@@ -1,0 +1,156 @@
+// Managed STT/LLM client — calls the pipeline worker.
+//
+// The URL is injected at build time via the build script so the OSS engine
+// has no idea this endpoint exists. Errors from the pipeline are mapped to
+// typed router errors so auto-fallback can decide what to do next.
+
+import type {
+  STTOptions,
+  STTResult,
+  LLMOptions,
+  LLMResult,
+} from './provider-router'
+import {
+  InsufficientBalanceError,
+  RateLimitedError,
+  UpstreamError,
+  NetworkError,
+} from './provider-router'
+
+// Substituted by the build script. Examples:
+//   __PIPELINE_URL__ = 'https://unmute-pipeline.<your-cf-subdomain>.workers.dev'
+declare const __PIPELINE_URL__: string
+
+interface PipelineEnvelope<T> {
+  ok: boolean
+  data?: T
+  balance_cents?: number
+  cost_cents?: number
+  engine?: 'managed'
+  code?: string
+  message?: string
+  top_up_url?: string
+}
+
+async function callPipeline<T>(
+  path: string,
+  init: RequestInit,
+  token: string
+): Promise<{ data: T; balanceCents: number; costCents: number }> {
+  let res: Response
+  try {
+    res = await fetch(`${__PIPELINE_URL__}${path}`, {
+      ...init,
+      headers: {
+        ...(init.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    })
+  } catch {
+    throw new NetworkError()
+  }
+
+  let body: PipelineEnvelope<T>
+  try {
+    body = (await res.json()) as PipelineEnvelope<T>
+  } catch {
+    throw new UpstreamError(res.status)
+  }
+
+  if (!res.ok || !body.ok) {
+    if (body.code === 'INSUFFICIENT_BALANCE') {
+      throw new InsufficientBalanceError(body.balance_cents ?? 0)
+    }
+    if (res.status === 429 || body.code === 'RATE_LIMITED') {
+      throw new RateLimitedError()
+    }
+    throw new UpstreamError(res.status)
+  }
+
+  return {
+    data: body.data as T,
+    balanceCents: body.balance_cents ?? 0,
+    costCents: body.cost_cents ?? 0,
+  }
+}
+
+// ─── STT client ────────────────────────────────────────────────
+
+export interface ManagedSTTClient {
+  transcribe(opts: STTOptions, token: string): Promise<STTResult>
+}
+
+export const managedSTT: ManagedSTTClient = {
+  async transcribe(opts, token): Promise<STTResult> {
+    const form = new FormData()
+    form.append('file', new Blob([opts.audio], { type: 'audio/webm' }), 'audio.webm')
+    form.append('duration_seconds', String(opts.durationSeconds))
+    if (opts.language) form.append('language', opts.language)
+    if (opts.flowType) form.append('flow_type', opts.flowType)
+
+    type Data = { text: string; duration_seconds: number; model: string }
+    const { data, costCents } = await callPipeline<Data>(
+      '/v1/stt',
+      { method: 'POST', body: form },
+      token
+    )
+    return {
+      text: data.text,
+      durationSeconds: data.duration_seconds,
+      engine: 'managed',
+      costCents,
+    }
+  },
+}
+
+// ─── LLM client ────────────────────────────────────────────────
+
+export interface ManagedLLMClient {
+  complete(opts: LLMOptions, token: string): Promise<LLMResult>
+}
+
+export const managedLLM: ManagedLLMClient = {
+  async complete(opts, token): Promise<LLMResult> {
+    type Data = { text: string; model: string; prompt_tokens: number; completion_tokens: number }
+    const { data, costCents } = await callPipeline<Data>(
+      '/v1/llm',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: opts.messages,
+          temperature: opts.temperature,
+          max_tokens: opts.maxTokens,
+        }),
+      },
+      token
+    )
+    return { text: data.text, engine: 'managed', costCents }
+  },
+}
+
+// ─── /v1/me — for periodic balance polling ─────────────────────
+
+export async function fetchMe(token: string): Promise<{
+  balanceCents: number
+  topUpUrl: string
+} | null> {
+  try {
+    const res = await fetch(`${__PIPELINE_URL__}/v1/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) return null
+    const body = (await res.json()) as {
+      ok: boolean
+      balance_cents?: number
+      top_up_url?: string
+    }
+    if (!body.ok) return null
+    return {
+      balanceCents: body.balance_cents ?? 0,
+      topUpUrl: body.top_up_url ?? '',
+    }
+  } catch {
+    return null
+  }
+}

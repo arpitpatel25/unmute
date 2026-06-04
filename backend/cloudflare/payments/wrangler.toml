@@ -1,0 +1,16 @@
+name = "unmute-payments"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Secrets (set via `wrangler secret put`):
+#   SUPABASE_URL
+#   SUPABASE_SERVICE_ROLE_KEY
+#   DODO_WEBHOOK_SECRET  (set when Dodo integration lands)
+
+[[kv_namespaces]]
+binding = "USER_BALANCE"
+id = "e7daf8475bd547679f96d0b3ca561519"
+
+[observability]
+enabled = true

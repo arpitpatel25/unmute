@@ -1,0 +1,26 @@
+name = "unmute-pipeline"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Smart Placement was tested and REVERTED. For unmute's traffic shape
+# (one downstream call to Groq, large audio payloads), running the worker
+# near Groq saves ~150ms on the Groq leg but COSTS ~600-1000ms because the
+# audio body has to traverse SIN↔US both ways. Net negative for non-US users.
+# Keeping the worker at the nearest edge to the user is the right default.
+
+# ─── Secrets (set via `wrangler secret put <NAME>`) ────────────
+# GROQ_API_KEY              — Groq API key, charged to OUR account for managed users
+# SUPABASE_URL              — Same Supabase project as BoloAI
+# SUPABASE_SERVICE_ROLE_KEY — Server-side write access (RLS bypassed)
+
+# ─── KV namespace binding ──────────────────────────────────────
+# Provision once with:  wrangler kv:namespace create "USER_BALANCE"
+# Then paste the returned id below.
+[[kv_namespaces]]
+binding = "USER_BALANCE"
+id = "e7daf8475bd547679f96d0b3ca561519"
+
+# ─── Observability ─────────────────────────────────────────────
+[observability]
+enabled = true

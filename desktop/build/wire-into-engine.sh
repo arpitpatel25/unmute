@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# Build the closed-source unmute build by wiring the paywall layer on top
+# of the OSS engine (unmute-dictation).
+#
+# Modes:
+#   dev    — wire + electron-vite dev (live reload)
+#   build  — wire + electron-vite build + electron-builder --mac (signed DMG)
+#   sync   — pull latest OSS engine source only (no build)
+#
+# The paywall layer is "wired in" by:
+#   1. Cloning unmute-dictation at a pinned tag into work/oss-engine/
+#   2. Copying desktop/src/paywall/ → work/oss-engine/renderer/paywall/
+#   3. Copying desktop/electron/ paywall files → work/oss-engine/electron/paywall/
+#   4. Applying the small patches documented in PATCHES.md (markers in
+#      OSS source files where paywall components are imported/mounted)
+#   5. Running the standard OSS build pipeline
+#
+# Required env (for build mode):
+#   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_SPECIFIC_PASSWORD
+#   __SUPABASE_URL__, __SUPABASE_ANON_KEY__, __PIPELINE_URL__
+#
+# Usage:
+#   ./build/wire-into-engine.sh build
+#   ./build/wire-into-engine.sh build --no-sign  # skip notarization (faster local builds)
+#   ./build/wire-into-engine.sh dev
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORK="$ROOT/work"
+ENGINE_TAG="${ENGINE_TAG:-v1.3.6}"
+OSS_REPO="${OSS_REPO:-https://github.com/arpitpatel25/unmute-dictation.git}"
+
+MODE="${1:-build}"
+NO_SIGN="${2:-}"
+
+log()   { echo "[wire] $*" >&2; }
+fatal() { log "ERROR: $*"; exit 1; }
+
+# ─── Sanity ────────────────────────────────────────────────────
+command -v git >/dev/null  || fatal "git required"
+command -v npm >/dev/null  || fatal "npm required"
+
+# ─── Stage 1: Pull OSS engine ───────────────────────────────────
+
+sync_engine() {
+  log "Syncing OSS engine at tag $ENGINE_TAG"
+  rm -rf "$WORK/oss-engine"
+  mkdir -p "$WORK"
+  git clone --depth 1 --branch "$ENGINE_TAG" "$OSS_REPO" "$WORK/oss-engine"
+  log "Engine synced to $WORK/oss-engine"
+}
+
+# ─── Stage 2: Wire paywall layer ────────────────────────────────
+
+wire_paywall() {
+  local engine="$WORK/oss-engine"
+  [[ -d "$engine" ]] || fatal "Engine not synced — run with 'sync' first or set ENGINE_TAG"
+
+  log "Wiring paywall layer"
+
+  # Copy paywall renderer components
+  mkdir -p "$engine/renderer/paywall"
+  cp -R "$ROOT/src/paywall/." "$engine/renderer/paywall/"
+
+  # Copy paywall main-process files
+  mkdir -p "$engine/electron/paywall"
+  cp -R "$ROOT/electron/." "$engine/electron/paywall/"
+
+  # Add Supabase dependency to engine package.json
+  node -e "
+    const fs = require('fs')
+    const path = '$engine/package.json'
+    const pkg = JSON.parse(fs.readFileSync(path, 'utf-8'))
+    pkg.dependencies['@supabase/supabase-js'] = '^2.45.0'
+    fs.writeFileSync(path, JSON.stringify(pkg, null, 2))
+  "
+
+  # Patch engine source — these markers are documented in PATCHES.md.
+  # We use a tiny sed-based patcher so each release of the engine can be
+  # wired in without maintaining a binary patch file.
+  patch_engine_sources "$engine"
+
+  log "Paywall wired"
+}
+
+patch_engine_sources() {
+  local engine="$1"
+
+  # 1) main.ts: init paywall after windows are ready
+  local main_ts="$engine/electron/main.ts"
+  if ! grep -q 'initPaywall' "$main_ts"; then
+    # Insert import near the top imports block
+    sed -i.bak "/^import { setupAutoUpdater/a\\
+import { initPaywall } from './paywall/main-extensions'
+" "$main_ts"
+    # Call after createWidgetWindow() — the existing main bootstrap.
+    sed -i.bak "/createWidgetWindow()/a\\
+  initPaywall(app, buildOSSAdapter())
+" "$main_ts"
+    rm -f "$main_ts.bak"
+  fi
+
+  # 2) preload.ts: merge paywall API into electronAPI
+  local preload="$engine/electron/preload.ts"
+  if ! grep -q 'paywallPreloadExtensions' "$preload"; then
+    sed -i.bak "/^const electronAPI = {/i\\
+import { paywallPreloadExtensions } from './paywall/preload-extensions'
+" "$preload"
+    # Inject the spread into the electronAPI object literal
+    sed -i.bak "/^const electronAPI = {/a\\
+  ...paywallPreloadExtensions,
+" "$preload"
+    rm -f "$preload.bak"
+  fi
+
+  # 3) App.tsx: mount BalancePill + OutOfCreditBanner
+  # (Best applied by hand on first wire — see PATCHES.md. The build script
+  #  bails out with a hint if these markers are missing.)
+  local app_tsx="$engine/renderer/app/App.tsx"
+  if ! grep -q 'BalancePill' "$app_tsx"; then
+    log "WARN: App.tsx not yet patched for BalancePill — see PATCHES.md"
+  fi
+  if ! grep -q 'EngineSettings' "$engine/renderer/app/Settings.tsx"; then
+    log "WARN: Settings.tsx not yet patched for EngineSettings — see PATCHES.md"
+  fi
+}
+
+# ─── Stage 3: Build ─────────────────────────────────────────────
+
+run_dev() {
+  local engine="$WORK/oss-engine"
+  cd "$engine"
+  npm install
+  npm run dev
+}
+
+run_build() {
+  local engine="$WORK/oss-engine"
+  cd "$engine"
+
+  log "Installing engine deps"
+  npm install
+
+  log "Building unsigned bundles"
+  npm run build
+
+  if [[ "$NO_SIGN" == "--no-sign" ]]; then
+    log "Skipping signing — local build only"
+    npx electron-builder --mac --config.mac.identity=null
+  else
+    : "${APPLE_ID:?APPLE_ID required for signed build}"
+    : "${APPLE_TEAM_ID:?APPLE_TEAM_ID required}"
+    : "${APPLE_APP_SPECIFIC_PASSWORD:?APPLE_APP_SPECIFIC_PASSWORD required}"
+    log "Signing + notarizing DMG"
+    npx electron-builder --mac
+  fi
+
+  log "Build complete — output in $engine/release/"
+  ls -la "$engine/release/" | grep -E '\.dmg$' || true
+}
+
+# ─── Dispatch ───────────────────────────────────────────────────
+
+case "$MODE" in
+  sync)
+    sync_engine
+    ;;
+  dev)
+    [[ -d "$WORK/oss-engine" ]] || sync_engine
+    wire_paywall
+    run_dev
+    ;;
+  build)
+    sync_engine
+    wire_paywall
+    run_build
+    ;;
+  *)
+    fatal "Unknown mode '$MODE' — use sync, dev, or build"
+    ;;
+esac

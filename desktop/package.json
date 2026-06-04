@@ -1,0 +1,15 @@
+{
+  "name": "unmute-cloud-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Closed-source desktop build of unmute with managed-cloud paywall, wrapping the OSS unmute-dictation engine.",
+  "scripts": {
+    "build": "./build/wire-into-engine.sh build",
+    "build:fast": "./build/wire-into-engine.sh build --no-sign",
+    "dev": "./build/wire-into-engine.sh dev",
+    "engine:sync": "./build/wire-into-engine.sh sync"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}

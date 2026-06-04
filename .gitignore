@@ -1,0 +1,11 @@
+node_modules/
+dist/
+# Generic build/ output dirs (not desktop/build which is our build script)
+/build/
+**/dist/build/
+desktop/work/
+.env
+.env.local
+.DS_Store
+*.log
+.wrangler/

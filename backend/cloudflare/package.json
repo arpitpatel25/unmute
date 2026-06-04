@@ -1,0 +1,12 @@
+{
+  "name": "unmute-cloud-backend",
+  "private": true,
+  "description": "Shared deps for all unmute-cloud Cloudflare Workers. Each worker's node_modules also exists, but bundlers fall back to this root for shared/ imports.",
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "typescript": "^5.6.0"
+  }
+}
