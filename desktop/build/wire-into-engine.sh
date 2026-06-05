@@ -76,9 +76,21 @@ wire_paywall() {
     fs.writeFileSync(path, JSON.stringify(pkg, null, 2))
   "
 
-  # Patch engine source — these markers are documented in PATCHES.md.
-  # We use a tiny sed-based patcher so each release of the engine can be
-  # wired in without maintaining a binary patch file.
+  # Apply engine-source overrides — full patched copies of OSS files that need
+  # paywall integration (App.tsx, Settings.tsx, useAudioRecorder.ts, sessionManager.ts).
+  # These live under desktop/engine-overrides/ mirroring the OSS path structure,
+  # so a plain recursive copy puts each file in the right place. This replaces the
+  # previous "hand-apply PATCHES.md" workflow that was vulnerable to sync_engine
+  # wiping the working tree.
+  if [[ -d "$ROOT/engine-overrides" ]]; then
+    log "Applying engine-overrides"
+    cp -R "$ROOT/engine-overrides/." "$engine/"
+  else
+    log "WARN: $ROOT/engine-overrides not found — UI integration patches will be missing"
+  fi
+
+  # Patch engine source — main.ts and preload.ts still get sed-patched (they only
+  # need one-line inserts that are stable across OSS releases).
   patch_engine_sources "$engine"
 
   log "Paywall wired"
@@ -114,15 +126,20 @@ import { paywallPreloadExtensions } from './paywall/preload-extensions'
     rm -f "$preload.bak"
   fi
 
-  # 3) App.tsx: mount BalancePill + OutOfCreditBanner
-  # (Best applied by hand on first wire — see PATCHES.md. The build script
-  #  bails out with a hint if these markers are missing.)
+  # 3) Verify the engine-overrides actually landed (paranoia — these used to be
+  #    hand-applied and got destroyed by sync_engine's rm -rf).
   local app_tsx="$engine/renderer/app/App.tsx"
   if ! grep -q 'BalancePill' "$app_tsx"; then
-    log "WARN: App.tsx not yet patched for BalancePill — see PATCHES.md"
+    log "WARN: App.tsx missing BalancePill — engine-overrides may have failed to apply"
   fi
   if ! grep -q 'EngineSettings' "$engine/renderer/app/Settings.tsx"; then
-    log "WARN: Settings.tsx not yet patched for EngineSettings — see PATCHES.md"
+    log "WARN: Settings.tsx missing EngineSettings — engine-overrides may have failed to apply"
+  fi
+  if ! grep -q 'paywallStreamChunk' "$engine/renderer/widget/useAudioRecorder.ts"; then
+    log "WARN: useAudioRecorder.ts missing paywallStreamChunk — engine-overrides may have failed to apply"
+  fi
+  if ! grep -q 'tryManagedSTT' "$engine/electron/sessionManager.ts"; then
+    log "WARN: sessionManager.ts missing tryManagedSTT — engine-overrides may have failed to apply"
   fi
 }
 

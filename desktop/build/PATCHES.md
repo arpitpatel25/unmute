@@ -1,100 +1,45 @@
 # Engine source patches
 
-The build script auto-patches `electron/main.ts` and `electron/preload.ts`. Other files need one-time manual patches because the right insertion points depend on the existing JSX/control-flow structure.
+The build script applies engine source modifications in two layers:
 
-## electron/sessionManager.ts — abort dangling stream in chunked path
+1. **Sed-based patcher** for two stable, single-line inserts:
+   - `electron/main.ts` — `initPaywall(app, buildOSSAdapter())` after `createWidgetWindow()`
+   - `electron/preload.ts` — spread `...paywallPreloadExtensions` into `electronAPI`
 
-Single-stream-for-all-chunks was tested and removed: Cloudflare terminates
-streaming POSTs that stay open longer than ~30s. For long dictations the
-chunked path stays upload-based (per-chunk POSTs via tryManagedSTT). Per-chunk
-streaming POSTs are the proper architectural fix — separate PR.
+2. **Full-file overrides** under `desktop/engine-overrides/` for files that need larger
+   structural changes. The build script's `wire_paywall` step does a recursive copy of
+   `engine-overrides/` over the freshly-cloned OSS engine right before sed-patching.
+   Mirroring the OSS path structure makes the copy trivial and keeps each override
+   diffable against the OSS original.
 
-The renderer still opens a single stream on Fn-down (for the short-clip fast
-path). In chunked mode that stream gets aborted as soon as the first chunk
-arrives, so it doesn't linger.
+## Current overrides
 
-### Imports
-```diff
- import { tryManagedSTT, tryManagedLLM } from './paywall-route'
-+import { closeImmediate as abortStream, isStreaming } from './paywall-stream'
-```
+| File | Purpose |
+|---|---|
+| `renderer/app/App.tsx` | Mounts `<BalancePill />` and `<OutOfCreditBanner />` |
+| `renderer/app/Settings.tsx` | Replaces the "Use Groq cloud transcription" row with `<EngineSettings />` |
+| `renderer/widget/useAudioRecorder.ts` | Opens a paywall stream on record-start; forwards each MediaRecorder blob via `paywallStreamChunk` |
+| `electron/sessionManager.ts` | Adds a managed-cloud intercept at the top of `transcribeChunk` (await streaming POST result if one exists, else `tryManagedSTT` upload-based, else abort dangling stream and fall through to the OSS engine's own STT) |
 
-### `transcribeChunk` — abort dangling stream
-Inside the `try {` block at the top of `transcribeChunk`, BEFORE the existing managed intercept:
-```diff
-+      if (isStreaming()) {
-+        abortStream('chunked-mode-fallback')
-+      }
-       // ─── Managed-cloud intercept (paywall) — upload-based ────────
-       const durationGuess = Math.max(1, Math.round(buffer.length / 4000))
-       const managed = await tryManagedSTT(buffer, durationGuess, 'dictation')
-```
+## Adding a new override
 
-## renderer/widget/useAudioRecorder.ts — wire streaming IPC
-Inside `ondataavailable`, after `chunksRef.current.push(e.data)`:
-```diff
-+        e.data.arrayBuffer().then((buf) => {
-+          window.electronAPI?.paywallStreamChunk?.(buf)
-+        }).catch(() => {})
-```
+1. Copy the OSS file from `desktop/work/oss-engine/<path>` to `desktop/engine-overrides/<same-path>`.
+2. Apply your edits to the override.
+3. Add a `grep` paranoia check in `wire-into-engine.sh`'s `patch_engine_sources` so the build
+   warns if the override didn't land.
+4. Document it in the table above.
 
-After `setIsRecording(true)` in startRecording:
-```diff
-+    window.electronAPI?.paywallStreamOpen?.({
-+      flowType: mode === 'instruction' ? 'instruction' : 'dictation',
-+    })
-```
+## Why we don't use `.patch` files
 
-## renderer/app/App.tsx — add BalancePill + OutOfCreditBanner
+OSS file structure changes too often. A full-file override stays valid as long as the
+override stays in sync with the OSS file's surrounding context — which is easy to verify
+with `diff` and easy to update when a new OSS release lands.
 
-```diff
-+import { BalancePill } from '../paywall/BalancePill'
-+import { OutOfCreditBanner } from '../paywall/OutOfCreditBanner'
- ...
+## OSS-side context: `buildOSSAdapter()` in `electron/main.ts`
 
- return (
-   <div className="flex h-screen bg-cream">
-     <div className="titlebar-drag absolute top-0 left-0 right-0 h-8 z-10" />
-
-+    {/* Paywall overlays */}
-+    <OutOfCreditBanner />
-+    <div className="absolute top-2 right-3 z-30">
-+      <BalancePill />
-+    </div>
-
-     {/* Update-ready banner */}
-     ...
-```
-
-## renderer/app/Settings.tsx — add EngineSettings, remove old toggle
-
-Find the existing **"Use Groq cloud transcription"** row (added in v1.3.4) and replace it with `<EngineSettings />`. The new component covers both the cloud/local toggle and the new managed mode in one selector.
-
-```diff
-+import { EngineSettings } from '../paywall/EngineSettings'
- ...
-
--{/* ═══ Behavior ═══ */}
--<SectionHeader icon={<BehaviorIcon />} title="Behavior" />
--<div className="bg-surface-2 border border-border rounded-2xl overflow-hidden mb-3 shadow-sm">
--  <SettingRow label="Use Groq cloud transcription" ...>
--    <Toggle checked={useCloudSTT} ... />
--  </SettingRow>
--  ...
-+{/* ═══ Behavior ═══ */}
-+<SectionHeader icon={<BehaviorIcon />} title="Behavior" />
-+<div className="bg-surface-2 border border-border rounded-2xl overflow-hidden mb-3 shadow-sm">
-+  <EngineSettings />
-+  ...
-```
-
-## renderer/app/Onboarding.tsx — add the 3-card step
-
-After the existing Shortcuts step, add a new step using `<OnboardingCards onComplete={(choice) => handleEngineChoice(choice)} />`.
-
-## electron/main.ts — buildOSSAdapter()
-
-The build script injects `initPaywall(app, buildOSSAdapter())`. You need to define `buildOSSAdapter()` once, exposing the OSS engine's existing BYOK/Local providers + the new Supabase user helpers. Reference shape:
+The sed patcher injects `initPaywall(app, buildOSSAdapter())`. `buildOSSAdapter()` must be
+defined somewhere in main.ts and expose the OSS engine's existing BYOK / Local providers
+plus Supabase user helpers:
 
 ```ts
 import { whisperManager } from './whisper'
@@ -106,13 +51,13 @@ function buildOSSAdapter() {
   return {
     byokSTT: {
       transcribe: async (opts, apiKey) => {
-        const r = await groqTranscribe(opts.audio, apiKey, { ... })
+        const r = await groqTranscribe(opts.audio, apiKey, { /* ... */ })
         return { text: r.text, durationSeconds: r.duration, engine: 'byok', costCents: 0 }
       },
     },
     byokLLM: {
       complete: async (opts, apiKey) => {
-        const r = await groqChat(opts.messages, apiKey, { ... })
+        const r = await groqChat(opts.messages, apiKey, { /* ... */ })
         return { text: r.content, engine: 'byok', costCents: 0 }
       },
     },
@@ -135,6 +80,4 @@ function buildOSSAdapter() {
 }
 ```
 
-## Sessionmanager wiring
-
-In `sessionManager.transcribeChunk()`, replace the existing provider routing with a call to `getRouter().transcribe(...)`. Same for LLM transforms. The router handles the auto-fallback chain transparently.
+This is currently still manual — moving it into a 5th override is a follow-up.
