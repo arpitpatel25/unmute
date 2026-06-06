@@ -22,7 +22,7 @@
 //   closeAndAwait(0)             → returns stream 0's transcript
 
 import { getPaywallAccessToken, getPaywallEngineMode, refreshAccessToken } from './paywall-glue'
-import { updateBalanceFromResponse } from './paywall/balance-ipc'
+import { updateBalanceFromResponse } from './balance-ipc'
 import { paywallFetch } from './paywall-net'
 
 interface StreamSession {

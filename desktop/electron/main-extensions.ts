@@ -4,12 +4,11 @@
 //     import { initPaywall } from './paywall/main-extensions'
 //     initPaywall(app, sessionManager)
 
-import { ipcMain, app, type App } from 'electron'
+import { ipcMain, BrowserWindow, type App } from 'electron'
 import Store from 'electron-store'
-import { registerAuthIPC, setPendingDeepLink } from './auth-ipc'
-import { registerBalanceIPC, startBalancePolling, stopBalancePolling } from './balance-ipc'
 import { ProviderRouter, type EngineMode } from './provider-router'
 import { managedSTT, managedLLM } from './managed-client'
+import { initPaywallGlue } from './paywall-glue'
 
 const settings = new Store<{ engineMode: EngineMode }>({ name: 'unmute-paywall-settings' })
 
@@ -32,38 +31,24 @@ interface OSSAdapter {
 let router: ProviderRouter | null = null
 
 export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
-  registerAuthIPC()
-  registerBalanceIPC()
+  // initPaywallGlue does most of the wiring: registerAuthIPC,
+  // registerBalanceIPC, registerSessionBridge (paywall:set-session — the
+  // missing wire that left tryManagedSTT silently falling back to local),
+  // the streaming POST IPC handlers (paywall:stream-open/chunk/close),
+  // token refresh scheduler, HTTPS pre-warm, the keep-alive ping, balance
+  // polling, the OAuth deep-link handler, and paywall:paste-auth-url. It
+  // also owns paywall:get-engine-mode, paywall:set-engine-mode,
+  // paywall:get-user, paywall:sign-out. Don't duplicate them here —
+  // ipcMain.handle throws on second registration.
+  //
+  initPaywallGlue()
 
-  // Deep-link handler for OAuth callback (unmute://auth/callback)
-  if (process.platform === 'darwin') {
-    _appHandle.on('open-url', (event, url) => {
-      event.preventDefault()
-      if (url.startsWith('unmute://auth/callback')) setPendingDeepLink(url)
-    })
-    // Register protocol if not already
-    if (!_appHandle.isDefaultProtocolClient('unmute')) {
-      _appHandle.setAsDefaultProtocolClient('unmute')
-    }
-  }
-
-  // Engine-mode IPC
-  ipcMain.handle('paywall:get-engine-mode', () => settings.get('engineMode', 'auto'))
-  ipcMain.handle('paywall:set-engine-mode', (_e, mode: EngineMode) => {
-    settings.set('engineMode', mode)
-    return true
-  })
-
-  // User-state IPC
-  ipcMain.handle('paywall:get-user', () => oss.getCurrentUser())
-  ipcMain.handle('paywall:sign-out', async () => {
-    await oss.signOut()
-    stopBalancePolling()
-    return true
-  })
+  // paywall:request-sign-in lives here (not in glue) so it can emit
+  // paywall:show-sign-in to the focused window; the renderer's AuthContext
+  // subscribes via paywallOnShowSignIn (preload) and mounts the modal.
   ipcMain.handle('paywall:request-sign-in', () => {
-    // The main window's renderer will pick this up via an IPC event and
-    // present the sign-in screen.
+    const focused = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    focused?.webContents.send('paywall:show-sign-in')
     return true
   })
 
@@ -112,8 +97,8 @@ export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
     },
   })
 
-  // Start polling once a session is available
-  startBalancePolling(oss.getAccessToken)
+  // Balance polling is started inside initPaywallGlue() against
+  // paywall-glue's currentSession.accessToken — don't double-start here.
 
   return router
 }

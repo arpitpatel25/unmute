@@ -3,6 +3,7 @@
 // with a 4-way selector: Auto / Managed / BYOK / Local.
 
 import { useEffect, useState } from 'react'
+import { useAuth } from './AuthContext'
 
 type EngineMode = 'auto' | 'managed' | 'byok' | 'local'
 
@@ -30,26 +31,18 @@ const OPTIONS: Array<{ value: EngineMode; label: string; description: string }> 
 ]
 
 export function EngineSettings() {
+  const auth = useAuth()
   const [mode, setMode] = useState<EngineMode>('auto')
-  const [signedIn, setSignedIn] = useState(false)
-  const [email, setEmail] = useState<string | null>(null)
 
   useEffect(() => {
     window.electronAPI.paywallGetEngineMode?.().then((v: EngineMode) => setMode(v))
-    window.electronAPI.paywallGetUser?.().then((u) => {
-      if (u) {
-        setSignedIn(true)
-        setEmail(u.email)
-      }
-    })
   }, [])
 
   function handleChange(next: EngineMode) {
     setMode(next)
     window.electronAPI.paywallSetEngineMode?.(next)
-    if (next === 'managed' && !signedIn) {
-      // Tell the main process to open the sign-in flow
-      window.electronAPI.paywallRequestSignIn?.()
+    if (next === 'managed' && !auth.signedIn) {
+      auth.openSignIn()
     }
   }
 
@@ -62,12 +55,19 @@ export function EngineSettings() {
             How transcription runs. Auto picks the best available.
           </p>
         </div>
-        {signedIn && (
+        {auth.signedIn ? (
           <button
-            onClick={() => window.electronAPI.paywallSignOut?.()}
+            onClick={() => auth.signOut()}
             className="text-[11px] text-ink-35 hover:text-ink-60 transition-colors whitespace-nowrap"
           >
             Sign out
+          </button>
+        ) : (
+          <button
+            onClick={() => auth.openSignIn()}
+            className="text-[11px] font-semibold text-ink hover:text-accent transition-colors whitespace-nowrap"
+          >
+            Sign in
           </button>
         )}
       </div>
@@ -85,9 +85,9 @@ export function EngineSettings() {
           >
             <div className="flex items-center justify-between mb-0.5">
               <span className="text-[12px] font-bold">{opt.label}</span>
-              {opt.value === 'managed' && signedIn && email && (
+              {opt.value === 'managed' && auth.signedIn && auth.user?.email && (
                 <span className={`text-[10px] ${mode === opt.value ? 'text-white/60' : 'text-ink-35'}`}>
-                  {email}
+                  {auth.user.email}
                 </span>
               )}
             </div>

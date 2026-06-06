@@ -67,14 +67,29 @@ wire_paywall() {
   mkdir -p "$engine/electron/paywall"
   cp -R "$ROOT/electron/." "$engine/electron/paywall/"
 
-  # Add Supabase dependency to engine package.json
+  # Patch engine package.json:
+  #   * Add @supabase/supabase-js for the paywall layer
+  #   * Pin electron-store to ^8 (CJS). v11+ is ESM-only and crashes our
+  #     main process with "TypeError: Store is not a constructor".
+  #   * Override appId from PAYWALL_APP_ID env (lets us flip to a fresh
+  #     bundle id for dev testing without re-poisoning TCC for the prod id).
   node -e "
     const fs = require('fs')
     const path = '$engine/package.json'
     const pkg = JSON.parse(fs.readFileSync(path, 'utf-8'))
     pkg.dependencies['@supabase/supabase-js'] = '^2.45.0'
+    pkg.dependencies['electron-store'] = '^8.2.0'
+    if (process.env.PAYWALL_APP_ID) {
+      pkg.build = pkg.build || {}
+      pkg.build.appId = process.env.PAYWALL_APP_ID
+    }
     fs.writeFileSync(path, JSON.stringify(pkg, null, 2))
   "
+
+  # Drop OSS engine's package-lock — it pins electron-store v11 which would
+  # otherwise override our v8 pin during electron-builder's install-app-deps
+  # postinstall step.
+  rm -f "$engine/package-lock.json"
 
   # Apply engine-source overrides — full patched copies of OSS files that need
   # paywall integration (App.tsx, Settings.tsx, useAudioRecorder.ts, sessionManager.ts).
@@ -107,8 +122,17 @@ patch_engine_sources() {
 import { initPaywall } from './paywall/main-extensions'
 " "$main_ts"
     # Call after createWidgetWindow() — the existing main bootstrap.
+    # NOTE: we pass `{}` instead of `buildOSSAdapter()` because the latter
+    # function is documented in PATCHES.md but was never persisted in code.
+    # A missing-symbol ReferenceError here short-circuits the whole
+    # app.whenReady().then() callback and kills setupIPC(), which prevents
+    # OSS IPC handlers (incl. permissions:request-mic) from ever registering.
+    # Passing `{}` lets initPaywall run; managed STT routing is wired via
+    # the engine-overrides sessionManager.ts, not via this adapter, so the
+    # only feature this stubs out is the provider-router's BYOK/Local fallback
+    # chain — fine for current testing.
     sed -i.bak "/createWidgetWindow()/a\\
-  initPaywall(app, buildOSSAdapter())
+  initPaywall(app, {} as any)
 " "$main_ts"
     rm -f "$main_ts.bak"
   fi

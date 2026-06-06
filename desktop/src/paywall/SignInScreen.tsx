@@ -1,86 +1,60 @@
-// Sign-in screen — shown only when the user explicitly picks Managed mode
-// (or clicks "Sign in" from the Engine settings).
+// Sign-in screen — overlay shown when the user explicitly picks Managed mode,
+// clicks "Sign in" from Settings, or hits a 401 from the managed pipeline.
 //
-// NEVER shown at app startup. The app is fully usable without an account
-// (BYOK + Local). The user can always back out via the top-left chevron.
+// All auth logic lives in AuthContext. This component is presentation-only
+// plus a few thin event handlers.
 
-import { useState, useCallback } from 'react'
-import { getSupabase } from './supabase-client'
+import { useState } from 'react'
+import { useAuth } from './AuthContext'
 
-interface Props {
-  onSuccess: () => void
-  onCancel: () => void
-}
-
-export function SignInScreen({ onSuccess, onCancel }: Props) {
+export function SignInScreen() {
+  const auth = useAuth()
   const [email, setEmail] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState<{ text: string; type: 'info' | 'error' | 'success' } | null>(null)
+  const [magicLinkMessage, setMagicLinkMessage] = useState<{ text: string; type: 'info' | 'error' | 'success' } | null>(null)
   const [showPaste, setShowPaste] = useState(false)
   const [pasteUrl, setPasteUrl] = useState('')
 
-  const sendMagicLink = useCallback(async () => {
-    if (!email.trim() || busy) return
-    setBusy(true)
-    setMessage(null)
-    try {
-      const supa = getSupabase()
-      const { error } = await supa.auth.signInWithOtp({
-        email: email.trim(),
-        options: { emailRedirectTo: 'unmute://auth/callback' },
-      })
-      if (error) {
-        setMessage({ text: error.message, type: 'error' })
-      } else {
-        setMessage({
-          text: `Magic link sent to ${email.trim()}. Open it on this Mac to finish signing in.`,
-          type: 'success',
-        })
-      }
-    } catch {
-      setMessage({ text: 'Something went wrong. Try again.', type: 'error' })
-    } finally {
-      setBusy(false)
-    }
-  }, [email, busy])
+  const busy = auth.authState === 'opening' || auth.authState === 'exchanging'
+  const waiting = auth.authState === 'waiting'
 
-  const signInWithGoogle = useCallback(async () => {
-    setBusy(true)
-    setMessage(null)
-    try {
-      const supa = getSupabase()
-      const { data, error } = await supa.auth.signInWithOAuth({
-        provider: 'google',
-        options: { redirectTo: 'unmute://auth/callback', skipBrowserRedirect: true },
-      })
-      if (error || !data.url) {
-        setMessage({ text: error?.message ?? 'Failed to start Google sign-in', type: 'error' })
-        setBusy(false)
-        return
-      }
-      await window.electronAPI.paywallOpenExternal(data.url)
-      setMessage({
-        text: 'Continue in your browser. We\'ll bring you back here when you\'re done.',
-        type: 'info',
-      })
-    } catch {
-      setMessage({ text: 'Something went wrong. Try again.', type: 'error' })
-      setBusy(false)
-    }
-  }, [])
+  async function handleMagicLink() {
+    const result = await auth.signInWithMagicLink(email)
+    setMagicLinkMessage(
+      result.ok
+        ? { text: result.message, type: 'success' }
+        : { text: result.message, type: 'error' }
+    )
+  }
 
-  // The parent handles success via supabase-js auth-state-change. This prop
-  // is kept for API parity in case we want explicit success flow later.
-  void onSuccess
+  async function handlePaste() {
+    const u = pasteUrl.trim()
+    if (!u) return
+    const ok = await auth.pasteAuthUrl(u)
+    if (ok) {
+      setPasteUrl('')
+      setMagicLinkMessage({ text: 'URL accepted — signing in…', type: 'info' })
+    } else {
+      setMagicLinkMessage({ text: 'Not a valid auth URL', type: 'error' })
+    }
+  }
+
+  // Message precedence: auth.errorMessage (auth flow error) trumps the local
+  // magic-link feedback so we don't show stale "magic link sent" alongside an
+  // exchange failure.
+  const displayMessage = auth.errorMessage
+    ? { text: auth.errorMessage, type: 'error' as const }
+    : waiting
+      ? { text: "Continue in your browser. We'll bring you back here when you're done.", type: 'info' as const }
+      : magicLinkMessage
 
   return (
-    <div className="relative min-h-screen bg-cream">
+    <div className="absolute inset-0 z-40 bg-cream">
       {/* Titlebar drag region */}
       <div className="titlebar-drag absolute top-0 left-0 right-0 h-8 z-10" />
 
-      {/* Back button — always clickable, never disabled */}
+      {/* Back button — closes the modal without changing auth state */}
       <button
-        onClick={onCancel}
+        onClick={() => { auth.cancelSignIn(); auth.closeSignIn() }}
         className="titlebar-no-drag absolute top-3 left-3 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-border text-[12px] font-semibold text-ink hover:bg-cream-mid transition-colors shadow-sm"
         aria-label="Back"
       >
@@ -98,8 +72,8 @@ export function SignInScreen({ onSuccess, onCancel }: Props) {
           </p>
 
           <button
-            onClick={signInWithGoogle}
-            disabled={busy}
+            onClick={() => auth.signInWithGoogle()}
+            disabled={busy || waiting}
             className="w-full px-4 py-3 rounded-xl bg-white text-ink font-semibold text-[13px] mb-3 border border-border disabled:opacity-50 hover:bg-cream-mid transition-colors flex items-center justify-center gap-2.5"
           >
             <svg width="16" height="16" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
@@ -108,7 +82,7 @@ export function SignInScreen({ onSuccess, onCancel }: Props) {
               <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05" />
               <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335" />
             </svg>
-            Sign in with Google
+            {waiting ? 'Waiting for browser…' : 'Sign in with Google'}
           </button>
 
           <div className="flex items-center gap-3 my-4">
@@ -122,33 +96,33 @@ export function SignInScreen({ onSuccess, onCancel }: Props) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
-            disabled={busy}
+            disabled={busy || waiting}
             className="w-full px-4 py-3 rounded-xl border border-border bg-white text-[13px] mb-3 focus:outline-none focus:border-ink"
-            onKeyDown={(e) => e.key === 'Enter' && sendMagicLink()}
+            onKeyDown={(e) => e.key === 'Enter' && handleMagicLink()}
           />
           <button
-            onClick={sendMagicLink}
-            disabled={busy || !email.trim()}
+            onClick={handleMagicLink}
+            disabled={busy || waiting || !email.trim()}
             className="w-full px-4 py-3 rounded-xl border border-border text-ink font-semibold text-[13px] disabled:opacity-50 hover:bg-cream-mid transition-colors"
           >
             Send magic link
           </button>
 
-          {message && (
+          {displayMessage && (
             <div
               className={`mt-4 text-[12px] px-3 py-2 rounded-lg ${
-                message.type === 'error'
+                displayMessage.type === 'error'
                   ? 'bg-red-50 text-red-700'
-                  : message.type === 'success'
+                  : displayMessage.type === 'success'
                     ? 'bg-green-50 text-green-700'
                     : 'bg-cream-mid text-ink-60'
               }`}
             >
-              {message.text}
+              {displayMessage.text}
             </div>
           )}
 
-          {/* Paste URL fallback — for when macOS deep-link is wedged */}
+          {/* Paste URL fallback — for when macOS deep-link is wedged (DNS-blocked regions, browser permissions, etc.) */}
           <button
             onClick={() => setShowPaste((s) => !s)}
             className="mt-5 text-[11px] text-ink-35 hover:text-ink-60 transition-colors underline"
@@ -161,20 +135,13 @@ export function SignInScreen({ onSuccess, onCancel }: Props) {
                 type="text"
                 value={pasteUrl}
                 onChange={(e) => setPasteUrl(e.target.value)}
-                placeholder="unmute://auth/callback#access_token=..."
+                placeholder="unmute://auth/callback?code=..."
                 className="w-full px-3 py-2.5 rounded-lg border border-border bg-white text-[11px] font-mono focus:outline-none focus:border-ink"
               />
               <button
-                onClick={async () => {
-                  const u = pasteUrl.trim()
-                  if (!u) return
-                  const ok = await window.electronAPI.paywallPasteAuthUrl?.(u)
-                  setMessage(ok
-                    ? { text: 'URL accepted — signing in…', type: 'success' }
-                    : { text: 'Not a valid auth URL', type: 'error' })
-                  if (ok) setPasteUrl('')
-                }}
-                className="mt-2 w-full px-3 py-2 rounded-lg bg-ink text-white text-[11px] font-semibold hover:opacity-90 transition-opacity"
+                onClick={handlePaste}
+                disabled={!pasteUrl.trim()}
+                className="mt-2 w-full px-3 py-2 rounded-lg bg-ink text-white text-[11px] font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity"
               >
                 Submit URL
               </button>

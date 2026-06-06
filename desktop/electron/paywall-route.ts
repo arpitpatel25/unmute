@@ -7,8 +7,10 @@
 // existing logic.
 
 import { getPaywallAccessToken, getPaywallEngineMode, refreshAccessToken } from './paywall-glue'
-import { hasApiKey } from './keyStore'
-import { updateBalanceFromResponse } from './paywall/balance-ipc'
+// keyStore lives in the OSS engine; after wire_paywall we sit in
+// engine/electron/paywall/, so OSS-engine siblings need `../`.
+import { hasApiKey } from '../keyStore'
+import { updateBalanceFromResponse } from './balance-ipc'
 import { paywallFetch } from './paywall-net'
 
 // Pipeline URL — bundler injects __PIPELINE_URL__ via electron.vite.config.ts

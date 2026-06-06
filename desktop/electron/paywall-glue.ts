@@ -5,9 +5,8 @@
 
 import { app, ipcMain, BrowserWindow } from 'electron'
 import path from 'path'
-import { registerAuthIPC } from './paywall/auth-ipc'
-import { registerBalanceIPC, startBalancePolling } from './paywall/balance-ipc'
-import { setPendingDeepLink } from './paywall/auth-ipc'
+import { registerAuthIPC, setPendingDeepLink } from './auth-ipc'
+import { registerBalanceIPC, startBalancePolling } from './balance-ipc'
 import Store from 'electron-store'
 import { paywallFetch, verifyKeepAlive, startPoolStatsSampling } from './paywall-net'
 
@@ -41,6 +40,7 @@ export function getPaywallEngineMode(): EngineMode {
 export function getPaywallUser(): { id: string; email: string | null } | null {
   return currentSession.user
 }
+
 
 // Substituted by build script
 declare const __SUPABASE_URL__: string
@@ -137,7 +137,7 @@ function registerSessionBridge() {
     // If we just gained a token (sign-in completed), kick the balance poll
     // immediately rather than waiting up to 60s for the next tick.
     if (!hadToken && data.accessToken) {
-      const { refreshBalanceNow } = await import('./paywall/balance-ipc')
+      const { refreshBalanceNow } = await import('./balance-ipc')
       await refreshBalanceNow()
     }
     return true
@@ -148,12 +148,11 @@ function registerSessionBridge() {
     if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null }
     return true
   })
-  ipcMain.handle('paywall:request-sign-in', () => {
-    for (const w of BrowserWindow.getAllWindows()) {
-      w.webContents.send('paywall:show-sign-in')
-    }
-    return true
-  })
+  // NOTE: paywall:request-sign-in is registered by main-extensions.ts (it has
+  // the improved implementation that emits paywall:show-sign-in to the
+  // focused window). Don't register here — ipcMain.handle throws on a second
+  // registration of the same channel.
+
   ipcMain.handle('paywall:get-engine-mode', () => settings.get('engineMode', 'auto'))
   ipcMain.handle('paywall:set-engine-mode', (_e, mode: EngineMode) => {
     settings.set('engineMode', mode)

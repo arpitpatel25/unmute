@@ -47,6 +47,44 @@ export const paywallPreloadExtensions = {
   paywallSignOut: (): Promise<boolean> =>
     ipcRenderer.invoke('paywall:sign-out'),
 
+  // Renderer-→-main session push. AuthContext calls this whenever supabase-js
+  // fires onAuthStateChange so the main process has the live access token
+  // available for tryManagedSTT / tryManagedLLM.
+  paywallSetSession: (session: {
+    accessToken: string | null
+    refreshToken?: string | null
+    expiresAt?: number | null
+    user: { id: string; email: string | null } | null
+  }): Promise<boolean> => ipcRenderer.invoke('paywall:set-session', session),
+
+  // Per-chunk streaming bridge. useAudioRecorder calls these to push audio
+  // into a streaming POST against the managed pipeline /v1/stt-stream
+  // endpoint while the user is still talking, so the upload finishes by the
+  // time recording stops. Without these the renderer's calls go to
+  // `undefined` and the streaming path silently dies — every dictation
+  // falls back to the upload path (POST whole audio when recording ends).
+  paywallStreamOpen: (opts: {
+    flowType: string
+    chunkIndex?: number
+    estimatedDurationSeconds?: number
+  }) => ipcRenderer.send('paywall:stream-open', opts),
+  paywallStreamChunk: (bytes: ArrayBuffer | Uint8Array) =>
+    ipcRenderer.send('paywall:stream-chunk', bytes),
+  paywallStreamClose: () => ipcRenderer.send('paywall:stream-close'),
+  paywallStreamAbort: () => ipcRenderer.send('paywall:stream-abort'),
+
+  // Surfacing the SignInScreen (sent from main when something — e.g. a future
+  // menu item, or a 401 → sign-in flow — wants to prompt the user).
+  paywallOnShowSignIn: (cb: () => void) => {
+    ipcRenderer.on('paywall:show-sign-in', () => cb())
+  },
+
+  // Manual OAuth callback URL paste (DNS-blocked-region fallback). Returns
+  // true if the URL was a valid callback that main handed back to the
+  // renderer through the regular auth-callback channel.
+  paywallPasteAuthUrl: (url: string): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:paste-auth-url', url),
+
   // Fallback notification (managed → local because balance ran out)
   paywallOnFellBackToLocal: (cb: (topUpUrl: string) => void) => {
     ipcRenderer.on('paywall:fell-back-to-local', (_e, url) => cb(url))

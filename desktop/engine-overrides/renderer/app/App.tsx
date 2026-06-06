@@ -7,12 +7,22 @@ import Privacy from './Privacy'
 import Onboarding from './Onboarding'
 import { BalancePill } from '../paywall/BalancePill'
 import { OutOfCreditBanner } from '../paywall/OutOfCreditBanner'
+import { AuthProvider, useAuth } from '../paywall/AuthContext'
+import { SignInScreen } from '../paywall/SignInScreen'
 
 type Tab = 'history' | 'voice' | 'settings' | 'privacy'
 
 type AppView = 'loading' | 'onboarding' | 'main'
 
 export default function App() {
+  return (
+    <AuthProvider>
+      <AppInner />
+    </AuthProvider>
+  )
+}
+
+function AppInner() {
   const [view, setView] = useState<AppView | 'loading'>('loading')
   const [activeTab, setActiveTab] = useState<Tab>('history')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
@@ -51,7 +61,12 @@ export default function App() {
   }
 
   if (view === 'onboarding') {
-    return <Onboarding onComplete={handleOnboardingComplete} />
+    return (
+      <>
+        <Onboarding onComplete={handleOnboardingComplete} />
+        <SignInOverlay />
+      </>
+    )
   }
 
   return (
@@ -61,8 +76,10 @@ export default function App() {
 
       {/* Paywall overlays */}
       <OutOfCreditBanner />
-      <div className="absolute top-2 right-3 z-30">
+      <SignInOverlay />
+      <div className="absolute top-2 right-3 z-30 flex items-center gap-2">
         <BalancePill />
+        <ProfileButton />
       </div>
 
       {/* Update-ready banner */}
@@ -157,6 +174,73 @@ export default function App() {
           {activeTab === 'privacy' && <Privacy />}
         </div>
       </main>
+    </div>
+  )
+}
+
+/**
+ * Renders the SignInScreen on top of everything when the user opens the modal
+ * OR when an OAuth/exchange flow is mid-stream (so navigating away accidentally
+ * doesn't drop the in-flight callback).
+ */
+function SignInOverlay() {
+  const auth = useAuth()
+  const visible = auth.showSignIn || auth.authState === 'opening' || auth.authState === 'waiting' || auth.authState === 'exchanging' || auth.authState === 'error'
+  if (!visible) return null
+  return <SignInScreen />
+}
+
+/**
+ * Tiny avatar/initial chip in the title bar. Always present (so signed-out
+ * users have a stable place to find sign-in), shows email initial when signed
+ * in, opens a menu with sign-out + email on click.
+ */
+function ProfileButton() {
+  const auth = useAuth()
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  if (!auth.signedIn) {
+    return (
+      <button
+        onClick={() => auth.openSignIn()}
+        className="titlebar-no-drag inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border border-border bg-white text-ink hover:bg-cream-mid transition-colors"
+      >
+        Sign in
+      </button>
+    )
+  }
+
+  const initial = (auth.user?.email ?? '?').charAt(0).toUpperCase()
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setMenuOpen((s) => !s)}
+        className="titlebar-no-drag inline-flex items-center justify-center w-[26px] h-[26px] rounded-full bg-ink text-white text-[11px] font-bold hover:opacity-90 transition-opacity"
+        aria-label="Account"
+        title={auth.user?.email ?? 'Signed in'}
+      >
+        {initial}
+      </button>
+      {menuOpen && (
+        <div
+          className="absolute top-full right-0 mt-1.5 w-[200px] bg-white rounded-xl shadow-lg border border-border p-2 z-50"
+          onMouseLeave={() => setMenuOpen(false)}
+        >
+          {auth.user?.email && (
+            <div className="px-2 py-1.5">
+              <p className="text-[10px] text-ink-35 font-bold uppercase tracking-wider mb-0.5">Signed in</p>
+              <p className="text-[12px] font-semibold text-ink truncate">{auth.user.email}</p>
+            </div>
+          )}
+          <div className="h-px bg-border my-1.5" />
+          <button
+            onClick={() => { setMenuOpen(false); auth.signOut() }}
+            className="w-full text-left px-2 py-1.5 rounded-lg text-[12px] text-ink hover:bg-cream-mid transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
+      )}
     </div>
   )
 }

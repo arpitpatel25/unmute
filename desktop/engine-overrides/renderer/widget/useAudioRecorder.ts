@@ -241,6 +241,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     }
     audioSentRef.current = true
 
+    // Paywall: close the streaming POST so the worker finalizes any in-flight
+    // upload (same reason as in stopRecording).
+    window.electronAPI?.paywallStreamClose?.()
+
     const duration = Date.now() - startTimeRef.current
     const mode = frozenModeRef.current
 
@@ -454,6 +458,13 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
   const stopRecording = useCallback(async () => {
     const recorder = mediaRecorderRef.current
+
+    // Paywall: close the streaming POST so the worker can finalize the
+    // pipeline call. paywall-stream.ts holds the result against chunkIndex 0
+    // and sessionManager's processSession picks it up via closeAndAwait().
+    // No-op if no stream was open (paywall-stream tracks an in-memory map).
+    window.electronAPI?.paywallStreamClose?.()
+
     if (!recorder || recorder.state === 'inactive') {
       // Already stopped (might have been flushed by startRecording)
       console.log('[audio] stopRecording called but recorder already inactive')
