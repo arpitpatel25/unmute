@@ -34,6 +34,33 @@ export const paywallPreloadExtensions = {
   paywallPopPendingPaymentCallback: (): Promise<string | null> =>
     ipcRenderer.invoke('paywall:pop-pending-payment-callback'),
 
+  // Dodo checkout — main proxies to the payments worker.
+  paywallCreateCheckout: (amountCents: number): Promise<{
+    ok: boolean
+    checkoutUrl?: string
+    paymentSessionId?: string
+    code?: string
+    message?: string
+  }> => ipcRenderer.invoke('paywall:create-checkout', amountCents),
+
+  // Recent wallet ledger rows (usage + topups) for the in-app history pane.
+  paywallGetLedger: (): Promise<Array<{
+    id: string
+    created_at: string
+    delta_cents: number
+    source: string
+    metadata: Record<string, unknown>
+  }>> => ipcRenderer.invoke('paywall:get-ledger'),
+
+  // Reconciliation: poll payment status when the browser redirect doesn't
+  // fire (closed tab, popup blocker).
+  paywallGetPaymentStatus: (paymentId: string): Promise<{
+    id: string
+    status: string
+    amount?: number
+    currency?: string
+  } | null> => ipcRenderer.invoke('paywall:get-payment-status', paymentId),
+
   // Balance state
   paywallGetBalance: (): Promise<{ balanceCents: number; topUpUrl: string }> =>
     ipcRenderer.invoke('paywall:get-balance'),

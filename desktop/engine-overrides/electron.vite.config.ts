@@ -9,11 +9,17 @@ import { resolve } from 'path'
 const SUPABASE_URL = process.env.__SUPABASE_URL__ || ''
 const SUPABASE_ANON_KEY = process.env.__SUPABASE_ANON_KEY__ || ''
 const PIPELINE_URL = process.env.__PIPELINE_URL__ || ''
+// Payments worker URL (Dodo checkout sessions + webhook + return bounce).
+// Separate from the pipeline (STT/LLM) so the two can be deployed and
+// scaled independently. Defaults to empty; renderer crashes loudly on
+// top-up attempt if not set, rather than silently failing.
+const PAYMENTS_URL = process.env.__PAYMENTS_URL__ || ''
 
 const paywallDefines = {
   __SUPABASE_URL__: JSON.stringify(SUPABASE_URL),
   __SUPABASE_ANON_KEY__: JSON.stringify(SUPABASE_ANON_KEY),
   __PIPELINE_URL__: JSON.stringify(PIPELINE_URL),
+  __PAYMENTS_URL__: JSON.stringify(PAYMENTS_URL),
 }
 
 export default defineConfig({

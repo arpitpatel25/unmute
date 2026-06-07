@@ -158,6 +158,35 @@ function registerSessionBridge() {
     settings.set('engineMode', mode)
     return true
   })
+
+  // ─── Dodo payments IPC ──────────────────────────────────────
+  // All three go through payments-client which calls the payments worker.
+  // They require a valid session — if the user isn't signed in, they
+  // return a structured error rather than crashing the renderer.
+
+  ipcMain.handle('paywall:create-checkout', async (_e, amountCents: number) => {
+    const token = currentSession.accessToken
+    if (!token) return { ok: false, code: 'UNAUTHORIZED', message: 'sign in first' }
+    if (!Number.isInteger(amountCents) || amountCents <= 0) {
+      return { ok: false, code: 'BAD_REQUEST', message: 'invalid amount' }
+    }
+    const { createCheckout } = await import('./payments-client')
+    return createCheckout(amountCents, token)
+  })
+
+  ipcMain.handle('paywall:get-ledger', async () => {
+    const token = currentSession.accessToken
+    if (!token) return []
+    const { fetchLedger } = await import('./payments-client')
+    return fetchLedger(token)
+  })
+
+  ipcMain.handle('paywall:get-payment-status', async (_e, paymentId: string) => {
+    const token = currentSession.accessToken
+    if (!token || !paymentId) return null
+    const { fetchPaymentStatus } = await import('./payments-client')
+    return fetchPaymentStatus(paymentId, token)
+  })
 }
 
 export function initPaywallGlue(): void {

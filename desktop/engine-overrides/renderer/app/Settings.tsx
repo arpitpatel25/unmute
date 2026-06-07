@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { UsageSummary } from '../shared/types'
 import { EngineSettings } from '../paywall/EngineSettings'
+import { Billing } from '../paywall/Billing'
 
 interface AudioDevice {
   deviceId: string
@@ -506,6 +507,12 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
       <SectionHeader icon={<BehaviorIcon />} title="Engine" />
       <div className="bg-surface-2 border border-border rounded-2xl overflow-hidden mb-3 shadow-sm">
         <EngineSettings />
+      </div>
+
+      {/* ═══ Billing ═══ (Dodo prepaid credits) */}
+      <SectionHeader icon={<BehaviorIcon />} title="Billing" />
+      <div className="bg-surface-2 border border-border rounded-2xl overflow-hidden mb-3 shadow-sm">
+        <Billing />
       </div>
 
       {/* ═══ Behavior ═══ */}
