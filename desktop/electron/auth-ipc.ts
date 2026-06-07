@@ -48,13 +48,35 @@ function keychainDelete(key: string): void {
   store.delete(`paywall.${key}`)
 }
 
-// ─── Deep link handler (Apple OAuth callback, magic link) ───────
+// ─── Deep link handler (Apple OAuth callback, magic link, payment) ─
+//
+// Two URL shapes share the unmute:// scheme:
+//   * unmute://auth/callback?access_token=…   — OAuth / magic link
+//   * unmute://payment-success?payment_id=…   — Dodo checkout completion
+//
+// Both need a "pending" slot because the URL may arrive BEFORE the renderer
+// is ready to receive it (cold launch via deep link). Each kind has its own
+// pending var + pop IPC so the two flows don't trample each other if a user
+// somehow triggers both in quick succession.
 
-let pendingDeepLink: string | null = null
+let pendingAuthDeepLink: string | null = null
+let pendingPaymentDeepLink: string | null = null
 
+/** Route a freshly-arrived unmute:// URL to the right renderer channel. */
 export function setPendingDeepLink(url: string): void {
-  pendingDeepLink = url
-  // Broadcast to all renderers — main window will route it to supabase-js
+  if (!url.startsWith('unmute://')) return
+
+  // unmute://payment-success?... — Dodo checkout return.
+  if (url.startsWith('unmute://payment-success')) {
+    pendingPaymentDeepLink = url
+    for (const w of BrowserWindow.getAllWindows()) {
+      w.webContents.send('paywall:payment-callback', url)
+    }
+    return
+  }
+
+  // Everything else is the auth/magic-link path.
+  pendingAuthDeepLink = url
   for (const w of BrowserWindow.getAllWindows()) {
     w.webContents.send('paywall:auth-callback', url)
   }
@@ -79,8 +101,14 @@ export function registerAuthIPC(): void {
   })
 
   ipcMain.handle('paywall:pop-pending-auth-callback', () => {
-    const url = pendingDeepLink
-    pendingDeepLink = null
+    const url = pendingAuthDeepLink
+    pendingAuthDeepLink = null
+    return url
+  })
+
+  ipcMain.handle('paywall:pop-pending-payment-callback', () => {
+    const url = pendingPaymentDeepLink
+    pendingPaymentDeepLink = null
     return url
   })
 }

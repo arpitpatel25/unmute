@@ -26,6 +26,14 @@ export const paywallPreloadExtensions = {
   paywallPopPendingAuthCallback: (): Promise<string | null> =>
     ipcRenderer.invoke('paywall:pop-pending-auth-callback'),
 
+  // Deep-link callback (Dodo checkout completion). Renderer's Billing pane
+  // listens to start polling /v1/me + /v1/payment/:id immediately.
+  paywallOnPaymentCallback: (cb: (url: string) => void) => {
+    ipcRenderer.on('paywall:payment-callback', (_e, url) => cb(url))
+  },
+  paywallPopPendingPaymentCallback: (): Promise<string | null> =>
+    ipcRenderer.invoke('paywall:pop-pending-payment-callback'),
+
   // Balance state
   paywallGetBalance: (): Promise<{ balanceCents: number; topUpUrl: string }> =>
     ipcRenderer.invoke('paywall:get-balance'),
