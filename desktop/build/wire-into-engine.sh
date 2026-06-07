@@ -67,10 +67,23 @@ wire_paywall() {
   mkdir -p "$engine/electron/paywall"
   cp -R "$ROOT/electron/." "$engine/electron/paywall/"
 
+  # Copy the native-paste addon into the OSS engine so it can be added as a
+  # path-based dep and built against Electron's Node ABI by
+  # electron-builder's install-app-deps postinstall.
+  if [[ -d "$ROOT/native-paste" ]]; then
+    log "Copying native-paste addon"
+    mkdir -p "$engine/native-paste"
+    cp -R "$ROOT/native-paste/." "$engine/native-paste/"
+  else
+    log "WARN: $ROOT/native-paste not found — native paste will be unavailable"
+  fi
+
   # Patch engine package.json:
   #   * Add @supabase/supabase-js for the paywall layer
   #   * Pin electron-store to ^8 (CJS). v11+ is ESM-only and crashes our
   #     main process with "TypeError: Store is not a constructor".
+  #   * Add unmute-native-paste as a file: dep so npm install + electron
+  #     rebuild compiles it against Electron's Node ABI.
   #   * Override appId from PAYWALL_APP_ID env (lets us flip to a fresh
   #     bundle id for dev testing without re-poisoning TCC for the prod id).
   node -e "
@@ -79,6 +92,9 @@ wire_paywall() {
     const pkg = JSON.parse(fs.readFileSync(path, 'utf-8'))
     pkg.dependencies['@supabase/supabase-js'] = '^2.45.0'
     pkg.dependencies['electron-store'] = '^8.2.0'
+    if (fs.existsSync('$engine/native-paste/package.json')) {
+      pkg.dependencies['unmute-native-paste'] = 'file:./native-paste'
+    }
     if (process.env.PAYWALL_APP_ID) {
       pkg.build = pkg.build || {}
       pkg.build.appId = process.env.PAYWALL_APP_ID
