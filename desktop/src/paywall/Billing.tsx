@@ -18,7 +18,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from './AuthContext'
 
-const TIERS_CENTS = [1000, 2500, 5000] // $10 / $25 / $50
+const TIERS_CENTS = [500, 1000, 2500] // $5 / $10 / $25
 const POLL_INTERVAL_MS = 3000
 const POLL_DEADLINE_MS = 5 * 60 * 1000
 

@@ -16,7 +16,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 DODO_API_BASE = "https://test.dodopayments.com"
 PUBLIC_API_BASE = "https://unmute-payments.zodpatel.workers.dev"
-DODO_TOPUP_PRODUCTS = "{}"   # populate with real product IDs after KYC clears
+DODO_TOPUP_PRODUCTS = '{"500":"pdt_0NgXpOexaxaUT5viKqM9B","1000":"pdt_0NgXoS2aKtdufsEgJEbqi","2500":"pdt_0NgXomgttNZyixWnNsu8U"}'
 
 [[kv_namespaces]]
 binding = "USER_BALANCE"
