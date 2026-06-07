@@ -138,8 +138,23 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // Send chunk to main process
     window.electronAPI.sendAudioChunk(buffer, chunkIdx, mode, frozenSessionIdRef.current)
 
+    // Paywall: close the current streaming POST (chunkIdx) and open a new one
+    // for the next macro chunk (chunkIdx + 1). Before this fix the renderer
+    // opened a single stream at chunkIndex 0 for the WHOLE recording, so VAD
+    // chunks 1+ silently fell through to the upload-after-stop path
+    // (tryManagedSTT) and paid the full audio upload latency. Now every macro
+    // chunk gets its own streaming POST — paywall-stream.ts already tracks
+    // sessions in a Map<chunkIndex, StreamSession>, we just had to drive the
+    // index from the renderer.
+    const nextChunkIdx = chunkIdx + 1
+    window.electronAPI?.paywallStreamClose?.()
+    window.electronAPI?.paywallStreamOpen?.({
+      flowType: mode === 'instruction' ? 'instruction' : 'dictation',
+      chunkIndex: nextChunkIdx,
+    })
+
     // Increment chunk index and reset chunk start time
-    chunkIndexRef.current = chunkIdx + 1
+    chunkIndexRef.current = nextChunkIdx
     chunkStartTimeRef.current = Date.now()
     silenceStartRef.current = null
 
@@ -154,6 +169,12 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         if (e.data.size > 0) {
           chunksRef.current.push(e.data) // Full recording backup
           macroBlobsRef.current.push(e.data) // Current macro chunk
+          // Forward to the active paywall stream (chunkIdx+1). Without this,
+          // bytes for chunks 1+ would never reach paywall-stream and the
+          // newly-opened stream would just sit empty.
+          e.data.arrayBuffer().then((buf) => {
+            window.electronAPI?.paywallStreamChunk?.(buf)
+          }).catch(() => { /* best-effort */ })
         }
       }
 
@@ -427,10 +448,12 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     chunkStartTimeRef.current = Date.now()
     setIsRecording(true)
 
-    // Paywall: open a streaming POST to the pipeline worker for this recording.
-    // No-op if managed cloud is not the selected provider.
+    // Paywall: open a streaming POST for chunk 0. Per-macro-chunk streams
+    // (chunk 1, 2, ...) get opened at VAD boundaries inside emitChunk so
+    // long dictations don't fall back to upload-after-stop for chunks > 0.
     window.electronAPI?.paywallStreamOpen?.({
       flowType: frozenModeRef.current === 'instruction' ? 'instruction' : 'dictation',
+      chunkIndex: 0,
     })
 
     // Always run the RMS monitor for the whole recording so heardSpeech is

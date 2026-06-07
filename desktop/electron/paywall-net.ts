@@ -38,6 +38,33 @@ export const pipelinePool = new Pool(origin, {
   pipelining: 1,
 })
 
+// Connection-event counters. undici emits 'connect' every time it opens a new
+// TCP+TLS socket and 'disconnect' when one drops. We want these as low as
+// possible — ideally one socket opens at app start, and every subsequent
+// request reuses it. The heuristic label in paywallFetch (based on
+// tHeaders-t0) is unreliable for streaming POSTs because the header response
+// only arrives AFTER the body finishes uploading. Counting real connect events
+// gives us the truth.
+let connectsOpened = 0
+let connectsClosed = 0
+try {
+  pipelinePool.on('connect', () => {
+    connectsOpened++
+    console.log(`[paywall-net] 🔌 pool connect (#${connectsOpened} opened, ${connectsClosed} closed since start)`)
+  })
+  pipelinePool.on('disconnect', (_origin, _targets, error) => {
+    connectsClosed++
+    console.log(`[paywall-net] 🔌 pool disconnect (#${connectsClosed} closed, ${connectsOpened} opened since start; reason: ${error?.message ?? 'idle/timeout'})`)
+  })
+} catch {
+  /* older undici may lack typed events — best-effort */
+}
+
+/** Returns total connection-open / connection-close counters since boot. */
+export function getConnectionCounters(): { opened: number; closed: number } {
+  return { opened: connectsOpened, closed: connectsClosed }
+}
+
 // Track per-request timing so the diagnostic logs are meaningful.
 let requestCounter = 0
 
@@ -92,7 +119,8 @@ export async function paywallFetch(
   console.log(
     `[paywall-net] req#${reqId} ${init.method || 'GET'} ${path} — ${tHeaders - t0}ms → ${reuseHint}\n` +
     `  pool before: ${JSON.stringify(statsBefore)}\n` +
-    `  pool after:  ${JSON.stringify(statsAfter)}`
+    `  pool after:  ${JSON.stringify(statsAfter)}\n` +
+    `  connections since boot: ${connectsOpened} opened, ${connectsClosed} closed`
   )
 
   return res

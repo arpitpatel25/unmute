@@ -190,6 +190,24 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
   }
 
   const tAwaitStart = Date.now()
+  // Event-loop stall detector for this await window: if the JS event loop
+  // stalls for >100ms between ticks, we want to know — that means response
+  // bytes may have been sitting in the OS socket buffer while our code was
+  // busy elsewhere (renderer IPC, GC, etc).
+  const stallSamples: Array<{ at: number; stallMs: number }> = []
+  let stallTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+    /* heartbeat — actual stall is measured via the gap between expected
+       fire time and actual fire time inside the callback */
+  }, 50)
+  let lastTick = Date.now()
+  const stallChecker = setInterval(() => {
+    const now = Date.now()
+    const gap = now - lastTick
+    if (gap > 150) {
+      stallSamples.push({ at: now - tAwaitStart, stallMs: gap - 50 })
+    }
+    lastTick = now
+  }, 50)
 
   try {
     // Race the response against a timeout to avoid hanging
@@ -197,11 +215,14 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
       setTimeout(() => reject(new Error('STREAM_TIMEOUT')), timeoutMs),
     )
     const res = await Promise.race([session.responsePromise, timeoutPromise])
+    const tHeadersReceived = Date.now()
 
     if (res.status === 401) {
       console.log(`[paywall-stream] chunk ${chunkIndex} got 401 — refreshing token, caller will fall back`)
       void refreshAccessToken()
       sessions.delete(chunkIndex)
+      if (stallTimer) clearInterval(stallTimer)
+      clearInterval(stallChecker)
       return null
     }
 
@@ -215,6 +236,10 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
       timing_ms?: Record<string, number>
     }
     const body = (await res.json()) as Envelope
+    const tBodyParsed = Date.now()
+
+    if (stallTimer) clearInterval(stallTimer)
+    clearInterval(stallChecker)
 
     if (!res.ok || !body.ok) {
       console.warn(`[paywall-stream] chunk ${chunkIndex} non-ok response: ${res.status} ${body.code} ${body.message}`)
@@ -224,15 +249,40 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
 
     if (body.balance_cents !== undefined) updateBalanceFromResponse(body.balance_cents)
 
-    const tDone = Date.now()
+    const tDone = tBodyParsed
     const totalElapsed = tDone - session.tOpenedAt
     const awaitTime = tDone - tAwaitStart
+    const headersTime = tHeadersReceived - tAwaitStart
+    const bodyReadTime = tBodyParsed - tHeadersReceived
     const w = body.timing_ms || {}
+    const drainMs = (w.drain as number | undefined) ?? 0
+    const groqTtfbMs = (w.groq_ttfb as number | undefined) ?? 0
+    const groqBodyMs = (w.groq_body as number | undefined) ?? 0
     const groqTotal = (w.groq_total as number | undefined) ?? 0
+    const workerTotal = (w.worker_total as number | undefined) ?? 0
+    // Client-side "unexplained" gap: time between worker saying "done" and
+    // us actually having the response. If this is large + stalls were
+    // detected, the response was likely sitting in the OS buffer while our
+    // event loop was busy. If large + no stalls, it was pure network down.
+    const unexplained = Math.max(0, awaitTime - workerTotal)
+    const totalStallMs = stallSamples.reduce((a, s) => a + s.stallMs, 0)
+    const stallNote = stallSamples.length
+      ? `event-loop stalls: ${stallSamples.length} spike(s), total ${totalStallMs}ms`
+      : 'event-loop: no stalls'
+
     console.log(
       `[paywall-stream] chunk ${chunkIndex} TIMING — open→done: ${totalElapsed}ms\n` +
       `  ├─ stream alive (recording): ${session.tClosedAt ? session.tClosedAt - session.tOpenedAt : '?'}ms (${session.tBytesWritten}B uploaded)\n` +
-      `  └─ close→response: ${awaitTime}ms (worker total ${w.worker_total || '?'}ms incl. Groq ${groqTotal}ms)`,
+      `  └─ close→response: ${awaitTime}ms\n` +
+      `     ├─ close → headers arrived: ${headersTime}ms (= FIN up + worker_total + headers down)\n` +
+      `     ├─ headers → body parsed:   ${bodyReadTime}ms (body down + JSON parse)\n` +
+      `     ├─ server-reported worker_total: ${workerTotal}ms\n` +
+      `     │    ├─ drain (CF buffer→worker):    ${drainMs}ms\n` +
+      `     │    ├─ groq_ttfb (CF→Groq first byte): ${groqTtfbMs}ms\n` +
+      `     │    └─ groq_body (Groq full response): ${groqBodyMs}ms\n` +
+      `     ├─ network round-trip (close→headers − worker): ${Math.max(0, headersTime - workerTotal)}ms\n` +
+      `     ├─ unexplained gap (await − worker): ${unexplained}ms\n` +
+      `     └─ ${stallNote}`,
     )
 
     sessions.delete(chunkIndex)
@@ -246,6 +296,8 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
       timing: body.timing_ms,
     }
   } catch (e) {
+    if (stallTimer) clearInterval(stallTimer)
+    clearInterval(stallChecker)
     const isTimeout = (e as Error).message === 'STREAM_TIMEOUT'
     console.warn(
       `[paywall-stream] chunk ${chunkIndex} ${isTimeout ? 'TIMEOUT' : 'response error'}: ${(e as Error).message}`,

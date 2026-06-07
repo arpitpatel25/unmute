@@ -121,18 +121,16 @@ patch_engine_sources() {
     sed -i.bak "/^import { setupAutoUpdater/a\\
 import { initPaywall } from './paywall/main-extensions'
 " "$main_ts"
+    # Inject the import for buildOSSAdapter (engine-override at
+    # engine/electron/buildOSSAdapter.ts that wraps OSS's whisperManager /
+    # groqTranscribe / keyStore so the provider-router can call BYOK + Local
+    # paths). This replaces the old `initPaywall(app, {} as any)` stub.
+    sed -i.bak "/^import { initPaywall } from '\.\/paywall\/main-extensions'/a\\
+import { buildOSSAdapter } from './buildOSSAdapter'
+" "$main_ts"
     # Call after createWidgetWindow() — the existing main bootstrap.
-    # NOTE: we pass `{}` instead of `buildOSSAdapter()` because the latter
-    # function is documented in PATCHES.md but was never persisted in code.
-    # A missing-symbol ReferenceError here short-circuits the whole
-    # app.whenReady().then() callback and kills setupIPC(), which prevents
-    # OSS IPC handlers (incl. permissions:request-mic) from ever registering.
-    # Passing `{}` lets initPaywall run; managed STT routing is wired via
-    # the engine-overrides sessionManager.ts, not via this adapter, so the
-    # only feature this stubs out is the provider-router's BYOK/Local fallback
-    # chain — fine for current testing.
     sed -i.bak "/createWidgetWindow()/a\\
-  initPaywall(app, {} as any)
+  initPaywall(app, buildOSSAdapter())
 " "$main_ts"
     rm -f "$main_ts.bak"
   fi

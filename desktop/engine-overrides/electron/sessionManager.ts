@@ -12,8 +12,12 @@ import { features } from './featureFlags'
 import { hasApiKey } from './keyStore'
 // ─── Paywall managed-cloud intercepts ──────────────────────────────
 // Files are copied into engine/electron/paywall/ by wire_paywall.
-import { tryManagedSTT } from './paywall/paywall-route'
+import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
 import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait } from './paywall/paywall-stream'
+// OSS prompt assembly — we reuse it client-side so the worker's /v1/llm
+// endpoint stays a thin pass-through to Groq instead of duplicating prompt
+// logic on the server (which would diverge from OSS over time).
+import { assembleTransformMessages } from './prompts'
 
 type FlowType = 'dictation' | 'transform' | 'quote' | 'context' | 'instruction'
 
@@ -51,6 +55,19 @@ function isLLMRefusal(text: string): boolean {
 const WHISPER_SENTINELS_RE = /\[\s*(?:BLANK_AUDIO|SILENCE|\*SILENCE\*|MUSIC|INAUDIBLE|NO\s*SPEECH|NOISE|SOUND|APPLAUSE|LAUGHTER)\s*\]/gi
 
 /**
+ * Well-known Whisper hallucination phrases on silent / low-volume audio.
+ * Whisper was trained on lots of podcast/YouTube content and at temperature=0
+ * deterministically inserts these high-probability sequences when given
+ * ambiguous silence. Applied per-chunk (before stitching) AND at the end of
+ * the whole transcript — otherwise a chunk-boundary "Thank you." lands in
+ * the middle of the final output where the trailing-anchored regex can't
+ * see it.
+ *
+ * We match leading + trailing whitespace so adjacent text stays well-spaced.
+ */
+const WHISPER_HALLUCINATION_RE = /\s*(?:thanks? for watching[.!]?|please subscribe[.!]?|thank you[.!]?|bye[.!]?|see you next time[.!]?|subtitles? by\s+[^.!]+[.!]?)\s*$/i
+
+/**
  * Lightweight deterministic cleanup for raw dictation output — no LLM.
  * Trims, normalises whitespace, strips whisper.cpp non-speech sentinels
  * (anywhere in the text, not just when the whole transcript is one), and
@@ -66,17 +83,24 @@ export function cleanTranscript(text: string): string {
   // normalise runs of spaces/tabs and excessive blank lines
   t = t.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n')
   // strip well-known trailing STT hallucinations on silence
-  t = t.replace(/[\s]*(?:thanks? for watching[.!]?|please subscribe[.!]?|thank you[.!]?)\s*$/i, '').trim()
+  t = t.replace(WHISPER_HALLUCINATION_RE, '').trim()
+  return t
+}
+
+/** Strip both sentinels AND trailing-hallucination phrases from one chunk. */
+function cleanChunk(text: string): string {
+  if (!text) return ''
+  let t = text.replace(WHISPER_SENTINELS_RE, ' ').trim()
+  // Apply the trailing-hallucination strip at the END of each chunk too —
+  // otherwise the phrase lands mid-stitch where cleanTranscript's $-anchor
+  // can't reach it.
+  t = t.replace(WHISPER_HALLUCINATION_RE, '').trim()
   return t
 }
 
 /** Join per-chunk transcripts into one clean block (deterministic, no LLM). */
 function stitchChunks(transcripts: string[]): string {
-  // Strip sentinels per-chunk first so a silent chunk doesn't survive the
-  // join, then run the full cleanup on the stitched whole.
-  const cleaned = transcripts
-    .map((t) => t.replace(WHISPER_SENTINELS_RE, ' ').trim())
-    .filter(Boolean)
+  const cleaned = transcripts.map(cleanChunk).filter(Boolean)
   return cleanTranscript(cleaned.join(' '))
 }
 
@@ -186,6 +210,50 @@ class SessionManager {
     return hasApiKey()
       ? 'Formatting needs internet — pasted raw'
       : 'Formatting needs a Groq key — pasted raw'
+  }
+
+  /**
+   * Managed-cloud LLM intercept for transform / context / instruction flows.
+   * Assembles the same messages OSS would have used (via the OSS prompts.ts
+   * helper) and routes them through tryManagedLLM (POST /v1/llm on the
+   * pipeline worker, which is a thin pass-through to Groq).
+   *
+   * Returns the LLM text on success, null when:
+   *   * the user is not on managed mode (shouldTryManaged inside
+   *     tryManagedLLM returns false → null)
+   *   * the worker responded with insufficient-balance / rate-limited and
+   *     paywall-route is configured to fall through
+   *   * any error before we get a text — the caller falls through to its
+   *     existing pipelineTransform path
+   */
+  private async tryManagedLLMForFlow(
+    flowType: FlowType,
+    content: string | null,
+    context: string | null,
+    instruction: string | null,
+    signal?: AbortSignal,
+  ): Promise<string | null> {
+    try {
+      const { messages, temperature } = assembleTransformMessages(
+        flowType,
+        content,
+        context,
+        instruction,
+        this.isChunkedSession,
+        this.inputLanguage,
+      )
+      const r = await tryManagedLLM(messages, { temperature }, signal)
+      if (r?.text != null) {
+        console.log(`[session] ✓ ${flowType} LLM via managed cloud (${r.costCents}¢)`)
+        return r.text
+      }
+    } catch (e) {
+      console.warn(
+        `[session] tryManagedLLM (${flowType}) failed, falling through:`,
+        e instanceof Error ? e.message : e,
+      )
+    }
+    return null
   }
 
   getAuthToken(): string | null {
@@ -1210,8 +1278,17 @@ class SessionManager {
             output = cleanTranscript(session.dictationTranscript || '')
             break
 
-          case 'context':
+          case 'context': {
             console.log('[session] Context flow — sending to LLM (provider:', this.llmProvider, ', backend:', this.backendProvider, ')')
+            // ─── Managed-cloud LLM intercept ────────────────────────
+            const managedCtx = await this.tryManagedLLMForFlow(
+              'context',
+              null,
+              session.selectedText,
+              session.instructionTranscript,
+              controller.signal,
+            )
+            if (managedCtx != null) { output = managedCtx; break }
             try {
               if (this.llmProvider === 'local-llm') {
                 const localOutput = await localTransformText(
@@ -1253,8 +1330,19 @@ class SessionManager {
             }
             break
 
-          case 'transform':
+          }
+
+          case 'transform': {
             console.log('[session] Transform flow — sending to LLM (provider:', this.llmProvider, ', backend:', this.backendProvider, ')')
+            // ─── Managed-cloud LLM intercept ────────────────────────
+            const managedTx = await this.tryManagedLLMForFlow(
+              'transform',
+              session.dictationTranscript,
+              session.selectedTextRole === 'context' ? session.selectedText : null,
+              session.instructionTranscript,
+              controller.signal,
+            )
+            if (managedTx != null) { output = managedTx; break }
             try {
               if (this.llmProvider === 'local-llm') {
                 const localOutput = await localTransformText(
@@ -1299,8 +1387,19 @@ class SessionManager {
             }
             break
 
-          case 'instruction':
+          }
+
+          case 'instruction': {
             console.log('[session] Instruction-only flow — sending to LLM (provider:', this.llmProvider, ', backend:', this.backendProvider, ')')
+            // ─── Managed-cloud LLM intercept ────────────────────────
+            const managedInstr = await this.tryManagedLLMForFlow(
+              'instruction',
+              null,
+              null,
+              session.instructionTranscript,
+              controller.signal,
+            )
+            if (managedInstr != null) { output = managedInstr; break }
             try {
               if (this.llmProvider === 'local-llm') {
                 const localOutput = await localTransformText(
@@ -1341,6 +1440,7 @@ class SessionManager {
               if (output) session.errorMessage = 'formatting-fallback'
             }
             break
+          }
 
           default:
             output = session.dictationTranscript || ''
