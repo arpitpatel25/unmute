@@ -67,10 +67,23 @@ wire_paywall() {
   mkdir -p "$engine/electron/paywall"
   cp -R "$ROOT/electron/." "$engine/electron/paywall/"
 
+  # Copy the native-paste addon into the OSS engine so it can be added as a
+  # path-based dep and built against Electron's Node ABI by
+  # electron-builder's install-app-deps postinstall.
+  if [[ -d "$ROOT/native-paste" ]]; then
+    log "Copying native-paste addon"
+    mkdir -p "$engine/native-paste"
+    cp -R "$ROOT/native-paste/." "$engine/native-paste/"
+  else
+    log "WARN: $ROOT/native-paste not found — native paste will be unavailable"
+  fi
+
   # Patch engine package.json:
   #   * Add @supabase/supabase-js for the paywall layer
   #   * Pin electron-store to ^8 (CJS). v11+ is ESM-only and crashes our
   #     main process with "TypeError: Store is not a constructor".
+  #   * Add unmute-native-paste as a file: dep so npm install + electron
+  #     rebuild compiles it against Electron's Node ABI.
   #   * Override appId from PAYWALL_APP_ID env (lets us flip to a fresh
   #     bundle id for dev testing without re-poisoning TCC for the prod id).
   node -e "
@@ -79,6 +92,9 @@ wire_paywall() {
     const pkg = JSON.parse(fs.readFileSync(path, 'utf-8'))
     pkg.dependencies['@supabase/supabase-js'] = '^2.45.0'
     pkg.dependencies['electron-store'] = '^8.2.0'
+    if (fs.existsSync('$engine/native-paste/package.json')) {
+      pkg.dependencies['unmute-native-paste'] = 'file:./native-paste'
+    }
     if (process.env.PAYWALL_APP_ID) {
       pkg.build = pkg.build || {}
       pkg.build.appId = process.env.PAYWALL_APP_ID
@@ -128,11 +144,55 @@ import { initPaywall } from './paywall/main-extensions'
     sed -i.bak "/^import { initPaywall } from '\.\/paywall\/main-extensions'/a\\
 import { buildOSSAdapter } from './buildOSSAdapter'
 " "$main_ts"
-    # Call after createWidgetWindow() — the existing main bootstrap.
-    sed -i.bak "/createWidgetWindow()/a\\
-  initPaywall(app, buildOSSAdapter())
-" "$main_ts"
     rm -f "$main_ts.bak"
+
+    # Rewrite the activate handler AND inject initPaywall in one pass.
+    #
+    # Two bugs in the OSS default we fix here:
+    #   (a) The activate handler's `getAllWindows().length === 0` branch is
+    #       unreachable in our build: the widget window stays open for the
+    #       life of the app, so length is never 0. Net effect: clicking the
+    #       macOS Dock icon after the user closed the main window is a no-op.
+    #       Replaced with the standard show-or-recreate pattern.
+    #   (b) A naive `sed /createWidgetWindow()/a initPaywall(...)` matches
+    #       BOTH the bootstrap and (pre-rewrite) the activate handler, which
+    #       would double-register IPC handlers if activate ever fired.
+    #       Rewriting the activate handler first removes the second match;
+    #       the string replace below is then unambiguous.
+    local patcher
+    patcher="$(mktemp)"
+    cat > "$patcher" <<'NODE_EOF'
+const fs = require('fs')
+const p = process.argv[2]
+let src = fs.readFileSync(p, 'utf-8')
+
+const ACTIVATE_RE = /app\.on\('activate',\s*\(\)\s*=>\s*\{[\s\S]*?\n  \}\)/
+const ACTIVATE_NEW = `app.on('activate', () => {
+    const win = getMainWindow()
+    if (!win || win.isDestroyed()) {
+      createMainWindow()
+    } else {
+      win.show()
+      win.focus()
+    }
+  })`
+if (ACTIVATE_RE.test(src)) {
+  src = src.replace(ACTIVATE_RE, ACTIVATE_NEW)
+} else {
+  console.error('[wire] WARN: activate handler not found in main.ts — Dock-click fix not applied')
+}
+
+if (!src.includes('initPaywall(app, buildOSSAdapter())')) {
+  src = src.replace(
+    'createWidgetWindow()\n',
+    'createWidgetWindow()\n  initPaywall(app, buildOSSAdapter())\n'
+  )
+}
+
+fs.writeFileSync(p, src)
+NODE_EOF
+    node "$patcher" "$main_ts"
+    rm -f "$patcher"
   fi
 
   # 2) preload.ts: merge paywall API into electronAPI

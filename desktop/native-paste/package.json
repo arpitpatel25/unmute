@@ -1,0 +1,18 @@
+{
+  "name": "unmute-native-paste",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native macOS CGEvent paste for unmute. Runs in the main Electron process so it inherits the signed .app bundle's TCC Accessibility grant — child-binary keystroke posting silently drops (we tried key-poster and globe-listener). This is the canonical fix.",
+  "main": "index.js",
+  "scripts": {
+    "install": "node-gyp rebuild --release",
+    "rebuild": "node-gyp rebuild --release"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.1.1"
+  },
+  "gypfile": true,
+  "engines": {
+    "node": ">=18"
+  }
+}
