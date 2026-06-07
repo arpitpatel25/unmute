@@ -15,7 +15,7 @@
 import { verifyJWT, extractBearer } from '../../shared/auth'
 import type { PaymentsEnv } from '../../shared/types'
 import { rpc } from '../../shared/supabase'
-import { createCheckoutSession, parseTopupConfig } from '../../shared/dodo'
+import { createCheckoutSession, getPayment, parseTopupConfig } from '../../shared/dodo'
 import { verifyDodoWebhook } from '../../shared/dodoWebhook'
 import { setBalance } from '../../shared/balance'
 
@@ -57,6 +57,12 @@ export default {
     }
     if (req.method === 'POST' && url.pathname === '/checkout/session') {
       return handleCreateCheckout(req, env, userId, payload.email)
+    }
+    // GET /v1/payment/:id — proxy lookup so the app can reconcile when the
+    // user closes the checkout tab before redirect.
+    if (req.method === 'GET' && url.pathname.startsWith('/v1/payment/')) {
+      const id = url.pathname.slice('/v1/payment/'.length)
+      return handlePaymentLookup(env, userId, id)
     }
 
     return json({ ok: false, code: 'NOT_FOUND', message: 'No route' }, 404)
@@ -275,6 +281,50 @@ async function onPaymentSucceeded(env: PaymentsEnv, eventId: string, evt: DodoEv
   } catch (e) {
     console.warn('[webhook:dodo] KV cache update failed (will reconcile via TTL):', (e as Error).message)
   }
+}
+
+// ─── GET /v1/payment/:id ────────────────────────────────────────
+// Authoritative status read from Dodo. Used by the desktop app's
+// reconciliation polling — when the browser redirect fails (closed tab,
+// blocked popup), the app polls this until status === 'succeeded' (the
+// webhook is the source of truth for crediting, but the app needs a way
+// to KNOW when to stop polling).
+//
+// Authorization: JWT-authed AND we verify metadata.user_id matches the
+// caller. Otherwise any user could enumerate payments by ID.
+
+async function handlePaymentLookup(
+  env: PaymentsEnv,
+  userId: string,
+  paymentId: string,
+): Promise<Response> {
+  if (!paymentId || !/^[A-Za-z0-9_\-]{1,128}$/.test(paymentId)) {
+    return json({ ok: false, code: 'BAD_REQUEST', message: 'invalid payment id' }, 400)
+  }
+  let payment
+  try {
+    payment = await getPayment(env, paymentId)
+  } catch (e) {
+    console.error('[payment-lookup] dodo error:', (e as Error).message)
+    return json({ ok: false, code: 'UPSTREAM_ERROR', message: 'lookup failed' }, 502)
+  }
+  if (!payment) {
+    return json({ ok: false, code: 'NOT_FOUND', message: 'payment not found' }, 404)
+  }
+  const ownerId = (payment.metadata?.user_id as string | undefined) ?? null
+  if (ownerId !== userId) {
+    // Don't leak that the payment exists — return 404, not 403.
+    return json({ ok: false, code: 'NOT_FOUND', message: 'payment not found' }, 404)
+  }
+  return json({
+    ok: true,
+    data: {
+      id: payment.id,
+      status: payment.status,
+      amount: payment.amount,
+      currency: payment.currency,
+    },
+  })
 }
 
 /** Record a failed/refunded payment for audit. Does NOT touch balance. */
