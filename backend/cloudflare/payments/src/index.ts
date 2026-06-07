@@ -15,6 +15,7 @@
 import { verifyJWT, extractBearer } from '../../shared/auth'
 import type { PaymentsEnv } from '../../shared/types'
 import { rpc } from '../../shared/supabase'
+import { createCheckoutSession, parseTopupConfig } from '../../shared/dodo'
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -53,11 +54,79 @@ export default {
       return handleLedger(env, userId)
     }
     if (req.method === 'POST' && url.pathname === '/checkout/session') {
-      return json({ ok: false, code: 'NOT_IMPLEMENTED', message: 'Dodo integration lands soon' }, 501)
+      return handleCreateCheckout(req, env, userId, payload.email)
     }
 
     return json({ ok: false, code: 'NOT_FOUND', message: 'No route' }, 404)
   },
+}
+
+// ─── POST /checkout/session ─────────────────────────────────────
+// Body: { amount_cents: number }   — must match one of the configured tiers.
+// Returns: { ok: true, checkout_url, payment_session_id? }
+//
+// Client opens checkout_url in the system browser (NOT an Electron
+// BrowserWindow — UPI/3DS/Apple Pay break in embedded webviews).
+
+interface CreateCheckoutRequest {
+  amount_cents?: number
+}
+
+async function handleCreateCheckout(
+  req: Request,
+  env: PaymentsEnv,
+  userId: string,
+  userEmail: string | undefined,
+): Promise<Response> {
+  let body: CreateCheckoutRequest
+  try {
+    body = (await req.json()) as CreateCheckoutRequest
+  } catch {
+    return json({ ok: false, code: 'BAD_REQUEST', message: 'invalid JSON' }, 400)
+  }
+  const amount = body.amount_cents
+  if (typeof amount !== 'number' || !Number.isInteger(amount) || amount <= 0) {
+    return json({ ok: false, code: 'BAD_REQUEST', message: 'amount_cents must be a positive integer' }, 400)
+  }
+  if (!userEmail) {
+    // Supabase JWTs from email/password and OAuth flows include email; if
+    // it's missing, the account is in some non-standard state. Fail loud.
+    return json({ ok: false, code: 'BAD_REQUEST', message: 'user has no email on file' }, 400)
+  }
+
+  let cfg
+  try {
+    cfg = parseTopupConfig(env)
+  } catch (e) {
+    console.error('[checkout] bad config:', (e as Error).message)
+    return json({ ok: false, code: 'INTERNAL_ERROR', message: 'checkout misconfigured' }, 500)
+  }
+
+  if (!cfg.productByCents[String(amount)]) {
+    return json(
+      { ok: false, code: 'BAD_REQUEST', message: `amount ${amount} not a configured tier` },
+      400,
+    )
+  }
+
+  try {
+    const session = await createCheckoutSession(env, cfg, {
+      amountCents: amount,
+      userId,
+      userEmail,
+      returnUrl: `${env.PUBLIC_API_BASE}/checkout/return`,
+    })
+    return json({
+      ok: true,
+      checkout_url: session.checkout_url,
+      payment_session_id: session.payment_session_id,
+    })
+  } catch (e) {
+    const msg = (e as Error).message
+    console.error('[checkout] create failed:', msg)
+    // Don't leak Dodo internals to the client.
+    return json({ ok: false, code: 'UPSTREAM_ERROR', message: 'could not create checkout session' }, 502)
+  }
 }
 
 // ─── Dodo webhook handler (skeleton) ────────────────────────────

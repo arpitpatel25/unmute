@@ -15,7 +15,25 @@ export interface PipelineEnv {
 export interface PaymentsEnv {
   SUPABASE_URL: string
   SUPABASE_SERVICE_ROLE_KEY: string
+
+  // Dodo Payments. Set via `wrangler secret put` (do not commit values).
+  DODO_API_KEY: string
   DODO_WEBHOOK_SECRET: string
+
+  // Dodo API host — test or live. Set per-environment in wrangler.toml.
+  //   test → https://test.dodopayments.com
+  //   live → https://live.dodopayments.com
+  DODO_API_BASE: string
+
+  // JSON map of top-up cents → Dodo product_id.
+  //   e.g. '{"1000":"prod_topup_10","2500":"prod_topup_25","5000":"prod_topup_50"}'
+  // Products are created out-of-band in the Dodo dashboard.
+  DODO_TOPUP_PRODUCTS: string
+
+  // Base URL for the return-page bounce (rendered by this worker).
+  //   e.g. https://api.unmute.app  (then /checkout/return is appended)
+  PUBLIC_API_BASE: string
+
   USER_BALANCE: KVNamespace
 }
 
