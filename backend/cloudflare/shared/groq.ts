@@ -24,9 +24,13 @@ const LLM_OUTPUT_PRICE = 0.34 / 1_000_000 // $0.34 per million output tokens
 
 // ─── Markup ─────────────────────────────────────────────────────
 
-/** 20% markup over Groq's actual cost (covers Cloudflare + Supabase + Dodo
- *  fees + small operating margin). Tunable. */
-export const MARKUP_MULTIPLIER = 1.2
+/** 2x markup over Groq's actual cost. Covers Cloudflare + Supabase + Dodo
+ *  fees (Dodo: ~4% + $0.40 + 1.5% intl; payout MoR cut amortizes to ~8-11%
+ *  on small top-ups) and leaves a ~40% net margin. Tunable, but should be
+ *  treated as a real price — not a beta number — since per-request cost is
+ *  surfaced to the user in the in-app usage history. Bumping later would be
+ *  noticed by power users. */
+export const MARKUP_MULTIPLIER = 2.0
 
 // ─── Cost calculators (return integer cents, rounded UP) ────────
 
