@@ -13,6 +13,7 @@ import { hasApiKey } from './keyStore'
 // ─── Paywall managed-cloud intercepts ──────────────────────────────
 // Files are copied into engine/electron/paywall/ by wire_paywall.
 import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
+import { getPaywallEngineMode } from './paywall/paywall-glue'
 import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait } from './paywall/paywall-stream'
 // OSS prompt assembly — we reuse it client-side so the worker's /v1/llm
 // endpoint stays a thin pass-through to Groq instead of duplicating prompt
@@ -210,6 +211,168 @@ class SessionManager {
     return hasApiKey()
       ? 'Formatting needs internet — pasted raw'
       : 'Formatting needs a Groq key — pasted raw'
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Speculative local-fallback for STT
+  //
+  // Two-timeout pattern (see sessionManager.ts inline docs above):
+  //
+  //   t=0          User stops talking; cloud STT request is in flight.
+  //   t=T1_MS      If cloud still hasn't returned, *speculatively* start
+  //                whisper.cpp on-device in parallel. CPU spin-up only
+  //                happens when cloud is slow — healthy dictations
+  //                (cloud back in <T1) never burn local cycles.
+  //   t=T2_MS      Commit: whichever has a result wins. Past T2 cloud
+  //                is dead to us, even if it eventually responds.
+  //                If local isn't ready yet at T2 we wait for it
+  //                (we already gave up on cloud, no point bailing).
+  //
+  // The cloud Promise we pass in must never reject — it should resolve
+  // to null on failure. The race helper itself never throws.
+  //
+  // Values chosen from observed latency data:
+  //   T1=1500ms  — above the 95th-percentile healthy cloud tail (~1s)
+  //                so we don't spin up local for normal dictations.
+  //   T2=4000ms  — typical "user feels broken" threshold; whisper-tiny
+  //                on M-series Macs finishes a ~15s clip in ~2-3s, so
+  //                local is usually ready by then.
+  // ────────────────────────────────────────────────────────────────
+  private static readonly SPECULATIVE_LOCAL_START_MS = 1500
+  private static readonly LOCAL_COMMIT_MS = 4000
+
+  /**
+   * Race a cloud STT call against a speculative on-device whisper.cpp
+   * transcription. Cloud wins if it returns before LOCAL_COMMIT_MS,
+   * local wins otherwise.
+   *
+   * Returns null only if BOTH paths failed (or local model isn't
+   * installed AND cloud failed). The caller falls through to the
+   * existing OSS engine logic (which itself may end up at local
+   * whisper, just without speculation).
+   */
+  private async raceCloudVsLocalSTT(
+    cloudPromise: Promise<{ text: string } | null>,
+    audio: Buffer,
+    label: string,
+  ): Promise<{ text: string; source: 'cloud' | 'local' } | null> {
+    // Only race when the user is on a cloud-using mode. In strict BYOK
+    // or Local mode, the cloudPromise returns null immediately and the
+    // user expects their OWN provider to be used (BYOK → groqTranscribe
+    // with their key; Local → whisper.cpp via the OSS path). Bailing
+    // here lets the existing OSS routing take over so we don't, e.g.,
+    // run local on top of a BYOK user who just wants Groq.
+    const mode = getPaywallEngineMode()
+    if (mode !== 'managed' && mode !== 'auto') return null
+
+    const t0 = Date.now()
+    const T1 = SessionManager.SPECULATIVE_LOCAL_START_MS
+    const T2 = SessionManager.LOCAL_COMMIT_MS
+
+    // Wrap cloud so a thrown error doesn't propagate (treat as null).
+    const cloud: Promise<{ text: string } | null> = cloudPromise.catch((e) => {
+      console.warn(`[session:race] ${label}: cloud threw — ${e instanceof Error ? e.message : e}`)
+      return null
+    })
+
+    // Lazily started at T1, only if model is ready. Resolves to text or
+    // null. Never throws (errors are caught + logged).
+    let localPromise: Promise<string | null> | null = null
+    const tryStartLocal = (): void => {
+      if (localPromise) return
+      if (!whisperManager.isModelReady() || !whisperManager.isBinaryReady()) {
+        console.log(`[session:race] ${label}: local model not ready — speculative fallback unavailable`)
+        return
+      }
+      const tStart = Date.now()
+      console.log(`[session:race] ${label}: starting speculative local whisper at +${tStart - t0}ms`)
+      localPromise = whisperManager
+        .transcribe(audio)
+        .then((text) => {
+          console.log(`[session:race] ${label}: local whisper produced ${text.length} chars in ${Date.now() - tStart}ms`)
+          return text
+        })
+        .catch((e) => {
+          console.warn(`[session:race] ${label}: local whisper failed — ${e instanceof Error ? e.message : e}`)
+          return null
+        })
+    }
+
+    // ── Phase 1: 0 → T1.  Cloud-only window. ──────────────────────
+    const t1Tick = new Promise<'t1'>((r) => setTimeout(() => r('t1'), T1))
+    const cloudTagged = cloud.then((v) => ({ tag: 'cloud' as const, value: v }))
+    const phase1 = await Promise.race([cloudTagged, t1Tick])
+    if (phase1 !== 't1' && phase1.value?.text != null) {
+      console.log(`[session:race] ${label}: cloud won in phase 1 (${Date.now() - t0}ms)`)
+      return { text: phase1.value.text, source: 'cloud' }
+    }
+    // Either T1 fired, or cloud returned null/no-text. Start local either way.
+    tryStartLocal()
+
+    // ── Phase 2: T1 → T2.  Cloud still preferred, local running. ──
+    if (!localPromise) {
+      // Local model unavailable — our only hope is to keep waiting on
+      // cloud (it might still come back).
+      const r = await cloud
+      if (r?.text != null) {
+        console.log(`[session:race] ${label}: cloud won late (no local available, ${Date.now() - t0}ms)`)
+        return { text: r.text, source: 'cloud' }
+      }
+      return null
+    }
+
+    const remainingToT2 = Math.max(0, T2 - (Date.now() - t0))
+    const t2Tick = new Promise<'t2'>((r) => setTimeout(() => r('t2'), remainingToT2))
+    const phase2 = await Promise.race([cloudTagged, t2Tick])
+    if (phase2 !== 't2' && phase2.value?.text != null) {
+      console.log(`[session:race] ${label}: cloud won in phase 2 (${Date.now() - t0}ms)`)
+      return { text: phase2.value.text, source: 'cloud' }
+    }
+
+    // ── Phase 3: post-T2. Commit to local. Cloud is dead to us. ───
+    console.log(`[session:race] ${label}: T2 (${T2}ms) reached, committing to local`)
+    const localText = await localPromise
+    if (localText) {
+      console.log(`[session:race] ${label}: local won in ${Date.now() - t0}ms (cloud abandoned)`)
+      return { text: localText, source: 'local' }
+    }
+
+    // Local also failed.  Last resort: take whatever cloud has, even late.
+    console.warn(`[session:race] ${label}: local failed too — checking late cloud`)
+    const lateCloud = await cloud
+    if (lateCloud?.text != null) {
+      console.log(`[session:race] ${label}: late cloud rescue in ${Date.now() - t0}ms`)
+      return { text: lateCloud.text, source: 'cloud' }
+    }
+    return null
+  }
+
+  /**
+   * Build the combined cloud-STT Promise: try the streaming POST result
+   * (if a stream is open for this chunkIndex) first, then upload-based
+   * tryManagedSTT, returning null if neither produces a transcript.
+   */
+  private async runManagedSTT(
+    audio: Buffer,
+    chunkIndex: number,
+    flowType: 'dictation' | 'transform' | 'quote' | 'context' | 'instruction',
+  ): Promise<{ text: string } | null> {
+    if (hasStreamForChunk(chunkIndex)) {
+      try {
+        const r = await closeAndAwait(chunkIndex, 15000)
+        if (r?.text != null) return { text: r.text }
+      } catch (e) {
+        console.warn(`[session] managed stream chunk ${chunkIndex} failed: ${e instanceof Error ? e.message : e}`)
+      }
+    }
+    try {
+      const durationGuess = Math.max(1, Math.round(audio.length / 4000))
+      const managed = await tryManagedSTT(audio, durationGuess, flowType)
+      if (managed?.text != null) return { text: managed.text }
+    } catch (e) {
+      console.warn(`[session] tryManagedSTT (${flowType}) failed: ${e instanceof Error ? e.message : e}`)
+    }
+    return null
   }
 
   /**
@@ -596,36 +759,27 @@ class SessionManager {
     const useDualWhisper = effectiveSTT === 'dual-whisper'
 
     try {
-      // ─── Managed-cloud intercept (paywall) ──────────────────────
-      // 1) If a streaming POST is already open for this chunk, await its
-      //    result instead of re-uploading the audio.
-      if (hasStreamForChunk(chunkIndex)) {
-        try {
-          const r = await closeAndAwait(chunkIndex, 15000)
-          if (r?.text != null) {
-            const chunk = this.chunkTracker.get(chunkIndex)
-            if (chunk) { chunk.transcript = r.text; chunk.completedAt = Date.now() }
-            console.log(`[session] ✅ Chunk ${chunkIndex} via managed stream in ${Date.now() - t0}ms`)
-            return r.text
-          }
-        } catch (e) {
-          console.warn('[session] managed stream chunk failed, falling through:', e instanceof Error ? e.message : e)
+      // ─── Managed-cloud + speculative-local race ─────────────────
+      // Cloud STT (stream → upload fallback inside runManagedSTT) is
+      // raced against on-device whisper.cpp via raceCloudVsLocalSTT.
+      // Cloud wins fast (~600ms healthy); local kicks in if cloud
+      // takes >1.5s and wins past 4s commit threshold. Either way the
+      // chunk transcript is recorded with the engine that produced it.
+      const cloudPromise = this.runManagedSTT(buffer, chunkIndex, 'dictation')
+      const raced = await this.raceCloudVsLocalSTT(cloudPromise, buffer, `chunk ${chunkIndex}`)
+      if (raced) {
+        const chunk = this.chunkTracker.get(chunkIndex)
+        if (chunk) { chunk.transcript = raced.text; chunk.completedAt = Date.now() }
+        if (raced.source === 'local') {
+          // Surface to the whole-session output handler so the widget can
+          // hint "via on-device — cloud was slow" once at the end.
+          this.notifyEngineFallback('cloud slow — used on-device whisper')
         }
+        console.log(`[session] ✅ Chunk ${chunkIndex} via ${raced.source === 'cloud' ? 'managed cloud' : 'local whisper (cloud was slow)'} in ${Date.now() - t0}ms`)
+        return raced.text
       }
-      // 2) Otherwise try upload-based managed STT (returns null if managed mode is off).
-      try {
-        const durationGuess = Math.max(1, Math.round(buffer.length / 4000))
-        const managed = await tryManagedSTT(buffer, durationGuess, 'dictation')
-        if (managed?.text != null) {
-          const chunk = this.chunkTracker.get(chunkIndex)
-          if (chunk) { chunk.transcript = managed.text; chunk.completedAt = Date.now() }
-          console.log(`[session] ✅ Chunk ${chunkIndex} via managed upload in ${Date.now() - t0}ms`)
-          return managed.text
-        }
-      } catch (e) {
-        console.warn('[session] tryManagedSTT failed, falling through:', e instanceof Error ? e.message : e)
-      }
-      // 3) In chunked mode, kill any dangling Fn-down stream so it doesn't linger.
+      // Race returned null = both cloud and local failed. Kill any
+      // dangling Fn-down stream so it doesn't linger.
       if (isStreaming()) {
         abortStream('chunked-mode-fallback')
       }
@@ -844,40 +998,21 @@ class SessionManager {
       // ═══════════════════════════════════════════════════════════════
       if (!this.isChunkedSession) {
         if (session.dictationAudio && !session.dictationTranscript) {
-          if (hasStreamForChunk(0)) {
-            try {
-              const r = await closeAndAwait(0, 15000)
-              if (r?.text != null) {
-                session.dictationTranscript = r.text
-                console.log(`[session] ✓ Dictation STT via managed stream (clip 0)`)
-              }
-            } catch (e) {
-              console.warn('[session] managed stream (clip 0) failed:', e instanceof Error ? e.message : e)
-            }
-          }
-          if (!session.dictationTranscript) {
-            try {
-              const durationGuess = Math.max(1, Math.round(session.dictationAudio.length / 4000))
-              const managed = await tryManagedSTT(session.dictationAudio, durationGuess, session.flowType)
-              if (managed?.text != null) {
-                session.dictationTranscript = managed.text
-                console.log(`[session] ✓ Dictation STT via managed upload`)
-              }
-            } catch (e) {
-              console.warn('[session] tryManagedSTT (dictation) failed:', e instanceof Error ? e.message : e)
-            }
+          const cloudPromise = this.runManagedSTT(session.dictationAudio, 0, session.flowType)
+          const raced = await this.raceCloudVsLocalSTT(cloudPromise, session.dictationAudio, 'dictation')
+          if (raced) {
+            session.dictationTranscript = raced.text
+            if (raced.source === 'local') this.notifyEngineFallback('cloud slow — used on-device whisper')
+            console.log(`[session] ✓ Dictation STT via ${raced.source === 'cloud' ? 'managed cloud' : 'local whisper (cloud was slow)'}`)
           }
         }
         if (session.instructionAudio && !session.instructionTranscript) {
-          try {
-            const durationGuess = Math.max(1, Math.round(session.instructionAudio.length / 4000))
-            const managed = await tryManagedSTT(session.instructionAudio, durationGuess, 'instruction')
-            if (managed?.text != null) {
-              session.instructionTranscript = managed.text
-              console.log(`[session] ✓ Instruction STT via managed upload`)
-            }
-          } catch (e) {
-            console.warn('[session] tryManagedSTT (instruction) failed:', e instanceof Error ? e.message : e)
+          const cloudPromise = this.runManagedSTT(session.instructionAudio, 0, 'instruction')
+          const raced = await this.raceCloudVsLocalSTT(cloudPromise, session.instructionAudio, 'instruction')
+          if (raced) {
+            session.instructionTranscript = raced.text
+            if (raced.source === 'local') this.notifyEngineFallback('cloud slow — used on-device whisper')
+            console.log(`[session] ✓ Instruction STT via ${raced.source === 'cloud' ? 'managed cloud' : 'local whisper (cloud was slow)'}`)
           }
         }
       }
