@@ -44,6 +44,13 @@ export default {
       return handleDodoWebhook(req, env)
     }
 
+    // ─── Public return-page bounce (no JWT) ───────────────────
+    // Dodo redirects users here after checkout. We bounce them back to the
+    // desktop app via the unmute:// deep link.
+    if (req.method === 'GET' && url.pathname === '/checkout/return') {
+      return handleCheckoutReturn(url)
+    }
+
     // ─── Everything else requires JWT ───────────────────────────
     const token = extractBearer(req)
     if (!token) return json({ ok: false, code: 'UNAUTHORIZED', message: 'Missing token' }, 401)
@@ -67,6 +74,75 @@ export default {
 
     return json({ ok: false, code: 'NOT_FOUND', message: 'No route' }, 404)
   },
+}
+
+// ─── GET /checkout/return — bounce page ─────────────────────────
+//
+// Dodo doesn't support custom URL schemes (unmute://) in return_url, so we
+// register a HTTPS return_url that lands here, then JS-trigger the deep
+// link. Browsers vary in deep-link UX: Safari shows a one-time prompt,
+// Chrome usually opens silently, Firefox needs a click. We try auto-click
+// after 400ms; if the browser blocks it, the visible "Return to unmute"
+// button serves as the explicit fallback.
+//
+// Robustness: the desktop app does NOT depend on this redirect succeeding.
+// It polls /v1/me (balance) and /v1/payment/:id (status) regardless. This
+// page is a UX nicety — failure here is invisible.
+
+function handleCheckoutReturn(url: URL): Response {
+  // Whitelist + sanitize. Anything we render is appended to a URI scheme;
+  // the deep link is built server-side so the renderer doesn't have to
+  // worry about XSS — but we still strip control chars defensively.
+  const safe = (s: string | null, fallback: string): string =>
+    (s ?? fallback).replace(/[^\x20-\x7E]/g, '').slice(0, 256)
+  const paymentId = encodeURIComponent(safe(url.searchParams.get('payment_id'), ''))
+  const status = encodeURIComponent(safe(url.searchParams.get('status'), 'unknown'))
+  const deepLink = `unmute://payment-success?payment_id=${paymentId}&status=${status}`
+  const escapedDeepLink = deepLink.replace(/"/g, '&quot;')
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Return to unmute</title>
+<style>
+  :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { min-height: 100vh; margin: 0; display: flex; align-items: center; justify-content: center;
+         background: #0a0a0a; color: #f4f4f4; }
+  .card { max-width: 420px; padding: 40px 32px; text-align: center; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 12px; }
+  p  { font-size: 14px; color: #b5b5b5; margin: 0 0 28px; line-height: 1.5; }
+  a.btn { display: inline-block; padding: 10px 22px; border-radius: 8px;
+          background: #fff; color: #000; text-decoration: none; font-weight: 500; }
+  .hint { margin-top: 18px; font-size: 12px; color: #6b6b6b; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Payment received</h1>
+  <p>Returning you to unmute&hellip;</p>
+  <a class="btn" id="back" href="${escapedDeepLink}">Open unmute</a>
+  <p class="hint">If unmute doesn't open automatically, click the button above.</p>
+</div>
+<script>
+  // Click programmatically after 400ms. Browsers that block this still
+  // honor the visible button; the desktop app polls /v1/me regardless.
+  setTimeout(function () {
+    try { document.getElementById('back').click() } catch (e) {}
+  }, 400);
+</script>
+</body>
+</html>`
+
+  return new Response(html, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      // No caching — query params change per-payment.
+      'Cache-Control': 'no-store',
+    },
+  })
 }
 
 // ─── POST /checkout/session ─────────────────────────────────────
