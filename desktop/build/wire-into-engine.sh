@@ -144,11 +144,55 @@ import { initPaywall } from './paywall/main-extensions'
     sed -i.bak "/^import { initPaywall } from '\.\/paywall\/main-extensions'/a\\
 import { buildOSSAdapter } from './buildOSSAdapter'
 " "$main_ts"
-    # Call after createWidgetWindow() — the existing main bootstrap.
-    sed -i.bak "/createWidgetWindow()/a\\
-  initPaywall(app, buildOSSAdapter())
-" "$main_ts"
     rm -f "$main_ts.bak"
+
+    # Rewrite the activate handler AND inject initPaywall in one pass.
+    #
+    # Two bugs in the OSS default we fix here:
+    #   (a) The activate handler's `getAllWindows().length === 0` branch is
+    #       unreachable in our build: the widget window stays open for the
+    #       life of the app, so length is never 0. Net effect: clicking the
+    #       macOS Dock icon after the user closed the main window is a no-op.
+    #       Replaced with the standard show-or-recreate pattern.
+    #   (b) A naive `sed /createWidgetWindow()/a initPaywall(...)` matches
+    #       BOTH the bootstrap and (pre-rewrite) the activate handler, which
+    #       would double-register IPC handlers if activate ever fired.
+    #       Rewriting the activate handler first removes the second match;
+    #       the string replace below is then unambiguous.
+    local patcher
+    patcher="$(mktemp)"
+    cat > "$patcher" <<'NODE_EOF'
+const fs = require('fs')
+const p = process.argv[2]
+let src = fs.readFileSync(p, 'utf-8')
+
+const ACTIVATE_RE = /app\.on\('activate',\s*\(\)\s*=>\s*\{[\s\S]*?\n  \}\)/
+const ACTIVATE_NEW = `app.on('activate', () => {
+    const win = getMainWindow()
+    if (!win || win.isDestroyed()) {
+      createMainWindow()
+    } else {
+      win.show()
+      win.focus()
+    }
+  })`
+if (ACTIVATE_RE.test(src)) {
+  src = src.replace(ACTIVATE_RE, ACTIVATE_NEW)
+} else {
+  console.error('[wire] WARN: activate handler not found in main.ts — Dock-click fix not applied')
+}
+
+if (!src.includes('initPaywall(app, buildOSSAdapter())')) {
+  src = src.replace(
+    'createWidgetWindow()\n',
+    'createWidgetWindow()\n  initPaywall(app, buildOSSAdapter())\n'
+  )
+}
+
+fs.writeFileSync(p, src)
+NODE_EOF
+    node "$patcher" "$main_ts"
+    rm -f "$patcher"
   fi
 
   # 2) preload.ts: merge paywall API into electronAPI
