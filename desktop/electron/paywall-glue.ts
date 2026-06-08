@@ -169,7 +169,7 @@ function registerSessionBridge() {
     const next = !!enabled
     settings.set('instructionEnabled', next)
     try {
-      const { setInstructionEnabled } = await import('./keyListener')
+      const { setInstructionEnabled } = await import('../keyListener')
       setInstructionEnabled(next)
     } catch (e) {
       console.warn(
@@ -221,7 +221,7 @@ export function initPaywallGlue(): void {
   // instructions until they touch the setting again this session.
   void (async () => {
     try {
-      const { setInstructionEnabled } = await import('./keyListener')
+      const { setInstructionEnabled } = await import('../keyListener')
       setInstructionEnabled(settings.get('instructionEnabled', true))
     } catch (e) {
       console.warn(
