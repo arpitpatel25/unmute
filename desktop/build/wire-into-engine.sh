@@ -78,6 +78,19 @@ wire_paywall() {
     log "WARN: $ROOT/native-paste not found — native paste will be unavailable"
   fi
 
+  # Copy the native-fn-listener addon. Sibling of native-paste, same install
+  # mechanism. Solves the TCC-identity-on-child-binary problem for Fn /
+  # Caps Lock / Right Option modifier detection — by running NSEvent
+  # monitors IN-PROCESS, the bundle's Input Monitoring grant covers the
+  # listener instead of needing a separate grant for the spawned child.
+  if [[ -d "$ROOT/native-fn-listener" ]]; then
+    log "Copying native-fn-listener addon"
+    mkdir -p "$engine/native-fn-listener"
+    cp -R "$ROOT/native-fn-listener/." "$engine/native-fn-listener/"
+  else
+    log "WARN: $ROOT/native-fn-listener not found — Fn detection will fall back to child binary"
+  fi
+
   # Patch engine package.json:
   #   * Add @supabase/supabase-js for the paywall layer
   #   * Pin electron-store to ^8 (CJS). v11+ is ESM-only and crashes our
@@ -94,6 +107,9 @@ wire_paywall() {
     pkg.dependencies['electron-store'] = '^8.2.0'
     if (fs.existsSync('$engine/native-paste/package.json')) {
       pkg.dependencies['unmute-native-paste'] = 'file:./native-paste'
+    }
+    if (fs.existsSync('$engine/native-fn-listener/package.json')) {
+      pkg.dependencies['unmute-native-fn-listener'] = 'file:./native-fn-listener'
     }
     if (process.env.PAYWALL_APP_ID) {
       pkg.build = pkg.build || {}
@@ -222,6 +238,9 @@ import { paywallPreloadExtensions } from './paywall/preload-extensions'
   fi
   if ! grep -q 'tryManagedSTT' "$engine/electron/sessionManager.ts"; then
     log "WARN: sessionManager.ts missing tryManagedSTT — engine-overrides may have failed to apply"
+  fi
+  if ! grep -q 'unmute-native-fn-listener' "$engine/electron/keyListener.ts"; then
+    log "WARN: keyListener.ts missing unmute-native-fn-listener — engine-overrides may have failed to apply"
   fi
 }
 

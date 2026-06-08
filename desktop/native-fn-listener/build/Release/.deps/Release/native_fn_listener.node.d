@@ -1,0 +1,1 @@
+cmd_Release/native_fn_listener.node := c++ -bundle -undefined dynamic_lookup -Wl,-search_paths_first -mmacosx-version-min=11.0 -arch arm64 -L./Release -stdlib=libc++  -o Release/native_fn_listener.node Release/obj.target/native_fn_listener/src/listener.o -framework AppKit -framework Foundation -framework ApplicationServices

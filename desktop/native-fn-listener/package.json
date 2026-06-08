@@ -1,0 +1,17 @@
+{
+  "name": "unmute-native-fn-listener",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "install": "node-gyp rebuild --release",
+    "rebuild": "node-gyp rebuild --release"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.1.1"
+  },
+  "gypfile": true,
+  "engines": {
+    "node": ">=18"
+  }
+}
