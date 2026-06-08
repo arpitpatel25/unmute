@@ -3,6 +3,8 @@ import unmuteLogo from '../assets/unmute-logo.png'
 import History from './History'
 import Voice from './Voice'
 import Settings from './Settings'
+import Account from './Account'
+import Permissions from './Permissions'
 import Privacy from './Privacy'
 import Onboarding from './Onboarding'
 import { BalancePill } from '../paywall/BalancePill'
@@ -10,7 +12,7 @@ import { OutOfCreditBanner } from '../paywall/OutOfCreditBanner'
 import { AuthProvider, useAuth } from '../paywall/AuthContext'
 import { SignInScreen } from '../paywall/SignInScreen'
 
-type Tab = 'history' | 'voice' | 'settings' | 'privacy'
+type Tab = 'history' | 'voice' | 'account' | 'permissions' | 'settings' | 'privacy'
 
 type AppView = 'loading' | 'onboarding' | 'main'
 
@@ -133,6 +135,18 @@ function AppInner() {
             onClick={() => setActiveTab('voice')}
           />
           <SidebarButton
+            icon={<AccountIcon />}
+            label="Account"
+            active={activeTab === 'account'}
+            onClick={() => setActiveTab('account')}
+          />
+          <SidebarButton
+            icon={<PermissionsIcon />}
+            label="Permissions"
+            active={activeTab === 'permissions'}
+            onClick={() => setActiveTab('permissions')}
+          />
+          <SidebarButton
             icon={<SettingsIcon />}
             label="Settings"
             active={activeTab === 'settings'}
@@ -170,6 +184,8 @@ function AppInner() {
         <div className="max-w-2xl mx-auto pb-8">
           {activeTab === 'history' && <History />}
           {activeTab === 'voice' && <Voice dictationKey={dictationKey} />}
+          {activeTab === 'account' && <Account />}
+          {activeTab === 'permissions' && <Permissions />}
           {activeTab === 'settings' && <Settings onDictationKeyChange={setDictationKey} />}
           {activeTab === 'privacy' && <Privacy />}
         </div>
@@ -306,6 +322,24 @@ function PrivacyIcon() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M8 14.5s5.5-2.5 5.5-7V3.5L8 1.5 2.5 3.5V7.5c0 4.5 5.5 7 5.5 7z" />
       <polyline points="5.5 8 7 9.5 10.5 6" />
+    </svg>
+  )
+}
+
+function AccountIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="5.5" r="2.5" />
+      <path d="M2.5 14a5.5 5.5 0 0 1 11 0" />
+    </svg>
+  )
+}
+
+function PermissionsIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+      <path d="M5.5 7V4.5a2.5 2.5 0 0 1 5 0V7" />
     </svg>
   )
 }
