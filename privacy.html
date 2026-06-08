@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Privacy Policy — unmute</title>
+<meta name="description" content="What data unmute collects, why, and how long we keep it. Different posture for each of the three engines." />
+<link rel="icon" type="image/png" href="icon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #2A1E18;
+    --ink-70: rgba(42,30,24,0.72);
+    --ink-50: rgba(42,30,24,0.50);
+    --ink-15: rgba(42,30,24,0.15);
+    --ink-08: rgba(42,30,24,0.08);
+    --paper: #FDF8F4;
+    --accent: #C44A2E;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--paper); }
+  body {
+    color: var(--ink);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.62;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 0 28px; }
+  nav { padding: 36px 0 0; }
+  nav a.brand {
+    color: var(--ink); text-decoration: none;
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-size: 22px; letter-spacing: -0.01em;
+  }
+  nav a.brand:hover { color: var(--accent); }
+  main { padding: 60px 0 80px; }
+  h1 {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 400; font-size: clamp(36px, 5vw, 52px);
+    letter-spacing: -0.02em; line-height: 1.05;
+    margin: 0 0 8px;
+  }
+  .lastupd { font-size: 12px; color: var(--ink-50); margin: 0 0 32px; letter-spacing: 0.03em; text-transform: uppercase; }
+  h2 {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 500; font-size: 22px;
+    letter-spacing: -0.01em; line-height: 1.2;
+    margin: 36px 0 12px;
+  }
+  h3 {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 500; font-size: 17px;
+    margin: 22px 0 8px;
+    letter-spacing: -0.005em;
+  }
+  p { font-size: 15.5px; color: var(--ink-70); margin: 0 0 14px; }
+  p strong { color: var(--ink); font-weight: 600; }
+  ul { font-size: 15.5px; color: var(--ink-70); margin: 0 0 14px; padding-left: 20px; }
+  ul li { margin: 4px 0; }
+  ul li strong { color: var(--ink); font-weight: 600; }
+  a { color: var(--ink); border-bottom: 1px solid var(--ink-15); text-decoration: none; transition: all .15s; }
+  a:hover { border-bottom-color: var(--ink); }
+  .tldr {
+    background: rgba(255,255,255,0.55);
+    border: 1px solid var(--ink-15);
+    border-radius: 14px;
+    padding: 20px 22px;
+    margin: 0 0 32px;
+  }
+  .tldr h3 {
+    font-family: 'Inter', system-ui;
+    font-weight: 700; font-size: 11px;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 10px;
+  }
+  .tldr p { margin: 0 0 8px; font-size: 14.5px; }
+  .tldr p:last-child { margin-bottom: 0; }
+  footer {
+    border-top: 1px solid var(--ink-08);
+    padding: 30px 0 50px;
+    font-size: 12px; color: var(--ink-50);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  }
+  footer .links { display: flex; gap: 18px; }
+  footer a { border: none; color: var(--ink-70); }
+  footer a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a href="./" class="brand">← unmute</a>
+    </nav>
+
+    <main>
+      <h1>Privacy Policy</h1>
+      <p class="lastupd">Effective: June 2026</p>
+
+      <div class="tldr">
+        <h3>tl;dr</h3>
+        <p>
+          Your audio recordings and the resulting transcripts are
+          <strong>never stored</strong> by us, on any engine. Period.
+        </p>
+        <p>
+          The only data we keep at all is what's necessary to bill the
+          no-key engine — your account email and per-request
+          metadata (timestamp, audio duration, charge amount). No
+          analytics, no telemetry, no tracking pixels.
+        </p>
+      </div>
+
+      <p>
+        Your privacy posture depends on which engine you pick in the app.
+        Each one is described separately below so the trade-offs are
+        explicit.
+      </p>
+
+      <h2>On-device engine</h2>
+      <p>
+        Audio is transcribed locally on your Mac by whisper.cpp. Audio
+        never leaves the machine. There is no network call associated with
+        the transcription itself.
+      </p>
+      <p>
+        The transcription model (~75 MB) is downloaded once from Hugging
+        Face the first time you enable this engine. After that, no further
+        network calls are made for dictation in this mode.
+      </p>
+
+      <h2>Bring-your-own-key (BYOK) engine</h2>
+      <p>
+        Audio is sent <strong>directly</strong> from your Mac to
+        <code>api.groq.com</code> using an API key you provide, over an
+        encrypted (HTTPS) connection. Nothing passes through any server we
+        operate, because we don't operate one in this path.
+      </p>
+      <p>
+        Your Groq API key is stored locally in the macOS Keychain and
+        never leaves the Mac it was entered on. We have no way to access it.
+      </p>
+      <p>
+        Groq's own privacy policy governs what Groq does with the audio
+        and transcripts on their side. Refer to
+        <a href="https://groq.com/privacy-policy/">groq.com/privacy-policy</a>
+        for that.
+      </p>
+
+      <h2>No-key engine</h2>
+      <p>
+        Audio is sent from your Mac to our hosted service over an
+        encrypted (HTTPS) connection. The service streams the audio
+        through to Groq for transcription, returns the resulting text to
+        your Mac, and discards the audio. We do not write the audio
+        bytes to disk anywhere, and we do not write the transcribed
+        text to disk anywhere.
+      </p>
+
+      <h3>What we DO store, and why</h3>
+      <ul>
+        <li><strong>Your sign-in email</strong> — required to associate prepaid credits with the right account.</li>
+        <li><strong>Per-request usage metadata</strong> — for each no-key transcription we record: a timestamp, the audio duration in seconds, the model used, and the resulting charge in cents. This is the minimum needed for accurate billing and for showing you a usage history inside the app. We do not record the audio or the transcribed text.</li>
+        <li><strong>Top-up records</strong> — every credit purchase generates a row with the amount, currency, payment provider event ID, and status. This is synced from Dodo Payments via signed webhook.</li>
+      </ul>
+
+      <h3>Where it's stored</h3>
+      <p>
+        All of the above lives in our Supabase project (managed PostgreSQL).
+        Access is restricted to the unmute hosted services and the
+        account owner.
+      </p>
+
+      <h3>How long</h3>
+      <p>
+        Billing records (top-ups, usage metadata) are retained for as long
+        as your account exists, plus a reasonable period afterwards for
+        accounting and tax purposes. You can request account deletion at
+        any time — see "Deleting your data" below.
+      </p>
+
+      <h2>Payment data</h2>
+      <p>
+        Payments are processed by Dodo Payments, acting as Merchant of
+        Record. They store your payment method details on our behalf — we
+        never see your card number or full payment details. Their privacy
+        policy applies to that data; see
+        <a href="https://dodopayments.com/privacy">dodopayments.com/privacy</a>.
+      </p>
+
+      <h2>Cookies, analytics, telemetry</h2>
+      <p>
+        The unmute app contains <strong>no analytics SDK, no telemetry
+        SDK, and no crash-reporting SDK</strong>. The only outbound
+        network requests the app makes are to whichever engine you've
+        explicitly chosen — your own Groq endpoint, our no-key
+        service, or the model download URL for the on-device engine.
+      </p>
+      <p>
+        This website (the one you're reading) is hosted on GitHub Pages
+        and uses Google Fonts. Both of those are HTTP-served by their
+        respective companies and may log standard server-side info
+        (IP address, user agent). We don't set any cookies on this site.
+      </p>
+
+      <h2>Today's dictations cache (in-app)</h2>
+      <p>
+        The History tab in the app shows your recent dictations so you
+        can copy them again or re-run them. These transcripts are stored
+        locally on your Mac and are <strong>automatically cleared the
+        next day</strong>. They never leave the device.
+      </p>
+
+      <h2>Deleting your data</h2>
+      <p>
+        To delete your no-key account and all associated billing
+        records, email <a href="mailto:arpitpatel20121999@gmail.com">arpitpatel20121999@gmail.com</a>
+        from the email address on the account. We'll remove the records
+        within a reasonable timeframe.
+      </p>
+      <p>
+        For the local cache (today's dictations, your Groq key in the
+        Keychain), uninstalling the app removes everything stored on this
+        Mac.
+      </p>
+
+      <h2>Children's privacy</h2>
+      <p>
+        unmute is not directed at children under 13. If you believe a
+        child has created an account, please email us and we'll delete it.
+      </p>
+
+      <h2>Changes to this policy</h2>
+      <p>
+        We'll update this page when the product changes in ways that
+        affect what data is processed. The "Effective" date at the top
+        always reflects the latest version.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        Email <a href="mailto:arpitpatel20121999@gmail.com">arpitpatel20121999@gmail.com</a>
+        with anything privacy-related.
+      </p>
+    </main>
+
+    <footer>
+      <div>© 2026 unmute · MIT</div>
+      <div class="links">
+        <a href="./">Home</a>
+        <a href="refund.html">Refund</a>
+        <a href="terms.html">Terms</a>
+        <a href="https://github.com/arpitpatel25/unmute-dictation">GitHub</a>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

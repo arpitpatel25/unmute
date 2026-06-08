@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>unmute — voice-first dictation for macOS</title>
+<meta name="description" content="Voice dictation for macOS that doesn't fall over when your Wi-Fi does. Three engines: fully on-device, your Groq key, or no key required. No subscription." />
+<link rel="icon" type="image/png" href="icon.png" />
+
+<meta property="og:title" content="unmute" />
+<meta property="og:description" content="Typing sucks. Just unmute." />
+<meta property="og:image" content="https://arpitpatel25.github.io/unmute/icon.png" />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary_large_image" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --ink: #2A1E18;
+    --ink-70: rgba(42,30,24,0.72);
+    --ink-50: rgba(42,30,24,0.50);
+    --ink-30: rgba(42,30,24,0.30);
+    --ink-15: rgba(42,30,24,0.15);
+    --ink-08: rgba(42,30,24,0.08);
+    --paper: #FDF8F4;
+    --accent: #C44A2E;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.55;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ─── Watercolor BG ─── */
+  .bg {
+    position: fixed; inset: 0; z-index: -2;
+    background:
+      linear-gradient(180deg, rgba(253,248,244,0) 0%, rgba(253,248,244,0.55) 70%, rgba(253,248,244,0.92) 100%),
+      url('bg.avif') center / cover no-repeat;
+    background-color: var(--paper);
+  }
+  .bg::after {
+    content: ''; position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 50% 30%, transparent 0%, rgba(253,248,244,0.35) 65%, rgba(253,248,244,0.75) 100%);
+    pointer-events: none;
+  }
+
+  /* ─── Layout ─── */
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; text-align: center; }
+  /* Stanzas stay narrow for readability even though the page is wider. */
+  .stanza, .stanzas { }
+  nav {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 36px 0 0;
+  }
+  .brand { display: inline-flex; align-items: center; gap: 11px; text-decoration: none; }
+  .brand-icon { width: 32px; height: 32px; border-radius: 8px; display: block; }
+  .brand-mark { height: 36px; width: auto; display: block; }
+  @media (max-width: 600px) {
+    .brand-mark { height: 30px; }
+    .brand-icon { width: 28px; height: 28px; }
+  }
+
+  /* ─── Mac keycap chip (matches the in-app key badge) ─── */
+  .kbd {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 6px 11px; min-height: 30px; min-width: 30px;
+    font-family: 'Inter', system-ui; font-size: 12.5px; font-weight: 700;
+    letter-spacing: -0.01em; color: var(--ink);
+    background: linear-gradient(180deg, #FFFFFF 0%, #EFE8DC 100%);
+    border: 1px solid rgba(42,30,24,0.20);
+    border-radius: 8px;
+    box-shadow:
+      0 3px 0 rgba(42,30,24,0.22),
+      0 4px 10px rgba(42,30,24,0.08),
+      inset 0 1px 0 rgba(255,255,255,0.95);
+    user-select: none; vertical-align: middle;
+  }
+  .kbd-lg {
+    padding: 12px 18px; min-height: 46px; min-width: 46px;
+    font-size: 14.5px; border-radius: 10px;
+    box-shadow:
+      0 4px 0 rgba(42,30,24,0.22),
+      0 6px 14px rgba(42,30,24,0.10),
+      inset 0 1px 0 rgba(255,255,255,0.95);
+  }
+  .kbd-black {
+    background: linear-gradient(180deg, #2E2A25 0%, #14110F 100%);
+    color: rgba(255,255,255,0.95);
+    border-color: rgba(0,0,0,0.55);
+    box-shadow:
+      0 3px 0 rgba(0,0,0,0.55),
+      0 4px 10px rgba(0,0,0,0.22),
+      inset 0 1px 0 rgba(255,255,255,0.14);
+  }
+  .kbd-black.kbd-lg {
+    box-shadow:
+      0 4px 0 rgba(0,0,0,0.55),
+      0 6px 14px rgba(0,0,0,0.30),
+      inset 0 1px 0 rgba(255,255,255,0.18);
+  }
+  .kbd-red {
+    background: linear-gradient(180deg, #F04040 0%, #C82828 100%);
+    color: white;
+    border-color: rgba(0,0,0,0.35);
+    box-shadow:
+      0 3px 0 #8a1a1a,
+      0 4px 10px rgba(200,30,30,0.22),
+      inset 0 1px 0 rgba(255,255,255,0.25);
+  }
+  .kbd-red.kbd-lg {
+    box-shadow:
+      0 4px 0 #7a1010,
+      0 6px 14px rgba(200,30,30,0.30),
+      inset 0 1px 0 rgba(255,255,255,0.22);
+  }
+  .combo { display: inline-flex; align-items: center; gap: 8px; }
+  .combo .arrow { color: var(--ink-30); font-size: 13px; }
+
+  /* ─── Key-rows block (used in the "Two keys" stanza) ─── */
+  .key-block {
+    display: flex; flex-direction: column; gap: 26px;
+    margin: 26px auto 0;
+    max-width: 540px;
+    text-align: left;
+  }
+  .key-row { display: flex; align-items: flex-start; gap: 20px; }
+  .key-row > .kbd, .key-row > .combo { flex-shrink: 0; margin-top: 2px; }
+  .key-name {
+    font-family: 'Instrument Serif', 'Times New Roman', serif; font-weight: 500;
+    font-size: 18px; letter-spacing: -0.01em; color: var(--ink);
+    margin-bottom: 3px;
+  }
+  .key-desc { font-size: 15.5px; color: var(--ink-70); line-height: 1.55; }
+  .key-desc em { font-style: italic; color: var(--ink); font-weight: 500; }
+  nav .right { display: flex; gap: 24px; font-size: 13px; }
+  nav a.link {
+    color: var(--ink-70); text-decoration: none;
+    border-bottom: 1px solid transparent; transition: all .2s;
+  }
+  nav a.link:hover { color: var(--ink); border-bottom-color: var(--ink-30); }
+
+  /* ─── Hero ─── */
+  .hero { padding: 12vh 0 0; }
+  .eyebrow {
+    font-size: 12px; color: var(--ink-50); letter-spacing: 0.16em;
+    text-transform: uppercase; font-weight: 500; margin: 0 0 28px;
+  }
+  h1 {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 400;
+    line-height: 0.96;
+    letter-spacing: -0.02em;
+    margin: 0 0 28px;
+    color: var(--ink);
+  }
+  /* Both lines at the same size. Capped so the longest typed variant
+     ("Typing your Slack messages sucks.") fits on one line inside the
+     780px wrap. white-space: nowrap on line 1 enforces the no-wrap
+     constraint; line 2 inherits the same font so they read as equals. */
+  h1 .line1, h1 .line2 {
+    display: block;
+    font-size: clamp(36px, 6.5vw, 70px);
+  }
+  h1 .line1 { white-space: nowrap; }
+  h1 .line2 { margin-top: 6px; }
+  h1 em {
+    font-style: italic;
+    color: var(--accent);
+    letter-spacing: -0.015em;
+  }
+  /* ─── Hero typing animation ─── */
+  /* The inserted phrase is a span between "Typing" and " sucks". A blinking
+     caret follows the inserted text only while we're actively typing or
+     erasing — hidden otherwise so the default static state ("Typing sucks.
+     Just unmute.") looks clean. */
+  #typed-insert {
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 300;
+    white-space: pre;
+  }
+  #typed-caret {
+    display: inline-block;
+    width: 2px;
+    height: 0.78em;
+    background: var(--accent);
+    margin-left: 2px;
+    vertical-align: -0.04em;
+    opacity: 0;
+    animation: caret-blink 0.9s steps(2) infinite;
+  }
+  #typed-caret.on { opacity: 1; }
+  @keyframes caret-blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    #typed-caret { display: none; }
+  }
+  .lede {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 400;
+    font-size: clamp(20px, 2.2vw, 25px);
+    line-height: 1.45;
+    color: var(--ink-70);
+    max-width: 560px;
+    margin: 0 auto 44px;
+    letter-spacing: -0.005em;
+  }
+
+  /* ─── CTA row ─── */
+  .cta {
+    display: flex; gap: 16px; align-items: center; justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 22px;
+  }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 13px 22px;
+    border-radius: 999px;
+    font-size: 14px; font-weight: 500;
+    text-decoration: none;
+    transition: all .2s;
+  }
+  .btn-primary {
+    background: var(--ink);
+    color: var(--paper);
+  }
+  .btn-primary:hover {
+    background: #1B130D;
+    transform: translateY(-1px);
+  }
+  .btn-quiet {
+    background: transparent;
+    color: var(--ink-70);
+    border: 1px solid var(--ink-15);
+  }
+  .btn-quiet:hover { color: var(--ink); border-color: var(--ink-30); background: rgba(255,255,255,0.4); }
+  .micro { font-size: 12px; color: var(--ink-50); margin-top: 6px; }
+
+  /* ─── Brew snippet ─── */
+  .brew {
+    display: inline-flex; align-items: center; gap: 12px;
+    margin-top: 28px;
+    padding: 10px 14px 10px 18px;
+    background: rgba(255,255,255,0.55);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--ink-15);
+    border-radius: 12px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 13px;
+    color: var(--ink);
+  }
+  .brew .pmt { color: var(--ink-30); user-select: none; }
+  .brew .cmd { white-space: nowrap; overflow-x: auto; }
+  .brew button {
+    background: transparent; border: none; color: var(--ink-50);
+    font-family: inherit; font-size: 11px; cursor: pointer;
+    padding: 4px 10px; border-radius: 6px; transition: all .15s;
+  }
+  .brew button:hover { color: var(--ink); background: rgba(0,0,0,0.05); }
+  .brew button.copied { color: #2E7D5B; }
+
+  /* ─── Manifesto sections ─── */
+  .stanzas {
+    padding: 11vh 0 9vh;
+    display: flex; flex-direction: column; align-items: center; gap: 6vh;
+  }
+  .stanza {
+    max-width: 600px;
+    text-align: center;
+  }
+  .stanza p { margin-left: auto; margin-right: auto; }
+  .stanza .mark {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 500;
+    font-style: italic;
+    font-size: 13px;
+    color: var(--accent);
+    letter-spacing: 0.02em;
+    margin: 0 0 14px;
+  }
+  .stanza h2 {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 400;
+    font-size: clamp(26px, 3.4vw, 36px);
+    letter-spacing: -0.022em;
+    line-height: 1.15;
+    margin: 0 0 14px;
+    color: var(--ink);
+  }
+  .stanza h2 em {
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 300;
+  }
+  .stanza p {
+    font-size: 16.5px;
+    color: var(--ink-70);
+    margin: 0;
+    max-width: 520px;
+    line-height: 1.6;
+  }
+  .stanza p + p { margin-top: 10px; }
+  .stanza a {
+    color: var(--ink); text-decoration: none;
+    border-bottom: 1px solid var(--ink-30); transition: all .15s;
+  }
+  .stanza a:hover { border-bottom-color: var(--ink); }
+
+  /* ─── Engines section (3 cards) ─── */
+  .engines {
+    padding: 4vh 0 0;
+    max-width: 760px;
+    margin: 0 auto;
+  }
+  .engines .mark {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 500; font-style: italic; font-size: 13px;
+    color: var(--accent); letter-spacing: 0.02em; margin: 0 0 14px;
+    text-align: center;
+  }
+  .engines h2 {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 400; font-size: clamp(26px, 3.4vw, 36px);
+    letter-spacing: -0.022em; line-height: 1.15;
+    margin: 0 0 14px; color: var(--ink); text-align: center;
+  }
+  .engines h2 em { font-style: italic; color: var(--accent); font-weight: 300; }
+  .engines > p.intro {
+    text-align: center; font-size: 16.5px; color: var(--ink-70);
+    max-width: 520px; margin: 0 auto 36px; line-height: 1.6;
+  }
+  .engine-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    text-align: left;
+  }
+  @media (max-width: 720px) {
+    .engine-grid { grid-template-columns: 1fr; }
+  }
+  .engine-card {
+    background: rgba(255,255,255,0.55);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--ink-15);
+    border-radius: 14px;
+    padding: 20px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .engine-card h3 {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 500; font-size: 21px;
+    letter-spacing: -0.01em; margin: 0;
+    color: var(--ink);
+  }
+  .engine-card .tagline {
+    font-size: 12.5px; color: var(--accent);
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-style: italic; margin: 0;
+  }
+  .engine-card p.body {
+    font-size: 13.5px; color: var(--ink-70);
+    line-height: 1.55; margin: 4px 0 0;
+  }
+  .engine-card .price {
+    margin-top: auto; padding-top: 12px;
+    font-size: 13px; color: var(--ink);
+    font-weight: 500;
+  }
+  .engine-card .price .small { color: var(--ink-50); font-weight: 400; }
+
+  /* ─── Footer ─── */
+  footer {
+    padding: 60px 0 50px;
+    border-top: 1px solid var(--ink-08);
+    margin-top: 60px;
+  }
+  .foot {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 14px;
+    font-size: 12px; color: var(--ink-50);
+  }
+  .foot .links { display: flex; gap: 18px; flex-wrap: wrap; }
+  .foot a {
+    color: var(--ink-70); text-decoration: none;
+    transition: color .15s;
+  }
+  .foot a:hover { color: var(--ink); }
+  .foot .heart { font-family: 'Instrument Serif', 'Times New Roman', serif; font-style: italic; }
+
+  @media (max-width: 600px) {
+    .wrap { padding: 0 22px; }
+    .hero { padding: 18vh 0 0; }
+    .stanzas { padding: 14vh 0 8vh; gap: 6vh; }
+  }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+
+  <div class="wrap">
+
+    <nav>
+      <a href="./" class="brand" aria-label="unmute">
+        <img src="icon.png" alt="" class="brand-icon" />
+        <img src="unmute-logo.png" alt="unmute" class="brand-mark" />
+      </a>
+      <div class="right">
+        <a class="link" href="https://x.com/just_unmute">Twitter</a>
+        <a class="link" href="https://github.com/arpitpatel25/unmute-dictation">GitHub</a>
+        <a class="link" href="https://github.com/arpitpatel25/unmute-dictation/discussions">Community</a>
+      </div>
+    </nav>
+
+    <!-- Hero -->
+    <section class="hero">
+      <p class="eyebrow">For Mac · Three engines · No subscription</p>
+      <h1>
+        <span class="line1">Typing<span id="typed-insert"></span><span id="typed-caret"></span> sucks.</span>
+        <span class="line2"><em>Just unmute.</em></span>
+      </h1>
+      <p class="lede">Voice dictation for macOS that doesn't fall over the moment your Wi-Fi does. On-device, your own key, or no key at all — pick what fits.</p>
+
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/arpitpatel25/unmute-dictation/releases/latest/download/unmute-1.3.6-arm64.dmg">
+          Download for Mac
+        </a>
+        <a class="btn btn-quiet" href="https://github.com/arpitpatel25/unmute-dictation">View on GitHub</a>
+      </div>
+      <p class="micro">macOS · Apple Silicon · signed &amp; notarized · MIT</p>
+
+      <div class="brew">
+        <span class="pmt">$</span>
+        <code class="cmd" id="brewCmd">brew install --cask arpitpatel25/unmute/unmute</code>
+        <button onclick="copyBrew(this)">Copy</button>
+      </div>
+    </section>
+
+    <!-- Manifesto -->
+    <section class="stanzas">
+
+      <div class="stanza">
+        <p class="mark">— Why this exists</p>
+        <h2>Five minutes of talking, <em>then "Something went wrong."</em></h2>
+        <p>You know the moment. Café Wi-Fi flickers. Wispr Flow times out. You retry. Retry. The transcript never comes — your monologue is gone and you start typing again.</p>
+        <p>unmute is built for that moment. Cloud when it's fast, on-device the instant it isn't. You won't notice the switch. You will notice that your words still showed up.</p>
+      </div>
+
+      <div class="stanza">
+        <p class="mark">— Two keys, two modes</p>
+        <h2>Speak. <em>Or speak instructions.</em></h2>
+
+        <div class="key-block">
+          <div class="key-row">
+            <span class="kbd kbd-lg kbd-black">Fn</span>
+            <div>
+              <div class="key-name">Pure dictation</div>
+              <div class="key-desc">Tap once to start, speak, tap again to send. Raw text lands at your cursor in any app — Slack, email, code, anywhere.</div>
+            </div>
+          </div>
+
+          <div class="key-row">
+            <span class="kbd kbd-lg kbd-red">Caps Lock</span>
+            <div>
+              <div class="key-name">Voice instruction</div>
+              <div class="key-desc">Same rhythm — tap, speak a command, tap. Select a Slack thread and say <em>"reply that I can't make the call, I'm out sick"</em> → it writes the message in the input. Select a paragraph and say <em>"three bullets"</em> → done.</div>
+            </div>
+          </div>
+
+          <div class="key-row">
+            <span class="combo"><span class="kbd kbd-black">Fn</span><span class="arrow">→</span><span class="kbd kbd-red">Caps Lock</span></span>
+            <div>
+              <div class="key-name">Chain them</div>
+              <div class="key-desc">Brain-dump with <span class="kbd kbd-black">Fn</span>, then immediately tap <span class="kbd kbd-red">Caps Lock</span> and tell it how to shape what you said. Rough thought → polished message in one breath.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stanza">
+        <p class="mark">— Raw by default</p>
+        <h2>You don't format what you paste <em>into a chatbot.</em></h2>
+        <p>Most of dictation today ends up in ChatGPT, Claude, Cursor. LLMs don't need your commas. They read raw thought just fine — at the same accuracy.</p>
+        <p>So unmute pastes raw, like a fast typist would. Want it formatted? Tap <span class="kbd kbd-red">Caps Lock</span> and ask — <em>"clean this up,"</em> <em>"three bullets,"</em> <em>"make it sound less corporate."</em> Two seconds, done.</p>
+      </div>
+
+      <div class="stanza">
+        <p class="mark">— No subscription</p>
+        <h2>$15 every month, <em>forever, for a wrapper.</em></h2>
+        <p>Dictation isn't a SaaS. It's a small Mac app and one API call. unmute is MIT and free — bring your own Groq key, or run it on your Mac, and pay nothing ever.</p>
+        <p>If you'd rather skip the API-key setup, top up once and let us handle it. No recurring charge, no card on file. Pay when the credits run out, or don't.</p>
+      </div>
+
+    </section>
+
+    <!-- Engines (the actual product surface) -->
+    <section class="engines">
+      <p class="mark">— Three engines, one app</p>
+      <h2>Pick what fits. <em>Switch any time.</em></h2>
+      <p class="intro">Every dictation runs through one of three engines you choose in the app. Same shortcut, same paste-at-cursor — different privacy and cost trade-offs.</p>
+
+      <div class="engine-grid">
+        <div class="engine-card">
+          <h3>On-device</h3>
+          <p class="tagline">Most private</p>
+          <p class="body">Whisper.cpp transcribes locally. Audio never leaves this Mac. Works offline. Slower than cloud, slightly less accurate.</p>
+          <p class="price">Free <span class="small">· no account</span></p>
+        </div>
+
+        <div class="engine-card">
+          <h3>Your Groq key</h3>
+          <p class="tagline">No middleman</p>
+          <p class="body">Audio goes directly from this Mac to Groq using your key, over an encrypted connection. Your key sits in the macOS Keychain.</p>
+          <p class="price">Free <span class="small">· you pay Groq</span></p>
+        </div>
+
+        <div class="engine-card">
+          <h3>No key required</h3>
+          <p class="tagline">Easiest setup</p>
+          <p class="body">Skip the API-key setup entirely. Sign in once, top up with credits, and unmute handles everything. Pay only for what you actually use.</p>
+          <p class="price">$5 top-up <span class="small">· lasts months</span></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Closing stanzas -->
+    <section class="stanzas">
+
+      <div class="stanza">
+        <p class="mark">— Built in the open</p>
+        <h2>Issues, PRs, opinions welcome.</h2>
+        <p><a href="https://github.com/arpitpatel25/unmute-dictation/discussions">Join the discussion</a> · <a href="https://github.com/arpitpatel25/unmute-dictation/issues/new">file an issue</a> · <a href="https://github.com/arpitpatel25/unmute-dictation/fork">fork it</a>.</p>
+      </div>
+
+    </section>
+
+    <footer>
+      <div class="foot">
+        <div>© 2026 unmute · MIT</div>
+        <div class="links">
+          <a href="refund.html">Refund</a>
+          <a href="terms.html">Terms</a>
+          <a href="privacy.html">Privacy</a>
+          <a href="https://x.com/just_unmute">Twitter</a>
+          <a href="https://github.com/arpitpatel25/unmute-dictation">Source</a>
+          <a href="https://github.com/arpitpatel25/unmute-dictation/releases">Releases</a>
+        </div>
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+    function copyBrew(btn) {
+      const text = document.getElementById('brewCmd').innerText
+      navigator.clipboard.writeText(text).then(() => {
+        const orig = btn.innerText
+        btn.innerText = 'Copied'
+        btn.classList.add('copied')
+        setTimeout(() => { btn.innerText = orig; btn.classList.remove('copied') }, 1400)
+      })
+    }
+
+    /* ─── Hero typing animation ───
+       Default markup is "Typing sucks. Just unmute." with two empty spans
+       (#typed-insert, #typed-caret) wedged between "Typing" and " sucks".
+       JS animates a few variants (" your prompts", " your emails", ...)
+       in and out of #typed-insert, blinking the caret only during typing.
+       If JS is disabled or prefers-reduced-motion is set, users see the
+       clean static line — caret element is hidden via the media query. */
+    (function () {
+      const insert = document.getElementById('typed-insert')
+      const caret  = document.getElementById('typed-caret')
+      if (!insert || !caret) return
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+
+      const variants = [
+        ' your prompts',
+        ' your emails',
+        ' your Slack messages',
+      ]
+      // Deliberate pacing — the previous values were unreadable.
+      // ~180ms per char + 3.5s hold reads as "a person actually typed
+      // and paused so you can take it in" rather than a screensaver.
+      const TYPE_MS  = 180
+      const ERASE_MS = 95
+      const HOLD_MS  = 3500
+      const GAP_MS   = 900
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+      const jitter = (base) => base + (Math.random() * base * 0.6 - base * 0.3)
+
+      async function typeIn(text) {
+        for (let i = 1; i <= text.length; i++) {
+          insert.textContent = text.slice(0, i)
+          await sleep(jitter(TYPE_MS))
+        }
+      }
+      async function eraseAll() {
+        const cur = insert.textContent
+        for (let i = cur.length; i >= 0; i--) {
+          insert.textContent = cur.slice(0, i)
+          await sleep(jitter(ERASE_MS))
+        }
+      }
+
+      async function run() {
+        await sleep(900) // settle, let the user see the static state first
+        // Loop through variants forever; if any user really cares they'll
+        // get the message after one pass anyway.
+        let idx = 0
+        while (true) {
+          caret.classList.add('on')
+          await typeIn(variants[idx])
+          caret.classList.remove('on')
+          await sleep(HOLD_MS)
+          caret.classList.add('on')
+          await eraseAll()
+          caret.classList.remove('on')
+          await sleep(GAP_MS)
+          idx = (idx + 1) % variants.length
+        }
+      }
+      run().catch(() => {/* swallow — never let the animation crash the page */})
+    })()
+  </script>
+</body>
+</html>

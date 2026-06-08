@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Terms of Service — unmute</title>
+<meta name="description" content="Terms of service for unmute dictation." />
+<link rel="icon" type="image/png" href="icon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #2A1E18;
+    --ink-70: rgba(42,30,24,0.72);
+    --ink-50: rgba(42,30,24,0.50);
+    --ink-15: rgba(42,30,24,0.15);
+    --ink-08: rgba(42,30,24,0.08);
+    --paper: #FDF8F4;
+    --accent: #C44A2E;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--paper); }
+  body {
+    color: var(--ink);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.62;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 0 28px; }
+  nav { padding: 36px 0 0; }
+  nav a.brand {
+    color: var(--ink); text-decoration: none;
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-size: 22px; letter-spacing: -0.01em;
+  }
+  nav a.brand:hover { color: var(--accent); }
+  main { padding: 60px 0 80px; }
+  h1 {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 400; font-size: clamp(36px, 5vw, 52px);
+    letter-spacing: -0.02em; line-height: 1.05;
+    margin: 0 0 8px;
+  }
+  .lastupd { font-size: 12px; color: var(--ink-50); margin: 0 0 32px; letter-spacing: 0.03em; text-transform: uppercase; }
+  h2 {
+    font-family: 'Instrument Serif', 'Times New Roman', serif;
+    font-weight: 500; font-size: 22px;
+    letter-spacing: -0.01em; line-height: 1.2;
+    margin: 36px 0 12px;
+  }
+  p { font-size: 15.5px; color: var(--ink-70); margin: 0 0 14px; }
+  p strong { color: var(--ink); font-weight: 600; }
+  ul { font-size: 15.5px; color: var(--ink-70); margin: 0 0 14px; padding-left: 20px; }
+  ul li { margin: 4px 0; }
+  a { color: var(--ink); border-bottom: 1px solid var(--ink-15); text-decoration: none; transition: all .15s; }
+  a:hover { border-bottom-color: var(--ink); }
+  footer {
+    border-top: 1px solid var(--ink-08);
+    padding: 30px 0 50px;
+    font-size: 12px; color: var(--ink-50);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  }
+  footer .links { display: flex; gap: 18px; }
+  footer a { border: none; color: var(--ink-70); }
+  footer a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a href="./" class="brand">← unmute</a>
+    </nav>
+
+    <main>
+      <h1>Terms of Service</h1>
+      <p class="lastupd">Effective: June 2026</p>
+
+      <p>
+        These terms govern your use of unmute, a voice dictation app for
+        macOS. By installing or using the app, you agree to these terms. If
+        you don't agree, don't use the app.
+      </p>
+
+      <h2>What unmute does</h2>
+      <p>
+        unmute records audio when you press a configured trigger key,
+        transcribes it via one of three engines you choose, and pastes the
+        result into the focused application. The three engines are:
+      </p>
+      <ul>
+        <li><strong>On-device</strong> — transcription runs locally via whisper.cpp on your Mac.</li>
+        <li><strong>Bring-your-own-key (BYOK)</strong> — audio is sent directly from your Mac to Groq using an API key you provide.</li>
+        <li><strong>No key required</strong> — audio is sent through our infrastructure to Groq and the transcript is returned. Requires a free account and prepaid credits.</li>
+      </ul>
+
+      <h2>The free engines</h2>
+      <p>
+        The on-device and BYOK engines are free to use. The app itself is
+        open source under the MIT license. You can read the source, fork it,
+        modify it, and ship your own version, subject to the license terms.
+      </p>
+
+      <h2>No key required — account and credits</h2>
+      <p>
+        Using the no-key engine engine requires:
+      </p>
+      <ul>
+        <li>A free account, created with an email address you control.</li>
+        <li>A non-zero credit balance, purchased as prepaid top-ups.</li>
+      </ul>
+      <p>
+        Each managed-cloud transcription deducts an amount from your
+        balance based on the audio duration and the model used. The deducted
+        amount is shown to you per request in the in-app billing view.
+      </p>
+      <p>
+        Credit top-ups are processed by Dodo Payments as Merchant of Record.
+        Your card information is handled by Dodo, not by us. See our
+        <a href="refund.html">Refund Policy</a> for the rules on top-ups,
+        and our <a href="privacy.html">Privacy Policy</a> for what we
+        record per request.
+      </p>
+
+      <h2>Acceptable use</h2>
+      <p>
+        You agree not to:
+      </p>
+      <ul>
+        <li>Use the no-key engine to transcribe content that's illegal, abusive, or violates third-party rights.</li>
+        <li>Reverse-engineer, scrape, or automate the no-key engine API in ways that simulate a different product.</li>
+        <li>Share managed-cloud credits across multiple users or attempt to resell access.</li>
+        <li>Bypass usage controls, rate limits, or balance enforcement.</li>
+      </ul>
+      <p>
+        We may suspend or terminate access to the no-key engine if we have
+        a reasonable belief these rules are being broken. The free engines
+        remain available regardless.
+      </p>
+
+      <h2>No warranty</h2>
+      <p>
+        The app and all three engines are provided <strong>"as is."</strong>
+        Transcription accuracy depends on audio quality, language, model,
+        background noise, and many factors outside our control. We don't
+        warrant that the app will be uninterrupted, error-free, or
+        accurate. Don't rely on it for anything where being slightly wrong
+        matters a lot (medical instructions, legal documents, etc.).
+      </p>
+
+      <h2>Limitation of liability</h2>
+      <p>
+        To the maximum extent permitted by law, our total liability for any
+        claim arising out of your use of unmute is limited to the amount
+        you've paid us in the 12 months preceding the claim. We're not
+        liable for indirect, incidental, or consequential damages.
+      </p>
+
+      <h2>Changes to these terms</h2>
+      <p>
+        We may update these terms when the product changes. The "Effective"
+        date above always reflects the latest version. Material changes
+        affecting paying users will be communicated by email to the address
+        on the account.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        Email <a href="mailto:arpitpatel20121999@gmail.com">arpitpatel20121999@gmail.com</a>
+        for anything related to these terms or the service.
+      </p>
+    </main>
+
+    <footer>
+      <div>© 2026 unmute · MIT</div>
+      <div class="links">
+        <a href="./">Home</a>
+        <a href="refund.html">Refund</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="https://github.com/arpitpatel25/unmute-dictation">GitHub</a>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
