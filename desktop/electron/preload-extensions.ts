@@ -75,6 +75,12 @@ export const paywallPreloadExtensions = {
     ipcRenderer.invoke('paywall:get-engine-mode'),
   paywallSetEngineMode: (mode: 'auto' | 'managed' | 'byok' | 'local'): Promise<boolean> =>
     ipcRenderer.invoke('paywall:set-engine-mode', mode),
+
+  // AI format on/off — gates Caps Lock detection in the keyListener.
+  paywallGetInstructionEnabled: (): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:get-instruction-enabled'),
+  paywallSetInstructionEnabled: (enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:set-instruction-enabled', enabled),
   paywallGetUser: (): Promise<{ id: string; email: string | null } | null> =>
     ipcRenderer.invoke('paywall:get-user'),
   paywallRequestSignIn: (): Promise<boolean> =>

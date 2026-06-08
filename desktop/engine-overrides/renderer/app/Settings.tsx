@@ -23,6 +23,7 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [widgetPosition, setWidgetPosition] = useState<'center' | 'right'>('center')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
+  const [instructionEnabled, setInstructionEnabled] = useState<boolean>(true)
 
   // Transcription engine — cloud (Groq) vs on-device (whisper.cpp)
   const [useCloudSTT, setUseCloudSTT] = useState(true)
@@ -96,6 +97,11 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
     window.electronAPI.getActivationMode().then((v: string) => {
       if (v === 'tap-toggle' || v === 'push-to-talk' || v === 'double-tap-push') setActivationMode(v)
     })
+    // AI format on/off — falls back to true if the IPC isn't present
+    // (e.g., running against an older main process during dev).
+    window.electronAPI.paywallGetInstructionEnabled?.()
+      .then((v: boolean) => setInstructionEnabled(v !== false))
+      .catch(() => {})
     window.electronAPI.getGroqKeyStatus().then((s) => {
       setGroqKeyMasked(s.hasKey ? s.masked : null)
     })
@@ -471,12 +477,27 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
           {/* Instruction */}
           <div className="flex items-center justify-between px-4 py-3.5 bg-white/[0.055] border border-white/[0.08] rounded-[13px] hover:bg-white/[0.085] transition-colors">
             <div>
-              <h4 className="text-[13px] font-medium text-white/88 mb-0.5">Instruction trigger</h4>
-              <p className="text-[11px] text-white/36">Tap to start, tap again to instruct AI</p>
+              <h4 className="text-[13px] font-medium text-white/88 mb-0.5">AI format (Instruction trigger)</h4>
+              <p className="text-[11px] text-white/36">
+                {instructionEnabled
+                  ? 'Tap to start, tap again to instruct AI'
+                  : 'Disabled — Caps Lock works as a normal key'}
+              </p>
             </div>
             <div className="flex items-center gap-2.5">
-              <MiniWave />
-              <HeroKey variant="red">Caps Lock</HeroKey>
+              {instructionEnabled && <MiniWave />}
+              {instructionEnabled ? (
+                <HeroKey variant="red">Caps Lock</HeroKey>
+              ) : (
+                <HeroKey>Off</HeroKey>
+              )}
+              <Toggle
+                checked={instructionEnabled}
+                onChange={(next) => {
+                  setInstructionEnabled(next)
+                  window.electronAPI.paywallSetInstructionEnabled?.(next)
+                }}
+              />
             </div>
           </div>
         </div>

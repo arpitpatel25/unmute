@@ -6,6 +6,31 @@ import fs from 'fs'
 
 export type KeyEvent = 'fn-down' | 'fn-up' | 'caps-down' | 'caps-up' | 'right-option-down' | 'right-option-up'
 
+// ─── AI format (instruction) enable/disable ─────────────────────
+//
+// When the user has disabled AI format in Settings, Caps Lock presses
+// should be a no-op. We intercept here (at the listener layer) rather
+// than inside keyboardManager so the OSS keyboard.ts stays untouched —
+// any 'caps-down'/'caps-up' event is dropped before downstream consumers
+// even see it.
+//
+// The flag is owned by paywall-glue.ts (which has the electron-store
+// settings instance). It calls setInstructionEnabled() at startup with
+// the persisted value, and again whenever the user toggles the setting.
+
+let instructionEnabled = true
+
+/** Called from paywall-glue at startup and on every IPC toggle. */
+export function setInstructionEnabled(enabled: boolean): void {
+  instructionEnabled = enabled
+  console.log('[keyListener] instructionEnabled →', enabled)
+}
+
+/** Used only by IPC `get` so the renderer reads the same source of truth. */
+export function getInstructionEnabled(): boolean {
+  return instructionEnabled
+}
+
 // ─── Native addon shape (loaded lazily) ────────────────────────────
 //
 // Why this file exists as an override:
@@ -84,6 +109,16 @@ class KeyListener extends EventEmitter {
     return null
   }
 
+  /** Single chokepoint for emitting key events. Drops Caps events when
+   *  AI format is disabled so downstream consumers (keyboardManager,
+   *  sessionManager) don't need to know about the setting. */
+  private emitKey(event: KeyEvent): void {
+    if ((event === 'caps-down' || event === 'caps-up') && !instructionEnabled) {
+      return
+    }
+    this.emit('key', event)
+  }
+
   start(): boolean {
     if (process.platform !== 'darwin') {
       console.log('[keyListener] Not macOS, skipping native key listener')
@@ -95,7 +130,7 @@ class KeyListener extends EventEmitter {
     if (addon) {
       try {
         const ok = addon.start((event: KeyEvent) => {
-          this.emit('key', event)
+          this.emitKey(event)
         })
         if (ok) {
           this.addonRunning = true
@@ -138,12 +173,12 @@ class KeyListener extends EventEmitter {
       for (const line of lines) {
         const trimmed = line.trim()
         switch (trimmed) {
-          case 'FN_DOWN': this.emit('key', 'fn-down' as KeyEvent); break
-          case 'FN_UP': this.emit('key', 'fn-up' as KeyEvent); break
-          case 'CAPS_DOWN': this.emit('key', 'caps-down' as KeyEvent); break
-          case 'CAPS_UP': this.emit('key', 'caps-up' as KeyEvent); break
-          case 'RIGHT_OPTION_DOWN': this.emit('key', 'right-option-down' as KeyEvent); break
-          case 'RIGHT_OPTION_UP': this.emit('key', 'right-option-up' as KeyEvent); break
+          case 'FN_DOWN': this.emitKey('fn-down' as KeyEvent); break
+          case 'FN_UP': this.emitKey('fn-up' as KeyEvent); break
+          case 'CAPS_DOWN': this.emitKey('caps-down' as KeyEvent); break
+          case 'CAPS_UP': this.emitKey('caps-up' as KeyEvent); break
+          case 'RIGHT_OPTION_DOWN': this.emitKey('right-option-down' as KeyEvent); break
+          case 'RIGHT_OPTION_UP': this.emitKey('right-option-up' as KeyEvent); break
           case 'PASTE_OK':
           case 'COPY_OK': break
         }

@@ -159,6 +159,27 @@ function registerSessionBridge() {
     return true
   })
 
+  // ─── AI format (instruction) on/off ─────────────────────────
+  // Owns the persisted setting + pushes it to the keyListener so Caps Lock
+  // events get dropped at the source when the user disables AI format.
+  ipcMain.handle('paywall:get-instruction-enabled', () => {
+    return settings.get('instructionEnabled', true)
+  })
+  ipcMain.handle('paywall:set-instruction-enabled', async (_e, enabled: boolean) => {
+    const next = !!enabled
+    settings.set('instructionEnabled', next)
+    try {
+      const { setInstructionEnabled } = await import('./keyListener')
+      setInstructionEnabled(next)
+    } catch (e) {
+      console.warn(
+        '[paywall-glue] could not push instructionEnabled to keyListener:',
+        e instanceof Error ? e.message : e,
+      )
+    }
+    return true
+  })
+
   // ─── Dodo payments IPC ──────────────────────────────────────
   // All three go through payments-client which calls the payments worker.
   // They require a valid session — if the user isn't signed in, they
@@ -193,6 +214,22 @@ export function initPaywallGlue(): void {
   registerAuthIPC()
   registerBalanceIPC()
   registerSessionBridge()
+
+  // Push the persisted instruction-enabled setting to the keyListener so
+  // Caps Lock events get filtered from the very first press. Without this
+  // a user who disabled AI format in a previous session would still trigger
+  // instructions until they touch the setting again this session.
+  void (async () => {
+    try {
+      const { setInstructionEnabled } = await import('./keyListener')
+      setInstructionEnabled(settings.get('instructionEnabled', true))
+    } catch (e) {
+      console.warn(
+        '[paywall-glue] could not init instructionEnabled:',
+        e instanceof Error ? e.message : e,
+      )
+    }
+  })()
 
   // Deep link for OAuth callbacks
   if (process.platform === 'darwin') {
