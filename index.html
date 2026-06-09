@@ -58,8 +58,12 @@
 
   /* ─── Layout ─── */
   .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; text-align: center; }
-  /* Stanzas stay narrow for readability even though the page is wider. */
-  .stanza, .stanzas { }
+  /* Below-the-fold container — manifesto + engine cards get more
+     horizontal room than the hero's narrow editorial column. */
+  .wrap.mid { max-width: 1400px; }
+  @media (max-width: 1100px) {
+    .wrap.mid { max-width: 100%; padding: 0 36px; }
+  }
   nav {
     display: flex; justify-content: space-between; align-items: baseline;
     padding: 36px 0 0;
@@ -272,11 +276,11 @@
 
   /* ─── Manifesto sections ─── */
   .stanzas {
-    padding: 11vh 0 9vh;
-    display: flex; flex-direction: column; align-items: center; gap: 6vh;
+    padding: 7vh 0 5vh;
+    display: flex; flex-direction: column; align-items: center; gap: 5vh;
   }
   .stanza {
-    max-width: 600px;
+    max-width: 880px;
     text-align: center;
   }
   .stanza p { margin-left: auto; margin-right: auto; }
@@ -307,7 +311,7 @@
     font-size: 16.5px;
     color: var(--ink-70);
     margin: 0;
-    max-width: 520px;
+    max-width: 720px;
     line-height: 1.6;
   }
   .stanza p + p { margin-top: 10px; }
@@ -319,8 +323,8 @@
 
   /* ─── Engines section (3 cards) ─── */
   .engines {
-    padding: 4vh 0 0;
-    max-width: 760px;
+    padding: 3vh 0 0;
+    max-width: 1240px;
     margin: 0 auto;
   }
   .engines .mark {
@@ -445,7 +449,12 @@
         <button onclick="copyBrew(this)">Copy</button>
       </div>
     </section>
+  </div>
 
+  <!-- Below-the-fold content opens a wider container so the manifesto +
+       engine cards have more horizontal room than the hero's narrow
+       editorial column. -->
+  <div class="wrap mid">
     <!-- Manifesto -->
     <section class="stanzas">
 
@@ -543,7 +552,11 @@
       </div>
 
     </section>
+  </div>
 
+  <!-- Footer goes back to the narrow column so it doesn't feel sprawled
+       at the edges of a 1400px container. -->
+  <div class="wrap">
     <footer>
       <div class="foot">
         <div>© 2026 unmute · MIT</div>
@@ -557,7 +570,6 @@
         </div>
       </div>
     </footer>
-
   </div>
 
   <script>
@@ -585,9 +597,9 @@
       if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
 
       const variants = [
-        ' your prompts',
-        ' your emails',
-        ' your Slack messages',
+        ' prompts',
+        ' emails',
+        ' Slack messages',
       ]
       // Deliberate pacing — the previous values were unreadable.
       // ~180ms per char + 3.5s hold reads as "a person actually typed
