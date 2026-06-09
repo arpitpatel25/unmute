@@ -61,6 +61,18 @@ export const paywallPreloadExtensions = {
     currency?: string
   } | null> => ipcRenderer.invoke('paywall:get-payment-status', paymentId),
 
+  // Output mode — paste-at-cursor vs clipboard-only.
+  paywallGetOutputMode: (): Promise<'paste' | 'clipboard'> =>
+    ipcRenderer.invoke('paywall:get-output-mode'),
+  paywallSetOutputMode: (mode: 'paste' | 'clipboard'): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:set-output-mode', mode),
+
+  // Launch at login — backed by Electron's setLoginItemSettings.
+  paywallGetLaunchAtLogin: (): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:get-launch-at-login'),
+  paywallSetLaunchAtLogin: (enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:set-launch-at-login', enabled),
+
   // Balance state
   paywallGetBalance: (): Promise<{ balanceCents: number; topUpUrl: string }> =>
     ipcRenderer.invoke('paywall:get-balance'),

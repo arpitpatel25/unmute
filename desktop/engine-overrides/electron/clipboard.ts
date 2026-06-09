@@ -317,11 +317,37 @@ function padOutput(text: string): string {
   return padded
 }
 
+// ─── Output mode ─────────────────────────────────────────────────
+//
+// 'paste'      → write to clipboard + simulate Cmd+V at the cursor (default)
+// 'clipboard'  → write to clipboard only; user pastes manually with Cmd+V
+//
+// Owned by paywall-glue.ts (which has the electron-store instance). It calls
+// setOutputMode() at startup with the persisted value and on every IPC
+// change, so the gate is in effect from the very first dictation of a
+// session.
+
+let outputMode: 'paste' | 'clipboard' = 'paste'
+
+export function setOutputMode(mode: 'paste' | 'clipboard'): void {
+  outputMode = mode
+  console.log('[clipboard] outputMode →', mode)
+}
+
+export function getOutputMode(): 'paste' | 'clipboard' {
+  return outputMode
+}
+
 export async function injectOutput(text: string): Promise<void> {
   const tStart = Date.now()
   const padded = padOutput(text)
   clipboard.writeText(padded)
   console.log(`[clipboard] writeText (${padded.length} chars) in ${Date.now() - tStart}ms`)
+
+  if (outputMode === 'clipboard') {
+    console.log('[clipboard] outputMode=clipboard — skipping auto-paste, user will Cmd+V')
+    return
+  }
 
   // Brief wait so the pasteboard write is observable to the target app before
   // we post Cmd+V — defeats a cross-process pasteboard-sync race that can

@@ -208,6 +208,49 @@ function registerSessionBridge() {
     const { fetchPaymentStatus } = await import('./payments-client')
     return fetchPaymentStatus(paymentId, token)
   })
+
+  // ─── Output mode: paste-at-cursor vs clipboard-only ──────────
+  // Wires the persisted setting into clipboard.ts's outputMode flag.
+  ipcMain.handle('paywall:get-output-mode', () => {
+    return settings.get('outputMode', 'paste')
+  })
+  ipcMain.handle('paywall:set-output-mode', async (_e, mode: 'paste' | 'clipboard') => {
+    const next = mode === 'clipboard' ? 'clipboard' : 'paste'
+    settings.set('outputMode', next)
+    try {
+      const { setOutputMode } = await import('../clipboard')
+      setOutputMode(next)
+    } catch (e) {
+      console.warn(
+        '[paywall-glue] could not push outputMode to clipboard:',
+        e instanceof Error ? e.message : e,
+      )
+    }
+    return true
+  })
+
+  // ─── Launch at login (macOS) ─────────────────────────────────
+  // Backed by Electron's app.setLoginItemSettings(). macOS persists this
+  // in launchd; we don't need our own electron-store entry.
+  ipcMain.handle('paywall:get-launch-at-login', () => {
+    try {
+      return app.getLoginItemSettings().openAtLogin
+    } catch {
+      return false
+    }
+  })
+  ipcMain.handle('paywall:set-launch-at-login', (_e, enabled: boolean) => {
+    try {
+      app.setLoginItemSettings({ openAtLogin: !!enabled })
+      return true
+    } catch (e) {
+      console.warn(
+        '[paywall-glue] setLoginItemSettings failed:',
+        e instanceof Error ? e.message : e,
+      )
+      return false
+    }
+  })
 }
 
 export function initPaywallGlue(): void {
@@ -226,6 +269,20 @@ export function initPaywallGlue(): void {
     } catch (e) {
       console.warn(
         '[paywall-glue] could not init instructionEnabled:',
+        e instanceof Error ? e.message : e,
+      )
+    }
+  })()
+
+  // Same pattern for outputMode — paste vs clipboard-only.
+  void (async () => {
+    try {
+      const { setOutputMode } = await import('../clipboard')
+      const persisted = settings.get('outputMode', 'paste')
+      setOutputMode(persisted === 'clipboard' ? 'clipboard' : 'paste')
+    } catch (e) {
+      console.warn(
+        '[paywall-glue] could not init outputMode:',
         e instanceof Error ? e.message : e,
       )
     }

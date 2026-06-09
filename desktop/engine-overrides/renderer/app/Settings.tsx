@@ -35,10 +35,8 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([])
   const [selectedDevice, setSelectedDevice] = useState<string>('')
   const [outputMode, setOutputMode] = useState<'paste' | 'clipboard'>('paste')
-  const [launchAtLogin, setLaunchAtLogin] = useState(true)
+  const [launchAtLogin, setLaunchAtLogin] = useState(false)
   const [soundFeedback, setSoundFeedback] = useState(true)
-  const [autoPunctuation, setAutoPunctuation] = useState(true)
-  const [inputLanguage, setInputLanguage] = useState<'en' | 'hinglish'>('en')
   const [widgetPosition, setWidgetPosition] = useState<'center' | 'right'>('center')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
@@ -52,9 +50,14 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
     window.electronAPI.getSoundFeedback().then((v: boolean) => {
       setSoundFeedback(v)
     })
-    window.electronAPI.getInputLanguage().then((v: string) => {
-      if (v === 'en' || v === 'hinglish') setInputLanguage(v)
-    })
+    window.electronAPI.paywallGetOutputMode?.()
+      .then((v: 'paste' | 'clipboard') => {
+        if (v === 'paste' || v === 'clipboard') setOutputMode(v)
+      })
+      .catch(() => {})
+    window.electronAPI.paywallGetLaunchAtLogin?.()
+      .then((v: boolean) => setLaunchAtLogin(!!v))
+      .catch(() => {})
     window.electronAPI.getDictationKey().then((v: string) => {
       if (v === 'fn' || v === 'right-option') setDictationKey(v)
     })
@@ -94,10 +97,15 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
     window.electronAPI.setSoundFeedback(value)
   }
 
-  function handleInputLanguageChange(value: string) {
-    const lang = value as 'en' | 'hinglish'
-    setInputLanguage(lang)
-    window.electronAPI.setInputLanguage(lang)
+  function handleOutputModeChange(value: string) {
+    const next = value === 'clipboard' ? 'clipboard' : 'paste'
+    setOutputMode(next)
+    window.electronAPI.paywallSetOutputMode?.(next)
+  }
+
+  function handleLaunchAtLoginChange(value: boolean) {
+    setLaunchAtLogin(value)
+    window.electronAPI.paywallSetLaunchAtLogin?.(value)
   }
 
   function handleDictationKeyChange(value: string) {
@@ -220,34 +228,26 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
       {/* ═══ Behavior ═══ */}
       <SectionHeader icon={<BehaviorIcon />} title="Behavior" />
       <div className="bg-surface-2 border border-border rounded-2xl overflow-hidden mb-3 shadow-sm">
-        <SettingRow label="Output mode" description="How output is delivered">
+        <SettingRow
+          label="Output mode"
+          description={outputMode === 'paste'
+            ? 'Auto-pastes at the cursor in whichever app is focused'
+            : 'Copies to clipboard only — you press ⌘V yourself'}
+        >
           <SegmentedControl
             options={[
               { value: 'paste', label: 'Paste at cursor' },
-              { value: 'clipboard', label: 'Clipboard' },
+              { value: 'clipboard', label: 'Clipboard only' },
             ]}
             value={outputMode}
-            onChange={(v) => setOutputMode(v as 'paste' | 'clipboard')}
+            onChange={handleOutputModeChange}
           />
         </SettingRow>
         <SettingRow label="Sound feedback" description="Play sounds on start / stop">
           <Toggle checked={soundFeedback} onChange={handleSoundFeedbackChange} />
         </SettingRow>
-        <SettingRow label="Input language" description={inputLanguage === 'hinglish' ? "Hinglish mode — Hindi + English mix, output in Roman script" : "English — standard dictation"}>
-          <SegmentedControl
-            options={[
-              { value: 'en', label: 'English' },
-              { value: 'hinglish', label: 'Hinglish' },
-            ]}
-            value={inputLanguage}
-            onChange={handleInputLanguageChange}
-          />
-        </SettingRow>
-        <SettingRow label="Auto-punctuation" description="Add punctuation automatically">
-          <Toggle checked={autoPunctuation} onChange={setAutoPunctuation} />
-        </SettingRow>
-        <SettingRow label="Launch at login" description="Start Unmute when you log in">
-          <Toggle checked={launchAtLogin} onChange={setLaunchAtLogin} />
+        <SettingRow label="Launch at login" description="Start unmute automatically when you log in to your Mac">
+          <Toggle checked={launchAtLogin} onChange={handleLaunchAtLoginChange} />
         </SettingRow>
       </div>
 
