@@ -265,12 +265,16 @@ run_build() {
 
   if [[ "$NO_SIGN" == "--no-sign" ]]; then
     log "Skipping signing — local build only"
-    npx electron-builder --mac --config.mac.identity=null
+    # Override the production yml's identity + notarize on the CLI so dev
+    # builds don't need APPLE_ID/cert and don't try to notarize.
+    npx electron-builder --mac \
+      --config.mac.identity=null \
+      --config.mac.notarize=false
   else
     : "${APPLE_ID:?APPLE_ID required for signed build}"
     : "${APPLE_TEAM_ID:?APPLE_TEAM_ID required}"
     : "${APPLE_APP_SPECIFIC_PASSWORD:?APPLE_APP_SPECIFIC_PASSWORD required}"
-    log "Signing + notarizing DMG"
+    log "Signing + notarizing DMG (this can take 5-15 min for the Apple notary trip)"
     npx electron-builder --mac
   fi
 

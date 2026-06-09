@@ -1,0 +1,62 @@
+# electron-builder config — engine-override.
+#
+# Replaces the OSS engine's electron-builder.yml in the wired tree.
+# Same shape as the OSS file, with three production additions for
+# the Pro distribution:
+#
+#   1. Real Developer ID Application identity instead of identity: null.
+#      The OSS engine ships ad-hoc-signed builds; Pro is signed by the
+#      Apple Developer ID so installed apps don't lose their TCC grants
+#      across updates and don't trigger "unidentified developer" warnings.
+#
+#   2. Hardened Runtime turned on — required for Apple notarization.
+#      Combined with the existing entitlements file (which keeps JIT,
+#      unsigned executable memory, and library-validation-disabled so
+#      our native addons load), the runtime is restrictive but lets the
+#      app actually function.
+#
+#   3. notarize: { teamId } — wires electron-builder's built-in
+#      notarytool integration. Requires APPLE_ID + APPLE_APP_SPECIFIC
+#      _PASSWORD env vars set during the build (the wire script
+#      enforces this via the run_build :"${VAR:?…}" guards).
+#
+# Local dev builds bypass all of this by passing
+# --config.mac.identity=null on the CLI (handled in wire-into-engine.sh's
+# --no-sign branch).
+
+appId: com.arpitpatel.unmute
+productName: Unmute
+directories:
+  output: release
+  buildResources: resources
+files:
+  - dist/**/*
+  - resources/**/*
+  - "!resources/bin/**"
+extraResources:
+  - from: resources/bin/
+    to: bin/
+    filter:
+      - "**/*"
+      - "!.gitkeep"
+  - from: node_modules/ffmpeg-static/ffmpeg
+    to: ffmpeg
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - dir
+  identity: "Developer ID Application: Arpit Patel (D8ZHT5S2XQ)"
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize:
+    teamId: D8ZHT5S2XQ
+  protocols:
+    - name: Unmute
+      schemes:
+        - unmute
+win:
+  target:
+    - nsis
