@@ -110,28 +110,12 @@ function AppInner() {
 
       {/* Sidebar */}
       <nav className="w-[220px] min-w-[220px] border-r border-border pt-12 px-2 flex flex-col bg-cream-mid">
-        {/* Brand — "Plus" suffix distinguishes this build from the OSS
-            unmute. Rendered in the same rounded-sans family as the
-            wordmark, black, smaller, baseline-aligned and snugged against
-            the logo so it reads as part of the mark rather than a
-            sticker. */}
+        {/* Brand — the wordmark PNG itself carries the distinguisher
+            from OSS unmute (baked into the asset, not a CSS overlay), so
+            this is back to a single image + tagline. */}
         <div className="px-3 mb-5 pb-5 border-b border-border flex flex-col items-center">
-          <div className="relative flex items-end gap-0.5">
+          <div className="relative">
             <img src={unmuteLogo} alt="unmute" className="h-[54px] w-auto" />
-            <span
-              aria-hidden="true"
-              className="font-display"
-              style={{
-                fontWeight: 700,
-                fontSize: '20px',
-                color: 'var(--ink, #2A1E18)',
-                lineHeight: 1,
-                letterSpacing: '-0.02em',
-                marginBottom: '8px',
-              }}
-            >
-              Plus
-            </span>
           </div>
           <p className="text-[10px] text-ink-60 font-medium -mt-0.5">
             Typing sucks. Just unmute.
