@@ -9,14 +9,17 @@ compatibility_flags = ["nodejs_compat"]
 #   DODO_API_KEY          — Bearer token from Dodo dashboard (test_mode key first)
 #   DODO_WEBHOOK_SECRET   — Signing secret from Dodo dashboard (whsec_… form)
 
-# Non-secret vars. DODO_API_BASE flips when going live. DODO_TOPUP_PRODUCTS
-# is a JSON map of top-up cents → Dodo product_id (one product per tier).
-# PUBLIC_API_BASE is the public URL of THIS worker, used for the checkout
-# return_url. Override in a [env.production] block when deploying live.
+# Non-secret vars.
+#   DODO_API_BASE — flipped to live.dodopayments.com on 2026-06-09. Bank
+#     verification is still under review but Dodo lets us accept live
+#     payments now (payouts queue until bank clears).
+#   DODO_TOPUP_PRODUCTS — JSON map of top-up cents → live product_id.
+#   PUBLIC_API_BASE — public URL of THIS worker, used for the checkout
+#     return_url.
 [vars]
-DODO_API_BASE = "https://test.dodopayments.com"
+DODO_API_BASE = "https://live.dodopayments.com"
 PUBLIC_API_BASE = "https://unmute-payments.zodpatel.workers.dev"
-DODO_TOPUP_PRODUCTS = '{"500":"pdt_0NgXpOexaxaUT5viKqM9B","1000":"pdt_0NgXoS2aKtdufsEgJEbqi","2500":"pdt_0NgXomgttNZyixWnNsu8U"}'
+DODO_TOPUP_PRODUCTS = '{"500":"pdt_0NgeSieNnvti8vHPDk8tn","1000":"pdt_0NgeT8ph6cRuRYfysopID","2500":"pdt_0NgeTEtZsRJ7X9P6iTDY8"}'
 
 [[kv_namespaces]]
 binding = "USER_BALANCE"

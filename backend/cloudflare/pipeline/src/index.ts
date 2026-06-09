@@ -125,7 +125,10 @@ export default {
 // ─── GET /v1/me — balance + plan snapshot ──────────────────────
 
 async function handleMe(env: PipelineEnv, userId: string): Promise<Response> {
-  const balance = await getBalance(env, userId)
+  // Bypass the 60s KV edge cache here — the desktop app polls /v1/me right
+  // after a top-up and the user is watching for the bump. Hot paths (STT,
+  // LLM) continue to use the cached path for speed.
+  const balance = await getBalance(env, userId, { fresh: true })
   return json({
     ok: true,
     user_id: userId,

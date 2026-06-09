@@ -25,13 +25,42 @@ function key(userId: string): string {
 
 /**
  * Get current balance in cents.
- *  - First: KV read (edge-fast).
- *  - On miss: fetch from Supabase, populate KV.
- *  - Returns 0 if user doesn't exist or fetch fails — fail-closed for safety
- *    (vs fail-open for auth, since debiting 0 is fine but allowing infinite
- *    spend isn't).
+ *
+ *  Default path (no opts):
+ *    - First: KV read (edge-fast, eventually-consistent within ~60s).
+ *    - On miss: fetch from Supabase, populate KV.
+ *
+ *  Fresh path ({ fresh: true }):
+ *    - Skips KV entirely. Reads straight from Supabase (~50-150ms).
+ *    - Also updates KV with the authoritative value so subsequent
+ *      cached reads return correct data faster.
+ *    - Use ONLY for low-frequency / user-blocking endpoints like
+ *      `/v1/me` where staleness right after a top-up is visible to
+ *      the user. Cloudflare KV's edge cache has a 60s minimum TTL
+ *      so there's no sub-60s knob on the .get() call itself — the
+ *      only way to guarantee freshness is to bypass KV.
+ *    - Do NOT use on the dictation hot path (STT/LLM) — the
+ *      Supabase round-trip latency compounds.
+ *
+ *  Returns 0 if user doesn't exist or fetch fails — fail-closed for safety
+ *  (vs fail-open for auth, since debiting 0 is fine but allowing infinite
+ *  spend isn't).
  */
-export async function getBalance(env: PipelineEnv, userId: string): Promise<number> {
+export interface GetBalanceOpts { fresh?: boolean }
+
+export async function getBalance(
+  env: PipelineEnv,
+  userId: string,
+  opts?: GetBalanceOpts,
+): Promise<number> {
+  if (opts?.fresh) {
+    const authoritative = await fetchBalanceFromSupabase(env, userId)
+    // Refresh the KV cache with the truth so subsequent default-path
+    // reads (hot path) see the correct value sooner.
+    try { await setBalance(env.USER_BALANCE, userId, authoritative) } catch {}
+    return authoritative
+  }
+
   const cached = await env.USER_BALANCE.get(key(userId))
   if (cached !== null) {
     const n = parseInt(cached, 10)
