@@ -110,10 +110,28 @@ function AppInner() {
 
       {/* Sidebar */}
       <nav className="w-[220px] min-w-[220px] border-r border-border pt-12 px-2 flex flex-col bg-cream-mid">
-        {/* Brand */}
+        {/* Brand — the italic coral "+" distinguishes this build from
+            the OSS unmute that anyone else might have installed. Renders
+            as styled text next to the logo PNG so we don't have to
+            re-export the asset at every size. */}
         <div className="px-3 mb-5 pb-5 border-b border-border flex flex-col items-center">
-          <div className="relative">
-            <img src={unmuteLogo} alt="Unmute" className="h-[54px] w-auto" />
+          <div className="relative flex items-start gap-1">
+            <img src={unmuteLogo} alt="unmute" className="h-[54px] w-auto" />
+            <span
+              aria-hidden="true"
+              style={{
+                fontFamily: "'Instrument Serif', 'Times New Roman', serif",
+                fontWeight: 500,
+                fontStyle: 'italic',
+                fontSize: '26px',
+                color: '#C44A2E',
+                lineHeight: 1,
+                letterSpacing: '-0.02em',
+                marginTop: '4px',
+              }}
+            >
+              +
+            </span>
           </div>
           <p className="text-[10px] text-ink-60 font-medium -mt-0.5">
             Typing sucks. Just unmute.
