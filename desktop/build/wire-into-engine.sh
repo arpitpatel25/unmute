@@ -242,6 +242,31 @@ import { paywallPreloadExtensions } from './paywall/preload-extensions'
   if ! grep -q 'unmute-native-fn-listener' "$engine/electron/keyListener.ts"; then
     log "WARN: keyListener.ts missing unmute-native-fn-listener — engine-overrides may have failed to apply"
   fi
+
+  # ─── HUD/widget window tightening ─────────────────────────────
+  # OSS widget window is 520×140 — the pill itself is only ~480×44 wide
+  # so there's ~96px of vertical dead space below the visible pill. That
+  # dead space still blocks clicks to apps underneath (Chrome tabs at
+  # the top of the screen are the canonical victim). Shrink the window
+  # height so it hugs the pill + just enough room for the drop shadow.
+  local wm="$engine/electron/windowManager.ts"
+  if [[ -f "$wm" ]]; then
+    sed -i.bak 's/^const HUD_HEIGHT = 140$/const HUD_HEIGHT = 72  \/\/ patched: was 140, shrunk to kill click-blocking dead zone/' "$wm"
+    rm -f "$wm.bak"
+    if ! grep -q 'patched: was 140' "$wm"; then
+      log "WARN: windowManager.ts HUD_HEIGHT patch did not apply"
+    fi
+  fi
+
+  # ─── Pill white border ─────────────────────────────────────────
+  # OSS pill border is nearly invisible (rgba 0.06). Bump it to a clean
+  # thin white outline so the pill reads as a defined object against any
+  # background.
+  local css="$engine/renderer/styles.css"
+  if [[ -f "$css" ]]; then
+    sed -i.bak 's|border: 1px solid rgba(255, 255, 255, 0.06);|border: 1px solid rgba(255, 255, 255, 0.55);|' "$css"
+    rm -f "$css.bak"
+  fi
 }
 
 # ─── Stage 3: Build ─────────────────────────────────────────────
