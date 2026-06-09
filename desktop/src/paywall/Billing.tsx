@@ -184,7 +184,7 @@ export function Billing() {
           <p className="text-[12px] text-ink-35">No activity yet.</p>
         ) : (
           <ul className="text-[12px] space-y-1.5">
-            {ledger.slice(0, 12).map((row) => (
+            {ledger.slice(0, 6).map((row) => (
               <li key={row.id} className="flex items-baseline justify-between gap-3">
                 <span className="text-ink truncate">{labelForRow(row)}</span>
                 <span
