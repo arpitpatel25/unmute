@@ -1,0 +1,244 @@
+// Managed-build db.ts override.
+//
+// Adds an `engine` column to the sessions table so the History view can
+// chip each row with which path actually ran (Cloud / Your key / Offline).
+// The chip is purely informational; the column is nullable so legacy rows
+// from pre-upgrade installs render without a chip.
+//
+// The engine value is set by the paywall layer's session-end hook just
+// before saveSession runs — see paywall/main-extensions.ts → popLastEngine().
+
+import Database from 'better-sqlite3'
+import { app } from 'electron'
+import path from 'path'
+// popLastEngine is the handoff point: sessionManager (or paywall-route on
+// the managed path) calls setLastEngine(...) when transcription returns,
+// and saveSession reads + clears it here. Single-flight assumption holds
+// because dictation is push-to-talk — one in-flight at a time.
+import { popLastEngine } from './paywall/main-extensions'
+
+let db: Database.Database
+
+export type EngineTag = 'cloud' | 'byok' | 'local'
+
+export interface DBSession {
+  id: string
+  created_at: number
+  flow_type: string
+  dictation_transcript: string | null
+  instruction_transcript: string | null
+  selected_text: string | null
+  selected_text_role: string | null
+  output: string | null
+  audio_file_path: string | null
+  status: string
+  error_message: string | null
+  engine: EngineTag | null
+}
+
+export function initDB(): void {
+  const dbPath = path.join(app.getPath('userData'), 'unmute.db')
+  db = new Database(dbPath)
+  db.pragma('journal_mode = WAL')
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL,
+      flow_type TEXT NOT NULL,
+      dictation_transcript TEXT,
+      instruction_transcript TEXT,
+      selected_text TEXT,
+      selected_text_role TEXT,
+      output TEXT,
+      audio_file_path TEXT,
+      status TEXT DEFAULT 'done',
+      error_message TEXT,
+      engine TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
+  `)
+
+  // Migration for existing installs that already had the sessions table
+  // without the engine column. sqlite errors if the column already exists,
+  // which we catch + ignore — there's no IF NOT EXISTS for ADD COLUMN
+  // until sqlite 3.35 and we're not guaranteed that.
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN engine TEXT')
+  } catch { /* already there */ }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS usage_daily (
+      date TEXT NOT NULL,
+      model TEXT NOT NULL,
+      stt_seconds REAL NOT NULL DEFAULT 0,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (date, model)
+    );
+  `)
+
+  cleanupSessions()
+}
+
+export interface UsageRow {
+  date: string
+  model: string
+  stt_seconds: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export function addUsage(date: string, model: string, delta: {
+  sttSeconds?: number
+  inputTokens?: number
+  outputTokens?: number
+}): void {
+  const stmt = db.prepare(`
+    INSERT INTO usage_daily (date, model, stt_seconds, input_tokens, output_tokens)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(date, model) DO UPDATE SET
+      stt_seconds = stt_seconds + excluded.stt_seconds,
+      input_tokens = input_tokens + excluded.input_tokens,
+      output_tokens = output_tokens + excluded.output_tokens
+  `)
+  stmt.run(
+    date,
+    model,
+    delta.sttSeconds || 0,
+    delta.inputTokens || 0,
+    delta.outputTokens || 0,
+  )
+}
+
+export function getUsageRows(): UsageRow[] {
+  return db.prepare('SELECT * FROM usage_daily').all() as UsageRow[]
+}
+
+export function clearUsage(): void {
+  db.prepare('DELETE FROM usage_daily').run()
+  console.log('[db] Usage stats cleared')
+}
+
+export function saveSession(session: {
+  sessionId: string
+  flowType: string
+  dictationTranscript: string | null
+  instructionTranscript: string | null
+  selectedText: string | null
+  selectedTextRole: string | null
+  output: string | null
+  audioFilePath?: string | null
+  status: string
+  errorMessage: string | null
+  createdAt: number
+}): void {
+  // Drain whatever the paywall layer recorded for the most recent STT call.
+  // popLastEngine clears it so the next dictation starts from null again.
+  const engine = popLastEngine()
+
+  const stmt = db.prepare(`
+    INSERT OR REPLACE INTO sessions (
+      id, created_at, flow_type, dictation_transcript, instruction_transcript,
+      selected_text, selected_text_role, output, audio_file_path, status, error_message, engine
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  stmt.run(
+    session.sessionId,
+    session.createdAt,
+    session.flowType,
+    session.dictationTranscript,
+    session.instructionTranscript,
+    session.selectedText,
+    session.selectedTextRole,
+    session.output,
+    session.audioFilePath || null,
+    session.status,
+    session.errorMessage,
+    engine,
+  )
+
+  cleanupSessions()
+}
+
+export function getSessions(limit = 50): Record<string, unknown>[] {
+  const rows = db.prepare(
+    'SELECT * FROM sessions ORDER BY created_at DESC LIMIT ?'
+  ).all(limit) as DBSession[]
+
+  return rows.map((row) => ({
+    id: row.id,
+    createdAt: row.created_at,
+    flowType: row.flow_type,
+    dictationTranscript: row.dictation_transcript,
+    instructionTranscript: row.instruction_transcript,
+    selectedText: row.selected_text,
+    selectedTextRole: row.selected_text_role,
+    output: row.output,
+    audioFilePath: row.audio_file_path,
+    status: row.status,
+    errorMessage: row.error_message,
+    engine: row.engine,
+  }))
+}
+
+export function getSession(id: string): DBSession | undefined {
+  return db.prepare(
+    'SELECT * FROM sessions WHERE id = ?'
+  ).get(id) as DBSession | undefined
+}
+
+export function updateSessionResult(sessionId: string, updates: {
+  dictationTranscript: string | null
+  output: string | null
+  status: string
+  errorMessage: string | null
+  flowType?: string
+}): void {
+  // Retries don't have a known engine — leave existing engine value alone.
+  const stmt = db.prepare(`
+    UPDATE sessions SET
+      dictation_transcript = ?,
+      output = ?,
+      status = ?,
+      error_message = ?,
+      flow_type = COALESCE(?, flow_type)
+    WHERE id = ?
+  `)
+  stmt.run(
+    updates.dictationTranscript,
+    updates.output,
+    updates.status,
+    updates.errorMessage,
+    updates.flowType || null,
+    sessionId
+  )
+}
+
+export function deleteSession(id: string): void {
+  db.prepare('DELETE FROM sessions WHERE id = ?').run(id)
+}
+
+function cleanupSessions(): void {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000
+  db.prepare('DELETE FROM sessions WHERE created_at < ?').run(cutoff)
+
+  const count = (db.prepare('SELECT COUNT(*) as c FROM sessions').get() as { c: number }).c
+  if (count > 100) {
+    db.prepare(`
+      DELETE FROM sessions WHERE id IN (
+        SELECT id FROM sessions ORDER BY created_at ASC LIMIT ?
+      )
+    `).run(count - 100)
+  }
+}
+
+export function clearAllSessions(): void {
+  db.prepare('DELETE FROM sessions').run()
+  console.log('[db] All sessions cleared')
+}
+
+export function closeDB(): void {
+  if (db) db.close()
+}

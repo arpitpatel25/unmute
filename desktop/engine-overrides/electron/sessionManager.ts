@@ -15,6 +15,7 @@ import { hasApiKey } from './keyStore'
 import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
 import { getPaywallEngineMode } from './paywall/paywall-glue'
 import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait } from './paywall/paywall-stream'
+import { setLastEngine } from './paywall/main-extensions'
 // OSS prompt assembly — we reuse it client-side so the worker's /v1/llm
 // endpoint stays a thin pass-through to Groq instead of duplicating prompt
 // logic on the server (which would diverge from OSS over time).
@@ -775,6 +776,7 @@ class SessionManager {
           // hint "via on-device — cloud was slow" once at the end.
           this.notifyEngineFallback('cloud slow — used on-device whisper')
         }
+        setLastEngine(raced.source)
         console.log(`[session] ✅ Chunk ${chunkIndex} via ${raced.source === 'cloud' ? 'managed cloud' : 'local whisper (cloud was slow)'} in ${Date.now() - t0}ms`)
         return raced.text
       }
@@ -791,6 +793,7 @@ class SessionManager {
         if (!hasApiKey()) throw new Error('No Groq API key set. Add your key in Settings.')
         const dualResult = await pipelineDualTranscribe(buffer, this.authToken)
         transcript = dualResult.transcription
+        setLastEngine('byok')
 
         // Store translation alongside transcript
         const chunk = this.chunkTracker.get(chunkIndex)
@@ -799,8 +802,10 @@ class SessionManager {
         }
       } else if (useFasterWhisper) {
         transcript = await fasterWhisperManager.transcribe(buffer)
+        setLastEngine('local')
       } else if (useLocalWhisper) {
         transcript = await whisperManager.transcribe(buffer)
+        setLastEngine('local')
       } else {
         // pipelineTranscribe handles cloud→on-device fallback (and no-key→on-device)
         const cloudProvider = useSarvam ? 'sarvam' as const : useCartesia ? 'cartesia' as const : 'groq' as const
@@ -810,6 +815,7 @@ class SessionManager {
           sttLanguage: this.getEffectiveSTTLanguage(),
           onFallback: (reason) => this.notifyEngineFallback(reason),
         })
+        setLastEngine('byok')
       }
 
       const elapsed = Date.now() - t0
@@ -1003,6 +1009,7 @@ class SessionManager {
           if (raced) {
             session.dictationTranscript = raced.text
             if (raced.source === 'local') this.notifyEngineFallback('cloud slow — used on-device whisper')
+            setLastEngine(raced.source)
             console.log(`[session] ✓ Dictation STT via ${raced.source === 'cloud' ? 'managed cloud' : 'local whisper (cloud was slow)'}`)
           }
         }
@@ -1012,6 +1019,7 @@ class SessionManager {
           if (raced) {
             session.instructionTranscript = raced.text
             if (raced.source === 'local') this.notifyEngineFallback('cloud slow — used on-device whisper')
+            // Don't overwrite dictation engine — instruction is secondary.
             console.log(`[session] ✓ Instruction STT via ${raced.source === 'cloud' ? 'managed cloud' : 'local whisper (cloud was slow)'}`)
           }
         }
@@ -1337,8 +1345,10 @@ class SessionManager {
         const t0 = Date.now()
         if (useFasterWhisper) {
           session.dictationTranscript = await fasterWhisperManager.transcribe(session.dictationAudio)
+          setLastEngine('local')
         } else if (useLocalWhisper) {
           session.dictationTranscript = await whisperManager.transcribe(session.dictationAudio)
+          setLastEngine('local')
         } else {
           const cloudProvider = useSarvam ? 'sarvam' as const : useCartesia ? 'cartesia' as const : 'groq' as const
           session.dictationTranscript = await pipelineTranscribe(session.dictationAudio, this.authToken, {
@@ -1347,6 +1357,7 @@ class SessionManager {
             sttLanguage: this.getEffectiveSTTLanguage(),
             onFallback: (r) => this.notifyEngineFallback(r),
           }, controller.signal)
+          setLastEngine('byok')
         }
         transcribeMs += Date.now() - t0
         const sttLabel = useSarvam ? 'sarvam' : useCartesia ? 'cartesia' : useFasterWhisper ? 'faster-whisper' : useLocalWhisper ? 'local' : 'cloud'
