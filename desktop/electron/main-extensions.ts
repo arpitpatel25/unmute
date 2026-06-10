@@ -6,9 +6,26 @@
 
 import { ipcMain, BrowserWindow, type App } from 'electron'
 import Store from 'electron-store'
-import { ProviderRouter, type EngineMode } from './provider-router'
+import { ProviderRouter, pickProvider, type EngineMode, type Provider, type ProviderState } from './provider-router'
 import { managedSTT, managedLLM } from './managed-client'
 import { initPaywallGlue } from './paywall-glue'
+// getWidgetWindow lives one directory up after wire-into-engine.sh
+// places main-extensions.ts at engine/electron/paywall/.
+import { getWidgetWindow } from '../windowManager'
+
+// Reason the user is on the on-device model right now. Drives the awareness
+// widget below the dictation pill. null means "no awareness widget needed"
+// (managed or BYOK are active, or no provider is available at all).
+export type OnDeviceReason =
+  | 'not_signed_in'      // anonymous + no BYOK key → local is the only option
+  | 'no_balance'         // signed in but $0 → managed unavailable
+  | 'cloud_unreachable'  // managed/byok was first choice, fell back due to error
+  | 'chose_on_device'    // user set Engine = Local explicitly
+
+export interface EnginePeekStatus {
+  provider: Provider | null
+  reason: OnDeviceReason | null
+}
 
 const settings = new Store<{ engineMode: EngineMode }>({ name: 'unmute-paywall-settings' })
 
@@ -29,6 +46,17 @@ interface OSSAdapter {
 }
 
 let router: ProviderRouter | null = null
+let routerState: (() => Promise<ProviderState>) | null = null
+
+/** Why is the user on the on-device model right now? */
+function localReason(state: ProviderState, mode: EngineMode): OnDeviceReason {
+  if (mode === 'local') return 'chose_on_device'
+  // In auto mode the priority chain is managed → byok → local.
+  // Local is picked only when nothing higher qualifies.
+  if (!state.signedIn && !state.byokKeySet) return 'not_signed_in'
+  if (state.signedIn && state.balanceCents === 0) return 'no_balance'
+  return 'chose_on_device' // catch-all for unusual configs (e.g. signed-out + BYOK off)
+}
 
 export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
   // initPaywallGlue does most of the wiring: registerAuthIPC,
@@ -52,6 +80,30 @@ export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
     return true
   })
 
+  // Shared state-builder — used by the router AND the awareness widget's
+  // peek IPC so they can never disagree on what we'd route to.
+  routerState = async (): Promise<ProviderState> => {
+    const user = await oss.getCurrentUser()
+    const byokKey = await oss.getByokKey()
+    const token = await oss.getAccessToken()
+    const balance = await (async () => {
+      try {
+        const { fetchMe } = await import('./managed-client')
+        if (!token) return 0
+        const me = await fetchMe(token)
+        return me?.balanceCents ?? 0
+      } catch {
+        return 0
+      }
+    })()
+    return {
+      signedIn: !!user,
+      balanceCents: balance,
+      byokKeySet: !!byokKey,
+      localReady: true, // OSS engine surfaces this — wire after submodule integration
+    }
+  }
+
   // Provider router wiring
   router = new ProviderRouter({
     managedSTT,
@@ -62,39 +114,50 @@ export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
     getByokKey: oss.getByokKey,
     getAccessToken: oss.getAccessToken,
     getEngineMode: async () => settings.get('engineMode', 'auto') as EngineMode,
-    getState: async () => {
-      const user = await oss.getCurrentUser()
-      const byokKey = await oss.getByokKey()
-      const token = await oss.getAccessToken()
-      // Balance check uses the cached pill state — already polled by balance-ipc
-      // For the router's pre-check we read the live cache via the IPC channel.
-      const balance = await (async () => {
-        try {
-          // Lazy import to avoid a circular load
-          const { fetchMe } = await import('./managed-client')
-          if (!token) return 0
-          const me = await fetchMe(token)
-          return me?.balanceCents ?? 0
-        } catch {
-          return 0
-        }
-      })()
-      return {
-        signedIn: !!user,
-        balanceCents: balance,
-        byokKeySet: !!byokKey,
-        localReady: true, // OSS engine surfaces this — wire after submodule integration
-      }
-    },
+    getState: routerState,
     onProviderUsed: (provider, cost) => {
       // If a managed call succeeded, we already got balance back in the
       // response. The fallback case (managed → local) is signaled here.
       if (provider === 'local') {
         // Indicates fallback happened (auto mode); surface the banner.
         oss.notifyFellBackToLocal('https://unmute.app/topup')
+        // Tag this as a runtime fallback so the awareness widget can swap
+        // its reason text to "cloud unreachable" instead of whatever the
+        // pre-call peek inferred. Broadcast to all windows.
+        for (const w of BrowserWindow.getAllWindows()) {
+          w.webContents.send('engine:fell-back', { reason: 'cloud_unreachable' as OnDeviceReason })
+        }
       }
       void cost
     },
+  })
+
+  // Pre-call peek used by the awareness widget. Computes the same provider
+  // pickProvider() would pick *right now*, plus the reason if it's local.
+  // Reasons are derived from the same state inputs the router itself reads,
+  // so the widget can never disagree with what actually routes.
+  ipcMain.handle('engine:peek-status', async (): Promise<EnginePeekStatus> => {
+    if (!router || !routerState) return { provider: null, reason: null }
+    const mode = settings.get('engineMode', 'auto') as EngineMode
+    const state = await routerState()
+    const provider = pickProvider(state, mode)
+    if (provider !== 'local') return { provider, reason: null }
+    return { provider: 'local', reason: localReason(state, mode) }
+  })
+
+  // Dynamic HUD height — the awareness widget needs ~70px of extra vertical
+  // canvas to sit below the pill. We grow the window only when the card
+  // mounts and shrink back on dismiss/hide so the empty area below the pill
+  // doesn't reintroduce a click-blocking dead zone.
+  ipcMain.handle('hud:set-height', (_e, height: number) => {
+    const w = getWidgetWindow()
+    if (!w) return false
+    const bounds = w.getBounds()
+    const clamped = Math.max(72, Math.min(220, Math.round(height)))
+    // Re-anchor: keep top-left corner where it is — the HUD is anchored to
+    // the top of the screen, not the center, so growth happens downward.
+    w.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: clamped })
+    return true
   })
 
   // Balance polling is started inside initPaywallGlue() against
