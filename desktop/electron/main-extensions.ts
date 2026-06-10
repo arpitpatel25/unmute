@@ -48,6 +48,22 @@ interface OSSAdapter {
 let router: ProviderRouter | null = null
 let routerState: (() => Promise<ProviderState>) | null = null
 
+// ─── Session-engine handoff (last STT path used) ──────────────────────
+// Dictation is single-flight (push-to-talk), so a module-level scalar
+// safely conveys "which engine ran" from the routing code to the DB
+// save site. setLastEngine is called by sessionManager/paywall-route at
+// the decision points; popLastEngine is called by db.ts saveSession at
+// session-end, which clears the value as a side effect so a no-engine
+// session can't accidentally inherit the previous one's tag.
+export type EngineTag = 'cloud' | 'byok' | 'local'
+let lastEngine: EngineTag | null = null
+export function setLastEngine(tag: EngineTag): void { lastEngine = tag }
+export function popLastEngine(): EngineTag | null {
+  const v = lastEngine
+  lastEngine = null
+  return v
+}
+
 /** Why is the user on the on-device model right now? */
 function localReason(state: ProviderState, mode: EngineMode): OnDeviceReason {
   if (mode === 'local') return 'chose_on_device'
