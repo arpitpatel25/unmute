@@ -142,6 +142,29 @@ export const paywallPreloadExtensions = {
   paywallOnFellBackToLocal: (cb: (topUpUrl: string) => void) => {
     ipcRenderer.on('paywall:fell-back-to-local', (_e, url) => cb(url))
   },
+
+  // Awareness widget — pre-call peek tells us which provider would route
+  // *right now* and, if it's local, why. Mirrors what ProviderRouter would
+  // do without actually consuming an STT slot.
+  paywallEnginePeekStatus: (): Promise<{
+    provider: 'managed' | 'byok' | 'local' | null
+    reason: 'not_signed_in' | 'no_balance' | 'cloud_unreachable' | 'chose_on_device' | null
+  }> => ipcRenderer.invoke('engine:peek-status'),
+
+  // Runtime fallback signal — fires when a managed/byok call fell through
+  // to local during this dictation. Used to swap the awareness widget's
+  // reason text to "cloud unreachable" mid-flight.
+  paywallOnEngineFellBack: (
+    cb: (info: { reason: 'cloud_unreachable' }) => void
+  ) => {
+    ipcRenderer.on('engine:fell-back', (_e, info) => cb(info))
+  },
+
+  // HUD window dynamic resize — grow when the awareness card mounts,
+  // shrink back when it dismisses. Width and top-left position stay; only
+  // height changes. Clamped in main to [72, 220].
+  paywallSetHUDHeight: (height: number): Promise<boolean> =>
+    ipcRenderer.invoke('hud:set-height', height),
 }
 
 export type PaywallAPI = typeof paywallPreloadExtensions
