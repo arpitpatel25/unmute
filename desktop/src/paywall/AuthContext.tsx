@@ -116,6 +116,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     })
 
+    // Main-process forced refresh sync. When paywall-route hits a 401 on a
+    // managed call, it refreshes via /auth/v1/token directly and broadcasts
+    // the new tokens here. We adopt them into supabase-js so the renderer's
+    // next auto-refresh doesn't re-use the now-rotated old refresh token
+    // (which Supabase would reject as a replay attempt and sign the user
+    // out of the app).
+    window.electronAPI.paywallOnTokenRefreshed?.(({ accessToken, refreshToken }) => {
+      if (!accessToken || !refreshToken) return
+      supa.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
+        .catch((e) => console.warn('[auth] setSession after main refresh failed:', e))
+    })
+
     return () => {
       cancelled = true
       sub.subscription.unsubscribe()

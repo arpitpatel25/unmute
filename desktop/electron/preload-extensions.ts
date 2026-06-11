@@ -165,6 +165,16 @@ export const paywallPreloadExtensions = {
   // height changes. Clamped in main to [72, 220].
   paywallSetHUDHeight: (height: number): Promise<boolean> =>
     ipcRenderer.invoke('hud:set-height', height),
+
+  // Token refresh sync — main broadcasts new tokens when paywall-route
+  // forces a refresh on 401. Renderer subscribes and pushes them into
+  // supabase-js via setSession so the renderer doesn't later try the
+  // (now-rotated) old refresh token and get signed out.
+  paywallOnTokenRefreshed: (
+    cb: (tokens: { accessToken: string; refreshToken: string }) => void
+  ) => {
+    ipcRenderer.on('paywall:token-refreshed', (_e, tokens) => cb(tokens))
+  },
 }
 
 export type PaywallAPI = typeof paywallPreloadExtensions
