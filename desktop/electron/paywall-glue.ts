@@ -100,21 +100,30 @@ export async function refreshAccessToken(): Promise<boolean> {
 }
 
 /**
- * Schedule a proactive refresh 5 minutes before the access token expires.
- * Called whenever we receive a fresh session (sign-in, refresh, app start).
+ * Proactive auto-refresh is intentionally a no-op.
+ *
+ * Historically main+renderer both ran timers that fired ~5min before
+ * access-token expiry. Both would call /auth/v1/token?grant_type=refresh_token
+ * with the same refresh token. With Supabase's refresh-token rotation,
+ * whichever request arrived second saw its refresh token already-rotated
+ * and was rejected — which supabase-js interprets as "session compromised"
+ * and fires SIGNED_OUT, kicking the user out of the app.
+ *
+ * Fix: supabase-js (renderer) is the sole proactive refresher. It already
+ * fires onAuthStateChange with the new tokens, which AuthContext pushes
+ * into main via paywallSetSession. Main stays in sync without competing.
+ *
+ * The reactive refreshAccessToken() below still exists for the rare case
+ * where main hits a 401 on a managed STT call (paywall-route). It broadcasts
+ * paywall:token-refreshed so the renderer's supabase-js can adopt the new
+ * tokens via setSession, keeping both sides aligned.
  */
 function scheduleAutoRefresh(): void {
+  // intentionally no-op — see comment above
   if (refreshTimer) {
     clearTimeout(refreshTimer)
     refreshTimer = null
   }
-  if (!currentSession.expiresAt || !currentSession.refreshToken) return
-  const now = Math.floor(Date.now() / 1000)
-  const secondsUntilExpiry = currentSession.expiresAt - now
-  // Refresh 5 minutes before expiry; if already past that point, refresh now
-  const refreshIn = Math.max(0, (secondsUntilExpiry - 300) * 1000)
-  console.log(`[paywall-glue] proactive refresh scheduled in ${Math.round(refreshIn / 1000)}s`)
-  refreshTimer = setTimeout(() => { void refreshAccessToken() }, refreshIn)
 }
 
 /** Renderer pushes session state to main when supabase-js fires auth-state-change. */
