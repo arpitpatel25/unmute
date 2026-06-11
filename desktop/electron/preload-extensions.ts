@@ -175,6 +175,21 @@ export const paywallPreloadExtensions = {
   ) => {
     ipcRenderer.on('paywall:token-refreshed', (_e, tokens) => cb(tokens))
   },
+
+  // Language picker — auto-detect toggle + single language code.
+  // Whisper's API is binary: send one ISO-639-1 code, or omit the field
+  // entirely (auto-detect). It does not accept multiple codes or a
+  // constrained-detect subset, so the picker is single-select.
+  // When autoDetect=true, sttLanguage is stored but ignored at request
+  // time. When false, sttLanguage is sent.
+  paywallGetLanguageAutoDetect: (): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:get-language-auto-detect'),
+  paywallSetLanguageAutoDetect: (enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:set-language-auto-detect', enabled),
+  paywallGetLanguage: (): Promise<string> =>
+    ipcRenderer.invoke('paywall:get-language'),
+  paywallSetLanguage: (code: string): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:set-language', code),
 }
 
 export type PaywallAPI = typeof paywallPreloadExtensions

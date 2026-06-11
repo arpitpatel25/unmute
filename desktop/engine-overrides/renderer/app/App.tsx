@@ -6,13 +6,14 @@ import Settings from './Settings'
 import Account from './Account'
 import Permissions from './Permissions'
 import Privacy from './Privacy'
+import Language from './Language'
 import Onboarding from './Onboarding'
 import { BalancePill } from '../paywall/BalancePill'
 import { OutOfCreditBanner } from '../paywall/OutOfCreditBanner'
 import { AuthProvider, useAuth } from '../paywall/AuthContext'
 import { SignInScreen } from '../paywall/SignInScreen'
 
-type Tab = 'history' | 'voice' | 'account' | 'permissions' | 'settings' | 'privacy'
+type Tab = 'history' | 'voice' | 'account' | 'permissions' | 'language' | 'settings' | 'privacy'
 
 type AppView = 'loading' | 'onboarding' | 'main'
 
@@ -29,6 +30,19 @@ function AppInner() {
   const [activeTab, setActiveTab] = useState<Tab>('history')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [pendingUpdate, setPendingUpdate] = useState<string | null>(null)
+  // Sidebar Language row badge — "Auto" or the ISO code (uppercased). Kept in
+  // sync via a polling re-read on tab focus + a refresh on every Language-tab
+  // visit, since the Language component itself is the only writer.
+  const [languageBadge, setLanguageBadge] = useState<string>('Auto')
+
+  async function refreshLanguageBadge() {
+    try {
+      const auto = await window.electronAPI?.paywallGetLanguageAutoDetect?.()
+      if (auto) { setLanguageBadge('Auto'); return }
+      const code = await window.electronAPI?.paywallGetLanguage?.()
+      if (typeof code === 'string' && code) setLanguageBadge(code.toUpperCase())
+    } catch { /* ignore — keep previous badge */ }
+  }
 
   useEffect(() => {
     // Load dictation key setting (for the pro-tip hint)
@@ -42,7 +56,15 @@ function AppInner() {
 
     // Listen for downloaded updates and surface a "Restart" banner.
     window.electronAPI?.onUpdateDownloaded((version) => setPendingUpdate(version))
+
+    refreshLanguageBadge()
   }, [])
+
+  // Re-read on every navigation back to History/Account/etc from Language —
+  // cheap (one IPC call) and avoids needing a pub/sub channel just for this.
+  useEffect(() => {
+    if (activeTab !== 'language') refreshLanguageBadge()
+  }, [activeTab])
 
   function handleOnboardingComplete() {
     localStorage.setItem('unmute_onboarding_complete', 'true')
@@ -149,6 +171,19 @@ function AppInner() {
             onClick={() => setActiveTab('permissions')}
           />
           <SidebarButton
+            icon={<LanguageIcon />}
+            label="Language"
+            active={activeTab === 'language'}
+            onClick={() => setActiveTab('language')}
+            trailing={
+              <span
+                className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${activeTab === 'language' ? 'bg-accent/10 text-accent' : 'bg-ink-07 text-ink-35'}`}
+              >
+                {languageBadge}
+              </span>
+            }
+          />
+          <SidebarButton
             icon={<SettingsIcon />}
             label="Settings"
             active={activeTab === 'settings'}
@@ -188,6 +223,7 @@ function AppInner() {
           {activeTab === 'voice' && <Voice dictationKey={dictationKey} />}
           {activeTab === 'account' && <Account />}
           {activeTab === 'permissions' && <Permissions />}
+          {activeTab === 'language' && <Language />}
           {activeTab === 'settings' && <Settings onDictationKeyChange={setDictationKey} />}
           {activeTab === 'privacy' && <Privacy />}
         </div>
@@ -267,17 +303,19 @@ function SidebarButton({
   icon,
   label,
   active,
-  onClick
+  onClick,
+  trailing,
 }: {
   icon: React.ReactNode
   label: string
   active: boolean
   onClick: () => void
+  trailing?: React.ReactNode
 }) {
   return (
     <button
       onClick={onClick}
-      className={`titlebar-no-drag flex items-center gap-2.5 text-left px-3 py-2.5 rounded-[10px] text-[13px] font-medium transition-all duration-150 select-none ${
+      className={`titlebar-no-drag w-full flex items-center gap-2.5 text-left px-3 py-2.5 rounded-[10px] text-[13px] font-medium transition-all duration-150 select-none ${
         active
           ? 'bg-surface-2 text-ink shadow-sm'
           : 'text-ink-60 hover:bg-ink-07 hover:text-ink'
@@ -286,7 +324,8 @@ function SidebarButton({
       <span className={`transition-colors ${active ? 'text-ink' : 'text-ink-35'}`}>
         {icon}
       </span>
-      {label}
+      <span className="flex-1 truncate">{label}</span>
+      {trailing}
     </button>
   )
 }
@@ -342,6 +381,16 @@ function PermissionsIcon() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
       <path d="M5.5 7V4.5a2.5 2.5 0 0 1 5 0V7" />
+    </svg>
+  )
+}
+
+function LanguageIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M2 8h12" />
+      <path d="M8 2c1.8 2 2.8 4 2.8 6S9.8 12 8 14c-1.8-2-2.8-4-2.8-6S6.2 4 8 2z" />
     </svg>
   )
 }

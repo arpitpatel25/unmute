@@ -21,7 +21,7 @@
 //   ... etc ...
 //   closeAndAwait(0)             → returns stream 0's transcript
 
-import { getPaywallAccessToken, getPaywallEngineMode, refreshAccessToken } from './paywall-glue'
+import { getPaywallAccessToken, getPaywallEngineMode, getSTTLanguageForRequest, refreshAccessToken } from './paywall-glue'
 import { updateBalanceFromResponse } from './balance-ipc'
 import { paywallFetch } from './paywall-net'
 
@@ -64,12 +64,14 @@ export function openStream(opts: { flowType: string; chunkIndex?: number; estima
     sessions.delete(chunkIndex)
   }
 
-  const params = new URLSearchParams({
+  const paramsInit: Record<string, string> = {
     flow_type: opts.flowType,
-    language: 'en',
     duration_seconds: String(opts.estimatedDurationSeconds || 0),
     chunk_index: String(chunkIndex),
-  })
+  }
+  const lang = getSTTLanguageForRequest()
+  if (lang) paramsInit.language = lang
+  const params = new URLSearchParams(paramsInit)
 
   const abortController = new AbortController()
   let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null

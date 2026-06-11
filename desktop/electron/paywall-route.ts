@@ -6,7 +6,7 @@
 // Otherwise these return null and the caller falls through to its
 // existing logic.
 
-import { getPaywallAccessToken, getPaywallEngineMode, refreshAccessToken } from './paywall-glue'
+import { getPaywallAccessToken, getPaywallEngineMode, getSTTLanguageForRequest, refreshAccessToken } from './paywall-glue'
 // keyStore lives in the OSS engine; after wire_paywall we sit in
 // engine/electron/paywall/, so OSS-engine siblings need `../`.
 import { hasApiKey } from '../keyStore'
@@ -85,7 +85,10 @@ export async function tryManagedSTT(
     const form = new FormData()
     form.append('file', new Blob([audio], { type: 'audio/webm' }), 'audio.webm')
     form.append('duration_seconds', String(durationSeconds))
-    form.append('language', 'en')
+    // Language is read from settings. null = auto-detect (no field sent —
+    // Whisper detects across all 99 supported languages on its own).
+    const lang = getSTTLanguageForRequest()
+    if (lang) form.append('language', lang)
     form.append('flow_type', flowType)
     const tFormEnd = Date.now()
 

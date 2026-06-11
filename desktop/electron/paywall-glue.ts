@@ -11,7 +11,26 @@ import Store from 'electron-store'
 import { paywallFetch, verifyKeepAlive, startPoolStatsSampling } from './paywall-net'
 
 type EngineMode = 'auto' | 'managed' | 'byok' | 'local'
-const settings = new Store<{ engineMode: EngineMode }>({ name: 'unmute-paywall-settings' })
+interface PaywallSettings {
+  engineMode: EngineMode
+  // Language picker — used by paywall-route to fill the STT `language` form
+  // field. When autoDetect=true, the field is omitted from the request so
+  // Whisper auto-detects; when false, sttLanguage is sent. Whisper's API
+  // is binary: one language code or omit (auto-detect). It does not accept
+  // multiple codes or a constrained-detect subset, so the UI is a single
+  // language picker, not a multi-select.
+  sttLanguageAutoDetect?: boolean
+  sttLanguage?: string
+}
+const settings = new Store<PaywallSettings>({ name: 'unmute-paywall-settings' })
+
+/** Read the STT language to send to the pipeline. Returns `null` when
+ *  auto-detect is on — caller should omit the `language` form field. */
+export function getSTTLanguageForRequest(): string | null {
+  const auto = settings.get('sttLanguageAutoDetect', true)
+  if (auto) return null
+  return settings.get('sttLanguage', 'en') ?? null
+}
 
 interface PaywallSession {
   accessToken: string | null
@@ -165,6 +184,23 @@ function registerSessionBridge() {
   ipcMain.handle('paywall:get-engine-mode', () => settings.get('engineMode', 'auto'))
   ipcMain.handle('paywall:set-engine-mode', (_e, mode: EngineMode) => {
     settings.set('engineMode', mode)
+    return true
+  })
+
+  // ─── Language picker settings (used by paywall-route's STT call) ───
+  ipcMain.handle('paywall:get-language-auto-detect', () => {
+    return settings.get('sttLanguageAutoDetect', true)
+  })
+  ipcMain.handle('paywall:set-language-auto-detect', (_e, enabled: boolean) => {
+    settings.set('sttLanguageAutoDetect', !!enabled)
+    return true
+  })
+  ipcMain.handle('paywall:get-language', () => {
+    return settings.get('sttLanguage', 'en')
+  })
+  ipcMain.handle('paywall:set-language', (_e, code: string) => {
+    if (typeof code !== 'string' || code.length === 0) return false
+    settings.set('sttLanguage', code)
     return true
   })
 
