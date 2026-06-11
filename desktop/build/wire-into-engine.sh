@@ -115,6 +115,23 @@ wire_paywall() {
       pkg.build = pkg.build || {}
       pkg.build.appId = process.env.PAYWALL_APP_ID
     }
+    // Override the OSS publish target so electron-updater on installed
+    // managed builds checks our release repo, not the OSS unmute-dictation
+    // repo. Without this, the in-app auto-updater would silently look at
+    // the wrong place and never find a newer version.
+    pkg.build = pkg.build || {}
+    pkg.build.publish = [{
+      provider: 'github',
+      owner: 'arpitpatel25',
+      repo: 'unmute',
+    }]
+    // Version bump from env. Required for electron-updater to recognize
+    // releases as newer than what the user has installed; the OSS
+    // package.json stays on 1.3.6 and DMG names follow it unless we
+    // bump explicitly here.
+    if (process.env.PAYWALL_VERSION) {
+      pkg.version = process.env.PAYWALL_VERSION
+    }
     fs.writeFileSync(path, JSON.stringify(pkg, null, 2))
   "
 
@@ -294,13 +311,24 @@ run_build() {
     # builds don't need APPLE_ID/cert and don't try to notarize.
     npx electron-builder --mac \
       --config.mac.identity=null \
-      --config.mac.notarize=false
+      --config.mac.notarize=false \
+      --publish never
   else
     : "${APPLE_ID:?APPLE_ID required for signed build}"
     : "${APPLE_TEAM_ID:?APPLE_TEAM_ID required}"
     : "${APPLE_APP_SPECIFIC_PASSWORD:?APPLE_APP_SPECIFIC_PASSWORD required}"
     log "Signing + notarizing DMG (this can take 5-15 min for the Apple notary trip)"
-    npx electron-builder --mac
+    # --publish always: ensures latest-mac.yml + blockmap are generated AND
+    # uploaded to the GitHub release matching the version in package.json.
+    # Requires GH_TOKEN (set from the environment so we can read it in CI
+    # too). PAYWALL_PUBLISH=skip turns off the upload but still generates
+    # the manifest locally — useful when you want to upload manually
+    # (e.g. via `gh release upload`).
+    local pub_flag="${PAYWALL_PUBLISH:-always}"
+    if [[ "$pub_flag" == "skip" ]]; then
+      pub_flag="never"
+    fi
+    npx electron-builder --mac --publish "$pub_flag"
   fi
 
   log "Build complete — output in $engine/release/"
