@@ -13,7 +13,7 @@ import { hasApiKey } from './keyStore'
 // ─── Paywall managed-cloud intercepts ──────────────────────────────
 // Files are copied into engine/electron/paywall/ by wire_paywall.
 import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
-import { getPaywallEngineMode } from './paywall/paywall-glue'
+import { getPaywallEngineMode, formatOutputForUser } from './paywall/paywall-glue'
 import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait } from './paywall/paywall-stream'
 import { setLastEngine } from './paywall/main-extensions'
 // OSS prompt assembly — we reuse it client-side so the worker's /v1/llm
@@ -1086,6 +1086,7 @@ class SessionManager {
               return
             }
 
+            output = formatOutputForUser(output)
             session.output = output
             session.status = 'done'
             console.log('[session] ✅ FINAL OUTPUT (raw transcript):', JSON.stringify(output))
@@ -1176,6 +1177,7 @@ class SessionManager {
             session.errorMessage = 'formatting-fallback'
           }
 
+          output = formatOutputForUser(output)
           session.output = output
           session.status = 'done'
 
@@ -1594,6 +1596,7 @@ class SessionManager {
         }
 
         const transformMs = Date.now() - transformStart
+        output = formatOutputForUser(output)
         session.output = output
         session.status = 'done'
 

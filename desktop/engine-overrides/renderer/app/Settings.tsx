@@ -41,6 +41,7 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
   const [instructionEnabled, setInstructionEnabled] = useState<boolean>(true)
+  const [lowercaseOutput, setLowercaseOutput] = useState<boolean>(false)
 
   useEffect(() => {
     loadAudioDevices()
@@ -57,6 +58,9 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
       .catch(() => {})
     window.electronAPI.paywallGetLaunchAtLogin?.()
       .then((v: boolean) => setLaunchAtLogin(!!v))
+      .catch(() => {})
+    window.electronAPI.paywallGetLowercaseOutput?.()
+      .then((v: boolean) => setLowercaseOutput(!!v))
       .catch(() => {})
     window.electronAPI.getDictationKey().then((v: string) => {
       if (v === 'fn' || v === 'right-option') setDictationKey(v)
@@ -95,6 +99,11 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   function handleSoundFeedbackChange(value: boolean) {
     setSoundFeedback(value)
     window.electronAPI.setSoundFeedback(value)
+  }
+
+  function handleLowercaseOutputChange(value: boolean) {
+    setLowercaseOutput(value)
+    window.electronAPI.paywallSetLowercaseOutput?.(value)?.catch(() => {})
   }
 
   function handleOutputModeChange(value: string) {
@@ -248,6 +257,9 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
         </SettingRow>
         <SettingRow label="Launch at login" description="Start unmute automatically when you log in to your Mac">
           <Toggle checked={launchAtLogin} onChange={handleLaunchAtLoginChange} />
+        </SettingRow>
+        <SettingRow label="Lowercase output" description="Force everything pasted to be lowercase">
+          <Toggle checked={lowercaseOutput} onChange={handleLowercaseOutputChange} />
         </SettingRow>
       </div>
 

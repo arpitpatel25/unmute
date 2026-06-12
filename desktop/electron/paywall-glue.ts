@@ -21,6 +21,11 @@ interface PaywallSettings {
   // language picker, not a multi-select.
   sttLanguageAutoDetect?: boolean
   sttLanguage?: string
+  // Output formatting toggles. lowercaseOutput, when on, applies
+  // .toLowerCase() to the final transcript/LLM output before it's pasted
+  // or copied to the clipboard. User-requested feature; sub-microsecond
+  // cost so no perf budget needed.
+  lowercaseOutput?: boolean
 }
 const settings = new Store<PaywallSettings>({ name: 'unmute-paywall-settings' })
 
@@ -30,6 +35,22 @@ export function getSTTLanguageForRequest(): string | null {
   const auto = settings.get('sttLanguageAutoDetect', true)
   if (auto) return null
   return settings.get('sttLanguage', 'en') ?? null
+}
+
+/** True if the user wants final output forced to lowercase before paste/
+ *  clipboard. Used by sessionManager just before deliverOutput so every
+ *  flow (dictation / transform / context / quote) gets the same treatment. */
+export function isLowercaseOutputEnabled(): boolean {
+  return settings.get('lowercaseOutput', false) === true
+}
+
+/** Apply the user's output-formatting preferences to a transcript string.
+ *  Right now this is just lowercase — kept as a single function so future
+ *  formatting options (UPPERCASE, sentence case, strip-punctuation, …)
+ *  slot into one place rather than every delivery site. */
+export function formatOutputForUser(text: string): string {
+  if (!text) return text
+  return isLowercaseOutputEnabled() ? text.toLowerCase() : text
 }
 
 interface PaywallSession {
@@ -201,6 +222,15 @@ function registerSessionBridge() {
   ipcMain.handle('paywall:set-language', (_e, code: string) => {
     if (typeof code !== 'string' || code.length === 0) return false
     settings.set('sttLanguage', code)
+    return true
+  })
+
+  // ─── Output formatting (lowercase) ──────────────────────────
+  ipcMain.handle('paywall:get-lowercase-output', () => {
+    return settings.get('lowercaseOutput', false)
+  })
+  ipcMain.handle('paywall:set-lowercase-output', (_e, enabled: boolean) => {
+    settings.set('lowercaseOutput', !!enabled)
     return true
   })
 
