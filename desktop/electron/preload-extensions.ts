@@ -190,6 +190,14 @@ export const paywallPreloadExtensions = {
     ipcRenderer.invoke('paywall:get-language'),
   paywallSetLanguage: (code: string): Promise<boolean> =>
     ipcRenderer.invoke('paywall:set-language', code),
+
+  // Output formatting — lowercase toggle. Single-microsecond cost at
+  // delivery time; doesn't affect dictation latency in any measurable
+  // way. Drives the "Format output as lowercase" switch in Settings.
+  paywallGetLowercaseOutput: (): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:get-lowercase-output'),
+  paywallSetLowercaseOutput: (enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:set-lowercase-output', enabled),
 }
 
 export type PaywallAPI = typeof paywallPreloadExtensions
