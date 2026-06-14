@@ -45,12 +45,23 @@ export function isLowercaseOutputEnabled(): boolean {
 }
 
 /** Apply the user's output-formatting preferences to a transcript string.
- *  Right now this is just lowercase — kept as a single function so future
- *  formatting options (UPPERCASE, sentence case, strip-punctuation, …)
- *  slot into one place rather than every delivery site. */
+ *  Single entry point for every delivery site (paste / clipboard / chained
+ *  flows) so future formatting options (UPPERCASE, sentence case, strip-
+ *  punctuation, …) slot into one place rather than every call site.
+ *
+ *  Current transforms, applied in order:
+ *    1. Strip leading whitespace. Whisper has a long-standing habit of
+ *       prefixing transcripts with a leading space (especially after
+ *       silence), which feels like a bug to users when it pastes into
+ *       an LLM prompt or code editor. Always-on; not opt-in. Trailing
+ *       whitespace is left alone because users sometimes dictate
+ *       sentences they want to keep punctuation-spaced for.
+ *    2. Lowercase, if enabled. */
 export function formatOutputForUser(text: string): string {
   if (!text) return text
-  return isLowercaseOutputEnabled() ? text.toLowerCase() : text
+  let out = text.replace(/^[\s ]+/, '')
+  if (isLowercaseOutputEnabled()) out = out.toLowerCase()
+  return out
 }
 
 interface PaywallSession {
