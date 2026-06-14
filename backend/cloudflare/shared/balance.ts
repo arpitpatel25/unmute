@@ -75,13 +75,26 @@ export async function getBalance(
 
 /**
  * Overwrite KV with an authoritative value (from Supabase or after a top-up).
+ *
+ * KV writes are wrapped in try/catch because Cloudflare's free-tier quota
+ * (1K puts/day) is easily exhausted under any non-trivial usage. When the
+ * daily limit is hit, `kv.put()` throws `KV put() limit exceeded for the
+ * day.` — without this guard, that exception propagates up through the
+ * Worker and turns a successful Whisper transcription into an HTTP 500
+ * for the user. Supabase is the source of truth for balances, so a missed
+ * KV write only means the edge cache stays stale until the next reconcile;
+ * the user-facing transcription still succeeds, which is what matters.
  */
 export async function setBalance(
   kv: KVNamespace,
   userId: string,
   cents: number
 ): Promise<void> {
-  await kv.put(key(userId), String(cents), { expirationTtl: TTL_SECONDS })
+  try {
+    await kv.put(key(userId), String(cents), { expirationTtl: TTL_SECONDS })
+  } catch (e) {
+    console.warn('[balance] setBalance KV put failed (continuing):', (e as Error).message)
+  }
 }
 
 /**
@@ -90,16 +103,31 @@ export async function setBalance(
  * separately via the `debit_wallet` RPC (which is what actually creates the
  * ledger row). This split is intentional: KV gives us edge-fast reads,
  * the RPC gives us auditable accounting.
+ *
+ * Same KV-quota guard as setBalance: if the put fails we still return the
+ * computed next-balance so the caller can use it for the response, but
+ * the cache entry stays at its prior value. Supabase reconcile catches
+ * it on the next /v1/me with `fresh: true`.
  */
 export async function cacheDebit(
   kv: KVNamespace,
   userId: string,
   deltaCents: number
 ): Promise<number> {
-  const prev = await kv.get(key(userId))
-  const prevNum = prev !== null ? parseInt(prev, 10) : 0
-  const next = (isNaN(prevNum) ? 0 : prevNum) - deltaCents
-  await kv.put(key(userId), String(next), { expirationTtl: TTL_SECONDS })
+  let prevNum = 0
+  try {
+    const prev = await kv.get(key(userId))
+    prevNum = prev !== null ? parseInt(prev, 10) : 0
+    if (isNaN(prevNum)) prevNum = 0
+  } catch (e) {
+    console.warn('[balance] cacheDebit KV get failed (assuming 0):', (e as Error).message)
+  }
+  const next = prevNum - deltaCents
+  try {
+    await kv.put(key(userId), String(next), { expirationTtl: TTL_SECONDS })
+  } catch (e) {
+    console.warn('[balance] cacheDebit KV put failed (continuing):', (e as Error).message)
+  }
   return next
 }
 
