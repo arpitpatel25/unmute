@@ -14,6 +14,7 @@ export interface RemoteTaskSnapshot {
   result: { summary: string; detail?: string; artifacts?: Array<{ type: 'path' | 'url'; value: string }> } | null
   error: { reason: string; detail?: string } | null
   question: { text: string; kind?: 'free_text' | 'choice' | 'confirm'; choices?: string[]; irreversible?: boolean } | null
+  mcpGap: { integration: string; fixCommand: string; message: string } | null
 }
 
 export interface RemoteSettingsSnapshot {

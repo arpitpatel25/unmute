@@ -18,7 +18,7 @@
 // NOT unit-tested — exactly like paywall/main-extensions.ts. The logic it
 // orchestrates (TaskManager, executor, status-file) is unit-tested separately.
 
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, Notification } from 'electron'
 import Store from 'electron-store'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -84,6 +84,17 @@ function serializeTask(t: Task) {
     result: t.result ?? null,
     error: t.error ?? null,
     question: t.question ?? null,
+    mcpGap: t.mcpGap ?? null,
+  }
+}
+
+// PRD §13.6: Unmute OBSERVES completion (it's the parent process) and emits the
+// notification itself — Claude never notifies Unmute.
+function notify(title: string, body: string): void {
+  try {
+    if (Notification.isSupported()) new Notification({ title, body }).show()
+  } catch (e) {
+    log.warn('notification failed', { error: (e as Error).message })
   }
 }
 
@@ -166,9 +177,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   manager.on('created', (t: Task) => broadcast('remote:task-created', t))
   manager.on('updated', (t: Task) => broadcast('remote:task-updated', t))
   manager.on('needs-user', (t: Task) => broadcast('remote:task-needs-user', t))
-  manager.on('done', (t: Task) => broadcast('remote:task-done', t))
-  manager.on('failed', (t: Task) => broadcast('remote:task-failed', t))
-  manager.on('stuck', (t: Task) => broadcast('remote:task-stuck', t))
+  manager.on('done', (t: Task) => {
+    broadcast('remote:task-done', t)
+    notify('Task done', t.result?.summary ? `${t.intent} — ${t.result.summary}` : t.intent)
+  })
+  manager.on('failed', (t: Task) => {
+    broadcast('remote:task-failed', t)
+    notify('Task failed', t.mcpGap ? t.mcpGap.message : (t.error?.reason ?? t.intent))
+  })
+  manager.on('stuck', (t: Task) => {
+    broadcast('remote:task-stuck', t)
+    notify('Task may be stuck', t.intent)
+  })
 
   // ── IPC: actions the renderer (or a future menu) can trigger ──
   ipcMain.handle('remote:dispatch', async (_e, intent: string) => dispatchFromCapture(intent))

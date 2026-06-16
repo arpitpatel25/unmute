@@ -33,6 +33,7 @@ import {
 import { buildDispatch } from './dispatch-prompt'
 import { installContract } from './contract/installer'
 import { installSkillsIntoCwd } from './skills'
+import { detectMcpGap, type McpGap } from './mcp-gap'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
 
@@ -57,6 +58,8 @@ export interface Task {
   error?: StatusPayload['error']
   question?: StatusPayload['question']
   recipeSuggestion?: StatusPayload['recipe_suggestion']
+  /** Set on failure when the error looks like a missing-integration gap (PRD §12.3). */
+  mcpGap?: McpGap
 }
 
 export interface TaskManagerOpts {
@@ -259,13 +262,20 @@ export class TaskManager extends EventEmitter {
         }
         this.finish(id)
         break
-      case 'failed':
+      case 'failed': {
         // PRD §13.4 #4: surface WHY.
         tlog.ui('task-row.failed', { reason: task.error?.reason ?? '(no reason reported)' })
         if (!task.error) tlog.warn('failed with no error.reason — Claude under-reported')
+        // PRD §12.3: detect a missing-integration gap → hand the user the fix.
+        const gap = detectMcpGap([task.error?.reason, task.error?.detail].filter(Boolean).join(' '))
+        if (gap) {
+          task.mcpGap = gap
+          tlog.ui('task-row.mcp-gap', { integration: gap.integration, fixCommand: gap.fixCommand })
+        }
         this.emit('failed', task)
         this.finish(id)
         break
+      }
       default:
         if (payload?.step) tlog.ui('task-row.step', { step: payload.step })
     }

@@ -20,4 +20,9 @@ declare module 'electron' {
   }
   export interface App { on(event: string, cb: (...a: unknown[]) => void): void }
   export const app: App
+  export class Notification {
+    constructor(opts: { title: string; body: string })
+    show(): void
+    static isSupported(): boolean
+  }
 }

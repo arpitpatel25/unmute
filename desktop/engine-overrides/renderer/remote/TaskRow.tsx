@@ -76,9 +76,27 @@ export function TaskRow({
         </div>
       )}
 
-      {/* #4 failure reason */}
-      {task.state === 'failed' && (
+      {/* #4 failure reason — or, if it's a missing-integration gap, the fix (PRD §12.3) */}
+      {task.state === 'failed' && !task.mcpGap && (
         <div className="mt-2 text-[12px] text-red-700">{task.error?.reason ?? 'Failed (no reason reported)'}</div>
+      )}
+      {task.state === 'failed' && task.mcpGap && (
+        <div className="mt-2 text-[12px] text-ink/80">
+          <div>{task.mcpGap.message}</div>
+          <code
+            className="mt-1 inline-block px-1.5 py-0.5 rounded bg-black/5 text-[11px] cursor-pointer"
+            title="Copy"
+            onClick={() => void navigator.clipboard?.writeText(task.mcpGap!.fixCommand)}
+          >
+            {task.mcpGap.fixCommand}
+          </code>
+          <button
+            className="ml-2 text-[11px] px-2 py-0.5 rounded border border-black/15 hover:bg-black/5"
+            onClick={() => onRerun(task.intent)}
+          >
+            Retry
+          </button>
+        </div>
       )}
 
       {/* #5 needs-user — answer by tap (PRD §7) */}
