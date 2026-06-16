@@ -40,6 +40,8 @@ export interface LibrarianOpts {
   pollMs?: number
   /** Max time to wait for one librarian session to finish before giving up. */
   timeoutMs?: number
+  /** ms to wait after accepting the folder-trust prompt for the REPL to boot. */
+  trustAcceptMs?: number
   now?: () => number
 }
 
@@ -54,6 +56,7 @@ export class Librarian {
       baseDir: opts.baseDir ?? '',
       pollMs: opts.pollMs ?? 1000,
       timeoutMs: opts.timeoutMs ?? 120_000,
+      trustAcceptMs: opts.trustAcceptMs ?? 2000,
       now: opts.now,
     }
   }
@@ -114,6 +117,10 @@ export class Librarian {
     ex.onData((c) => llog.debug('librarian-pty', { chunk: c }))
     await ex.spawn({ cwd: libCwd, env: process.env, taskId: `${s.taskId}-librarian` })
     await ex.isReady()
+    // Accept the folder-trust prompt (fresh dir) before dispatching — same as
+    // the doer path. Enter = "Yes, I trust"; harmless if absent.
+    ex.writeStdin('')
+    await new Promise((r) => setTimeout(r, this.opts.trustAcceptMs))
 
     ex.writeStdin(this.buildPrompt(s, skillsDir, statusPath, existing))
 

@@ -343,10 +343,24 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
 
 # ─── Stage 3: Build ─────────────────────────────────────────────
 
+# node-pty (Unmute Remote PTY backend) ships prebuilt spawn-helper binaries that
+# can land WITHOUT the executable bit, causing `posix_spawnp failed` at runtime
+# (confirmed on macOS/arm64). Ensure +x after install. Harmless if already set.
+fix_node_pty_helper() {
+  local engine="$1"
+  local helpers
+  helpers=$(find "$engine/node_modules/node-pty" -name 'spawn-helper' 2>/dev/null || true)
+  if [[ -n "$helpers" ]]; then
+    echo "$helpers" | while read -r h; do chmod +x "$h" 2>/dev/null || true; done
+    log "Ensured +x on node-pty spawn-helper"
+  fi
+}
+
 run_dev() {
   local engine="$WORK/oss-engine"
   cd "$engine"
   npm install
+  fix_node_pty_helper "$engine"
   npm run dev
 }
 
@@ -356,6 +370,7 @@ run_build() {
 
   log "Installing engine deps"
   npm install
+  fix_node_pty_helper "$engine"
 
   log "Building unsigned bundles"
   npm run build

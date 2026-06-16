@@ -20,7 +20,9 @@ function makeLibrarianExecutor(opts: { onWrite: (cwd: string) => Promise<void> }
     get alive() { return alive },
     async spawn(o: SpawnOpts) { cwd = o.cwd },
     async isReady() {},
-    writeStdin() { void opts.onWrite(cwd) },
+    // The real flow sends an empty trust-accept write first, then the prompt.
+    // Only react to the actual prompt (non-empty), like real Claude would.
+    writeStdin(t: string) { if (t.trim()) void opts.onWrite(cwd) },
     onData() {},
     kill() { alive = false },
   }
@@ -58,6 +60,7 @@ test('librarian applies a suggestion by writing into the shared skills dir', { t
 
   const lib = new Librarian({
     baseDir: base,
+    trustAcceptMs: 0,
     pollMs: 25,
     executorFactory: () => makeLibrarianExecutor({
       onWrite: async (libCwd) => {
@@ -79,6 +82,7 @@ test('librarian is serialized — only one session runs at a time (PRD §9.3)', 
   let maxConcurrent = 0
   const lib = new Librarian({
     baseDir: base,
+    trustAcceptMs: 0,
     pollMs: 20,
     executorFactory: () => makeLibrarianExecutor({
       onWrite: async (libCwd) => {

@@ -39,7 +39,7 @@ test('dispatch → scaffolds, installs contract, types payload, starts processin
   let spawned: SpawnOpts | null = null
   const tm = new TaskManager({
     executorFactory: () => makeFakeExecutor({ onSpawn: (o) => { spawned = o } }),
-    baseDir, pollMs: 50,
+    baseDir, trustAcceptMs: 0, pollMs: 50,
   })
   const id = await tm.dispatch('extract ~/Downloads/report.zip')
   const task = tm.get(id)!
@@ -55,7 +55,7 @@ test('dispatch → scaffolds, installs contract, types payload, starts processin
 
 test('done status transition emits done with inline result (PRD §13.4 #3, §13.6)', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
-  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, pollMs: 25 })
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, pollMs: 25 })
   const id = await tm.dispatch('extract a zip')
   const task = tm.get(id)!
 
@@ -73,7 +73,7 @@ test('done status transition emits done with inline result (PRD §13.4 #3, §13.
 test('needs-user surfaces the question; answer() pipes it into stdin (PRD §7)', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
-  const tm = new TaskManager({ executorFactory: () => fake, baseDir, pollMs: 25 })
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 25 })
   const id = await tm.dispatch('send a file to rishi')
   const task = tm.get(id)!
 
@@ -101,7 +101,7 @@ test('staleness backstop flags a silent task as stuck (PRD §6.3)', { timeout: 5
   // comparison must be like-for-like.)
   const tm = new TaskManager({
     executorFactory: () => makeFakeExecutor(),
-    baseDir, pollMs: 30, staleMs: 150,
+    baseDir, trustAcceptMs: 0, pollMs: 30, staleMs: 150,
   })
   const id = await tm.dispatch('a task that goes silent')
   const [stuckTask] = await once(tm, 'stuck')
@@ -111,7 +111,7 @@ test('staleness backstop flags a silent task as stuck (PRD §6.3)', { timeout: 5
 
 test('kill marks a running task failed with "Stopped by you" (PRD §10.4)', async () => {
   const baseDir = await tmpBase()
-  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, pollMs: 9999 })
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, pollMs: 9999 })
   const id = await tm.dispatch('long task')
   tm.kill(id)
   const task = tm.get(id)!

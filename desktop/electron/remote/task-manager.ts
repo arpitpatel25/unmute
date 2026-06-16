@@ -73,6 +73,8 @@ export interface TaskManagerOpts {
   pollMs?: number
   /** staleness threshold (ms) — generous (PRD §6.3). Default 4 min. */
   staleMs?: number
+  /** ms to wait after accepting the folder-trust prompt for the REPL to boot. */
+  trustAcceptMs?: number
   /** Recipe librarian (PRD §9). When set, a 'done' task that proposed a recipe
    *  suggestion is submitted for curation. Optional. */
   librarian?: Librarian
@@ -99,6 +101,7 @@ export class TaskManager extends EventEmitter {
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       pollMs: opts.pollMs ?? 1000,
       staleMs: opts.staleMs ?? 4 * 60_000,
+      trustAcceptMs: opts.trustAcceptMs ?? 2000,
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
       now: opts.now,
@@ -159,6 +162,14 @@ export class TaskManager extends EventEmitter {
 
       await ex.spawn({ cwd: dir, env: process.env, taskId: id })
       await ex.isReady()
+
+      // Accept Claude Code's folder-trust prompt. It appears on the first run in
+      // a fresh dir EVEN with --dangerously-skip-permissions (validated by the
+      // Task-0 probe). Enter accepts the highlighted "Yes, I trust this folder";
+      // a no-op empty submit if no prompt is shown. Then let the REPL boot.
+      ex.writeStdin('')
+      await new Promise((r) => setTimeout(r, this.opts.trustAcceptMs))
+      tlog.event('folder-trust-accepted', {})
 
       const payload = buildDispatch({ intent, statusPath, recipeScratchPath })
       ex.writeStdin(payload)
