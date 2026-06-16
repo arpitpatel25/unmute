@@ -23,6 +23,7 @@ import Store from 'electron-store'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { TaskManager, type Task } from './task-manager'
+import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
@@ -142,7 +143,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const logFile = configureRemoteLogging({ dir: logDir, runId })
   log.event('init-remote', { logFile, permissionMode: settings.get('permissionMode') })
 
-  manager = new TaskManager({ executorFactory })
+  // PRD §9: the serialized recipe librarian, sharing the same executor factory
+  // (another interactive claude session on the user's plan — §9.3).
+  const librarian = new Librarian({ executorFactory })
+  manager = new TaskManager({ executorFactory, librarian })
 
   // ── Wire the Remote trigger key → capture (PRD §2.4.4 / §5) ──
   // keyboard.ts emits 'remote-start'/'remote-stop' for the non-dictation key;

@@ -32,6 +32,8 @@ import {
 } from './status-file'
 import { buildDispatch } from './dispatch-prompt'
 import { installContract } from './contract/installer'
+import { installSkillsIntoCwd } from './skills'
+import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
 
 const log = createLogger('task-manager')
@@ -68,6 +70,9 @@ export interface TaskManagerOpts {
   pollMs?: number
   /** staleness threshold (ms) — generous (PRD §6.3). Default 4 min. */
   staleMs?: number
+  /** Recipe librarian (PRD §9). When set, a 'done' task that proposed a recipe
+   *  suggestion is submitted for curation. Optional. */
+  librarian?: Librarian
   /** clock + sleep injectable for tests. */
   now?: () => number
 }
@@ -80,7 +85,9 @@ export class TaskManager extends EventEmitter {
   private tasks = new Map<string, Task>()
   private executors = new Map<string, AgentExecutor>()
   private timers = new Map<string, ReturnType<typeof setInterval>>()
-  private readonly opts: Required<Omit<TaskManagerOpts, 'userKey' | 'now'>> & Pick<TaskManagerOpts, 'userKey' | 'now'>
+  private readonly opts:
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -90,6 +97,7 @@ export class TaskManager extends EventEmitter {
       pollMs: opts.pollMs ?? 1000,
       staleMs: opts.staleMs ?? 4 * 60_000,
       userKey: opts.userKey ?? 'local',
+      librarian: opts.librarian,
       now: opts.now,
     }
   }
@@ -139,6 +147,7 @@ export class TaskManager extends EventEmitter {
       // measured from "task start", not the logical createdAt.
       task.lastMtimeMs = (await statusMtimeMs(statusPath)) ?? now
       await installContract(dir) // CLAUDE.md auto-load (#3)
+      await installSkillsIntoCwd(dir, this.opts.baseDir) // recipes auto-discovery (PRD §8.3)
 
       const ex = this.opts.executorFactory()
       this.executors.set(id, ex)
@@ -237,6 +246,17 @@ export class TaskManager extends EventEmitter {
         // PRD §13.4 #3: result lands ON the row. PRD §13.6: WE observe + notify.
         tlog.ui('task-row.done', { summary: task.result?.summary, artifacts: task.result?.artifacts })
         this.emit('done', task)
+        // PRD §9: if the doer proposed a recipe, hand it to the (serialized)
+        // librarian. Fire-and-forget — the user already has their result.
+        if (this.opts.librarian && task.recipeSuggestion?.present) {
+          tlog.event('recipe-suggestion-handoff', { scratch: task.recipeScratchPath })
+          void this.opts.librarian.submit({
+            taskId: task.id,
+            intent: task.intent,
+            scratchPath: task.recipeSuggestion.scratch_path ?? task.recipeScratchPath,
+            cwd: task.cwd,
+          }).catch((e) => tlog.error('librarian submit failed', { error: (e as Error).message }))
+        }
         this.finish(id)
         break
       case 'failed':
