@@ -155,14 +155,18 @@ export class CliAgentExecutor implements AgentExecutor {
 export interface ClaudeCodeExecutorOpts {
   claudeBin?: string
   extraArgs?: string[]
+  /** PRD §10.6 sandbox: allowlisted roots the session may reach (--add-dir).
+   *  Empty ⇒ no sandbox (default posture). */
+  addDirs?: string[]
   ptyLoader?: () => NodePty
 }
 
 export class ClaudeCodeExecutor extends CliAgentExecutor {
   constructor(opts: ClaudeCodeExecutorOpts = {}) {
+    const dirArgs = (opts.addDirs ?? []).flatMap((d) => ['--add-dir', d])
     super({
       bin: opts.claudeBin || 'claude',
-      extraArgs: opts.extraArgs || [],
+      extraArgs: [...(opts.extraArgs || []), ...dirArgs],
       // PRD §3.2: any of these flip billing off the subscription — strip all.
       stripEnvVars: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY'],
       ptyLoader: opts.ptyLoader,

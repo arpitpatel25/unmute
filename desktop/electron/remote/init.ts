@@ -58,11 +58,13 @@ interface RemoteSettings {
   dictationKey: TriggerKey
   // PRD §11: which CLI coding agent executes tasks. Default 'claude'.
   agent: AgentKind
+  // PRD §10.6: path sandbox — allowlisted roots. Empty ⇒ OFF (default posture).
+  sandboxRoots: string[]
 }
 
 const settings = new Store<RemoteSettings>({
   name: 'unmute-remote-settings',
-  defaults: { permissionMode: 'prompt', dictationKey: 'fn', agent: 'claude' },
+  defaults: { permissionMode: 'prompt', dictationKey: 'fn', agent: 'claude', sandboxRoots: [] },
 })
 
 let manager: TaskManager | null = null
@@ -104,14 +106,17 @@ function notify(title: string, body: string): void {
 function executorFactory() {
   const mode = settings.get('permissionMode')
   const agent = settings.get('agent')
-  log.event('executor-factory', { agent, permissionMode: mode })
+  const sandboxRoots = settings.get('sandboxRoots') ?? []
+  const sandboxed = sandboxRoots.length > 0
+  log.event('executor-factory', { agent, permissionMode: mode, sandboxed, sandboxRoots })
   if (agent === 'codex') {
-    // Codex's allow-all flag differs; pass none by default (interactive prompts).
     return new CodexExecutor({})
   }
-  // Claude (default): auto-approve ⇒ skip-permissions (PRD §10.1).
-  const extraArgs = mode === 'auto-approve' ? ['--dangerously-skip-permissions'] : []
-  return new ClaudeCodeExecutor({ extraArgs })
+  // PRD §10.1/§10.6 interaction: a sandbox is the "fenced yard" — when it's ON
+  // we do NOT skip permissions globally (out-of-fence access still prompts via
+  // needs-user); claude gets the allowed roots via --add-dir.
+  const extraArgs = !sandboxed && mode === 'auto-approve' ? ['--dangerously-skip-permissions'] : []
+  return new ClaudeCodeExecutor({ extraArgs, addDirs: sandboxRoots })
 }
 
 /**
@@ -213,11 +218,24 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:get-settings', async () => ({
     permissionMode: settings.get('permissionMode'),
     remoteKey: getRemoteKey(),
+    agent: settings.get('agent'),
+    sandboxRoots: settings.get('sandboxRoots') ?? [],
     logFile: getRemoteLogFilePath(),
   }))
   ipcMain.handle('remote:set-permission-mode', async (_e, mode: PermissionMode) => {
     settings.set('permissionMode', mode)
     log.event('permission-mode-set', { mode }) // PRD §10.1
+    return true
+  })
+  ipcMain.handle('remote:set-agent', async (_e, agent: AgentKind) => {
+    settings.set('agent', agent)
+    log.event('agent-set', { agent }) // PRD §11
+    return true
+  })
+  ipcMain.handle('remote:set-sandbox-roots', async (_e, roots: string[]) => {
+    const clean = Array.isArray(roots) ? roots.filter((r) => typeof r === 'string' && r.trim()) : []
+    settings.set('sandboxRoots', clean)
+    log.event('sandbox-roots-set', { count: clean.length, roots: clean }) // PRD §10.6
     return true
   })
 

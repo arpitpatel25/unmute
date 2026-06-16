@@ -65,6 +65,24 @@ test('writeStdin sends the text followed by a carriage return', async () => {
   assert.deepEqual(fake.writes, ['do the thing', '\r'])
 })
 
+test('sandbox: addDirs become --add-dir args (PRD §10.6)', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader, addDirs: ['/Users/x/Downloads', '/Users/x/projects'] })
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 't1' })
+  const args = fake.calls.args || []
+  assert.deepEqual(
+    args,
+    ['--add-dir', '/Users/x/Downloads', '--add-dir', '/Users/x/projects'],
+  )
+})
+
+test('no sandbox (no addDirs) ⇒ no --add-dir args', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader })
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 't1' })
+  assert.ok(!(fake.calls.args || []).includes('--add-dir'))
+})
+
 test('kill marks the session not-alive and calls pty.kill', async () => {
   const fake = makeFakePty()
   const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader })
