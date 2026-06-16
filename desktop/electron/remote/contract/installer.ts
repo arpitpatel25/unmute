@@ -9,24 +9,17 @@
 // at a shared/existing CLAUDE.md in the future.
 
 import { promises as fs } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { createLogger } from '../log'
+import { CONTRACT_TEXT, CONTRACT_BEGIN, CONTRACT_END } from './contract-text'
 
 const log = createLogger('contract-installer')
 
-export const CONTRACT_BEGIN = '<!-- UNMUTE-REMOTE-CONTRACT:BEGIN -->'
-export const CONTRACT_END = '<!-- UNMUTE-REMOTE-CONTRACT:END -->'
+export { CONTRACT_BEGIN, CONTRACT_END }
 
-let cachedContract: string | null = null
-
-/** Read the bundled contract.md (next to this module). Cached after first read. */
+/** The bundled contract text (survives electron-vite bundling — see contract-text.ts). */
 export async function readContractText(): Promise<string> {
-  if (cachedContract !== null) return cachedContract
-  const here = dirname(fileURLToPath(import.meta.url))
-  const text = await fs.readFile(join(here, 'contract.md'), 'utf8')
-  cachedContract = text.trim()
-  return cachedContract
+  return CONTRACT_TEXT.trim()
 }
 
 /**
