@@ -13,6 +13,8 @@ import { hasApiKey } from './keyStore'
 // ─── Paywall managed-cloud intercepts ──────────────────────────────
 // Files are copied into engine/electron/paywall/ by wire_paywall.
 import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
+// Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
+import { dispatchFromCapture } from './paywall/remote/init'
 import { getPaywallEngineMode, formatOutputForUser } from './paywall/paywall-glue'
 import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait } from './paywall/paywall-stream'
 import { setLastEngine } from './paywall/main-extensions'
@@ -131,6 +133,11 @@ function sendToWidget(channel: string, ...args: unknown[]): void {
 class SessionManager {
   private currentSession: SessionState | null = null
   private authToken: string | null = null
+  // ─── Unmute Remote (ADDITIVE, PRD §5) ───
+  // When true, the in-flight capture is a Remote command, not dictation:
+  // the transcript is dispatched to Claude Code instead of being pasted.
+  // Defaults false ⇒ every existing dictation flow is byte-for-byte unchanged.
+  private remoteCaptureActive = false
   private outputMode: 'paste' | 'clipboard' = 'paste'
   private llmProvider: 'cloud' | 'local-llm' = 'cloud'
   private sttProvider: 'cloud' | 'local' | 'faster-whisper' | 'cartesia' | 'sarvam' | 'dual-whisper' = 'cloud'
@@ -602,6 +609,81 @@ class SessionManager {
     this.onRecordingStarted?.()
   }
 
+  // ─── Unmute Remote capture (ADDITIVE, PRD §5) ───
+  //
+  // Reuses the ENTIRE existing dictation capture+STT pipeline (recorder,
+  // chunking, fallback, transcription) by starting a normal dictation session
+  // behind the remoteCaptureActive flag. The ONLY behavioural divergence is at
+  // the transcript point in processSession(), where — when the flag is set —
+  // the transcript is dispatched to Claude Code (dispatchFromCapture) instead
+  // of being formatted + pasted. No renderer changes, no new audio IPC.
+  //
+  // Set by the keyboard 'remote-start'/'remote-stop' events (main.ts).
+
+  startRemoteCapture(): void {
+    if (this.isProcessing) {
+      console.log('[session] ⛔ Remote capture blocked — still processing')
+      this.onSessionRejected?.()
+      return
+    }
+    console.log('[session] 🛰  REMOTE capture START')
+    this.remoteCaptureActive = true
+    // Reuse the dictation capture machinery wholesale.
+    this.startSession('dictation')
+  }
+
+  async stopRemoteCapture(): Promise<void> {
+    console.log('[session] 🛰  REMOTE capture STOP → awaiting audio, then process')
+    await this.stopRecording('dictation')
+    // The renderer finalises + sends the audio (sendAudioReady/FinalChunk →
+    // receiveAudio) shortly after recording:stop. Wait for it to land before
+    // processing, instead of relying on the dictation chain-timer path.
+    const deadline = Date.now() + 4000
+    while (Date.now() < deadline) {
+      if (this.currentSession?.dictationAudio || !this.currentSession) break
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    await this.processSession()
+  }
+
+  /**
+   * Remote delivery: dispatch the captured transcript to Claude Code instead of
+   * formatting + pasting it. Called from the guarded branch at each
+   * processSession delivery site. Mirrors the standard dictation cleanup so the
+   * session ends cleanly, then clears the flag so the NEXT capture is normal
+   * dictation again (the flag can never leak across captures).
+   */
+  private async dispatchRemoteAndFinish(
+    command: string,
+    session: SessionState,
+    apiTimeout: ReturnType<typeof setTimeout>,
+  ): Promise<void> {
+    this.remoteCaptureActive = false
+    const cmd = (command || '').trim()
+    console.log('[session] 🛰  REMOTE dispatch:', JSON.stringify(cmd))
+    if (cmd && cmd !== '[BLANK_AUDIO]') {
+      try {
+        await dispatchFromCapture(cmd)
+      } catch (e) {
+        console.error('[session] 🛰  REMOTE dispatch failed:', e instanceof Error ? e.message : e)
+      }
+    } else {
+      console.log('[session] 🛰  REMOTE: empty transcript — nothing to dispatch')
+    }
+    // Standard session cleanup (mirrors the dictation terminal paths).
+    session.status = 'done'
+    session.output = null
+    sendToWidget('remote:dispatched', cmd, session.sessionId)
+    this.scheduleAutoHide(1500)
+    clearTimeout(apiTimeout)
+    this.abortController = null
+    this.isProcessing = false
+    this.resetChunkState()
+    try { this.onSessionComplete?.(session) } catch { /* ignore */ }
+    this.currentSession = null
+    this.onSessionEnded?.()
+  }
+
   chainSession(mode: 'dictation' | 'instruction'): void {
     console.log('[session] chainSession called, mode:', mode, '| isProcessing:', this.isProcessing)
     if (this.isProcessing) {
@@ -1069,6 +1151,12 @@ class SessionManager {
             session.dictationTranscript = transcript
             const output = cleanTranscript(transcript)
 
+            // ─── Unmute Remote (ADDITIVE): dispatch instead of paste ───
+            if (this.remoteCaptureActive) {
+              await this.dispatchRemoteAndFinish(output, session, apiTimeout)
+              return
+            }
+
             if (!output || output === '[BLANK_AUDIO]') {
               console.log('[session] Pipeline STT-only: empty/blank transcript, skipping output')
               session.status = 'done'
@@ -1175,6 +1263,12 @@ class SessionManager {
           if (pipelineResult.usedFallback) {
             console.log(`[session] Pipeline used fallback (${pipelineResult.fallbackReason})`)
             session.errorMessage = 'formatting-fallback'
+          }
+
+          // ─── Unmute Remote (ADDITIVE): dispatch instead of paste ───
+          if (this.remoteCaptureActive) {
+            await this.dispatchRemoteAndFinish(output, session, apiTimeout)
+            return
           }
 
           output = formatOutputForUser(output)
@@ -1596,6 +1690,13 @@ class SessionManager {
         }
 
         const transformMs = Date.now() - transformStart
+
+        // ─── Unmute Remote (ADDITIVE): dispatch instead of paste ───
+        if (this.remoteCaptureActive) {
+          await this.dispatchRemoteAndFinish(output, session, apiTimeout)
+          return
+        }
+
         output = formatOutputForUser(output)
         session.output = output
         session.status = 'done'

@@ -18,7 +18,7 @@
 // NOT unit-tested — exactly like paywall/main-extensions.ts. The logic it
 // orchestrates (TaskManager, executor, status-file) is unit-tested separately.
 
-import { ipcMain, BrowserWindow, app as electronApp, type App } from 'electron'
+import { ipcMain, BrowserWindow } from 'electron'
 import Store from 'electron-store'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -27,6 +27,21 @@ import { ClaudeCodeExecutor } from './pty-session'
 import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
+
+// ─── Loose interfaces for the OSS engine singletons we wire into ───
+// Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
+// don't entangle with engine internals. main.ts passes its real instances.
+interface SessionManagerLike {
+  startRemoteCapture(): void
+  stopRemoteCapture(): Promise<void>
+}
+interface KeyboardManagerLike {
+  on(event: 'keyboard', cb: (e: { type: string }) => void): unknown
+}
+export interface RemoteInitDeps {
+  sessionManager: SessionManagerLike
+  keyboardManager: KeyboardManagerLike
+}
 
 const log = createLogger('init')
 
@@ -119,7 +134,7 @@ export function setDictationKey(key: TriggerKey): void {
   log.event('dictation-key-set', { dictationKey: key, derivedRemoteKey: deriveRemoteKey(key) })
 }
 
-export function initRemote(_app: App = electronApp): TaskManager {
+export function initRemote(deps: RemoteInitDeps): TaskManager {
   if (manager) return manager
 
   const logDir = join(homedir(), '.unmute', 'remote', 'logs')
@@ -128,6 +143,20 @@ export function initRemote(_app: App = electronApp): TaskManager {
   log.event('init-remote', { logFile, permissionMode: settings.get('permissionMode') })
 
   manager = new TaskManager({ executorFactory })
+
+  // ── Wire the Remote trigger key → capture (PRD §2.4.4 / §5) ──
+  // keyboard.ts emits 'remote-start'/'remote-stop' for the non-dictation key;
+  // route them to the sessionManager's Remote capture (which reuses the STT
+  // pipeline then calls dispatchFromCapture).
+  deps.keyboardManager.on('keyboard', (e) => {
+    if (e.type === 'remote-start') {
+      log.event('remote-key', { phase: 'start' })
+      deps.sessionManager.startRemoteCapture()
+    } else if (e.type === 'remote-stop') {
+      log.event('remote-key', { phase: 'stop' })
+      void deps.sessionManager.stopRemoteCapture()
+    }
+  })
 
   // Fan task lifecycle out to renderers (PRD §13).
   manager.on('created', (t: Task) => broadcast('remote:task-created', t))

@@ -111,6 +111,16 @@ wire_paywall() {
     if (fs.existsSync('$engine/native-fn-listener/package.json')) {
       pkg.dependencies['unmute-native-fn-listener'] = 'file:./native-fn-listener'
     }
+    // Unmute Remote: node-pty is the PTY backend for the owned interactive
+    // claude session (PRD §4.1). It's a native module — electron-builder's
+    // install-app-deps rebuilds it against Electron's ABI, and its .node
+    // binary must be unpacked from the asar so it can be dlopen'd at runtime.
+    pkg.dependencies['node-pty'] = '^1.1.0'
+    pkg.build = pkg.build || {}
+    pkg.build.asarUnpack = pkg.build.asarUnpack || []
+    if (!pkg.build.asarUnpack.includes('**/node_modules/node-pty/**')) {
+      pkg.build.asarUnpack.push('**/node_modules/node-pty/**')
+    }
     if (process.env.PAYWALL_APP_ID) {
       pkg.build = pkg.build || {}
       pkg.build.appId = process.env.PAYWALL_APP_ID
@@ -222,6 +232,24 @@ if (!src.includes('initPaywall(app, buildOSSAdapter())')) {
   )
 }
 
+// ─── Unmute Remote wiring ───
+// import initRemote, then call it right after initPaywall with the engine's
+// sessionManager + keyboardManager singletons (already imported in main.ts).
+// initRemote subscribes to keyboard.ts's 'remote-start'/'remote-stop' events
+// and registers the task IPC. ADDITIVE — dictation init is untouched.
+if (!src.includes("from './paywall/remote/init'")) {
+  src = src.replace(
+    "import { buildOSSAdapter } from './buildOSSAdapter'\n",
+    "import { buildOSSAdapter } from './buildOSSAdapter'\nimport { initRemote } from './paywall/remote/init'\n"
+  )
+}
+if (!src.includes('initRemote({')) {
+  src = src.replace(
+    'initPaywall(app, buildOSSAdapter())\n',
+    'initPaywall(app, buildOSSAdapter())\n  initRemote({ sessionManager, keyboardManager })\n'
+  )
+}
+
 fs.writeFileSync(p, src)
 NODE_EOF
     node "$patcher" "$main_ts"
@@ -237,6 +265,17 @@ import { paywallPreloadExtensions } from './paywall/preload-extensions'
     # Inject the spread into the electronAPI object literal
     sed -i.bak "/^const electronAPI = {/a\\
   ...paywallPreloadExtensions,
+" "$preload"
+    rm -f "$preload.bak"
+  fi
+
+  # 2b) preload.ts: merge the Unmute Remote API into electronAPI (ADDITIVE).
+  if ! grep -q 'remotePreloadExtensions' "$preload"; then
+    sed -i.bak "/^const electronAPI = {/i\\
+import { remotePreloadExtensions } from './paywall/remote-preload'
+" "$preload"
+    sed -i.bak "/^const electronAPI = {/a\\
+  ...remotePreloadExtensions,
 " "$preload"
     rm -f "$preload.bak"
   fi
@@ -258,6 +297,22 @@ import { paywallPreloadExtensions } from './paywall/preload-extensions'
   fi
   if ! grep -q 'unmute-native-fn-listener' "$engine/electron/keyListener.ts"; then
     log "WARN: keyListener.ts missing unmute-native-fn-listener — engine-overrides may have failed to apply"
+  fi
+  # ─── Unmute Remote wiring checks (ADDITIVE) ───
+  if ! grep -q 'remote-start' "$engine/electron/keyboard.ts"; then
+    log "WARN: keyboard.ts missing Remote-key seam — engine-overrides may have failed to apply"
+  fi
+  if ! grep -q 'remoteCaptureActive' "$engine/electron/sessionManager.ts"; then
+    log "WARN: sessionManager.ts missing Remote capture branch — engine-overrides may have failed to apply"
+  fi
+  if [[ ! -f "$engine/electron/paywall/remote/init.ts" ]]; then
+    log "WARN: remote/init.ts not copied into engine — Remote will not initialise"
+  fi
+  if ! grep -q 'initRemote' "$engine/electron/main.ts"; then
+    log "WARN: main.ts missing initRemote — Remote will not start"
+  fi
+  if ! grep -q 'remotePreloadExtensions' "$engine/electron/preload.ts"; then
+    log "WARN: preload.ts missing remotePreloadExtensions — renderer Remote API absent"
   fi
 
   # ─── HUD/widget window tightening ─────────────────────────────
