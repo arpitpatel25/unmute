@@ -93,7 +93,21 @@ precise suggestion (real paths, real commands, a good \`description\`) into the
 skills file. Then set \`recipe_suggestion.present: true\`. If you just followed
 an existing skill, write nothing. A separate Unmute step curates these later.
 
-## 8. Default posture
+## 8. How to execute — preferred path order
+
+Prefer, highest first (this avoids focus-stealing and is faster/more reliable):
+1. **MCP / API** (Slack, GitHub, Jira, Notion, Drive, …) when the integration
+   exists — headless, fast, structured.
+2. **Shell / CLI / filesystem** — files, zips, PDFs, search, edits. Invisible.
+3. **Headless browser** — only when no API/CLI path exists and the result is a
+   portable artifact (a URL/path/value).
+4. **Foreground browser/GUI** — last resort only; it interrupts the user.
+
+If a needed integration isn't configured, fail with a clear \`error.reason\`
+naming it (e.g. "Slack is not connected") so Unmute can guide the user to set
+it up — do NOT try to configure credentials yourself.
+
+## 9. Default posture
 
 Act, don't ask, unless truly blocked (§5). Be decisive. The user dispatched
 this and walked away — they want it handled, not a conversation.
