@@ -1,0 +1,150 @@
+// Unmute Remote — status file: the frozen wire protocol (PRD §6.1).
+//
+// Schema authored in docs/superpowers/plans/2026-06-16-remote-status-schema.md
+// (PENDING sign-off — this is the one artifact the owner wants eyes on).
+//
+// This module is Unmute's READ side of the contract:
+//   * scaffoldStatusFile() — Unmute creates the file + owns the path; Claude
+//     only fills fields (PRD ownership decision). Unmute writes ONLY the
+//     initial scaffold; after that it never edits the content.
+//   * readStatus()         — atomic-tolerant read (PRD #2): missing/partial/
+//     invalid ⇒ null ("no update this poll"), never throws.
+//   * isStale()            — mtime-based staleness backstop (PRD §6.3). This is
+//     TUI-INDEPENDENT and the load-bearing stuck-detector; terminal-silence is
+//     only a bonus hint we may add later.
+//
+// Claude's WRITE side (atomic temp-then-rename + heartbeat cadence) is
+// instructed via contract/contract.md, not enforced here.
+
+import { promises as fs } from 'node:fs'
+import { dirname } from 'node:path'
+import { createLogger } from './log'
+
+const log = createLogger('status-file')
+
+// ─── Schema types (mirror the schema doc 1:1) ──────────────────────
+
+export type TaskState = 'processing' | 'needs-user' | 'done' | 'failed' // PRD §5.3
+
+export interface TaskResult {
+  summary: string
+  detail?: string
+  artifacts?: Array<{ type: 'path' | 'url'; value: string }>
+}
+
+export interface TaskError {
+  reason: string
+  detail?: string
+}
+
+export interface TaskQuestion {
+  text: string
+  kind?: 'free_text' | 'choice' | 'confirm'
+  choices?: string[]
+  irreversible?: boolean // PRD §10.7 destructive-action confirm
+}
+
+export interface RecipeSuggestionPointer {
+  present: boolean
+  scratch_path?: string
+}
+
+export interface StatusPayload {
+  schema_version?: number
+  state: TaskState
+  updated_at?: string
+  step?: string
+  result?: TaskResult
+  error?: TaskError
+  question?: TaskQuestion
+  recipe_suggestion?: RecipeSuggestionPointer
+}
+
+export const CURRENT_SCHEMA_VERSION = 1
+
+// ─── Scaffold (Unmute owns creation + path; Claude fills fields) ────
+
+/**
+ * Create the initial status file. Unmute writes ONLY this scaffold; from here
+ * on Claude is the sole writer of content and Unmute is read-only (PRD §6.1).
+ */
+export async function scaffoldStatusFile(filePath: string): Promise<void> {
+  await fs.mkdir(dirname(filePath), { recursive: true })
+  const initial: StatusPayload = {
+    schema_version: CURRENT_SCHEMA_VERSION,
+    state: 'processing',
+    updated_at: new Date().toISOString(),
+  }
+  await fs.writeFile(filePath, JSON.stringify(initial, null, 2), 'utf8')
+  log.event('status-file-scaffolded', { filePath, state: 'processing' })
+}
+
+// ─── Tolerant read (PRD #2) ─────────────────────────────────────────
+
+function isValidState(s: unknown): s is TaskState {
+  return s === 'processing' || s === 'needs-user' || s === 'done' || s === 'failed'
+}
+
+/**
+ * Read + parse the status file. Returns null on ANY problem (missing, partial
+ * write caught mid-rename, invalid JSON, missing/invalid `state`) — the caller
+ * simply retries on the next poll. Never throws (PRD #2 tolerant reader).
+ */
+export async function readStatus(filePath: string): Promise<StatusPayload | null> {
+  let raw: string
+  try {
+    raw = await fs.readFile(filePath, 'utf8')
+  } catch {
+    return null // not there yet / transient — no update this poll
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    // Almost always a read that landed mid-write. Expected; debug not warn.
+    log.debug('status read parse-miss (likely mid-write) — will retry', { filePath })
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null || !isValidState((parsed as StatusPayload).state)) {
+    log.debug('status read missing/invalid state — treated as no-update', { filePath })
+    return null
+  }
+  return parsed as StatusPayload
+}
+
+// ─── Staleness backstop (PRD §6.3 — mtime, TUI-independent) ─────────
+
+const TERMINAL_STATES: TaskState[] = ['done', 'failed']
+
+/**
+ * Decide whether a task looks stuck. Only NON-terminal tasks can be stale:
+ * a task whose status file hasn't been touched in `thresholdMs` while still
+ * in `processing`/`needs-user` is flagged so Unmute can offer check/kill/retry.
+ *
+ * Keying on the file's mtime (not terminal output) is what makes this immune
+ * to whatever the Claude TUI does on screen (PRD §6.3).
+ */
+export function isStale(
+  status: Pick<StatusPayload, 'state'>,
+  mtimeMs: number,
+  nowMs: number,
+  thresholdMs: number,
+): boolean {
+  if (TERMINAL_STATES.includes(status.state)) return false
+  const ageMs = nowMs - mtimeMs
+  const stale = ageMs > thresholdMs
+  if (stale) {
+    log.event('staleness-detected', { state: status.state, ageMs, thresholdMs })
+  }
+  return stale
+}
+
+/** Read the file's last-modified time in ms, or null if unreadable. */
+export async function statusMtimeMs(filePath: string): Promise<number | null> {
+  try {
+    const st = await fs.stat(filePath)
+    return st.mtimeMs
+  } catch {
+    return null
+  }
+}
