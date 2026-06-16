@@ -59,7 +59,15 @@ async function main() {
   await ex.spawn({ cwd, env: process.env, taskId: runId })
   await ex.isReady()
   const readyMs = Date.now() - tSpawn
-  console.log(`\n[probe] REPL ready after ${readyMs}ms`)
+  console.log(`\n[probe] first quiet window after ${readyMs}ms`)
+
+  // Accept the folder-trust prompt if claude shows one on first run in a new
+  // dir. The default highlighted choice is "1. Yes, I trust this folder" and
+  // the footer says "Enter to confirm" — so a bare carriage return accepts it.
+  // Harmless if there's no prompt (an empty REPL submit is ignored).
+  console.log('[probe] sending Enter to accept any folder-trust prompt…')
+  ex.writeStdin('') // writeStdin appends \r ⇒ just an Enter
+  await new Promise((r) => setTimeout(r, 2500)) // let the REPL boot after trust
 
   // A trivial, harmless, fully-local task.
   const intent = 'Create a file named hello.txt in the current directory containing the text "hi from unmute remote". Then mark the task done in your status file.'
