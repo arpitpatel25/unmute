@@ -1,0 +1,21 @@
+{
+  "compilerObjectNote": "Typecheck-only config for the Remote main-process modules. Not used by the engine build (which has its own tsconfig + real electron).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": [
+    "typecheck/electron-stub.d.ts",
+    "electron/remote/**/*.ts",
+    "electron/remote-preload.ts"
+  ],
+  "exclude": ["electron/remote/**/*.test.ts", "electron/remote/probe/**"]
+}

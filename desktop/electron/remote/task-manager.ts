@@ -208,8 +208,10 @@ export class TaskManager extends EventEmitter {
     }
   }
 
-  /** Apply a status payload to a task + emit the right events. */
-  private transition(id: string, next: UiTaskState, payload?: StatusPayload): void {
+  /** Apply a status payload to a task + emit the right events.
+   *  Payload is Partial: callers (kill/dispatch-failure) supply only the fields
+   *  they know; poll() supplies a full status read. */
+  private transition(id: string, next: UiTaskState, payload?: Partial<StatusPayload>): void {
     const task = this.tasks.get(id)
     if (!task) return
     const tlog = log.child({ taskId: id })
