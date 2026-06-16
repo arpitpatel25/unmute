@@ -1,30 +1,26 @@
-// Unmute Remote — ClaudeCodeExecutor: the interactive `claude` REPL in an
-// owned PTY (PRD §3.2, §4.1, §4.5).
+// Unmute Remote — CLI-agent executor over an owned PTY (PRD §3.2, §4, §11).
 //
-// HARD BILLING RULES (PRD §3.2 — the single most important constraint):
-//   1. Spawn the interactive `claude` REPL. NEVER `claude -p`, NEVER the SDK.
-//   2. STRIP ANTHROPIC_API_KEY from the environment — any API key overrides
-//      the subscription and bills API rates. The session must auth via the
-//      user's own Claude Code subscription login.
+// Generic core (CliAgentExecutor) drives ANY interactive CLI coding agent in a
+// node-pty we own. The agent-specific bits — which binary, which env vars to
+// strip for the right billing pool — are config. ClaudeCodeExecutor is the
+// default adapter; CodexExecutor (codex-executor.ts) is a second, proving the
+// seam is a config change, not a rewrite (PRD §11.3).
 //
-// We own the PTY (node-pty, the lib VS Code's terminal uses, PRD §4.1) so:
-//   * no dependency on any installed terminal app,
-//   * no window ⇒ no focus to steal,
-//   * direct bidirectional stdin/stdout.
+// HARD BILLING RULE for Claude (PRD §3.2): interactive REPL only (never -p /
+// SDK), and STRIP ANTHROPIC_API_KEY (any API key overrides the subscription and
+// bills API rates). The generic `stripEnvVars` makes this configurable per agent.
 //
-// Readiness detection (PRD §5/#5): the TUI takes a moment to boot. We wait for
-// a quiet window after first output before declaring ready, with a hard
-// fallback timeout. The exact ready signature is refined by the Task-0 probe;
-// the quiet-window heuristic is robust regardless of the TUI's exact banner.
+// Owning the PTY (node-pty, the lib VS Code's terminal uses) gives us: no
+// dependency on any terminal app, no window (no focus to steal), bidirectional
+// stdin/stdout, clean multi-session.
 
 import { createLogger } from './log'
 import type { AgentExecutor, SpawnOpts } from './executor'
 
 const log = createLogger('pty-session')
 
-// node-pty is a native module; it's only present inside the built engine, not
-// in the source-overlay's dev env. Lazy-require so this module can be imported
-// (and the surrounding logic unit-tested) without node-pty installed.
+// node-pty is a native module present only inside the built engine. Lazy-require
+// so this module imports (and unit-tests) without node-pty installed.
 interface IPtyProcess {
   onData(cb: (data: string) => void): void
   onExit(cb: (e: { exitCode: number }) => void): void
@@ -43,27 +39,29 @@ function loadNodePty(): NodePty {
 const READY_QUIET_MS = 700 // a quiet gap this long after first output ⇒ ready
 const READY_MAX_MS = 8000 // hard cap so we never wait forever
 
-export interface ClaudeCodeExecutorOpts {
-  /** Path to the `claude` binary. Default resolves from PATH. */
-  claudeBin?: string
-  /** Extra args appended to the interactive launch (NEVER include -p). */
-  extraArgs?: string[]
-  /** Override node-pty loader (tests inject a fake). */
+export interface CliAgentConfig {
+  /** The agent binary, e.g. 'claude' or 'codex'. */
+  bin: string
+  /** Extra launch args. NEVER include a headless flag (-p / --print). */
+  extraArgs: string[]
+  /** Env vars to delete before spawn — the billing-pool guard (PRD §3.2). */
+  stripEnvVars: string[]
+  /** Override the node-pty loader (tests inject a fake). */
   ptyLoader?: () => NodePty
+  /** Component label for logs. */
+  label: string
 }
 
-export class ClaudeCodeExecutor implements AgentExecutor {
+/** Generic interactive-CLI-agent executor in an owned PTY. */
+export class CliAgentExecutor implements AgentExecutor {
   private pty: IPtyProcess | null = null
   private dataCbs: Array<(chunk: string) => void> = []
   private lastDataAt = 0
   private sawData = false
   private exited = false
   private taskId = ''
-  private readonly opts: ClaudeCodeExecutorOpts
 
-  constructor(opts: ClaudeCodeExecutorOpts = {}) {
-    this.opts = opts
-  }
+  constructor(protected readonly cfg: CliAgentConfig) {}
 
   get alive(): boolean {
     return this.pty !== null && !this.exited
@@ -71,25 +69,19 @@ export class ClaudeCodeExecutor implements AgentExecutor {
 
   async spawn(spawnOpts: SpawnOpts): Promise<void> {
     this.taskId = spawnOpts.taskId
-    const slog = log.child({ taskId: this.taskId })
+    const slog = log.child({ taskId: this.taskId, agent: this.cfg.label })
 
-    // ── BILLING RULE 2: strip ANTHROPIC_API_KEY (and any alias) ──
+    // ── Billing guard: strip the configured env vars (PRD §3.2) ──
     const env: NodeJS.ProcessEnv = { ...spawnOpts.env }
-    let strippedKey = false
-    for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY']) {
-      if (k in env) {
-        delete env[k]
-        strippedKey = true
-      }
+    let stripped = 0
+    for (const k of this.cfg.stripEnvVars) {
+      if (k in env) { delete env[k]; stripped++ }
     }
-    slog.event('env-sanitized-for-subscription-billing', { strippedApiKey: strippedKey })
+    slog.event('env-sanitized-for-subscription-billing', { strippedCount: stripped, vars: this.cfg.stripEnvVars })
 
-    const bin = this.opts.claudeBin || 'claude'
-    // ── BILLING RULE 1: interactive REPL only — NO -p, NO SDK. ──
-    const args = [...(this.opts.extraArgs || [])]
-    slog.event('pty-spawn', { bin, args, cwd: spawnOpts.cwd })
-
-    const pty = (this.opts.ptyLoader ?? loadNodePty)().spawn(bin, args, {
+    // ── Interactive REPL only — NO -p / SDK (PRD §3.2) ──
+    slog.event('pty-spawn', { bin: this.cfg.bin, args: this.cfg.extraArgs, cwd: spawnOpts.cwd })
+    const pty = (this.cfg.ptyLoader ?? loadNodePty)().spawn(this.cfg.bin, this.cfg.extraArgs, {
       name: 'xterm-256color',
       cols: 120,
       rows: 40,
@@ -109,25 +101,18 @@ export class ClaudeCodeExecutor implements AgentExecutor {
     pty.onExit(({ exitCode }) => {
       this.exited = true
       // PRD §4.5: the bare REPL does NOT exit on task completion — so an exit
-      // here means we killed it, it crashed, or the user closed it. Log loudly.
+      // here means we killed it, it crashed, or the user closed it.
       slog.event('pty-exit', { exitCode })
     })
   }
 
-  /**
-   * Resolve once the TUI is ready for input. Heuristic: wait until we've seen
-   * output AND it has been quiet for READY_QUIET_MS — i.e. the TUI finished its
-   * initial paint and is sitting at the prompt. Hard cap at READY_MAX_MS.
-   */
+  /** Resolve once the TUI is ready: seen output AND quiet for READY_QUIET_MS. */
   async isReady(): Promise<void> {
-    const slog = log.child({ taskId: this.taskId })
+    const slog = log.child({ taskId: this.taskId, agent: this.cfg.label })
     const start = Date.now()
     return new Promise<void>((resolve) => {
       const check = () => {
-        if (this.exited) {
-          slog.warn('isReady: pty exited before ready')
-          return resolve()
-        }
+        if (this.exited) { slog.warn('isReady: pty exited before ready'); return resolve() }
         const now = Date.now()
         const quietFor = now - this.lastDataAt
         if (this.sawData && quietFor >= READY_QUIET_MS) {
@@ -145,14 +130,10 @@ export class ClaudeCodeExecutor implements AgentExecutor {
   }
 
   writeStdin(text: string): void {
-    const slog = log.child({ taskId: this.taskId })
-    if (!this.pty || this.exited) {
-      slog.warn('writeStdin on dead pty — dropped', { bytes: text.length })
-      return
-    }
-    // The REPL submits on a carriage return. Send the text then CR.
+    const slog = log.child({ taskId: this.taskId, agent: this.cfg.label })
+    if (!this.pty || this.exited) { slog.warn('writeStdin on dead pty — dropped', { bytes: text.length }); return }
     this.pty.write(text)
-    this.pty.write('\r')
+    this.pty.write('\r') // REPL submits on carriage return
     slog.event('stdin-written', { bytes: text.length, preview: text.slice(0, 120) })
   }
 
@@ -161,10 +142,31 @@ export class ClaudeCodeExecutor implements AgentExecutor {
   }
 
   kill(): void {
-    const slog = log.child({ taskId: this.taskId })
+    const slog = log.child({ taskId: this.taskId, agent: this.cfg.label })
     if (this.pty && !this.exited) {
       slog.event('pty-kill', {})
       try { this.pty.kill() } catch (e) { slog.error('kill threw', { error: (e as Error).message }) }
     }
+  }
+}
+
+// ─── Claude Code adapter (default) ─────────────────────────────────
+
+export interface ClaudeCodeExecutorOpts {
+  claudeBin?: string
+  extraArgs?: string[]
+  ptyLoader?: () => NodePty
+}
+
+export class ClaudeCodeExecutor extends CliAgentExecutor {
+  constructor(opts: ClaudeCodeExecutorOpts = {}) {
+    super({
+      bin: opts.claudeBin || 'claude',
+      extraArgs: opts.extraArgs || [],
+      // PRD §3.2: any of these flip billing off the subscription — strip all.
+      stripEnvVars: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY'],
+      ptyLoader: opts.ptyLoader,
+      label: 'claude',
+    })
   }
 }

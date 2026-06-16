@@ -25,6 +25,7 @@ import { homedir } from 'node:os'
 import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
+import { CodexExecutor, type AgentKind } from './codex-executor'
 import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
@@ -55,11 +56,13 @@ interface RemoteSettings {
   // The dictation key already exists as an OSS setting; we read it to DERIVE
   // the Remote key (PRD §2.4.4). Stored here only as a cache/fallback.
   dictationKey: TriggerKey
+  // PRD §11: which CLI coding agent executes tasks. Default 'claude'.
+  agent: AgentKind
 }
 
 const settings = new Store<RemoteSettings>({
   name: 'unmute-remote-settings',
-  defaults: { permissionMode: 'prompt', dictationKey: 'fn' },
+  defaults: { permissionMode: 'prompt', dictationKey: 'fn', agent: 'claude' },
 })
 
 let manager: TaskManager | null = null
@@ -100,8 +103,14 @@ function notify(title: string, body: string): void {
 
 function executorFactory() {
   const mode = settings.get('permissionMode')
+  const agent = settings.get('agent')
+  log.event('executor-factory', { agent, permissionMode: mode })
+  if (agent === 'codex') {
+    // Codex's allow-all flag differs; pass none by default (interactive prompts).
+    return new CodexExecutor({})
+  }
+  // Claude (default): auto-approve ⇒ skip-permissions (PRD §10.1).
   const extraArgs = mode === 'auto-approve' ? ['--dangerously-skip-permissions'] : []
-  log.event('executor-factory', { permissionMode: mode, extraArgs })
   return new ClaudeCodeExecutor({ extraArgs })
 }
 
