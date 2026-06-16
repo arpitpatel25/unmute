@@ -90,6 +90,9 @@ export class TaskManager extends EventEmitter {
   private tasks = new Map<string, Task>()
   private executors = new Map<string, AgentExecutor>()
   private timers = new Map<string, ReturnType<typeof setInterval>>()
+  // Per-task ring buffer of recent PTY output for render-on-demand (PRD §13.4#8).
+  private outputBuffers = new Map<string, string>()
+  private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
     Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian'>> &
     Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian'>
@@ -118,6 +121,11 @@ export class TaskManager extends EventEmitter {
 
   get(id: string): Task | undefined {
     return this.tasks.get(id)
+  }
+
+  /** Recent buffered PTY output for a task (render-on-demand, PRD §13.4#8). */
+  getOutput(id: string): string {
+    return this.outputBuffers.get(id) ?? ''
   }
 
   /** Active = not yet terminal (drives the ambient "N running" count, PRD §13.2). */
@@ -157,8 +165,15 @@ export class TaskManager extends EventEmitter {
 
       const ex = this.opts.executorFactory()
       this.executors.set(id, ex)
-      // Surface raw output to logs at debug — feeds render-on-demand later (§4.3).
-      ex.onData((chunk) => tlog.debug('pty-data', { chunk }))
+      // Buffer raw PTY output (capped) for render-on-demand (§4.3/§13.4#8) and
+      // emit it live so a watching terminal view updates in real time.
+      this.outputBuffers.set(id, '')
+      ex.onData((chunk) => {
+        tlog.debug('pty-data', { chunk })
+        const cur = (this.outputBuffers.get(id) ?? '') + chunk
+        this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
+        this.emit('output', { taskId: id, chunk })
+      })
 
       await ex.spawn({ cwd: dir, env: process.env, taskId: id })
       await ex.isReady()

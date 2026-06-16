@@ -20,6 +20,8 @@ export interface RemoteTaskSnapshot {
 export interface RemoteSettingsSnapshot {
   permissionMode: 'prompt' | 'auto-approve'
   remoteKey: 'fn' | 'right-option'
+  agent: 'claude' | 'codex'
+  sandboxRoots: string[]
   logFile: string | null
 }
 
@@ -40,6 +42,17 @@ export const remotePreloadExtensions = {
   remoteGetSettings: (): Promise<RemoteSettingsSnapshot> => ipcRenderer.invoke('remote:get-settings'),
   remoteSetPermissionMode: (mode: 'prompt' | 'auto-approve'): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-permission-mode', mode),
+  remoteSetAgent: (agent: 'claude' | 'codex'): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-agent', agent),
+  remoteSetSandboxRoots: (roots: string[]): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-sandbox-roots', roots),
+
+  // ── Render-on-demand live terminal (PRD §13.4 #8) ──
+  /** Recent buffered PTY output for a task (for opening the live view). */
+  remoteGetOutput: (taskId: string): Promise<string> => ipcRenderer.invoke('remote:get-output', taskId),
+  /** Live PTY output chunks for the currently-watched task. */
+  remoteOnOutput: (cb: (d: { taskId: string; chunk: string }) => void) =>
+    ipcRenderer.on('remote:task-output', (_e, d) => cb(d)),
 
   // ── Live task events (drive the ambient pill + task panel) ──
   remoteOnTaskCreated: (cb: (t: RemoteTaskSnapshot) => void) =>

@@ -5,6 +5,7 @@
 
 import { useRemoteTasks } from './useRemoteTasks'
 import { TaskRow } from './TaskRow'
+import { RemoteSettings } from './RemoteSettings'
 
 export function TaskPanel() {
   const { tasks, answer, kill, rerun } = useRemoteTasks()
@@ -15,6 +16,8 @@ export function TaskPanel() {
       <div className="text-[12px] text-ink/50 mb-3">
         Hold the Remote key and speak a command — it runs on your machine via Claude Code.
       </div>
+
+      <RemoteSettings />
 
       {tasks.length === 0 ? (
         <div className="text-[12px] text-ink/40 italic py-6 text-center">

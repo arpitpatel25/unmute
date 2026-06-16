@@ -203,6 +203,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     broadcast('remote:task-stuck', t)
     notify('Task may be stuck', t.intent)
   })
+  // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
+  manager.on('output', (d: { taskId: string; chunk: string }) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('remote:task-output', d)
+    }
+  })
 
   // ── IPC: actions the renderer (or a future menu) can trigger ──
   ipcMain.handle('remote:dispatch', async (_e, intent: string) => dispatchFromCapture(intent))
@@ -215,6 +221,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     manager?.kill(id)
     return true
   })
+  ipcMain.handle('remote:get-output', async (_e, id: string) => manager?.getOutput(id) ?? '')
   ipcMain.handle('remote:get-settings', async () => ({
     permissionMode: settings.get('permissionMode'),
     remoteKey: getRemoteKey(),

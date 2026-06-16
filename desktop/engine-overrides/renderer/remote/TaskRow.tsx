@@ -9,6 +9,7 @@
 
 import { useState } from 'react'
 import type { RemoteTask } from './useRemoteTasks'
+import { LiveTerminal } from './LiveTerminal'
 
 const STATE_LABEL: Record<RemoteTask['state'], string> = {
   processing: 'Working…',
@@ -42,6 +43,7 @@ export function TaskRow({
   onRerun: (intent: string) => void
 }) {
   const [draft, setDraft] = useState('')
+  const [showTerminal, setShowTerminal] = useState(false)
   const active = task.state === 'processing' || task.state === 'needs-user' || task.state === 'stuck'
 
   return (
@@ -151,7 +153,16 @@ export function TaskRow({
             Re-run
           </button>
         )}
+        {/* #8 render-on-demand terminal */}
+        <button
+          className="text-[11px] px-2 py-0.5 rounded border border-black/15 hover:bg-black/5"
+          onClick={() => setShowTerminal((v) => !v)}
+        >
+          {showTerminal ? 'Hide terminal' : 'View terminal'}
+        </button>
       </div>
+
+      {showTerminal && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
     </div>
   )
 }
