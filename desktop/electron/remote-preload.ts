@@ -1,0 +1,58 @@
+// Unmute Remote — preload bridge. Spread into the OSS engine's electronAPI by
+// the build step (same mechanism as paywallPreloadExtensions — see PATCHES.md).
+//
+// Each method maps to an IPC handler/broadcast registered in remote/init.ts.
+
+import { ipcRenderer } from 'electron'
+
+export interface RemoteTaskSnapshot {
+  id: string
+  intent: string
+  state: 'processing' | 'needs-user' | 'stuck' | 'done' | 'failed'
+  createdAt: number
+  updatedAt: number
+  result: { summary: string; detail?: string; artifacts?: Array<{ type: 'path' | 'url'; value: string }> } | null
+  error: { reason: string; detail?: string } | null
+  question: { text: string; kind?: 'free_text' | 'choice' | 'confirm'; choices?: string[]; irreversible?: boolean } | null
+}
+
+export interface RemoteSettingsSnapshot {
+  permissionMode: 'prompt' | 'auto-approve'
+  remoteKey: 'fn' | 'right-option'
+  logFile: string | null
+}
+
+export const remotePreloadExtensions = {
+  // ── Actions ──
+  /** Dispatch a task by text (capture path types its own; this is for UI re-run/manual). */
+  remoteDispatch: (intent: string): Promise<string | null> =>
+    ipcRenderer.invoke('remote:dispatch', intent),
+  /** All tasks, newest first (PRD §13.3 panel + §13.5 history). */
+  remoteList: (): Promise<RemoteTaskSnapshot[]> => ipcRenderer.invoke('remote:list'),
+  /** Answer a needs-user question — piped into the session stdin (PRD §7). */
+  remoteAnswer: (id: string, answer: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:answer', id, answer),
+  /** Instant kill (PRD §10.4). */
+  remoteKill: (id: string): Promise<boolean> => ipcRenderer.invoke('remote:kill', id),
+
+  // ── Settings ──
+  remoteGetSettings: (): Promise<RemoteSettingsSnapshot> => ipcRenderer.invoke('remote:get-settings'),
+  remoteSetPermissionMode: (mode: 'prompt' | 'auto-approve'): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-permission-mode', mode),
+
+  // ── Live task events (drive the ambient pill + task panel) ──
+  remoteOnTaskCreated: (cb: (t: RemoteTaskSnapshot) => void) =>
+    ipcRenderer.on('remote:task-created', (_e, t) => cb(t)),
+  remoteOnTaskUpdated: (cb: (t: RemoteTaskSnapshot) => void) =>
+    ipcRenderer.on('remote:task-updated', (_e, t) => cb(t)),
+  remoteOnTaskNeedsUser: (cb: (t: RemoteTaskSnapshot) => void) =>
+    ipcRenderer.on('remote:task-needs-user', (_e, t) => cb(t)),
+  remoteOnTaskDone: (cb: (t: RemoteTaskSnapshot) => void) =>
+    ipcRenderer.on('remote:task-done', (_e, t) => cb(t)),
+  remoteOnTaskFailed: (cb: (t: RemoteTaskSnapshot) => void) =>
+    ipcRenderer.on('remote:task-failed', (_e, t) => cb(t)),
+  remoteOnTaskStuck: (cb: (t: RemoteTaskSnapshot) => void) =>
+    ipcRenderer.on('remote:task-stuck', (_e, t) => cb(t)),
+}
+
+export type RemoteAPI = typeof remotePreloadExtensions
