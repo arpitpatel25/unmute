@@ -116,6 +116,12 @@ wire_paywall() {
     // install-app-deps rebuilds it against Electron's ABI, and its .node
     // binary must be unpacked from the asar so it can be dlopen'd at runtime.
     pkg.dependencies['node-pty'] = '^1.1.0'
+    // Unmute Remote: xterm.js renders the owned-PTY stream as a real terminal
+    // in the render-on-demand live view (PRD §4.3) — faithful TUI + typeable —
+    // instead of the old ANSI-stripped <pre>. Renderer deps (bundled by vite),
+    // not native.
+    pkg.dependencies['@xterm/xterm'] = '^5.5.0'
+    pkg.dependencies['@xterm/addon-fit'] = '^0.10.0'
     pkg.build = pkg.build || {}
     pkg.build.asarUnpack = pkg.build.asarUnpack || []
     if (!pkg.build.asarUnpack.includes('**/node_modules/node-pty/**')) {

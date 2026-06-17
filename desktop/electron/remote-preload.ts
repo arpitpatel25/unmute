@@ -54,9 +54,19 @@ export const remotePreloadExtensions = {
   // ── Render-on-demand live terminal (PRD §13.4 #8) ──
   /** Recent buffered PTY output for a task (for opening the live view). */
   remoteGetOutput: (taskId: string): Promise<string> => ipcRenderer.invoke('remote:get-output', taskId),
-  /** Live PTY output chunks for the currently-watched task. */
-  remoteOnOutput: (cb: (d: { taskId: string; chunk: string }) => void) =>
-    ipcRenderer.on('remote:task-output', (_e, d) => cb(d)),
+  /** Live PTY output chunks for the currently-watched task. Returns an
+   *  unsubscribe fn so a re-summoned terminal doesn't leak listeners. */
+  remoteOnOutput: (cb: (d: { taskId: string; chunk: string }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { taskId: string; chunk: string }) => cb(d)
+    ipcRenderer.on('remote:task-output', handler)
+    return () => ipcRenderer.removeListener('remote:task-output', handler)
+  },
+  /** Typeable terminal (PRD §4.3): raw keystrokes from xterm → the task's PTY. */
+  remoteTerminalInput: (taskId: string, data: string): void =>
+    ipcRenderer.send('remote:terminal-input', taskId, data),
+  /** Tell the PTY the on-screen terminal size so the TUI reflows. */
+  remoteTerminalResize: (taskId: string, cols: number, rows: number): void =>
+    ipcRenderer.send('remote:terminal-resize', taskId, cols, rows),
 
   // ── Live task events (drive the ambient pill + task panel) ──
   remoteOnTaskCreated: (cb: (t: RemoteTaskSnapshot) => void) =>

@@ -25,6 +25,7 @@ interface IPtyProcess {
   onData(cb: (data: string) => void): void
   onExit(cb: (e: { exitCode: number }) => void): void
   write(data: string): void
+  resize(cols: number, rows: number): void
   kill(signal?: string): void
 }
 interface NodePty {
@@ -135,6 +136,20 @@ export class CliAgentExecutor implements AgentExecutor {
     this.pty.write(text)
     this.pty.write('\r') // REPL submits on carriage return
     slog.event('stdin-written', { bytes: text.length, preview: text.slice(0, 120) })
+  }
+
+  write(data: string): void {
+    // RAW passthrough for the interactive terminal — NO appended carriage return.
+    // Keep this quiet (debug, not event): a user typing fires this per keystroke.
+    if (!this.pty || this.exited) return
+    this.pty.write(data)
+  }
+
+  resize(cols: number, rows: number): void {
+    if (!this.pty || this.exited) return
+    const c = Math.max(1, Math.floor(cols))
+    const r = Math.max(1, Math.floor(rows))
+    try { this.pty.resize(c, r) } catch { /* pty may have just exited */ }
   }
 
   onData(cb: (chunk: string) => void): void {

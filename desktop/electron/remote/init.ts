@@ -262,6 +262,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return true
   })
   ipcMain.handle('remote:get-output', async (_e, id: string) => manager?.getOutput(id) ?? '')
+  // Typeable live terminal (PRD §4.3): raw keystrokes + viewport resize → PTY.
+  ipcMain.on('remote:terminal-input', (_e, id: string, data: string) => manager?.sendInput(id, data))
+  ipcMain.on('remote:terminal-resize', (_e, id: string, cols: number, rows: number) => manager?.resize(id, cols, rows))
   ipcMain.handle('remote:get-settings', async () => ({
     permissionMode: settings.get('permissionMode'),
     remoteKey: getRemoteKey(),

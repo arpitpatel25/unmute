@@ -16,6 +16,7 @@ declare module 'electron' {
   export const ipcRenderer: {
     invoke(channel: string, ...args: any[]): Promise<any>
     on(channel: string, listener: (e: unknown, ...args: any[]) => void): void
+    removeListener(channel: string, listener: (e: unknown, ...args: any[]) => void): void
     send(channel: string, ...args: any[]): void
   }
   export interface App { on(event: string, cb: (...a: unknown[]) => void): void }

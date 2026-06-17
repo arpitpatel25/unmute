@@ -23,6 +23,8 @@ function makeLibrarianExecutor(opts: { onWrite: (cwd: string) => Promise<void> }
     // The real flow sends an empty trust-accept write first, then the prompt.
     // Only react to the actual prompt (non-empty), like real Claude would.
     writeStdin(t: string) { if (t.trim()) void opts.onWrite(cwd) },
+    write() {},
+    resize() {},
     onData() {},
     kill() { alive = false },
   }

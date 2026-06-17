@@ -391,6 +391,24 @@ export class TaskManager extends EventEmitter {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
+  /** Forward RAW keystrokes from the live terminal into the session's PTY
+   *  (PRD §4.3 typeable terminal). No carriage return is appended — xterm sends
+   *  the exact bytes (including Enter as \r) the user typed. No-op if dead. */
+  sendInput(id: string, data: string): void {
+    const ex = this.executors.get(id)
+    if (!ex?.alive) return
+    // A user typing into a parked-warm session means they want to keep working;
+    // cancel the idle-kill so their hands-on session isn't reaped under them.
+    const wt = this.warmTimers.get(id)
+    if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
+    ex.write(data)
+  }
+
+  /** Resize a session's PTY to match the on-screen terminal (TUI reflow). */
+  resize(id: string, cols: number, rows: number): void {
+    this.executors.get(id)?.resize(cols, rows)
+  }
+
   private stopPolling(id: string): void {
     const timer = this.timers.get(id)
     if (timer) { clearInterval(timer); this.timers.delete(id) }

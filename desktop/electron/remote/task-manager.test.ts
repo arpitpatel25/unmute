@@ -11,13 +11,19 @@ import type { AgentExecutor, SpawnOpts } from './executor.ts'
 // by writing the status file directly (atomic temp-then-rename, like the contract).
 function makeFakeExecutor(opts: { onSpawn?: (o: SpawnOpts) => void } = {}) {
   const writes: string[] = []
+  const raw: string[] = []
+  const resizes: Array<[number, number]> = []
   let aliveFlag = true
-  const ex: AgentExecutor & { writes: string[] } = {
+  const ex: AgentExecutor & { writes: string[]; raw: string[]; resizes: Array<[number, number]> } = {
     writes,
+    raw,
+    resizes,
     get alive() { return aliveFlag },
     async spawn(o) { opts.onSpawn?.(o) },
     async isReady() {},
     writeStdin(t) { writes.push(t) },
+    write(d) { raw.push(d) },
+    resize(c, r) { resizes.push([c, r]) },
     onData() {},
     kill() { aliveFlag = false },
   }
@@ -161,4 +167,25 @@ test('followUp returns false when the session is no longer warm', async () => {
   tm.kill(id) // hard kill — no warm window
   assert.equal(tm.followUp(id, 'continue'), false)
   assert.equal(tm.continuableTasks().length, 0)
+})
+
+test('sendInput forwards RAW keystrokes to the PTY (typeable terminal, PRD §4.3)', async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('a task')
+  tm.sendInput(id, 'ls') // two keystrokes
+  tm.sendInput(id, '\r') // Enter — sent verbatim, NO extra \r appended
+  assert.deepEqual(fake.raw, ['ls', '\r'])
+  tm.kill(id)
+})
+
+test('resize forwards cols/rows to the PTY', async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('a task')
+  tm.resize(id, 100, 30)
+  assert.deepEqual(fake.resizes.at(-1), [100, 30])
+  tm.kill(id)
 })
