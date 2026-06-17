@@ -211,6 +211,17 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
     log.warn('empty intent after cleanup — not dispatching', { rawTranscript })
     return null
   }
+  // Voice answering (PRD §7): a task BLOCKED asking you a question is the
+  // strongest routing signal — the system explicitly paused for your input, so
+  // your next utterance answers IT rather than starting a new task. Highest
+  // priority, ahead of continuation/new. (Start a fresh task while one waits via
+  // the panel / typing.)
+  const awaiting = manager.tasksAwaitingUser()
+  if (awaiting[0]) {
+    log.event('routed-as-answer', { taskId: awaiting[0].id, question: awaiting[0].question?.text })
+    manager.answer(awaiting[0].id, cleaned)
+    return awaiting[0].id
+  }
   // v1 routing (decided): default-new + explicit-continue. If the utterance has
   // a continuation cue AND a warm session is still alive, continue it (the
   // read-then-act case). Otherwise dispatch a fresh task. Fails safe to new.

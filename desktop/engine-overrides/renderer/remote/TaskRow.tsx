@@ -1,7 +1,8 @@
 // Unmute Remote — one task row (PRD §13.4). Each row is a "mini-conversation":
 // it shows the cleaned intent (the trust-builder), live status, and — when the
 // task talks back — an inline result, a failure reason, or a needs-user prompt
-// the user answers by tap (voice answering arrives with the realtime layer).
+// the user answers by VOICE (hold the Remote key — routed straight to this
+// task's answer) or by tap/type.
 //
 // Items covered here (core): #1 intent, #2 status+duration, #3 inline result,
 // #4 failure reason, #5 needs-user answer, #6 cancel/kill, #7 re-run.
@@ -101,10 +102,18 @@ export function TaskRow({
         </div>
       )}
 
-      {/* #5 needs-user — answer by tap (PRD §7) */}
+      {/* #5 needs-user — answer by voice (hold the Remote key) or by tap (PRD §7) */}
       {task.state === 'needs-user' && task.question && (
-        <div className="mt-2">
-          <div className="text-[12px] text-amber-700 mb-1">{task.question.text}</div>
+        <div className="mt-2 rounded-md border border-amber-300/60 bg-amber-50/60 p-2">
+          {task.question.irreversible && (
+            <div className="text-[10px] uppercase tracking-wider text-red-700 mb-1">
+              ⚠ irreversible — confirm carefully
+            </div>
+          )}
+          <div className="text-[12px] text-amber-800 font-medium mb-0.5">{task.question.text}</div>
+          <div className="text-[10px] text-amber-700/70 mb-1.5">
+            🎙 Hold the Remote key and speak your answer — or {task.question.kind === 'choice' ? 'tap a choice' : 'type'} below.
+          </div>
           {task.question.kind === 'choice' && task.question.choices ? (
             <div className="flex flex-wrap gap-1">
               {task.question.choices.map((c) => (

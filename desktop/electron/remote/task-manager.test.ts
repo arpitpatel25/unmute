@@ -189,3 +189,17 @@ test('resize forwards cols/rows to the PTY', async () => {
   assert.deepEqual(fake.resizes.at(-1), [100, 30])
   tm.kill(id)
 })
+
+test('tasksAwaitingUser lists only needs-user tasks, newest first (voice answering, PRD §7)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, pollMs: 25 })
+  const a = await tm.dispatch('task A')
+  const b = await tm.dispatch('task B')
+  // A goes needs-user; B stays processing.
+  const wait = once(tm, 'needs-user')
+  await claudeWrites(tm.get(a)!.statusPath, { state: 'needs-user', question: { text: 'Which one?' } })
+  await wait
+  const awaiting = tm.tasksAwaitingUser()
+  assert.deepEqual(awaiting.map((t) => t.id), [a])
+  tm.kill(a); tm.kill(b)
+})

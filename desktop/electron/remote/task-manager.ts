@@ -383,6 +383,15 @@ export class TaskManager extends EventEmitter {
     return true
   }
 
+  /** Tasks currently BLOCKED on a needs-user question, newest first. The router
+   *  uses this for voice answering: a paused task that explicitly asked you a
+   *  question is the strongest target for your next utterance (PRD §7). */
+  tasksAwaitingUser(): Task[] {
+    return [...this.tasks.values()]
+      .filter((t) => t.state === 'needs-user')
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
   /** Warm, continuable sessions (terminal state but PTY still alive), newest first.
    *  Used by the router to decide whether a follow-up can land somewhere. */
   continuableTasks(): Task[] {
