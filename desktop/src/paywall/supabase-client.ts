@@ -31,9 +31,24 @@ const KEYCHAIN_STORAGE = {
 
 let cachedClient: SupabaseClient | null = null
 
+/** True when the managed-cloud Supabase backend is configured (build/dev env set). */
+export function isSupabaseConfigured(): boolean {
+  return Boolean(__SUPABASE_URL__ && __SUPABASE_ANON_KEY__)
+}
+
 export function getSupabase(): SupabaseClient {
   if (cachedClient) return cachedClient
-  cachedClient = createClient(__SUPABASE_URL__, __SUPABASE_ANON_KEY__, {
+  // Defensive: if the build/dev env didn't inject the URL (e.g. a dev run
+  // without desktop/.env.dev), createClient("") throws "supabaseUrl is required"
+  // and crashes the ENTIRE renderer to a blank screen. Fall back to a harmless
+  // localhost URL so the app still renders — cloud sign-in is simply disabled,
+  // while Local / BYOK / Remote (which don't need our backend) keep working.
+  const url = __SUPABASE_URL__ || 'http://localhost:54321'
+  const anonKey = __SUPABASE_ANON_KEY__ || 'anon-key-not-configured'
+  if (!isSupabaseConfigured()) {
+    console.warn('[supabase] __SUPABASE_URL__/__SUPABASE_ANON_KEY__ unset — cloud sign-in disabled. Set desktop/.env.dev for managed cloud in dev.')
+  }
+  cachedClient = createClient(url, anonKey, {
     auth: {
       // @ts-expect-error - supabase-js types want Storage but our async adapter
       // satisfies it functionally in v2.

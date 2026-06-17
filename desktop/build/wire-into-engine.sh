@@ -365,6 +365,14 @@ fix_node_pty_helper() {
 
 run_dev() {
   local engine="$WORK/oss-engine"
+  # Source dev env (Supabase URL/keys) so the renderer's supabase client gets a
+  # real URL — without this createClient("") throws and the renderer is blank.
+  if [[ -f "$ROOT/.env.dev" ]]; then
+    log "Sourcing .env.dev for dev paywall vars"
+    set -a; source "$ROOT/.env.dev"; set +a
+  else
+    log "WARN: no desktop/.env.dev — cloud sign-in disabled in dev (Local/BYOK/Remote still work)"
+  fi
   cd "$engine"
   npm install
   fix_node_pty_helper "$engine"
