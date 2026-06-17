@@ -29,6 +29,7 @@ import { CodexExecutor, type AgentKind } from './codex-executor'
 import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
+import { launchAutomationChrome } from './browser'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -60,11 +61,23 @@ interface RemoteSettings {
   agent: AgentKind
   // PRD §10.6: path sandbox — allowlisted roots. Empty ⇒ OFF (default posture).
   sandboxRoots: string[]
+  // DECIDED: executor runs Opus (router uses a lighter model). '' ⇒ inherit default.
+  model: string
+  // DECIDED: connect Claude-in-Chrome by default (browser tasks need it; others
+  // ignore it). User can disable. Setup of the extension is guided/one-time.
+  browserEnabled: boolean
 }
 
 const settings = new Store<RemoteSettings>({
   name: 'unmute-remote-settings',
-  defaults: { permissionMode: 'prompt', dictationKey: 'fn', agent: 'claude', sandboxRoots: [] },
+  defaults: {
+    permissionMode: 'prompt',
+    dictationKey: 'fn',
+    agent: 'claude',
+    sandboxRoots: [],
+    model: 'opus',
+    browserEnabled: true,
+  },
 })
 
 let manager: TaskManager | null = null
@@ -108,7 +121,9 @@ function executorFactory() {
   const agent = settings.get('agent')
   const sandboxRoots = settings.get('sandboxRoots') ?? []
   const sandboxed = sandboxRoots.length > 0
-  log.event('executor-factory', { agent, permissionMode: mode, sandboxed, sandboxRoots })
+  const model = settings.get('model') || 'opus'
+  const browser = settings.get('browserEnabled') !== false
+  log.event('executor-factory', { agent, permissionMode: mode, sandboxed, sandboxRoots, model, browser })
   if (agent === 'codex') {
     return new CodexExecutor({})
   }
@@ -116,7 +131,12 @@ function executorFactory() {
   // we do NOT skip permissions globally (out-of-fence access still prompts via
   // needs-user); claude gets the allowed roots via --add-dir.
   const extraArgs = !sandboxed && mode === 'auto-approve' ? ['--dangerously-skip-permissions'] : []
-  return new ClaudeCodeExecutor({ extraArgs, addDirs: sandboxRoots })
+  return new ClaudeCodeExecutor({
+    extraArgs,
+    addDirs: sandboxRoots,
+    model, // DECIDED: Opus for executor sessions
+    chrome: browser, // DECIDED: Claude-in-Chrome on by default (browser lane)
+  })
 }
 
 /**
@@ -167,6 +187,15 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const runId = String(Date.now())
   const logFile = configureRemoteLogging({ dir: logDir, runId })
   log.event('init-remote', { logFile, permissionMode: settings.get('permissionMode') })
+
+  // DECIDED isolation: when the browser lane is on, launch a DEDICATED Chrome
+  // (its own profile) so automation + the "debugging" banner never touch the
+  // user's real browser. One-time on-device steps (install the extension in
+  // this profile, sign in, place it on a separate Space) are guided in
+  // onboarding; this just makes sure the isolated instance is running.
+  if (settings.get('browserEnabled') !== false) {
+    launchAutomationChrome()
+  }
 
   // PRD §9: the serialized recipe librarian, sharing the same executor factory
   // (another interactive claude session on the user's plan — §9.3).
@@ -227,8 +256,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     remoteKey: getRemoteKey(),
     agent: settings.get('agent'),
     sandboxRoots: settings.get('sandboxRoots') ?? [],
+    model: settings.get('model') || 'opus',
+    browserEnabled: settings.get('browserEnabled') !== false,
     logFile: getRemoteLogFilePath(),
   }))
+  ipcMain.handle('remote:set-browser-enabled', async (_e, enabled: boolean) => {
+    settings.set('browserEnabled', !!enabled)
+    log.event('browser-enabled-set', { enabled: !!enabled })
+    if (enabled) launchAutomationChrome()
+    return true
+  })
   ipcMain.handle('remote:set-permission-mode', async (_e, mode: PermissionMode) => {
     settings.set('permissionMode', mode)
     log.event('permission-mode-set', { mode }) // PRD §10.1

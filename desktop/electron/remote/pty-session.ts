@@ -158,15 +158,27 @@ export interface ClaudeCodeExecutorOpts {
   /** PRD §10.6 sandbox: allowlisted roots the session may reach (--add-dir).
    *  Empty ⇒ no sandbox (default posture). */
   addDirs?: string[]
+  /** Model for the executor session. DECIDED: 'opus' for task sessions
+   *  (the router uses a lighter model). Passed as `--model <model>`.
+   *  Set to '' / undefined to inherit the user's Claude Code default. */
+  model?: string
+  /** Connect Claude-in-Chrome browser control for this session (`--chrome`).
+   *  DECIDED: always on for Remote (browser tasks need it; non-browser tasks
+   *  ignore it). Requires the extension installed + connected. */
+  chrome?: boolean
   ptyLoader?: () => NodePty
 }
 
 export class ClaudeCodeExecutor extends CliAgentExecutor {
   constructor(opts: ClaudeCodeExecutorOpts = {}) {
     const dirArgs = (opts.addDirs ?? []).flatMap((d) => ['--add-dir', d])
+    const modelArgs = opts.model ? ['--model', opts.model] : []
+    const chromeArgs = opts.chrome ? ['--chrome'] : []
     super({
       bin: opts.claudeBin || 'claude',
-      extraArgs: [...(opts.extraArgs || []), ...dirArgs],
+      // Order: model + chrome first (stable), then caller extras (e.g.
+      // --dangerously-skip-permissions), then sandbox --add-dir roots.
+      extraArgs: [...modelArgs, ...chromeArgs, ...(opts.extraArgs || []), ...dirArgs],
       // PRD §3.2: any of these flip billing off the subscription — strip all.
       stripEnvVars: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY'],
       ptyLoader: opts.ptyLoader,

@@ -65,6 +65,25 @@ test('writeStdin sends the text followed by a carriage return', async () => {
   assert.deepEqual(fake.writes, ['do the thing', '\r'])
 })
 
+test('model + chrome flags are passed (--model opus, --chrome)', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader, model: 'opus', chrome: true })
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 't1' })
+  const args = fake.calls.args || []
+  assert.ok(args.includes('--model') && args[args.indexOf('--model') + 1] === 'opus', 'has --model opus')
+  assert.ok(args.includes('--chrome'), 'has --chrome')
+  assert.ok(!args.includes('-p') && !args.includes('--print'), 'still never headless')
+})
+
+test('no model/chrome flags when not requested', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader })
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 't1' })
+  const args = fake.calls.args || []
+  assert.ok(!args.includes('--model'))
+  assert.ok(!args.includes('--chrome'))
+})
+
 test('sandbox: addDirs become --add-dir args (PRD §10.6)', async () => {
   const fake = makeFakePty()
   const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader, addDirs: ['/Users/x/Downloads', '/Users/x/projects'] })

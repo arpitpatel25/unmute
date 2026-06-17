@@ -22,6 +22,8 @@ export interface RemoteSettingsSnapshot {
   remoteKey: 'fn' | 'right-option'
   agent: 'claude' | 'codex'
   sandboxRoots: string[]
+  model: string
+  browserEnabled: boolean
   logFile: string | null
 }
 
@@ -46,6 +48,8 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-agent', agent),
   remoteSetSandboxRoots: (roots: string[]): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-sandbox-roots', roots),
+  remoteSetBrowserEnabled: (enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-browser-enabled', enabled),
 
   // ── Render-on-demand live terminal (PRD §13.4 #8) ──
   /** Recent buffered PTY output for a task (for opening the live view). */
