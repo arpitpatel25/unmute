@@ -12,6 +12,8 @@ interface Settings {
   remoteKey: 'fn' | 'right-option'
   agent: 'claude' | 'codex'
   sandboxRoots: string[]
+  model: string
+  browserEnabled: boolean
   logFile: string | null
 }
 type API = {
@@ -19,6 +21,7 @@ type API = {
   remoteSetPermissionMode?: (m: 'prompt' | 'auto-approve') => Promise<boolean>
   remoteSetAgent?: (a: 'claude' | 'codex') => Promise<boolean>
   remoteSetSandboxRoots?: (r: string[]) => Promise<boolean>
+  remoteSetBrowserEnabled?: (enabled: boolean) => Promise<boolean>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -51,6 +54,20 @@ export function RemoteSettings() {
             const mode = e.target.checked ? 'auto-approve' : 'prompt'
             update({ permissionMode: mode })
             void api().remoteSetPermissionMode?.(mode)
+          }}
+        />
+      </label>
+
+      {/* Browser lane — dedicated Claude-in-Chrome instance (DECIDED) */}
+      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
+        <span>Browser tasks <span className="text-ink/40">(dedicated Chrome; set up in onboarding)</span></span>
+        <input
+          type="checkbox"
+          checked={s.browserEnabled}
+          onChange={(e) => {
+            const browserEnabled = e.target.checked
+            update({ browserEnabled })
+            void api().remoteSetBrowserEnabled?.(browserEnabled)
           }}
         />
       </label>

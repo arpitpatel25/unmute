@@ -27,6 +27,19 @@ export interface RemoteSettingsSnapshot {
   logFile: string | null
 }
 
+export interface RemoteSetupStep {
+  key: string
+  title: string
+  detail: string
+  command?: string
+  status: 'done' | 'todo'
+  auto: boolean
+}
+export interface RemoteSetupStatus {
+  steps: RemoteSetupStep[]
+  complete: boolean
+}
+
 export const remotePreloadExtensions = {
   // ── Actions ──
   /** Dispatch a task by text (capture path types its own; this is for UI re-run/manual). */
@@ -50,6 +63,14 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-sandbox-roots', roots),
   remoteSetBrowserEnabled: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-browser-enabled', enabled),
+
+  // ── Onboarding / guided one-time setup (PRD §12) ──
+  /** The setup checklist: auto-detected (MCP/Chrome profile) + user-confirmed steps. */
+  remoteGetSetupStatus: (): Promise<RemoteSetupStatus> =>
+    ipcRenderer.invoke('remote:get-setup-status'),
+  /** Mark a manual step done/undone; returns the refreshed checklist. */
+  remoteSetSetupConfirmation: (key: string, done: boolean): Promise<RemoteSetupStatus> =>
+    ipcRenderer.invoke('remote:set-setup-confirmation', key, done),
 
   // ── Render-on-demand live terminal (PRD §13.4 #8) ──
   /** Recent buffered PTY output for a task (for opening the live view). */

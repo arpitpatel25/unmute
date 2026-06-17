@@ -22,6 +22,8 @@ import { ipcMain, BrowserWindow, Notification } from 'electron'
 import Store from 'electron-store'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { existsSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
@@ -29,8 +31,9 @@ import { CodexExecutor, type AgentKind } from './codex-executor'
 import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
-import { launchAutomationChrome } from './browser'
+import { launchAutomationChrome, automationProfileDir } from './browser'
 import { looksLikeContinuation } from './routing'
+import { buildSetupChecklist, setupComplete } from './setup-status'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -67,6 +70,9 @@ interface RemoteSettings {
   // DECIDED: connect Claude-in-Chrome by default (browser tasks need it; others
   // ignore it). User can disable. Setup of the extension is guided/one-time.
   browserEnabled: boolean
+  // Onboarding: user-confirmed manual steps we can't auto-detect (extension
+  // installed, signed in, window parked on its own Space). Keyed by step key.
+  setupConfirmations: Record<string, boolean>
 }
 
 const settings = new Store<RemoteSettings>({
@@ -78,8 +84,46 @@ const settings = new Store<RemoteSettings>({
     sandboxRoots: [],
     model: 'opus',
     browserEnabled: true,
+    setupConfirmations: {},
   },
 })
+
+/**
+ * Run `claude mcp list` (read-only) to discover which integrations the user has
+ * connected in THEIR Claude Code, for the onboarding checklist. Best-effort:
+ * resolves '' if the binary is missing or it errors/times out. We do NOT strip
+ * env here — listing is read-only and never bills a session (PRD §12.1: Unmute
+ * is not in the credential path; this only READS what the user configured).
+ */
+function claudeMcpList(): Promise<string> {
+  return new Promise((resolve) => {
+    try {
+      execFile('claude', ['mcp', 'list'], { timeout: 8000 }, (err, stdout, stderr) => {
+        if (err) {
+          log.warn('claude mcp list failed', { error: err.message })
+          resolve('')
+          return
+        }
+        resolve(`${stdout || ''}\n${stderr || ''}`)
+      })
+    } catch (e) {
+      log.warn('claude mcp list threw', { error: (e as Error).message })
+      resolve('')
+    }
+  })
+}
+
+/** Assemble the onboarding checklist from detected + confirmed state (§12). */
+async function getSetupStatus() {
+  const browserEnabled = settings.get('browserEnabled') !== false
+  const mcpListOutput = await claudeMcpList()
+  const chromeProfileExists = existsSync(automationProfileDir())
+  const confirmations = settings.get('setupConfirmations') ?? {}
+  const steps = buildSetupChecklist({ mcpListOutput, chromeProfileExists, browserEnabled, confirmations })
+  const complete = setupComplete(steps)
+  log.event('setup-status', { complete, todo: steps.filter((s) => s.status === 'todo').map((s) => s.key) })
+  return { steps, complete }
+}
 
 let manager: TaskManager | null = null
 let completeFn: CompleteFn | null = null
@@ -274,6 +318,15 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     browserEnabled: settings.get('browserEnabled') !== false,
     logFile: getRemoteLogFilePath(),
   }))
+  // ── Onboarding / guided one-time setup (PRD §12) ──
+  ipcMain.handle('remote:get-setup-status', async () => getSetupStatus())
+  ipcMain.handle('remote:set-setup-confirmation', async (_e, key: string, done: boolean) => {
+    const cur = { ...(settings.get('setupConfirmations') ?? {}) }
+    cur[key] = !!done
+    settings.set('setupConfirmations', cur)
+    log.event('setup-confirmation-set', { key, done: !!done })
+    return getSetupStatus()
+  })
   ipcMain.handle('remote:set-browser-enabled', async (_e, enabled: boolean) => {
     settings.set('browserEnabled', !!enabled)
     log.event('browser-enabled-set', { enabled: !!enabled })
