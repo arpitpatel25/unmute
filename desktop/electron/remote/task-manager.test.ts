@@ -118,3 +118,47 @@ test('kill marks a running task failed with "Stopped by you" (PRD §10.4)', asyn
   assert.equal(task.state, 'failed')
   assert.equal(task.error?.reason, 'Stopped by you')
 })
+
+test('done task stays WARM (session alive) for follow-up, then idle-kills', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 25, warmMs: 120 })
+  const id = await tm.dispatch('check which emails are worth replying to')
+  const task = tm.get(id)!
+  const done = once(tm, 'done')
+  await claudeWrites(task.statusPath, { state: 'done', result: { summary: '3 emails worth replying to' } })
+  await done
+  // session kept warm: still alive + listed as continuable
+  assert.equal(fake.alive, true)
+  assert.equal(tm.continuableTasks()[0]?.id, id)
+  // after the warm window with no follow-up, it idle-kills
+  await new Promise((r) => setTimeout(r, 200))
+  assert.equal(fake.alive, false)
+  assert.equal(tm.continuableTasks().length, 0)
+})
+
+test('followUp resumes a warm session — pipes text into stdin, back to processing', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 25, warmMs: 60_000 })
+  const id = await tm.dispatch('check emails')
+  const task = tm.get(id)!
+  await (async () => { const d = once(tm, 'done'); await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'done' } }); await d })()
+  const before = fake.writes.length
+  const ok = tm.followUp(id, 'reply to the second one')
+  assert.equal(ok, true)
+  assert.equal(fake.writes.length, before + 1)
+  assert.equal(fake.writes.at(-1), 'reply to the second one')
+  assert.equal(tm.get(id)!.state, 'processing')
+  tm.kill(id)
+})
+
+test('followUp returns false when the session is no longer warm', async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 9999, warmMs: 60_000 })
+  const id = await tm.dispatch('a task')
+  tm.kill(id) // hard kill — no warm window
+  assert.equal(tm.followUp(id, 'continue'), false)
+  assert.equal(tm.continuableTasks().length, 0)
+})

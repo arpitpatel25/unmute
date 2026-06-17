@@ -30,6 +30,7 @@ import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { launchAutomationChrome } from './browser'
+import { looksLikeContinuation } from './routing'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -165,6 +166,16 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
   if (!cleaned) {
     log.warn('empty intent after cleanup — not dispatching', { rawTranscript })
     return null
+  }
+  // v1 routing (decided): default-new + explicit-continue. If the utterance has
+  // a continuation cue AND a warm session is still alive, continue it (the
+  // read-then-act case). Otherwise dispatch a fresh task. Fails safe to new.
+  if (looksLikeContinuation(cleaned)) {
+    const warm = manager.continuableTasks()[0]
+    if (warm && manager.followUp(warm.id, cleaned)) {
+      log.event('routed-as-continuation', { taskId: warm.id })
+      return warm.id
+    }
   }
   return manager.dispatch(cleaned)
 }

@@ -75,6 +75,11 @@ export interface TaskManagerOpts {
   staleMs?: number
   /** ms to wait after accepting the folder-trust prompt for the REPL to boot. */
   trustAcceptMs?: number
+  /** Keep a session WARM this long after it reaches done/failed, so a follow-up
+   *  ("now reply to #2") can continue it with full context (minimal continuation).
+   *  After this idle window with no follow-up, the session is hard-killed.
+   *  Default 3 min; 0 = kill immediately on done (pure one-shot). */
+  warmMs?: number
   /** Recipe librarian (PRD §9). When set, a 'done' task that proposed a recipe
    *  suggestion is submitted for curation. Optional. */
   librarian?: Librarian
@@ -90,6 +95,8 @@ export class TaskManager extends EventEmitter {
   private tasks = new Map<string, Task>()
   private executors = new Map<string, AgentExecutor>()
   private timers = new Map<string, ReturnType<typeof setInterval>>()
+  // Idle-kill timers for WARM sessions (kept alive after done for follow-ups).
+  private warmTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Per-task ring buffer of recent PTY output for render-on-demand (PRD §13.4#8).
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
@@ -105,6 +112,7 @@ export class TaskManager extends EventEmitter {
       pollMs: opts.pollMs ?? 1000,
       staleMs: opts.staleMs ?? 4 * 60_000,
       trustAcceptMs: opts.trustAcceptMs ?? 2000,
+      warmMs: opts.warmMs ?? 3 * 60_000,
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
       now: opts.now,
@@ -286,7 +294,7 @@ export class TaskManager extends EventEmitter {
             cwd: task.cwd,
           }).catch((e) => tlog.error('librarian submit failed', { error: (e as Error).message }))
         }
-        this.finish(id)
+        this.parkWarm(id) // keep warm for a follow-up (read-then-act), then idle-kill
         break
       case 'failed': {
         // PRD §13.4 #4: surface WHY.
@@ -299,7 +307,7 @@ export class TaskManager extends EventEmitter {
           tlog.ui('task-row.mcp-gap', { integration: gap.integration, fixCommand: gap.fixCommand })
         }
         this.emit('failed', task)
-        this.finish(id)
+        this.parkWarm(id) // a failed task can still be continued/retried while warm
         break
       }
       default:
@@ -332,32 +340,86 @@ export class TaskManager extends EventEmitter {
   }
 
   /** Instant kill (PRD §10.4). Closes the session; marks failed if not terminal. */
+  /** Explicit user stop (PRD §10.4). Hard-kills the session immediately. */
   kill(id: string): void {
     const tlog = log.child({ taskId: id })
     tlog.ui('task-row.killed', {})
-    const ex = this.executors.get(id)
-    ex?.kill()
     const task = this.tasks.get(id)
     if (task && !TERMINAL.includes(task.state)) {
-      this.transition(id, 'failed', { state: 'failed', error: { reason: 'Stopped by you' } })
-    } else {
-      this.finish(id)
+      task.state = 'failed'
+      task.error = { reason: 'Stopped by you' }
+      task.updatedAt = this.clock()
+      this.emit('updated', task)
+      this.emit('failed', task)
     }
+    this.hardKill(id) // explicit stop ⇒ no warm window
   }
 
-  /** Stop polling + close the session. PRD §5.4 / §10.2: don't destroy evidence —
-   *  the status file (with result/error) stays on disk for the history/log. */
-  private finish(id: string): void {
-    const timer = this.timers.get(id)
-    if (timer) {
-      clearInterval(timer)
-      this.timers.delete(id)
-    }
+  /**
+   * Continue a WARM (done/failed but still-alive) session with a follow-up
+   * instruction (minimal continuation — the read-then-act case). Pipes the text
+   * into the kept-alive PTY and resumes. Returns false if the session is gone
+   * (caller should dispatch a fresh task instead).
+   */
+  followUp(id: string, text: string): boolean {
+    const tlog = log.child({ taskId: id })
     const ex = this.executors.get(id)
-    if (ex?.alive) {
-      // PRD §4.5: the REPL won't exit on its own — close it explicitly.
-      ex.kill()
+    const task = this.tasks.get(id)
+    if (!ex?.alive || !task) {
+      tlog.warn('followUp: session no longer warm — caller should dispatch new', {})
+      return false
     }
+    // Cancel the idle-kill; resume the session.
+    const wt = this.warmTimers.get(id)
+    if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
+    tlog.ui('task-row.follow-up', { text })
+    ex.writeStdin(text)
+    task.state = 'processing'
+    task.updatedAt = this.clock()
+    task.lastMtimeMs = this.clock() // reset heartbeat clock so the old 'done' file isn't read as stale
+    this.startPolling(id)
+    this.emit('updated', task)
+    tlog.event('task-followup', {})
+    return true
+  }
+
+  /** Warm, continuable sessions (terminal state but PTY still alive), newest first.
+   *  Used by the router to decide whether a follow-up can land somewhere. */
+  continuableTasks(): Task[] {
+    return [...this.tasks.values()]
+      .filter((t) => TERMINAL.includes(t.state) && this.executors.get(t.id)?.alive === true)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  private stopPolling(id: string): void {
+    const timer = this.timers.get(id)
+    if (timer) { clearInterval(timer); this.timers.delete(id) }
+  }
+
+  /** Natural completion: stop polling but keep the session WARM for a follow-up
+   *  window (minimal continuation). After warmMs idle with no follow-up, hard-kill.
+   *  Status file (result/error) stays on disk for history regardless (§10.2). */
+  private parkWarm(id: string): void {
+    this.stopPolling(id)
+    const ex = this.executors.get(id)
+    if (!ex?.alive || this.opts.warmMs <= 0) { this.hardKill(id); return }
+    const tlog = log.child({ taskId: id })
+    const t = setTimeout(() => {
+      tlog.event('warm-idle-timeout', { warmMs: this.opts.warmMs })
+      this.hardKill(id)
+    }, this.opts.warmMs)
+    t.unref?.() // don't block process exit on the warm window
+    this.warmTimers.set(id, t)
+    tlog.event('parked-warm', { warmMs: this.opts.warmMs })
+  }
+
+  /** Hard close: stop polling, cancel warm timer, kill the PTY (PRD §4.5). */
+  private hardKill(id: string): void {
+    this.stopPolling(id)
+    const wt = this.warmTimers.get(id)
+    if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
+    const ex = this.executors.get(id)
+    if (ex?.alive) ex.kill() // the REPL won't exit on its own
     this.executors.delete(id)
     log.child({ taskId: id }).event('task-finished', { state: this.tasks.get(id)?.state })
   }
