@@ -114,12 +114,18 @@ export async function readStatus(filePath: string): Promise<StatusPayload | null
 
 // ─── Staleness backstop (PRD §6.3 — mtime, TUI-independent) ─────────
 
-const TERMINAL_STATES: TaskState[] = ['done', 'failed']
-
 /**
- * Decide whether a task looks stuck. Only NON-terminal tasks can be stale:
- * a task whose status file hasn't been touched in `thresholdMs` while still
- * in `processing`/`needs-user` is flagged so Unmute can offer check/kill/retry.
+ * Decide whether a task looks STUCK.
+ *
+ * ONLY a `processing` task can go stale. A task that is actively working but
+ * stops touching its status file for `thresholdMs` is likely hung → flag it.
+ *
+ * Crucially, `needs-user` is NOT stale-able: that task is *legitimately* waiting
+ * on the human, who may take minutes (or step away). Its own `needs-user` state
+ * is already the "needs attention" signal (amber row) — flagging it "stuck" on
+ * top of that is wrong and was a real bug (a Gmail-auth pause got marked stuck
+ * after 4 min just because the user hadn't answered yet). `done`/`failed`/
+ * `stuck` are likewise never stale.
  *
  * Keying on the file's mtime (not terminal output) is what makes this immune
  * to whatever the Claude TUI does on screen (PRD §6.3).
@@ -130,7 +136,9 @@ export function isStale(
   nowMs: number,
   thresholdMs: number,
 ): boolean {
-  if (TERMINAL_STATES.includes(status.state)) return false
+  // Only an actively-working task can hang. Anything waiting on the user, or
+  // already terminal, is never "stuck".
+  if (status.state !== 'processing') return false
   const ageMs = nowMs - mtimeMs
   const stale = ageMs > thresholdMs
   if (stale) {

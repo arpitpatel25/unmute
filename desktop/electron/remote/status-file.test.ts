@@ -65,12 +65,17 @@ test('reader parses a needs-user question payload (PRD §7)', async () => {
   assert.equal(s?.question?.choices?.length, 2)
 })
 
-test('isStale: processing + old mtime ⇒ stuck; fresh ⇒ not; terminal never (PRD §6.3)', () => {
+test('isStale: ONLY processing can go stuck; needs-user/terminal never (PRD §6.3)', () => {
   const now = 1_000_000
   const FIVE_MIN = 5 * 60_000
+  // processing + no heartbeat past threshold ⇒ stuck
   assert.equal(isStale({ state: 'processing' }, now - 6 * 60_000, now, FIVE_MIN), true)
+  // processing but fresh ⇒ not stuck
   assert.equal(isStale({ state: 'processing' }, now - 2 * 60_000, now, FIVE_MIN), false)
-  assert.equal(isStale({ state: 'needs-user' }, now - 6 * 60_000, now, FIVE_MIN), true)
+  // needs-user is legitimately waiting on the human ⇒ NEVER stuck (the bug fix)
+  assert.equal(isStale({ state: 'needs-user' }, now - 6 * 60_000, now, FIVE_MIN), false)
+  assert.equal(isStale({ state: 'needs-user' }, now - 99 * 60_000, now, FIVE_MIN), false)
+  // terminal states ⇒ never stuck
   assert.equal(isStale({ state: 'done' }, now - 99 * 60_000, now, FIVE_MIN), false)
   assert.equal(isStale({ state: 'failed' }, now - 99 * 60_000, now, FIVE_MIN), false)
 })
