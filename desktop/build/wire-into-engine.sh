@@ -449,7 +449,9 @@ case "$MODE" in
     [[ -d "$WORK/oss-engine" ]] || sync_engine
     wire_paywall
     cd "$WORK/oss-engine"
-    npm install node-pty --no-save >/dev/null 2>&1 || true
+    # node-pty (PTY backend) + xterm (live-terminal renderer dep) so the
+    # integrated build resolves them without a full install.
+    npm install node-pty @xterm/xterm @xterm/addon-fit --no-save >/dev/null 2>&1 || true
     fix_node_pty_helper "$WORK/oss-engine"
     log "Compiling (electron-vite build)…"
     npx electron-vite build
