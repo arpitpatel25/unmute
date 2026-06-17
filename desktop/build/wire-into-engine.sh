@@ -232,28 +232,35 @@ if (!src.includes('initPaywall(app, buildOSSAdapter())')) {
   )
 }
 
-// ─── Unmute Remote wiring ───
-// import initRemote, then call it right after initPaywall with the engine's
-// sessionManager + keyboardManager singletons (already imported in main.ts).
-// initRemote subscribes to keyboard.ts's 'remote-start'/'remote-stop' events
-// and registers the task IPC. ADDITIVE — dictation init is untouched.
-if (!src.includes("from './paywall/remote/init'")) {
-  src = src.replace(
-    "import { buildOSSAdapter } from './buildOSSAdapter'\n",
-    "import { buildOSSAdapter } from './buildOSSAdapter'\nimport { initRemote } from './paywall/remote/init'\n"
-  )
-}
-if (!src.includes('initRemote({')) {
-  src = src.replace(
-    'initPaywall(app, buildOSSAdapter())\n',
-    'initPaywall(app, buildOSSAdapter())\n  initRemote({ sessionManager, keyboardManager })\n'
-  )
-}
-
 fs.writeFileSync(p, src)
 NODE_EOF
     node "$patcher" "$main_ts"
     rm -f "$patcher"
+  fi
+
+  # ─── Unmute Remote: init wiring (INDEPENDENT of the initPaywall guard) ───
+  # Must run even when main.ts was already paywall-patched by a prior wire,
+  # otherwise initRemote never lands and Remote silently never starts.
+  # Anchors on the buildOSSAdapter import + the initPaywall(...) call, both of
+  # which the paywall patch guarantees. ADDITIVE — dictation init untouched.
+  if ! grep -q 'initRemote' "$main_ts"; then
+    sed -i.bak "/^import { buildOSSAdapter } from '\.\/buildOSSAdapter'/a\\
+import { initRemote } from './paywall/remote/init'
+" "$main_ts"
+    rm -f "$main_ts.bak"
+    node -e "
+      const fs = require('fs'); const p = '$main_ts'; let s = fs.readFileSync(p, 'utf-8')
+      if (!s.includes('initRemote({')) {
+        s = s.replace(
+          'initPaywall(app, buildOSSAdapter())\n',
+          'initPaywall(app, buildOSSAdapter())\n  initRemote({ sessionManager, keyboardManager })\n'
+        )
+      }
+      fs.writeFileSync(p, s)
+    "
+    if ! grep -q 'initRemote({' "$main_ts"; then
+      log "WARN: initRemote call injection did not land in main.ts"
+    fi
   fi
 
   # 2) preload.ts: merge paywall API into electronAPI
@@ -421,7 +428,19 @@ case "$MODE" in
     wire_paywall
     run_build
     ;;
+  compile)
+    # Wire + typecheck/compile only (no sign, no launch). Verifies the engine
+    # integration compiles against the real engine + renderer. Reuses an
+    # existing engine checkout if present (skips the re-clone).
+    [[ -d "$WORK/oss-engine" ]] || sync_engine
+    wire_paywall
+    cd "$WORK/oss-engine"
+    npm install node-pty --no-save >/dev/null 2>&1 || true
+    fix_node_pty_helper "$WORK/oss-engine"
+    log "Compiling (electron-vite build)…"
+    npx electron-vite build
+    ;;
   *)
-    fatal "Unknown mode '$MODE' — use sync, dev, or build"
+    fatal "Unknown mode '$MODE' — use sync, dev, build, or compile"
     ;;
 esac

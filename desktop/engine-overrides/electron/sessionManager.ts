@@ -1149,7 +1149,7 @@ class SessionManager {
             console.log(`[session] ⏱ Pipeline STT-only returned: ${tPostFetch - tPreFetch}ms`)
 
             session.dictationTranscript = transcript
-            const output = cleanTranscript(transcript)
+            let output = cleanTranscript(transcript) // reassigned below by formatOutputForUser
 
             // ─── Unmute Remote (ADDITIVE): dispatch instead of paste ───
             if (this.remoteCaptureActive) {
