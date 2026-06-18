@@ -15,6 +15,9 @@ export interface RemoteTaskSnapshot {
   error: { reason: string; detail?: string } | null
   question: { text: string; kind?: 'free_text' | 'choice' | 'confirm'; choices?: string[]; irreversible?: boolean } | null
   mcpGap: { integration: string; fixCommand: string; message: string } | null
+  /** PTY still alive (running or parked-warm) — drives the live terminal's
+   *  repaint-vs-replay choice. */
+  alive: boolean
 }
 
 export interface RemoteSettingsSnapshot {

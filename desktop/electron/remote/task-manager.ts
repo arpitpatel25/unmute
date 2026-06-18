@@ -418,6 +418,12 @@ export class TaskManager extends EventEmitter {
     this.executors.get(id)?.resize(cols, rows)
   }
 
+  /** Is the task's PTY still alive (running or parked-warm)? The live terminal
+   *  uses this to decide: repaint a live session clean vs. replay history. */
+  isAlive(id: string): boolean {
+    return this.executors.get(id)?.alive === true
+  }
+
   private stopPolling(id: string): void {
     const timer = this.timers.get(id)
     if (timer) { clearInterval(timer); this.timers.delete(id) }

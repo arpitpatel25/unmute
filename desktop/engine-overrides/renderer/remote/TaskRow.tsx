@@ -174,7 +174,7 @@ export function TaskRow({
         </button>
       </div>
 
-      {showTerminal && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
+      {showTerminal && <LiveTerminal taskId={task.id} alive={task.alive ?? active} onClose={() => setShowTerminal(false)} />}
     </div>
   )
 }

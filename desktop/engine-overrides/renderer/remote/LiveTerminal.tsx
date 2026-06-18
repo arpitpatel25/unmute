@@ -23,8 +23,12 @@ function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
 }
 
-export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () => void }) {
+export function LiveTerminal({ taskId, alive, onClose }: { taskId: string; alive?: boolean; onClose: () => void }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
+  // Read `alive` at mount only — so the terminal doesn't re-init when the task
+  // flips done while you're watching.
+  const aliveRef = useRef(alive)
+  aliveRef.current = alive
 
   useEffect(() => {
     const host = hostRef.current
@@ -44,25 +48,45 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
     term.loadAddon(fit)
     term.open(host)
 
-    const refit = () => {
+    // Push the xterm geometry to the PTY so the TUI renders at the SAME width
+    // we display — the fix for the wrapped/garbled right column (the PTY used to
+    // render at a fixed 120 cols into a narrower view).
+    const syncSize = () => {
       try {
         fit.fit()
         api().remoteTerminalResize?.(taskId, term.cols, term.rows)
       } catch { /* host not laid out yet */ }
     }
-    refit()
+    syncSize()
 
     // Keystrokes → the session's PTY stdin (raw, verbatim). PRD §4.3.
     term.onData((data) => api().remoteTerminalInput?.(taskId, data))
 
-    // Backfill the buffered history, then stream live chunks for THIS task.
-    void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf) term.write(buf) })
+    // Live stream for THIS task.
     const off = api().remoteOnOutput?.((d) => {
       if (!disposed && d.taskId === taskId) term.write(d.chunk)
     })
 
+    if (aliveRef.current) {
+      // Live (running or parked-warm): DON'T replay the stale-width scrollback —
+      // that's what wrapped into garbage. Nudge a fresh repaint at the matched
+      // width with a resize "wiggle" (two SIGWINCHes). No stdin, so the warm
+      // window isn't cancelled; Ink repaints the current frame cleanly.
+      setTimeout(() => {
+        if (disposed) return
+        const c = Math.max(2, term.cols)
+        const r = Math.max(2, term.rows)
+        api().remoteTerminalResize?.(taskId, c, r - 1)
+        api().remoteTerminalResize?.(taskId, c, r)
+      }, 60)
+    } else {
+      // Finished + reaped: no process left to repaint, so show buffered history
+      // (best-effort — may carry its original geometry, but it's a static record).
+      void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf) term.write(buf) })
+    }
+
     // Reflow when the panel resizes.
-    const ro = new ResizeObserver(() => refit())
+    const ro = new ResizeObserver(() => syncSize())
     ro.observe(host)
 
     return () => {
@@ -81,7 +105,7 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
         </span>
         <button className="text-[11px] text-white/60 hover:text-white" onClick={onClose}>close</button>
       </div>
-      <div ref={hostRef} className="h-56 p-1" />
+      <div ref={hostRef} className="h-72 p-1" />
     </div>
   )
 }

@@ -16,6 +16,7 @@ export interface RemoteTask {
   error: { reason: string; detail?: string } | null
   question: { text: string; kind?: 'free_text' | 'choice' | 'confirm'; choices?: string[]; irreversible?: boolean } | null
   mcpGap: { integration: string; fixCommand: string; message: string } | null
+  alive?: boolean
 }
 
 // The remote* methods are spread into electronAPI by the build (remote-preload).

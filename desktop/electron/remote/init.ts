@@ -148,6 +148,9 @@ function serializeTask(t: Task) {
     error: t.error ?? null,
     question: t.question ?? null,
     mcpGap: t.mcpGap ?? null,
+    // PTY still alive (running or parked-warm) → the live terminal can repaint
+    // it clean instead of replaying stale-width history (PRD §13.4 #8).
+    alive: manager?.isAlive(t.id) ?? false,
   }
 }
 
