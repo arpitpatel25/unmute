@@ -32,7 +32,7 @@ import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { buildSetupChecklist, setupComplete } from './setup-status'
-import { createOverlayWindow, presentOverlay, dismissOverlay } from './overlay'
+import { createOverlayWindow, presentOverlay, dismissOverlay, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
 import { Router, type RoutableTask } from './router'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, TMUX_CONF } from './tmux'
 
@@ -418,9 +418,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   deps.keyboardManager.on('keyboard', (e) => {
     if (e.type === 'remote-start') {
       log.event('remote-key', { phase: 'start' })
+      pauseOverlayEscape() // capture owns Escape (cancel) while recording
       deps.sessionManager.startRemoteCapture()
     } else if (e.type === 'remote-stop') {
       log.event('remote-key', { phase: 'stop' })
+      resumeOverlayEscape() // give Escape back to a still-visible overlay
       void deps.sessionManager.stopRemoteCapture()
     }
   })

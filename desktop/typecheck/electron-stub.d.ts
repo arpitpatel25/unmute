@@ -39,6 +39,11 @@ declare module 'electron' {
     removeListener(channel: string, listener: (e: unknown, ...args: any[]) => void): void
     send(channel: string, ...args: any[]): void
   }
+  export const globalShortcut: {
+    register(accelerator: string, cb: () => void): boolean
+    unregister(accelerator: string): void
+    isRegistered(accelerator: string): boolean
+  }
   export const shell: {
     openExternal(url: string, options?: { activate?: boolean }): Promise<void>
     openPath(path: string): Promise<string>

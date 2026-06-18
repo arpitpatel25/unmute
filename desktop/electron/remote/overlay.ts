@@ -15,13 +15,40 @@
 //
 // Electron glue (BrowserWindow/screen), so — like init.ts — not unit-tested.
 
-import { BrowserWindow, screen } from 'electron'
+import { BrowserWindow, screen, globalShortcut } from 'electron'
 import { join } from 'node:path'
 import { createLogger } from './log'
 
 const log = createLogger('overlay')
 
 let overlayWindow: BrowserWindow | null = null
+// Whether WE currently hold the global Escape shortcut (vs the engine, which
+// grabs it during a dictation/remote capture so its cancel wins). We only take
+// Escape while the overlay is visible AND no capture owns it.
+let escHeldByOverlay = false
+
+/** Take global Escape → dismiss (only if no one else — i.e. a capture — holds it). */
+function grabEscape(): void {
+  if (escHeldByOverlay) return
+  try {
+    if (!globalShortcut.isRegistered('Escape')) {
+      escHeldByOverlay = globalShortcut.register('Escape', () => dismissOverlay())
+    }
+  } catch (e) { log.warn('grabEscape failed', { error: (e as Error).message }) }
+}
+
+function releaseEscape(): void {
+  if (!escHeldByOverlay) return
+  try { globalShortcut.unregister('Escape') } catch { /* best-effort */ }
+  escHeldByOverlay = false
+}
+
+/** Called when a voice capture starts: yield Escape so the capture's cancel wins
+ *  (capture-first priority). The overlay stays visible. */
+export function pauseOverlayEscape(): void { releaseEscape() }
+
+/** Called when a capture ends: reclaim Escape if the overlay is still up. */
+export function resumeOverlayEscape(): void { if (isOverlayVisible()) grabEscape() }
 
 /** Right-edge bounds: a tall, narrow panel on the active display's right side. */
 function overlayBounds(): { x: number; y: number; width: number; height: number } {
@@ -54,6 +81,9 @@ export function createOverlayWindow(): BrowserWindow {
     // Focusable so the user can click a card / type an answer — but we present
     // with showInactive() so it never grabs focus on its own.
     focusable: true,
+    // Accept the FIRST click even when the window isn't active, so the ✕ / a card
+    // responds immediately instead of the first click only raising the window.
+    acceptFirstMouse: true,
     type: 'panel',
     alwaysOnTop: true,
     webPreferences: {
@@ -83,7 +113,7 @@ export function createOverlayWindow(): BrowserWindow {
     void overlayWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: '/overlay' })
   }
 
-  overlayWindow.on('closed', () => { overlayWindow = null })
+  overlayWindow.on('closed', () => { releaseEscape(); overlayWindow = null })
   log.event('overlay-window-created', {})
   return overlayWindow
 }
@@ -99,11 +129,15 @@ export function presentOverlay(taskId: string): void {
   // single Space. Re-applying here keeps it omnipresent.
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
   win.setAlwaysOnTop(true, 'screen-saver')
+  // Escape dismisses even though the window is unfocused (we show it inactive) —
+  // a global shortcut, taken only while no capture owns Escape.
+  grabEscape()
   log.event('overlay-presented', { taskId })
 }
 
 /** Hide the overlay (user-triggered dismiss). The task stays in the app. */
 export function dismissOverlay(): void {
+  releaseEscape()
   if (overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
     overlayWindow.hide()
     log.event('overlay-dismissed', {})
