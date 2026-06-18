@@ -19,6 +19,7 @@ interface SetupStep {
   command?: string
   status: 'done' | 'todo'
   auto: boolean
+  optional?: boolean
 }
 interface SetupStatus {
   steps: SetupStep[]
@@ -27,6 +28,7 @@ interface SetupStatus {
 type API = {
   remoteGetSetupStatus?: () => Promise<SetupStatus>
   remoteSetSetupConfirmation?: (key: string, done: boolean) => Promise<SetupStatus>
+  remoteInstallTmux?: () => Promise<SetupStatus>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -96,6 +98,21 @@ export function Onboarding() {
                   {step.command && (
                     <div className="flex items-center gap-2 mt-1">
                       <code className="flex-1 px-1.5 py-0.5 bg-black/5 rounded text-[11px] truncate">{step.command}</code>
+                      {/* tmux is a known dep — Unmute installs it for you, no terminal needed. */}
+                      {step.key === 'tmux' && step.status !== 'done' && (
+                        <button
+                          className="text-[11px] px-2 py-0.5 rounded border border-black/15 hover:bg-black/5 shrink-0"
+                          disabled={busy}
+                          onClick={async () => {
+                            setBusy(true)
+                            const next = await api().remoteInstallTmux?.()
+                            if (next) setStatus(next)
+                            setBusy(false)
+                          }}
+                        >
+                          {busy ? 'installing…' : 'install'}
+                        </button>
+                      )}
                       <CopyButton text={step.command} />
                     </div>
                   )}

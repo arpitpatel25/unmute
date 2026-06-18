@@ -122,12 +122,35 @@ function claudeMcpList(): Promise<string> {
   })
 }
 
+/** Resolve the Homebrew binary (so Unmute can install deterministic deps itself
+ *  rather than making the user run commands). Null ⇒ no brew → we guide instead. */
+function resolveBrew(): string | null {
+  for (const p of ['/opt/homebrew/bin/brew', '/usr/local/bin/brew']) {
+    if (existsSync(p)) return p
+  }
+  return null
+}
+
+/** Re-resolve tmux + (re)write its config. Called at init and after an install. */
+function refreshTmux(): void {
+  tmuxBin = resolveTmuxBin((p) => existsSync(p))
+  if (tmuxBin) {
+    try {
+      mkdirSync(dirname(tmuxConfPath), { recursive: true })
+      writeFileSync(tmuxConfPath, TMUX_CONF)
+    } catch (e) {
+      log.warn('tmux conf write failed — disabling tmux', { error: (e as Error).message })
+      tmuxBin = null
+    }
+  }
+}
+
 /** Assemble the onboarding checklist from detected + confirmed state (§12). */
 async function getSetupStatus() {
   const browserEnabled = settings.get('browserEnabled') !== false
   const mcpListOutput = await claudeMcpList()
   const confirmations = settings.get('setupConfirmations') ?? {}
-  const steps = buildSetupChecklist({ mcpListOutput, browserEnabled, confirmations })
+  const steps = buildSetupChecklist({ mcpListOutput, browserEnabled, tmuxAvailable: tmuxBin !== null, confirmations })
   const complete = setupComplete(steps)
   log.event('setup-status', { complete, todo: steps.filter((s) => s.status === 'todo').map((s) => s.key) })
   return { steps, complete }
@@ -337,19 +360,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Resolve tmux once: if present, sessions run inside it so the live terminal
   // can be popped out to a real terminal app (same session). Write the minimal
   // config (no status bar, mouse scroll, fixed size).
-  tmuxBin = resolveTmuxBin((p) => existsSync(p))
-  if (tmuxBin) {
-    try {
-      mkdirSync(dirname(tmuxConfPath), { recursive: true })
-      writeFileSync(tmuxConfPath, TMUX_CONF)
-      log.event('tmux-available', { tmuxBin, conf: tmuxConfPath })
-    } catch (e) {
-      log.warn('tmux conf write failed — disabling tmux', { error: (e as Error).message })
-      tmuxBin = null
-    }
-  } else {
-    log.event('tmux-unavailable', {})
-  }
+  refreshTmux()
+  log.event(tmuxBin ? 'tmux-available' : 'tmux-unavailable', { tmuxBin, conf: tmuxConfPath })
 
   // DECIDED isolation: browser tasks run in a DEDICATED Chrome (its own profile)
   // so automation + the "debugging" banner never touch the user's real browser.
@@ -499,6 +511,23 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     cur[key] = !!done
     settings.set('setupConfirmations', cur)
     log.event('setup-confirmation-set', { key, done: !!done })
+    return getSetupStatus()
+  })
+  // Unmute installs the deterministic dep itself (tmux via Homebrew) — the user
+  // shouldn't run terminal commands. If Homebrew is absent we guide instead
+  // (the checklist still shows the `brew install tmux` command to copy).
+  ipcMain.handle('remote:install-tmux', async () => {
+    const brew = resolveBrew()
+    if (!brew) { log.warn('install-tmux: no Homebrew found — user must install manually'); return getSetupStatus() }
+    log.event('install-tmux-start', { brew })
+    await new Promise<void>((resolve) => {
+      execFile(brew, ['install', 'tmux'], { timeout: 180_000 }, (err) => {
+        if (err) log.warn('brew install tmux failed', { error: err.message })
+        resolve()
+      })
+    })
+    refreshTmux()
+    log.event('install-tmux-done', { tmuxBin })
     return getSetupStatus()
   })
   ipcMain.handle('remote:set-browser-enabled', async (_e, enabled: boolean) => {

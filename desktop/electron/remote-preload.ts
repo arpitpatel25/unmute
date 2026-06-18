@@ -40,6 +40,7 @@ export interface RemoteSetupStep {
   command?: string
   status: 'done' | 'todo'
   auto: boolean
+  optional?: boolean
 }
 export interface RemoteSetupStatus {
   steps: RemoteSetupStep[]
@@ -98,6 +99,8 @@ export const remotePreloadExtensions = {
   /** Mark a manual step done/undone; returns the refreshed checklist. */
   remoteSetSetupConfirmation: (key: string, done: boolean): Promise<RemoteSetupStatus> =>
     ipcRenderer.invoke('remote:set-setup-confirmation', key, done),
+  /** Unmute installs tmux itself (via Homebrew); returns the refreshed checklist. */
+  remoteInstallTmux: (): Promise<RemoteSetupStatus> => ipcRenderer.invoke('remote:install-tmux'),
 
   // ── Render-on-demand live terminal (PRD §13.4 #8) ──
   /** Recent buffered PTY output for a task (for opening the live view). */

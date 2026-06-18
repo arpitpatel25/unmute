@@ -25,6 +25,7 @@ test('parseMcpList tolerates empty / no-servers output', () => {
 test('buildSetupChecklist auto-marks a connected MCP done and a missing one todo', () => {
   const steps = buildSetupChecklist({
     mcpListOutput: 'gmail: x - ✓ Connected',
+    tmuxAvailable: true,
     browserEnabled: false, // browser step omitted
     confirmations: {},
   })
@@ -37,14 +38,14 @@ test('buildSetupChecklist auto-marks a connected MCP done and a missing one todo
 })
 
 test('buildSetupChecklist includes the single Chrome-extension step + honors confirmation', () => {
-  const todo = buildSetupChecklist({ mcpListOutput: '', browserEnabled: true, confirmations: {} })
+  const todo = buildSetupChecklist({ mcpListOutput: '', tmuxAvailable: true, browserEnabled: true, confirmations: {} })
   const ext = todo.find((s) => s.key === 'chrome-extension')!
   assert.equal(ext.status, 'todo')
   assert.equal(ext.auto, false)
   // no dedicated-profile / sign-in / Space steps anymore (real Chrome)
   assert.ok(!todo.some((s) => ['chrome-profile', 'chrome-signin', 'chrome-space'].includes(s.key)))
 
-  const done = buildSetupChecklist({ mcpListOutput: '', browserEnabled: true, confirmations: { 'chrome-extension': true } })
+  const done = buildSetupChecklist({ mcpListOutput: '', tmuxAvailable: true, browserEnabled: true, confirmations: { 'chrome-extension': true } })
   assert.equal(done.find((s) => s.key === 'chrome-extension')!.status, 'done')
 })
 
@@ -54,4 +55,16 @@ test('setupComplete is true only when every step is done', () => {
     { key: 'a', title: '', detail: '', status: 'done', auto: true },
     { key: 'b', title: '', detail: '', status: 'todo', auto: false },
   ]), false)
+})
+
+test('tmux is an optional step — todo when missing, never blocks completeness', () => {
+  // all recommended MCPs connected, browser lane off ⇒ only the optional tmux is todo
+  const allMcp = ['gmail', 'google-sheets', 'google-docs', 'google-drive'].map((n) => `${n}: x - ✓ Connected`).join('\n')
+  const steps = buildSetupChecklist({ mcpListOutput: allMcp, tmuxAvailable: false, browserEnabled: false, confirmations: {} })
+  const tmux = steps.find((s) => s.key === 'tmux')!
+  assert.equal(tmux.status, 'todo')
+  assert.equal(tmux.optional, true)
+  assert.equal(tmux.command, 'brew install tmux')
+  // every non-optional step done + tmux todo(optional) ⇒ essentials complete
+  assert.equal(setupComplete(steps), true)
 })

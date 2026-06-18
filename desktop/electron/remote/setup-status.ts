@@ -74,6 +74,8 @@ export interface SetupStep {
   status: StepStatus
   /** true = Unmute auto-detected this; false = user self-confirms (we can't see it). */
   auto: boolean
+  /** Optional enhancement — doesn't block "setup complete". */
+  optional?: boolean
 }
 
 export interface SetupInputs {
@@ -81,6 +83,8 @@ export interface SetupInputs {
   mcpListOutput: string
   /** Whether the browser lane is enabled in settings. */
   browserEnabled: boolean
+  /** Whether tmux is installed (enables pop-out-to-terminal). */
+  tmuxAvailable: boolean
   /** User-confirmed manual steps (persisted), keyed by step key. */
   confirmations: Record<string, boolean>
 }
@@ -113,6 +117,18 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
     }
   }
 
+  // Optional enhancement: tmux enables popping a task out to your real terminal
+  // (iTerm/Terminal) as the SAME session. Auto-detected; Unmute can install it.
+  steps.push({
+    key: 'tmux',
+    title: 'Pop-out-to-terminal (optional)',
+    detail: 'Install tmux to open a running task in your real terminal as the same live session. Unmute can install it for you (via Homebrew).',
+    command: 'brew install tmux',
+    status: inputs.tmuxAvailable ? 'done' : 'todo',
+    auto: true,
+    optional: true,
+  })
+
   for (const rec of RECOMMENDED_MCPS) {
     const hit = servers.find((s) => rec.match.test(s.name) && s.connected)
     steps.push({
@@ -128,7 +144,8 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
   return steps
 }
 
-/** Headline: are the essentials done? (drives the "setup needed" nudge.) */
+/** Headline: are the ESSENTIAL steps done? (drives the "setup needed" nudge.)
+ *  Optional enhancements (e.g. tmux) don't count against completeness. */
 export function setupComplete(steps: SetupStep[]): boolean {
-  return steps.every((s) => s.status === 'done')
+  return steps.filter((s) => !s.optional).every((s) => s.status === 'done')
 }
