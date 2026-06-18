@@ -39,6 +39,12 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const frozenSessionIdRef = useRef<string | undefined>(undefined)
   // Guard against double-sending audio
   const audioSentRef = useRef<boolean>(false)
+  // Holds the in-flight AudioContext.close() so the NEXT recording can wait for
+  // the mic to be fully released before re-acquiring it. Without this, the 2nd
+  // (and every later) recording started getUserMedia while the prior context was
+  // still tearing down, and the MediaRecorder emitted a malformed/undecodable
+  // webm — every STT engine rejected it and dictation fell back to offline.
+  const teardownRef = useRef<Promise<void> | null>(null)
 
   // ─── VAD Chunking Refs ───
   const chunkIndexRef = useRef<number>(0)
@@ -85,8 +91,15 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       streamRef.current = null
     }
     if (audioContextRef.current) {
-      audioContextRef.current.close()
+      // close() is ASYNC. Keep the promise so startRecording can await the mic
+      // being fully released before the next getUserMedia (the fix for the
+      // "every recording after the first is corrupt" bug). Null the ref now so
+      // nothing reuses a closing context.
+      const ctx = audioContextRef.current
       audioContextRef.current = null
+      teardownRef.current = ctx.close().catch(() => { /* already closed */ }).then(() => {
+        if (teardownRef.current) teardownRef.current = null
+      })
     }
     analyserRef.current = null
     setAnalyserNode(null)
@@ -418,6 +431,16 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       audio: deviceId
         ? { deviceId: { exact: deviceId }, sampleRate: 16000 }
         : { sampleRate: 16000 }
+    }
+
+    // Wait for the PREVIOUS recording's AudioContext to finish closing before we
+    // re-acquire the mic. Acquiring while the old context/device is still tearing
+    // down is what corrupted every recording after the first (undecodable audio →
+    // STT 400 → offline fallback). A small settle covers the device-release lag
+    // after the context reports closed.
+    if (teardownRef.current) {
+      try { await teardownRef.current } catch { /* best-effort */ }
+      await new Promise((r) => setTimeout(r, 40))
     }
 
     const stream = await navigator.mediaDevices.getUserMedia(constraints)
