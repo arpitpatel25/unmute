@@ -104,6 +104,57 @@ test('Router.route returns continue when the session decides so', async () => {
   router.dispose()
 })
 
+test('Router sends /clear after each decision (keeps the resident session lean)', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'router-'))
+  const decisionPath = path.join(baseDir, 'router', 'decision.json')
+  const writes: string[] = []
+  const factory = () => {
+    let alive = true
+    const ex: AgentExecutor = {
+      get alive() { return alive },
+      async spawn() {}, async isReady() {},
+      writeStdin(t: string) {
+        writes.push(t)
+        if (t.includes('[Unmute router]')) void fs.mkdir(path.dirname(decisionPath), { recursive: true })
+          .then(() => fs.writeFile(decisionPath, JSON.stringify({ action: 'new', intent: 'x' })))
+      },
+      write() {}, resize() {}, onData() {}, kill() { alive = false },
+    }
+    return ex
+  }
+  const router = new Router({ executorFactory: factory, baseDir, readyGraceMs: 0, decisionTimeoutMs: 1000, pollMs: 20 })
+  await router.route('x', ONE)
+  await router.settleHousekeeping() // awaits the chain's trailing housekeep
+  assert.ok(writes.includes('/clear'))
+  router.dispose()
+})
+
+test('Router recycles the session after recycleEvery decisions', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'router-'))
+  const decisionPath = path.join(baseDir, 'router', 'decision.json')
+  let spawns = 0, kills = 0
+  const factory = () => {
+    let alive = true
+    const ex: AgentExecutor = {
+      get alive() { return alive },
+      async spawn() { spawns++ }, async isReady() {},
+      writeStdin(t: string) {
+        if (t.includes('[Unmute router]')) void fs.mkdir(path.dirname(decisionPath), { recursive: true })
+          .then(() => fs.writeFile(decisionPath, JSON.stringify({ action: 'new', intent: 'x' })))
+      },
+      write() {}, resize() {}, onData() {}, kill() { alive = false; kills++ },
+    }
+    return ex
+  }
+  const router = new Router({ executorFactory: factory, baseDir, readyGraceMs: 0, decisionTimeoutMs: 1000, pollMs: 20, recycleEvery: 2 })
+  await router.warm()                 // spawns === 1
+  await router.route('a', ONE); await router.settleHousekeeping()
+  await router.route('b', ONE); await router.settleHousekeeping() // 2nd decision ⇒ recycle
+  assert.equal(spawns, 2)             // one fresh session spun up
+  assert.equal(kills, 1)              // old one killed
+  router.dispose()
+})
+
 test('Router.route fails safe on timeout: ambiguous (2+ tasks) ⇒ NEW', async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'router-'))
   const decisionPath = path.join(baseDir, 'router', 'decision.json')

@@ -7,8 +7,9 @@
 //
 // Why a session and not a one-off model call: classification needs intelligence
 // (vague utterances, "apply it to the most recent one"), and the user's flat
-// subscription is the only zero-incremental-cost place to get it. Kept WARM so
-// there's no per-utterance cold start; killed after idle.
+// subscription is the only zero-incremental-cost place to get it. RESIDENT from
+// app startup (warm()) so there's never a per-utterance cold start; kept lean by
+// a post-decision /clear and recycled periodically; killed only on app shutdown.
 //
 // Topology (star, Unmute = hub): Unmute composes a fresh snapshot from its own
 // task map and hands it here; the router writes a decision FILE (the REPL's TUI
@@ -121,20 +122,23 @@ export interface RouterOpts {
   /** Builds the tool-less classifier session (a minimal claude REPL). */
   executorFactory: ExecutorFactory
   baseDir?: string
-  /** Kill the warm session after this idle (default 5 min). */
-  idleMs?: number
-  /** Per-call wait for the decision file (default 8s). */
+  /** Per-call wait for the decision file (default 12s). */
   decisionTimeoutMs?: number
   /** ms to let the REPL boot before the first prompt. */
   readyGraceMs?: number
   pollMs?: number
+  /** Recycle (full respawn) the resident session after this many decisions. */
+  recycleEvery?: number
+  /** Recycle the resident session once it is older than this (ms). */
+  maxSessionMs?: number
   now?: () => number
 }
 
 export class Router {
   private ex: AgentExecutor | null = null
-  private idleTimer: ReturnType<typeof setTimeout> | null = null
   private chain: Promise<unknown> = Promise.resolve() // single-flight serializer
+  private decisionCount = 0
+  private spawnedAt = 0
   private readonly dir: string
   private readonly decisionPath: string
   private readonly o: Required<Omit<RouterOpts, 'now'>> & Pick<RouterOpts, 'now'>
@@ -143,10 +147,11 @@ export class Router {
     this.o = {
       executorFactory: opts.executorFactory,
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
-      idleMs: opts.idleMs ?? 5 * 60_000,
-      decisionTimeoutMs: opts.decisionTimeoutMs ?? 8000,
+      decisionTimeoutMs: opts.decisionTimeoutMs ?? 12000,
       readyGraceMs: opts.readyGraceMs ?? 1500,
       pollMs: opts.pollMs ?? 150,
+      recycleEvery: opts.recycleEvery ?? 50,
+      maxSessionMs: opts.maxSessionMs ?? 2 * 60 * 60_000,
       now: opts.now,
     }
     this.dir = join(this.o.baseDir, 'router')
@@ -157,8 +162,10 @@ export class Router {
    *  always resolves (fail-safe to a new task). */
   route(utterance: string, tasks: RoutableTask[]): Promise<RouteDecision> {
     const run = this.chain.then(() => this.routeOnce(utterance, tasks))
-    // keep the chain alive regardless of this call's outcome
-    this.chain = run.catch(() => undefined)
+    // After the decision resolves to the caller, keep the chain alive with
+    // housekeeping (/clear + maybe-recycle) — off the hot path, but serialized
+    // so it can never overlap the next route.
+    this.chain = run.then(() => this.housekeep(), () => this.housekeep())
     return run
   }
 
@@ -192,14 +199,51 @@ export class Router {
   private async ensureSession(): Promise<void> {
     if (this.ex?.alive) return
     log.event('router-spawn', {})
+    this.ex = await this.spawnSession()
+    this.spawnedAt = this.clock()
+    this.decisionCount = 0
+  }
+
+  /** Spawn + ready a new executor (shared by ensureSession and recycle). */
+  private async spawnSession(): Promise<AgentExecutor> {
     const ex = this.o.executorFactory()
-    this.ex = ex
     await ex.spawn({ cwd: this.dir, env: process.env, taskId: 'router' })
     await fs.mkdir(this.dir, { recursive: true }).catch(() => {})
     await ex.isReady()
     ex.writeStdin('') // accept any folder-trust prompt
     await this.sleep(this.o.readyGraceMs)
+    return ex
   }
+
+  /** Runs in the idle gap AFTER a decision (chained, never on the hot path):
+   *  wipe the conversation context so the resident session stays lean (routing
+   *  is stateless — the full snapshot is supplied every turn), and periodically
+   *  recycle the whole process to cap long-run drift. */
+  private async housekeep(): Promise<void> {
+    this.decisionCount++
+    if (this.ex?.alive) {
+      try { this.ex.writeStdin('/clear') } catch { /* best-effort */ }
+    }
+    const aged = this.spawnedAt > 0 && this.clock() - this.spawnedAt > this.o.maxSessionMs
+    if (this.decisionCount >= this.o.recycleEvery || aged) {
+      await this.recycle().catch(() => {})
+    }
+  }
+
+  /** Proactive full respawn: bring a fresh session up, then kill the old one and
+   *  swap. Done in idle time so a real decision never pays cold-start. */
+  private async recycle(): Promise<void> {
+    log.event('router-recycle', { decisions: this.decisionCount })
+    const fresh = await this.spawnSession()
+    const old = this.ex
+    this.ex = fresh
+    this.spawnedAt = this.clock()
+    this.decisionCount = 0
+    if (old?.alive) { try { old.kill() } catch { /* best-effort */ } }
+  }
+
+  /** Test hook: await any trailing housekeeping queued on the chain. */
+  settleHousekeeping(): Promise<void> { return this.chain.then(() => undefined, () => undefined) }
 
   private async waitForDecision(): Promise<string | null> {
     const deadline = this.clock() + this.o.decisionTimeoutMs
@@ -214,18 +258,8 @@ export class Router {
     return null
   }
 
-  private touchIdle(): void {
-    if (this.idleTimer) clearTimeout(this.idleTimer)
-    this.idleTimer = setTimeout(() => {
-      log.event('router-idle-kill', { idleMs: this.o.idleMs })
-      this.dispose()
-    }, this.o.idleMs)
-    this.idleTimer.unref?.()
-  }
-
-  /** Kill the warm session (idle, or app shutdown). */
+  /** Kill the resident session (app shutdown). */
   dispose(): void {
-    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null }
     if (this.ex?.alive) { try { this.ex.kill() } catch { /* best-effort */ } }
     this.ex = null
   }
