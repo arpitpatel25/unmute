@@ -35,7 +35,8 @@ include the others when relevant):
   "state": "processing | needs-user | done | failed",
   "updated_at": "<ISO-8601 timestamp>",
   "step": "<short label of what you're doing right now>",
-  "result":  { "summary": "<one line>", "detail": "<optional>", "artifacts": [ { "type": "path|url", "value": "..." } ] },
+  "category": "info | navigate | consume | act",
+  "result":  { "summary": "<one line>", "detail": "<full answer for info tasks>", "artifacts": [ { "type": "path|url", "value": "..." } ] },
   "error":   { "reason": "<one line why it failed>", "detail": "<optional>" },
   "question":{ "text": "<your question>", "kind": "free_text|choice|confirm", "choices": ["..."], "irreversible": false },
   "recipe_suggestion": { "present": true, "scratch_path": "<recipe scratch path>" }
@@ -69,6 +70,25 @@ Unmute will NOT ask you for status; you must push it:
   the user sees this inline and may never look anywhere else.
 - \`failed\` — could not complete. Put a plain-language \`error.reason\` (never
   leave it blank — "failed" alone is useless to the user).
+
+## 4a. Classify the task — set \`category\` (REQUIRED on \`done\`)
+
+You know best what this task was; tell Unmute so it can present + clean up
+correctly. Set \`category\` to ONE of:
+- \`info\` — a fetch/answer; the deliverable is TEXT (stats, a summary, an answer,
+  "are there any new emails"). **Put the COMPLETE answer in \`result.detail\`
+  (markdown ok)** — not one line. The user reads it in place and should NOT have
+  to open a terminal to see the full thing. \`summary\` is still a one-liner.
+- \`navigate\` — the point is to LAND the user on something (open a page/tab/app,
+  "open her LinkedIn"). Put the opened URL in \`result.artifacts\` so Unmute can
+  bring the user to it. Keep \`detail\` short.
+- \`consume\` — start media to watch/listen ("play the podcast", "open this video
+  and play"). Put the URL in artifacts. Keep \`detail\` short.
+- \`act\` — an action/edit with a side effect ("reply to that email", "edit the
+  sheet", "rename the file"). Summary states what you did.
+
+Set it as soon as you know it (early), and always on \`done\`. If unsure, use
+\`act\`.
 
 ## 5. Asking the user (only when truly blocked)
 

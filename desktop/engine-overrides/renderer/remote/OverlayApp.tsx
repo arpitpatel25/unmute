@@ -79,6 +79,13 @@ function Expanded({
       {task.state === 'done' && task.result && (
         <div className="text-[12px] text-white/75 leading-relaxed">
           <div>{task.result.summary}</div>
+          {/* Full answer for info/fetch tasks — shown in place so you never need
+              the terminal to read the complete result. */}
+          {task.result.detail && (
+            <div className="mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap text-white/70 border-l border-white/10 pl-2">
+              {task.result.detail}
+            </div>
+          )}
           {task.result.artifacts?.map((a, i) => (
             <button
               key={i}

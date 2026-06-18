@@ -26,6 +26,15 @@ const log = createLogger('status-file')
 
 export type TaskState = 'processing' | 'needs-user' | 'done' | 'failed' // PRD §5.3
 
+// The executor self-classifies the task so Unmute can drive presentation +
+// lifecycle (DECIDED). The executor knows best — it's the one doing the work.
+//   info     — a fetch/answer; the deliverable is TEXT → show the full `detail`.
+//   navigate — open/land the user on something (page, tab, app) → focus it.
+//   consume  — start media to watch/listen (video, podcast) → kill on done so
+//              the browser-extension glow clears; the tab keeps playing.
+//   act      — an action/edit with a side effect → keep warm for a follow-up.
+export type TaskCategory = 'info' | 'navigate' | 'consume' | 'act'
+
 export interface TaskResult {
   summary: string
   detail?: string
@@ -54,6 +63,8 @@ export interface StatusPayload {
   state: TaskState
   updated_at?: string
   step?: string
+  /** Executor self-classification (drives presentation + lifecycle). */
+  category?: TaskCategory
   result?: TaskResult
   error?: TaskError
   question?: TaskQuestion

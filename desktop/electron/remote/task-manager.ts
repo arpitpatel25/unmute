@@ -54,6 +54,8 @@ export interface Task {
   /** mtime (ms) of the last status write we applied — the heartbeat clock for
    *  staleness (PRD §6.3). Updated only when the file genuinely changes. */
   lastMtimeMs: number
+  /** Executor self-classification (drives presentation + lifecycle). */
+  category?: StatusPayload['category']
   result?: StatusPayload['result']
   error?: StatusPayload['error']
   question?: StatusPayload['question']
@@ -290,6 +292,7 @@ export class TaskManager extends EventEmitter {
     const prev = task.state
     task.state = next
     task.updatedAt = this.clock()
+    if (payload?.category) task.category = payload.category
     if (payload?.result) task.result = payload.result
     if (payload?.error) task.error = payload.error
     if (payload?.question) task.question = payload.question
@@ -320,7 +323,15 @@ export class TaskManager extends EventEmitter {
             cwd: task.cwd,
           }).catch((e) => tlog.error('librarian submit failed', { error: (e as Error).message }))
         }
-        this.parkWarm(id) // keep warm for a follow-up (read-then-act), then idle-kill
+        // Lifecycle by category (DECIDED): consume/navigate are fire-and-forget
+        // — detach NOW so the Claude-in-Chrome "glow" clears and we don't hold a
+        // session for a tab you're just watching. info/act (and unknown) keep a
+        // warm window for a follow-up ("now reply to #2", "what about his assists").
+        if (task.category === 'consume' || task.category === 'navigate') {
+          this.hardKill(id)
+        } else {
+          this.parkWarm(id)
+        }
         break
       case 'failed': {
         // PRD §13.4 #4: surface WHY.

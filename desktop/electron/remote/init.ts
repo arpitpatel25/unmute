@@ -169,11 +169,38 @@ function broadcast(channel: string, task: Task): void {
   }
 }
 
-/** Auto-present the floating overlay on a terminal/attention state, unless the
- *  user turned auto-popup off. The overlay (not OS notifications) is how a
- *  fire-and-forget task reaches the user where they are. */
+/** Bring the user to a navigate task's target (DECIDED: for "open X" tasks the
+ *  deliverable is BEING there, so focus the tab/app instead of a popup). Focusing
+ *  steals focus — which is correct ONLY for this category. Best-effort. */
+function focusTarget(task: Task): void {
+  const arts = task.result?.artifacts ?? []
+  const path = arts.find((a) => a.type === 'path')?.value
+  const url = arts.find((a) => a.type === 'url')?.value
+  try {
+    if (path) {
+      void shell.openPath(path) // opens the file/folder + brings its app forward
+    } else if (url) {
+      // The executor opened the tab as active; just bring the browser forward
+      // (avoids opening a duplicate tab). Best-effort — Chrome is the real lane.
+      execFile('osascript', ['-e', 'tell application "Google Chrome" to activate'], (err) => {
+        if (err) { void shell.openExternal(url) } // fallback: open it (may dupe)
+      })
+    }
+    log.event('focus-target', { taskId: task.id, hasPath: !!path, hasUrl: !!url })
+  } catch (e) {
+    log.warn('focus-target failed', { error: (e as Error).message })
+  }
+}
+
+/** Present a terminal/attention state, keyed on category (DECIDED):
+ *   navigate → focus the target tab/app, no popup.
+ *   consume  → stay out of the way (it's playing); no popup.
+ *   info/act/needs-user/unknown → the overlay.
+ *  Honors the auto-present toggle (off ⇒ user opens the app manually). */
 function maybePresent(task: Task): void {
   if (settings.get('overlayAutoPresent') === false) return
+  if (task.state === 'done' && task.category === 'navigate') { focusTarget(task); return }
+  if (task.state === 'done' && task.category === 'consume') return
   presentOverlay(task.id)
 }
 
@@ -183,6 +210,7 @@ function serializeTask(t: Task) {
     id: t.id,
     intent: t.intent,
     state: t.state,
+    category: t.category ?? null,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     result: t.result ?? null,
