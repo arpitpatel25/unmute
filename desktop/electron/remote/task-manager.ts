@@ -368,6 +368,12 @@ export class TaskManager extends EventEmitter {
     }
     tlog.ui('task-row.answer-submitted', { answer: userAnswer }) // user spoke/typed an answer
     ex.writeStdin(userAnswer)
+    // Same submit-confirm as dispatch/followUp — the input occasionally lands one
+    // Enter short of submitting, which would leave the blocked task waiting forever.
+    void (async () => {
+      await new Promise((r) => setTimeout(r, this.opts.submitConfirmMs))
+      if (ex.alive) { ex.write('\r'); tlog.event('submit-confirm-enter', { afterMs: this.opts.submitConfirmMs, via: 'answer' }) }
+    })()
     // Optimistically return to processing; the heartbeat will confirm.
     const task = this.tasks.get(id)
     if (task && task.state === 'needs-user') {
@@ -455,13 +461,27 @@ export class TaskManager extends EventEmitter {
     const wt = this.warmTimers.get(id)
     if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
     tlog.ui('task-row.follow-up', { text })
-    ex.writeStdin(text)
+
+    // A follow-up is a FRESH dispatch into the SAME session — the only thing
+    // shared is the terminal (for context). Send the full dispatch payload, not
+    // raw text, so the model is re-anchored to the contract (status-file path +
+    // "act now, update status"). Without this it answers conversationally and
+    // never writes status → Unmute never learns it finished → marks it stuck.
+    const payload = buildDispatch({ intent: text, statusPath: task.statusPath, recipeScratchPath: task.recipeScratchPath })
+    ex.writeStdin(payload)
     task.state = 'processing'
     task.updatedAt = this.clock()
     task.lastMtimeMs = this.clock() // reset heartbeat clock so the old 'done' file isn't read as stale
     this.startPolling(id)
     this.emit('updated', task)
     tlog.event('task-followup', {})
+
+    // Same submit-confirm as dispatch: the multi-line payload occasionally lands
+    // one Enter short of submitting in Claude's input box.
+    void (async () => {
+      await new Promise((r) => setTimeout(r, this.opts.submitConfirmMs))
+      if (ex.alive) { ex.write('\r'); tlog.event('submit-confirm-enter', { afterMs: this.opts.submitConfirmMs, via: 'followUp' }) }
+    })()
     return true
   }
 

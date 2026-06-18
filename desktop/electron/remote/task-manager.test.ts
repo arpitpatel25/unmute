@@ -154,7 +154,10 @@ test('followUp resumes a warm session — pipes text into stdin, back to process
   const ok = tm.followUp(id, 'reply to the second one')
   assert.equal(ok, true)
   assert.equal(fake.writes.length, before + 1)
-  assert.equal(fake.writes.at(-1), 'reply to the second one')
+  // A follow-up re-sends the FULL dispatch payload (not raw text) so the model is
+  // re-anchored to the contract — the intent plus the status-file path.
+  assert.ok(fake.writes.at(-1)!.includes('reply to the second one')) // the new intent
+  assert.ok(fake.writes.at(-1)!.includes(task.statusPath))            // status-file path re-sent
   assert.equal(tm.get(id)!.state, 'processing')
   tm.kill(id)
 })
