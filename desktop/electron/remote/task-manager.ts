@@ -474,6 +474,15 @@ export class TaskManager extends EventEmitter {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
+  /** Tasks a follow-up could land on (for the router's snapshot): anything still
+   *  blocked on you (needs-user) or with a live session (processing / parked-warm).
+   *  Newest first. If empty, Unmute skips the router and dispatches a new task. */
+  routableTasks(): Task[] {
+    return [...this.tasks.values()]
+      .filter((t) => t.state === 'needs-user' || this.executors.get(t.id)?.alive === true)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
   /** Warm, continuable sessions (terminal state but PTY still alive), newest first.
    *  Used by the router to decide whether a follow-up can land somewhere. */
   continuableTasks(): Task[] {

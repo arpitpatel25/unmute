@@ -31,9 +31,9 @@ import { CodexExecutor, type AgentKind } from './codex-executor'
 import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
-import { looksLikeContinuation } from './routing'
 import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOverlay, dismissOverlay } from './overlay'
+import { Router, type RoutableTask } from './router'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, TMUX_CONF } from './tmux'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
@@ -158,6 +158,27 @@ async function getSetupStatus() {
 
 let manager: TaskManager | null = null
 let completeFn: CompleteFn | null = null
+// The warm routing classifier (lazy — spawns on first routed utterance).
+let router: Router | null = null
+
+/** A minimal, tool-less classifier session for the router: no --chrome, no tmux;
+ *  --dangerously-skip-permissions so it can write its decision file unprompted. */
+function routerExecutorFactory() {
+  return new ClaudeCodeExecutor({ extraArgs: ['--dangerously-skip-permissions'], chrome: false })
+}
+
+/** Build the router's task snapshot from Unmute's live map (Unmute is the hub —
+ *  the router never touches sessions). */
+function routableSnapshot(now: number): RoutableTask[] {
+  if (!manager) return []
+  return manager.routableTasks().map((t) => ({
+    id: t.id,
+    intent: t.intent,
+    state: t.state,
+    category: t.category ?? null,
+    ageSec: Math.max(0, Math.round((now - t.updatedAt) / 1000)),
+  }))
+}
 
 // tmux backing for the live terminal (pop-out to a real terminal = SAME session).
 // Resolved once at init; null ⇒ tmux not installed, sessions spawn directly.
@@ -307,34 +328,42 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
     log.error('dispatchFromCapture before initRemote')
     return null
   }
-  const cleaned = completeFn
-    ? (await cleanIntent(rawTranscript, completeFn)).intent
-    : rawTranscript.trim()
-  if (!cleaned) {
-    log.warn('empty intent after cleanup — not dispatching', { rawTranscript })
-    return null
-  }
-  // Voice answering (PRD §7): a task BLOCKED asking you a question is the
-  // strongest routing signal — the system explicitly paused for your input, so
-  // your next utterance answers IT rather than starting a new task. Highest
-  // priority, ahead of continuation/new. (Start a fresh task while one waits via
-  // the panel / typing.)
+  const raw = (rawTranscript || '').trim()
+  if (!raw) { log.warn('empty transcript — not dispatching', {}); return null }
+
+  // 1. Voice-answering (PRD §7) — deterministic, highest priority. A task BLOCKED
+  //    on a question is the strongest signal; your next utterance answers IT.
+  //    (No router needed — this is unambiguous.)
   const awaiting = manager.tasksAwaitingUser()
   if (awaiting[0]) {
     log.event('routed-as-answer', { taskId: awaiting[0].id, question: awaiting[0].question?.text })
-    manager.answer(awaiting[0].id, cleaned)
+    manager.answer(awaiting[0].id, raw)
     return awaiting[0].id
   }
-  // v1 routing (decided): default-new + explicit-continue. If the utterance has
-  // a continuation cue AND a warm session is still alive, continue it (the
-  // read-then-act case). Otherwise dispatch a fresh task. Fails safe to new.
-  if (looksLikeContinuation(cleaned)) {
-    const warm = manager.continuableTasks()[0]
-    if (warm && manager.followUp(warm.id, cleaned)) {
-      log.event('routed-as-continuation', { taskId: warm.id })
-      return warm.id
+
+  // 2. If there are tasks a follow-up could land on, ask the warm router (the
+  //    only place that needs intelligence). It also cleans the transcript in the
+  //    same turn. Fails safe to a new task on any error/timeout.
+  const routable = manager.routableTasks()
+  if (routable.length && router) {
+    try {
+      const decision = await router.route(raw, routableSnapshot(Date.now()))
+      if (decision.action === 'continue' && decision.targetTaskId && manager.followUp(decision.targetTaskId, decision.intent)) {
+        log.event('routed-as-continuation', { taskId: decision.targetTaskId, via: 'router' })
+        return decision.targetTaskId
+      }
+      log.event('routed-as-new', { via: 'router' })
+      return manager.dispatch(decision.intent || raw)
+    } catch (e) {
+      log.warn('router error — dispatching new', { error: (e as Error).message })
+      return manager.dispatch(raw)
     }
   }
+
+  // 3. Nothing to route among → straight to a new task. Cleanup is optional (the
+  //    executor tolerates raw); use the managed LLM only if it's wired.
+  const cleaned = completeFn ? (await cleanIntent(raw, completeFn)).intent : raw
+  if (!cleaned) { log.warn('empty intent after cleanup — not dispatching', {}); return null }
   return manager.dispatch(cleaned)
 }
 
@@ -374,6 +403,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // (another interactive claude session on the user's plan — §9.3).
   const librarian = new Librarian({ executorFactory })
   manager = new TaskManager({ executorFactory, librarian })
+  // The warm routing classifier (lazy — spawns on the first routed utterance,
+  // idle-kills itself; tool-less, no glow). Star topology: Unmute is the hub.
+  router = new Router({ executorFactory: routerExecutorFactory })
 
   // ── Wire the Remote trigger key → capture (PRD §2.4.4 / §5) ──
   // keyboard.ts emits 'remote-start'/'remote-stop' for the non-dictation key;
@@ -426,6 +458,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // none is left orphaned on the user's machine/plan (PRD §10.4).
   app.on('before-quit', () => {
     try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
+    try { router?.dispose() } catch { /* best-effort */ }
   })
   // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
   manager.on('output', (d: { taskId: string; chunk: string }) => {
@@ -561,4 +594,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
 export function _resetForTest(): void {
   manager = null
   completeFn = null
+  try { router?.dispose() } catch { /* ignore */ }
+  router = null
 }

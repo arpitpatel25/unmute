@@ -174,6 +174,7 @@ test('sendInput forwards RAW keystrokes to the PTY (typeable terminal, PRD §4.3
   const fake = makeFakeExecutor()
   const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   const id = await tm.dispatch('a task')
+  fake.raw.length = 0 // ignore dispatch's submit-confirm Enter; test the typeable path
   tm.sendInput(id, 'ls') // two keystrokes
   tm.sendInput(id, '\r') // Enter — sent verbatim, NO extra \r appended
   assert.deepEqual(fake.raw, ['ls', '\r'])
