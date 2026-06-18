@@ -184,6 +184,8 @@ function routableSnapshot(now: number): RoutableTask[] {
     category: t.category ?? null,
     ageSec: Math.max(0, Math.round((now - t.updatedAt) / 1000)),
     surfaced: i === 0,
+    awaiting: t.state === 'needs-user',
+    question: t.state === 'needs-user' ? (t.question?.text ?? null) : null,
   }))
 }
 
@@ -387,26 +389,30 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
   const raw = (rawTranscript || '').trim()
   if (!raw) { log.warn('empty transcript — not dispatching', {}); return null }
 
-  // 1. Voice-answering (PRD §7) — deterministic, highest priority. A task BLOCKED
-  //    on a question is the strongest signal; your next utterance answers IT.
-  //    (No router needed — this is unambiguous.)
-  const awaiting = manager.tasksAwaitingUser()
-  if (awaiting[0]) {
-    log.event('routed-as-answer', { taskId: awaiting[0].id, question: awaiting[0].question?.text })
-    manager.answer(awaiting[0].id, raw)
-    return awaiting[0].id
-  }
-
-  // 2. If there are tasks a follow-up could land on, ask the warm router (the
-  //    only place that needs intelligence). It also cleans the transcript in the
-  //    same turn. Fails safe to a new task on any error/timeout.
+  // 1. ALL routing goes through the warm router — including answering a task that
+  //    is blocked on a question. There is no deterministic short-circuit: the
+  //    router sees blocked tasks (flagged "awaiting" with their question) in its
+  //    snapshot and decides intelligently whether this utterance answers one,
+  //    continues another, or starts something new. The router is resident/warm,
+  //    so routing everything through it is still instant.
   const routable = manager.routableTasks()
   if (routable.length && router) {
+    const awaitingIds = new Set(manager.tasksAwaitingUser().map((t) => t.id))
     try {
       const decision = await router.route(raw, routableSnapshot(Date.now()))
-      if (decision.action === 'continue' && decision.targetTaskId && manager.followUp(decision.targetTaskId, decision.intent)) {
-        log.event('routed-as-continuation', { taskId: decision.targetTaskId, via: 'router' })
-        return decision.targetTaskId
+      if (decision.action === 'continue' && decision.targetTaskId) {
+        const tid = decision.targetTaskId
+        // Continuing a BLOCKED task means piping the utterance in as its answer;
+        // continuing a live task means a fresh follow-up turn.
+        if (awaitingIds.has(tid)) {
+          log.event('routed-as-answer', { taskId: tid, via: 'router' })
+          manager.answer(tid, decision.intent || raw)
+          return tid
+        }
+        if (manager.followUp(tid, decision.intent)) {
+          log.event('routed-as-continuation', { taskId: tid, via: 'router' })
+          return tid
+        }
       }
       log.event('routed-as-new', { via: 'router' })
       return manager.dispatch(decision.intent || raw)

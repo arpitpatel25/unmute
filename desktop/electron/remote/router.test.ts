@@ -29,6 +29,13 @@ test('failsafeDecision: one recent task continues it; multiple or stale or none 
   assert.equal(failsafeDecision(stale, 'x').action, 'new')             // too old ⇒ new
 })
 
+test('buildRoutingPrompt surfaces a blocked task and its question so the router can answer it', () => {
+  const blocked: RoutableTask[] = [{ id: 't1', intent: 'open messi stats', state: 'needs-user', ageSec: 8, surfaced: true, awaiting: true, question: 'What would you like me to open?' }]
+  const p = buildRoutingPrompt('Messi 2011 stats, all of it', blocked, '/d/decision.json')
+  assert.ok(p.includes('BLOCKED — awaiting your answer to: "What would you like me to open?"'))
+  assert.ok(p.includes('CONTINUE that task')) // the answer-routing guidance is present
+})
+
 test('parseDecision: explicit decisions honored; failures use failsafe', () => {
   // explicit "new" is honored even with one open task
   assert.equal(parseDecision('{"action":"new","intent":"fresh"}', 'raw', ONE).action, 'new')

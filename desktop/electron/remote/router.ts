@@ -36,6 +36,11 @@ export interface RoutableTask {
   ageSec: number
   /** the task currently expanded/surfaced in the overlay — a strong prior. */
   surfaced?: boolean
+  /** the task is BLOCKED on a question to the user (state needs-user). */
+  awaiting?: boolean
+  /** the pending question text, when awaiting — so the router can judge whether
+   *  this utterance answers it. */
+  question?: string | null
 }
 
 export interface RouteDecision {
@@ -51,7 +56,8 @@ export interface RouteDecision {
  *  router relies on THIS snapshot, not on accumulated memory (keeps it thin). */
 export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string): string {
   const lines = tasks.map((t) =>
-    `  [${t.id}] "${t.intent}" — ${t.state}${t.category ? ` · ${t.category}` : ''} · ${t.ageSec}s ago${t.surfaced ? ' · ON SCREEN' : ''}`,
+    `  [${t.id}] "${t.intent}" — ${t.state}${t.category ? ` · ${t.category}` : ''} · ${t.ageSec}s ago${t.surfaced ? ' · ON SCREEN' : ''}` +
+    (t.awaiting ? ` · ⏳ BLOCKED — awaiting your answer to: "${t.question || ''}"` : ''),
   )
   return [
     `[Unmute router] You route a spoken command to where it belongs. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else — no tools, no browser, no research.`,
@@ -64,6 +70,12 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     ``,
     `Decide: does this command START a new task, or CONTINUE one of the open ones?`,
     `Reason about it genuinely — this is a judgement, not a default.`,
+    ``,
+    `A task marked "⏳ BLOCKED — awaiting your answer" stopped to ask the user`,
+    `something and is waiting. If this command is plausibly the ANSWER to that`,
+    `question (it supplies what was asked, even loosely), CONTINUE that task — the`,
+    `answer is piped straight back into it. Only choose otherwise if the command`,
+    `clearly ignores the question and starts something unrelated.`,
     ``,
     `Lean CONTINUE when the command DEPENDS on an existing task to make sense: it`,
     `refers back to it (a pronoun or a relative phrase), leaves the subject implied,`,
