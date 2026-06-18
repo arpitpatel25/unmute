@@ -1,42 +1,171 @@
 // Unmute Remote — the floating overlay's renderer (loaded at #/overlay).
 //
-// A compact, translucent task list shown on top of whatever the user is doing.
-// It AUTO-PRESENTS (from the main process) on a terminal/attention state and
+// A compact, translucent-DARK task surface shown on top of whatever the user is
+// doing. Auto-presents (from the main process) on a terminal/attention state and
 // expands the task that just changed; the user reads the result/answer in place,
 // answers needs-user by voice (Remote key) or by typing into the task terminal,
 // and dismisses with Esc or the ✕ — it NEVER closes on its own.
 //
-// Reuses the same task event stream (useRemoteTasks) and the full TaskRow for the
-// expanded card, so it stays in lockstep with the in-app panel.
+// Aesthetic: minimal, black-translucent, no white cards/borders. Its own dark
+// rendering (NOT the light in-app TaskRow), with a soft expand/collapse animation.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
-import { TaskRow } from './TaskRow'
+import { LiveTerminal } from './LiveTerminal'
 
 type API = {
   remoteOverlayDismiss?: () => void
   remoteOnOverlayFocus?: (cb: (d: { taskId: string }) => void) => () => void
+  remoteOpenArtifact?: (type: 'url' | 'path', value: string) => Promise<boolean>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
 }
 
-const STATE_DOT: Record<RemoteTask['state'], string> = {
-  processing: '#3b82f6',
-  'needs-user': '#f59e0b',
-  stuck: '#f59e0b',
-  done: '#22c55e',
-  failed: '#ef4444',
-}
-const STATE_LABEL: Record<RemoteTask['state'], string> = {
-  processing: 'working',
-  'needs-user': 'needs you',
-  stuck: 'stuck',
-  done: 'done',
-  failed: 'failed',
+const TAG: Record<RemoteTask['state'], { label: string; text: string; dot: string }> = {
+  processing: { label: 'working', text: 'text-sky-300/90', dot: '#38bdf8' },
+  'needs-user': { label: 'needs you', text: 'text-amber-300/90', dot: '#fbbf24' },
+  stuck: { label: 'stuck', text: 'text-amber-300/90', dot: '#fbbf24' },
+  done: { label: 'done', text: 'text-emerald-300/90', dot: '#34d399' },
+  failed: { label: 'failed', text: 'text-rose-300/90', dot: '#fb7185' },
 }
 
-function OverlayRow({
+function duration(t: RemoteTask): string {
+  const s = Math.max(0, Math.round((t.updatedAt - t.createdAt) / 1000))
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
+}
+
+function Tag({ state }: { state: RemoteTask['state'] }) {
+  const tag = TAG[state]
+  return (
+    <span className={`text-[9px] uppercase tracking-[0.12em] ${tag.text} shrink-0`}>{tag.label}</span>
+  )
+}
+
+function Dot({ state }: { state: RemoteTask['state'] }) {
+  const tag = TAG[state]
+  const active = state === 'processing'
+  return (
+    <span
+      className={`inline-block w-[6px] h-[6px] rounded-full shrink-0 ${active ? 'animate-pulse' : ''}`}
+      style={{ background: tag.dot }}
+    />
+  )
+}
+
+function Expanded({
+  task, onAnswer, onKill, onRerun,
+}: {
+  task: RemoteTask
+  onAnswer: (id: string, text: string) => void
+  onKill: (id: string) => void
+  onRerun: (intent: string) => void
+}) {
+  const [draft, setDraft] = useState('')
+  const [showTerminal, setShowTerminal] = useState(false)
+  const active = task.state === 'processing' || task.state === 'needs-user' || task.state === 'stuck'
+
+  const openArtifact = (type: 'url' | 'path', value: string) => {
+    const fn = api().remoteOpenArtifact
+    if (fn) void fn(type, value)
+    else void navigator.clipboard?.writeText(value)
+  }
+
+  return (
+    <div className="px-2.5 pb-2.5 pt-1">
+      <div className="text-[10px] text-white/30 mb-1.5">{duration(task)}</div>
+
+      {/* done → summary + artifacts */}
+      {task.state === 'done' && task.result && (
+        <div className="text-[12px] text-white/75 leading-relaxed">
+          <div>{task.result.summary}</div>
+          {task.result.artifacts?.map((a, i) => (
+            <button
+              key={i}
+              className="mt-1.5 block text-left text-[11px] text-sky-300/85 hover:text-sky-200 truncate max-w-full"
+              onClick={() => openArtifact(a.type, a.value)}
+              title={a.type === 'path' ? 'Open in Finder' : 'Open in browser'}
+            >
+              ↗ {a.value}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* failed → reason / mcp gap */}
+      {task.state === 'failed' && !task.mcpGap && (
+        <div className="text-[12px] text-rose-300/85">{task.error?.reason ?? 'Failed (no reason reported)'}</div>
+      )}
+      {task.state === 'failed' && task.mcpGap && (
+        <div className="text-[12px] text-white/75">
+          <div>{task.mcpGap.message}</div>
+          <code
+            className="mt-1 inline-block px-1.5 py-0.5 rounded bg-white/10 text-[11px] text-white/80 cursor-pointer"
+            title="Copy"
+            onClick={() => void navigator.clipboard?.writeText(task.mcpGap!.fixCommand)}
+          >
+            {task.mcpGap.fixCommand}
+          </code>
+        </div>
+      )}
+
+      {/* needs-user → question + answer (by voice or here) */}
+      {task.state === 'needs-user' && task.question && (
+        <div>
+          {task.question.irreversible && (
+            <div className="text-[9px] uppercase tracking-wider text-rose-300/90 mb-1">⚠ irreversible</div>
+          )}
+          <div className="text-[12px] text-amber-200/90 mb-1.5">{task.question.text}</div>
+          {task.question.kind === 'choice' && task.question.choices ? (
+            <div className="flex flex-wrap gap-1.5">
+              {task.question.choices.map((c) => (
+                <button
+                  key={c}
+                  className="text-[11px] px-2 py-1 rounded-lg bg-amber-400/10 text-amber-200/90 hover:bg-amber-400/20"
+                  onClick={() => onAnswer(task.id, c)}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <form
+              className="flex gap-1.5"
+              onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { onAnswer(task.id, draft.trim()); setDraft('') } }}
+            >
+              <input
+                className="flex-1 text-[12px] px-2 py-1 rounded-lg bg-white/[0.06] text-white placeholder-white/30 outline-none"
+                placeholder={task.question.kind === 'confirm' ? 'yes / no' : 'type your answer…'}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                autoFocus
+              />
+              <button className="text-[11px] px-2.5 py-1 rounded-lg bg-amber-400/20 text-amber-100" type="submit">send</button>
+            </form>
+          )}
+          <div className="text-[10px] text-white/30 mt-1.5">🎙 or hold the Remote key and speak your answer</div>
+        </div>
+      )}
+
+      {/* actions */}
+      <div className="flex items-center gap-3 mt-2.5 text-[11px]">
+        {active && (
+          <button className="text-white/35 hover:text-white/80" onClick={() => onKill(task.id)}>stop</button>
+        )}
+        {!active && (
+          <button className="text-white/35 hover:text-white/80" onClick={() => onRerun(task.intent)}>re-run</button>
+        )}
+        <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
+          {showTerminal ? 'hide terminal' : 'terminal'}
+        </button>
+      </div>
+
+      {showTerminal && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
+    </div>
+  )
+}
+
+function Row({
   task, expanded, onToggle, onAnswer, onKill, onRerun,
 }: {
   task: RemoteTask
@@ -46,27 +175,23 @@ function OverlayRow({
   onKill: (id: string) => void
   onRerun: (intent: string) => void
 }) {
-  if (expanded) {
-    return (
-      <div>
-        <button className="w-full text-left text-[11px] text-white/45 px-1 mb-1 hover:text-white/70" onClick={onToggle}>
-          ▾ collapse
-        </button>
-        {/* The full in-app card (light) sits on the dark overlay — answer/result/terminal all available. */}
-        <TaskRow task={task} onAnswer={onAnswer} onKill={onKill} onRerun={onRerun} />
-      </div>
-    )
-  }
-  const dot = STATE_DOT[task.state] ?? '#888'
   return (
-    <button
-      className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-white/5 text-left"
-      onClick={onToggle}
-    >
-      <span className="inline-block w-[7px] h-[7px] rounded-full shrink-0" style={{ background: dot }} />
-      <span className="flex-1 text-[12px] text-white/85 truncate">{task.intent}</span>
-      <span className="text-[10px] uppercase tracking-wide shrink-0" style={{ color: dot }}>{STATE_LABEL[task.state]}</span>
-    </button>
+    <div className={`rounded-xl transition-colors ${expanded ? 'bg-white/[0.05]' : 'hover:bg-white/[0.04]'}`}>
+      <button className="w-full flex items-center gap-2.5 px-2.5 py-2 text-left" onClick={onToggle}>
+        <Dot state={task.state} />
+        <span className="flex-1 text-[12.5px] text-white/85 truncate">{task.intent}</span>
+        <Tag state={task.state} />
+      </button>
+      {/* Soft expand/collapse — grid-rows 0fr→1fr animates height without a fixed px cap. */}
+      <div
+        className="grid transition-[grid-template-rows] duration-200 ease-out"
+        style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
+      >
+        <div className="overflow-hidden">
+          {expanded && <Expanded task={task} onAnswer={onAnswer} onKill={onKill} onRerun={onRerun} />}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -74,14 +199,11 @@ export function OverlayApp() {
   const { tasks, answer, kill, rerun } = useRemoteTasks()
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
-  // Main tells us which task to expand when it auto-presents.
   useEffect(() => {
     const off = api().remoteOnOverlayFocus?.((d) => setExpandedId(d.taskId))
     return () => off?.()
   }, [])
 
-  // Esc dismisses (only fires when the window is focused — i.e. the user clicked
-  // into the overlay; otherwise Esc belongs to dictation/capture). NEVER auto.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.preventDefault(); api().remoteOverlayDismiss?.() }
@@ -93,22 +215,27 @@ export function OverlayApp() {
   const dismiss = () => api().remoteOverlayDismiss?.()
 
   return (
-    <div className="h-screen w-screen p-2" style={{ background: 'transparent' }}>
+    <div className="h-screen w-screen p-3" style={{ background: 'transparent' }}>
       <div
-        className="h-full flex flex-col rounded-2xl overflow-hidden border border-white/10 shadow-2xl"
-        style={{ background: 'rgba(18,18,20,0.84)', backdropFilter: 'blur(14px)' }}
+        className="h-full flex flex-col rounded-[20px] overflow-hidden"
+        style={{
+          background: 'rgba(14,14,16,0.62)',
+          backdropFilter: 'blur(28px) saturate(140%)',
+          WebkitBackdropFilter: 'blur(28px) saturate(140%)',
+          boxShadow: '0 24px 70px rgba(0,0,0,0.55)',
+        }}
       >
-        <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
-          <span className="text-[12px] font-semibold text-white/90">Unmute · tasks</span>
-          <button className="text-[13px] text-white/50 hover:text-white px-1" onClick={dismiss} title="Dismiss (Esc)">✕</button>
+        <div className="flex items-center justify-between px-4 pt-3 pb-2">
+          <span className="text-[10px] font-semibold tracking-[0.22em] uppercase text-white/35">unmute</span>
+          <button className="text-[13px] leading-none text-white/25 hover:text-white/70" onClick={dismiss} title="Dismiss (Esc)">✕</button>
         </div>
 
-        <div className="flex-1 overflow-auto p-2 space-y-1">
+        <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
           {tasks.length === 0 ? (
-            <div className="text-[12px] text-white/40 italic py-8 text-center">No tasks yet.</div>
+            <div className="text-[12px] text-white/25 italic py-10 text-center">No tasks yet.</div>
           ) : (
             tasks.map((t) => (
-              <OverlayRow
+              <Row
                 key={t.id}
                 task={t}
                 expanded={expandedId === t.id}
@@ -121,8 +248,8 @@ export function OverlayApp() {
           )}
         </div>
 
-        <div className="px-3 py-1.5 border-t border-white/10 text-[10px] text-white/40">
-          🎙 hold the Remote key to answer · Esc or ✕ to dismiss
+        <div className="px-4 py-2 text-[9.5px] tracking-wide text-white/25">
+          hold the Remote key to answer · esc to dismiss
         </div>
       </div>
     </div>

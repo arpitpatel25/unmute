@@ -39,48 +39,53 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
     const host = hostRef.current
     if (!host) return
     let disposed = false
+    let term: Terminal | null = null
+    let fit: FitAddon | null = null
+    let off: (() => void) | undefined
 
-    const term = new Terminal({
-      cols: FIXED_COLS,
-      rows: 24,
-      convertEol: true,
-      cursorBlink: true,
-      fontSize: 11,
-      lineHeight: 1.1,
-      scrollback: 8000,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-      theme: { background: '#0a0a0a', foreground: '#d4d4d4', cursor: '#d4d4d4' },
-    })
-    const fit = new FitAddon()
-    term.loadAddon(fit)
-    term.open(host)
-
-    // Fit the ROWS to the pane height, but FORCE the width back to FIXED_COLS so
-    // the TUI is never squeezed into a narrow box. The pane scrolls horizontally
-    // to show the full width. PTY is told the same fixed width → no mismatch.
+    // Fit the ROWS to the pane height, but FORCE the width to FIXED_COLS so the
+    // TUI is never squeezed into a narrow box; the pane scrolls horizontally.
     const sync = () => {
+      if (!term || !fit || !host.clientWidth || !host.clientHeight) return
       try {
-        fit.fit() // sets cols+rows from the visible pane
-        if (term.cols !== FIXED_COLS) term.resize(FIXED_COLS, term.rows) // override width back
+        fit.fit()
+        if (term.cols !== FIXED_COLS) term.resize(FIXED_COLS, term.rows)
         api().remoteTerminalResize?.(taskId, FIXED_COLS, term.rows)
       } catch { /* not laid out yet */ }
     }
-    sync()
 
-    // Keystrokes → the session's PTY stdin (raw, verbatim). PRD §4.3.
-    term.onData((data) => api().remoteTerminalInput?.(taskId, data))
+    // LAZY open: only instantiate xterm once the host actually has dimensions.
+    // Opening into a 0×0 container (e.g. inside a collapsed/hidden overlay row)
+    // makes xterm throw "Cannot read properties of undefined (reading
+    // 'dimensions')". The ResizeObserver below kicks this once it's laid out.
+    const open = () => {
+      if (disposed || term || !host.clientWidth || !host.clientHeight) return
+      term = new Terminal({
+        cols: FIXED_COLS,
+        rows: 24,
+        convertEol: true,
+        cursorBlink: true,
+        fontSize: 11,
+        lineHeight: 1.1,
+        scrollback: 8000,
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        theme: { background: 'rgba(0,0,0,0)', foreground: '#d4d4d4', cursor: '#d4d4d4' },
+      })
+      fit = new FitAddon()
+      term.loadAddon(fit)
+      term.open(host)
+      sync()
+      term.onData((data) => api().remoteTerminalInput?.(taskId, data))
+      void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf && term) term.write(buf) })
+      off = api().remoteOnOutput?.((d) => {
+        if (!disposed && d.taskId === taskId && term) term.write(d.chunk)
+      })
+    }
 
-    // Backfill history (now clean — same width), then stream live.
-    void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf) term.write(buf) })
-    const off = api().remoteOnOutput?.((d) => {
-      if (!disposed && d.taskId === taskId) term.write(d.chunk)
-    })
-
-    // Reflow rows on pane resize (width stays fixed).
-    const ro = new ResizeObserver(() => sync())
+    open()
+    const ro = new ResizeObserver(() => { open(); sync() })
     ro.observe(host)
 
-    // Show the pop-out button only when tmux is available to attach to.
     void api().remoteTmuxAvailable?.().then((ok) => {
       if (!disposed && popRef.current) popRef.current.style.display = ok ? '' : 'none'
     })
@@ -89,7 +94,7 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
       disposed = true
       ro.disconnect()
       off?.()
-      term.dispose()
+      term?.dispose()
     }
   }, [taskId])
 
