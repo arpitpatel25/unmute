@@ -88,6 +88,34 @@ export function Markdown({ text }: { text: string }) {
       continue
     }
 
+    // GFM table: a `| a | b |` header row immediately followed by a `|---|---|`
+    // separator. Render a real, horizontally-scrollable table (the overlay is narrow).
+    const isRow = (s: string) => /^\s*\|.*\|\s*$/.test(s)
+    const isSep = (s: string) => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(s) && s.includes('|')
+    if (isRow(line) && i + 1 < lines.length && isSep(lines[i + 1])) {
+      flushPara()
+      const cells = (s: string) => s.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+      const header = cells(line)
+      i += 2 // header + separator
+      const rows: string[][] = []
+      while (i < lines.length && isRow(lines[i]) && !isSep(lines[i])) { rows.push(cells(lines[i])); i++ }
+      blocks.push(
+        <div key={`t${k++}`} className="overflow-x-auto mb-1.5 -ml-0.5">
+          <table className="border-collapse text-[0.9em]">
+            <thead>
+              <tr>{header.map((h, c) => <th key={c} className="text-left font-semibold px-1.5 py-0.5 border-b border-zinc-500/40 whitespace-nowrap">{inline(h, `th${k}-${c}`)}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map((r, ri) => (
+                <tr key={ri}>{r.map((cell, ci) => <td key={ci} className="px-1.5 py-0.5 border-b border-zinc-500/20 align-top whitespace-nowrap">{inline(cell, `td${k}-${ri}-${ci}`)}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      )
+      continue
+    }
+
     para.push(line)
     i++
   }
