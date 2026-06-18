@@ -321,6 +321,9 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
   if [[ ! -f "$engine/electron/paywall/remote/init.ts" ]]; then
     log "WARN: remote/init.ts not copied into engine — Remote will not initialise"
   fi
+  if ! grep -q 'OverlayApp' "$engine/renderer/main.tsx"; then
+    log "WARN: main.tsx missing OverlayApp route — Remote overlay window will be blank"
+  fi
   if ! grep -q 'initRemote' "$engine/electron/main.ts"; then
     log "WARN: main.ts missing initRemote — Remote will not start"
   fi

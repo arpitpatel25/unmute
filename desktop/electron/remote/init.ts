@@ -31,9 +31,9 @@ import { CodexExecutor, type AgentKind } from './codex-executor'
 import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
-import { launchAutomationChrome, automationProfileDir } from './browser'
 import { looksLikeContinuation } from './routing'
 import { buildSetupChecklist, setupComplete } from './setup-status'
+import { createOverlayWindow, presentOverlay, dismissOverlay } from './overlay'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, TMUX_CONF } from './tmux'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
@@ -74,6 +74,12 @@ interface RemoteSettings {
   // Onboarding: user-confirmed manual steps we can't auto-detect (extension
   // installed, signed in, window parked on its own Space). Keyed by step key.
   setupConfirmations: Record<string, boolean>
+  // DECIDED: the overlay surfaces task state, not macOS notifications (which get
+  // dropped/missed). OFF by default; toggle on to also fire OS notifications.
+  osNotifications: boolean
+  // DECIDED: the floating overlay auto-presents on terminal/attention states.
+  // User can turn the auto-popup off (then they open the app manually).
+  overlayAutoPresent: boolean
 }
 
 const settings = new Store<RemoteSettings>({
@@ -86,6 +92,8 @@ const settings = new Store<RemoteSettings>({
     model: 'opus',
     browserEnabled: true,
     setupConfirmations: {},
+    osNotifications: false,
+    overlayAutoPresent: true,
   },
 })
 
@@ -118,9 +126,8 @@ function claudeMcpList(): Promise<string> {
 async function getSetupStatus() {
   const browserEnabled = settings.get('browserEnabled') !== false
   const mcpListOutput = await claudeMcpList()
-  const chromeProfileExists = existsSync(automationProfileDir())
   const confirmations = settings.get('setupConfirmations') ?? {}
-  const steps = buildSetupChecklist({ mcpListOutput, chromeProfileExists, browserEnabled, confirmations })
+  const steps = buildSetupChecklist({ mcpListOutput, browserEnabled, confirmations })
   const complete = setupComplete(steps)
   log.event('setup-status', { complete, todo: steps.filter((s) => s.status === 'todo').map((s) => s.key) })
   return { steps, complete }
@@ -154,12 +161,20 @@ function openInTerminal(taskId: string): boolean {
   }
 }
 
-/** Broadcast a task snapshot to every renderer (ambient pill + panel). */
+/** Broadcast a task snapshot to every renderer (ambient pill + panel + overlay). */
 function broadcast(channel: string, task: Task): void {
   const safe = serializeTask(task)
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send(channel, safe)
   }
+}
+
+/** Auto-present the floating overlay on a terminal/attention state, unless the
+ *  user turned auto-popup off. The overlay (not OS notifications) is how a
+ *  fire-and-forget task reaches the user where they are. */
+function maybePresent(task: Task): void {
+  if (settings.get('overlayAutoPresent') === false) return
+  presentOverlay(task.id)
 }
 
 /** Plain, structured-clone-safe snapshot of a task for IPC. */
@@ -180,9 +195,13 @@ function serializeTask(t: Task) {
   }
 }
 
-// PRD §13.6: Unmute OBSERVES completion (it's the parent process) and emits the
-// notification itself — Claude never notifies Unmute.
+// PRD §13.6: Unmute OBSERVES completion (it's the parent process). We no longer
+// emit macOS notifications — they're unreliable (silently dropped for unsigned/
+// dev builds and easy to miss) and the floating task OVERLAY now surfaces every
+// terminal/attention state in-place. Kept behind a setting (default OFF) so it
+// can be re-enabled, but the overlay is the canonical surface.
 function notify(title: string, body: string): void {
+  if (settings.get('osNotifications') !== true) return
   try {
     if (Notification.isSupported()) new Notification({ title, body }).show()
   } catch (e) {
@@ -330,20 +349,30 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     }
   })
 
-  // Fan task lifecycle out to renderers (PRD §13).
+  // Pre-warm the floating overlay window (hidden) so the first present is instant.
+  createOverlayWindow()
+
+  // Fan task lifecycle out to renderers (PRD §13). Terminal/attention states
+  // also AUTO-PRESENT the overlay (the canonical surface; OS notifications off).
   manager.on('created', (t: Task) => broadcast('remote:task-created', t))
   manager.on('updated', (t: Task) => broadcast('remote:task-updated', t))
-  manager.on('needs-user', (t: Task) => broadcast('remote:task-needs-user', t))
+  manager.on('needs-user', (t: Task) => {
+    broadcast('remote:task-needs-user', t)
+    maybePresent(t)
+  })
   manager.on('done', (t: Task) => {
     broadcast('remote:task-done', t)
+    maybePresent(t)
     notify('Task done', t.result?.summary ? `${t.intent} — ${t.result.summary}` : t.intent)
   })
   manager.on('failed', (t: Task) => {
     broadcast('remote:task-failed', t)
+    maybePresent(t)
     notify('Task failed', t.mcpGap ? t.mcpGap.message : (t.error?.reason ?? t.intent))
   })
   manager.on('stuck', (t: Task) => {
     broadcast('remote:task-stuck', t)
+    maybePresent(t)
     notify('Task may be stuck', t.intent)
   })
   // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
@@ -390,6 +419,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Pop the live terminal out to a real terminal app — SAME tmux session.
   ipcMain.handle('remote:tmux-available', async () => tmuxBin !== null)
   ipcMain.handle('remote:open-in-terminal', async (_e, id: string) => openInTerminal(id))
+  // Floating overlay: user-triggered dismiss (never auto) + the auto-present toggle.
+  ipcMain.on('remote:overlay-dismiss', () => dismissOverlay())
+  ipcMain.handle('remote:set-overlay-auto-present', async (_e, on: boolean) => {
+    settings.set('overlayAutoPresent', !!on)
+    log.event('overlay-auto-present-set', { on: !!on })
+    return true
+  })
+  ipcMain.handle('remote:set-os-notifications', async (_e, on: boolean) => {
+    settings.set('osNotifications', !!on)
+    log.event('os-notifications-set', { on: !!on })
+    return true
+  })
   ipcMain.handle('remote:get-settings', async () => ({
     permissionMode: settings.get('permissionMode'),
     remoteKey: getRemoteKey(),
@@ -397,16 +438,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     sandboxRoots: settings.get('sandboxRoots') ?? [],
     model: settings.get('model') || 'opus',
     browserEnabled: settings.get('browserEnabled') !== false,
+    overlayAutoPresent: settings.get('overlayAutoPresent') !== false,
+    osNotifications: settings.get('osNotifications') === true,
     logFile: getRemoteLogFilePath(),
   }))
   // ── Onboarding / guided one-time setup (PRD §12) ──
   ipcMain.handle('remote:get-setup-status', async () => getSetupStatus())
-  // User-initiated launch of the dedicated automation Chrome (from onboarding).
-  // On-demand only — never on boot — so it never steals focus unexpectedly.
-  ipcMain.handle('remote:launch-automation-chrome', async () => {
-    launchAutomationChrome()
-    return true
-  })
   ipcMain.handle('remote:set-setup-confirmation', async (_e, key: string, done: boolean) => {
     const cur = { ...(settings.get('setupConfirmations') ?? {}) }
     cur[key] = !!done
@@ -415,9 +452,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return getSetupStatus()
   })
   ipcMain.handle('remote:set-browser-enabled', async (_e, enabled: boolean) => {
+    // Browser tasks use the user's REAL Chrome via --chrome; nothing to launch.
     settings.set('browserEnabled', !!enabled)
     log.event('browser-enabled-set', { enabled: !!enabled })
-    if (enabled) launchAutomationChrome()
     return true
   })
   ipcMain.handle('remote:set-permission-mode', async (_e, mode: PermissionMode) => {

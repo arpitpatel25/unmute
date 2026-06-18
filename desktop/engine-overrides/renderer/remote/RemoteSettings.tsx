@@ -14,6 +14,8 @@ interface Settings {
   sandboxRoots: string[]
   model: string
   browserEnabled: boolean
+  overlayAutoPresent: boolean
+  osNotifications: boolean
   logFile: string | null
 }
 type API = {
@@ -22,6 +24,8 @@ type API = {
   remoteSetAgent?: (a: 'claude' | 'codex') => Promise<boolean>
   remoteSetSandboxRoots?: (r: string[]) => Promise<boolean>
   remoteSetBrowserEnabled?: (enabled: boolean) => Promise<boolean>
+  remoteSetOverlayAutoPresent?: (on: boolean) => Promise<boolean>
+  remoteSetOsNotifications?: (on: boolean) => Promise<boolean>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -58,9 +62,37 @@ export function RemoteSettings() {
         />
       </label>
 
-      {/* Browser lane — dedicated Claude-in-Chrome instance (DECIDED) */}
+      {/* Overlay auto-present — the floating task window pops up on done/needs-you */}
       <label className="flex items-center justify-between py-1.5 border-t border-black/5">
-        <span>Browser tasks <span className="text-ink/40">(dedicated Chrome; set up in onboarding)</span></span>
+        <span>Pop up task overlay <span className="text-ink/40">(shows results/questions where you’re working)</span></span>
+        <input
+          type="checkbox"
+          checked={s.overlayAutoPresent}
+          onChange={(e) => {
+            const on = e.target.checked
+            update({ overlayAutoPresent: on })
+            void api().remoteSetOverlayAutoPresent?.(on)
+          }}
+        />
+      </label>
+
+      {/* macOS notifications — off by default (the overlay is the surface) */}
+      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
+        <span>macOS notifications <span className="text-ink/40">(off — overlay replaces them; often dropped anyway)</span></span>
+        <input
+          type="checkbox"
+          checked={s.osNotifications}
+          onChange={(e) => {
+            const on = e.target.checked
+            update({ osNotifications: on })
+            void api().remoteSetOsNotifications?.(on)
+          }}
+        />
+      </label>
+
+      {/* Browser lane — drives your real Chrome via the extension (DECIDED) */}
+      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
+        <span>Browser tasks <span className="text-ink/40">(drives your real Chrome via the extension)</span></span>
         <input
           type="checkbox"
           checked={s.browserEnabled}

@@ -45,7 +45,7 @@ test('dispatch → scaffolds, installs contract, types payload, starts processin
   let spawned: SpawnOpts | null = null
   const tm = new TaskManager({
     executorFactory: () => makeFakeExecutor({ onSpawn: (o) => { spawned = o } }),
-    baseDir, trustAcceptMs: 0, pollMs: 50,
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 50,
   })
   const id = await tm.dispatch('extract ~/Downloads/report.zip')
   const task = tm.get(id)!
@@ -61,7 +61,7 @@ test('dispatch → scaffolds, installs contract, types payload, starts processin
 
 test('done status transition emits done with inline result (PRD §13.4 #3, §13.6)', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
-  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, pollMs: 25 })
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25 })
   const id = await tm.dispatch('extract a zip')
   const task = tm.get(id)!
 
@@ -79,7 +79,7 @@ test('done status transition emits done with inline result (PRD §13.4 #3, §13.
 test('needs-user surfaces the question; answer() pipes it into stdin (PRD §7)', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
-  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 25 })
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25 })
   const id = await tm.dispatch('send a file to rishi')
   const task = tm.get(id)!
 
@@ -107,7 +107,7 @@ test('staleness backstop flags a silent task as stuck (PRD §6.3)', { timeout: 5
   // comparison must be like-for-like.)
   const tm = new TaskManager({
     executorFactory: () => makeFakeExecutor(),
-    baseDir, trustAcceptMs: 0, pollMs: 30, staleMs: 150,
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 30, staleMs: 150,
   })
   const id = await tm.dispatch('a task that goes silent')
   const [stuckTask] = await once(tm, 'stuck')
@@ -117,7 +117,7 @@ test('staleness backstop flags a silent task as stuck (PRD §6.3)', { timeout: 5
 
 test('kill marks a running task failed with "Stopped by you" (PRD §10.4)', async () => {
   const baseDir = await tmpBase()
-  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, pollMs: 9999 })
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   const id = await tm.dispatch('long task')
   tm.kill(id)
   const task = tm.get(id)!
@@ -128,7 +128,7 @@ test('kill marks a running task failed with "Stopped by you" (PRD §10.4)', asyn
 test('done task stays WARM (session alive) for follow-up, then idle-kills', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
-  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 25, warmMs: 120 })
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 120 })
   const id = await tm.dispatch('check which emails are worth replying to')
   const task = tm.get(id)!
   const done = once(tm, 'done')
@@ -146,7 +146,7 @@ test('done task stays WARM (session alive) for follow-up, then idle-kills', { ti
 test('followUp resumes a warm session — pipes text into stdin, back to processing', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
-  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 25, warmMs: 60_000 })
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
   const id = await tm.dispatch('check emails')
   const task = tm.get(id)!
   await (async () => { const d = once(tm, 'done'); await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'done' } }); await d })()
@@ -162,7 +162,7 @@ test('followUp resumes a warm session — pipes text into stdin, back to process
 test('followUp returns false when the session is no longer warm', async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
-  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 9999, warmMs: 60_000 })
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999, warmMs: 60_000 })
   const id = await tm.dispatch('a task')
   tm.kill(id) // hard kill — no warm window
   assert.equal(tm.followUp(id, 'continue'), false)
@@ -172,7 +172,7 @@ test('followUp returns false when the session is no longer warm', async () => {
 test('sendInput forwards RAW keystrokes to the PTY (typeable terminal, PRD §4.3)', async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
-  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 9999 })
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   const id = await tm.dispatch('a task')
   tm.sendInput(id, 'ls') // two keystrokes
   tm.sendInput(id, '\r') // Enter — sent verbatim, NO extra \r appended
@@ -183,7 +183,7 @@ test('sendInput forwards RAW keystrokes to the PTY (typeable terminal, PRD §4.3
 test('resize forwards cols/rows to the PTY', async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
-  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, pollMs: 9999 })
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   const id = await tm.dispatch('a task')
   tm.resize(id, 100, 30)
   assert.deepEqual(fake.resizes.at(-1), [100, 30])
@@ -192,7 +192,7 @@ test('resize forwards cols/rows to the PTY', async () => {
 
 test('tasksAwaitingUser lists only needs-user tasks, newest first (voice answering, PRD §7)', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
-  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, pollMs: 25 })
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25 })
   const a = await tm.dispatch('task A')
   const b = await tm.dispatch('task B')
   // A goes needs-user; B stays processing.

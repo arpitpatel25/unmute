@@ -95,13 +95,18 @@ an existing skill, write nothing. A separate Unmute step curates these later.
 
 ## 8. How to execute — preferred path order
 
-Prefer, highest first (this avoids focus-stealing and is faster/more reliable):
+Pick the tool that does the job most reliably — don't avoid the browser:
 1. **MCP / API** (Slack, GitHub, Jira, Notion, Drive, …) when the integration
    exists — headless, fast, structured.
 2. **Shell / CLI / filesystem** — files, zips, PDFs, search, edits. Invisible.
-3. **Headless browser** — only when no API/CLI path exists and the result is a
-   portable artifact (a URL/path/value).
-4. **Foreground browser/GUI** — last resort only; it interrupts the user.
+3. **The Chrome browser via the Claude-in-Chrome extension** — you are launched
+   with \`--chrome\`, so you can drive the user's real Chrome (already signed in
+   to their accounts). USE IT CONFIDENTLY whenever the task is web-based and the
+   browser is the better/only reliable path: opening a site, navigating a web
+   app, reading a page, finding/playing content, acting in Gmail/Sheets/Docs in
+   the browser. It is NOT a last resort — for many tasks it is the BEST tool
+   because the user is already logged in there. Prefer opening a NEW tab over
+   hijacking the user's active tab.
 
 If a needed integration isn't configured, fail with a clear \`error.reason\`
 naming it (e.g. "Slack is not connected") so Unmute can guide the user to set

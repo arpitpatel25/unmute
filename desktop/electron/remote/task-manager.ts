@@ -75,6 +75,11 @@ export interface TaskManagerOpts {
   staleMs?: number
   /** ms to wait after accepting the folder-trust prompt for the REPL to boot. */
   trustAcceptMs?: number
+  /** ms to wait after typing the dispatch payload before sending an explicit
+   *  confirm Enter. Claude's input occasionally lands one Enter short of
+   *  submitting a multi-line payload (proven: a manual Enter unsticks it), so we
+   *  always send a second Enter once the input has settled. Default 450. */
+  submitConfirmMs?: number
   /** Keep a session WARM this long after it reaches done/failed, so a follow-up
    *  ("now reply to #2") can continue it with full context (minimal continuation).
    *  After this idle window with no follow-up, the session is hard-killed.
@@ -112,6 +117,7 @@ export class TaskManager extends EventEmitter {
       pollMs: opts.pollMs ?? 1000,
       staleMs: opts.staleMs ?? 4 * 60_000,
       trustAcceptMs: opts.trustAcceptMs ?? 2000,
+      submitConfirmMs: opts.submitConfirmMs ?? 450,
       warmMs: opts.warmMs ?? 3 * 60_000,
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
@@ -198,6 +204,17 @@ export class TaskManager extends EventEmitter {
       ex.writeStdin(payload)
       tlog.event('task-dispatched', {})
 
+      // Reliability fix: the multi-line payload occasionally lands one Enter
+      // short of submitting in Claude's input box (proven on-device — a manual
+      // Enter unstuck a hung task). After the input settles, send an explicit
+      // confirm Enter so dispatch always submits. A spare Enter on an already-
+      // submitted prompt is a harmless no-op (empty input).
+      await new Promise((r) => setTimeout(r, this.opts.submitConfirmMs))
+      if (ex.alive) {
+        ex.write('\r')
+        tlog.event('submit-confirm-enter', { afterMs: this.opts.submitConfirmMs })
+      }
+
       this.startPolling(id)
     } catch (e) {
       tlog.error('dispatch failed before polling', { error: (e as Error).message })
@@ -246,6 +263,15 @@ export class TaskManager extends EventEmitter {
       isStale({ state: task.state as TaskState }, task.lastMtimeMs, this.clock(), this.opts.staleMs)
     ) {
       tlog.event('task-stuck', { lastMtimeMs: task.lastMtimeMs, staleMs: this.opts.staleMs })
+      // Cheap recovery before surfacing stuck: a task is sometimes just one Enter
+      // short of submitting/continuing (the same input quirk we confirm-Enter for
+      // at dispatch). Send ONE Enter — a no-op if it's genuinely busy. If it
+      // recovers, the next heartbeat transitions it back out of stuck.
+      const stuckEx = this.executors.get(id)
+      if (stuckEx?.alive) {
+        stuckEx.write('\r')
+        tlog.event('stuck-nudge-enter', {})
+      }
       tlog.ui('task-row.stuck', { intent: task.intent }) // PRD §13.4 #2 + §6.3: offer check/kill/retry
       task.state = 'stuck'
       task.updatedAt = this.clock()

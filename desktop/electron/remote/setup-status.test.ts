@@ -25,8 +25,7 @@ test('parseMcpList tolerates empty / no-servers output', () => {
 test('buildSetupChecklist auto-marks a connected MCP done and a missing one todo', () => {
   const steps = buildSetupChecklist({
     mcpListOutput: 'gmail: x - ✓ Connected',
-    chromeProfileExists: true,
-    browserEnabled: false, // browser steps omitted
+    browserEnabled: false, // browser step omitted
     confirmations: {},
   })
   assert.ok(!steps.some((s) => s.key.startsWith('chrome')))
@@ -37,17 +36,16 @@ test('buildSetupChecklist auto-marks a connected MCP done and a missing one todo
   assert.equal(sheets.command, 'claude mcp add google-sheets')
 })
 
-test('buildSetupChecklist includes browser steps + honors manual confirmations', () => {
-  const steps = buildSetupChecklist({
-    mcpListOutput: '',
-    chromeProfileExists: true,
-    browserEnabled: true,
-    confirmations: { 'chrome-extension': true },
-  })
-  assert.equal(steps.find((s) => s.key === 'chrome-profile')!.status, 'done') // profile exists
-  assert.equal(steps.find((s) => s.key === 'chrome-extension')!.status, 'done') // confirmed
-  assert.equal(steps.find((s) => s.key === 'chrome-signin')!.status, 'todo') // not confirmed
-  assert.equal(steps.find((s) => s.key === 'chrome-extension')!.auto, false)
+test('buildSetupChecklist includes the single Chrome-extension step + honors confirmation', () => {
+  const todo = buildSetupChecklist({ mcpListOutput: '', browserEnabled: true, confirmations: {} })
+  const ext = todo.find((s) => s.key === 'chrome-extension')!
+  assert.equal(ext.status, 'todo')
+  assert.equal(ext.auto, false)
+  // no dedicated-profile / sign-in / Space steps anymore (real Chrome)
+  assert.ok(!todo.some((s) => ['chrome-profile', 'chrome-signin', 'chrome-space'].includes(s.key)))
+
+  const done = buildSetupChecklist({ mcpListOutput: '', browserEnabled: true, confirmations: { 'chrome-extension': true } })
+  assert.equal(done.find((s) => s.key === 'chrome-extension')!.status, 'done')
 })
 
 test('setupComplete is true only when every step is done', () => {

@@ -27,6 +27,8 @@ export interface RemoteSettingsSnapshot {
   sandboxRoots: string[]
   model: string
   browserEnabled: boolean
+  overlayAutoPresent: boolean
+  osNotifications: boolean
   logFile: string | null
 }
 
@@ -66,6 +68,20 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-sandbox-roots', roots),
   remoteSetBrowserEnabled: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-browser-enabled', enabled),
+  remoteSetOverlayAutoPresent: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-overlay-auto-present', on),
+  remoteSetOsNotifications: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-os-notifications', on),
+
+  // ── Floating overlay window ──
+  /** User-triggered dismiss (Escape / ✕). Never auto-dismissed. */
+  remoteOverlayDismiss: (): void => ipcRenderer.send('remote:overlay-dismiss'),
+  /** Main tells the overlay which task to expand when it auto-presents. */
+  remoteOnOverlayFocus: (cb: (d: { taskId: string }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { taskId: string }) => cb(d)
+    ipcRenderer.on('remote:overlay-focus', handler)
+    return () => ipcRenderer.removeListener('remote:overlay-focus', handler)
+  },
 
   // ── Onboarding / guided one-time setup (PRD §12) ──
   /** The setup checklist: auto-detected (MCP/Chrome profile) + user-confirmed steps. */
@@ -74,9 +90,6 @@ export const remotePreloadExtensions = {
   /** Mark a manual step done/undone; returns the refreshed checklist. */
   remoteSetSetupConfirmation: (key: string, done: boolean): Promise<RemoteSetupStatus> =>
     ipcRenderer.invoke('remote:set-setup-confirmation', key, done),
-  /** User-initiated launch of the dedicated automation Chrome (onboarding). */
-  remoteLaunchAutomationChrome: (): Promise<boolean> =>
-    ipcRenderer.invoke('remote:launch-automation-chrome'),
 
   // ── Render-on-demand live terminal (PRD §13.4 #8) ──
   /** Recent buffered PTY output for a task (for opening the live view). */

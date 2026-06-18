@@ -27,7 +27,6 @@ interface SetupStatus {
 type API = {
   remoteGetSetupStatus?: () => Promise<SetupStatus>
   remoteSetSetupConfirmation?: (key: string, done: boolean) => Promise<SetupStatus>
-  remoteLaunchAutomationChrome?: () => Promise<boolean>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -99,18 +98,6 @@ export function Onboarding() {
                       <code className="flex-1 px-1.5 py-0.5 bg-black/5 rounded text-[11px] truncate">{step.command}</code>
                       <CopyButton text={step.command} />
                     </div>
-                  )}
-                  {step.key === 'chrome-profile' && step.status !== 'done' && (
-                    <button
-                      className="mt-1 text-[11px] px-2 py-0.5 rounded border border-black/15 hover:bg-black/5"
-                      onClick={async () => {
-                        await api().remoteLaunchAutomationChrome?.()
-                        // give Chrome a beat to create its profile dir, then re-check
-                        setTimeout(() => void refresh(), 1500)
-                      }}
-                    >
-                      Launch automation Chrome
-                    </button>
                   )}
                   {!step.auto && (
                     <label className="flex items-center gap-1.5 mt-1 text-[11px] text-ink/60">

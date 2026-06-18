@@ -79,36 +79,28 @@ export interface SetupStep {
 export interface SetupInputs {
   /** Raw stdout from `claude mcp list` (empty string if it couldn't run). */
   mcpListOutput: string
-  /** Whether the dedicated automation Chrome profile dir exists (≈ launched once). */
-  chromeProfileExists: boolean
   /** Whether the browser lane is enabled in settings. */
   browserEnabled: boolean
   /** User-confirmed manual steps (persisted), keyed by step key. */
   confirmations: Record<string, boolean>
 }
 
+// DECIDED: browser tasks drive the user's REAL, already-signed-in Chrome (no
+// dedicated profile, no separate sign-in, no Space juggling). The only one-time
+// thing is having the Claude for Chrome extension installed in that Chrome — and
+// most users already do. So onboarding is a single, self-confirmed reminder.
 export const MANUAL_BROWSER_STEPS: Array<Pick<SetupStep, 'key' | 'title' | 'detail'>> = [
   {
     key: 'chrome-extension',
     title: 'Install the Claude for Chrome extension',
-    detail: 'In the dedicated Unmute automation Chrome window, add the Claude for Chrome extension and enable it. This profile is separate from your everyday browser, so its automation never touches your own tabs.',
-  },
-  {
-    key: 'chrome-signin',
-    title: 'Sign in to Claude in that Chrome window',
-    detail: 'Sign in to claude.ai inside the automation Chrome so browser tasks can act on your behalf there.',
-  },
-  {
-    key: 'chrome-space',
-    title: 'Move the automation Chrome to its own Space',
-    detail: 'Drag the automation Chrome window to a separate macOS Space (or fullscreen it) so browser tasks run out of sight and never steal focus from what you are doing.',
+    detail: 'Add the Claude for Chrome extension to your normal Chrome and enable it. Browser tasks drive your real, already-signed-in Chrome — no separate profile or login needed. If you already have it, just check this off.',
   },
 ]
 
 /**
  * Assemble the ordered onboarding checklist from detected + confirmed state.
- * Order: dedicated Chrome → extension → sign-in → Space → each recommended MCP.
- * Browser steps are omitted entirely when the browser lane is disabled.
+ * Order: Chrome extension → each recommended MCP. Browser step is omitted when
+ * the browser lane is disabled.
  */
 export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
   const steps: SetupStep[] = []
@@ -116,13 +108,6 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
   const confirmed = (k: string) => inputs.confirmations?.[k] === true
 
   if (inputs.browserEnabled) {
-    steps.push({
-      key: 'chrome-profile',
-      title: 'Dedicated automation Chrome',
-      detail: 'Unmute runs a separate, isolated Chrome instance for browser tasks so they never interrupt your own browsing.',
-      status: inputs.chromeProfileExists ? 'done' : 'todo',
-      auto: true,
-    })
     for (const s of MANUAL_BROWSER_STEPS) {
       steps.push({ ...s, status: confirmed(s.key) ? 'done' : 'todo', auto: false })
     }
