@@ -71,6 +71,9 @@ export const remotePreloadExtensions = {
   /** Mark a manual step done/undone; returns the refreshed checklist. */
   remoteSetSetupConfirmation: (key: string, done: boolean): Promise<RemoteSetupStatus> =>
     ipcRenderer.invoke('remote:set-setup-confirmation', key, done),
+  /** User-initiated launch of the dedicated automation Chrome (onboarding). */
+  remoteLaunchAutomationChrome: (): Promise<boolean> =>
+    ipcRenderer.invoke('remote:launch-automation-chrome'),
 
   // ── Render-on-demand live terminal (PRD §13.4 #8) ──
   /** Recent buffered PTY output for a task (for opening the live view). */

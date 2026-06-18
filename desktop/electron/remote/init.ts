@@ -254,14 +254,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const logFile = configureRemoteLogging({ dir: logDir, runId })
   log.event('init-remote', { logFile, permissionMode: settings.get('permissionMode') })
 
-  // DECIDED isolation: when the browser lane is on, launch a DEDICATED Chrome
-  // (its own profile) so automation + the "debugging" banner never touch the
-  // user's real browser. One-time on-device steps (install the extension in
-  // this profile, sign in, place it on a separate Space) are guided in
-  // onboarding; this just makes sure the isolated instance is running.
-  if (settings.get('browserEnabled') !== false) {
-    launchAutomationChrome()
-  }
+  // DECIDED isolation: browser tasks run in a DEDICATED Chrome (its own profile)
+  // so automation + the "debugging" banner never touch the user's real browser.
+  // We do NOT launch it on boot — popping a Chrome window to the foreground every
+  // launch is exactly the interruption this design avoids. It's launched
+  // on-demand instead: from the onboarding step (user clicks "Launch"), when the
+  // user toggles the browser lane on, and lazily before a browser task needs it.
 
   // PRD §9: the serialized recipe librarian, sharing the same executor factory
   // (another interactive claude session on the user's plan — §9.3).
@@ -331,6 +329,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   }))
   // ── Onboarding / guided one-time setup (PRD §12) ──
   ipcMain.handle('remote:get-setup-status', async () => getSetupStatus())
+  // User-initiated launch of the dedicated automation Chrome (from onboarding).
+  // On-demand only — never on boot — so it never steals focus unexpectedly.
+  ipcMain.handle('remote:launch-automation-chrome', async () => {
+    launchAutomationChrome()
+    return true
+  })
   ipcMain.handle('remote:set-setup-confirmation', async (_e, key: string, done: boolean) => {
     const cur = { ...(settings.get('setupConfirmations') ?? {}) }
     cur[key] = !!done
