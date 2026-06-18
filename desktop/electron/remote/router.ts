@@ -134,7 +134,8 @@ export interface RouterOpts {
   /** Builds the tool-less classifier session (a minimal claude REPL). */
   executorFactory: ExecutorFactory
   baseDir?: string
-  /** Per-call wait for the decision file (default 12s). */
+  /** Per-call wait for the decision file (default 60s — cloud inference + a
+   *  tool-driven file write can be slow; we are diagnosing the true latency). */
   decisionTimeoutMs?: number
   /** ms to let the REPL boot before the first prompt. */
   readyGraceMs?: number
@@ -159,7 +160,7 @@ export class Router {
     this.o = {
       executorFactory: opts.executorFactory,
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
-      decisionTimeoutMs: opts.decisionTimeoutMs ?? 12000,
+      decisionTimeoutMs: opts.decisionTimeoutMs ?? 60000,
       readyGraceMs: opts.readyGraceMs ?? 1500,
       pollMs: opts.pollMs ?? 150,
       recycleEvery: opts.recycleEvery ?? 50,
@@ -219,6 +220,19 @@ export class Router {
   /** Spawn + ready a new executor (shared by ensureSession and recycle). */
   private async spawnSession(): Promise<AgentExecutor> {
     const ex = this.o.executorFactory()
+    // DIAGNOSTIC: mirror the router REPL's own output into our logs. The router
+    // executor (unlike task executors) was never subscribed, so we were blind to
+    // what the model actually says/does with the routing prompt. Strip ANSI +
+    // OSC sequences, collapse whitespace, and log any non-empty text so we can
+    // SEE whether it writes the file, prints JSON to chat, stalls on a prompt, etc.
+    ex.onData((chunk) => {
+      // Log a compact view of whatever the router REPL emits. The logger
+      // JSON-escapes control bytes, so ANSI shows as \u001b... — readable
+      // enough to see if the model writes the file, prints JSON to chat, or
+      // stalls. Skip pure cursor/redraw noise (chunks with no letters).
+      const text = chunk.replace(/\s+/g, ' ').trim()
+      if (/[A-Za-z0-9{}"]/.test(text)) log.event('router-output', { text: text.slice(0, 500) })
+    })
     await ex.spawn({ cwd: this.dir, env: process.env, taskId: 'router' })
     await fs.mkdir(this.dir, { recursive: true }).catch(() => {})
     await ex.isReady()
@@ -258,12 +272,21 @@ export class Router {
   settleHousekeeping(): Promise<void> { return this.chain.then(() => undefined, () => undefined) }
 
   private async waitForDecision(): Promise<string | null> {
-    const deadline = this.clock() + this.o.decisionTimeoutMs
+    const start = this.clock()
+    const deadline = start + this.o.decisionTimeoutMs
+    let lastBeat = 0
     while (this.clock() < deadline) {
       try {
         const raw = await fs.readFile(this.decisionPath, 'utf8')
-        if (raw.trim()) return raw
+        if (raw.trim()) {
+          log.event('router-decision-file-read', { afterMs: this.clock() - start, raw: raw.slice(0, 500) })
+          return raw
+        }
       } catch { /* not written yet */ }
+      // DIAGNOSTIC heartbeat: prove we are still polling and show elapsed, so a
+      // slow-but-eventual write is distinguishable from a never-write.
+      const elapsed = this.clock() - start
+      if (elapsed - lastBeat >= 5000) { lastBeat = elapsed; log.event('router-waiting', { elapsedMs: elapsed, decisionPath: this.decisionPath }) }
       await this.sleep(this.o.pollMs)
     }
     log.warn('router decision timed out', { ms: this.o.decisionTimeoutMs })
