@@ -92,7 +92,17 @@ export async function tryManagedSTT(
     form.append('flow_type', flowType)
     const tFormEnd = Date.now()
 
-    console.log(`[paywall-route] STT request — audio ${audio.length}B (${(audio.length / 1024).toFixed(1)}KB) for ${durationSeconds}s, FormData built in ${tFormEnd - tFormStart}ms`)
+    // DIAG (offline-fallback hunt): is the audio we're uploading a VALID webm?
+    // A Groq 400 usually means the file couldn't be decoded. webm/Matroska starts
+    // with the EBML magic 1A 45 DF A3. Log the first bytes + mime so we can tell a
+    // good recording from a malformed/empty one across machines.
+    const head = Array.from(audio.subarray(0, 8)).map((b) => b.toString(16).padStart(2, '0')).join(' ')
+    const isWebm = audio.length >= 4 && audio[0] === 0x1a && audio[1] === 0x45 && audio[2] === 0xdf && audio[3] === 0xa3
+    console.log(
+      `[paywall-route] STT request — audio ${audio.length}B (${(audio.length / 1024).toFixed(1)}KB) for ${durationSeconds}s, ` +
+      `mime=audio/webm, lang=${lang ?? 'auto'}, flow=${flowType}, FormData built in ${tFormEnd - tFormStart}ms\n` +
+      `  audio head bytes: [${head}] → ${isWebm ? 'valid webm EBML header ✓' : 'NOT a webm EBML header ✗ (Groq will 400)'}`
+    )
 
     const tFetchStart = Date.now()
     let currentToken = token
@@ -142,7 +152,19 @@ export async function tryManagedSTT(
     const body = (await res.json()) as Envelope
 
     if (!res.ok || !body.ok) {
-      console.warn('[paywall-route] managed STT failed:', res.status, body.code, body.message)
+      // DIAG (offline-fallback hunt): dump EVERYTHING about the failure so we can
+      // see exactly why the worker/Groq rejected this request — full envelope +
+      // the edge request-ids (cf-ray / x-request-id) to correlate with worker logs.
+      const ray = res.headers.get('cf-ray') ?? '-'
+      const reqIdHdr = res.headers.get('x-request-id') ?? res.headers.get('x-amzn-requestid') ?? '-'
+      console.warn(
+        `[paywall-route] ❌ managed STT FAILED — HTTP ${res.status} ${res.statusText}\n` +
+        `  url: ${__PIPELINE_URL__}/v1/stt\n` +
+        `  code=${body.code} message=${body.message}\n` +
+        `  full envelope: ${JSON.stringify(body)}\n` +
+        `  edge: cf-ray=${ray} x-request-id=${reqIdHdr} content-type=${res.headers.get('content-type') ?? '-'}\n` +
+        `  → falling through to ${shouldFallThrough() ? 'LOCAL (offline model)' : 'ERROR (no fallback)'}`
+      )
       if (body.balance_cents !== undefined) updateBalanceFromResponse(body.balance_cents)
       if (shouldFallThrough()) {
         notifyFellBack()

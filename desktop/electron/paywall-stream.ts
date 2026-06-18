@@ -244,7 +244,16 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
     clearInterval(stallChecker)
 
     if (!res.ok || !body.ok) {
-      console.warn(`[paywall-stream] chunk ${chunkIndex} non-ok response: ${res.status} ${body.code} ${body.message}`)
+      // DIAG (offline-fallback hunt): full failure detail + edge ids, same as the
+      // /v1/stt path, so both managed STT routes are equally observable.
+      const ray = res.headers.get('cf-ray') ?? '-'
+      const reqIdHdr = res.headers.get('x-request-id') ?? '-'
+      console.warn(
+        `[paywall-stream] ❌ chunk ${chunkIndex} FAILED — HTTP ${res.status} ${res.statusText}\n` +
+        `  code=${body.code} message=${body.message}\n` +
+        `  full envelope: ${JSON.stringify(body)}\n` +
+        `  edge: cf-ray=${ray} x-request-id=${reqIdHdr}`
+      )
       sessions.delete(chunkIndex)
       return null
     }

@@ -29,6 +29,17 @@ const origin = (() => {
   }
 })()
 
+// DIAG (offline-fallback hunt): make the resolved backend + runtime explicit so
+// two machines can be compared at a glance. If two laptops point at different
+// origins, that's the answer; if the same, the difference is upstream (audio).
+try {
+  console.log(
+    `[paywall-net] 🔎 PIPELINE ORIGIN = ${origin}\n` +
+    `  __PIPELINE_URL__ = ${(() => { try { return __PIPELINE_URL__ } catch { return '(undefined)' } })()}\n` +
+    `  electron=${process.versions.electron} chrome=${process.versions.chrome} node=${process.versions.node}`
+  )
+} catch { /* best-effort */ }
+
 export const pipelinePool = new Pool(origin, {
   connections: 8,
   // Keep idle connections alive for 60 seconds — well above CF's idle close
