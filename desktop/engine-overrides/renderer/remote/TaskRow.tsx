@@ -11,6 +11,7 @@
 import { useState } from 'react'
 import type { RemoteTask } from './useRemoteTasks'
 import { LiveTerminal } from './LiveTerminal'
+import { Markdown } from './Markdown'
 
 const STATE_LABEL: Record<RemoteTask['state'], string> = {
   processing: 'Working…',
@@ -65,8 +66,8 @@ export function TaskRow({
         <div className="mt-2 text-[12px] text-ink/80">
           <div>{task.result.summary}</div>
           {task.result.detail && (
-            <div className="mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap text-ink/70 border-l border-black/10 pl-2">
-              {task.result.detail}
+            <div className="mt-1.5 max-h-72 overflow-auto text-ink/70 border-l border-black/10 pl-2">
+              <Markdown text={task.result.detail} />
             </div>
           )}
           {task.result.artifacts?.map((a, i) => (

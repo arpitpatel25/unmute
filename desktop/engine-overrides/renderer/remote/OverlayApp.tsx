@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
 import { LiveTerminal } from './LiveTerminal'
+import { Markdown } from './Markdown'
 
 type API = {
   remoteOverlayDismiss?: () => void
@@ -83,8 +84,8 @@ function Expanded({
           {/* Full answer for info/fetch tasks — shown in place so you never need
               the terminal to read the complete result. */}
           {task.result.detail && (
-            <div className="mt-1.5 max-h-72 overflow-auto whitespace-pre-wrap text-white/70 border-l border-white/10 pl-2">
-              {task.result.detail}
+            <div className="mt-1.5 max-h-72 overflow-auto text-white/70 border-l border-white/10 pl-2">
+              <Markdown text={task.result.detail} />
             </div>
           )}
           {task.result.artifacts?.map((a, i) => (

@@ -171,12 +171,16 @@ function routerExecutorFactory() {
  *  the router never touches sessions). */
 function routableSnapshot(now: number): RoutableTask[] {
   if (!manager) return []
-  return manager.routableTasks().map((t) => ({
+  // routableTasks() is newest-first; the most-recent one is the de-facto
+  // "on-screen" task (the overlay auto-expands the last change) — mark it so the
+  // router has that prior when the command is terse.
+  return manager.routableTasks().map((t, i) => ({
     id: t.id,
     intent: t.intent,
     state: t.state,
     category: t.category ?? null,
     ageSec: Math.max(0, Math.round((now - t.updatedAt) / 1000)),
+    surfaced: i === 0,
   }))
 }
 
