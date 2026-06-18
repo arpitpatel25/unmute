@@ -16,6 +16,17 @@
 
 import { createLogger } from './log'
 import type { AgentExecutor, SpawnOpts } from './executor'
+import { sessionNameFor, buildCommand, tmuxNewSessionArgs, tmuxKillSessionArgs } from './tmux'
+
+/** When set, the agent runs inside a tmux session (private socket) so it can be
+ *  popped out to a real terminal as the SAME session. Session name is derived
+ *  from taskId at spawn. */
+export interface TmuxConfig {
+  bin: string
+  confPath: string
+  cols?: number
+  rows?: number
+}
 
 const log = createLogger('pty-session')
 
@@ -49,6 +60,8 @@ export interface CliAgentConfig {
   stripEnvVars: string[]
   /** Override the node-pty loader (tests inject a fake). */
   ptyLoader?: () => NodePty
+  /** Run the agent inside a tmux session (for pop-out to a real terminal). */
+  tmux?: TmuxConfig
   /** Component label for logs. */
   label: string
 }
@@ -61,6 +74,7 @@ export class CliAgentExecutor implements AgentExecutor {
   private sawData = false
   private exited = false
   private taskId = ''
+  private tmuxSession: string | null = null
 
   constructor(protected readonly cfg: CliAgentConfig) {}
 
@@ -80,9 +94,24 @@ export class CliAgentExecutor implements AgentExecutor {
     }
     slog.event('env-sanitized-for-subscription-billing', { strippedCount: stripped, vars: this.cfg.stripEnvVars })
 
+    // ── Optionally wrap in tmux so the session can be popped out to a real
+    //    terminal (the SAME session). The agent runs inside tmux; our PTY is a
+    //    tmux client. Env is still the stripped one above — and the private
+    //    socket (-L) means our OWN tmux server with that env (PRD §3.2). ──
+    let bin = this.cfg.bin
+    let args = this.cfg.extraArgs
+    if (this.cfg.tmux) {
+      const session = sessionNameFor(this.taskId)
+      this.tmuxSession = session
+      const command = buildCommand(this.cfg.bin, this.cfg.extraArgs)
+      bin = this.cfg.tmux.bin
+      args = tmuxNewSessionArgs({ session, command, confPath: this.cfg.tmux.confPath, cols: this.cfg.tmux.cols, rows: this.cfg.tmux.rows })
+      slog.event('tmux-wrap', { session, tmuxBin: this.cfg.tmux.bin, command })
+    }
+
     // ── Interactive REPL only — NO -p / SDK (PRD §3.2) ──
-    slog.event('pty-spawn', { bin: this.cfg.bin, args: this.cfg.extraArgs, cwd: spawnOpts.cwd })
-    const pty = (this.cfg.ptyLoader ?? loadNodePty)().spawn(this.cfg.bin, this.cfg.extraArgs, {
+    slog.event('pty-spawn', { bin, args, cwd: spawnOpts.cwd })
+    const pty = (this.cfg.ptyLoader ?? loadNodePty)().spawn(bin, args, {
       name: 'xterm-256color',
       cols: 120,
       rows: 40,
@@ -158,6 +187,16 @@ export class CliAgentExecutor implements AgentExecutor {
 
   kill(): void {
     const slog = log.child({ taskId: this.taskId, agent: this.cfg.label })
+    // In tmux mode, killing our client PTY only DETACHES — claude keeps running
+    // in the session (and keeps billing). Kill the session itself (PRD §3.2/§4.5).
+    if (this.tmuxSession && this.cfg.tmux) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const cp = require('node:child_process') as typeof import('node:child_process')
+        cp.execFile(this.cfg.tmux.bin, tmuxKillSessionArgs(this.tmuxSession), () => {})
+        slog.event('tmux-kill-session', { session: this.tmuxSession })
+      } catch (e) { slog.error('tmux kill-session failed', { error: (e as Error).message }) }
+    }
     if (this.pty && !this.exited) {
       slog.event('pty-kill', {})
       try { this.pty.kill() } catch (e) { slog.error('kill threw', { error: (e as Error).message }) }
@@ -181,6 +220,8 @@ export interface ClaudeCodeExecutorOpts {
    *  DECIDED: always on for Remote (browser tasks need it; non-browser tasks
    *  ignore it). Requires the extension installed + connected. */
   chrome?: boolean
+  /** Run inside a tmux session so it can be popped out to a real terminal. */
+  tmux?: TmuxConfig
   ptyLoader?: () => NodePty
 }
 
@@ -197,6 +238,7 @@ export class ClaudeCodeExecutor extends CliAgentExecutor {
       // PRD §3.2: any of these flip billing off the subscription — strip all.
       stripEnvVars: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY'],
       ptyLoader: opts.ptyLoader,
+      tmux: opts.tmux,
       label: 'claude',
     })
   }

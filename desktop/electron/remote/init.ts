@@ -20,9 +20,9 @@
 
 import { ipcMain, BrowserWindow, Notification, shell } from 'electron'
 import Store from 'electron-store'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
@@ -34,6 +34,7 @@ import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './lo
 import { launchAutomationChrome, automationProfileDir } from './browser'
 import { looksLikeContinuation } from './routing'
 import { buildSetupChecklist, setupComplete } from './setup-status'
+import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, TMUX_CONF } from './tmux'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -128,6 +129,31 @@ async function getSetupStatus() {
 let manager: TaskManager | null = null
 let completeFn: CompleteFn | null = null
 
+// tmux backing for the live terminal (pop-out to a real terminal = SAME session).
+// Resolved once at init; null ⇒ tmux not installed, sessions spawn directly.
+let tmuxBin: string | null = null
+const tmuxConfPath = join(homedir(), '.unmute', 'remote', 'tmux.conf')
+
+/** Open a task's tmux session in the user's terminal app (iTerm if present, else
+ *  Terminal). It ATTACHES to the running session — same claude, not a new one. */
+function openInTerminal(taskId: string): boolean {
+  if (!tmuxBin) { log.warn('open-in-terminal: tmux unavailable'); return false }
+  const session = sessionNameFor(taskId)
+  const attachCmd = [tmuxBin, ...tmuxAttachArgs(session)].join(' ')
+  const useIterm = existsSync('/Applications/iTerm.app')
+  const script = useIterm
+    ? `tell application "iTerm"\n  activate\n  create window with default profile command "${attachCmd}"\nend tell`
+    : `tell application "Terminal"\n  activate\n  do script "${attachCmd}"\nend tell`
+  try {
+    execFile('osascript', ['-e', script], (err) => { if (err) log.warn('open-in-terminal osascript failed', { error: err.message }) })
+    log.event('open-in-terminal', { taskId, session, terminal: useIterm ? 'iterm' : 'terminal' })
+    return true
+  } catch (e) {
+    log.warn('open-in-terminal threw', { error: (e as Error).message })
+    return false
+  }
+}
+
 /** Broadcast a task snapshot to every renderer (ambient pill + panel). */
 function broadcast(channel: string, task: Task): void {
   const safe = serializeTask(task)
@@ -179,11 +205,15 @@ function executorFactory() {
   // we do NOT skip permissions globally (out-of-fence access still prompts via
   // needs-user); claude gets the allowed roots via --add-dir.
   const extraArgs = !sandboxed && mode === 'auto-approve' ? ['--dangerously-skip-permissions'] : []
+  // Run inside tmux when available so the live terminal can be popped out to a
+  // real terminal app as the SAME session (private socket keeps env stripped).
+  const tmux = tmuxBin ? { bin: tmuxBin, confPath: tmuxConfPath, cols: 120, rows: 40 } : undefined
   return new ClaudeCodeExecutor({
     extraArgs,
     addDirs: sandboxRoots,
     model, // DECIDED: Opus for executor sessions
     chrome: browser, // DECIDED: Claude-in-Chrome on by default (browser lane)
+    tmux,
   })
 }
 
@@ -256,6 +286,23 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const runId = String(Date.now())
   const logFile = configureRemoteLogging({ dir: logDir, runId })
   log.event('init-remote', { logFile, permissionMode: settings.get('permissionMode') })
+
+  // Resolve tmux once: if present, sessions run inside it so the live terminal
+  // can be popped out to a real terminal app (same session). Write the minimal
+  // config (no status bar, mouse scroll, fixed size).
+  tmuxBin = resolveTmuxBin((p) => existsSync(p))
+  if (tmuxBin) {
+    try {
+      mkdirSync(dirname(tmuxConfPath), { recursive: true })
+      writeFileSync(tmuxConfPath, TMUX_CONF)
+      log.event('tmux-available', { tmuxBin, conf: tmuxConfPath })
+    } catch (e) {
+      log.warn('tmux conf write failed — disabling tmux', { error: (e as Error).message })
+      tmuxBin = null
+    }
+  } else {
+    log.event('tmux-unavailable', {})
+  }
 
   // DECIDED isolation: browser tasks run in a DEDICATED Chrome (its own profile)
   // so automation + the "debugging" banner never touch the user's real browser.
@@ -340,6 +387,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Typeable live terminal (PRD §4.3): raw keystrokes + viewport resize → PTY.
   ipcMain.on('remote:terminal-input', (_e, id: string, data: string) => manager?.sendInput(id, data))
   ipcMain.on('remote:terminal-resize', (_e, id: string, cols: number, rows: number) => manager?.resize(id, cols, rows))
+  // Pop the live terminal out to a real terminal app — SAME tmux session.
+  ipcMain.handle('remote:tmux-available', async () => tmuxBin !== null)
+  ipcMain.handle('remote:open-in-terminal', async (_e, id: string) => openInTerminal(id))
   ipcMain.handle('remote:get-settings', async () => ({
     permissionMode: settings.get('permissionMode'),
     remoteKey: getRemoteKey(),
