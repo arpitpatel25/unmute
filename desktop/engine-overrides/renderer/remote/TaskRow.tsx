@@ -37,11 +37,13 @@ export function TaskRow({
   onAnswer,
   onKill,
   onRerun,
+  onRemove,
 }: {
   task: RemoteTask
   onAnswer: (id: string, text: string) => void
   onKill: (id: string) => void
   onRerun: (intent: string) => void
+  onRemove?: (id: string) => void
 }) {
   const [draft, setDraft] = useState('')
   const [showTerminal, setShowTerminal] = useState(false)
@@ -177,6 +179,17 @@ export function TaskRow({
         >
           {showTerminal ? 'Hide terminal' : 'View terminal'}
         </button>
+        {onRemove && (
+          <button
+            className="text-[11px] px-2 py-0.5 rounded border border-red-200 text-red-700 hover:bg-red-50 ml-auto"
+            title="Kill the session and erase this task"
+            onClick={() => {
+              if (window.confirm('Kill this task and erase it? The Claude session is terminated and the task is removed.')) onRemove(task.id)
+            }}
+          >
+            Kill
+          </button>
+        )}
       </div>
 
       {showTerminal && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}

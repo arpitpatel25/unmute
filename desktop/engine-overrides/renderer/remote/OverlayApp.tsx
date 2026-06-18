@@ -54,12 +54,13 @@ function Dot({ state }: { state: RemoteTask['state'] }) {
 }
 
 function Expanded({
-  task, onAnswer, onKill, onRerun,
+  task, onAnswer, onKill, onRerun, onRemove,
 }: {
   task: RemoteTask
   onAnswer: (id: string, text: string) => void
   onKill: (id: string) => void
   onRerun: (intent: string) => void
+  onRemove: (id: string) => void
 }) {
   const [draft, setDraft] = useState('')
   const [showTerminal, setShowTerminal] = useState(false)
@@ -166,6 +167,13 @@ function Expanded({
         <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
           {showTerminal ? 'hide terminal' : 'terminal'}
         </button>
+        <button
+          className="text-rose-300/60 hover:text-rose-300 ml-auto"
+          title="Kill the session and erase this task"
+          onClick={() => { if (window.confirm('Kill this task and erase it?')) onRemove(task.id) }}
+        >
+          kill
+        </button>
       </div>
 
       {showTerminal && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
@@ -174,7 +182,7 @@ function Expanded({
 }
 
 function Row({
-  task, expanded, onToggle, onAnswer, onKill, onRerun,
+  task, expanded, onToggle, onAnswer, onKill, onRerun, onRemove,
 }: {
   task: RemoteTask
   expanded: boolean
@@ -182,6 +190,7 @@ function Row({
   onAnswer: (id: string, text: string) => void
   onKill: (id: string) => void
   onRerun: (intent: string) => void
+  onRemove: (id: string) => void
 }) {
   return (
     <div className={`rounded-xl transition-colors ${expanded ? 'bg-white/[0.05]' : 'hover:bg-white/[0.04]'}`}>
@@ -196,7 +205,7 @@ function Row({
         style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
       >
         <div className="overflow-hidden">
-          {expanded && <Expanded task={task} onAnswer={onAnswer} onKill={onKill} onRerun={onRerun} />}
+          {expanded && <Expanded task={task} onAnswer={onAnswer} onKill={onKill} onRerun={onRerun} onRemove={onRemove} />}
         </div>
       </div>
     </div>
@@ -204,7 +213,7 @@ function Row({
 }
 
 export function OverlayApp() {
-  const { tasks, answer, kill, rerun } = useRemoteTasks()
+  const { tasks, activeCount, answer, kill, remove, killAll, rerun } = useRemoteTasks()
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -251,7 +260,18 @@ export function OverlayApp() {
       >
         <div className="flex items-center justify-between px-4 pt-3 pb-2">
           <span className="text-[10px] font-semibold tracking-[0.22em] uppercase text-white/35">unmute</span>
-          <button className="text-[13px] leading-none text-white/25 hover:text-white/70" onClick={dismiss} title="Dismiss (Esc)">✕</button>
+          <div className="flex items-center gap-3">
+            {activeCount > 0 && (
+              <button
+                className="text-[10px] uppercase tracking-wider text-rose-300/55 hover:text-rose-300"
+                title="Terminate every running session"
+                onClick={() => { if (window.confirm('Kill ALL tasks?')) killAll() }}
+              >
+                kill all
+              </button>
+            )}
+            <button className="text-[13px] leading-none text-white/25 hover:text-white/70" onClick={dismiss} title="Dismiss (Esc)">✕</button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
@@ -267,6 +287,7 @@ export function OverlayApp() {
                 onAnswer={answer}
                 onKill={kill}
                 onRerun={rerun}
+                onRemove={remove}
               />
             ))
           )}

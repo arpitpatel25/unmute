@@ -18,7 +18,7 @@
 // NOT unit-tested — exactly like paywall/main-extensions.ts. The logic it
 // orchestrates (TaskManager, executor, status-file) is unit-tested separately.
 
-import { ipcMain, BrowserWindow, Notification, shell } from 'electron'
+import { ipcMain, BrowserWindow, Notification, shell, app } from 'electron'
 import Store from 'electron-store'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
@@ -403,6 +403,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     maybePresent(t)
     notify('Task may be stuck', t.intent)
   })
+  // Task erased (Kill/Delete) → tell renderers to drop the row.
+  manager.on('removed', (t: Task) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('remote:task-removed', { id: t.id })
+    }
+  })
+
+  // Master kill switch: closing Unmute terminates every Claude/tmux session so
+  // none is left orphaned on the user's machine/plan (PRD §10.4).
+  app.on('before-quit', () => {
+    try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
+  })
   // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
   manager.on('output', (d: { taskId: string; chunk: string }) => {
     for (const w of BrowserWindow.getAllWindows()) {
@@ -419,6 +431,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
   ipcMain.handle('remote:kill', async (_e, id: string) => {
     manager?.kill(id)
+    return true
+  })
+  // Kill/Delete a task entirely (terminate + erase). UI confirms before calling.
+  ipcMain.handle('remote:remove-task', async (_e, id: string) => {
+    await manager?.remove(id)
+    return true
+  })
+  // Master kill switch from the UI ("kill all tasks" above the table).
+  ipcMain.handle('remote:kill-all', async () => {
+    manager?.killAll()
     return true
   })
   ipcMain.handle('remote:get-output', async (_e, id: string) => manager?.getOutput(id) ?? '')

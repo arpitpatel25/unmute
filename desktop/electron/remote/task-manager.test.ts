@@ -203,3 +203,25 @@ test('tasksAwaitingUser lists only needs-user tasks, newest first (voice answeri
   assert.deepEqual(awaiting.map((t) => t.id), [a])
   tm.kill(a); tm.kill(b)
 })
+
+test('remove kills the session, erases the row, and deletes the scratch dir', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('a task')
+  const dir = tm.get(id)!.cwd
+  assert.ok((await fs.stat(dir)).isDirectory())
+  await tm.remove(id)
+  assert.equal(tm.get(id), undefined)        // gone from the list
+  await assert.rejects(fs.stat(dir))         // scratch dir deleted
+})
+
+test('killAll terminates every session and marks running tasks stopped (PRD §10.4)', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const a = await tm.dispatch('a')
+  const b = await tm.dispatch('b')
+  tm.killAll()
+  assert.equal(tm.get(a)!.state, 'failed')
+  assert.equal(tm.get(b)!.state, 'failed')
+  assert.equal(tm.activeCount(), 0)
+})

@@ -56,8 +56,15 @@ export const remotePreloadExtensions = {
   /** Answer a needs-user question — piped into the session stdin (PRD §7). */
   remoteAnswer: (id: string, answer: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:answer', id, answer),
-  /** Instant kill (PRD §10.4). */
+  /** Instant kill / Stop — terminates the session, keeps the row (PRD §10.4). */
   remoteKill: (id: string): Promise<boolean> => ipcRenderer.invoke('remote:kill', id),
+  /** Kill/Delete — terminate + erase the task entirely (UI confirms first). */
+  remoteRemoveTask: (id: string): Promise<boolean> => ipcRenderer.invoke('remote:remove-task', id),
+  /** Master kill switch — terminate every task's session at once. */
+  remoteKillAll: (): Promise<boolean> => ipcRenderer.invoke('remote:kill-all'),
+  /** A task was erased — drop its row. */
+  remoteOnTaskRemoved: (cb: (d: { id: string }) => void) =>
+    ipcRenderer.on('remote:task-removed', (_e, d) => cb(d)),
 
   // ── Settings ──
   remoteGetSettings: (): Promise<RemoteSettingsSnapshot> => ipcRenderer.invoke('remote:get-settings'),

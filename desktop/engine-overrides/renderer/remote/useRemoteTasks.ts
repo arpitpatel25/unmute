@@ -26,6 +26,8 @@ type RemoteAPIShape = {
   remoteList?: () => Promise<RemoteTask[]>
   remoteAnswer?: (id: string, answer: string) => Promise<boolean>
   remoteKill?: (id: string) => Promise<boolean>
+  remoteRemoveTask?: (id: string) => Promise<boolean>
+  remoteKillAll?: () => Promise<boolean>
   remoteDispatch?: (intent: string) => Promise<string | null>
   remoteOnTaskCreated?: (cb: (t: RemoteTask) => void) => void
   remoteOnTaskUpdated?: (cb: (t: RemoteTask) => void) => void
@@ -33,6 +35,7 @@ type RemoteAPIShape = {
   remoteOnTaskDone?: (cb: (t: RemoteTask) => void) => void
   remoteOnTaskFailed?: (cb: (t: RemoteTask) => void) => void
   remoteOnTaskStuck?: (cb: (t: RemoteTask) => void) => void
+  remoteOnTaskRemoved?: (cb: (d: { id: string }) => void) => void
 }
 function api(): RemoteAPIShape {
   return (window as unknown as { electronAPI?: RemoteAPIShape }).electronAPI ?? {}
@@ -62,6 +65,7 @@ export function useRemoteTasks() {
     api().remoteOnTaskDone?.(upsert)
     api().remoteOnTaskFailed?.(upsert)
     api().remoteOnTaskStuck?.(upsert)
+    api().remoteOnTaskRemoved?.((d) => setTasks((prev) => prev.filter((x) => x.id !== d.id)))
     return () => { alive = false }
   }, [upsert])
 
@@ -70,7 +74,9 @@ export function useRemoteTasks() {
 
   const answer = useCallback((id: string, text: string) => { void api().remoteAnswer?.(id, text) }, [])
   const kill = useCallback((id: string) => { void api().remoteKill?.(id) }, [])
+  const remove = useCallback((id: string) => { void api().remoteRemoveTask?.(id) }, [])
+  const killAll = useCallback(() => { void api().remoteKillAll?.() }, [])
   const rerun = useCallback((intent: string) => { void api().remoteDispatch?.(intent) }, [])
 
-  return { tasks, activeCount, anyNeedsUser, answer, kill, rerun }
+  return { tasks, activeCount, anyNeedsUser, answer, kill, remove, killAll, rerun }
 }

@@ -20,6 +20,7 @@
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { promises as fs } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { createLogger } from './log'
 import {
@@ -94,7 +95,7 @@ export interface TaskManagerOpts {
   now?: () => number
 }
 
-type TaskEvent = 'created' | 'updated' | 'needs-user' | 'stuck' | 'done' | 'failed'
+type TaskEvent = 'created' | 'updated' | 'needs-user' | 'stuck' | 'done' | 'failed' | 'removed'
 
 const TERMINAL: UiTaskState[] = ['done', 'failed']
 
@@ -390,6 +391,50 @@ export class TaskManager extends EventEmitter {
       this.emit('failed', task)
     }
     this.hardKill(id) // explicit stop ⇒ no warm window
+  }
+
+  /**
+   * Kill/Delete (PRD §10.4 hard erase). Terminates the session, removes the task
+   * from the list ENTIRELY, and deletes its scratch dir. This is the destructive
+   * "nuke it" the user confirms — distinct from kill()/Stop which keeps the row.
+   * The scratch dir holds only status/recipe + the session cwd, never the user's
+   * real deliverables (those land wherever Claude put them).
+   */
+  async remove(id: string): Promise<void> {
+    const tlog = log.child({ taskId: id })
+    tlog.ui('task-row.removed', {})
+    const task = this.tasks.get(id)
+    this.hardKill(id) // terminate session (PTY + tmux kill-session)
+    this.tasks.delete(id)
+    this.outputBuffers.delete(id)
+    if (task) {
+      try { await fs.rm(task.cwd, { recursive: true, force: true }) } catch (e) {
+        tlog.warn('remove: scratch dir delete failed', { error: (e as Error).message })
+      }
+    }
+    this.emit('removed', { id } as unknown as Task)
+    tlog.event('task-removed', {})
+  }
+
+  /**
+   * Master kill switch: terminate EVERY task's session at once (the UI "kill all"
+   * control + app-quit). Marks any still-running task as stopped; does NOT erase
+   * history. Guarantees no Claude/tmux session is left orphaned.
+   */
+  killAll(): void {
+    const ids = [...this.executors.keys()]
+    for (const id of ids) {
+      const task = this.tasks.get(id)
+      if (task && !TERMINAL.includes(task.state)) {
+        task.state = 'failed'
+        task.error = { reason: 'Stopped (kill all)' }
+        task.updatedAt = this.clock()
+        this.emit('updated', task)
+        this.emit('failed', task)
+      }
+      this.hardKill(id)
+    }
+    log.event('kill-all', { count: ids.length })
   }
 
   /**

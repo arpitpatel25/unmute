@@ -9,11 +9,24 @@ import { RemoteSettings } from './RemoteSettings'
 import { Onboarding } from './Onboarding'
 
 export function TaskPanel() {
-  const { tasks, answer, kill, rerun } = useRemoteTasks()
+  const { tasks, activeCount, answer, kill, remove, killAll, rerun } = useRemoteTasks()
 
   return (
     <div className="p-4">
-      <div className="text-sm font-semibold text-ink mb-1">Remote tasks</div>
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-sm font-semibold text-ink">Remote tasks</div>
+        {tasks.length > 0 && (
+          <button
+            className="text-[11px] px-2 py-0.5 rounded border border-red-200 text-red-700 hover:bg-red-50"
+            title="Terminate every running session"
+            onClick={() => {
+              if (window.confirm('Kill ALL tasks? Every running Claude session is terminated immediately.')) killAll()
+            }}
+          >
+            Kill all{activeCount ? ` (${activeCount} running)` : ''}
+          </button>
+        )}
+      </div>
       <div className="text-[12px] text-ink/50 mb-3">
         Hold the Remote key and speak a command — it runs on your machine via Claude Code.
       </div>
@@ -27,7 +40,7 @@ export function TaskPanel() {
         </div>
       ) : (
         tasks.map((t) => (
-          <TaskRow key={t.id} task={t} onAnswer={answer} onKill={kill} onRerun={rerun} />
+          <TaskRow key={t.id} task={t} onAnswer={answer} onKill={kill} onRerun={rerun} onRemove={remove} />
         ))
       )}
     </div>
