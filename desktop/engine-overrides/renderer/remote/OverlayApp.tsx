@@ -204,6 +204,21 @@ export function OverlayApp() {
     return () => off?.()
   }, [])
 
+  // The window body defaults to the app's light background, which (1) shows as a
+  // white frame around the card and (2) sits behind the translucent panel, making
+  // it look grey instead of black. Force the whole document transparent so only
+  // our black-glass card is visible.
+  useEffect(() => {
+    const prevHtml = document.documentElement.style.background
+    const prevBody = document.body.style.background
+    document.documentElement.style.background = 'transparent'
+    document.body.style.background = 'transparent'
+    return () => {
+      document.documentElement.style.background = prevHtml
+      document.body.style.background = prevBody
+    }
+  }, [])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.preventDefault(); api().remoteOverlayDismiss?.() }
@@ -215,14 +230,15 @@ export function OverlayApp() {
   const dismiss = () => api().remoteOverlayDismiss?.()
 
   return (
-    <div className="h-screen w-screen p-3" style={{ background: 'transparent' }}>
+    <div className="h-screen w-screen p-2" style={{ background: 'transparent' }}>
       <div
-        className="h-full flex flex-col rounded-[20px] overflow-hidden"
+        className="h-full flex flex-col rounded-[18px] overflow-hidden"
         style={{
-          background: 'rgba(14,14,16,0.62)',
-          backdropFilter: 'blur(28px) saturate(140%)',
-          WebkitBackdropFilter: 'blur(28px) saturate(140%)',
-          boxShadow: '0 24px 70px rgba(0,0,0,0.55)',
+          // Black glass: actual black at ~60% opacity, light blur. No border, no
+          // white frame (the document is forced transparent above).
+          background: 'rgba(0,0,0,0.6)',
+          backdropFilter: 'blur(18px)',
+          WebkitBackdropFilter: 'blur(18px)',
         }}
       >
         <div className="flex items-center justify-between px-4 pt-3 pb-2">
