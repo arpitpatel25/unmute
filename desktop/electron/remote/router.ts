@@ -139,6 +139,11 @@ export interface RouterOpts {
   decisionTimeoutMs?: number
   /** ms to let the REPL boot before the first prompt. */
   readyGraceMs?: number
+  /** ms to wait after typing the multi-line prompt before sending an explicit
+   *  confirm Enter. Claude's TUI captures a multi-line write as a paste that
+   *  lands one Enter short of submitting (same quirk the task dispatch path
+   *  confirm-Enters for). Without this the prompt sits unsubmitted as a paste. */
+  submitConfirmMs?: number
   pollMs?: number
   /** Recycle (full respawn) the resident session after this many decisions. */
   recycleEvery?: number
@@ -162,6 +167,7 @@ export class Router {
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       decisionTimeoutMs: opts.decisionTimeoutMs ?? 60000,
       readyGraceMs: opts.readyGraceMs ?? 1500,
+      submitConfirmMs: opts.submitConfirmMs ?? 450,
       pollMs: opts.pollMs ?? 150,
       recycleEvery: opts.recycleEvery ?? 50,
       maxSessionMs: opts.maxSessionMs ?? 2 * 60 * 60_000,
@@ -199,6 +205,12 @@ export class Router {
       await fs.rm(this.decisionPath, { force: true }).catch(() => {})
       const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath)
       this.ex!.writeStdin(prompt)
+      // The multi-line prompt is captured by Claude's TUI as a paste that lands
+      // one Enter short of submitting — so it sits as "[Pasted text]" and the
+      // model never runs. Mirror the task dispatch path: settle, then send an
+      // explicit confirm Enter to actually submit it. (Proven on the task lane.)
+      await this.sleep(this.o.submitConfirmMs)
+      if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
       const raw = await this.waitForDecision()
       const decision = parseDecision(raw, fallback, tasks)
       log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length })

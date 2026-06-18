@@ -91,7 +91,7 @@ test('Router.warm() spawns the session before the first route', async () => {
     }
     return ex
   }
-  const router = new Router({ executorFactory: factory, baseDir, readyGraceMs: 0, decisionTimeoutMs: 1000, pollMs: 20 })
+  const router = new Router({ executorFactory: factory, baseDir, readyGraceMs: 0, submitConfirmMs: 0, decisionTimeoutMs: 1000, pollMs: 20 })
   await router.warm()
   assert.equal(spawns, 1)             // already up before any utterance
   await router.route('x', ONE)
@@ -103,7 +103,7 @@ test('Router.route returns continue when the session decides so', async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'router-'))
   const decisionPath = path.join(baseDir, 'router', 'decision.json')
   const ex = fakeRouterExecutor(decisionPath, { action: 'continue', targetTaskId: 't1', intent: 'reply to it' })
-  const router = new Router({ executorFactory: () => ex, baseDir, readyGraceMs: 0, decisionTimeoutMs: 2000, pollMs: 20 })
+  const router = new Router({ executorFactory: () => ex, baseDir, readyGraceMs: 0, submitConfirmMs: 0, decisionTimeoutMs: 2000, pollMs: 20 })
   const d = await router.route('reply to it', TASKS)
   assert.equal(d.action, 'continue')
   assert.equal(d.targetTaskId, 't1')
@@ -129,7 +129,7 @@ test('Router sends /clear after each decision (keeps the resident session lean)'
     }
     return ex
   }
-  const router = new Router({ executorFactory: factory, baseDir, readyGraceMs: 0, decisionTimeoutMs: 1000, pollMs: 20 })
+  const router = new Router({ executorFactory: factory, baseDir, readyGraceMs: 0, submitConfirmMs: 0, decisionTimeoutMs: 1000, pollMs: 20 })
   await router.route('x', ONE)
   await router.settleHousekeeping() // awaits the chain's trailing housekeep
   assert.ok(writes.includes('/clear'))
@@ -153,7 +153,7 @@ test('Router recycles the session after recycleEvery decisions', async () => {
     }
     return ex
   }
-  const router = new Router({ executorFactory: factory, baseDir, readyGraceMs: 0, decisionTimeoutMs: 1000, pollMs: 20, recycleEvery: 2 })
+  const router = new Router({ executorFactory: factory, baseDir, readyGraceMs: 0, submitConfirmMs: 0, decisionTimeoutMs: 1000, pollMs: 20, recycleEvery: 2 })
   await router.warm()                 // spawns === 1
   await router.route('a', ONE); await router.settleHousekeeping()
   await router.route('b', ONE); await router.settleHousekeeping() // 2nd decision ⇒ recycle
@@ -166,7 +166,7 @@ test('Router.route fails safe on timeout: ambiguous (2+ tasks) ⇒ NEW', async (
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'router-'))
   const decisionPath = path.join(baseDir, 'router', 'decision.json')
   const ex = fakeRouterExecutor(decisionPath, null) // never writes
-  const router = new Router({ executorFactory: () => ex, baseDir, readyGraceMs: 0, decisionTimeoutMs: 250, pollMs: 20 })
+  const router = new Router({ executorFactory: () => ex, baseDir, readyGraceMs: 0, submitConfirmMs: 0, decisionTimeoutMs: 250, pollMs: 20 })
   const d = await router.route('open my downloads folder', TWO)
   assert.equal(d.action, 'new')
   assert.equal(d.intent, 'open my downloads folder')
@@ -177,7 +177,7 @@ test('Router.route fails safe on timeout: ONE recent task ⇒ CONTINUE it (the f
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'router-'))
   const decisionPath = path.join(baseDir, 'router', 'decision.json')
   const ex = fakeRouterExecutor(decisionPath, null) // never writes (cold-timeout)
-  const router = new Router({ executorFactory: () => ex, baseDir, readyGraceMs: 0, decisionTimeoutMs: 250, pollMs: 20 })
+  const router = new Router({ executorFactory: () => ex, baseDir, readyGraceMs: 0, submitConfirmMs: 0, decisionTimeoutMs: 250, pollMs: 20 })
   const d = await router.route('and what about 2015?', ONE)
   assert.equal(d.action, 'continue')
   assert.equal(d.targetTaskId, 't1')
