@@ -19,6 +19,10 @@ declare module 'electron' {
     removeListener(channel: string, listener: (e: unknown, ...args: any[]) => void): void
     send(channel: string, ...args: any[]): void
   }
+  export const shell: {
+    openExternal(url: string, options?: { activate?: boolean }): Promise<void>
+    openPath(path: string): Promise<string>
+  }
   export interface App { on(event: string, cb: (...a: unknown[]) => void): void }
   export const app: App
   export class Notification {

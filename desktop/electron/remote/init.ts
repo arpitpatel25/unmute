@@ -18,7 +18,7 @@
 // NOT unit-tested — exactly like paywall/main-extensions.ts. The logic it
 // orchestrates (TaskManager, executor, status-file) is unit-tested separately.
 
-import { ipcMain, BrowserWindow, Notification } from 'electron'
+import { ipcMain, BrowserWindow, Notification, shell } from 'electron'
 import Store from 'electron-store'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -315,6 +315,25 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return true
   })
   ipcMain.handle('remote:get-output', async (_e, id: string) => manager?.getOutput(id) ?? '')
+  // Open a result artifact in the USER's default app (PRD §13.4 #3 + the
+  // consumption handoff): URLs open in the default browser, paths in Finder.
+  // activate:false ⇒ open in a background tab WITHOUT stealing focus from what
+  // the user is currently doing (DECIDED: never yank the user to it).
+  ipcMain.handle('remote:open-artifact', async (_e, type: 'url' | 'path', value: string) => {
+    try {
+      if (type === 'path') {
+        const err = await shell.openPath(value)
+        if (err) { log.warn('open-artifact path failed', { value, err }); return false }
+      } else {
+        await shell.openExternal(value, { activate: false })
+      }
+      log.event('artifact-opened', { type, value })
+      return true
+    } catch (e) {
+      log.warn('open-artifact failed', { type, value, error: (e as Error).message })
+      return false
+    }
+  })
   // Typeable live terminal (PRD §4.3): raw keystrokes + viewport resize → PTY.
   ipcMain.on('remote:terminal-input', (_e, id: string, data: string) => manager?.sendInput(id, data))
   ipcMain.on('remote:terminal-resize', (_e, id: string, cols: number, rows: number) => manager?.resize(id, cols, rows))

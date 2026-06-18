@@ -78,6 +78,10 @@ export const remotePreloadExtensions = {
   // ── Render-on-demand live terminal (PRD §13.4 #8) ──
   /** Recent buffered PTY output for a task (for opening the live view). */
   remoteGetOutput: (taskId: string): Promise<string> => ipcRenderer.invoke('remote:get-output', taskId),
+  /** Open a result artifact in the user's default app — URL in the default
+   *  browser (background tab, no focus steal), path in Finder. */
+  remoteOpenArtifact: (type: 'url' | 'path', value: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:open-artifact', type, value),
   /** Live PTY output chunks for the currently-watched task. Returns an
    *  unsubscribe fn so a re-summoned terminal doesn't leak listeners. */
   remoteOnOutput: (cb: (d: { taskId: string; chunk: string }) => void): (() => void) => {

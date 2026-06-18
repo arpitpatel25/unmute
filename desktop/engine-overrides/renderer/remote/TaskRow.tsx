@@ -65,13 +65,16 @@ export function TaskRow({
           {task.result.artifacts?.map((a, i) => (
             <button
               key={i}
-              className="mt-1 text-[11px] underline text-blue-700 block text-left"
+              className="mt-1 text-[11px] underline text-blue-700 block text-left hover:text-blue-900"
               onClick={() => {
-                // Opening artifacts (file/url) is wired to the shell in a follow-on;
-                // for now surface the value so the user can act on it.
-                void navigator.clipboard?.writeText(a.value)
+                // Open in the user's default app: URL → default browser (background
+                // tab, no focus steal), path → Finder. Falls back to copying the
+                // value if the bridge isn't present.
+                const open = (window as unknown as { electronAPI?: { remoteOpenArtifact?: (t: 'url' | 'path', v: string) => Promise<boolean> } }).electronAPI?.remoteOpenArtifact
+                if (open) void open(a.type, a.value)
+                else void navigator.clipboard?.writeText(a.value)
               }}
-              title="Copy"
+              title={a.type === 'path' ? 'Open in Finder' : 'Open in browser'}
             >
               {a.type === 'path' ? '📄 ' : '🔗 '}{a.value}
             </button>
