@@ -600,8 +600,16 @@ class SessionManager {
 
     // Capture selected text AFTER HUD is shown — delay to let macOS
     // finish rendering the window before osascript Cmd+C fires,
-    // which can disrupt window ordering
-    if (!this.currentSession.selectedText) {
+    // which can disrupt window ordering.
+    //
+    // For Remote captures the selection grab is DEFERRED to key-release
+    // (see stopRemoteCapture). The Remote trigger is the right-option key,
+    // which the user is still physically holding during this on-down window;
+    // a synthesized Cmd+C colliding with the held Option becomes Cmd+Opt+C —
+    // which Chrome interprets as "Inspect Element" and pops DevTools. Grabbing
+    // only after the key lifts keeps the select-text→command flow intact
+    // without ever producing that modifier combination.
+    if (!this.remoteCaptureActive && !this.currentSession.selectedText) {
       setTimeout(() => this.captureSelection(mode), 50)
     }
 
@@ -635,6 +643,18 @@ class SessionManager {
   async stopRemoteCapture(): Promise<void> {
     console.log('[session] 🛰  REMOTE capture STOP → awaiting audio, then process')
     await this.stopRecording('dictation')
+
+    // Deferred selection grab — see startSession. The right-option trigger has
+    // now been released, so the synthesized osascript Cmd+C lands cleanly
+    // (no Cmd+Opt+C, no Chrome DevTools). A short settle lets the modifier
+    // fully lift before we synthesize the keystroke; we AWAIT the grab so the
+    // selection is populated before processSession() reads it — preserving the
+    // select-text→command flow with no loss of ordering.
+    if (this.currentSession && !this.currentSession.selectedText) {
+      await new Promise((r) => setTimeout(r, 60))
+      await this.captureSelection('dictation')
+    }
+
     // The renderer finalises + sends the audio (sendAudioReady/FinalChunk →
     // receiveAudio) shortly after recording:stop. Wait for it to land before
     // processing, instead of relying on the dictation chain-timer path.
