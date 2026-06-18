@@ -134,7 +134,8 @@ function Expanded({
               onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { onAnswer(task.id, draft.trim()); setDraft('') } }}
             >
               <input
-                className="flex-1 text-[12px] px-2 py-1 rounded-lg bg-white/[0.06] text-white placeholder-white/30 outline-none"
+                className="flex-1 text-[12px] px-2 py-1 rounded-lg bg-white/10 text-white placeholder-white/40 outline-none border border-white/15 focus:border-white/40"
+                style={{ caretColor: '#ffffff' }}
                 placeholder={task.question.kind === 'confirm' ? 'yes / no' : 'type your answer…'}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -234,9 +235,9 @@ export function OverlayApp() {
       <div
         className="h-full flex flex-col rounded-[18px] overflow-hidden"
         style={{
-          // Black glass: actual black at ~60% opacity, light blur. No border, no
+          // Black glass: actual black at 80% opacity, light blur. No border, no
           // white frame (the document is forced transparent above).
-          background: 'rgba(0,0,0,0.6)',
+          background: 'rgba(0,0,0,0.8)',
           backdropFilter: 'blur(18px)',
           WebkitBackdropFilter: 'blur(18px)',
         }}
