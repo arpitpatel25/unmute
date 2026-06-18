@@ -167,7 +167,7 @@ let router: Router | null = null
  *  ~1-2s, and we must NOT inherit the CLI default (the user can change it to
  *  Opus, which is heavy and slow for a one-line judgement). */
 function routerExecutorFactory() {
-  return new ClaudeCodeExecutor({ model: 'haiku', extraArgs: ['--dangerously-skip-permissions'], chrome: false })
+  return new ClaudeCodeExecutor({ model: 'sonnet', extraArgs: ['--dangerously-skip-permissions'], chrome: false })
 }
 
 /** Build the router's task snapshot from Unmute's live map (Unmute is the hub —
