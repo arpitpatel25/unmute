@@ -63,7 +63,13 @@ export function createOverlayWindow(): BrowserWindow {
     },
   })
 
-  overlayWindow.setAlwaysOnTop(true, 'floating')
+  // 'screen-saver' level sits ABOVE full-screen apps (the 'floating' level sat
+  // below them, so the overlay vanished over fullscreen video/apps). Combined
+  // with visibleOnFullScreen (the fullScreenAuxiliary collection behavior), this
+  // is the standard recipe for an overlay that stays pinned over EVERYTHING,
+  // including full-screen Spaces. (DRM players / exclusive-fullscreen games can
+  // still block any overlay — an OS limit, not ours.)
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver')
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   overlayWindow.setFullScreenable(false)
 
