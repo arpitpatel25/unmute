@@ -80,8 +80,11 @@ correctly. Set \`category\` to ONE of:
   (markdown ok)** — not one line. The user reads it in place and should NOT have
   to open a terminal to see the full thing. \`summary\` is still a one-liner.
 - \`navigate\` — the point is to LAND the user on something (open a page/tab/app,
-  "open her LinkedIn"). Put the opened URL in \`result.artifacts\` so Unmute can
-  bring the user to it. Keep \`detail\` short.
+  "open her LinkedIn"). Open it in a real Chrome tab, and put that tab's EXACT
+  current URL — as the address bar shows it AFTER any redirects — in
+  \`result.artifacts\` (\`type: "url"\`). Unmute uses it to raise that precise tab
+  for the user, so report the live tab URL, not your spoken approximation. Keep
+  \`detail\` short.
 - \`consume\` — start media to watch/listen ("play the podcast", "open this video
   and play"). Put the URL in artifacts. Keep \`detail\` short.
 - \`act\` — an action/edit with a side effect ("reply to that email", "edit the

@@ -220,6 +220,45 @@ function broadcast(channel: string, task: Task): void {
 /** Bring the user to a navigate task's target (DECIDED: for "open X" tasks the
  *  deliverable is BEING there, so focus the tab/app instead of a popup). Focusing
  *  steals focus — which is correct ONLY for this category. Best-effort. */
+// Find the EXACT Chrome tab the executor left on a URL and raise it — right
+// window AND right tab, switching Spaces if the window lives on another one.
+// Matching is by normalized URL (drop scheme, leading "www.", trailing "/",
+// #fragment and ?query) so the executor's reported URL and Chrome's own tab
+// URL join reliably despite cosmetic drift. Returns "focused" or "notfound".
+// Because we search every window/tab first and only open when nothing matches,
+// we can never create a duplicate tab.
+const FOCUS_CHROME_TAB = `
+on run argv
+  set target to my normURL(item 1 of argv)
+  tell application "Google Chrome"
+    repeat with w in every window
+      set i to 0
+      repeat with t in every tab of w
+        set i to i + 1
+        if my normURL(URL of t) is target then
+          set index of w to 1
+          set active tab index of w to i
+          activate
+          return "focused"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "notfound"
+end run
+
+on normURL(u)
+  try
+    if u contains "://" then set u to text ((offset of "://" in u) + 3) thru -1 of u
+    if u contains "#" then set u to text 1 thru ((offset of "#" in u) - 1) of u
+    if u contains "?" then set u to text 1 thru ((offset of "?" in u) - 1) of u
+    if u starts with "www." then set u to text 5 thru -1 of u
+    if u ends with "/" then set u to text 1 thru -2 of u
+  end try
+  return u
+end normURL
+`
+
 function focusTarget(task: Task): void {
   const arts = task.result?.artifacts ?? []
   const path = arts.find((a) => a.type === 'path')?.value
@@ -227,14 +266,24 @@ function focusTarget(task: Task): void {
   try {
     if (path) {
       void shell.openPath(path) // opens the file/folder + brings its app forward
-    } else if (url) {
-      // The executor opened the tab as active; just bring the browser forward
-      // (avoids opening a duplicate tab). Best-effort — Chrome is the real lane.
-      execFile('osascript', ['-e', 'tell application "Google Chrome" to activate'], (err) => {
-        if (err) { void shell.openExternal(url) } // fallback: open it (may dupe)
-      })
+      log.event('focus-target', { taskId: task.id, hasPath: true, hasUrl: false })
+      return
     }
-    log.event('focus-target', { taskId: task.id, hasPath: !!path, hasUrl: !!url })
+    if (!url) {
+      log.event('focus-target', { taskId: task.id, hasPath: false, hasUrl: false })
+      return
+    }
+    // Raise the precise tab the executor navigated. Only if NO tab currently
+    // holds this URL do we open it once (foreground) — never a duplicate.
+    execFile('osascript', ['-e', FOCUS_CHROME_TAB, url], { timeout: 5000 }, (err, stdout) => {
+      const result = (stdout || '').trim()
+      if (err || result !== 'focused') {
+        log.event('focus-target-open', { taskId: task.id, reason: err ? 'osascript-error' : result })
+        void shell.openExternal(url, { activate: true }) // genuinely absent → open once, foreground
+      } else {
+        log.event('focus-target-raised', { taskId: task.id })
+      }
+    })
   } catch (e) {
     log.warn('focus-target failed', { error: (e as Error).message })
   }
