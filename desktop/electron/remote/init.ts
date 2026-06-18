@@ -462,6 +462,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // The warm routing classifier (lazy — spawns on the first routed utterance,
   // idle-kills itself; tool-less, no glow). Star topology: Unmute is the hub.
   router = new Router({ executorFactory: routerExecutorFactory })
+  // Resident from startup — bring the classifier up now so the FIRST follow-up
+  // utterance hits a warm session, never a cold spawn + timeout. Fire-and-forget.
+  void router.warm()
 
   // ── Wire the Remote trigger key → capture (PRD §2.4.4 / §5) ──
   // keyboard.ts emits 'remote-start'/'remote-stop' for the non-dictation key;
@@ -470,6 +473,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   deps.keyboardManager.on('keyboard', (e) => {
     if (e.type === 'remote-start') {
       log.event('remote-key', { phase: 'start' })
+      void router?.warm() // ensure the classifier is ready before the utterance lands (re-warms if it died)
       pauseOverlayEscape() // capture owns Escape (cancel) while recording
       deps.sessionManager.startRemoteCapture()
     } else if (e.type === 'remote-stop') {

@@ -162,6 +162,15 @@ export class Router {
     return run
   }
 
+  /** Bring the session up (or respawn it if it died) BEFORE it is needed, so a
+   *  real utterance never pays cold-start. Idempotent and single-flighted: safe
+   *  to call at app init and again on every Remote key-down. */
+  warm(): Promise<void> {
+    const run = this.chain.then(() => this.ensureSession())
+    this.chain = run.catch(() => undefined)
+    return run
+  }
+
   private async routeOnce(utterance: string, tasks: RoutableTask[]): Promise<RouteDecision> {
     const fallback = (utterance || '').trim()
     try {

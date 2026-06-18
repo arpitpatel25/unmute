@@ -67,6 +67,31 @@ function fakeRouterExecutor(decisionPath: string, decision: object | null) {
   return ex
 }
 
+test('Router.warm() spawns the session before the first route', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'router-'))
+  const decisionPath = path.join(baseDir, 'router', 'decision.json')
+  let spawns = 0
+  const factory = () => {
+    let alive = true
+    const ex: AgentExecutor = {
+      get alive() { return alive },
+      async spawn() { spawns++ }, async isReady() {},
+      writeStdin(t: string) {
+        if (t.includes('[Unmute router]')) void fs.mkdir(path.dirname(decisionPath), { recursive: true })
+          .then(() => fs.writeFile(decisionPath, JSON.stringify({ action: 'new', intent: 'x' })))
+      },
+      write() {}, resize() {}, onData() {}, kill() { alive = false },
+    }
+    return ex
+  }
+  const router = new Router({ executorFactory: factory, baseDir, readyGraceMs: 0, decisionTimeoutMs: 1000, pollMs: 20 })
+  await router.warm()
+  assert.equal(spawns, 1)             // already up before any utterance
+  await router.route('x', ONE)
+  assert.equal(spawns, 1)             // route reused the warm session, no respawn
+  router.dispose()
+})
+
 test('Router.route returns continue when the session decides so', async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'router-'))
   const decisionPath = path.join(baseDir, 'router', 'decision.json')
