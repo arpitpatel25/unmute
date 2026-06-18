@@ -14,7 +14,7 @@ declare module 'electron' {
     isVisible(): boolean
     webContents: WebContents
     setAlwaysOnTop(flag: boolean, level?: string): void
-    setVisibleOnAllWorkspaces(flag: boolean, opts?: { visibleOnFullScreen?: boolean }): void
+    setVisibleOnAllWorkspaces(flag: boolean, opts?: { visibleOnFullScreen?: boolean; skipTransformProcessType?: boolean }): void
     setFullScreenable(flag: boolean): void
     setBounds(b: Rectangle): void
     showInactive(): void

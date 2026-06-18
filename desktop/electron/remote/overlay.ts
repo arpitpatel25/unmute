@@ -70,7 +70,11 @@ export function createOverlayWindow(): BrowserWindow {
   // including full-screen Spaces. (DRM players / exclusive-fullscreen games can
   // still block any overlay — an OS limit, not ours.)
   overlayWindow.setAlwaysOnTop(true, 'screen-saver')
-  overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  // skipTransformProcessType:true stops Electron from flipping the process type
+  // when it joins all Spaces — that transform is what gave the window a "home"
+  // Space and made it flicker-in-then-vanish during Space swipes. With it, the
+  // window genuinely lives on every Space (incl. full-screen).
+  overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
   overlayWindow.setFullScreenable(false)
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -90,6 +94,11 @@ export function presentOverlay(taskId: string): void {
   win.setBounds(overlayBounds()) // re-anchor to the active display
   win.webContents.send('remote:overlay-focus', { taskId })
   if (!win.isVisible()) win.showInactive() // appear WITHOUT taking focus
+  // Re-assert the all-Spaces + level flags on every present — macOS can drop the
+  // collection behavior after a show/hide, which is what let it slip back to a
+  // single Space. Re-applying here keeps it omnipresent.
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
+  win.setAlwaysOnTop(true, 'screen-saver')
   log.event('overlay-presented', { taskId })
 }
 
