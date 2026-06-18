@@ -86,17 +86,33 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
   ].join('\n')
 }
 
-/** Parse the decision file. Fail-safe: anything malformed/unknown ⇒ new task. */
-export function parseDecision(raw: string | null, fallbackIntent: string, validIds: Set<string>): RouteDecision {
-  const safe = (intent?: string): RouteDecision => ({ action: 'new', intent: (intent || fallbackIntent).trim() || fallbackIntent })
-  if (!raw) return safe()
+/** The default decision when the router gives us nothing usable (timeout, bad
+ *  parse, unknown id). A follow-up is far likelier than a coincidental brand-new
+ *  request when exactly ONE recent task is open — so continue it rather than
+ *  start blind and lose its context (the cold-timeout bug). Anything ambiguous
+ *  (0 or 2+ tasks, or a stale lone task) stays NEW. */
+export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSec = 180): RouteDecision {
+  const clean = (intent || '').trim()
+  if (tasks.length === 1 && tasks[0].ageSec <= maxAgeSec) {
+    return { action: 'continue', targetTaskId: tasks[0].id, intent: clean }
+  }
+  return { action: 'new', intent: clean }
+}
+
+/** Parse the decision file. EXPLICIT router decisions (new, or continue→known id)
+ *  are honored. Everything else — null/malformed/unknown-action/unknown-id —
+ *  routes through failsafeDecision (continue-latest-if-single). */
+export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[]): RouteDecision {
+  const validIds = new Set(tasks.map((t) => t.id))
+  if (!raw) return failsafeDecision(tasks, fallbackIntent)
   let obj: { action?: string; targetTaskId?: string; intent?: string }
-  try { obj = JSON.parse(raw) } catch { return safe() }
+  try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
   const intent = (obj.intent && obj.intent.trim()) || fallbackIntent
   if (obj.action === 'continue' && obj.targetTaskId && validIds.has(obj.targetTaskId)) {
     return { action: 'continue', targetTaskId: obj.targetTaskId, intent }
   }
-  return { action: 'new', intent }
+  if (obj.action === 'new') return { action: 'new', intent }
+  return failsafeDecision(tasks, intent)
 }
 
 // ─── The warm session ─────────────────────────────────────────────
@@ -147,7 +163,6 @@ export class Router {
   }
 
   private async routeOnce(utterance: string, tasks: RoutableTask[]): Promise<RouteDecision> {
-    const validIds = new Set(tasks.map((t) => t.id))
     const fallback = (utterance || '').trim()
     try {
       await this.ensureSession()
@@ -156,14 +171,12 @@ export class Router {
       const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath)
       this.ex!.writeStdin(prompt)
       const raw = await this.waitForDecision()
-      const decision = parseDecision(raw, fallback, validIds)
+      const decision = parseDecision(raw, fallback, tasks)
       log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length })
-      this.touchIdle()
       return decision
     } catch (e) {
-      log.warn('route failed — defaulting to new task', { error: (e as Error).message })
-      this.touchIdle()
-      return { action: 'new', intent: fallback }
+      log.warn('route failed — using failsafe', { error: (e as Error).message })
+      return failsafeDecision(tasks, fallback)
     }
   }
 
