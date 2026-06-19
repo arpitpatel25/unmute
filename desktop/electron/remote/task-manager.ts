@@ -88,6 +88,10 @@ export interface TaskManagerOpts {
    *  After this idle window with no follow-up, the session is hard-killed.
    *  Default 3 min; 0 = kill immediately on done (pure one-shot). */
   warmMs?: number
+  /** ms to wait after asking a fire-and-forget (consume/navigate) session to QUIT
+   *  cleanly — so claude-in-chrome disconnects from the tab and the extension
+   *  "glow" clears — before hard-killing as a backstop. Default 1500. */
+  detachGraceMs?: number
   /** Recipe librarian (PRD §9). When set, a 'done' task that proposed a recipe
    *  suggestion is submitted for curation. Optional. */
   librarian?: Librarian
@@ -122,6 +126,7 @@ export class TaskManager extends EventEmitter {
       trustAcceptMs: opts.trustAcceptMs ?? 2000,
       submitConfirmMs: opts.submitConfirmMs ?? 450,
       warmMs: opts.warmMs ?? 3 * 60_000,
+      detachGraceMs: opts.detachGraceMs ?? 1500,
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
       now: opts.now,
@@ -325,11 +330,13 @@ export class TaskManager extends EventEmitter {
           }).catch((e) => tlog.error('librarian submit failed', { error: (e as Error).message }))
         }
         // Lifecycle by category (DECIDED): consume/navigate are fire-and-forget
-        // — detach NOW so the Claude-in-Chrome "glow" clears and we don't hold a
-        // session for a tab you're just watching. info/act (and unknown) keep a
-        // warm window for a follow-up ("now reply to #2", "what about his assists").
+        // — DETACH now (quit the session cleanly so the Claude-in-Chrome "glow"
+        // clears on the tab you're just watching/reading), and don't hold a
+        // session. info/act (and unknown) keep a warm window for a follow-up
+        // ("now reply to #2", "what about his assists") — extension stays
+        // attached so the user can continue acting in Sheets/Docs/Gmail.
         if (task.category === 'consume' || task.category === 'navigate') {
-          this.hardKill(id)
+          this.detachAndKill(id)
         } else {
           this.parkWarm(id)
         }
@@ -566,5 +573,29 @@ export class TaskManager extends EventEmitter {
     if (ex?.alive) ex.kill() // the REPL won't exit on its own
     this.executors.delete(id)
     log.child({ taskId: id }).event('task-finished', { state: this.tasks.get(id)?.state })
+  }
+
+  /** Fire-and-forget cleanup for consume/navigate: ask the REPL to QUIT cleanly
+   *  first, so claude-in-chrome disconnects from the tab it was driving and the
+   *  extension "glow" clears (an abrupt SIGHUP never disconnects, so the glow
+   *  lingers). The tab keeps playing/displaying; control is re-acquired by a
+   *  fresh task if the user wants to act on it later. Hard-kill is the backstop
+   *  in case the clean quit doesn't take. */
+  private detachAndKill(id: string): void {
+    const tlog = log.child({ taskId: id })
+    this.stopPolling(id)
+    const ex = this.executors.get(id)
+    if (!ex?.alive) { this.hardKill(id); return }
+    try {
+      ex.writeStdin('/exit') // clean quit ⇒ extension disconnect ⇒ glow clears
+      tlog.event('graceful-detach', { graceMs: this.opts.detachGraceMs })
+    } catch (e) {
+      tlog.warn('graceful-detach write failed — hard-killing', { error: (e as Error).message })
+      this.hardKill(id)
+      return
+    }
+    // Backstop: ensure the session is actually gone even if /exit didn't take.
+    const t = setTimeout(() => this.hardKill(id), this.opts.detachGraceMs)
+    t.unref?.()
   }
 }
