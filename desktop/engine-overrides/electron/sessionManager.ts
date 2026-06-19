@@ -121,6 +121,13 @@ interface SessionState {
   status: 'recording' | 'processing' | 'done' | 'error'
   errorMessage: string | null
   createdAt: number
+  // Capture kind, stamped at session birth and never mutated after. 'remote' ⇒
+  // the transcript is dispatched to Claude Code; 'dictation' ⇒ formatted+pasted.
+  // Living on the session (not a global flag) means it dies when the session is
+  // nulled on ANY teardown (dispatch, cancel, discard, quota) — so a cancelled
+  // Remote capture can never leak its mode into the next dictation. Default-safe:
+  // a fresh session is always 'dictation' unless explicitly started as remote.
+  kind: 'dictation' | 'remote'
 }
 
 function sendToWidget(channel: string, ...args: unknown[]): void {
@@ -134,10 +141,9 @@ class SessionManager {
   private currentSession: SessionState | null = null
   private authToken: string | null = null
   // ─── Unmute Remote (ADDITIVE, PRD §5) ───
-  // When true, the in-flight capture is a Remote command, not dictation:
-  // the transcript is dispatched to Claude Code instead of being pasted.
-  // Defaults false ⇒ every existing dictation flow is byte-for-byte unchanged.
-  private remoteCaptureActive = false
+  // The "is this a Remote command?" mode now lives on the session itself
+  // (SessionState.kind), set at birth and gone on teardown — see startSession /
+  // startRemoteCapture. No global flag ⇒ the mode can never leak across captures.
   private outputMode: 'paste' | 'clipboard' = 'paste'
   private llmProvider: 'cloud' | 'local-llm' = 'cloud'
   private sttProvider: 'cloud' | 'local' | 'faster-whisper' | 'cartesia' | 'sarvam' | 'dual-whisper' = 'cloud'
@@ -548,8 +554,8 @@ class SessionManager {
     return this.usePipeline
   }
 
-  startSession(mode: 'dictation' | 'instruction'): void {
-    console.log('[session] startSession called, mode:', mode, '| isProcessing:', this.isProcessing, '| currentSession:', this.currentSession?.sessionId || 'null')
+  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation'): void {
+    console.log('[session] startSession called, mode:', mode, '| kind:', kind, '| isProcessing:', this.isProcessing, '| currentSession:', this.currentSession?.sessionId || 'null')
     if (this.isProcessing) {
       console.log('[session] ⛔ BLOCKED — Fn pressed during processing — showing discard hint')
       sendToWidget('processing:show-discard-hint')
@@ -584,11 +590,12 @@ class SessionManager {
         flowType: 'dictation',
         status: 'recording',
         errorMessage: null,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        kind, // stamped at birth; default 'dictation' (default-safe → paste)
       }
-      console.log('[session] New session created:', sessionId)
+      console.log('[session] New session created:', sessionId, '| kind:', kind)
     } else {
-      console.log('[session] Reusing existing session:', this.currentSession.sessionId)
+      console.log('[session] Reusing existing session:', this.currentSession.sessionId, '| kind:', this.currentSession.kind)
     }
 
     // Show HUD FIRST — before clipboard capture, which runs osascript Cmd+C
@@ -609,7 +616,7 @@ class SessionManager {
     // which Chrome interprets as "Inspect Element" and pops DevTools. Grabbing
     // only after the key lifts keeps the select-text→command flow intact
     // without ever producing that modifier combination.
-    if (!this.remoteCaptureActive && !this.currentSession.selectedText) {
+    if (this.currentSession.kind !== 'remote' && !this.currentSession.selectedText) {
       setTimeout(() => this.captureSelection(mode), 50)
     }
 
@@ -620,11 +627,11 @@ class SessionManager {
   // ─── Unmute Remote capture (ADDITIVE, PRD §5) ───
   //
   // Reuses the ENTIRE existing dictation capture+STT pipeline (recorder,
-  // chunking, fallback, transcription) by starting a normal dictation session
-  // behind the remoteCaptureActive flag. The ONLY behavioural divergence is at
-  // the transcript point in processSession(), where — when the flag is set —
-  // the transcript is dispatched to Claude Code (dispatchFromCapture) instead
-  // of being formatted + pasted. No renderer changes, no new audio IPC.
+  // chunking, fallback, transcription) by starting a session stamped kind:'remote'.
+  // The ONLY behavioural divergence is at the transcript point in processSession(),
+  // where — when session.kind === 'remote' — the transcript is dispatched to
+  // Claude Code (dispatchFromCapture) instead of being formatted + pasted. No
+  // renderer changes, no new audio IPC.
   //
   // Set by the keyboard 'remote-start'/'remote-stop' events (main.ts).
 
@@ -635,9 +642,10 @@ class SessionManager {
       return
     }
     console.log('[session] 🛰  REMOTE capture START')
-    this.remoteCaptureActive = true
-    // Reuse the dictation capture machinery wholesale.
-    this.startSession('dictation')
+    // Reuse the dictation capture machinery wholesale, but stamp the session as
+    // 'remote' at birth so delivery dispatches instead of pasting. The kind lives
+    // on the session, so it can't leak if this capture is later cancelled.
+    this.startSession('dictation', 'remote')
   }
 
   async stopRemoteCapture(): Promise<void> {
@@ -678,7 +686,6 @@ class SessionManager {
     session: SessionState,
     apiTimeout: ReturnType<typeof setTimeout>,
   ): Promise<void> {
-    this.remoteCaptureActive = false
     const cmd = (command || '').trim()
     console.log('[session] 🛰  REMOTE dispatch:', JSON.stringify(cmd))
     if (cmd && cmd !== '[BLANK_AUDIO]') {
@@ -1172,7 +1179,7 @@ class SessionManager {
             let output = cleanTranscript(transcript) // reassigned below by formatOutputForUser
 
             // ─── Unmute Remote (ADDITIVE): dispatch instead of paste ───
-            if (this.remoteCaptureActive) {
+            if (session.kind === 'remote') {
               await this.dispatchRemoteAndFinish(output, session, apiTimeout)
               return
             }
@@ -1286,7 +1293,7 @@ class SessionManager {
           }
 
           // ─── Unmute Remote (ADDITIVE): dispatch instead of paste ───
-          if (this.remoteCaptureActive) {
+          if (session.kind === 'remote') {
             await this.dispatchRemoteAndFinish(output, session, apiTimeout)
             return
           }
@@ -1712,7 +1719,7 @@ class SessionManager {
         const transformMs = Date.now() - transformStart
 
         // ─── Unmute Remote (ADDITIVE): dispatch instead of paste ───
-        if (this.remoteCaptureActive) {
+        if (session.kind === 'remote') {
           await this.dispatchRemoteAndFinish(output, session, apiTimeout)
           return
         }
