@@ -164,7 +164,7 @@ function AppInner() {
           />
           {/* Unmute Remote (ADDITIVE) */}
           <SidebarButton
-            icon={<span className="text-[14px] leading-none">🛰</span>}
+            icon={<RemoteIcon />}
             label="Remote"
             active={activeTab === 'remote'}
             onClick={() => setActiveTab('remote')}
@@ -347,6 +347,17 @@ function HistoryIcon() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="8" cy="8" r="6" />
       <polyline points="8,5 8,8 10,10" />
+    </svg>
+  )
+}
+// Remote control (the clicker) — matches the line-icon set; reinforces "Unmute
+// is a remote for YOUR Claude Code", and disambiguates "Remote" from remote-work.
+function RemoteIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="1.5" width="6" height="13" rx="2.5" />
+      <path d="M6.7 4.3h2.6" />
+      <circle cx="8" cy="9.3" r="1.6" />
     </svg>
   )
 }
