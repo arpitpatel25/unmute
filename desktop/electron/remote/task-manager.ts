@@ -33,7 +33,7 @@ import {
 } from './status-file'
 import { buildDispatch } from './dispatch-prompt'
 import { installContract } from './contract/installer'
-import { installSkillsIntoCwd } from './skills'
+import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
@@ -102,6 +102,20 @@ export interface TaskManagerOpts {
 type TaskEvent = 'created' | 'updated' | 'needs-user' | 'stuck' | 'done' | 'failed' | 'removed'
 
 const TERMINAL: UiTaskState[] = ['done', 'failed']
+
+/** Strip the TUI's ANSI/OSC/control noise from a raw PTY buffer and keep a
+ *  readable tail — enough for the librarian to see what the doer actually did
+ *  (tools called, key outputs) without shipping the whole megabyte. */
+function cleanTranscriptTail(raw: string, maxChars = 4000): string {
+  const clean = raw
+    .replace(/\u001b\][^\u0007]*\u0007/g, '')          // OSC (title) sequences
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')         // CSI (color/cursor) sequences
+    .replace(/[\u0000-\u0008\u000b-\u001f]/g, ' ')     // stray control chars
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return clean.length > maxChars ? clean.slice(-maxChars) : clean
+}
 
 export class TaskManager extends EventEmitter {
   private tasks = new Map<string, Task>()
@@ -184,6 +198,7 @@ export class TaskManager extends EventEmitter {
       task.lastMtimeMs = (await statusMtimeMs(statusPath)) ?? now
       await installContract(dir) // CLAUDE.md auto-load (#3)
       await installSkillsIntoCwd(dir, this.opts.baseDir) // recipes auto-discovery (PRD §8.3)
+      await installProfileIntoCwd(dir, this.opts.baseDir) // user facts/prefs the doer Reads on demand
 
       const ex = this.opts.executorFactory()
       this.executors.set(id, ex)
@@ -318,15 +333,25 @@ export class TaskManager extends EventEmitter {
         // PRD §13.4 #3: result lands ON the row. PRD §13.6: WE observe + notify.
         tlog.ui('task-row.done', { summary: task.result?.summary, artifacts: task.result?.artifacts })
         this.emit('done', task)
-        // PRD §9: if the doer proposed a recipe, hand it to the (serialized)
-        // librarian. Fire-and-forget — the user already has their result.
-        if (this.opts.librarian && task.recipeSuggestion?.present) {
-          tlog.event('recipe-suggestion-handoff', { scratch: task.recipeScratchPath })
+        // Phase timing: how long the doer (executor) held this task end-to-end.
+        tlog.event('phase-timing', { taskId: task.id, phase: 'executor', ms: this.clock() - task.createdAt })
+        // PRD §9: ALWAYS hand the finished task to the (serialized) librarian —
+        // it, not the doer, decides whether anything durable was learned
+        // (profile fact / reusable skill) or it's a no-op. ASYNC + fire-and-
+        // forget: the user already has their result; the librarian NEVER blocks
+        // 'done'. It curates from what the task actually DID (summary/detail +
+        // transcript), so the doer no longer needs to flag anything.
+        if (this.opts.librarian) {
+          tlog.event('librarian-handoff', { taskId: task.id })
           void this.opts.librarian.submit({
             taskId: task.id,
             intent: task.intent,
-            scratchPath: task.recipeSuggestion.scratch_path ?? task.recipeScratchPath,
+            scratchPath: task.recipeScratchPath,
             cwd: task.cwd,
+            summary: task.result?.summary,
+            detail: task.result?.detail,
+            category: task.category,
+            transcript: cleanTranscriptTail(this.outputBuffers.get(task.id) ?? ''),
           }).catch((e) => tlog.error('librarian submit failed', { error: (e as Error).message }))
         }
         // Lifecycle by category (DECIDED): consume/navigate are fire-and-forget

@@ -145,13 +145,23 @@ emptying trash, mass deletion), do **not** just proceed: set \`state:
 clear question (e.g. "About to delete 40 files in ~/Downloads — ok?"). Prefer
 reversible operations where possible (move to Trash over \`rm\`).
 
-## 7. Recipes (only if you learned something reusable)
+## 7. Memory — use it, don't curate it
 
-If you discovered a repeatable, generalizable way to do this task, write a
-precise suggestion (real paths, real commands, a good \`description\`) into the
-**recipe scratch file** path given in the task message — NOT into any shared
-skills file. Then set \`recipe_suggestion.present: true\`. If you just followed
-an existing skill, write nothing. A separate Unmute step curates these later.
+Unmute keeps a long-term memory of this user so they can say LESS over time. You
+both USE it and feed it:
+
+- **USE it before acting.** Two sources are available in your working dir:
+  (1) your auto-discovered **skills** (proven methods for task-types), and
+  (2) **\`./PROFILE.md\`** — the user's durable facts & preferences (which
+  accounts they use and for what, preferred apps/services, main email, key
+  people, conventions). If the task depends on the user's setup ("my calendar",
+  "my show", "reply to my client"), **Read \`./PROFILE.md\`** and use what's
+  there instead of guessing or asking.
+- **You do NOT curate memory.** A separate Unmute librarian reviews every
+  finished task and updates the profile/skills itself — you don't need to flag
+  anything or write skill files. OPTIONALLY, if you hit a genuinely non-obvious
+  trick worth remembering, you may jot one line into the **recipe scratch file**
+  named in your task message; it's a hint for the librarian, never required.
 
 ## 8. How to execute — preferred path order
 

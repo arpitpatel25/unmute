@@ -65,3 +65,62 @@ export async function listSharedSkills(baseDir?: string): Promise<string[]> {
     return []
   }
 }
+
+// ─── User profile (the SECOND store) ──────────────────────────────────────
+//
+// Distinct from skills: the profile holds durable FACTS & PREFERENCES about the
+// user (which accounts, preferred apps, main email, key contacts, conventions)
+// — the stuff that lets a terse command succeed without the user re-specifying
+// it. Plain markdown the doer Reads on demand; the librarian is the only writer.
+
+/** The shared user-profile file — durable facts/preferences (single source). */
+export function userProfilePath(baseDir?: string): string {
+  return join(baseDir ?? join(homedir(), '.unmute', 'remote'), 'profile.md')
+}
+
+/** Read the user profile (empty string if none yet). For librarian context. */
+export async function readUserProfile(baseDir?: string): Promise<string> {
+  try {
+    return await fs.readFile(userProfilePath(baseDir), 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+/** Copy the profile into a task's cwd as PROFILE.md so the doer can Read it on
+ *  demand (the contract points at ./PROFILE.md). Best-effort; absent = no-op. */
+export async function installProfileIntoCwd(cwd: string, baseDir?: string): Promise<boolean> {
+  const content = await readUserProfile(baseDir)
+  if (!content.trim()) return false
+  try {
+    await fs.writeFile(join(cwd, 'PROFILE.md'), content, 'utf8')
+    log.event('profile-installed-into-cwd', { cwd, bytes: content.length })
+    return true
+  } catch (e) {
+    log.warn('profile install failed', { error: (e as Error).message })
+    return false
+  }
+}
+
+/** The skills "index": each skill's `name` + first-line `description` from its
+ *  frontmatter, so the librarian sees what already exists WITHOUT loading every
+ *  body. Keeps the librarian's context bounded as the library grows. */
+export async function skillsIndex(baseDir?: string): Promise<Array<{ name: string; description: string }>> {
+  const dir = sharedSkillsDir(baseDir)
+  let names: string[]
+  try { names = await fs.readdir(dir) } catch { return [] }
+  const out: Array<{ name: string; description: string }> = []
+  for (const name of names) {
+    let description = ''
+    try {
+      // Skill may be a dir (SKILL.md) or a flat .md file.
+      const stat = await fs.stat(join(dir, name))
+      const file = stat.isDirectory() ? join(dir, name, 'SKILL.md') : join(dir, name)
+      const text = await fs.readFile(file, 'utf8')
+      const m = text.match(/^description:\s*(.+)$/m)
+      description = m ? m[1].trim().replace(/^["']|["']$/g, '') : ''
+    } catch { /* unreadable skill — list name only */ }
+    out.push({ name, description })
+  }
+  return out
+}

@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import { createLogger } from './log'
 import { scaffoldStatusFile, readStatus } from './status-file'
 import { installContract } from './contract/installer'
-import { sharedSkillsDir, listSharedSkills } from './skills'
+import { sharedSkillsDir, skillsIndex, readUserProfile, userProfilePath } from './skills'
 import type { ExecutorFactory } from './executor'
 
 const log = createLogger('librarian')
@@ -28,10 +28,19 @@ export interface RecipeSuggestion {
   taskId: string
   /** The cleaned intent the doer accomplished. */
   intent: string
-  /** Absolute path to the doer's recipe-suggestion scratch file. */
-  scratchPath: string
+  /** Absolute path to the doer's OPTIONAL recipe-suggestion scratch file (the
+   *  doer may jot an insight here, but the librarian no longer depends on it —
+   *  it curates from what the task actually did). */
+  scratchPath?: string
   /** The doer's per-task working dir (for the librarian session base). */
   cwd: string
+  /** What the task DID — so the librarian can judge durable knowledge itself
+   *  rather than relying on the doer to pre-distill it. */
+  summary?: string
+  detail?: string
+  category?: string
+  /** A cleaned tail of the task transcript (the doer's real actions/tools). */
+  transcript?: string
 }
 
 export interface LibrarianOpts {
@@ -98,10 +107,12 @@ export class Librarian {
     }
   }
 
-  /** Spawn one librarian session to apply a single suggestion to the book. */
+  /** Spawn one librarian session to curate the user's durable memory. */
   private async runOne(s: RecipeSuggestion): Promise<void> {
     const llog = log.child({ taskId: s.taskId })
+    const t0 = this.clock()
     const skillsDir = sharedSkillsDir(this.opts.baseDir || undefined)
+    const profilePath = userProfilePath(this.opts.baseDir || undefined)
     await fs.mkdir(skillsDir, { recursive: true })
 
     // The librarian gets its own working dir + status file under the task dir.
@@ -110,8 +121,9 @@ export class Librarian {
     await scaffoldStatusFile(statusPath)
     await installContract(libCwd)
 
-    const existing = await listSharedSkills(this.opts.baseDir || undefined)
-    llog.event('librarian-start', { skillsDir, existingSkills: existing.length })
+    const index = await skillsIndex(this.opts.baseDir || undefined)
+    const profile = await readUserProfile(this.opts.baseDir || undefined)
+    llog.event('librarian-start', { skillsDir, profilePath, existingSkills: index.length, hasProfile: !!profile.trim() })
 
     const ex = this.opts.executorFactory()
     ex.onData((c) => llog.debug('librarian-pty', { chunk: c }))
@@ -122,7 +134,7 @@ export class Librarian {
     ex.writeStdin('')
     await new Promise((r) => setTimeout(r, this.opts.trustAcceptMs))
 
-    ex.writeStdin(this.buildPrompt(s, skillsDir, statusPath, existing))
+    ex.writeStdin(this.buildPrompt(s, skillsDir, profilePath, statusPath, index, profile))
 
     // Wait (bounded) for the librarian to finish, signalled via its status file.
     const deadline = this.clock() + this.opts.timeoutMs
@@ -138,30 +150,73 @@ export class Librarian {
     }
     if (!done) llog.warn('librarian timed out — closing session', {})
     ex.kill()
+    // Phase timing: how long the librarian held this submission end-to-end.
+    llog.event('phase-timing', { taskId: s.taskId, phase: 'librarian', ms: this.clock() - t0, finished: done })
   }
 
-  /** The curation instruction for the librarian session. */
-  private buildPrompt(s: RecipeSuggestion, skillsDir: string, statusPath: string, existing: string[]): string {
+  /** The curation CHARTER for the librarian session — the heart of the system.
+   *  It curates DURABLE knowledge that lets future terse commands succeed, with
+   *  a hard bias toward no-op; it is NOT a step-logger. */
+  private buildPrompt(
+    s: RecipeSuggestion,
+    skillsDir: string,
+    profilePath: string,
+    statusPath: string,
+    index: Array<{ name: string; description: string }>,
+    profile: string,
+  ): string {
+    const indexLines = index.length
+      ? index.map((i) => `  - ${i.name}: ${i.description || '(no description)'}`).join('\n')
+      : '  (the skills library is empty)'
     return [
-      `[Unmute Remote — librarian task]`,
-      `You are the recipe librarian. A task just completed and proposed a recipe.`,
+      `[Unmute Remote — librarian]`,
+      `You curate the user's long-term MEMORY so that, over time, they can say`,
+      `LESS and still get tasks done. You learn from a task that just finished.`,
+      `You are the ONLY writer to this memory. Be conservative: MOST tasks teach`,
+      `nothing new — when in doubt, NO-OP.`,
       ``,
-      `Task intent: ${s.intent}`,
-      `The doer's recipe suggestion is in: ${s.scratchPath}`,
-      `The shared skill/recipe library is the directory: ${skillsDir}`,
-      existing.length ? `Existing recipe files: ${existing.join(', ')}` : `The library is currently empty.`,
+      `── The task that just finished ──`,
+      `Intent: ${s.intent}`,
+      s.category ? `Category: ${s.category}` : null,
+      s.summary ? `Result summary: ${s.summary}` : null,
+      s.detail ? `Result detail: ${s.detail}` : null,
+      s.scratchPath ? `Optional doer note (may be empty/absent): ${s.scratchPath}` : null,
+      s.transcript ? `\nWhat the doer actually did (transcript tail):\n${s.transcript}` : null,
       ``,
-      `Decide: create a new recipe, update an existing one, or no-op (if the`,
-      `suggestion adds nothing). If you create/update, write a skill file into`,
-      `${skillsDir} in OpenClaw skill-file format: YAML frontmatter with a`,
-      `precise, specific \`name\` and \`description\` (the description is what`,
-      `auto-discovery matches against — make it specific), then a body of`,
-      `concrete steps with REAL paths/commands/identifiers (not vague prose).`,
-      `Prefer ONE recipe per clear task-type (start coarse).`,
+      `── The two memory stores you maintain ──`,
+      `1. USER PROFILE — durable FACTS & PREFERENCES about this user: which`,
+      `   accounts they use (and for what), preferred apps/services, main email,`,
+      `   key people, naming conventions, defaults. This is what lets "open my`,
+      `   show" or "any meetings today" work without them specifying where/which.`,
+      `   File: ${profilePath} (plain markdown, sectioned by topic).`,
+      profile.trim() ? `   Current profile:\n${profile}` : `   The profile is currently empty.`,
+      `2. SKILLS — reusable METHODS for a CLASS of task, capturing the reliable`,
+      `   approach + the non-obvious GOTCHA (e.g. "use get_page_text not`,
+      `   screenshots, which hide late events"). File per skill in ${skillsDir},`,
+      `   OpenClaw format: YAML frontmatter (\`name\` + a SPECIFIC \`description\` —`,
+      `   the description is what future tasks match on) then a markdown body.`,
+      `   Existing skills (name: description):`,
+      indexLines,
+      ``,
+      `── What to capture (and what NOT to) ──`,
+      `- Capture only DURABLE knowledge: a user fact/preference, or a reusable`,
+      `  method + its gotcha. NEVER store brittle UI steps ("click here, scroll`,
+      `  there") — they break and add noise.`,
+      `- If nothing was non-obvious — the task was simple, or any competent model`,
+      `  would do it right next time — NO-OP. Simplicity is the common case.`,
+      `- CONSOLIDATE, don't fragment: prefer UPDATING the profile or an existing`,
+      `  skill over creating a new one. One skill per task-CLASS, kept coarse.`,
+      `  Delete a skill only if it's now wrong or superseded.`,
+      `- A user fact (accounts, prefs, contacts) goes in the PROFILE, not a skill.`,
+      ``,
+      `── Decide, then act ──`,
+      `Choose: update the profile, create/update/delete a skill, or no-op. Make`,
+      `at most the minimal change. Use REAL identifiers (account indexes, paths,`,
+      `handles) but no pixel-level steps.`,
       ``,
       `When finished, write your status file (${statusPath}) state=done with a`,
-      `one-line result.summary of what you changed (or "no-op"). Follow the`,
-      `loaded Unmute contract for status-file writes.`,
-    ].join('\n')
+      `one-line result.summary of exactly what you changed — or "no-op: <reason>"`,
+      `if nothing was worth keeping. Follow the loaded Unmute contract for writes.`,
+    ].filter((l): l is string => l !== null).join('\n')
   }
 }

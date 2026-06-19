@@ -399,7 +399,10 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
   if (routable.length && router) {
     const awaitingIds = new Set(manager.tasksAwaitingUser().map((t) => t.id))
     try {
+      const tRoute = Date.now()
       const decision = await router.route(raw, routableSnapshot(Date.now()))
+      // Phase timing: how long the utterance spent in the router (warm → decision).
+      log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       if (decision.action === 'continue' && decision.targetTaskId) {
         const tid = decision.targetTaskId
         // Continuing a BLOCKED task means piping the utterance in as its answer;
