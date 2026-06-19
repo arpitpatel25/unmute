@@ -29,6 +29,7 @@ class KeyboardManager extends EventEmitter {
   // Separate debounce per logical key so Fn and Caps Lock can't cross-block each other
   private lastDictationToggleTime = 0
   private lastInstructionToggleTime = 0
+  private lastRemoteToggleTime = 0
   private readonly DEBOUNCE_MS = 300
 
   // ─── Configurable dictation key + activation mode ───
@@ -142,27 +143,49 @@ class KeyboardManager extends EventEmitter {
     }
   }
 
-  // ─── Unmute Remote key-down/up dispatchers (ADDITIVE, PRD §2.4.4 / §5) ───
-  // Remote is always push-to-talk: hold to capture, release to dispatch.
-  // Mutual exclusion: Remote can't start while a dictation/instruction capture
-  // is active; once Remote is active, the dictation handlers below bail out.
+  // ─── Unmute Remote (task creation) key dispatchers (ADDITIVE, PRD §2.4.4 / §5) ───
+  // The task key is ALWAYS tap-toggle — never push-to-talk, and not configurable.
+  // A task is a commit (spawns a Claude session, spends tokens), so it deserves a
+  // deliberate two-action submit: TAP to start capturing, TAP again to stop +
+  // dispatch. Escape (during capture) cancels — which a held push-to-talk key
+  // can't offer, since release would submit before there's any moment to cancel.
+  // Key-UP is ignored (it's a toggle). Cancel resets remoteActive via resetState()
+  // (onSessionEnded), so a cancelled task can't leak its lock into dictation.
+  // Mutual exclusion: a task capture can't START while dictation/instruction is
+  // active; while a task capture is active, the dictation handlers below bail out.
 
   private handleRemoteKeyDown(): void {
+    const now = Date.now()
+    // Debounce only the START (a too-fast re-tap right after toggling). The STOP
+    // tap must always go through so the user can submit/cancel without delay.
+    if (!this.remoteActive && now - this.lastRemoteToggleTime < this.DEBOUNCE_MS) {
+      console.log('[keyboard] Remote toggle DEBOUNCED (too fast)')
+      return
+    }
+
+    if (this.remoteActive) {
+      // Second tap → stop + dispatch.
+      this.lastRemoteToggleTime = now
+      this.remoteActive = false
+      console.log('[keyboard] Remote capture STOP (tap-toggle) → dispatch')
+      this.emit('keyboard', { type: 'remote-stop' } as KeyboardEvent)
+      return
+    }
+
+    // First tap → start. Mutual exclusion with an active dictation/instruction.
     if (this.dictationActive || this.instructionActive) {
       console.log('[keyboard] Remote key ignored — a dictation capture is active (mutual exclusion)')
       return
     }
-    if (this.remoteActive) return // already capturing (key repeat)
+    this.lastRemoteToggleTime = now
     this.remoteActive = true
-    console.log('[keyboard] Remote capture START')
+    console.log('[keyboard] Remote capture START (tap-toggle)')
     this.emit('keyboard', { type: 'remote-start' } as KeyboardEvent)
   }
 
   private handleRemoteKeyUp(): void {
-    if (!this.remoteActive) return
-    this.remoteActive = false
-    console.log('[keyboard] Remote capture STOP → dispatch')
-    this.emit('keyboard', { type: 'remote-stop' } as KeyboardEvent)
+    // Tap-toggle ignores key-up — the capture ends on the SECOND tap or on
+    // Escape, never on release. (Mirrors dictation tap-toggle.)
   }
 
   // ─── Dictation key-down/up dispatchers ───
