@@ -206,6 +206,10 @@ function openInTerminal(taskId: string): boolean {
     : `tell application "Terminal"\n  activate\n  do script "${attachCmd}"\nend tell`
   try {
     execFile('osascript', ['-e', script], (err) => { if (err) log.warn('open-in-terminal osascript failed', { error: err.message }) })
+    // The overlay is pinned at 'screen-saver' level (above everything), so the
+    // terminal window opens BEHIND it and looks like nothing happened. Dismiss
+    // the overlay — the user is leaving for the real terminal anyway.
+    dismissOverlay()
     log.event('open-in-terminal', { taskId, session, terminal: useIterm ? 'iterm' : 'terminal' })
     return true
   } catch (e) {
