@@ -29,7 +29,11 @@ export function sessionNameFor(taskId: string): string {
 export const TMUX_CONF = [
   'set -g status off',
   'set -g mouse on',
-  'set -g window-size manual', // don't let an attaching client resize the session
+  // NOTE: do NOT add `set -g window-size manual` — it crashes the tmux 3.6b
+  // server on window spawn ("server exited unexpectedly"), killing every task.
+  // We pass an explicit `-x/-y` on new-session for the headless size anyway;
+  // letting the window size to the attaching client is fine (and better for
+  // pop-out, where the TUI reflows to the real terminal).
   'set -g history-limit 50000',
   'set -g destroy-unattached off', // keep the session alive between attaches
   'set -g escape-time 10',
