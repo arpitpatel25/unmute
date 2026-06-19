@@ -343,21 +343,26 @@ function notify(title: string, body: string): void {
   }
 }
 
-function executorFactory() {
+function executorFactory(resume = false) {
   const mode = settings.get('permissionMode')
   const agent = settings.get('agent')
   const sandboxRoots = settings.get('sandboxRoots') ?? []
   const sandboxed = sandboxRoots.length > 0
   const model = settings.get('model') || 'opus'
   const browser = settings.get('browserEnabled') !== false
-  log.event('executor-factory', { agent, permissionMode: mode, sandboxed, sandboxRoots, model, browser })
+  log.event('executor-factory', { agent, permissionMode: mode, sandboxed, sandboxRoots, model, browser, resume })
   if (agent === 'codex') {
-    return new CodexExecutor({})
+    return new CodexExecutor({}) // NOTE: Codex resume isn't wired yet (different mechanism)
   }
   // PRD §10.1/§10.6 interaction: a sandbox is the "fenced yard" — when it's ON
   // we do NOT skip permissions globally (out-of-fence access still prompts via
   // needs-user); claude gets the allowed roots via --add-dir.
-  const extraArgs = !sandboxed && mode === 'auto-approve' ? ['--dangerously-skip-permissions'] : []
+  // `--continue` resumes the MOST RECENT session in the cwd. Each task has its
+  // own cwd with exactly one session, so this reliably continues THAT task with
+  // full prior context (no session-id tracking needed). Claude's resume is
+  // scoped to the working dir, which is exactly our per-task isolation.
+  const resumeArgs = resume ? ['--continue'] : []
+  const extraArgs = [...resumeArgs, ...(!sandboxed && mode === 'auto-approve' ? ['--dangerously-skip-permissions'] : [])]
   // Run inside tmux when available so the live terminal can be popped out to a
   // real terminal app as the SAME session (private socket keeps env stripped).
   const tmux = tmuxBin ? { bin: tmuxBin, confPath: tmuxConfPath, cols: 120, rows: 40 } : undefined
@@ -558,6 +563,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     await manager?.remove(id)
     return true
   })
+  // Resume a finished/reaped task — respawn its session with --continue in the
+  // same cwd (full prior context). For when a complex task was killed but the
+  // user wants to keep working on it. Returns whether it resumed.
+  ipcMain.handle('remote:resume', async (_e, id: string) => (await manager?.resume(id)) ?? false)
   // Master kill switch from the UI ("kill all tasks" above the table).
   ipcMain.handle('remote:kill-all', async () => {
     manager?.killAll()

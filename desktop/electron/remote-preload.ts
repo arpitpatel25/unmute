@@ -61,6 +61,9 @@ export const remotePreloadExtensions = {
   remoteKill: (id: string): Promise<boolean> => ipcRenderer.invoke('remote:kill', id),
   /** Kill/Delete — terminate + erase the task entirely (UI confirms first). */
   remoteRemoveTask: (id: string): Promise<boolean> => ipcRenderer.invoke('remote:remove-task', id),
+  /** Resume a finished/reaped task — respawn its session with --continue, full
+   *  prior context, alive + warm again (re-attachable terminal, ready for more). */
+  remoteResume: (id: string): Promise<boolean> => ipcRenderer.invoke('remote:resume', id),
   /** Master kill switch — terminate every task's session at once. */
   remoteKillAll: (): Promise<boolean> => ipcRenderer.invoke('remote:kill-all'),
   /** A task was erased — drop its row. */

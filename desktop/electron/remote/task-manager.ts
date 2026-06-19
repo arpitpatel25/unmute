@@ -517,6 +517,51 @@ export class TaskManager extends EventEmitter {
     return true
   }
 
+  /**
+   * Resume a finished/reaped task: respawn its session with `--continue` in the
+   * SAME cwd. Claude resume is cwd-scoped and each task owns one session, so this
+   * continues THAT task with full prior context — no session-id tracking needed.
+   * The transcript survives because we keep the task dir after kill. The session
+   * comes back alive + warm (re-attachable terminal, ready for a follow-up).
+   * Returns false if the task is unknown, already alive, or its dir was removed.
+   */
+  async resume(id: string): Promise<boolean> {
+    const tlog = log.child({ taskId: id })
+    const task = this.tasks.get(id)
+    if (!task) { tlog.warn('resume: no such task'); return false }
+    if (this.executors.get(id)?.alive) { tlog.event('resume-noop-already-alive', {}); return true }
+    try { await fs.access(task.cwd) } catch { tlog.warn('resume: task dir gone — cannot resume', {}); return false }
+
+    tlog.event('resume-start', { cwd: task.cwd })
+    try {
+      const ex = this.opts.executorFactory(true) // --continue (resume the cwd's session)
+      this.executors.set(id, ex)
+      this.outputBuffers.set(id, this.outputBuffers.get(id) ?? '')
+      ex.onData((chunk) => {
+        tlog.debug('pty-data', { chunk })
+        const cur = (this.outputBuffers.get(id) ?? '') + chunk
+        this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
+        this.emit('output', { taskId: id, chunk })
+      })
+      await ex.spawn({ cwd: task.cwd, env: process.env, taskId: id })
+      await ex.isReady()
+      ex.writeStdin('') // accept folder-trust; session reopens with full prior context
+      await new Promise((r) => setTimeout(r, this.opts.trustAcceptMs))
+      // Alive + idle at the prompt: treat it like a warm session — re-arm the
+      // idle window; followUp()/terminal can use it. No polling (status is
+      // terminal; a follow-up will drive fresh updates).
+      task.updatedAt = this.clock()
+      this.parkWarm(id)
+      this.emit('updated', task)
+      tlog.event('resume-ready', {})
+      return true
+    } catch (e) {
+      tlog.error('resume failed', { error: (e as Error).message })
+      this.hardKill(id)
+      return false
+    }
+  }
+
   /** Tasks currently BLOCKED on a needs-user question, newest first. The router
    *  uses this for voice answering: a paused task that explicitly asked you a
    *  question is the strongest target for your next utterance (PRD §7). */

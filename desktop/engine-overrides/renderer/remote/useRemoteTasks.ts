@@ -27,6 +27,7 @@ type RemoteAPIShape = {
   remoteAnswer?: (id: string, answer: string) => Promise<boolean>
   remoteKill?: (id: string) => Promise<boolean>
   remoteRemoveTask?: (id: string) => Promise<boolean>
+  remoteResume?: (id: string) => Promise<boolean>
   remoteKillAll?: () => Promise<boolean>
   remoteDispatch?: (intent: string) => Promise<string | null>
   remoteOnTaskCreated?: (cb: (t: RemoteTask) => void) => void
@@ -77,6 +78,7 @@ export function useRemoteTasks() {
   const remove = useCallback((id: string) => { void api().remoteRemoveTask?.(id) }, [])
   const killAll = useCallback(() => { void api().remoteKillAll?.() }, [])
   const rerun = useCallback((intent: string) => { void api().remoteDispatch?.(intent) }, [])
+  const resume = useCallback((id: string) => { void api().remoteResume?.(id) }, [])
 
-  return { tasks, activeCount, anyNeedsUser, answer, kill, remove, killAll, rerun }
+  return { tasks, activeCount, anyNeedsUser, answer, kill, remove, killAll, rerun, resume }
 }

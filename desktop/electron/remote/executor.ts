@@ -39,5 +39,8 @@ export interface AgentExecutor {
   readonly alive: boolean
 }
 
-/** Factory type so callers can be handed a constructor without importing node-pty. */
-export type ExecutorFactory = () => AgentExecutor
+/** Factory type so callers can be handed a constructor without importing node-pty.
+ *  `resume` (optional) asks for an executor that CONTINUES the cwd's existing
+ *  session (e.g. `claude --continue`) rather than starting fresh — used by
+ *  TaskManager.resume(). Factories that don't support resume ignore the flag. */
+export type ExecutorFactory = (resume?: boolean) => AgentExecutor

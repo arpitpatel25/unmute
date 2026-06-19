@@ -55,13 +55,14 @@ function Dot({ state }: { state: RemoteTask['state'] }) {
 }
 
 function Expanded({
-  task, onAnswer, onKill, onRerun, onRemove,
+  task, onAnswer, onKill, onRerun, onRemove, onResume,
 }: {
   task: RemoteTask
   onAnswer: (id: string, text: string) => void
   onKill: (id: string) => void
   onRerun: (intent: string) => void
   onRemove: (id: string) => void
+  onResume: (id: string) => void
 }) {
   const [draft, setDraft] = useState('')
   const [showTerminal, setShowTerminal] = useState(false)
@@ -165,6 +166,13 @@ function Expanded({
         {!active && (
           <button className="text-white/35 hover:text-white/80" onClick={() => onRerun(task.intent)}>re-run</button>
         )}
+        {!active && (
+          <button
+            className="text-white/35 hover:text-white/80"
+            title="Continue this exact session with full prior context"
+            onClick={() => onResume(task.id)}
+          >resume</button>
+        )}
         <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
           {showTerminal ? 'hide terminal' : 'terminal'}
         </button>
@@ -183,7 +191,7 @@ function Expanded({
 }
 
 function Row({
-  task, expanded, onToggle, onAnswer, onKill, onRerun, onRemove,
+  task, expanded, onToggle, onAnswer, onKill, onRerun, onRemove, onResume,
 }: {
   task: RemoteTask
   expanded: boolean
@@ -192,6 +200,7 @@ function Row({
   onKill: (id: string) => void
   onRerun: (intent: string) => void
   onRemove: (id: string) => void
+  onResume: (id: string) => void
 }) {
   return (
     <div className={`rounded-xl transition-colors ${expanded ? 'bg-white/[0.05]' : 'hover:bg-white/[0.04]'}`}>
@@ -206,7 +215,7 @@ function Row({
         style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
       >
         <div className="overflow-hidden">
-          {expanded && <Expanded task={task} onAnswer={onAnswer} onKill={onKill} onRerun={onRerun} onRemove={onRemove} />}
+          {expanded && <Expanded task={task} onAnswer={onAnswer} onKill={onKill} onRerun={onRerun} onRemove={onRemove} onResume={onResume} />}
         </div>
       </div>
     </div>
@@ -214,7 +223,7 @@ function Row({
 }
 
 export function OverlayApp() {
-  const { tasks, activeCount, answer, kill, remove, killAll, rerun } = useRemoteTasks()
+  const { tasks, activeCount, answer, kill, remove, killAll, rerun, resume } = useRemoteTasks()
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -289,6 +298,7 @@ export function OverlayApp() {
                 onKill={kill}
                 onRerun={rerun}
                 onRemove={remove}
+                onResume={resume}
               />
             ))
           )}
