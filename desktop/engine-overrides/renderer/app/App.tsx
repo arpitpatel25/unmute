@@ -350,14 +350,16 @@ function HistoryIcon() {
     </svg>
   )
 }
-// Remote control (the clicker) — matches the line-icon set; reinforces "Unmute
-// is a remote for YOUR Claude Code", and disambiguates "Remote" from remote-work.
+// Walkie-talkie — handheld, you TALK into it (ties to voice), and the antenna
+// makes it unmistakable. Matches the line-icon set; says "remote control for
+// your Claude Code" and disambiguates "Remote" from remote-work.
 function RemoteIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="5" y="1.5" width="6" height="13" rx="2.5" />
-      <path d="M6.7 4.3h2.6" />
-      <circle cx="8" cy="9.3" r="1.6" />
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.5 5V1.8" />
+      <rect x="4.5" y="5" width="7" height="9.5" rx="1.8" />
+      <path d="M6.4 7.4h3.2" />
+      <circle cx="8" cy="11.4" r="1.2" />
     </svg>
   )
 }
