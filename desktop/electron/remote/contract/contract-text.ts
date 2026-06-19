@@ -74,24 +74,42 @@ Unmute will NOT ask you for status; you must push it:
 ## 4a. Classify the task — set \`category\` (REQUIRED on \`done\`)
 
 You know best what this task was; tell Unmute so it can present + clean up
-correctly. Set \`category\` to ONE of:
-- \`info\` — a fetch/answer; the deliverable is TEXT (stats, a summary, an answer,
-  "are there any new emails"). **Put the COMPLETE answer in \`result.detail\`
-  (markdown ok)** — not one line. The user reads it in place and should NOT have
-  to open a terminal to see the full thing. \`summary\` is still a one-liner.
-- \`navigate\` — the point is to LAND the user on something (open a page/tab/app,
-  "open her LinkedIn"). Open it in a real Chrome tab, and put that tab's EXACT
-  current URL — as the address bar shows it AFTER any redirects — in
-  \`result.artifacts\` (\`type: "url"\`). Unmute uses it to raise that precise tab
-  for the user, so report the live tab URL, not your spoken approximation. Keep
-  \`detail\` short.
-- \`consume\` — start media to watch/listen ("play the podcast", "open this video
-  and play"). Put the URL in artifacts. Keep \`detail\` short.
-- \`act\` — an action/edit with a side effect ("reply to that email", "edit the
-  sheet", "rename the file"). Summary states what you did.
+correctly. Classify by the END-STATE — what the user ends up *with* — not by the
+verb they used or the steps you took. Set \`category\` to ONE of:
 
-Set it as soon as you know it (early), and always on \`done\`. If unsure, use
-\`act\`.
+- \`info\` — the deliverable is **text the user reads**: an answer, summary, list,
+  or lookup. You may browse/search to get it, but you're handing back KNOWLEDGE
+  and nothing in the world changed. → Unmute shows it in place, so **put the
+  COMPLETE answer in \`result.detail\`** (markdown ok), not one line; \`summary\`
+  stays a one-liner. *e.g. "any meetings today?", "summarize this thread."*
+
+- \`navigate\` — you place the user **on a page/app/document to read or work in**;
+  the DESTINATION is the deliverable, not info extracted from it and not media
+  that plays. → Unmute raises that exact tab, so put the tab's EXACT current URL
+  (as the address bar shows it AFTER redirects) in \`result.artifacts\`
+  (\`type: "url"\`); keep \`detail\` short. *e.g. "open her LinkedIn", "pull up the
+  pricing page."*
+
+- \`consume\` — **media that plays** for the user to watch or listen to: video,
+  audio, podcast, song, livestream, show/movie. Decided by the fact that it
+  PLAYS, **not by the verb** — "open", "play", "put on", "watch", "listen" all
+  count, so an "open this video" is \`consume\`, not \`navigate\`. **ALWAYS \`consume\`
+  for YouTube, Netflix, Prime Video, Hotstar / JioCinema, Spotify, Apple Music /
+  Podcasts** and similar video/OTT/music apps. → Unmute hands the media to a
+  clean tab and DETACHES (see §4b); put the URL in artifacts, keep \`detail\` short.
+
+- \`act\` — you **change something or take an action with an effect**: send,
+  create, edit, delete, submit, book, move, rename, order. On ANY surface
+  (browser, MCP, shell, files). If something exists or is different after you
+  finish that wasn't before, it's \`act\` — not \`info\` (only returns knowledge)
+  and not \`navigate\` (only places the user somewhere). → Unmute keeps the session
+  WARM for a follow-up; \`summary\` states what you did. *e.g. "reply to that
+  email", "add it to the sheet."*
+
+Pick by what the user wanted to END UP WITH. If two genuinely fit (you opened a
+page AND read from it), choose the one matching their goal, not the steps you
+took. Set it early once you know, and always on \`done\`. If still unsure, use
+\`act\` (Unmute keeps it warm — the safest, most recoverable lifecycle).
 
 ## 4b. Finishing a \`consume\` task in the browser — hand off glow-free
 
