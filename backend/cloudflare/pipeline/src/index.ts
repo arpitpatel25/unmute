@@ -234,10 +234,14 @@ async function handleSTT(
       // 1. Update KV cache with new balance (in background)
       await setBalance(env.USER_BALANCE, userId, balanceAfter)
 
-      // 2. Single Supabase RPC: insert usage_log + debit wallet atomically
-      const result = await rpc<Array<{ usage_log_id: string; new_balance: number }>>(env, 'log_and_debit', {
+      // 2. Record the BILL durably (no debit). DECOUPLED on purpose: recording
+      //    usage is what we must never lose; the debit is applied later by the
+      //    reconcile cron from this durable usage_log (migration 008), so a
+      //    failed/dropped debit is never a lost bill. The KV balance above is
+      //    optimistic; reconcile makes Supabase authoritative within ~2 min and
+      //    /v1/me (fresh) returns the reconciled value to the app.
+      await rpc<string>(env, 'log_usage', {
         p_user_id: userId,
-        p_amount_cents: costCents,
         p_call_type: 'stt',
         p_flow_type: flowType,
         p_provider: 'groq',
@@ -247,15 +251,8 @@ async function handleSTT(
         p_audio_duration_seconds: actualDuration,
         p_estimated_cost: rawGroqCostUsd('stt', { durationSeconds: actualDuration }),
         p_latency_ms: latencyMs,
-        p_metadata: { model: STT_MODEL, duration_seconds: actualDuration },
       })
-
-      // 3. Reconcile KV with Supabase if they drift (rare)
-      const supabaseBalance = result?.[0]?.new_balance
-      if (typeof supabaseBalance === 'number' && supabaseBalance !== balanceAfter) {
-        await setBalance(env.USER_BALANCE, userId, supabaseBalance)
-      }
-    })().catch((e) => console.error('[pipeline] reconcile error:', e))
+    })().catch((e) => console.error('[pipeline] log_usage FAILED (bill at risk until retry/reconcile):', e))
   )
 
   const tDone = Date.now()
@@ -394,9 +391,10 @@ async function handleSTTStream(
   ctx.waitUntil(
     (async () => {
       await setBalance(env.USER_BALANCE, userId, balanceAfter)
-      const result = await rpc<Array<{ usage_log_id: string; new_balance: number }>>(env, 'log_and_debit', {
+      // Record the BILL durably (no debit) — reconcile applies the charge later
+      // from this usage_log (migration 008). Never lose a bill on a dropped debit.
+      await rpc<string>(env, 'log_usage', {
         p_user_id: userId,
-        p_amount_cents: costCents,
         p_call_type: 'stt',
         p_flow_type: flowType,
         p_provider: 'groq',
@@ -406,13 +404,8 @@ async function handleSTTStream(
         p_audio_duration_seconds: actualDuration,
         p_estimated_cost: rawGroqCostUsd('stt', { durationSeconds: actualDuration }),
         p_latency_ms: groqTotalMs,
-        p_metadata: { model: STT_MODEL, duration_seconds: actualDuration, streaming: true },
       })
-      const supabaseBalance = result?.[0]?.new_balance
-      if (typeof supabaseBalance === 'number' && supabaseBalance !== balanceAfter) {
-        await setBalance(env.USER_BALANCE, userId, supabaseBalance)
-      }
-    })().catch((e) => console.error('[pipeline] stream reconcile error:', e))
+    })().catch((e) => console.error('[pipeline] stream log_usage FAILED (bill at risk until retry/reconcile):', e))
   )
 
   const tDone = Date.now()
@@ -517,9 +510,10 @@ async function handleLLM(
   ctx.waitUntil(
     (async () => {
       await setBalance(env.USER_BALANCE, userId, balanceAfter)
-      const result = await rpc<Array<{ usage_log_id: string; new_balance: number }>>(env, 'log_and_debit', {
+      // Record the BILL durably (no debit) — reconcile applies the charge later
+      // from this usage_log (migration 008). Never lose a bill on a dropped debit.
+      await rpc<string>(env, 'log_usage', {
         p_user_id: userId,
-        p_amount_cents: costCents,
         p_call_type: 'llm',
         p_flow_type: 'transform',
         p_provider: 'groq',
@@ -529,13 +523,8 @@ async function handleLLM(
         p_audio_duration_seconds: 0,
         p_estimated_cost: rawGroqCostUsd('llm', { promptTokens: pt, completionTokens: ct }),
         p_latency_ms: latencyMs,
-        p_metadata: { model: groqJson.model || LLM_MODEL, prompt_tokens: pt, completion_tokens: ct },
       })
-      const supabaseBalance = result?.[0]?.new_balance
-      if (typeof supabaseBalance === 'number' && supabaseBalance !== balanceAfter) {
-        await setBalance(env.USER_BALANCE, userId, supabaseBalance)
-      }
-    })().catch((e) => console.error('[pipeline] LLM reconcile error:', e))
+    })().catch((e) => console.error('[pipeline] LLM log_usage FAILED (bill at risk until retry/reconcile):', e))
   )
 
   return json({
