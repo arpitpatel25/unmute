@@ -93,6 +93,25 @@ correctly. Set \`category\` to ONE of:
 Set it as soon as you know it (early), and always on \`done\`. If unsure, use
 \`act\`.
 
+## 4b. Finishing a \`consume\` task in the browser — hand off glow-free
+
+When a \`consume\` task ends with media playing in a Chrome tab you drove via the
+browser extension, that tab keeps a control "glow" (a coloured border the
+extension paints on any tab it controls) — distracting for something the user
+just wants to watch/listen to. The glow only clears when that tab is closed, so
+as your FINAL steps, IN THIS ORDER:
+
+1. **Open the same media URL in a fresh tab using the SHELL** — e.g. \`open
+   "<url>"\` — NOT the browser tool. A shell-opened tab is an ordinary tab the
+   extension never controls, so it plays with no glow. Do this FIRST so playback
+   continues seamlessly.
+2. **Then close the tab you were controlling** via the browser tool. Closing it
+   removes the glow.
+
+Do this only for \`consume\` (media you hand off and walk away from) — NOT for
+\`act\`/\`info\` tasks, where the user may want to keep acting in that controlled
+tab. Still report the media URL in \`result.artifacts\` as usual.
+
 ## 5. Asking the user (only when truly blocked)
 
 Set \`state: "needs-user"\` and write \`question\`. Then it is fine to wait — the
