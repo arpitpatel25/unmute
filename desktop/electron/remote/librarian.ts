@@ -47,8 +47,14 @@ export interface LibrarianOpts {
   executorFactory: ExecutorFactory
   baseDir?: string
   pollMs?: number
-  /** Max time to wait for one librarian session to finish before giving up. */
+  /** Last-resort backstop: kill a wedged session after this long so it can't jam
+   *  the serialized queue forever. Generous — the librarian is async/off the hot
+   *  path, so this should never fire in normal operation. Default 5 min. */
   timeoutMs?: number
+  /** If the librarian's status file hasn't changed for this long, nudge it with
+   *  an Enter — a Claude Code session occasionally lands one Enter short of
+   *  submitting (same quirk the doer/router confirm-Enter for). Default 20s. */
+  nudgeMs?: number
   /** ms to wait after accepting the folder-trust prompt for the REPL to boot. */
   trustAcceptMs?: number
   now?: () => number
@@ -64,7 +70,8 @@ export class Librarian {
       executorFactory: opts.executorFactory,
       baseDir: opts.baseDir ?? '',
       pollMs: opts.pollMs ?? 1000,
-      timeoutMs: opts.timeoutMs ?? 120_000,
+      timeoutMs: opts.timeoutMs ?? 5 * 60_000,
+      nudgeMs: opts.nudgeMs ?? 20_000,
       trustAcceptMs: opts.trustAcceptMs ?? 2000,
       now: opts.now,
     }
@@ -137,8 +144,12 @@ export class Librarian {
     ex.writeStdin(this.buildPrompt(s, skillsDir, profilePath, statusPath, index, profile))
 
     // Wait (bounded) for the librarian to finish, signalled via its status file.
+    // A stuck-nudge fires an Enter if the status file stalls — a Claude Code
+    // session sometimes lands one Enter short of submitting. The timeout is only
+    // a last-resort backstop so a wedged session can't jam the serialized queue.
     const deadline = this.clock() + this.opts.timeoutMs
     let done = false
+    let lastNudge = this.clock()
     while (this.clock() < deadline) {
       await new Promise((r) => setTimeout(r, this.opts.pollMs))
       const st = await readStatus(statusPath)
@@ -147,8 +158,13 @@ export class Librarian {
         llog.event('librarian-finished', { state: st.state, summary: st.result?.summary })
         break
       }
+      if (this.clock() - lastNudge >= this.opts.nudgeMs && ex.alive) {
+        lastNudge = this.clock()
+        ex.write('\r') // unstick a one-Enter-short session
+        llog.event('librarian-nudge', { taskId: s.taskId, elapsedMs: this.clock() - t0 })
+      }
     }
-    if (!done) llog.warn('librarian timed out — closing session', {})
+    if (!done) llog.warn('librarian backstop-timeout — closing wedged session', { ms: this.opts.timeoutMs })
     ex.kill()
     // Phase timing: how long the librarian held this submission end-to-end.
     llog.event('phase-timing', { taskId: s.taskId, phase: 'librarian', ms: this.clock() - t0, finished: done })
@@ -174,6 +190,12 @@ export class Librarian {
       `LESS and still get tasks done. You learn from a task that just finished.`,
       `You are the ONLY writer to this memory. Be conservative: MOST tasks teach`,
       `nothing new — when in doubt, NO-OP.`,
+      ``,
+      `You run AUTONOMOUSLY in the background — there is NO user watching and no`,
+      `one to answer you. NEVER ask a question, NEVER pause for confirmation, and`,
+      `NEVER wait for input. You have full authority to write, update, or delete`,
+      `in the memory yourself. If something is unclear, make the smallest safe`,
+      `change or no-op and finish — but never block waiting for an answer.`,
       ``,
       `── The task that just finished ──`,
       `Intent: ${s.intent}`,
