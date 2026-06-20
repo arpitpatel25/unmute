@@ -55,14 +55,19 @@ import type {
 // so there is ZERO dictation-latency impact. If every attempt fails we log
 // LOUDLY (the only thing that can still lose a bill is a Cloudflare waitUntil
 // eviction, which a paid Queue would close — out of scope by design).
-async function logUsageDurable(env: PipelineEnv, params: Record<string, unknown>): Promise<void> {
+async function logUsageDurable(env: PipelineEnv, params: Record<string, unknown>): Promise<string | null> {
   const ATTEMPTS = 4
   for (let i = 1; i <= ATTEMPTS; i++) {
     const id = await rpc<string>(env, 'log_usage', params) // null = failure (rpc swallows)
-    if (id) return
+    if (id) {
+      console.log('[billing] usage recorded', JSON.stringify({ usage_log_id: id, attempt: i }))
+      return id
+    }
+    console.warn('[billing] log_usage attempt FAILED', JSON.stringify({ attempt: i, of: ATTEMPTS }))
     if (i < ATTEMPTS) await new Promise((r) => setTimeout(r, 250 * i)) // 250/500/750ms backoff
   }
-  console.error('[pipeline] log_usage FAILED after retries — BILL LOST (no usage_log written):', JSON.stringify(params))
+  console.error('[billing] log_usage FAILED after all retries — BILL LOST (no usage_log written):', JSON.stringify(params))
+  return null
 }
 
 // ─── Top-up URL surfaced in 402 responses (frontend uses this to deep-link) ─
@@ -245,6 +250,12 @@ async function handleSTT(
   // The actual KV write happens inside ctx.waitUntil below — saves ~300ms
   // because Cloudflare KV writes are slow-globally-consistent (~200-400ms).
   const balanceAfter = balanceBefore - costCents
+  console.log('[billing]', JSON.stringify({
+    user: userId, call: 'stt', flow: flowType, model: STT_MODEL,
+    duration_s: actualDuration,
+    raw_cost_usd: rawGroqCostUsd('stt', { durationSeconds: actualDuration }),
+    cost_cents: costCents, balance_before: balanceBefore, balance_after: balanceAfter,
+  }))
 
   // ─── Fire-and-forget reconcile + logging + KV update ───────
   // Everything below runs AFTER the response is sent. Critical for latency.
@@ -405,6 +416,12 @@ async function handleSTTStream(
   // ─── Cost + balance ────────────────────────────────────────────
   const costCents = sttCostCents(actualDuration)
   const balanceAfter = balanceBefore - costCents
+  console.log('[billing]', JSON.stringify({
+    user: userId, call: 'stt', flow: flowType, model: STT_MODEL, streaming: true,
+    duration_s: actualDuration,
+    raw_cost_usd: rawGroqCostUsd('stt', { durationSeconds: actualDuration }),
+    cost_cents: costCents, balance_before: balanceBefore, balance_after: balanceAfter,
+  }))
 
   // ─── Fire-and-forget reconcile ─────────────────────────────────
   ctx.waitUntil(
@@ -525,6 +542,12 @@ async function handleLLM(
 
   const costCents = Math.max(llmCostCents(pt, ct), 1) // minimum 1 cent so we charge something
   const balanceAfter = await cacheDebit(env.USER_BALANCE, userId, costCents)
+  console.log('[billing]', JSON.stringify({
+    user: userId, call: 'llm', flow: 'transform', model: groqJson.model || LLM_MODEL,
+    prompt_tokens: pt, completion_tokens: ct, total_tokens: pt + ct,
+    raw_cost_usd: rawGroqCostUsd('llm', { promptTokens: pt, completionTokens: ct }),
+    cost_cents: costCents, balance_before: balanceBefore, balance_after: balanceAfter,
+  }))
 
   ctx.waitUntil(
     (async () => {
