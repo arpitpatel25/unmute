@@ -86,7 +86,8 @@ export interface TaskManagerOpts {
   /** Keep a session WARM this long after it reaches done/failed, so a follow-up
    *  ("now reply to #2") can continue it with full context (minimal continuation).
    *  After this idle window with no follow-up, the session is hard-killed.
-   *  Default 3 min; 0 = kill immediately on done (pure one-shot). */
+   *  Default 15 min; 0 = kill immediately on done (pure one-shot). The window
+   *  resets on every follow-up, so an actively-continued thread stays alive. */
   warmMs?: number
   /** ms to wait after asking a fire-and-forget (consume/navigate) session to QUIT
    *  cleanly — so claude-in-chrome disconnects from the tab and the extension
@@ -139,7 +140,7 @@ export class TaskManager extends EventEmitter {
       staleMs: opts.staleMs ?? 4 * 60_000,
       trustAcceptMs: opts.trustAcceptMs ?? 2000,
       submitConfirmMs: opts.submitConfirmMs ?? 450,
-      warmMs: opts.warmMs ?? 3 * 60_000,
+      warmMs: opts.warmMs ?? 15 * 60_000,
       detachGraceMs: opts.detachGraceMs ?? 1500,
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
