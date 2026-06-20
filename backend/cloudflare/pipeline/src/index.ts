@@ -411,7 +411,11 @@ async function handleSTTStream(
   const tGroqBody = Date.now()
   const groqBodyMs = tGroqBody - tGroqHeaders
   const groqTotalMs = tGroqBody - tGroqStart
-  const actualDuration = duration
+  // The client SHOULD send a real duration_seconds (from MediaRecorder), but it
+  // currently posts 0 on the stream path — which would bill $0 forever. Fall back
+  // to estimating from the drained audio bytes (same as the non-stream /v1/stt
+  // path). Latency-free: totalBytes is already computed. Never trust a 0 duration.
+  const actualDuration = duration > 0 ? duration : estimateDurationFromBytes(totalBytes)
 
   // ─── Cost + balance ────────────────────────────────────────────
   const costCents = sttCostCents(actualDuration)
