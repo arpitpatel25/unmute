@@ -46,6 +46,25 @@ import type {
   LLMRequest,
 } from '../../shared/types'
 
+// ─── Durable usage recording (the BILL we must never lose) ──────────────────
+// Records a usage event with RETRIES. `rpc` swallows failures and returns null
+// (it never throws), so we must check the RETURN VALUE and retry — a transient
+// Supabase blip would otherwise silently drop the bill, and the debit is
+// reconciled from this row later (migration 008), so a missing usage_log is
+// unrecoverable. All attempts run inside ctx.waitUntil — AFTER the response —
+// so there is ZERO dictation-latency impact. If every attempt fails we log
+// LOUDLY (the only thing that can still lose a bill is a Cloudflare waitUntil
+// eviction, which a paid Queue would close — out of scope by design).
+async function logUsageDurable(env: PipelineEnv, params: Record<string, unknown>): Promise<void> {
+  const ATTEMPTS = 4
+  for (let i = 1; i <= ATTEMPTS; i++) {
+    const id = await rpc<string>(env, 'log_usage', params) // null = failure (rpc swallows)
+    if (id) return
+    if (i < ATTEMPTS) await new Promise((r) => setTimeout(r, 250 * i)) // 250/500/750ms backoff
+  }
+  console.error('[pipeline] log_usage FAILED after retries — BILL LOST (no usage_log written):', JSON.stringify(params))
+}
+
 // ─── Top-up URL surfaced in 402 responses (frontend uses this to deep-link) ─
 // Keeping this hardcoded means non-paying users never see it — the only path
 // to a 402 is being a signed-in managed user, who already has an account.
@@ -240,7 +259,7 @@ async function handleSTT(
       //    failed/dropped debit is never a lost bill. The KV balance above is
       //    optimistic; reconcile makes Supabase authoritative within ~2 min and
       //    /v1/me (fresh) returns the reconciled value to the app.
-      await rpc<string>(env, 'log_usage', {
+      await logUsageDurable(env, {
         p_user_id: userId,
         p_call_type: 'stt',
         p_flow_type: flowType,
@@ -393,7 +412,7 @@ async function handleSTTStream(
       await setBalance(env.USER_BALANCE, userId, balanceAfter)
       // Record the BILL durably (no debit) — reconcile applies the charge later
       // from this usage_log (migration 008). Never lose a bill on a dropped debit.
-      await rpc<string>(env, 'log_usage', {
+      await logUsageDurable(env, {
         p_user_id: userId,
         p_call_type: 'stt',
         p_flow_type: flowType,
@@ -512,7 +531,7 @@ async function handleLLM(
       await setBalance(env.USER_BALANCE, userId, balanceAfter)
       // Record the BILL durably (no debit) — reconcile applies the charge later
       // from this usage_log (migration 008). Never lose a bill on a dropped debit.
-      await rpc<string>(env, 'log_usage', {
+      await logUsageDurable(env, {
         p_user_id: userId,
         p_call_type: 'llm',
         p_flow_type: 'transform',
