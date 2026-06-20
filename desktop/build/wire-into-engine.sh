@@ -344,6 +344,38 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
     if ! grep -q 'patched: was 140' "$wm"; then
       log "WARN: windowManager.ts HUD_HEIGHT patch did not apply"
     fi
+
+    # ─── HUD/pill cross-Space + level hardening ──────────────────
+    # The pill vanished inconsistently (over fullscreen apps, terminals, and
+    # during Space swipes). Three root causes, all fixed here to match the
+    # task-panel overlay (electron/remote/overlay.ts), which was already hardened:
+    #
+    #  1. PROCESS-TYPE CHURN: setVisibleOnAllWorkspaces WITHOUT
+    #     skipTransformProcessType flips the *app-wide* process type on every
+    #     show, which (a) flicker-vanishes the pill on Space swipes and (b)
+    #     destabilises EVERY other window in the app — including the panel that
+    #     correctly set the flag. Adding it stops the churn for both windows.
+    #  2. WEAK LEVEL: 'floating' (3) sits BELOW fullscreen apps / other elevated
+    #     windows, so the pill sank under terminals & fullscreen. 'screen-saver'
+    #     (1000) sits above them — same level the panel uses.
+    #  3. NO RE-ASSERT ON SHOW: macOS drops the all-Spaces collection behavior
+    #     after a hide/show, and showHUD() only re-asserted alwaysOnTop, not
+    #     setVisibleOnAllWorkspaces. Re-assert it on every show.
+    #
+    # (1) + (2): promote level to screen-saver (both call sites).
+    sed -i.bak "s/hudWindow.setAlwaysOnTop(true, 'floating')/hudWindow.setAlwaysOnTop(true, 'screen-saver')  \/\/ patched: was 'floating', sank under fullscreen\/terminal/g" "$wm"
+    # (1): add skipTransformProcessType to the create-time all-Spaces call
+    # (single-line form — BSD sed doesn't expand \n in the replacement).
+    sed -i.bak 's/^    visibleOnFullScreen: true$/    visibleOnFullScreen: true, skipTransformProcessType: true \/* patched: stop app-wide process-type churn *\//' "$wm"
+    # (3): re-assert all-Spaces on every showHUD() (macOS drops it after hide/show).
+    sed -i.bak 's/^  hudWindow.moveTop()$/  hudWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); hudWindow.moveTop()/' "$wm"
+    rm -f "$wm.bak"
+    if ! grep -q "screen-saver" "$wm"; then
+      log "WARN: windowManager.ts pill level patch did not apply"
+    fi
+    if ! grep -q 'skipTransformProcessType' "$wm"; then
+      log "WARN: windowManager.ts pill skipTransformProcessType patch did not apply"
+    fi
   fi
 
   # ─── Pill white border ─────────────────────────────────────────

@@ -15,13 +15,20 @@
 //
 // Electron glue (BrowserWindow/screen), so — like init.ts — not unit-tested.
 
-import { BrowserWindow, screen, globalShortcut } from 'electron'
+import { app, BrowserWindow, screen, globalShortcut } from 'electron'
 import { join } from 'node:path'
 import { createLogger } from './log'
 
 const log = createLogger('overlay')
 
 let overlayWindow: BrowserWindow | null = null
+// Installed once: re-pin the overlay when the app regains focus. macOS can drop
+// the all-Spaces collection behavior / level on app-deactivation, and nothing
+// else re-asserts it between presents — so without this the panel can silently
+// slip off after you tab away and back. (Cross-Space persistence while we're in
+// the BACKGROUND relies on the stable collection behavior — skipTransformProcessType
+// on both windows — since macOS gives Electron no Space-change event to hook.)
+let reassertInstalled = false
 // Whether WE currently hold the global Escape shortcut (vs the engine, which
 // grabs it during a dictation/remote capture so its cancel wins). We only take
 // Escape while the overlay is visible AND no capture owns it.
@@ -65,6 +72,28 @@ function overlayBounds(): { x: number; y: number; width: number; height: number 
   }
 }
 
+/** Re-assert the level + all-Spaces flags. macOS drops these on show/hide and on
+ *  app-deactivation; re-applying keeps the panel pinned over everything, on every
+ *  Space. No-op if the window is gone. */
+function reassertPinning(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
+  win.setAlwaysOnTop(true, 'screen-saver')
+}
+
+/** Install (once) an app-focus hook that re-pins the overlay whenever we regain
+ *  focus — covers the case where macOS dropped the behavior while we were in the
+ *  background (e.g. you were in a terminal and the panel slipped off). */
+function installReassertHook(): void {
+  if (reassertInstalled) return
+  reassertInstalled = true
+  app.on('browser-window-focus', () => {
+    if (overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
+      reassertPinning(overlayWindow)
+    }
+  })
+}
+
 /** Create the overlay window (hidden). Idempotent. */
 export function createOverlayWindow(): BrowserWindow {
   if (overlayWindow && !overlayWindow.isDestroyed()) return overlayWindow
@@ -93,19 +122,16 @@ export function createOverlayWindow(): BrowserWindow {
     },
   })
 
-  // 'screen-saver' level sits ABOVE full-screen apps (the 'floating' level sat
-  // below them, so the overlay vanished over fullscreen video/apps). Combined
-  // with visibleOnFullScreen (the fullScreenAuxiliary collection behavior), this
-  // is the standard recipe for an overlay that stays pinned over EVERYTHING,
-  // including full-screen Spaces. (DRM players / exclusive-fullscreen games can
-  // still block any overlay — an OS limit, not ours.)
-  overlayWindow.setAlwaysOnTop(true, 'screen-saver')
-  // skipTransformProcessType:true stops Electron from flipping the process type
-  // when it joins all Spaces — that transform is what gave the window a "home"
-  // Space and made it flicker-in-then-vanish during Space swipes. With it, the
-  // window genuinely lives on every Space (incl. full-screen).
-  overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
+  // Pin over EVERYTHING, on every Space: 'screen-saver' level (above full-screen
+  // apps — 'floating' sat below them and vanished over fullscreen/terminal) +
+  // all-Spaces + visibleOnFullScreen + skipTransformProcessType. The last flag
+  // stops Electron from flipping the process type when it joins all Spaces — that
+  // transform gave the window a "home" Space (flicker-in-then-vanish on Space
+  // swipes) and, being app-wide, destabilised the pill too. (DRM players /
+  // exclusive-fullscreen games can still block any overlay — an OS limit, not ours.)
+  reassertPinning(overlayWindow)
   overlayWindow.setFullScreenable(false)
+  installReassertHook()
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void overlayWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}#/overlay`)
@@ -127,8 +153,7 @@ export function presentOverlay(taskId: string): void {
   // Re-assert the all-Spaces + level flags on every present — macOS can drop the
   // collection behavior after a show/hide, which is what let it slip back to a
   // single Space. Re-applying here keeps it omnipresent.
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
-  win.setAlwaysOnTop(true, 'screen-saver')
+  reassertPinning(win)
   // Escape dismisses even though the window is unfocused (we show it inactive) —
   // a global shortcut, taken only while no capture owns Escape.
   grabEscape()
