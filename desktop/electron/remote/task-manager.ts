@@ -97,6 +97,14 @@ export interface TaskManagerOpts {
   /** Recipe librarian (PRD §9). When set, a 'done' task that proposed a recipe
    *  suggestion is submitted for curation. Optional. */
   librarian?: Librarian
+  /** Auto-purge: a task untouched (by updatedAt) for this long is hard-erased on
+   *  the maintenance sweep — session killed, OUR scratch dir deleted, row removed.
+   *  Keeps the user from accumulating hundreds of Unmute-spun Claude/tmux sessions.
+   *  NEVER touches ~/.claude (Claude cleans its own transcripts on its own clock).
+   *  Default 24h ("gone by end of day"). */
+  purgeAgeMs?: number
+  /** How often the maintenance sweep runs. Default 1h. */
+  purgeSweepMs?: number
   /** clock + sleep injectable for tests. */
   now?: () => number
 }
@@ -125,6 +133,8 @@ export class TaskManager extends EventEmitter {
   private timers = new Map<string, ReturnType<typeof setInterval>>()
   // Idle-kill timers for WARM sessions (kept alive after done for follow-ups).
   private warmTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  // Background auto-purge sweep (null until startMaintenance()).
+  private purgeTimer: ReturnType<typeof setInterval> | null = null
   // Per-task ring buffer of recent PTY output for render-on-demand (PRD §13.4#8).
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
@@ -143,6 +153,8 @@ export class TaskManager extends EventEmitter {
       submitConfirmMs: opts.submitConfirmMs ?? 450,
       warmMs: opts.warmMs ?? 15 * 60_000,
       detachGraceMs: opts.detachGraceMs ?? 1500,
+      purgeAgeMs: opts.purgeAgeMs ?? 24 * 60 * 60_000, // 24h — "gone by end of day"
+      purgeSweepMs: opts.purgeSweepMs ?? 60 * 60_000,  // hourly
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
       now: opts.now,
@@ -472,6 +484,42 @@ export class TaskManager extends EventEmitter {
     }
     this.emit('removed', { id } as unknown as Task)
     tlog.event('task-removed', {})
+  }
+
+  /**
+   * Start the background maintenance sweep: hard-erase any task untouched (by
+   * updatedAt) for >= purgeAgeMs (default 24h). This is what keeps a user from
+   * ending up with hundreds of Unmute-spun Claude/tmux sessions + scratch dirs.
+   * Runs once now, then every purgeSweepMs. Idempotent (a second call is a no-op).
+   * Call once at app start (init.ts). Reuses remove() — the SAME proven path as
+   * the manual ✕ — so there is no new deletion logic to get wrong.
+   */
+  startMaintenance(): void {
+    if (this.purgeTimer) return
+    void this.purgeStale()
+    this.purgeTimer = setInterval(() => { void this.purgeStale() }, this.opts.purgeSweepMs)
+    // Don't keep the process alive just for the sweep.
+    ;(this.purgeTimer as { unref?: () => void }).unref?.()
+    log.event('maintenance-started', { purgeAgeMs: this.opts.purgeAgeMs, purgeSweepMs: this.opts.purgeSweepMs })
+  }
+
+  /** Stop the maintenance sweep (shutdown / tests). */
+  stopMaintenance(): void {
+    if (this.purgeTimer) { clearInterval(this.purgeTimer); this.purgeTimer = null }
+  }
+
+  /**
+   * Hard-erase every task untouched for >= purgeAgeMs (ANY state — this also
+   * reaps a still-alive session left behind by an abandoned needs-user/stuck
+   * task, which otherwise never gets its warm-timeout). Scoped to OUR scratch dir
+   * via remove(); NEVER touches ~/.claude. Public so it can be unit-tested.
+   */
+  async purgeStale(): Promise<void> {
+    const cutoff = this.clock() - this.opts.purgeAgeMs
+    const stale = [...this.tasks.values()].filter((t) => t.updatedAt < cutoff)
+    if (!stale.length) return
+    log.event('purge-sweep', { count: stale.length })
+    for (const t of stale) await this.remove(t.id)
   }
 
   /**

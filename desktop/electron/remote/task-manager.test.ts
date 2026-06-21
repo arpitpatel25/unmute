@@ -135,6 +135,29 @@ test('deterministic hook heartbeat keeps a silent task alive; it goes stuck once
   tm.kill(id)
 })
 
+test('maintenance sweep hard-erases tasks untouched past purgeAgeMs; keeps recent ones', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999, purgeAgeMs: 60_000,
+  })
+  const oldId = await tm.dispatch('a stale task from yesterday')
+  const freshId = await tm.dispatch('a task from just now')
+  const oldTask = tm.get(oldId)!
+  const oldCwd = oldTask.cwd
+  oldTask.updatedAt = Date.now() - 120_000 // age it well past the 60s threshold
+
+  const removed = once(tm, 'removed')
+  await tm.purgeStale()
+  const [r] = await removed
+
+  assert.equal((r as { id: string }).id, oldId, 'removed event fired for the stale task')
+  assert.equal(tm.get(oldId), undefined, 'stale task erased from the map')
+  assert.equal(tm.get(freshId)?.id, freshId, 'recent task kept')
+  await assert.rejects(fs.access(oldCwd), 'stale scratch dir was deleted')
+  tm.kill(freshId)
+})
+
 test('kill marks a running task failed with "Stopped by you" (PRD §10.4)', async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })

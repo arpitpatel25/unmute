@@ -477,6 +477,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // (another interactive claude session on the user's plan — §9.3).
   const librarian = new Librarian({ executorFactory })
   manager = new TaskManager({ executorFactory, librarian })
+  // Auto-purge dead tasks (>24h): kill any leftover session + erase OUR scratch
+  // dir + row, so the user never accumulates hundreds of Unmute-spun sessions.
+  // Runs once now (cleans up yesterday) then hourly. Never touches ~/.claude.
+  manager.startMaintenance()
   // The warm routing classifier (lazy — spawns on the first routed utterance,
   // idle-kills itself; tool-less, no glow). Star topology: Unmute is the hub.
   router = new Router({ executorFactory: routerExecutorFactory })
@@ -676,6 +680,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
 
 /** Test/teardown helper. */
 export function _resetForTest(): void {
+  try { manager?.stopMaintenance() } catch { /* ignore */ }
   manager = null
   completeFn = null
   try { router?.dispose() } catch { /* ignore */ }
