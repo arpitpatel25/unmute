@@ -33,6 +33,7 @@ import {
 } from './status-file'
 import { buildDispatch } from './dispatch-prompt'
 import { installContract } from './contract/installer'
+import { installHooks, hookActivityMs } from './hooks'
 import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import type { Librarian } from './librarian'
@@ -198,6 +199,11 @@ export class TaskManager extends EventEmitter {
       // measured from "task start", not the logical createdAt.
       task.lastMtimeMs = (await statusMtimeMs(statusPath)) ?? now
       await installContract(dir) // CLAUDE.md auto-load (#3)
+      // Deterministic lifecycle hooks: heartbeat on real progress + enforce a
+      // status write before the turn ends. Best-effort — a failure here must not
+      // block dispatch (without hooks the task runs on the status-file path, i.e.
+      // today's behaviour). See hooks.ts.
+      await installHooks(dir).catch((e) => tlog.warn('installHooks failed — running without hooks', { error: (e as Error).message }))
       await installSkillsIntoCwd(dir, this.opts.baseDir) // recipes auto-discovery (PRD §8.3)
       await installProfileIntoCwd(dir, this.opts.baseDir) // user facts/prefs the doer Reads on demand
 
@@ -278,6 +284,19 @@ export class TaskManager extends EventEmitter {
       // Parsed-as-null on a changed file ⇒ caught mid-write (PRD #2). Do NOT
       // advance lastMtimeMs; retry next poll once the rename completes.
       tlog.debug('fresh write but parse-miss — will retry', {})
+      return
+    }
+
+    // DETERMINISTIC hook heartbeat (hooks.ts): real progress (PostToolUse) and
+    // turn boundaries advance liveness even when the model didn't write `step`.
+    // This is LIVENESS ONLY — never a state change (semantic content stays the
+    // status file's job; we only checked it above). It keys off real tool
+    // execution, not TUI redraw noise, so a genuinely hung task (no tool calls)
+    // still goes stale below. If hooks never fired, hookMs is null ⇒ we fall
+    // straight through to the status-only backstop, i.e. today's behaviour.
+    const hookMs = await hookActivityMs(task.cwd)
+    if (hookMs !== null && hookMs > task.lastMtimeMs) {
+      task.lastMtimeMs = hookMs
       return
     }
 

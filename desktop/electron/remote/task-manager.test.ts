@@ -115,6 +115,26 @@ test('staleness backstop flags a silent task as stuck (PRD §6.3)', { timeout: 5
   tm.kill(id)
 })
 
+test('deterministic hook heartbeat keeps a silent task alive; it goes stuck once activity stops', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 30, staleMs: 200,
+  })
+  const id = await tm.dispatch('a long task that works without writing status')
+  const cwd = tm.get(id)!.cwd
+  const activity = path.join(cwd, '.unmute-activity')
+  // Simulate PostToolUse firing every 60ms (real progress, NO status writes).
+  const beat = setInterval(() => { void fs.writeFile(activity, '') }, 60)
+  await new Promise((r) => setTimeout(r, 500)) // > 2x staleMs with no status write
+  assert.notEqual(tm.get(id)!.state, 'stuck', 'hook heartbeat kept the silent task alive')
+  // Activity stops → no heartbeat, no status → the backstop must still fire.
+  clearInterval(beat)
+  const [stuckTask] = await once(tm, 'stuck')
+  assert.equal(stuckTask.state, 'stuck', 'still goes stuck once genuinely silent')
+  tm.kill(id)
+})
+
 test('kill marks a running task failed with "Stopped by you" (PRD §10.4)', async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
