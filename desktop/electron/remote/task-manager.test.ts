@@ -153,6 +153,10 @@ test('followUp resumes a warm session — pipes text into stdin, back to process
   const before = fake.writes.length
   const ok = tm.followUp(id, 'reply to the second one')
   assert.equal(ok, true)
+  // The write is now DEFERRED until the REPL is idle (await ex.isReady()) so a
+  // payload can't be swallowed mid-generation. isReady() resolves immediately
+  // for the fake executor; flush the microtask so the deferred write lands.
+  await new Promise((r) => setTimeout(r, 0))
   assert.equal(fake.writes.length, before + 1)
   // A follow-up re-sends the FULL dispatch payload (not raw text) so the model is
   // re-anchored to the contract — the intent plus the status-file path.

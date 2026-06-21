@@ -490,10 +490,16 @@ export class TaskManager extends EventEmitter {
       tlog.warn('followUp: session no longer warm — caller should dispatch new', {})
       return false
     }
-    // Cancel the idle-kill; resume the session.
+    // Cancel the idle-kill so the session can't be reaped while we wait below
+    // for it to go idle.
     const wt = this.warmTimers.get(id)
     if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
     tlog.ui('task-row.follow-up', { text })
+    // Show the task as working immediately — the command was accepted — even
+    // though the actual write is deferred until the REPL is idle (below).
+    task.state = 'processing'
+    task.updatedAt = this.clock()
+    this.emit('updated', task)
 
     // A follow-up is a FRESH dispatch into the SAME session — the only thing
     // shared is the terminal (for context). Send the full dispatch payload, not
@@ -501,17 +507,29 @@ export class TaskManager extends EventEmitter {
     // "act now, update status"). Without this it answers conversationally and
     // never writes status → Unmute never learns it finished → marks it stuck.
     const payload = buildDispatch({ intent: text, statusPath: task.statusPath, recipeScratchPath: task.recipeScratchPath })
-    ex.writeStdin(payload)
-    task.state = 'processing'
-    task.updatedAt = this.clock()
-    task.lastMtimeMs = this.clock() // reset heartbeat clock so the old 'done' file isn't read as stale
-    this.startPolling(id)
-    this.emit('updated', task)
-    tlog.event('task-followup', {})
 
-    // Same submit-confirm as dispatch: the multi-line payload occasionally lands
-    // one Enter short of submitting in Claude's input box.
     void (async () => {
+      // CRITICAL: wait until the REPL is genuinely idle at the prompt before
+      // writing. A task writes status='done' MID-TURN (it can keep generating
+      // for minutes afterwards), so 'done' does NOT mean the session is ready
+      // for input. Writing the payload during active generation gets it
+      // SWALLOWED — the instruction never registers as a turn and is silently
+      // lost (observed live: a "move" follow-up vanished exactly this way).
+      // isReady() resolves on a 700ms quiet gap and has its own hard-timeout
+      // fallback, so this can't hang. Every other write path (dispatch / resume
+      // / router / librarian) already gates on isReady(); this just makes
+      // followUp consistent with them.
+      await ex.isReady()
+      if (!ex.alive) { tlog.warn('followUp: session died before it went idle — instruction NOT delivered', {}); return }
+      ex.writeStdin(payload)
+      // Start the heartbeat/stuck clock only NOW — when the instruction actually
+      // lands — so a long idle-wait above can't trip the stale-stuck detector.
+      task.lastMtimeMs = this.clock() // reset so the old 'done' file isn't read as stale
+      this.startPolling(id)
+      tlog.event('task-followup', {})
+
+      // Same submit-confirm as dispatch: the multi-line payload occasionally
+      // lands one Enter short of submitting in Claude's input box.
       await new Promise((r) => setTimeout(r, this.opts.submitConfirmMs))
       if (ex.alive) { ex.write('\r'); tlog.event('submit-confirm-enter', { afterMs: this.opts.submitConfirmMs, via: 'followUp' }) }
     })()
