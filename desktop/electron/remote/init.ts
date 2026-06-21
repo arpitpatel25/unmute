@@ -34,7 +34,7 @@ import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './lo
 import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOverlay, dismissOverlay, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
 import { Router, type RoutableTask } from './router'
-import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, TMUX_CONF } from './tmux'
+import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -476,10 +476,22 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // PRD §9: the serialized recipe librarian, sharing the same executor factory
   // (another interactive claude session on the user's plan — §9.3).
   const librarian = new Librarian({ executorFactory })
-  manager = new TaskManager({ executorFactory, librarian })
-  // Auto-purge dead tasks (>24h): kill any leftover session + erase OUR scratch
-  // dir + row, so the user never accumulates hundreds of Unmute-spun sessions.
-  // Runs once now (cleans up yesterday) then hourly. Never touches ~/.claude.
+  manager = new TaskManager({
+    executorFactory,
+    librarian,
+    // Best-effort reaper for an orphan tmux session a past run left on our
+    // private socket (app crashed before killAll). Per-session kill, never the
+    // server (would hit live ones).
+    reapSession: (id) => {
+      if (!tmuxBin) return
+      try { execFile(tmuxBin, tmuxKillSessionArgs(sessionNameFor(id)), () => {}) } catch { /* best-effort */ }
+    },
+  })
+  // Auto-purge dead tasks (>24h): in-memory aged-out tasks AND orphan on-disk
+  // dirs from past runs (tasks are in-memory only, so yesterday's dirs are never
+  // rehydrated — the disk sweep is what actually reclaims them). Kills any
+  // leftover session + erases OUR scratch dir + row. Runs once now then hourly.
+  // Never touches ~/.claude.
   manager.startMaintenance()
   // The warm routing classifier (lazy — spawns on the first routed utterance,
   // idle-kills itself; tool-less, no glow). Star topology: Unmute is the hub.

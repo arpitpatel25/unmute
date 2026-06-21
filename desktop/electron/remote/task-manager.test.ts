@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { promises as fs } from 'node:fs'
+import { promises as fs, utimesSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { once } from 'node:events'
@@ -156,6 +156,37 @@ test('maintenance sweep hard-erases tasks untouched past purgeAgeMs; keeps recen
   assert.equal(tm.get(freshId)?.id, freshId, 'recent task kept')
   await assert.rejects(fs.access(oldCwd), 'stale scratch dir was deleted')
   tm.kill(freshId)
+})
+
+test('maintenance sweep also reclaims ORPHAN on-disk dirs from past runs (not in memory)', async () => {
+  const baseDir = await tmpBase()
+  const reaped: string[] = []
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+    purgeAgeMs: 60_000, userKey: 'local',
+    reapSession: (id) => reaped.push(id),
+  })
+  // A live task (in memory) — must be kept even though we also seed its dir.
+  const liveId = await tm.dispatch('a live task')
+
+  // Two ORPHAN dirs on disk, never in memory (simulate yesterday's runs).
+  const root = path.join(baseDir, 'local')
+  const oldOrphan = path.join(root, 'orphan-old')
+  const newOrphan = path.join(root, 'orphan-recent')
+  await fs.mkdir(oldOrphan, { recursive: true })
+  await fs.mkdir(newOrphan, { recursive: true })
+  const past = new Date(Date.now() - 120_000)
+  utimesSync(oldOrphan, past, past)               // aged past the 60s cutoff
+  // newOrphan keeps its fresh mtime (just created)
+
+  await tm.purgeStale()
+
+  await assert.rejects(fs.access(oldOrphan), 'old orphan dir reclaimed')
+  assert.deepEqual(reaped, ['orphan-old'], 'orphan tmux session reaped by id')
+  await fs.access(newOrphan) // recent orphan kept
+  await fs.access(tm.get(liveId)!.cwd) // live task untouched
+  tm.kill(liveId)
 })
 
 test('kill marks a running task failed with "Stopped by you" (PRD §10.4)', async () => {

@@ -105,6 +105,10 @@ export interface TaskManagerOpts {
   purgeAgeMs?: number
   /** How often the maintenance sweep runs. Default 1h. */
   purgeSweepMs?: number
+  /** Best-effort reaper for an ORPHAN tmux session left by a past run (the app
+   *  crashed/quit without killing it). Wired from init.ts (which owns the tmux
+   *  bin + private socket). Omitted in tests. */
+  reapSession?: (taskId: string) => void
   /** clock + sleep injectable for tests. */
   now?: () => number
 }
@@ -139,8 +143,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -157,6 +161,7 @@ export class TaskManager extends EventEmitter {
       purgeSweepMs: opts.purgeSweepMs ?? 60 * 60_000,  // hourly
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
+      reapSession: opts.reapSession,
       now: opts.now,
     }
   }
@@ -516,10 +521,41 @@ export class TaskManager extends EventEmitter {
    */
   async purgeStale(): Promise<void> {
     const cutoff = this.clock() - this.opts.purgeAgeMs
+    // 1. IN-MEMORY tasks that have aged out — remove() kills the live session too.
     const stale = [...this.tasks.values()].filter((t) => t.updatedAt < cutoff)
-    if (!stale.length) return
-    log.event('purge-sweep', { count: stale.length })
-    for (const t of stale) await this.remove(t.id)
+    if (stale.length) {
+      log.event('purge-sweep', { count: stale.length })
+      for (const t of stale) await this.remove(t.id)
+    }
+    // 2. ON-DISK ORPHAN dirs from PAST runs. Tasks are in-memory only (no disk
+    //    rehydrate), so yesterday's dirs are never in `this.tasks` and the sweep
+    //    above can't see them — they'd accumulate forever. Scan our own root and
+    //    erase any dir older than the cutoff that isn't an active in-memory task,
+    //    reaping any orphan tmux session it left behind. Scoped to OUR baseDir;
+    //    NEVER touches ~/.claude.
+    await this.purgeOrphanDirs(cutoff)
+  }
+
+  private async purgeOrphanDirs(cutoff: number): Promise<void> {
+    const root = join(this.opts.baseDir, this.opts.userKey ?? 'local')
+    let ids: string[]
+    try { ids = await fs.readdir(root) } catch { return } // root not created yet
+    let removed = 0
+    for (const id of ids) {
+      if (this.tasks.has(id)) continue // active in memory — handled in pass 1
+      const dir = join(root, id)
+      let mtimeMs: number
+      try {
+        const st = await fs.stat(dir)
+        if (!st.isDirectory()) continue
+        mtimeMs = st.mtimeMs // dir mtime advances on every status (atomic rename) ≈ last activity
+      } catch { continue }
+      if (mtimeMs >= cutoff) continue // recent orphan (e.g. a just-crashed run) — keep
+      try { this.opts.reapSession?.(id) } catch { /* best-effort */ }
+      try { await fs.rm(dir, { recursive: true, force: true }) } catch { /* ignore */ }
+      removed++
+    }
+    if (removed) log.event('purge-orphan-dirs', { removed })
   }
 
   /**
