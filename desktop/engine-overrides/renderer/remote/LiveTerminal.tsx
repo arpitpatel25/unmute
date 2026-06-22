@@ -55,6 +55,16 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
         const dims = fit.proposeDimensions()
         const rows = dims?.rows ?? term.rows
         if (term.cols !== FIXED_COLS || term.rows !== rows) term.resize(FIXED_COLS, rows)
+        // PIN the host to the FULL 120-col pixel width so the TUI renders at its
+        // true width (never squeezed/distorted) and the pane scrolls LEFT/RIGHT to
+        // reveal it. h-full gives the height FitAddon needs to fit rows, but once
+        // height is pinned, w-max stops growing to the terminal width — which is
+        // what killed horizontal scroll. Compute the exact width from xterm's
+        // measured cell width and set it explicitly (inline style beats w-max).
+        const cellW = (term as unknown as {
+          _core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number } } } } }
+        })._core?._renderService?.dimensions?.css?.cell?.width
+        if (cellW && cellW > 0) host.style.width = `${Math.ceil(FIXED_COLS * cellW)}px`
         api().remoteTerminalResize?.(taskId, FIXED_COLS, term.rows)
       } catch { /* not laid out yet */ }
     }
