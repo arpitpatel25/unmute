@@ -135,6 +135,26 @@ test('deterministic hook heartbeat keeps a silent task alive; it goes stuck once
   tm.kill(id)
 })
 
+test('a later hook event must NOT hide a status write (false-stuck regression)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, staleMs: 100_000,
+  })
+  const id = await tm.dispatch('check my emails')
+  const task = tm.get(id)!
+  // Simulate the production race: hook activity (PostToolUse/Stop) raced AHEAD of
+  // the model's 'done' write, so the liveness clock is far in the future...
+  task.lastHeartbeatMs = Date.now() + 60_000
+  // ...then the doer writes its terminal 'done' (mtime ~now: newer than the status
+  // read cursor, but OLDER than the hook-advanced heartbeat).
+  const done = once(tm, 'done')
+  await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'no human emails' } })
+  const [d] = await done // must still fire — the read cursor (lastMtimeMs) ignores the heartbeat
+  assert.equal((d as { state: string }).state, 'done', 'done was read despite a later hook event')
+  tm.kill(id)
+})
+
 test('maintenance sweep hard-erases tasks untouched past purgeAgeMs; keeps recent ones', async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({

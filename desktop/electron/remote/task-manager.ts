@@ -53,9 +53,16 @@ export interface Task {
   cwd: string
   statusPath: string
   recipeScratchPath: string
-  /** mtime (ms) of the last status write we applied — the heartbeat clock for
-   *  staleness (PRD §6.3). Updated only when the file genuinely changes. */
+  /** mtime (ms) of the last status write we APPLIED — purely the read cursor for
+   *  "is there a newer status write to process?" (status path only). MUST NOT be
+   *  advanced by hook activity, or a status write older than a later hook event
+   *  (e.g. the Stop hook firing after the model wrote 'done') becomes invisible
+   *  and the terminal state is never read. */
   lastMtimeMs: number
+  /** Liveness clock for the staleness/stuck backstop (PRD §6.3): the latest of a
+   *  status write OR a deterministic hook event (hooks.ts). Decoupled from
+   *  lastMtimeMs so hook heartbeats keep a task alive WITHOUT hiding status reads. */
+  lastHeartbeatMs: number
   /** Executor self-classification (drives presentation + lifecycle). */
   category?: StatusPayload['category']
   result?: StatusPayload['result']
@@ -202,7 +209,7 @@ export class TaskManager extends EventEmitter {
 
     const task: Task = {
       id, intent, state: 'processing', createdAt: now, updatedAt: now,
-      cwd: dir, statusPath, recipeScratchPath, lastMtimeMs: now,
+      cwd: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
     }
     this.tasks.set(id, task)
     tlog.event('task-created', { intent, cwd: dir })
@@ -214,7 +221,7 @@ export class TaskManager extends EventEmitter {
       await scaffoldStatusFile(statusPath) // Unmute owns creation (PRD §6.1)
       // Seed the heartbeat clock from the scaffold's real mtime so staleness is
       // measured from "task start", not the logical createdAt.
-      task.lastMtimeMs = (await statusMtimeMs(statusPath)) ?? now
+      task.lastMtimeMs = task.lastHeartbeatMs = (await statusMtimeMs(statusPath)) ?? now
       await installContract(dir) // CLAUDE.md auto-load (#3)
       // Deterministic lifecycle hooks: heartbeat on real progress + enforce a
       // status write before the turn ends. Best-effort — a failure here must not
@@ -294,7 +301,8 @@ export class TaskManager extends EventEmitter {
     if (mtime !== null && mtime > task.lastMtimeMs) {
       const status = await readStatus(task.statusPath)
       if (status) {
-        task.lastMtimeMs = mtime
+        task.lastMtimeMs = mtime          // advance the status read cursor
+        task.lastHeartbeatMs = mtime      // a status write is also a heartbeat
         this.transition(id, status.state, status)
         return
       }
@@ -305,24 +313,27 @@ export class TaskManager extends EventEmitter {
     }
 
     // DETERMINISTIC hook heartbeat (hooks.ts): real progress (PostToolUse) and
-    // turn boundaries advance liveness even when the model didn't write `step`.
-    // This is LIVENESS ONLY — never a state change (semantic content stays the
-    // status file's job; we only checked it above). It keys off real tool
-    // execution, not TUI redraw noise, so a genuinely hung task (no tool calls)
-    // still goes stale below. If hooks never fired, hookMs is null ⇒ we fall
-    // straight through to the status-only backstop, i.e. today's behaviour.
+    // turn boundaries advance LIVENESS even when the model didn't write `step`.
+    // CRITICAL: this advances lastHeartbeatMs ONLY — never lastMtimeMs. The Stop
+    // hook fires AFTER the model writes its final 'done' status, so the hook mtime
+    // is LATER than that status write; if we let it touch lastMtimeMs (the read
+    // cursor) the 'done' write would be < cursor and never read → the task would
+    // sit and then false-stuck (observed). It keys off real tool execution, not
+    // TUI redraw noise, so a genuinely hung task (no hook events) still goes stale.
+    // If hooks never fired, hookMs is null ⇒ staleness falls back to status mtime.
     const hookMs = await hookActivityMs(task.cwd)
-    if (hookMs !== null && hookMs > task.lastMtimeMs) {
-      task.lastMtimeMs = hookMs
+    if (hookMs !== null && hookMs > task.lastHeartbeatMs) {
+      task.lastHeartbeatMs = hookMs
       return
     }
 
-    // No fresh heartbeat this poll — staleness backstop (PRD §6.3, mtime-keyed).
+    // No fresh heartbeat this poll — staleness backstop (PRD §6.3). Keyed on
+    // lastHeartbeatMs (status writes OR hook activity), NOT the status read cursor.
     if (
       task.state !== 'stuck' &&
-      isStale({ state: task.state as TaskState }, task.lastMtimeMs, this.clock(), this.opts.staleMs)
+      isStale({ state: task.state as TaskState }, task.lastHeartbeatMs, this.clock(), this.opts.staleMs)
     ) {
-      tlog.event('task-stuck', { lastMtimeMs: task.lastMtimeMs, staleMs: this.opts.staleMs })
+      tlog.event('task-stuck', { lastHeartbeatMs: task.lastHeartbeatMs, staleMs: this.opts.staleMs })
       // Cheap recovery before surfacing stuck: a task is sometimes just one Enter
       // short of submitting/continuing (the same input quirk we confirm-Enter for
       // at dispatch). Send ONE Enter — a no-op if it's genuinely busy. If it
@@ -627,7 +638,7 @@ export class TaskManager extends EventEmitter {
       ex.writeStdin(payload)
       // Start the heartbeat/stuck clock only NOW — when the instruction actually
       // lands — so a long idle-wait above can't trip the stale-stuck detector.
-      task.lastMtimeMs = this.clock() // reset so the old 'done' file isn't read as stale
+      task.lastMtimeMs = task.lastHeartbeatMs = this.clock() // reset so the old 'done' file isn't read as stale
       this.startPolling(id)
       tlog.event('task-followup', {})
 
