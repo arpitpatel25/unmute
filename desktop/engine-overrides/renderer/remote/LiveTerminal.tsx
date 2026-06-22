@@ -46,10 +46,15 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
     // Fit the ROWS to the pane height, but FORCE the width to FIXED_COLS so the
     // TUI is never squeezed into a narrow box; the pane scrolls horizontally.
     const sync = () => {
-      if (!term || !fit || !host.clientWidth || !host.clientHeight) return
+      if (!term || !fit || !host.clientHeight) return
       try {
-        fit.fit()
-        if (term.cols !== FIXED_COLS) term.resize(FIXED_COLS, term.rows)
+        // Fit ROWS to the pane height; PIN cols to FIXED_COLS (the PTY width) so the
+        // TUI never reflows. Use proposeDimensions (a pure read) + an explicit resize
+        // rather than fit.fit(), so we never momentarily resize to a wrong width and
+        // flash a reflow. proposeDimensions can return undefined before layout.
+        const dims = fit.proposeDimensions()
+        const rows = dims?.rows ?? term.rows
+        if (term.cols !== FIXED_COLS || term.rows !== rows) term.resize(FIXED_COLS, rows)
         api().remoteTerminalResize?.(taskId, FIXED_COLS, term.rows)
       } catch { /* not laid out yet */ }
     }
@@ -59,7 +64,12 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
     // makes xterm throw "Cannot read properties of undefined (reading
     // 'dimensions')". The ResizeObserver below kicks this once it's laid out.
     const open = () => {
-      if (disposed || term || !host.clientWidth || !host.clientHeight) return
+      // Gate on HEIGHT only: width is content-driven (w-max) and is 0 until xterm
+      // renders its 120 cols, so requiring clientWidth here would deadlock (xterm
+      // never opens). Height (h-full of the fixed h-72) is laid out immediately, and
+      // it's the dimension FitAddon needs to compute rows — so it also prevents the
+      // 0-height "Cannot read 'dimensions'" throw.
+      if (disposed || term || !host.clientHeight) return
       term = new Terminal({
         cols: FIXED_COLS,
         rows: 24,
@@ -117,9 +127,15 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
           <button className="text-[11px] text-white/60 hover:text-white" onClick={onClose}>close</button>
         </div>
       </div>
-      {/* Scroll container: horizontal reveals the fixed-width TUI; xterm owns vertical. */}
-      <div className="h-72 overflow-auto">
-        <div ref={hostRef} className="p-1 w-max" />
+      {/* Horizontal scroll reveals the fixed-width (120-col) TUI; xterm owns VERTICAL
+          via its own scrollback. NO outer vertical scroll (overflow-y-hidden) — that
+          double-scroll was what hid the last line below an outer fold. The host fills
+          the pane HEIGHT (h-full of the fixed h-72) so FitAddon measures the REAL
+          viewport and fits rows to it; width stays content-sized (w-max) so the wide
+          TUI scrolls left/right. No padding on the measured host (it threw the row
+          math off by a fraction and clipped the bottom line). */}
+      <div className="h-72 overflow-x-auto overflow-y-hidden">
+        <div ref={hostRef} className="h-full w-max" />
       </div>
     </div>
   )
