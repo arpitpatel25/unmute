@@ -135,6 +135,45 @@ test('deterministic hook heartbeat keeps a silent task alive; it goes stuck once
   tm.kill(id)
 })
 
+test('rehydrate() rebuilds task rows from disk after a restart (crash recovery)', async () => {
+  const baseDir = await tmpBase()
+  // Simulate a task left on disk by a previous (crashed) run.
+  const id = 'aaaaaaaa-1111-2222-3333-444444444444'
+  const dir = path.join(baseDir, 'local', id)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id, intent: 'analyze fastlane', createdAt: Date.now() }))
+  await claudeWrites(path.join(dir, 'status.json'), {
+    state: 'done', category: 'act', result: { summary: 'created the analysis folder' },
+  })
+
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const created = once(tm, 'created')
+  await tm.rehydrate()
+  const [t] = await created
+
+  const task = (t as { id: string }).id === id ? (t as { intent: string; state: string; result?: { summary?: string } }) : null
+  assert.ok(task, 'rehydrated the crashed task')
+  assert.equal(task!.intent, 'analyze fastlane', 'intent recovered from meta.json')
+  assert.equal(task!.state, 'done', 'last state recovered from status.json')
+  assert.equal(task!.result?.summary, 'created the analysis folder', 'result recovered')
+  assert.equal(tm.get(id)?.id, id, 'task is back in the live list (viewable + resumable)')
+})
+
+test('rehydrate() surfaces an interrupted (non-terminal) task as failed, still resumable', async () => {
+  const baseDir = await tmpBase()
+  const id = 'bbbbbbbb-1111-2222-3333-444444444444'
+  const dir = path.join(baseDir, 'local', id)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id, intent: 'long running task', createdAt: Date.now() }))
+  await claudeWrites(path.join(dir, 'status.json'), { state: 'processing', step: 'mid-flight' })
+
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm.rehydrate()
+  const task = tm.get(id)!
+  assert.equal(task.state, 'failed', 'mid-run task whose session died shows as failed, not forever-processing')
+  assert.match(task.error?.reason ?? '', /interrupted/i)
+})
+
 test('a later hook event must NOT hide a status write (false-stuck regression)', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({

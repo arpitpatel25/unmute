@@ -487,12 +487,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       try { execFile(tmuxBin, tmuxKillSessionArgs(sessionNameFor(id)), () => {}) } catch { /* best-effort */ }
     },
   })
-  // Auto-purge dead tasks (>24h): in-memory aged-out tasks AND orphan on-disk
-  // dirs from past runs (tasks are in-memory only, so yesterday's dirs are never
-  // rehydrated — the disk sweep is what actually reclaims them). Kills any
-  // leftover session + erases OUR scratch dir + row. Runs once now then hourly.
-  // Never touches ~/.claude.
-  manager.startMaintenance()
+  // Recover the user's tasks after an app crash/restart: rebuild the rows from
+  // the on-disk meta + status files (they were never lost — just invisible once
+  // the in-memory list reset on relaunch). Then start maintenance so the sweep
+  // can purge any rehydrated rows that are too old.
+  void manager.rehydrate().finally(() => {
+    // Auto-purge dead tasks (>24h): in-memory aged-out tasks AND orphan on-disk
+    // dirs from past runs. Kills any leftover session + erases OUR scratch dir +
+    // row. Runs once now then hourly. Never touches ~/.claude.
+    manager?.startMaintenance()
+  })
   // The warm routing classifier (lazy — spawns on the first routed utterance,
   // idle-kills itself; tool-less, no glow). Star topology: Unmute is the hub.
   router = new Router({ executorFactory: routerExecutorFactory })

@@ -219,6 +219,10 @@ export class TaskManager extends EventEmitter {
 
     try {
       await scaffoldStatusFile(statusPath) // Unmute owns creation (PRD §6.1)
+      // Persist a tiny receipt so the task survives an app crash/restart. The
+      // intent (what the user asked) lives only in memory + here — status.json
+      // holds the result, never the original ask. rehydrate() reads it on launch.
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, createdAt: now }))
       // Seed the heartbeat clock from the scaffold's real mtime so staleness is
       // measured from "task start", not the logical createdAt.
       task.lastMtimeMs = task.lastHeartbeatMs = (await statusMtimeMs(statusPath)) ?? now
@@ -500,6 +504,58 @@ export class TaskManager extends EventEmitter {
     }
     this.emit('removed', { id } as unknown as Task)
     tlog.event('task-removed', {})
+  }
+
+  /**
+   * Rebuild the in-memory task list from disk on launch so the user's tasks
+   * SURVIVE an app crash/restart — from the user's view they were lost (the UI
+   * was empty), even though the durable meta.json (intent) + status.json
+   * (state/result) were on disk the whole time. Adds rows the user can view and
+   * resume(); it does NOT re-attach a still-live session (resume respawns on
+   * demand). A task that was mid-run when the app died is surfaced as 'failed'
+   * (interrupted) — honest, and still resumable. Run BEFORE startMaintenance so
+   * the sweep can then purge anything too old. Idempotent (skips tasks already
+   * in memory / dirs without a receipt).
+   */
+  async rehydrate(): Promise<void> {
+    const root = join(this.opts.baseDir, this.opts.userKey ?? 'local')
+    let ids: string[]
+    try { ids = await fs.readdir(root) } catch { return } // nothing on disk yet
+    let restored = 0
+    for (const id of ids) {
+      if (this.tasks.has(id)) continue
+      const dir = join(root, id)
+      let meta: { intent?: string; createdAt?: number }
+      try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
+      if (!meta.intent) continue // pre-receipt task or junk dir — skip
+      const statusPath = join(dir, 'status.json')
+      const status = await readStatus(statusPath)
+      const now = this.clock()
+      const terminal = status?.state === 'done' || status?.state === 'failed'
+      const task: Task = {
+        id,
+        intent: meta.intent,
+        // A non-terminal task whose session died with the app is, to the user,
+        // interrupted — surface it as failed (still resumable) rather than a
+        // forever-spinning 'processing'.
+        state: terminal ? status!.state : 'failed',
+        createdAt: meta.createdAt ?? now,
+        updatedAt: (await statusMtimeMs(statusPath)) ?? meta.createdAt ?? now,
+        cwd: dir,
+        statusPath,
+        recipeScratchPath: join(dir, 'recipe.json'),
+        lastMtimeMs: now,
+        lastHeartbeatMs: now,
+        category: status?.category,
+        result: status?.result,
+        error: terminal ? status?.error : { reason: 'Interrupted by an app restart — resume to continue' },
+        question: status?.question,
+      }
+      this.tasks.set(id, task)
+      this.emit('created', task)
+      restored++
+    }
+    if (restored) log.event('rehydrated', { restored })
   }
 
   /**
