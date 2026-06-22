@@ -43,6 +43,22 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
     let fit: FitAddon | null = null
     let off: (() => void) | undefined
 
+    // xterm CLIPS its own horizontal overflow internally (.xterm-viewport is
+    // overflow-x:hidden), so when the host is content-collapsed to the pane width
+    // the extra columns are clipped inside xterm and never push the host wider for
+    // the outer pane to scroll over — that's why only a portion shows. Fix: measure
+    // the TRUE rendered grid width (.xterm-screen has a fixed cols*cellWidth px
+    // width) and PIN the host to it. Now the 120-col TUI FITS the host (no internal
+    // clip, no distortion) and the outer pane scrolls left/right to reveal it.
+    const pinHostWidth = () => {
+      const screen = host.querySelector('.xterm-screen') as HTMLElement | null
+      const viewport = host.querySelector('.xterm-viewport') as HTMLElement | null
+      // The widest measure wins — scrollWidth of the clipping elements reports the
+      // full content width even when overflow is hidden.
+      const w = Math.max(screen?.offsetWidth || 0, screen?.scrollWidth || 0, viewport?.scrollWidth || 0)
+      if (w > 0 && host.style.width !== `${w}px`) host.style.width = `${w}px`
+    }
+
     // Fit the ROWS to the pane height, but FORCE the width to FIXED_COLS so the
     // TUI is never squeezed into a narrow box; the pane scrolls horizontally.
     const sync = () => {
@@ -55,17 +71,8 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
         const dims = fit.proposeDimensions()
         const rows = dims?.rows ?? term.rows
         if (term.cols !== FIXED_COLS || term.rows !== rows) term.resize(FIXED_COLS, rows)
-        // PIN the host to the FULL 120-col pixel width so the TUI renders at its
-        // true width (never squeezed/distorted) and the pane scrolls LEFT/RIGHT to
-        // reveal it. h-full gives the height FitAddon needs to fit rows, but once
-        // height is pinned, w-max stops growing to the terminal width — which is
-        // what killed horizontal scroll. Compute the exact width from xterm's
-        // measured cell width and set it explicitly (inline style beats w-max).
-        const cellW = (term as unknown as {
-          _core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number } } } } }
-        })._core?._renderService?.dimensions?.css?.cell?.width
-        if (cellW && cellW > 0) host.style.width = `${Math.ceil(FIXED_COLS * cellW)}px`
         api().remoteTerminalResize?.(taskId, FIXED_COLS, term.rows)
+        pinHostWidth()
       } catch { /* not laid out yet */ }
     }
 
@@ -95,6 +102,9 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
       term.loadAddon(fit)
       term.open(host)
       sync()
+      // Re-pin the host width after every render — the grid width settles a frame
+      // or two after open/resize, and grows as wide output streams in.
+      term.onRender(() => pinHostWidth())
       term.onData((data) => api().remoteTerminalInput?.(taskId, data))
       void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf && term) term.write(buf) })
       off = api().remoteOnOutput?.((d) => {
