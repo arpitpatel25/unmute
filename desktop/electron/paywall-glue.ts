@@ -151,6 +151,32 @@ export async function refreshAccessToken(): Promise<boolean> {
 }
 
 /**
+ * Warm the pool's TLS socket NOW (best-effort, no auth — a cheap OPTIONS via the
+ * undici pool). Used at recording-start and on power-resume — the cases the 25s
+ * keep-alive timer can't cover: macOS App Nap suspends that timer while the app
+ * is backgrounded, and sleep stops it entirely, so the socket goes cold and the
+ * first dictation pays a fresh TLS handshake (which loses the local-fallback
+ * race → silent offline). Warming here keeps the cloud STT call on a live socket.
+ */
+export async function warmNow(): Promise<void> {
+  try { await paywallFetch('/v1/me', { method: 'OPTIONS' }) } catch { /* best-effort */ }
+}
+
+/**
+ * Refresh the access token if it expires within `withinSec` (or already has), so
+ * a managed call never eats a mid-request 401 — that reactive refresh adds
+ * ~0.4-1.2s, enough to lose the cloud-vs-local race. Cheap when fresh (just an
+ * expiry compare, no network); deduped via refreshAccessToken when it does run.
+ */
+export async function ensureFreshToken(withinSec = 120): Promise<void> {
+  if (!currentSession.refreshToken || currentSession.expiresAt == null) return
+  const now = Math.floor(Date.now() / 1000)
+  if (currentSession.expiresAt - now <= withinSec) {
+    await refreshAccessToken()
+  }
+}
+
+/**
  * Proactive auto-refresh is intentionally a no-op.
  *
  * Historically main+renderer both ran timers that fired ~5min before

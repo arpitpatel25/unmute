@@ -6,7 +6,7 @@
 // Otherwise these return null and the caller falls through to its
 // existing logic.
 
-import { getPaywallAccessToken, getPaywallEngineMode, getSTTLanguageForRequest, refreshAccessToken } from './paywall-glue'
+import { getPaywallAccessToken, getPaywallEngineMode, getSTTLanguageForRequest, refreshAccessToken, ensureFreshToken } from './paywall-glue'
 // keyStore lives in the OSS engine; after wire_paywall we sit in
 // engine/electron/paywall/, so OSS-engine siblings need `../`.
 import { hasApiKey } from '../keyStore'
@@ -77,6 +77,10 @@ export async function tryManagedSTT(
 ): Promise<ManagedSTTResult | null> {
   if (!shouldTryManaged()) return null
 
+  // Guarantee a fresh token BEFORE the call so we never eat a mid-request 401
+  // (whose reactive refresh adds ~0.4-1.2s and loses the local-fallback race).
+  // No-op cost when the token is already fresh.
+  await ensureFreshToken()
   const token = getPaywallAccessToken()
   if (!token) return null
 
@@ -225,6 +229,7 @@ export async function tryManagedLLM(
 ): Promise<ManagedLLMResult | null> {
   if (!shouldTryManaged()) return null
 
+  await ensureFreshToken() // fresh token before the call — no mid-request 401
   const token = getPaywallAccessToken()
   if (!token) return null
 

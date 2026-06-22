@@ -4,11 +4,11 @@
 //     import { initPaywall } from './paywall/main-extensions'
 //     initPaywall(app, sessionManager)
 
-import { ipcMain, BrowserWindow, type App } from 'electron'
+import { ipcMain, BrowserWindow, powerMonitor, type App } from 'electron'
 import Store from 'electron-store'
 import { ProviderRouter, pickProvider, type EngineMode, type Provider, type ProviderState } from './provider-router'
 import { managedSTT, managedLLM } from './managed-client'
-import { initPaywallGlue } from './paywall-glue'
+import { initPaywallGlue, warmNow, ensureFreshToken } from './paywall-glue'
 // getWidgetWindow lives one directory up after wire-into-engine.sh
 // places main-extensions.ts at engine/electron/paywall/.
 import { getWidgetWindow } from '../windowManager'
@@ -86,6 +86,12 @@ export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
   // ipcMain.handle throws on second registration.
   //
   initPaywallGlue()
+
+  // On wake from sleep the socket is dead (slept past keep-alive) and the token
+  // may be stale — re-warm + refresh proactively so the first post-wake dictation
+  // isn't cold (it would lose the local-fallback race → silent offline). The 25s
+  // keep-alive timer can't cover this: it's suspended during sleep / App Nap.
+  powerMonitor.on('resume', () => { void warmNow(); void ensureFreshToken() })
 
   // paywall:request-sign-in lives here (not in glue) so it can emit
   // paywall:show-sign-in to the focused window; the renderer's AuthContext

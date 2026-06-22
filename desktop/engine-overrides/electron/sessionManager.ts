@@ -13,6 +13,7 @@ import { hasApiKey } from './keyStore'
 // ─── Paywall managed-cloud intercepts ──────────────────────────────
 // Files are copied into engine/electron/paywall/ by wire_paywall.
 import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
+import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 // Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
 import { dispatchFromCapture } from './paywall/remote/init'
 import { getPaywallEngineMode, formatOutputForUser } from './paywall/paywall-glue'
@@ -604,6 +605,15 @@ class SessionManager {
     setTrayRecording(mode)
     sendToWidget('recording:start', mode, this.currentSession.sessionId)
     console.log('[session] HUD shown, recording:start sent for mode:', mode)
+
+    // Warm the cloud path NOW — in parallel with the user speaking — so the STT
+    // call rides a LIVE socket + FRESH token instead of a cold connection that
+    // loses the local-fallback race after the app's been idle/napped/asleep.
+    // Fire-and-forget: the ~1-5s of speaking hides the warm/refresh latency, and
+    // there's zero cost when already warm. (paywall-route also awaits
+    // ensureFreshToken right before the call as a guarantee.)
+    void warmNow()
+    void ensureFreshToken()
 
     // Capture selected text AFTER HUD is shown — delay to let macOS
     // finish rendering the window before osascript Cmd+C fires,
