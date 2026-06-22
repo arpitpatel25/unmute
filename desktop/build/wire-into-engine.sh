@@ -355,6 +355,20 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
     sed -i.bak 's|border: 1px solid rgba(255, 255, 255, 0.06);|border: 1px solid rgba(255, 255, 255, 0.55);|' "$css"
     rm -f "$css.bak"
   fi
+
+  # ─── Dictation crash-recovery wiring (main.ts) ─────────────────
+  # The module ships via engine-overrides (cp -R, above). Here we import it and
+  # call it from app.whenReady, right after initDB(), so any dictation whose audio
+  # was saved but never transcribed (app died mid-flight) is recovered into
+  # History on launch. Fail-open; never touches the live recording path.
+  local mainf="$engine/electron/main.ts"
+  if [[ -f "$mainf" ]] && ! grep -q 'recoverOrphanDictations' "$mainf"; then
+    perl -0pi -e "s/(import \{ initDB[^\n]*from '\.\/db';?)/\$1\nimport { recoverOrphanDictations } from '.\/dictation-recovery';/" "$mainf"
+    perl -0pi -e "s/(\n[ \t]*initDB\(\);?)/\$1\n  void recoverOrphanDictations();/" "$mainf"
+    if ! grep -q 'recoverOrphanDictations' "$mainf"; then
+      log "WARN: main.ts dictation-recovery wiring did not apply"
+    fi
+  fi
 }
 
 # ─── Stage 3: Build ─────────────────────────────────────────────
