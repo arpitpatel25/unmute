@@ -57,7 +57,11 @@ export async function rpc<T = unknown>(
       console.warn(`[supabase] rpc ${fn} failed:`, res.status, await res.text())
       return null
     }
-    return (await res.json()) as T
+    // VOID-returning RPCs (e.g. process_subscription_event) reply with an empty
+    // body / 204 — res.json() would throw "Unexpected end of JSON input". Read as
+    // text and only parse when there's actually a body.
+    const text = await res.text()
+    return (text ? JSON.parse(text) : null) as T
   } catch (e) {
     console.warn(`[supabase] rpc ${fn} threw:`, e)
     return null
