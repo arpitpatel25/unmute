@@ -68,6 +68,8 @@ export interface PipelineErrorResponse {
   code:
     | 'UNAUTHORIZED'
     | 'INSUFFICIENT_BALANCE'
+    | 'SUBSCRIPTION_INACTIVE'
+    | 'UPGRADE_REQUIRED'
     | 'UPSTREAM_ERROR'
     | 'BAD_REQUEST'
     | 'RATE_LIMITED'
@@ -75,6 +77,7 @@ export interface PipelineErrorResponse {
   message: string
   balance_cents?: number
   top_up_url?: string
+  subscribe_url?: string
 }
 
 export interface STTResult {

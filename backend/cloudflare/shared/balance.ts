@@ -23,6 +23,10 @@ function key(userId: string): string {
   return `bal:${userId}`
 }
 
+function entKey(userId: string): string {
+  return `ent:${userId}`
+}
+
 /**
  * Get current balance in cents.
  *
@@ -139,6 +143,83 @@ export async function invalidateBalance(kv: KVNamespace, userId: string): Promis
   await kv.delete(key(userId))
 }
 
+// ─── Subscription entitlement (mirrors the balance KV-cache pattern) ──────────
+//
+// We moved from prepaid wallet balance to flat subscriptions. Access is gated on
+// the user's subscription plan/status rather than a per-call debit. Same caching
+// shape as getBalance: KV read at the edge → on miss, reconcile from Supabase
+// profiles and populate KV with the same TTL.
+//
+// `overFairUse` is a hidden soft cap (the over_fair_use RPC). It is read ONCE on
+// the Supabase reconcile (cache miss / fresh) and cached on the entitlement so
+// the hot path never makes an extra DB round-trip. It NEVER blocks — it only
+// flips a notify header — so we fail it open (default false) on any error.
+
+export type Entitlement = {
+  plan: 'none' | 'dictation' | 'unmute'
+  status: string
+  periodEnd: number | null
+  overFairUse: boolean
+}
+
+/** entitled = active subscription that hasn't lapsed. */
+export function isEntitled(ent: Entitlement): boolean {
+  return ent.status === 'active' && (ent.periodEnd == null || ent.periodEnd > Date.now())
+}
+
+/**
+ * Get the user's subscription entitlement.
+ *
+ *  Default path: KV read (edge-fast). On miss → reconcile from Supabase
+ *  (profiles + over_fair_use RPC), populate KV with the same TTL.
+ *  Fresh path ({ fresh: true }): skip KV, read straight from Supabase and
+ *  refresh the cache.
+ *
+ *  Fail-closed: on any fetch failure returns plan 'none' / status '' so the
+ *  gate denies access (consistent with getBalance returning 0).
+ */
+export async function getEntitlement(
+  env: PipelineEnv,
+  userId: string,
+  opts?: GetBalanceOpts,
+): Promise<Entitlement> {
+  if (opts?.fresh) {
+    const authoritative = await fetchEntitlementFromSupabase(env, userId)
+    try { await setEntitlement(env.USER_BALANCE, userId, authoritative) } catch {}
+    return authoritative
+  }
+
+  const cached = await env.USER_BALANCE.get(entKey(userId))
+  if (cached !== null) {
+    try {
+      const ent = JSON.parse(cached) as Entitlement
+      if (ent && typeof ent.plan === 'string') return ent
+    } catch { /* fall through to reconcile on malformed cache */ }
+  }
+
+  // KV miss — reconcile from Supabase
+  const fresh = await fetchEntitlementFromSupabase(env, userId)
+  await setEntitlement(env.USER_BALANCE, userId, fresh)
+  return fresh
+}
+
+/**
+ * Overwrite the KV entitlement cache with an authoritative value (from Supabase
+ * or after a subscription webhook on the payments side). Same KV-quota guard as
+ * setBalance — a failed put just leaves the edge cache stale until next reconcile.
+ */
+export async function setEntitlement(
+  kv: KVNamespace,
+  userId: string,
+  ent: Entitlement,
+): Promise<void> {
+  try {
+    await kv.put(entKey(userId), JSON.stringify(ent), { expirationTtl: TTL_SECONDS })
+  } catch (e) {
+    console.warn('[entitlement] setEntitlement KV put failed (continuing):', (e as Error).message)
+  }
+}
+
 // ─── Internal: Supabase REST fetch (service-role auth) ───────────
 
 async function fetchBalanceFromSupabase(
@@ -160,6 +241,74 @@ async function fetchBalanceFromSupabase(
   const rows = (await res.json()) as Array<{ balance_cents: number }>
   if (!rows.length) return 0
   return rows[0].balance_cents ?? 0
+}
+
+/**
+ * Read the subscription entitlement from Supabase (source of truth) and the
+ * hidden soft-cap flag in one reconcile. Same REST helper/URL/headers shape as
+ * fetchBalanceFromSupabase. Fail-closed (plan 'none') so a fetch failure denies
+ * access rather than handing out free usage. The over_fair_use RPC is best-effort
+ * and fails OPEN (false) — it never gates, only flips a notify header.
+ */
+async function fetchEntitlementFromSupabase(
+  env: PipelineEnv,
+  userId: string,
+): Promise<Entitlement> {
+  const url = `${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=sub_plan,sub_status,sub_period_end`
+  let ent: Entitlement = { plan: 'none', status: '', periodEnd: null, overFairUse: false }
+  try {
+    const res = await fetch(url, {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        Accept: 'application/json',
+      },
+    })
+    if (!res.ok) {
+      console.warn('[entitlement] Supabase fetch failed:', res.status)
+      return ent
+    }
+    const rows = (await res.json()) as Array<{
+      sub_plan: string | null
+      sub_status: string | null
+      sub_period_end: string | null
+    }>
+    if (rows.length) {
+      const r = rows[0]
+      ent = {
+        plan: (r.sub_plan as Entitlement['plan']) || 'none',
+        status: r.sub_status || '',
+        periodEnd: r.sub_period_end ? Date.parse(r.sub_period_end) : null,
+        overFairUse: false,
+      }
+    }
+  } catch (e) {
+    console.warn('[entitlement] Supabase fetch threw (fail-closed):', (e as Error).message)
+    return ent
+  }
+
+  // Hidden soft cap — best-effort, never blocks. Read once here so the hot path
+  // never round-trips. Fail open (not-over) on any error.
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/over_fair_use`, {
+      method: 'POST',
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ p_user_id: userId }),
+    })
+    if (res.ok) {
+      const over = (await res.json()) as unknown
+      ent.overFairUse = over === true
+    }
+  } catch (e) {
+    console.warn('[entitlement] over_fair_use RPC failed (treating as not-over):', (e as Error).message)
+  }
+
+  return ent
 }
 
 /**

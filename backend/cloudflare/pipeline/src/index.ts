@@ -26,15 +26,14 @@
 import { verifyJWT, extractBearer } from '../../shared/auth'
 import {
   getBalance,
-  cacheDebit,
-  setBalance,
+  getEntitlement,
+  isEntitled,
 } from '../../shared/balance'
 import {
   GROQ_STT_URL,
   GROQ_CHAT_URL,
   STT_MODEL,
   LLM_MODEL,
-  estimateMaxCostCents,
   sttCostCents,
   llmCostCents,
   rawGroqCostUsd,
@@ -74,6 +73,8 @@ async function logUsageDurable(env: PipelineEnv, params: Record<string, unknown>
 // Keeping this hardcoded means non-paying users never see it — the only path
 // to a 402 is being a signed-in managed user, who already has an account.
 const TOP_UP_URL = 'https://unmute.app/topup' // placeholder — Dodo later
+// Surfaced in 402/403 gate responses so the frontend can deep-link to checkout.
+const SUBSCRIBE_URL = 'https://unmute.app/subscribe'
 
 // ─── Request size limits ────────────────────────────────────────
 const MAX_AUDIO_BYTES = 50 * 1024 * 1024 // 50 MB — covers ~50min of opus audio
@@ -194,15 +195,12 @@ async function handleSTT(
   const language = (form.get('language') as string) || 'en'
   const flowType = (form.get('flow_type') as string) || 'dictation'
 
-  // ─── Balance check (KV — fast) ────────────────────────────────
-  const balanceBefore = await getBalance(env, userId)
+  // ─── Subscription gate (KV — fast) ────────────────────────────
+  const ent = await getEntitlement(env, userId)
   const tBalanceChecked = Date.now()
-  const estCostCents = estimateMaxCostCents(duration)
-
-  if (balanceBefore < estCostCents) {
-    return err('INSUFFICIENT_BALANCE', 'Top up to use managed cloud', 402, {
-      balance_cents: balanceBefore,
-      top_up_url: TOP_UP_URL,
+  if (!isEntitled(ent)) {
+    return err('SUBSCRIPTION_INACTIVE', 'An active subscription is required', 402, {
+      subscribe_url: SUBSCRIBE_URL,
     })
   }
 
@@ -244,32 +242,21 @@ async function handleSTT(
   const latencyMs = tGroqBody - tGroqStart   // full Groq round-trip
   const actualDuration = duration
 
-  // ─── Cost calculation ────────────────────────────────────────
+  // ─── Cost calculation (usage logging only — no per-call charge) ──
   const costCents = sttCostCents(actualDuration)
-  // Compute new balance LOCALLY (no KV write in hot path).
-  // The actual KV write happens inside ctx.waitUntil below — saves ~300ms
-  // because Cloudflare KV writes are slow-globally-consistent (~200-400ms).
-  const balanceAfter = balanceBefore - costCents
   console.log('[billing]', JSON.stringify({
     user: userId, call: 'stt', flow: flowType, model: STT_MODEL,
     duration_s: actualDuration,
     raw_cost_usd: rawGroqCostUsd('stt', { durationSeconds: actualDuration }),
-    cost_cents: costCents, balance_before: balanceBefore, balance_after: balanceAfter,
+    cost_cents: costCents,
   }))
 
-  // ─── Fire-and-forget reconcile + logging + KV update ───────
+  // ─── Fire-and-forget usage logging ─────────────────────────────
   // Everything below runs AFTER the response is sent. Critical for latency.
+  // Subscriptions are flat-rate: there is NO per-call debit. We still record
+  // usage durably — it feeds the fair-use soft cap and analytics.
   ctx.waitUntil(
     (async () => {
-      // 1. Update KV cache with new balance (in background)
-      await setBalance(env.USER_BALANCE, userId, balanceAfter)
-
-      // 2. Record the BILL durably (no debit). DECOUPLED on purpose: recording
-      //    usage is what we must never lose; the debit is applied later by the
-      //    reconcile cron from this durable usage_log (migration 008), so a
-      //    failed/dropped debit is never a lost bill. The KV balance above is
-      //    optimistic; reconcile makes Supabase authoritative within ~2 min and
-      //    /v1/me (fresh) returns the reconciled value to the app.
       await logUsageDurable(env, {
         p_user_id: userId,
         p_call_type: 'stt',
@@ -286,6 +273,9 @@ async function handleSTT(
   )
 
   const tDone = Date.now()
+  // Fair-use soft cap: non-blocking notify header from the cached flag (no DB
+  // call on the hot path). The transcription still returns normally.
+  const fairUseHeader: Record<string, string> = ent.overFairUse ? { 'x-unmute-fair-use': 'notify' } : {}
   return json({
     ok: true,
     data: {
@@ -293,18 +283,18 @@ async function handleSTT(
       duration_seconds: actualDuration,
       model: STT_MODEL,
     },
-    balance_cents: balanceAfter,
+    balance_cents: 0, // subscriptions: flat-rate, no per-call balance
     cost_cents: costCents,
     engine: 'managed',
     timing_ms: {
       parse: tParsed - tEnter,                  // FormData parse
-      balance: tBalanceChecked - tParsed,       // KV read (+ Supabase miss path)
+      balance: tBalanceChecked - tParsed,       // entitlement read (+ Supabase miss path)
       groq_ttfb: groqTtfbMs,                    // Worker→Groq→headers (TTFB)
       groq_body: groqBodyMs,                    // Groq response body streaming + parse
       groq_total: latencyMs,                    // Full Groq round-trip
       worker_total: tDone - tEnter,             // All worker-side time
     },
-  })
+  }, 200, fairUseHeader)
 }
 
 // ─── POST /v1/stt-stream — streamed STT ────────────────────────
@@ -330,16 +320,12 @@ async function handleSTTStream(
   const language = url.searchParams.get('language') || 'en'
   const flowType = url.searchParams.get('flow_type') || 'dictation'
 
-  // ─── Balance check (KV — fast) — done while body buffers at edge ──
-  const balanceBefore = await getBalance(env, userId)
+  // ─── Subscription gate (KV — fast) — done while body buffers at edge ──
+  const ent = await getEntitlement(env, userId)
   const tBalanceChecked = Date.now()
-  // We don't know exact duration yet, but the client estimate is reliable
-  // (it comes from the actual MediaRecorder timestamps). If unset, reserve $0.10.
-  const estCostCents = duration > 0 ? estimateMaxCostCents(duration) : 10
-  if (balanceBefore < estCostCents) {
-    return err('INSUFFICIENT_BALANCE', 'Top up to use managed cloud', 402, {
-      balance_cents: balanceBefore,
-      top_up_url: TOP_UP_URL,
+  if (!isEntitled(ent)) {
+    return err('SUBSCRIPTION_INACTIVE', 'An active subscription is required', 402, {
+      subscribe_url: SUBSCRIBE_URL,
     })
   }
 
@@ -417,22 +403,19 @@ async function handleSTTStream(
   // path). Latency-free: totalBytes is already computed. Never trust a 0 duration.
   const actualDuration = duration > 0 ? duration : estimateDurationFromBytes(totalBytes)
 
-  // ─── Cost + balance ────────────────────────────────────────────
+  // ─── Cost (usage logging only — no per-call charge) ─────────────
   const costCents = sttCostCents(actualDuration)
-  const balanceAfter = balanceBefore - costCents
   console.log('[billing]', JSON.stringify({
     user: userId, call: 'stt', flow: flowType, model: STT_MODEL, streaming: true,
     duration_s: actualDuration,
     raw_cost_usd: rawGroqCostUsd('stt', { durationSeconds: actualDuration }),
-    cost_cents: costCents, balance_before: balanceBefore, balance_after: balanceAfter,
+    cost_cents: costCents,
   }))
 
-  // ─── Fire-and-forget reconcile ─────────────────────────────────
+  // ─── Fire-and-forget usage logging (flat-rate: no debit) ───────
   ctx.waitUntil(
     (async () => {
-      await setBalance(env.USER_BALANCE, userId, balanceAfter)
-      // Record the BILL durably (no debit) — reconcile applies the charge later
-      // from this usage_log (migration 008). Never lose a bill on a dropped debit.
+      // Record usage durably — feeds the fair-use soft cap and analytics.
       await logUsageDurable(env, {
         p_user_id: userId,
         p_call_type: 'stt',
@@ -449,6 +432,8 @@ async function handleSTTStream(
   )
 
   const tDone = Date.now()
+  // Fair-use soft cap: non-blocking notify header from the cached flag.
+  const fairUseHeader: Record<string, string> = ent.overFairUse ? { 'x-unmute-fair-use': 'notify' } : {}
   return json({
     ok: true,
     data: {
@@ -456,7 +441,7 @@ async function handleSTTStream(
       duration_seconds: actualDuration,
       model: STT_MODEL,
     },
-    balance_cents: balanceAfter,
+    balance_cents: 0, // subscriptions: flat-rate, no per-call balance
     cost_cents: costCents,
     engine: 'managed',
     timing_ms: {
@@ -468,7 +453,7 @@ async function handleSTTStream(
       worker_total: tDone - tEnter,
       audio_bytes: audio.byteLength,
     },
-  })
+  }, 200, fairUseHeader)
 }
 
 // ─── POST /v1/llm — chat completion ────────────────────────────
@@ -494,13 +479,16 @@ async function handleLLM(
     return err('BAD_REQUEST', 'messages required', 400)
   }
 
-  // ─── Balance pre-check (small, but charge a minimum to deter spam) ───
-  const balanceBefore = await getBalance(env, userId)
-  // Reserve 5 cents up-front — actual cost charged after the call.
-  if (balanceBefore < 5) {
-    return err('INSUFFICIENT_BALANCE', 'Top up to use managed cloud', 402, {
-      balance_cents: balanceBefore,
-      top_up_url: TOP_UP_URL,
+  // ─── Subscription gate: Remote/LLM requires the 'unmute' plan ───
+  const ent = await getEntitlement(env, userId)
+  if (!isEntitled(ent)) {
+    return err('SUBSCRIPTION_INACTIVE', 'An active subscription is required', 402, {
+      subscribe_url: SUBSCRIBE_URL,
+    })
+  }
+  if (ent.plan !== 'unmute') {
+    return err('UPGRADE_REQUIRED', 'The Unmute plan is required for Remote/LLM', 403, {
+      subscribe_url: SUBSCRIBE_URL,
     })
   }
 
@@ -544,20 +532,17 @@ async function handleLLM(
   const pt = groqJson.usage?.prompt_tokens ?? 0
   const ct = groqJson.usage?.completion_tokens ?? 0
 
-  const costCents = Math.max(llmCostCents(pt, ct), 1) // minimum 1 cent so we charge something
-  const balanceAfter = await cacheDebit(env.USER_BALANCE, userId, costCents)
+  const costCents = Math.max(llmCostCents(pt, ct), 1) // usage logging only — no charge
   console.log('[billing]', JSON.stringify({
     user: userId, call: 'llm', flow: 'transform', model: groqJson.model || LLM_MODEL,
     prompt_tokens: pt, completion_tokens: ct, total_tokens: pt + ct,
     raw_cost_usd: rawGroqCostUsd('llm', { promptTokens: pt, completionTokens: ct }),
-    cost_cents: costCents, balance_before: balanceBefore, balance_after: balanceAfter,
+    cost_cents: costCents,
   }))
 
   ctx.waitUntil(
     (async () => {
-      await setBalance(env.USER_BALANCE, userId, balanceAfter)
-      // Record the BILL durably (no debit) — reconcile applies the charge later
-      // from this usage_log (migration 008). Never lose a bill on a dropped debit.
+      // Record usage durably (flat-rate: no debit) — analytics + fair-use.
       await logUsageDurable(env, {
         p_user_id: userId,
         p_call_type: 'llm',
@@ -581,7 +566,7 @@ async function handleLLM(
       prompt_tokens: pt,
       completion_tokens: ct,
     },
-    balance_cents: balanceAfter,
+    balance_cents: 0, // subscriptions: flat-rate, no per-call balance
     cost_cents: costCents,
     engine: 'managed',
   })
