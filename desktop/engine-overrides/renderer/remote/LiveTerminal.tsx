@@ -43,20 +43,32 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
     let fit: FitAddon | null = null
     let off: (() => void) | undefined
 
-    // xterm CLIPS its own horizontal overflow internally (.xterm-viewport is
-    // overflow-x:hidden), so when the host is content-collapsed to the pane width
-    // the extra columns are clipped inside xterm and never push the host wider for
-    // the outer pane to scroll over — that's why only a portion shows. Fix: measure
-    // the TRUE rendered grid width (.xterm-screen has a fixed cols*cellWidth px
-    // width) and PIN the host to it. Now the 120-col TUI FITS the host (no internal
-    // clip, no distortion) and the outer pane scrolls left/right to reveal it.
+    // Horizontal scroll, the RELIABLE way. The host width must come from ONE
+    // authority that NEVER reads back from xterm — otherwise we get a circular
+    // "measure xterm → size host → xterm measures the host" loop that always
+    // collapses to the container width (so nothing overflows and there is no
+    // scrollbar; that was the long-standing regression). So we compute the grid
+    // width DETERMINISTICALLY from font metrics: measure one monospace cell in the
+    // REAL font, multiply by FIXED_COLS, pin the host to that. xterm then renders
+    // its 120 cols INTO that width and the outer pane scrolls left/right to reveal
+    // it. The vertical story is untouched (h-full + overflow-y-hidden + rows-fit).
+    const measureCellWidth = (): number => {
+      try {
+        const ctx = document.createElement('canvas').getContext('2d')
+        if (!ctx) return 7
+        // Same font as the Terminal below (fontSize 11 + this family). Measure a
+        // long run so sub-pixel rounding averages out to a true per-cell width.
+        ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace'
+        const w = ctx.measureText('0'.repeat(100)).width / 100
+        return w > 0 ? w : 7
+      } catch { return 7 }
+    }
+    // Pin the host to the full grid width. Bias slightly WIDE (+cushion): a few
+    // extra px is harmless (a hair of scroll slack), whereas too narrow would clip
+    // the last column. Font-metric derived ⇒ it can never feed back from xterm.
     const pinHostWidth = () => {
-      const screen = host.querySelector('.xterm-screen') as HTMLElement | null
-      const viewport = host.querySelector('.xterm-viewport') as HTMLElement | null
-      // The widest measure wins — scrollWidth of the clipping elements reports the
-      // full content width even when overflow is hidden.
-      const w = Math.max(screen?.offsetWidth || 0, screen?.scrollWidth || 0, viewport?.scrollWidth || 0)
-      if (w > 0 && host.style.width !== `${w}px`) host.style.width = `${w}px`
+      const w = Math.ceil(measureCellWidth() * FIXED_COLS) + 16
+      if (host.style.width !== `${w}px`) host.style.width = `${w}px`
     }
 
     // Fit the ROWS to the pane height, but FORCE the width to FIXED_COLS so the
@@ -81,11 +93,11 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
     // makes xterm throw "Cannot read properties of undefined (reading
     // 'dimensions')". The ResizeObserver below kicks this once it's laid out.
     const open = () => {
-      // Gate on HEIGHT only: width is content-driven (w-max) and is 0 until xterm
-      // renders its 120 cols, so requiring clientWidth here would deadlock (xterm
-      // never opens). Height (h-full of the fixed h-72) is laid out immediately, and
-      // it's the dimension FitAddon needs to compute rows — so it also prevents the
-      // 0-height "Cannot read 'dimensions'" throw.
+      // Gate on HEIGHT only. Height (h-full of the fixed h-72) is laid out
+      // immediately and is the dimension FitAddon needs to compute rows — gating
+      // on it also prevents the 0-height "Cannot read 'dimensions'" throw. We do
+      // NOT gate on width: it's pinned deterministically (pinHostWidth), not
+      // derived from xterm, so there's nothing to wait for.
       if (disposed || term || !host.clientHeight) return
       term = new Terminal({
         cols: FIXED_COLS,
@@ -100,11 +112,12 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
       })
       fit = new FitAddon()
       term.loadAddon(fit)
+      // Pin the host to the deterministic grid width BEFORE xterm paints, so it
+      // renders straight into a correctly-sized (scrollable) box. No onRender
+      // re-pin — the width is font-derived and constant, so there is no loop.
+      pinHostWidth()
       term.open(host)
       sync()
-      // Re-pin the host width after every render — the grid width settles a frame
-      // or two after open/resize, and grows as wide output streams in.
-      term.onRender(() => pinHostWidth())
       term.onData((data) => api().remoteTerminalInput?.(taskId, data))
       void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf && term) term.write(buf) })
       off = api().remoteOnOutput?.((d) => {
@@ -151,11 +164,14 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
           via its own scrollback. NO outer vertical scroll (overflow-y-hidden) — that
           double-scroll was what hid the last line below an outer fold. The host fills
           the pane HEIGHT (h-full of the fixed h-72) so FitAddon measures the REAL
-          viewport and fits rows to it; width stays content-sized (w-max) so the wide
-          TUI scrolls left/right. No padding on the measured host (it threw the row
-          math off by a fraction and clipped the bottom line). */}
+          viewport and fits rows to it; width is pinned in JS to the font-derived
+          grid width so the wide TUI scrolls left/right. No padding on the measured
+          host (it threw the row math off by a fraction and clipped the bottom line). */}
       <div className="h-72 overflow-x-auto overflow-y-hidden">
-        <div ref={hostRef} className="h-full w-max" />
+        {/* Width is pinned in JS to the font-derived grid width (FIXED_COLS×cell),
+            so the host is reliably WIDER than this pane → it scrolls left/right.
+            No w-max (that depended on xterm's own width, which fed the old loop). */}
+        <div ref={hostRef} className="h-full" />
       </div>
     </div>
   )
