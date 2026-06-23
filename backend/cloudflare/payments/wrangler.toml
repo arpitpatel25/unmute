@@ -21,9 +21,8 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 DODO_API_BASE = "https://live.dodopayments.com"
 PUBLIC_API_BASE = "https://unmute-payments.zodpatel.workers.dev"
-# LIVE product IDs — filled at cutover once the live (not test) recurring
-# products are created in the Dodo dashboard.
-DODO_SUBSCRIPTION_PRODUCTS = '{"dictation:month":"REPLACE_dict_m","dictation:year":"REPLACE_dict_y","unmute:month":"REPLACE_unmute_m","unmute:year":"REPLACE_unmute_y"}'
+# LIVE product IDs (created 2026-06-23 in Dodo live mode).
+DODO_SUBSCRIPTION_PRODUCTS = '{"dictation:month":"pdt_0NhfhV4cmhPQyxCOBdBJo","dictation:year":"pdt_0NhfhpK3hxCn8DudgkOfB","unmute:month":"pdt_0Nhfhv0mJ4n7Aqs3l5HhQ","unmute:year":"pdt_0NhfhhIsx1PErV2Cb5IpG"}'
 
 [[kv_namespaces]]
 binding = "USER_BALANCE"
