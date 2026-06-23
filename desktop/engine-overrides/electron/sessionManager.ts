@@ -271,12 +271,10 @@ class SessionManager {
     audio: Buffer,
     label: string,
   ): Promise<{ text: string; source: 'cloud' | 'local' } | null> {
-    // Only race when the user is on a cloud-using mode. In strict BYOK
-    // or Local mode, the cloudPromise returns null immediately and the
-    // user expects their OWN provider to be used (BYOK → groqTranscribe
-    // with their key; Local → whisper.cpp via the OSS path). Bailing
-    // here lets the existing OSS routing take over so we don't, e.g.,
-    // run local on top of a BYOK user who just wants Groq.
+    // Only race when the user is on a cloud-using mode. In strict Local
+    // mode, the cloudPromise returns null immediately and the user expects
+    // whisper.cpp via the OSS path. Bailing here lets the existing OSS
+    // routing take over.
     const mode = getPaywallEngineMode()
     if (mode !== 'managed' && mode !== 'auto') return null
 
@@ -912,7 +910,6 @@ class SessionManager {
         if (!hasApiKey()) throw new Error('No Groq API key set. Add your key in Settings.')
         const dualResult = await pipelineDualTranscribe(buffer, this.authToken)
         transcript = dualResult.transcription
-        setLastEngine('byok')
 
         // Store translation alongside transcript
         const chunk = this.chunkTracker.get(chunkIndex)
@@ -934,7 +931,6 @@ class SessionManager {
           sttLanguage: this.getEffectiveSTTLanguage(),
           onFallback: (reason) => this.notifyEngineFallback(reason),
         })
-        setLastEngine('byok')
       }
 
       const elapsed = Date.now() - t0
@@ -1490,7 +1486,6 @@ class SessionManager {
             sttLanguage: this.getEffectiveSTTLanguage(),
             onFallback: (r) => this.notifyEngineFallback(r),
           }, controller.signal)
-          setLastEngine('byok')
         }
         transcribeMs += Date.now() - t0
         const sttLabel = useSarvam ? 'sarvam' : useCartesia ? 'cartesia' : useFasterWhisper ? 'faster-whisper' : useLocalWhisper ? 'local' : 'cloud'

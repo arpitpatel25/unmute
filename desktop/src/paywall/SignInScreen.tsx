@@ -68,7 +68,7 @@ export function SignInScreen() {
         <div className="max-w-sm w-full">
           <h1 className="font-display text-[28px] font-bold text-ink tracking-tight mb-2">Sign in</h1>
           <p className="text-[13px] text-ink-60 mb-8">
-            To use unmute's managed cloud, sign in once. You can still use BYOK or Local mode without an account.
+            To use unmute's managed cloud, sign in once. You can still use Local mode without an account.
           </p>
 
           <button

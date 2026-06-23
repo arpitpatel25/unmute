@@ -1,32 +1,28 @@
-// Provider router — picks Managed / BYOK / Local for each transcription
+// Provider router — picks Managed / Local for each transcription
 // based on user state and the explicit Settings → Engine preference.
 //
 // State inputs (all are reactive — the router re-evaluates on every call):
 //   * Signed in to managed cloud?       (has Supabase session)
 //   * Balance > $0?                     (read from main-process balance cache)
-//   * BYOK Groq API key set & valid?    (read from existing OSS engine keyStore)
 //   * Local whisper model + binary ready?
 //
 // Engine setting (from Settings → Engine), default 'auto':
-//   * 'auto'      — Managed → BYOK → Local priority chain
+//   * 'auto'      — Managed → Local priority chain
 //   * 'managed'   — only Managed (no fallback on 402, surface top-up)
-//   * 'byok'      — only BYOK (no fallback on auth error)
 //   * 'local'     — only Local (never touches network)
 //
 // Per-call fallback (auto mode only):
-//   Managed → 402/5xx/timeout  → BYOK if C, else Local if D, else error
-//   BYOK    → 401/429/timeout  → Local if D, else error
+//   Managed → 402/5xx/timeout  → Local if ready, else error
 //   Local   → failure          → hard error (Local is the floor)
 
 import type { ManagedSTTClient, ManagedLLMClient } from './managed-client'
 
-export type EngineMode = 'auto' | 'managed' | 'byok' | 'local'
-export type Provider = 'managed' | 'byok' | 'local'
+export type EngineMode = 'auto' | 'managed' | 'local'
+export type Provider = 'managed' | 'local'
 
 export interface ProviderState {
   signedIn: boolean
   balanceCents: number
-  byokKeySet: boolean
   localReady: boolean
 }
 
@@ -62,9 +58,6 @@ export class InsufficientBalanceError extends Error {
     super('INSUFFICIENT_BALANCE')
   }
 }
-export class InvalidByokKeyError extends Error {
-  constructor() { super('INVALID_BYOK_KEY') }
-}
 export class RateLimitedError extends Error {
   constructor() { super('RATE_LIMITED') }
 }
@@ -83,12 +76,10 @@ export class NetworkError extends Error {
  */
 export function pickProvider(state: ProviderState, mode: EngineMode): Provider | null {
   if (mode === 'managed') return state.signedIn && state.balanceCents > 0 ? 'managed' : null
-  if (mode === 'byok') return state.byokKeySet ? 'byok' : null
   if (mode === 'local') return state.localReady ? 'local' : null
 
   // mode === 'auto' — priority chain
   if (state.signedIn && state.balanceCents > 0) return 'managed'
-  if (state.byokKeySet) return 'byok'
   if (state.localReady) return 'local'
   return null
 }
@@ -104,11 +95,6 @@ export function nextFallback(
 ): Provider | null {
   if (mode !== 'auto') return null // strict modes don't fall back
   if (failed === 'managed') {
-    if (state.byokKeySet) return 'byok'
-    if (state.localReady) return 'local'
-    return null
-  }
-  if (failed === 'byok') {
     if (state.localReady) return 'local'
     return null
   }
@@ -117,14 +103,8 @@ export function nextFallback(
 
 // ─── Provider implementation interfaces ────────────────────────
 
-export interface ByokSTT {
-  transcribe(opts: STTOptions, apiKey: string): Promise<STTResult>
-}
 export interface LocalSTT {
   transcribe(opts: STTOptions): Promise<STTResult>
-}
-export interface ByokLLM {
-  complete(opts: LLMOptions, apiKey: string): Promise<LLMResult>
 }
 // Local LLM does not currently exist — formatting falls back to "no formatting"
 // when in local mode (the raw transcript is pasted). That matches v1.3.4 behavior.
@@ -134,12 +114,9 @@ export interface ByokLLM {
 export interface RouterDeps {
   managedSTT: ManagedSTTClient
   managedLLM: ManagedLLMClient
-  byokSTT: ByokSTT
-  byokLLM: ByokLLM
   localSTT: LocalSTT
   getState: () => Promise<ProviderState>
   getEngineMode: () => Promise<EngineMode>
-  getByokKey: () => Promise<string | null>
   getAccessToken: () => Promise<string | null>
   onProviderUsed?: (provider: Provider, costCents: number) => void
 }
@@ -170,7 +147,7 @@ export class ProviderRouter {
     if (!initial) {
       throw new Error('NO_PROVIDER_AVAILABLE')
     }
-    // LLM is only meaningful for managed and byok. Local has no LLM.
+    // LLM is only meaningful for managed. Local has no LLM.
     if (initial === 'local') {
       throw new Error('LLM_UNAVAILABLE_IN_LOCAL_MODE')
     }
@@ -218,11 +195,6 @@ export class ProviderRouter {
       if (!token) throw new Error('NOT_SIGNED_IN')
       return await this.deps.managedSTT.transcribe(opts, token)
     }
-    if (provider === 'byok') {
-      const key = await this.deps.getByokKey()
-      if (!key) throw new InvalidByokKeyError()
-      return await this.deps.byokSTT.transcribe(opts, key)
-    }
     return await this.deps.localSTT.transcribe(opts)
   }
 
@@ -231,11 +203,6 @@ export class ProviderRouter {
       const token = await this.deps.getAccessToken()
       if (!token) throw new Error('NOT_SIGNED_IN')
       return await this.deps.managedLLM.complete(opts, token)
-    }
-    if (provider === 'byok') {
-      const key = await this.deps.getByokKey()
-      if (!key) throw new InvalidByokKeyError()
-      return await this.deps.byokLLM.complete(opts, key)
     }
     throw new Error('LLM_UNAVAILABLE_IN_LOCAL_MODE')
   }
@@ -248,13 +215,6 @@ function shouldFallback(provider: Provider, e: Error): boolean {
       e instanceof InsufficientBalanceError ||
       e instanceof RateLimitedError ||
       e instanceof UpstreamError ||
-      e instanceof NetworkError
-    )
-  }
-  if (provider === 'byok') {
-    return (
-      e instanceof InvalidByokKeyError ||
-      e instanceof RateLimitedError ||
       e instanceof NetworkError
     )
   }

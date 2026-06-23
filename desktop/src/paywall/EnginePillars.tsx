@@ -1,6 +1,5 @@
 // Engine pillars — the production-grade replacement for the old
-// 4-way radio (Auto / Managed / BYOK / Local) + separate Groq API Key
-// section.
+// radio (Auto / Managed / Local).
 //
 // Design:
 //   * Single "Auto" toggle at the top — when on, the system picks the
@@ -21,15 +20,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from './AuthContext'
 import { Billing } from './Billing'
 
-type EngineMode = 'auto' | 'managed' | 'byok' | 'local'
-type PillarId = 'managed' | 'byok' | 'local'
+type EngineMode = 'auto' | 'managed' | 'local'
+type PillarId = 'managed' | 'local'
 
 // Order matters — also drives the Auto preference display.
-const PILLAR_ORDER: PillarId[] = ['managed', 'byok', 'local']
+const PILLAR_ORDER: PillarId[] = ['managed', 'local']
 
 const ENGINE_TO_PILLAR: Record<Exclude<EngineMode, 'auto'>, PillarId> = {
   managed: 'managed',
-  byok: 'byok',
   local: 'local',
 }
 
@@ -44,12 +42,6 @@ export function EnginePillars() {
   const [managedVerifying, setManagedVerifying] = useState(false)
   const [managedVerifyResult, setManagedVerifyResult] = useState<VerifyState>(null)
 
-  // BYOK: key state + inline save/remove flow
-  const [groqKeyInput, setGroqKeyInput] = useState('')
-  const [groqKeyMasked, setGroqKeyMasked] = useState<string | null>(null)
-  const [keyBusy, setKeyBusy] = useState(false)
-  const [keyMsg, setKeyMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null)
-
   // Local: whisper model availability + download
   const [whisperModelReady, setWhisperModelReady] = useState(false)
   const [whisperDownloading, setWhisperDownloading] = useState(false)
@@ -58,11 +50,7 @@ export function EnginePillars() {
   // ─── Initial load ────────────────────────────────────────────
   useEffect(() => {
     window.electronAPI.paywallGetEngineMode?.().then((v) => {
-      if (v === 'auto' || v === 'managed' || v === 'byok' || v === 'local') setMode(v)
-    }).catch(() => {})
-
-    window.electronAPI.getGroqKeyStatus().then((s) => {
-      setGroqKeyMasked(s.hasKey ? s.masked : null)
+      if (v === 'auto' || v === 'managed' || v === 'local') setMode(v)
     }).catch(() => {})
 
     window.electronAPI.getWhisperModelStatus().then(setWhisperModelReady).catch(() => {})
@@ -84,7 +72,6 @@ export function EnginePillars() {
   // ─── Derived: pillar readiness (drives Active + Auto) ────────
   const ready: Record<PillarId, boolean> = {
     managed: auth.signedIn && balanceCents > 0,
-    byok: !!groqKeyMasked,
     local: whisperModelReady,
   }
 
@@ -112,40 +99,6 @@ export function EnginePillars() {
       handleModeChange((autoPick ?? 'managed') as EngineMode)
     }
   }, [autoPick, handleModeChange])
-
-  async function handleSaveKey() {
-    const key = groqKeyInput.trim()
-    if (!key || keyBusy) return
-    setKeyBusy(true)
-    setKeyMsg(null)
-    try {
-      const test = await window.electronAPI.testGroqKey(key)
-      if (!test.ok) {
-        setKeyMsg({ text: test.error || 'Invalid key', type: 'err' })
-        return
-      }
-      const res = await window.electronAPI.setGroqKey(key)
-      if (res.success) {
-        setGroqKeyMasked(res.masked ?? null)
-        setGroqKeyInput('')
-        setKeyMsg({ text: 'Saved.', type: 'ok' })
-        setTimeout(() => setKeyMsg(null), 2500)
-      } else {
-        setKeyMsg({ text: res.error || 'Failed to save key', type: 'err' })
-      }
-    } catch {
-      setKeyMsg({ text: 'Something went wrong', type: 'err' })
-    } finally {
-      setKeyBusy(false)
-    }
-  }
-
-  function handleRemoveKey() {
-    window.electronAPI.clearGroqKey()
-    setGroqKeyMasked(null)
-    setGroqKeyInput('')
-    setKeyMsg(null)
-  }
 
   async function handleDownloadWhisper() {
     if (whisperDownloading) return
@@ -222,21 +175,6 @@ export function EnginePillars() {
           onVerify={handleVerifyManaged}
         />
 
-        <BYOKCard
-          isActive={activePillar === 'byok'}
-          isSelected={mode === 'byok'}
-          isAuto={isAuto}
-          ready={ready.byok}
-          keyMasked={groqKeyMasked}
-          keyInput={groqKeyInput}
-          onKeyInputChange={setGroqKeyInput}
-          onSave={handleSaveKey}
-          onRemove={handleRemoveKey}
-          busy={keyBusy}
-          message={keyMsg}
-          onSelect={() => handleModeChange('byok')}
-        />
-
         <LocalCard
           isActive={activePillar === 'local'}
           isSelected={mode === 'local'}
@@ -258,7 +196,7 @@ export function EnginePillars() {
 type VerifyState = { ok: boolean; text: string } | null
 
 function labelFor(p: PillarId): string {
-  return p === 'managed' ? 'Managed' : p === 'byok' ? 'BYOK' : 'Local'
+  return p === 'managed' ? 'Managed' : 'Local'
 }
 
 function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -476,95 +414,6 @@ function ManagedCard(props: {
   )
 }
 
-// ── BYOK card ──────────────────────────────────────────────────
-
-function BYOKCard(props: {
-  isActive: boolean
-  isSelected: boolean
-  isAuto: boolean
-  ready: boolean
-  keyMasked: string | null
-  keyInput: string
-  onKeyInputChange: (v: string) => void
-  onSave: () => void
-  onRemove: () => void
-  busy: boolean
-  message: { text: string; type: 'ok' | 'err' } | null
-  onSelect: () => void
-}) {
-  let statusBlock: React.ReactNode
-  if (props.keyMasked) {
-    statusBlock = <StatusBadge ok={true} text={`Connected · ${props.keyMasked}`} />
-  } else {
-    statusBlock = <StatusBadge ok={false} text="No key saved" />
-  }
-
-  const setupBlock = (
-    <div>
-      {props.keyMasked ? (
-        <div className="flex items-center justify-between">
-          <p className="text-[12px] text-ink-60">Paste a new key to replace, or remove the saved one.</p>
-          <button
-            onClick={props.onRemove}
-            className="text-[11px] font-medium text-ink-60 hover:text-red-500 transition-colors px-2 py-1"
-          >
-            Remove
-          </button>
-        </div>
-      ) : null}
-      <div className="mt-2 flex items-center gap-2">
-        <input
-          type="password"
-          value={props.keyInput}
-          onChange={(e) => props.onKeyInputChange(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') props.onSave() }}
-          placeholder={props.keyMasked ? 'Paste a new key to replace' : 'gsk_...'}
-          spellCheck={false}
-          autoComplete="off"
-          className="flex-1 bg-cream-mid border border-border-md rounded-[10px] px-3.5 py-2 text-[12px] font-mono text-ink outline-none focus:border-ink/30 transition-colors"
-        />
-        <button
-          onClick={props.onSave}
-          disabled={!props.keyInput.trim() || props.busy}
-          className="px-4 py-2 rounded-[10px] text-[12px] font-semibold bg-ink text-white shadow-sm disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity whitespace-nowrap"
-        >
-          {props.busy ? 'Checking…' : 'Save'}
-        </button>
-      </div>
-      <div className="mt-2 flex items-center justify-between">
-        <button
-          onClick={() => window.electronAPI.openExternal('https://console.groq.com/keys')}
-          className="text-[11px] text-ink-35 hover:text-ink transition-colors underline underline-offset-2"
-        >
-          Get a free key →
-        </button>
-        {props.message && (
-          <span className={`text-[11px] font-medium ${props.message.type === 'ok' ? 'text-green-600' : 'text-red-500'}`}>
-            {props.message.text}
-          </span>
-        )}
-      </div>
-    </div>
-  )
-
-  return (
-    <CardShell
-      isActive={props.isActive}
-      isSelected={props.isSelected}
-      isAuto={props.isAuto}
-      ready={props.ready}
-      icon={<KeyIcon />}
-      title="Your Groq key"
-      valueProp="Fast and accurate. As good as the best dictation tools — or better."
-      statusBlock={statusBlock}
-      setupBlock={setupBlock}
-      bestFor="Power users with their own Groq account."
-      tradeOff="Get your key at console.groq.com and recharge it there when it runs out."
-      onSelect={props.onSelect}
-    />
-  )
-}
-
 // ── Local card ─────────────────────────────────────────────────
 
 function LocalCard(props: {
@@ -619,15 +468,6 @@ function CloudIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
-    </svg>
-  )
-}
-
-function KeyIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="15" r="4" />
-      <path d="M10.85 12.15 19 4M18 5l2 2M15 8l2 2" />
     </svg>
   )
 }

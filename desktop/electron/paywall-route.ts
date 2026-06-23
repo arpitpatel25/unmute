@@ -1,22 +1,19 @@
 // Managed-route intercept for sessionManager.
 //
 // sessionManager calls tryManagedSTT/tryManagedLLM BEFORE its existing
-// BYOK/local routing. If the user has selected Managed (or Auto + has
+// local routing. If the user has selected Managed (or Auto + has
 // balance + signed in), the call goes through our pipeline worker.
 // Otherwise these return null and the caller falls through to its
 // existing logic.
 
 import { getPaywallAccessToken, getPaywallEngineMode, getSTTLanguageForRequest, refreshAccessToken, ensureFreshToken } from './paywall-glue'
-// keyStore lives in the OSS engine; after wire_paywall we sit in
-// engine/electron/paywall/, so OSS-engine siblings need `../`.
-import { hasApiKey } from '../keyStore'
 import { updateBalanceFromResponse } from './balance-ipc'
 import { paywallFetch } from './paywall-net'
 
 // Pipeline URL — bundler injects __PIPELINE_URL__ via electron.vite.config.ts
 declare const __PIPELINE_URL__: string
 
-// Track if we just fell back from managed → BYOK/local so we can show the banner
+// Track if we just fell back from managed → local so we can show the banner
 let fellBackThisSession = false
 
 export interface ManagedSTTResult {
@@ -38,14 +35,14 @@ function shouldTryManaged(): boolean {
   const token = getPaywallAccessToken()
   if (mode === 'managed') return !!token
   if (mode === 'auto') return !!token // try managed first; fall back on failure
-  return false // 'byok' or 'local' → never use managed
+  return false // 'local' → never use managed
 }
 
 /** Decide if we should fall through to existing OSS routing on managed failure. */
 function shouldFallThrough(): boolean {
   const mode = getPaywallEngineMode()
   // 'managed' strict mode → don't fall through, surface the error
-  // 'auto' → fall through to BYOK/Local
+  // 'auto' → fall through to Local
   return mode === 'auto'
 }
 
@@ -283,14 +280,4 @@ export async function tryManagedLLM(
     }
     throw e
   }
-}
-
-/** Used by sessionManager to decide if BYOK should be skipped in favor of local. */
-export function shouldSkipByok(): boolean {
-  const mode = getPaywallEngineMode()
-  if (mode === 'local') return true
-  if (mode === 'byok') return false
-  if (mode === 'managed') return true // strict managed → no BYOK
-  // auto: skip BYOK if user has no key
-  return !hasApiKey()
 }

@@ -1,27 +1,22 @@
 // Engine selector — goes inside Settings.tsx as a new row.
 // Replaces the existing "Use Groq cloud transcription" toggle from v1.3.4
-// with a 4-way selector: Auto / Managed / BYOK / Local.
+// with a 3-way selector: Auto / Managed / Local.
 
 import { useEffect, useState } from 'react'
 import { useAuth } from './AuthContext'
 
-type EngineMode = 'auto' | 'managed' | 'byok' | 'local'
+type EngineMode = 'auto' | 'managed' | 'local'
 
 const OPTIONS: Array<{ value: EngineMode; label: string; description: string }> = [
   {
     value: 'auto',
     label: 'Auto',
-    description: 'Picks the best available — Managed → BYOK → Local',
+    description: 'Picks the best available — Managed → Local',
   },
   {
     value: 'managed',
     label: 'Managed',
     description: 'Use our cloud (sign in required, prepaid credits)',
-  },
-  {
-    value: 'byok',
-    label: 'BYOK',
-    description: 'Use your own Groq API key (your key, our app, zero network on us)',
   },
   {
     value: 'local',

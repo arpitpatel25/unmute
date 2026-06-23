@@ -3,7 +3,7 @@
 
 import { useState } from 'react'
 
-type Choice = 'managed' | 'byok' | 'local'
+type Choice = 'managed' | 'local'
 
 interface Props {
   onComplete: (choice: Choice) => void
@@ -31,16 +31,6 @@ export function OnboardingCards({ onComplete }: Props) {
           onLeave={() => setHovered(null)}
           onPick={() => onComplete('managed')}
           highlighted={hovered === null || hovered === 'managed'}
-        />
-        <Card
-          title="BYOK (your own Groq key)"
-          tag="Power user"
-          description="Bring your own Groq API key. Audio goes straight from your Mac to Groq — never touches our servers. You pay Groq directly (~$0.04/hr)."
-          accent="warm"
-          onHover={() => setHovered('byok')}
-          onLeave={() => setHovered(null)}
-          onPick={() => onComplete('byok')}
-          highlighted={hovered === null || hovered === 'byok'}
         />
         <Card
           title="Local (fully offline)"

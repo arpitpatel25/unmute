@@ -15,11 +15,11 @@ import { getWidgetWindow } from '../windowManager'
 
 // Reason the user is on the on-device model right now. Drives the awareness
 // widget below the dictation pill. null means "no awareness widget needed"
-// (managed or BYOK are active, or no provider is available at all).
+// (managed is active, or no provider is available at all).
 export type OnDeviceReason =
-  | 'not_signed_in'      // anonymous + no BYOK key → local is the only option
+  | 'not_signed_in'      // anonymous → local is the only option
   | 'no_balance'         // signed in but $0 → managed unavailable
-  | 'cloud_unreachable'  // managed/byok was first choice, fell back due to error
+  | 'cloud_unreachable'  // managed was first choice, fell back due to error
   | 'chose_on_device'    // user set Engine = Local explicitly
 
 export interface EnginePeekStatus {
@@ -32,11 +32,8 @@ const settings = new Store<{ engineMode: EngineMode }>({ name: 'unmute-paywall-s
 // The OSS engine provides these via its sessionManager. We accept them
 // as opaque interfaces so we don't entangle with the engine internals.
 interface OSSAdapter {
-  // Existing BYOK + Local providers from the OSS engine
-  byokSTT: { transcribe: (opts: { audio: Buffer; durationSeconds: number; language?: string; flowType?: string }, apiKey: string) => Promise<{ text: string; durationSeconds: number; engine: 'byok'; costCents: number }> }
-  byokLLM: { complete: (opts: { messages: Array<{ role: string; content: string }>; temperature?: number; maxTokens?: number }, apiKey: string) => Promise<{ text: string; engine: 'byok'; costCents: number }> }
+  // Local provider from the OSS engine
   localSTT: { transcribe: (opts: { audio: Buffer; durationSeconds: number; language?: string; flowType?: string }) => Promise<{ text: string; durationSeconds: number; engine: 'local'; costCents: number }> }
-  getByokKey: () => Promise<string | null>
   // For balance polling
   getAccessToken: () => Promise<string | null>
   getCurrentUser: () => Promise<{ id: string; email: string | null } | null>
@@ -55,7 +52,7 @@ let routerState: (() => Promise<ProviderState>) | null = null
 // the decision points; popLastEngine is called by db.ts saveSession at
 // session-end, which clears the value as a side effect so a no-engine
 // session can't accidentally inherit the previous one's tag.
-export type EngineTag = 'cloud' | 'byok' | 'local'
+export type EngineTag = 'cloud' | 'local'
 let lastEngine: EngineTag | null = null
 export function setLastEngine(tag: EngineTag): void { lastEngine = tag }
 export function popLastEngine(): EngineTag | null {
@@ -67,11 +64,11 @@ export function popLastEngine(): EngineTag | null {
 /** Why is the user on the on-device model right now? */
 function localReason(state: ProviderState, mode: EngineMode): OnDeviceReason {
   if (mode === 'local') return 'chose_on_device'
-  // In auto mode the priority chain is managed → byok → local.
+  // In auto mode the priority chain is managed → local.
   // Local is picked only when nothing higher qualifies.
-  if (!state.signedIn && !state.byokKeySet) return 'not_signed_in'
+  if (!state.signedIn) return 'not_signed_in'
   if (state.signedIn && state.balanceCents === 0) return 'no_balance'
-  return 'chose_on_device' // catch-all for unusual configs (e.g. signed-out + BYOK off)
+  return 'chose_on_device' // catch-all for unusual configs
 }
 
 export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
@@ -106,7 +103,6 @@ export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
   // peek IPC so they can never disagree on what we'd route to.
   routerState = async (): Promise<ProviderState> => {
     const user = await oss.getCurrentUser()
-    const byokKey = await oss.getByokKey()
     const token = await oss.getAccessToken()
     const balance = await (async () => {
       try {
@@ -121,7 +117,6 @@ export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
     return {
       signedIn: !!user,
       balanceCents: balance,
-      byokKeySet: !!byokKey,
       localReady: true, // OSS engine surfaces this — wire after submodule integration
     }
   }
@@ -130,10 +125,7 @@ export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
   router = new ProviderRouter({
     managedSTT,
     managedLLM,
-    byokSTT: oss.byokSTT,
-    byokLLM: oss.byokLLM,
     localSTT: oss.localSTT,
-    getByokKey: oss.getByokKey,
     getAccessToken: oss.getAccessToken,
     getEngineMode: async () => settings.get('engineMode', 'auto') as EngineMode,
     getState: routerState,

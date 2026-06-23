@@ -11,7 +11,7 @@ export default function Privacy() {
       <h2 className="font-display text-[22px] font-bold text-ink tracking-tight mb-2">Privacy</h2>
       <p className="text-[13px] text-ink-60 leading-relaxed mb-6">
         Your privacy depends on which engine you pick in the Account tab. Each
-        of the three options has a different posture — pick the one that
+        option has a different posture — pick the one that
         matches what you need.
       </p>
 
@@ -30,30 +30,6 @@ export default function Privacy() {
               The transcription model is downloaded once from Hugging Face on
               first setup; after that, no further network calls are made for
               dictation in this mode.
-            </p>
-          </>
-        }
-      />
-
-      <PillarCard
-        icon={<KeyIcon />}
-        title="Your Groq key (BYOK)"
-        tag="No middleman"
-        tagTone="blue"
-        body={
-          <>
-            <p>
-              Audio is sent <span className="font-semibold text-ink">directly</span> from this Mac
-              to <span className="font-mono">api.groq.com</span> using your own API key,
-              over an encrypted (HTTPS) connection. Nothing passes through any
-              server of ours, because there isn't one in this path.
-            </p>
-            <p>
-              Your Groq key itself is stored locally in the macOS Keychain and
-              never leaves this Mac. Groq's privacy policy governs what they
-              do with your audio — they currently state they don't store input
-              data after processing, but read their terms for the current
-              policy.
             </p>
           </>
         }
@@ -102,7 +78,7 @@ export default function Privacy() {
         />
         <BlurbRow
           title="Open source roots"
-          body="The underlying engine is open source — you can verify exactly what gets sent where for the on-device and your-own-key paths."
+          body="The underlying engine is open source — you can verify exactly what gets sent where for the on-device path."
         />
       </div>
     </div>
@@ -160,15 +136,6 @@ function LaptopIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="5" width="18" height="12" rx="2" />
       <path d="M2 20h20" />
-    </svg>
-  )
-}
-
-function KeyIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="15" r="4" />
-      <path d="M10.85 12.15 19 4M18 5l2 2M15 8l2 2" />
     </svg>
   )
 }

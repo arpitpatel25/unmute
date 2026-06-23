@@ -10,7 +10,7 @@ import { registerBalanceIPC, startBalancePolling } from './balance-ipc'
 import Store from 'electron-store'
 import { paywallFetch, verifyKeepAlive, startPoolStatsSampling } from './paywall-net'
 
-type EngineMode = 'auto' | 'managed' | 'byok' | 'local'
+type EngineMode = 'auto' | 'managed' | 'local'
 interface PaywallSettings {
   engineMode: EngineMode
   // Language picker — used by paywall-route to fill the STT `language` form

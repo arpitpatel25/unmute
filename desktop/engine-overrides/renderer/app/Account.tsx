@@ -1,15 +1,14 @@
 // Account tab — identity + engine selection.
 //
-// The Engine selector is the centerpiece — 3 pillar cards (Managed /
-// BYOK / On-device) with inline setup per pillar. The Managed card
+// The Engine selector is the centerpiece — pillar cards (Managed /
+// On-device) with inline setup per pillar. The Managed card
 // embeds the full Billing UI (balance + top-up + recent activity)
 // inside itself, since billing IS the managed-cloud flow rather than
 // a separate concept.
 //
-// The legacy local-Groq-pricing Usage card was removed — it was a
-// BYOK-only artifact that always showed $0.00 for Managed users
-// (where real spend is tracked in Supabase via Billing) and never
-// counted Local at all. Misleading for the majority case.
+// The legacy local-Groq-pricing Usage card was removed — it always
+// showed $0.00 for Managed users (where real spend is tracked in
+// Supabase via Billing) and never counted Local at all.
 
 import { EnginePillars } from '../paywall/EnginePillars'
 import { useAuth } from '../paywall/AuthContext'

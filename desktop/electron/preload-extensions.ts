@@ -83,9 +83,9 @@ export const paywallPreloadExtensions = {
   },
 
   // Engine mode + sign-in
-  paywallGetEngineMode: (): Promise<'auto' | 'managed' | 'byok' | 'local'> =>
+  paywallGetEngineMode: (): Promise<'auto' | 'managed' | 'local'> =>
     ipcRenderer.invoke('paywall:get-engine-mode'),
-  paywallSetEngineMode: (mode: 'auto' | 'managed' | 'byok' | 'local'): Promise<boolean> =>
+  paywallSetEngineMode: (mode: 'auto' | 'managed' | 'local'): Promise<boolean> =>
     ipcRenderer.invoke('paywall:set-engine-mode', mode),
 
   // AI format on/off — gates Caps Lock detection in the keyListener.
@@ -147,11 +147,11 @@ export const paywallPreloadExtensions = {
   // *right now* and, if it's local, why. Mirrors what ProviderRouter would
   // do without actually consuming an STT slot.
   paywallEnginePeekStatus: (): Promise<{
-    provider: 'managed' | 'byok' | 'local' | null
+    provider: 'managed' | 'local' | null
     reason: 'not_signed_in' | 'no_balance' | 'cloud_unreachable' | 'chose_on_device' | null
   }> => ipcRenderer.invoke('engine:peek-status'),
 
-  // Runtime fallback signal — fires when a managed/byok call fell through
+  // Runtime fallback signal — fires when a managed call fell through
   // to local during this dictation. Used to swap the awareness widget's
   // reason text to "cloud unreachable" mid-flight.
   paywallOnEngineFellBack: (
