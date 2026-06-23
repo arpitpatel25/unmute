@@ -8,13 +8,13 @@ import { useEffect } from 'react'
 
 export type OfflineReason =
   | 'not_signed_in'
-  | 'no_balance'
+  | 'no_subscription'
   | 'cloud_unreachable'
   | 'chose_on_device'
 
 const REASON_TEXT: Record<OfflineReason, string> = {
   not_signed_in: 'Sign in for faster cloud transcription',
-  no_balance: 'Out of credits — top up for cloud transcription',
+  no_subscription: 'Subscribe for cloud transcription',
   cloud_unreachable: 'Cloud unreachable — using on-device model',
   chose_on_device: 'On-device mode is selected in Settings',
 }

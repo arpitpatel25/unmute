@@ -15,7 +15,7 @@ export const paywallPreloadExtensions = {
   paywallKeychainDelete: (key: string): Promise<boolean> =>
     ipcRenderer.invoke('paywall:keychain-delete', key),
 
-  // External URL (Apple OAuth, magic link, top-up)
+  // External URL (Apple OAuth, magic link, checkout/portal)
   paywallOpenExternal: (url: string): Promise<boolean> =>
     ipcRenderer.invoke('paywall:open-external', url),
 
@@ -34,16 +34,35 @@ export const paywallPreloadExtensions = {
   paywallPopPendingPaymentCallback: (): Promise<string | null> =>
     ipcRenderer.invoke('paywall:pop-pending-payment-callback'),
 
-  // Dodo checkout — main proxies to the payments worker.
-  paywallCreateCheckout: (amountCents: number): Promise<{
+  // Dodo subscription checkout — main proxies to the payments worker.
+  paywallCreateSubscription: (
+    plan: 'dictation' | 'unmute',
+    interval: 'month' | 'year',
+  ): Promise<{
     ok: boolean
     checkoutUrl?: string
-    paymentSessionId?: string
     code?: string
     message?: string
-  }> => ipcRenderer.invoke('paywall:create-checkout', amountCents),
+  }> => ipcRenderer.invoke('paywall:create-subscription', plan, interval),
 
-  // Recent wallet ledger rows (usage + topups) for the in-app history pane.
+  // Dodo customer portal — manage/cancel an existing subscription. Returns
+  // { noSubscription: true } when the user has no Dodo customer record (409).
+  paywallOpenPortal: (): Promise<{
+    ok: boolean
+    portalUrl?: string
+    noSubscription?: boolean
+    code?: string
+    message?: string
+  }> => ipcRenderer.invoke('paywall:open-portal'),
+
+  // Subscription/entitlement status — drives the subscription-status pill and
+  // Billing's post-checkout "is it active yet?" poll.
+  paywallGetSubscription: (): Promise<{
+    active: boolean
+    plan: 'dictation' | 'unmute' | null
+  }> => ipcRenderer.invoke('paywall:get-subscription'),
+
+  // Recent wallet ledger rows for the in-app history pane.
   paywallGetLedger: (): Promise<Array<{
     id: string
     created_at: string
@@ -148,7 +167,7 @@ export const paywallPreloadExtensions = {
   // do without actually consuming an STT slot.
   paywallEnginePeekStatus: (): Promise<{
     provider: 'managed' | 'local' | null
-    reason: 'not_signed_in' | 'no_balance' | 'cloud_unreachable' | 'chose_on_device' | null
+    reason: 'not_signed_in' | 'no_subscription' | 'cloud_unreachable' | 'chose_on_device' | null
   }> => ipcRenderer.invoke('engine:peek-status'),
 
   // Runtime fallback signal — fires when a managed call fell through

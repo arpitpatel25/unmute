@@ -55,7 +55,7 @@ function notifyFellBack(): void {
   try {
     const { BrowserWindow } = require('electron')
     for (const w of BrowserWindow.getAllWindows()) {
-      w.webContents.send('paywall:fell-back-to-local', 'https://unmute.app/topup')
+      w.webContents.send('paywall:fell-back-to-local', 'https://unmute.app/subscribe')
     }
   } catch { /* ignore */ }
 }

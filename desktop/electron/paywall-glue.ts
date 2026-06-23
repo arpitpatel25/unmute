@@ -297,14 +297,38 @@ function registerSessionBridge() {
   // They require a valid session — if the user isn't signed in, they
   // return a structured error rather than crashing the renderer.
 
-  ipcMain.handle('paywall:create-checkout', async (_e, amountCents: number) => {
+  ipcMain.handle('paywall:create-subscription', async (
+    _e,
+    plan: 'dictation' | 'unmute',
+    interval: 'month' | 'year',
+  ) => {
     const token = currentSession.accessToken
     if (!token) return { ok: false, code: 'UNAUTHORIZED', message: 'sign in first' }
-    if (!Number.isInteger(amountCents) || amountCents <= 0) {
-      return { ok: false, code: 'BAD_REQUEST', message: 'invalid amount' }
+    if (plan !== 'dictation' && plan !== 'unmute') {
+      return { ok: false, code: 'BAD_REQUEST', message: 'invalid plan' }
     }
-    const { createCheckout } = await import('./payments-client')
-    return createCheckout(amountCents, token)
+    if (interval !== 'month' && interval !== 'year') {
+      return { ok: false, code: 'BAD_REQUEST', message: 'invalid interval' }
+    }
+    const { createSubscriptionCheckout } = await import('./payments-client')
+    return createSubscriptionCheckout(plan, interval, token)
+  })
+
+  ipcMain.handle('paywall:open-portal', async () => {
+    const token = currentSession.accessToken
+    if (!token) return { ok: false, code: 'UNAUTHORIZED', message: 'sign in first' }
+    const { openCustomerPortal } = await import('./payments-client')
+    return openCustomerPortal(token)
+  })
+
+  // Subscription/entitlement status — read off the same /v1/me status
+  // endpoint as the balance poll. Used by Billing's post-checkout poll and
+  // the subscription-status pill.
+  ipcMain.handle('paywall:get-subscription', async () => {
+    const token = currentSession.accessToken
+    if (!token) return { active: false, plan: null }
+    const { fetchSubscription } = await import('./managed-client')
+    return (await fetchSubscription(token)) ?? { active: false, plan: null }
   })
 
   ipcMain.handle('paywall:get-ledger', async () => {

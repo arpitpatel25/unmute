@@ -18,7 +18,7 @@ import { getWidgetWindow } from '../windowManager'
 // (managed is active, or no provider is available at all).
 export type OnDeviceReason =
   | 'not_signed_in'      // anonymous → local is the only option
-  | 'no_balance'         // signed in but $0 → managed unavailable
+  | 'no_subscription'    // signed in but no active subscription → managed unavailable
   | 'cloud_unreachable'  // managed was first choice, fell back due to error
   | 'chose_on_device'    // user set Engine = Local explicitly
 
@@ -67,7 +67,7 @@ function localReason(state: ProviderState, mode: EngineMode): OnDeviceReason {
   // In auto mode the priority chain is managed → local.
   // Local is picked only when nothing higher qualifies.
   if (!state.signedIn) return 'not_signed_in'
-  if (state.signedIn && state.balanceCents === 0) return 'no_balance'
+  if (state.signedIn && !state.subActive) return 'no_subscription'
   return 'chose_on_device' // catch-all for unusual configs
 }
 
@@ -104,19 +104,19 @@ export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
   routerState = async (): Promise<ProviderState> => {
     const user = await oss.getCurrentUser()
     const token = await oss.getAccessToken()
-    const balance = await (async () => {
+    const subActive = await (async () => {
       try {
-        const { fetchMe } = await import('./managed-client')
-        if (!token) return 0
-        const me = await fetchMe(token)
-        return me?.balanceCents ?? 0
+        if (!token) return false
+        const { fetchSubscription } = await import('./managed-client')
+        const sub = await fetchSubscription(token)
+        return !!sub?.active
       } catch {
-        return 0
+        return false
       }
     })()
     return {
       signedIn: !!user,
-      balanceCents: balance,
+      subActive,
       localReady: true, // OSS engine surfaces this — wire after submodule integration
     }
   }
@@ -134,7 +134,7 @@ export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
       // response. The fallback case (managed → local) is signaled here.
       if (provider === 'local') {
         // Indicates fallback happened (auto mode); surface the banner.
-        oss.notifyFellBackToLocal('https://unmute.app/topup')
+        oss.notifyFellBackToLocal('https://unmute.app/subscribe')
         // Tag this as a runtime fallback so the awareness widget can swap
         // its reason text to "cloud unreachable" instead of whatever the
         // pre-call peek inferred. Broadcast to all windows.

@@ -37,8 +37,8 @@ export function EnginePillars() {
   // Engine mode (persisted) — 'auto' or one of the three pillars
   const [mode, setMode] = useState<EngineMode>('auto')
 
-  // Managed: balance, surfaced live
-  const [balanceCents, setBalanceCents] = useState<number>(0)
+  // Managed: subscription status, surfaced live
+  const [subActive, setSubActive] = useState<boolean>(false)
   const [managedVerifying, setManagedVerifying] = useState(false)
   const [managedVerifyResult, setManagedVerifyResult] = useState<VerifyState>(null)
 
@@ -56,22 +56,18 @@ export function EnginePillars() {
     window.electronAPI.getWhisperModelStatus().then(setWhisperModelReady).catch(() => {})
     window.electronAPI.onWhisperDownloadProgress?.((p: number) => setWhisperProgress(p))
 
-    window.electronAPI.paywallGetBalance?.().then((s) => {
-      if (s) setBalanceCents(s.balanceCents)
+    window.electronAPI.paywallGetSubscription?.().then((s) => {
+      if (s) setSubActive(!!s.active)
     }).catch(() => {})
-    window.electronAPI.paywallOnBalanceUpdated?.((next) => {
-      setBalanceCents(next.balanceCents)
-    })
 
     return () => {
       window.electronAPI.removeAllListeners?.('whisper:download-progress')
-      window.electronAPI.removeAllListeners?.('paywall:balance-updated')
     }
   }, [])
 
   // ─── Derived: pillar readiness (drives Active + Auto) ────────
   const ready: Record<PillarId, boolean> = {
-    managed: auth.signedIn && balanceCents > 0,
+    managed: auth.signedIn && subActive,
     local: whisperModelReady,
   }
 
@@ -119,10 +115,10 @@ export function EnginePillars() {
     setManagedVerifyResult(null)
     const t0 = performance.now()
     try {
-      const s = await window.electronAPI.paywallRefreshBalance?.()
+      const s = await window.electronAPI.paywallGetSubscription?.()
       const ms = Math.round(performance.now() - t0)
       if (s) {
-        setBalanceCents(s.balanceCents)
+        setSubActive(!!s.active)
         setManagedVerifyResult({ ok: true, text: `Works — ${ms}ms` })
       } else {
         setManagedVerifyResult({ ok: false, text: 'No response from server' })
@@ -138,7 +134,6 @@ export function EnginePillars() {
   // ─── Render ──────────────────────────────────────────────────
 
   const isAuto = mode === 'auto'
-  const dollars = (c: number) => `$${(c / 100).toFixed(2)}`
 
   return (
     <div className="space-y-3">
@@ -167,7 +162,6 @@ export function EnginePillars() {
           ready={ready.managed}
           signedIn={auth.signedIn}
           email={auth.user?.email ?? null}
-          balanceCents={balanceCents}
           onSelect={() => handleModeChange('managed')}
           onSignIn={() => auth.openSignIn()}
           verifying={managedVerifying}
@@ -273,7 +267,7 @@ function CardShell(p: CardShellProps) {
         {p.setupBlock && <div className="mt-3">{p.setupBlock}</div>}
 
         {/* Expanded panel — used by Managed to render the full Billing
-            sub-component (balance, top-up, recent activity) inline. */}
+            sub-component (subscription plans + manage) inline. */}
         {p.expandedBlock && <div className="mt-3">{p.expandedBlock}</div>}
 
         {/* Verify + manual select */}
@@ -353,7 +347,6 @@ function ManagedCard(props: {
   ready: boolean
   signedIn: boolean
   email: string | null
-  balanceCents: number
   onSelect: () => void
   onSignIn: () => void
   verifying: boolean
@@ -377,8 +370,8 @@ function ManagedCard(props: {
     statusBlock = <StatusBadge ok={true} text={`Signed in as ${props.email ?? 'you'}`} />
   }
 
-  // When signed in, embed the full Billing UI (balance, top-up tiers,
-  // recent activity) inside this card — billing IS the managed cloud
+  // When signed in, embed the full Billing UI (subscription plans +
+  // manage) inside this card — billing IS the managed cloud
   // flow, not a separate concept.
   const expandedBlock = props.signedIn ? (
     <div className="mt-1 rounded-2xl border border-border bg-cream-mid/40 overflow-hidden">
@@ -399,7 +392,7 @@ function ManagedCard(props: {
       setupBlock={setupBlock}
       expandedBlock={expandedBlock}
       bestFor="Anyone who wants it to just work. Faster than mainstream dictation tools — optimized end to end."
-      tradeOff="Pay-per-use credits. Only deducted when this engine is used. Credits never expire."
+      tradeOff="Requires an active subscription. From $5.99/mo — cancel any time."
       onSelect={props.onSelect}
       verifyBlock={
         props.ready ? (

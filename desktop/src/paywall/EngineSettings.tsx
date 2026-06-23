@@ -16,7 +16,7 @@ const OPTIONS: Array<{ value: EngineMode; label: string; description: string }> 
   {
     value: 'managed',
     label: 'Managed',
-    description: 'Use our cloud (sign in required, prepaid credits)',
+    description: 'Use our cloud (sign in + active subscription)',
   },
   {
     value: 'local',

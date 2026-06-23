@@ -57,6 +57,10 @@ async function callPipeline<T>(
     throw new UpstreamError(res.status)
   }
 
+  // TODO(fair-use): the pipeline may set `x-unmute-fair-use: notify` on the
+  // response (res.headers.get('x-unmute-fair-use')). Surfacing it as a soft,
+  // dismissible renderer toast needs new main→renderer header plumbing that
+  // doesn't exist yet, so it's intentionally skipped here to keep scope tight.
   if (!res.ok || !body.ok) {
     if (body.code === 'INSUFFICIENT_BALANCE') {
       throw new InsufficientBalanceError(body.balance_cents ?? 0)
@@ -150,6 +154,43 @@ export async function fetchMe(token: string): Promise<{
       balanceCents: body.balance_cents ?? 0,
       topUpUrl: body.top_up_url ?? '',
     }
+  } catch {
+    return null
+  }
+}
+
+// ─── /v1/me — subscription/entitlement status ──────────────────
+// Reads the same status endpoint as the balance poll, but surfaces the
+// subscription entitlement so the renderer can show "Unmute" / "Dictation" /
+// "Inactive" and the post-checkout poll can detect when a sub goes active.
+// Field names are tolerant of a few likely backend shapes; default to inactive.
+
+export type SubscriptionStatus = {
+  active: boolean
+  plan: 'dictation' | 'unmute' | null
+}
+
+export async function fetchSubscription(token: string): Promise<SubscriptionStatus | null> {
+  try {
+    const res = await fetch(`${__PIPELINE_URL__}/v1/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) return null
+    const body = (await res.json()) as {
+      ok?: boolean
+      subscription_active?: boolean
+      subscription_plan?: string
+      subscription?: { active?: boolean; plan?: string; status?: string } | null
+    }
+    const sub = body.subscription ?? null
+    const active = !!(
+      body.subscription_active ||
+      sub?.active ||
+      sub?.status === 'active'
+    )
+    const rawPlan = body.subscription_plan ?? sub?.plan ?? null
+    const plan = rawPlan === 'unmute' || rawPlan === 'dictation' ? rawPlan : null
+    return { active, plan }
   } catch {
     return null
   }

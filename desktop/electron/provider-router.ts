@@ -22,7 +22,7 @@ export type Provider = 'managed' | 'local'
 
 export interface ProviderState {
   signedIn: boolean
-  balanceCents: number
+  subActive: boolean
   localReady: boolean
 }
 
@@ -75,11 +75,11 @@ export class NetworkError extends Error {
  * The caller is responsible for fallback if that provider fails.
  */
 export function pickProvider(state: ProviderState, mode: EngineMode): Provider | null {
-  if (mode === 'managed') return state.signedIn && state.balanceCents > 0 ? 'managed' : null
+  if (mode === 'managed') return state.signedIn && state.subActive ? 'managed' : null
   if (mode === 'local') return state.localReady ? 'local' : null
 
   // mode === 'auto' — priority chain
-  if (state.signedIn && state.balanceCents > 0) return 'managed'
+  if (state.signedIn && state.subActive) return 'managed'
   if (state.localReady) return 'local'
   return null
 }

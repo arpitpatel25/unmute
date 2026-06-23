@@ -1,42 +1,58 @@
-// Small balance indicator shown in the top-right corner of the main window.
-// Visible only when the user is signed in to managed cloud. Clicking it opens
-// the top-up flow.
+// Small subscription-status indicator shown in the top-right corner of the
+// main window. Visible only when the user is signed in to managed cloud.
+// Clicking it opens the customer portal to manage the subscription.
 
 import { useEffect, useState } from 'react'
-import { TopUpButton } from './TopUpButton'
 
-interface BalanceState {
-  balanceCents: number
-  topUpUrl: string
+interface SubState {
+  active: boolean
+  plan: 'dictation' | 'unmute' | null
 }
 
 export function BalancePill() {
-  const [state, setState] = useState<BalanceState | null>(null)
+  const [state, setState] = useState<SubState | null>(null)
   const [showMenu, setShowMenu] = useState(false)
 
   useEffect(() => {
-    window.electronAPI.paywallGetBalance().then(setState)
-    window.electronAPI.paywallOnBalanceUpdated((next) => setState(next))
-    return () => window.electronAPI.removeAllListeners('paywall:balance-updated')
+    window.electronAPI.paywallGetSubscription?.().then((s) => {
+      if (s) setState(s)
+    })
   }, [])
 
-  if (!state || state.balanceCents === 0 && !state.topUpUrl) return null
+  if (!state) return null
 
-  const dollars = (state.balanceCents / 100).toFixed(2)
-  const low = state.balanceCents > 0 && state.balanceCents < 100 // <$1 is low
+  const label = state.active
+    ? state.plan === 'unmute'
+      ? 'Unmute'
+      : state.plan === 'dictation'
+        ? 'Dictation'
+        : 'Active'
+    : 'Inactive'
+
+  async function manage() {
+    setShowMenu(false)
+    const result = await window.electronAPI.paywallOpenPortal?.()
+    if (result?.ok && result.portalUrl) {
+      await window.electronAPI.paywallOpenExternal(result.portalUrl)
+    }
+  }
 
   return (
     <div className="relative">
       <button
         onClick={() => setShowMenu((s) => !s)}
         className={`titlebar-no-drag inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
-          low
-            ? 'bg-warm-soft text-warm border-warm/30 hover:bg-warm/15'
-            : 'bg-surface-2 text-ink border-border hover:bg-cream-mid'
+          state.active
+            ? 'bg-surface-2 text-ink border-border hover:bg-cream-mid'
+            : 'bg-warm-soft text-warm border-warm/30 hover:bg-warm/15'
         }`}
       >
-        <span className={`w-[6px] h-[6px] rounded-full ${low ? 'bg-warm' : 'bg-green-500'}`} />
-        ${dollars}
+        <span
+          className={`w-[6px] h-[6px] rounded-full ${
+            state.active ? 'bg-green-500' : 'bg-warm'
+          }`}
+        />
+        {label}
       </button>
 
       {showMenu && (
@@ -45,11 +61,18 @@ export function BalancePill() {
           onMouseLeave={() => setShowMenu(false)}
         >
           <div className="px-2 py-1.5">
-            <p className="text-[10px] text-ink-35 font-bold uppercase tracking-wider mb-0.5">Balance</p>
-            <p className="text-[16px] font-bold text-ink">${dollars}</p>
+            <p className="text-[10px] text-ink-35 font-bold uppercase tracking-wider mb-0.5">
+              Subscription
+            </p>
+            <p className="text-[16px] font-bold text-ink">{label}</p>
           </div>
           <div className="h-px bg-border my-1.5" />
-          <TopUpButton topUpUrl={state.topUpUrl} />
+          <button
+            onClick={manage}
+            className="w-full px-3 py-2 rounded-lg bg-ink text-white text-[11px] font-semibold hover:opacity-90 transition-opacity"
+          >
+            {state.active ? 'Manage subscription' : 'Subscribe'}
+          </button>
         </div>
       )}
     </div>

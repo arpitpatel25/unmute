@@ -25,7 +25,7 @@ export function OnboardingCards({ onComplete }: Props) {
         <Card
           title="Managed (recommended for most)"
           tag="Convenience"
-          description="Sign in once, top up credits, transcription routes through our cloud. Fast, accurate, zero setup. ~$1/mo for typical use vs $12/mo for WisprFlow."
+          description="Sign in, subscribe, and transcription routes through our cloud. Fast, accurate, zero setup. From $5.99/mo vs $12/mo for WisprFlow."
           accent="ink"
           onHover={() => setHovered('managed')}
           onLeave={() => setHovered(null)}
