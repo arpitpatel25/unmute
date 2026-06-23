@@ -147,18 +147,22 @@ export default {
   },
 }
 
-// ─── GET /v1/me — balance + plan snapshot ──────────────────────
+// ─── GET /v1/me — subscription snapshot ─────────────────────────
 
 async function handleMe(env: PipelineEnv, userId: string): Promise<Response> {
-  // Bypass the 60s KV edge cache here — the desktop app polls /v1/me right
-  // after a top-up and the user is watching for the bump. Hot paths (STT,
-  // LLM) continue to use the cached path for speed.
-  const balance = await getBalance(env, userId, { fresh: true })
+  // Bypass the edge cache here — the desktop app polls /v1/me right after a
+  // checkout/return and is watching for the subscription to go active. Hot
+  // paths (STT, LLM) continue to use the cached entitlement read for speed.
+  const ent = await getEntitlement(env, userId, { fresh: true })
+  const active = isEntitled(ent)
   return json({
     ok: true,
     user_id: userId,
-    balance_cents: balance,
-    top_up_url: TOP_UP_URL,
+    // Subscription snapshot (the desktop router + Billing poll read these).
+    subscription_active: active,
+    subscription_plan: active ? ent.plan : null,
+    subscription: { active, plan: active ? ent.plan : null, status: ent.status },
+    subscribe_url: SUBSCRIBE_URL,
   })
 }
 
