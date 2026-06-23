@@ -10,9 +10,10 @@
 //     only place a NEW subscription is created.
 //   * ACTIVE → a clear "your plan" summary. We do NOT re-pitch the price grid
 //     (clicking Subscribe again would create a SECOND subscription / double
-//     charge). Plan changes go through the Dodo customer portal, which prorates
-//     automatically — so a Dictation subscriber upgrades to Unmute there and
-//     only pays the difference.
+//     charge). A Dictation subscriber upgrades to Unmute in-app via the
+//     payments worker's /change-plan (Dodo change-plan on the existing
+//     subscription) — prorated, no second subscription. Cancel / payment-method
+//     changes still go through the Dodo customer portal.
 //
 // Flow when an INACTIVE user clicks Subscribe:
 //   a. paywallCreateSubscription(plan, interval) → Dodo hosted checkout URL
@@ -20,7 +21,9 @@
 //   c. "waiting" state; exits via paywallOnPaymentCallback (deep-link) or polling
 //      paywallGetSubscription() every 3s for 5 min until active.
 //
-// "Manage subscription" / "Upgrade" open the Dodo customer portal (paywallOpenPortal).
+// "Upgrade to Unmute" calls paywallChangePlan (in-app, prorated). "Manage
+// subscription" opens the Dodo customer portal (paywallOpenPortal) for
+// cancel / payment-method changes.
 
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from './AuthContext'
@@ -82,6 +85,7 @@ export function Billing() {
   const [sub, setSub] = useState<SubState>({ active: false, plan: null })
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const [portalNote, setPortalNote] = useState<string | null>(null)
+  const [upgrading, setUpgrading] = useState(false)
 
   // Refresh subscription status on mount, and again when a checkout lands.
   useEffect(() => {
@@ -139,6 +143,45 @@ export function Billing() {
       return
     }
     await window.electronAPI.paywallOpenExternal?.(result.portalUrl)
+  }
+
+  // In-app upgrade Dictation → Unmute via Dodo's change-plan (prorated, no
+  // second subscription). On success we don't redirect to the browser — we
+  // poll refresh() a few times so the UI flips to Unmute once the
+  // subscription.plan_changed webhook lands (usually within seconds).
+  async function upgrade() {
+    if (!auth.signedIn) {
+      auth.openSignIn()
+      return
+    }
+    setPortalNote(null)
+    setUpgrading(true)
+    try {
+      const result = await window.electronAPI.paywallChangePlan?.()
+      if (result?.ok) {
+        setPortalNote('Upgrading… your plan will switch to Unmute in a moment.')
+        // Short poll: re-check entitlement a few times over ~15s so the card
+        // flips to Unmute once the webhook updates the subscription.
+        for (let i = 0; i < 5; i++) {
+          await new Promise((r) => setTimeout(r, 3000))
+          await refresh()
+        }
+        return
+      }
+      if (result?.error === 'change_pending') {
+        setPortalNote('An upgrade is already processing.')
+        return
+      }
+      if (result?.error === 'already_unmute') {
+        await refresh()
+        return
+      }
+      setPortalNote(
+        "Couldn't start the upgrade — try again or use Manage subscription.",
+      )
+    } finally {
+      setUpgrading(false)
+    }
   }
 
   // Polling loop while in 'waiting' — exits when the subscription goes active.
@@ -244,11 +287,11 @@ export function Billing() {
                 Code. You only pay the prorated difference — handled in the billing portal.
               </p>
               <button
-                onClick={openPortal}
-                disabled={busy}
+                onClick={upgrade}
+                disabled={busy || upgrading}
                 className="mt-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-ink text-white hover:opacity-90 disabled:opacity-50"
               >
-                Upgrade to Unmute →
+                {upgrading ? 'Upgrading…' : 'Upgrade to Unmute →'}
               </button>
             </div>
           )}

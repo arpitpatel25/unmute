@@ -118,6 +118,68 @@ export async function createPortalSession(
   return { portalUrl }
 }
 
+// ─── Change plan (in-app upgrade) ───────────────────────────────
+//
+// Upgrade an existing subscription to a different product (Dictation →
+// Unmute) in place, so the subscriber pays only the prorated difference
+// instead of starting a second subscription. The subscription.plan_changed
+// webhook flips entitlement afterward.
+
+export interface ChangePlanInput {
+  apiBase: string
+  apiKey: string
+  subscriptionId: string
+  productId: string
+  quantity?: number
+  prorationMode?: string
+}
+
+/**
+ * Change an existing subscription's plan via Dodo's change-plan endpoint.
+ *
+ * Effective immediately, prorated; if the payment fails the change is
+ * prevented (the subscription stays on its current plan). Returns
+ * { ok: true } on a 2xx; throws a code-shaped error (status + body text) on
+ * any non-2xx — the caller maps that to a Worker response. Dodo statuses we
+ * care about: 200 ok, 409 pending change exists, 422 inactive/on-demand.
+ */
+export async function changePlan(
+  {
+    apiBase,
+    apiKey,
+    subscriptionId,
+    productId,
+    quantity = 1,
+    prorationMode = 'difference_immediately',
+  }: ChangePlanInput,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ok: true }> {
+  const reqBody = {
+    product_id: productId,
+    quantity,
+    proration_billing_mode: prorationMode,
+    effective_at: 'immediately',
+    on_payment_failure: 'prevent_change',
+  }
+
+  const res = await fetchImpl(
+    `${apiBase}/subscriptions/${encodeURIComponent(subscriptionId)}/change-plan`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(reqBody),
+    },
+  )
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '<no body>')
+    throw new Error(`DODO_API_ERROR:${res.status}:${detail.slice(0, 200)}`)
+  }
+  return { ok: true }
+}
+
 /** Minimal shape of a Dodo payment — we only read what we need. */
 export interface DodoPayment {
   id: string

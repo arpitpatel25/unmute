@@ -55,6 +55,15 @@ export const paywallPreloadExtensions = {
     message?: string
   }> => ipcRenderer.invoke('paywall:open-portal'),
 
+  // In-app upgrade (Dictation → Unmute) — main proxies to the payments worker,
+  // which prorates the existing subscription via Dodo's change-plan. Entitlement
+  // flips via the subscription.plan_changed webhook a moment later.
+  paywallChangePlan: (): Promise<{
+    ok: boolean
+    error?: string
+    message?: string
+  }> => ipcRenderer.invoke('paywall:change-plan'),
+
   // Subscription/entitlement status — drives the subscription-status pill and
   // Billing's post-checkout "is it active yet?" poll.
   paywallGetSubscription: (): Promise<{

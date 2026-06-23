@@ -112,6 +112,32 @@ export async function openCustomerPortal(token: string): Promise<OpenPortalResul
   }
 }
 
+// ─── /change-plan ───────────────────────────────────────────────
+//
+// In-app upgrade (Dictation → Unmute). The worker calls Dodo's change-plan on
+// the user's existing subscription so they pay only the prorated difference.
+// Tolerant of the worker's response shapes:
+//   200 { ok: true }
+//   409 { error: 'no_active_subscription' }      (no row)
+//   400 { error: 'already_unmute' }
+//   500 { error: 'product_not_configured' }
+//   200 { ok: false, error: 'change_pending' | 'not_upgradeable' | 'upgrade_failed', message? }
+
+export interface ChangePlanResult {
+  ok: boolean
+  error?: string
+  message?: string
+}
+
+export async function changePlan(token: string): Promise<ChangePlanResult> {
+  const env = await callPayments<unknown>('/change-plan', { method: 'POST' }, token)
+  return {
+    ok: !!env.ok,
+    error: env.error ?? env.code,
+    message: env.message,
+  }
+}
+
 // ─── /v1/ledger ─────────────────────────────────────────────────
 
 export interface LedgerRow {

@@ -321,6 +321,15 @@ function registerSessionBridge() {
     return openCustomerPortal(token)
   })
 
+  // In-app upgrade (Dictation → Unmute) via Dodo's change-plan — the worker
+  // prorates the existing subscription, no second subscription is created.
+  ipcMain.handle('paywall:change-plan', async () => {
+    const token = currentSession.accessToken
+    if (!token) return { ok: false, error: 'UNAUTHORIZED', message: 'sign in first' }
+    const { changePlan } = await import('./payments-client')
+    return changePlan(token)
+  })
+
   // Subscription/entitlement status — read off the same /v1/me status
   // endpoint as the balance poll. Used by Billing's post-checkout poll and
   // the subscription-status pill.

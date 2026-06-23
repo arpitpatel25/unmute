@@ -15,7 +15,7 @@
 import { verifyJWT, extractBearer } from '../../shared/auth'
 import type { PaymentsEnv } from '../../shared/types'
 import { rpc } from '../../shared/supabase'
-import { getPayment, createSubscriptionCheckout, createPortalSession } from '../../shared/dodo'
+import { getPayment, createSubscriptionCheckout, createPortalSession, changePlan } from '../../shared/dodo'
 import { verifyDodoWebhook } from '../../shared/dodoWebhook'
 
 const CORS_HEADERS: Record<string, string> = {
@@ -66,6 +66,9 @@ export default {
     }
     if (req.method === 'POST' && url.pathname === '/portal') {
       return handlePortal(env, userId)
+    }
+    if (req.method === 'POST' && url.pathname === '/change-plan') {
+      return handleChangePlan(env, userId)
     }
     // GET /v1/payment/:id — proxy lookup so the app can reconcile when the
     // user closes the checkout tab before redirect.
@@ -311,6 +314,97 @@ async function handlePortal(env: PaymentsEnv, userId: string): Promise<Response>
   } catch (e) {
     console.error('[portal] create failed:', (e as Error).message)
     return json({ ok: false, code: 'UPSTREAM_ERROR', message: 'could not create portal session' }, 502)
+  }
+}
+
+// ─── POST /change-plan ──────────────────────────────────────────
+// In-app upgrade: Dictation → Unmute on the user's EXISTING subscription via
+// Dodo's change-plan endpoint, so they pay only the prorated difference (no
+// second subscription). The target Unmute interval matches the user's current
+// interval (month→month / year→year). We do NOT touch Supabase here — the
+// subscription.plan_changed webhook flips entitlement once Dodo confirms.
+//
+// Returns: { ok: true } on success. Mapped failures:
+//   no active subscription → 409 { error: 'no_active_subscription' }
+//   already on unmute      → 400 { error: 'already_unmute' }
+//   product not configured → 500 { error: 'product_not_configured' }
+//   Dodo 409 (pending)     → { ok: false, error: 'change_pending' }
+//   Dodo 422 (inactive)    → { ok: false, error: 'not_upgradeable' }
+//   anything else          → { ok: false, error: 'upgrade_failed', message }
+
+async function handleChangePlan(env: PaymentsEnv, userId: string): Promise<Response> {
+  // Read the caller's CURRENT active subscription from Supabase via PostgREST
+  // (mirrors how /portal reads profiles).
+  const subUrl =
+    `${env.SUPABASE_URL}/rest/v1/subscriptions` +
+    `?user_id=eq.${userId}&status=eq.active` +
+    `&select=dodo_subscription_id,plan,interval&order=updated_at.desc&limit=1`
+  let sub: { dodo_subscription_id: string; plan: string; interval: string } | null = null
+  try {
+    const res = await fetch(subUrl, {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        Accept: 'application/json',
+      },
+    })
+    if (!res.ok) {
+      console.error('[change-plan] subscription read failed:', res.status)
+      return json({ ok: false, code: 'INTERNAL_ERROR', message: 'subscription lookup failed' }, 500)
+    }
+    const rows = (await res.json()) as Array<{
+      dodo_subscription_id: string
+      plan: string
+      interval: string
+    }>
+    sub = rows[0] ?? null
+  } catch (e) {
+    console.error('[change-plan] subscription read threw:', (e as Error).message)
+    return json({ ok: false, code: 'INTERNAL_ERROR', message: 'subscription lookup failed' }, 500)
+  }
+
+  if (!sub || !sub.dodo_subscription_id) {
+    return json({ error: 'no_active_subscription' }, 409)
+  }
+  if (sub.plan === 'unmute') {
+    return json({ error: 'already_unmute' }, 400)
+  }
+
+  // Resolve the target Unmute product matching the user's current interval.
+  let products: SubscriptionProductMap
+  try {
+    products = parseSubscriptionProducts(env)
+  } catch (e) {
+    console.error('[change-plan] bad config:', (e as Error).message)
+    return json({ error: 'product_not_configured' }, 500)
+  }
+  const targetProductId = products[`unmute:${sub.interval}`]
+  if (!targetProductId) {
+    return json({ error: 'product_not_configured' }, 500)
+  }
+
+  try {
+    await changePlan({
+      apiBase: env.DODO_API_BASE,
+      apiKey: env.DODO_API_KEY,
+      subscriptionId: sub.dodo_subscription_id,
+      productId: targetProductId,
+    })
+    // Entitlement flips via the subscription.plan_changed webhook; don't write
+    // Supabase here.
+    return json({ ok: true })
+  } catch (e) {
+    const msg = (e as Error).message
+    console.error('[change-plan] dodo change-plan failed:', msg)
+    // Error message shape from changePlan: "DODO_API_ERROR:<status>:<body>".
+    const status = Number(msg.split(':')[1])
+    if (status === 409) {
+      return json({ ok: false, error: 'change_pending' })
+    }
+    if (status === 422) {
+      return json({ ok: false, error: 'not_upgradeable' })
+    }
+    return json({ ok: false, error: 'upgrade_failed', message: msg })
   }
 }
 
