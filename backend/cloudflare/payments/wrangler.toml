@@ -13,13 +13,15 @@ compatibility_flags = ["nodejs_compat"]
 #   DODO_API_BASE — flipped to live.dodopayments.com on 2026-06-09. Bank
 #     verification is still under review but Dodo lets us accept live
 #     payments now (payouts queue until bank clears).
-#   DODO_TOPUP_PRODUCTS — JSON map of top-up cents → live product_id.
+#   DODO_SUBSCRIPTION_PRODUCTS — JSON map of "<plan>:<interval>" → recurring
+#     product_id. Placeholder IDs below; real product IDs are filled in at
+#     cutover once the recurring products are created in the Dodo dashboard.
 #   PUBLIC_API_BASE — public URL of THIS worker, used for the checkout
 #     return_url.
 [vars]
 DODO_API_BASE = "https://live.dodopayments.com"
 PUBLIC_API_BASE = "https://unmute-payments.zodpatel.workers.dev"
-DODO_TOPUP_PRODUCTS = '{"500":"pdt_0NgeSieNnvti8vHPDk8tn","1000":"pdt_0NgeT8ph6cRuRYfysopID","2500":"pdt_0NgeTEtZsRJ7X9P6iTDY8"}'
+DODO_SUBSCRIPTION_PRODUCTS = '{"dictation:month":"REPLACE_dict_m","dictation:year":"REPLACE_dict_y","unmute:month":"REPLACE_unmute_m","unmute:year":"REPLACE_unmute_y"}'
 
 [[kv_namespaces]]
 binding = "USER_BALANCE"

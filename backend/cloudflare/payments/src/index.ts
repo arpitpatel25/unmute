@@ -15,9 +15,8 @@
 import { verifyJWT, extractBearer } from '../../shared/auth'
 import type { PaymentsEnv } from '../../shared/types'
 import { rpc } from '../../shared/supabase'
-import { createCheckoutSession, getPayment, parseTopupConfig } from '../../shared/dodo'
+import { getPayment, createSubscriptionCheckout, createPortalSession } from '../../shared/dodo'
 import { verifyDodoWebhook } from '../../shared/dodoWebhook'
-import { setBalance } from '../../shared/balance'
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -62,8 +61,11 @@ export default {
     if (req.method === 'GET' && url.pathname === '/v1/ledger') {
       return handleLedger(env, userId)
     }
-    if (req.method === 'POST' && url.pathname === '/checkout/session') {
-      return handleCreateCheckout(req, env, userId, payload.email)
+    if (req.method === 'POST' && url.pathname === '/checkout/subscription') {
+      return handleSubscriptionCheckout(req, env, userId, payload.email)
+    }
+    if (req.method === 'POST' && url.pathname === '/portal') {
+      return handlePortal(env, userId)
     }
     // GET /v1/payment/:id — proxy lookup so the app can reconcile when the
     // user closes the checkout tab before redirect.
@@ -145,32 +147,87 @@ function handleCheckoutReturn(url: URL): Response {
   })
 }
 
-// ─── POST /checkout/session ─────────────────────────────────────
-// Body: { amount_cents: number }   — must match one of the configured tiers.
-// Returns: { ok: true, checkout_url, payment_session_id? }
-//
-// Client opens checkout_url in the system browser (NOT an Electron
-// BrowserWindow — UPI/3DS/Apple Pay break in embedded webviews).
+// ─── Subscription product map ───────────────────────────────────
+// DODO_SUBSCRIPTION_PRODUCTS is a JSON map of "<plan>:<interval>" → product_id.
+// Parsed lazily per-request (cheap; the worker stays stateless).
 
-interface CreateCheckoutRequest {
-  amount_cents?: number
+type SubscriptionProductMap = Record<string, string>
+
+function parseSubscriptionProducts(env: PaymentsEnv): SubscriptionProductMap {
+  const raw = env.DODO_SUBSCRIPTION_PRODUCTS
+  if (!raw) throw new Error('DODO_SUBSCRIPTION_PRODUCTS env var not set')
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>
+  } catch (e) {
+    throw new Error(`DODO_SUBSCRIPTION_PRODUCTS not valid JSON: ${(e as Error).message}`)
+  }
+  const map: SubscriptionProductMap = {}
+  for (const [key, pid] of Object.entries(parsed)) {
+    if (typeof pid !== 'string' || !pid) {
+      throw new Error(`DODO_SUBSCRIPTION_PRODUCTS: product_id for ${key} not a string`)
+    }
+    map[key] = pid
+  }
+  return map
 }
 
-async function handleCreateCheckout(
+/** Reverse-lookup the "<plan>:<interval>" key for a given product_id. */
+function productIdToKey(env: PaymentsEnv, productId: string): string | null {
+  let map: SubscriptionProductMap
+  try {
+    map = parseSubscriptionProducts(env)
+  } catch {
+    return null
+  }
+  for (const [key, pid] of Object.entries(map)) {
+    if (pid === productId) return key
+  }
+  return null
+}
+
+/** Reverse-lookup the plan (part before ':') for a Dodo product_id. */
+function productIdToPlan(env: PaymentsEnv, productId: string): string | null {
+  const key = productIdToKey(env, productId)
+  return key ? (key.split(':')[0] ?? null) : null
+}
+
+/** Reverse-lookup the interval (part after ':') for a Dodo product_id. */
+function productIdToInterval(env: PaymentsEnv, productId: string): string | null {
+  const key = productIdToKey(env, productId)
+  return key ? (key.split(':')[1] ?? null) : null
+}
+
+// ─── POST /checkout/subscription ────────────────────────────────
+// Body: { plan: 'dictation'|'unmute', interval: 'month'|'year' }
+// Returns: { ok: true, checkoutUrl }
+//
+// Client opens checkoutUrl in the system browser (NOT an Electron
+// BrowserWindow — UPI/3DS/Apple Pay break in embedded webviews).
+
+interface SubscriptionCheckoutRequest {
+  plan?: string
+  interval?: string
+}
+
+async function handleSubscriptionCheckout(
   req: Request,
   env: PaymentsEnv,
   userId: string,
   userEmail: string | undefined,
 ): Promise<Response> {
-  let body: CreateCheckoutRequest
+  let body: SubscriptionCheckoutRequest
   try {
-    body = (await req.json()) as CreateCheckoutRequest
+    body = (await req.json()) as SubscriptionCheckoutRequest
   } catch {
     return json({ ok: false, code: 'BAD_REQUEST', message: 'invalid JSON' }, 400)
   }
-  const amount = body.amount_cents
-  if (typeof amount !== 'number' || !Number.isInteger(amount) || amount <= 0) {
-    return json({ ok: false, code: 'BAD_REQUEST', message: 'amount_cents must be a positive integer' }, 400)
+  const { plan, interval } = body
+  if (plan !== 'dictation' && plan !== 'unmute') {
+    return json({ ok: false, code: 'BAD_REQUEST', message: 'plan must be dictation or unmute' }, 400)
+  }
+  if (interval !== 'month' && interval !== 'year') {
+    return json({ ok: false, code: 'BAD_REQUEST', message: 'interval must be month or year' }, 400)
   }
   if (!userEmail) {
     // Supabase JWTs from email/password and OAuth flows include email; if
@@ -178,38 +235,82 @@ async function handleCreateCheckout(
     return json({ ok: false, code: 'BAD_REQUEST', message: 'user has no email on file' }, 400)
   }
 
-  let cfg
+  let products: SubscriptionProductMap
   try {
-    cfg = parseTopupConfig(env)
+    products = parseSubscriptionProducts(env)
   } catch (e) {
-    console.error('[checkout] bad config:', (e as Error).message)
+    console.error('[checkout:sub] bad config:', (e as Error).message)
     return json({ ok: false, code: 'INTERNAL_ERROR', message: 'checkout misconfigured' }, 500)
   }
 
-  if (!cfg.productByCents[String(amount)]) {
+  const productId = products[`${plan}:${interval}`]
+  if (!productId) {
     return json(
-      { ok: false, code: 'BAD_REQUEST', message: `amount ${amount} not a configured tier` },
+      { ok: false, code: 'BAD_REQUEST', message: `no product for ${plan}:${interval}` },
       400,
     )
   }
 
   try {
-    const session = await createCheckoutSession(env, cfg, {
-      amountCents: amount,
+    const session = await createSubscriptionCheckout({
+      apiBase: env.DODO_API_BASE,
+      apiKey: env.DODO_API_KEY,
+      productId,
       userId,
-      userEmail,
+      email: userEmail,
       returnUrl: `${env.PUBLIC_API_BASE}/checkout/return`,
     })
-    return json({
-      ok: true,
-      checkout_url: session.checkout_url,
-      payment_session_id: session.payment_session_id,
-    })
+    return json({ ok: true, checkoutUrl: session.checkoutUrl })
   } catch (e) {
     const msg = (e as Error).message
-    console.error('[checkout] create failed:', msg)
+    console.error('[checkout:sub] create failed:', msg)
     // Don't leak Dodo internals to the client.
     return json({ ok: false, code: 'UPSTREAM_ERROR', message: 'could not create checkout session' }, 502)
+  }
+}
+
+// ─── POST /portal ───────────────────────────────────────────────
+// Returns: { ok: true, portalUrl } for the caller to manage their
+// subscription, or 409 { error: 'no_subscription' } if they have no Dodo
+// customer on file (never subscribed).
+
+async function handlePortal(env: PaymentsEnv, userId: string): Promise<Response> {
+  // Read the caller's dodo_customer_id from profiles via PostgREST.
+  const profUrl = `${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=dodo_customer_id`
+  let customerId: string | null = null
+  try {
+    const res = await fetch(profUrl, {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        Accept: 'application/json',
+      },
+    })
+    if (!res.ok) {
+      console.error('[portal] profile read failed:', res.status)
+      return json({ ok: false, code: 'INTERNAL_ERROR', message: 'profile lookup failed' }, 500)
+    }
+    const rows = (await res.json()) as Array<{ dodo_customer_id: string | null }>
+    customerId = rows[0]?.dodo_customer_id ?? null
+  } catch (e) {
+    console.error('[portal] profile read threw:', (e as Error).message)
+    return json({ ok: false, code: 'INTERNAL_ERROR', message: 'profile lookup failed' }, 500)
+  }
+
+  if (!customerId) {
+    return json({ error: 'no_subscription' }, 409)
+  }
+
+  try {
+    const session = await createPortalSession({
+      apiBase: env.DODO_API_BASE,
+      apiKey: env.DODO_API_KEY,
+      customerId,
+    })
+    return json({ ok: true, portalUrl: session.portalUrl })
+  } catch (e) {
+    console.error('[portal] create failed:', (e as Error).message)
+    return json({ ok: false, code: 'UPSTREAM_ERROR', message: 'could not create portal session' }, 502)
   }
 }
 
@@ -234,8 +335,9 @@ interface DodoEvent {
   data?: {
     payload_type?: string
     payment_id?: string
-    total_amount?: number          // in subunits (cents for USD)
-    settlement_amount?: number
+    subscription_id?: string
+    product_id?: string
+    next_billing_date?: string
     currency?: string
     customer?: { email?: string; customer_id?: string }
     metadata?: Record<string, string>
@@ -272,12 +374,10 @@ async function handleDodoWebhook(req: Request, env: PaymentsEnv): Promise<Respon
   }
 
   try {
-    if (eventType === 'payment.succeeded') {
-      await onPaymentSucceeded(env, verified.id, evt)
-    } else if (eventType === 'payment.failed' || eventType === 'payment.cancelled') {
-      await onPaymentTerminal(env, verified.id, evt, 'failed')
-    } else if (eventType === 'refund.succeeded') {
-      await onPaymentTerminal(env, verified.id, evt, 'refunded')
+    if (eventType.startsWith('subscription.')) {
+      // The only crediting/entitlement path now: upsert the subscription and
+      // denormalize entitlement onto profiles (idempotent on webhook-id).
+      await onSubscriptionEvent(env, verified.id, evt)
     } else if (
       eventType === 'dispute.opened' ||
       eventType === 'dispute.lost' ||
@@ -287,7 +387,10 @@ async function handleDodoWebhook(req: Request, env: PaymentsEnv): Promise<Respon
       // v1: log + alert manually. v2 will freeze the account on dispute.opened.
       console.warn('[webhook:dodo] dispute event:', eventType, 'payment_id:', evt.data?.payment_id)
     } else {
-      console.log('[webhook:dodo] unhandled event type:', eventType)
+      // Renewal payment.* events, refunds, and anything else: no crediting.
+      // Entitlement is driven entirely by subscription.* events, so we just
+      // ACK these to keep Dodo from retrying.
+      console.log('[webhook:dodo] non-subscription event acked:', eventType)
     }
   } catch (e) {
     // Persistence error → 500. Dodo will retry. This is the right behavior
@@ -305,58 +408,36 @@ function ack(): Response {
   return json({ ok: true })
 }
 
-/** Credit a user's wallet for a successful payment. Idempotent on webhook-id. */
-async function onPaymentSucceeded(env: PaymentsEnv, eventId: string, evt: DodoEvent): Promise<void> {
+/**
+ * Process a Dodo subscription.* event: upsert the subscription row and
+ * denormalize entitlement onto profiles. Idempotent on webhook-id (the RPC
+ * dedupes via processed_events). This is the only path that grants/revokes
+ * access now that crediting is gone.
+ */
+async function onSubscriptionEvent(env: PaymentsEnv, eventId: string, evt: DodoEvent): Promise<void> {
   const d = evt.data ?? {}
   const userId = d.metadata?.user_id
-  const creditCentsRaw = d.metadata?.credit_cents
-  const paymentId = d.payment_id
-  const currency = (d.currency ?? 'usd').toLowerCase()
+  const subscriptionId = d.subscription_id
+  const productId = d.product_id
 
-  if (!userId || !paymentId) {
-    console.warn('[webhook:dodo] payment.succeeded missing user_id or payment_id; event:', eventId)
-    return
-  }
-  const creditCents = Number(creditCentsRaw)
-  if (!Number.isFinite(creditCents) || creditCents <= 0) {
+  if (!userId || !subscriptionId || !productId) {
     console.warn(
-      '[webhook:dodo] payment.succeeded bad credit_cents metadata; event:', eventId,
-      'value:', creditCentsRaw,
+      '[webhook:dodo] subscription event missing user_id/subscription_id/product_id; event:', eventId,
     )
     return
   }
 
-  const result = await rpc<Array<{ topup_id: string; new_balance: number; is_duplicate: boolean }>>(
-    env,
-    'process_topup_webhook',
-    {
-      p_event_id: eventId,
-      p_payment_id: paymentId,
-      p_user_id: userId,
-      p_amount_cents: creditCents,
-      p_currency: currency,
-      p_raw: evt,
-    },
-  )
-  if (!result || result.length === 0) {
-    throw new Error('process_topup_webhook returned empty')
-  }
-  const { is_duplicate, new_balance } = result[0]
-
-  if (is_duplicate) {
-    console.log('[webhook:dodo] duplicate payment.succeeded ack; event:', eventId)
-    return
-  }
-
-  // Update the KV cache so the next pipeline call sees the fresh balance
-  // without a Supabase round-trip. Non-critical: cache TTL would catch up
-  // within an hour anyway, but doing it here means the user's next
-  // dictation after top-up shows the new balance instantly.
-  try {
-    await setBalance(env.USER_BALANCE, userId, new_balance)
-  } catch (e) {
-    console.warn('[webhook:dodo] KV cache update failed (will reconcile via TTL):', (e as Error).message)
-  }
+  await rpc(env, 'process_subscription_event', {
+    p_event_id: eventId,
+    p_subscription_id: subscriptionId,
+    p_customer_id: d.customer?.customer_id ?? null,
+    p_user_id: userId,
+    p_plan: productIdToPlan(env, productId),
+    p_interval: productIdToInterval(env, productId),
+    p_status: d.status,
+    p_period_end: d.next_billing_date ?? null,
+    p_product_id: productId,
+  })
 }
 
 // ─── GET /v1/payment/:id ────────────────────────────────────────
@@ -403,35 +484,6 @@ async function handlePaymentLookup(
   })
 }
 
-/** Record a failed/refunded payment for audit. Does NOT touch balance. */
-async function onPaymentTerminal(
-  env: PaymentsEnv,
-  eventId: string,
-  evt: DodoEvent,
-  status: 'failed' | 'refunded',
-): Promise<void> {
-  const d = evt.data ?? {}
-  const userId = d.metadata?.user_id
-  const creditCents = Number(d.metadata?.credit_cents ?? d.total_amount ?? 0)
-  const paymentId = d.payment_id
-  const currency = (d.currency ?? 'usd').toLowerCase()
-
-  if (!userId || !paymentId) {
-    console.warn('[webhook:dodo]', status, 'missing user_id or payment_id; event:', eventId)
-    return
-  }
-
-  await rpc(env, 'process_topup_terminal', {
-    p_event_id: eventId,
-    p_payment_id: paymentId,
-    p_user_id: userId,
-    p_amount_cents: creditCents,
-    p_currency: currency,
-    p_status: status,
-    p_raw: evt,
-  })
-}
-
 // ─── Ledger view ────────────────────────────────────────────────
 
 interface LedgerRow {
@@ -456,6 +508,3 @@ async function handleLedger(env: PaymentsEnv, userId: string): Promise<Response>
   const rows = (await res.json()) as LedgerRow[]
   return json({ ok: true, data: rows })
 }
-
-// Stub so TS doesn't drop the import as unused
-void rpc

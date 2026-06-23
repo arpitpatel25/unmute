@@ -25,10 +25,10 @@ export interface PaymentsEnv {
   //   live → https://live.dodopayments.com
   DODO_API_BASE: string
 
-  // JSON map of top-up cents → Dodo product_id.
-  //   e.g. '{"1000":"prod_topup_10","2500":"prod_topup_25","5000":"prod_topup_50"}'
+  // JSON map of "<plan>:<interval>" → recurring Dodo product_id.
+  //   e.g. '{"dictation:month":"pdt_...","unmute:year":"pdt_..."}'
   // Products are created out-of-band in the Dodo dashboard.
-  DODO_TOPUP_PRODUCTS: string
+  DODO_SUBSCRIPTION_PRODUCTS: string
 
   // Base URL for the return-page bounce (rendered by this worker).
   //   e.g. https://api.unmute.app  (then /checkout/return is appended)
