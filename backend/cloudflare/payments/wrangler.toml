@@ -21,6 +21,8 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 DODO_API_BASE = "https://live.dodopayments.com"
 PUBLIC_API_BASE = "https://unmute-payments.zodpatel.workers.dev"
+# LIVE product IDs — filled at cutover once the live (not test) recurring
+# products are created in the Dodo dashboard.
 DODO_SUBSCRIPTION_PRODUCTS = '{"dictation:month":"REPLACE_dict_m","dictation:year":"REPLACE_dict_y","unmute:month":"REPLACE_unmute_m","unmute:year":"REPLACE_unmute_y"}'
 
 [[kv_namespaces]]
@@ -28,4 +30,22 @@ binding = "USER_BALANCE"
 id = "e7daf8475bd547679f96d0b3ca561519"
 
 [observability]
+enabled = true
+
+# ── Test-mode env (verification before go-live) ────────────────────────
+# Deploy with:  wrangler deploy --env test   (worker name: unmute-payments-test)
+# Set test secrets with:  wrangler secret put <NAME> --env test
+#   DODO_API_KEY (test_mode key), DODO_WEBHOOK_SECRET (test webhook secret),
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+# Real TEST-mode product IDs (created 2026-06-23):
+[env.test.vars]
+DODO_API_BASE = "https://test.dodopayments.com"
+PUBLIC_API_BASE = "https://unmute-payments-test.zodpatel.workers.dev"
+DODO_SUBSCRIPTION_PRODUCTS = '{"dictation:month":"pdt_0NhfW2cRjmjUelf9T0Oet","dictation:year":"pdt_0NhfWCxGhFPQZ6vdGpxjs","unmute:month":"pdt_0NhfWJGMJiWXrRp09Xi9T","unmute:year":"pdt_0NhfWPEja2UuYeClGsCb1"}'
+
+[[env.test.kv_namespaces]]
+binding = "USER_BALANCE"
+id = "e7daf8475bd547679f96d0b3ca561519"
+
+[env.test.observability]
 enabled = true
