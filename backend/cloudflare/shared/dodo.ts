@@ -159,7 +159,12 @@ export async function changePlan(
     quantity,
     proration_billing_mode: prorationMode,
     effective_at: 'immediately',
-    on_payment_failure: 'prevent_change',
+    // apply_change: flip the plan to Unmute IMMEDIATELY and settle the prorated
+    // charge in the background (UPI auto-debit is async / slow). If that charge
+    // ultimately fails, Dodo fires subscription.on_hold → our webhook revokes
+    // access. This is the standard optimistic-upgrade UX; the alternative
+    // (prevent_change) leaves the upgrade hanging until the slow UPI charge clears.
+    on_payment_failure: 'apply_change',
   }
 
   const res = await fetchImpl(
