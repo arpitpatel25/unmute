@@ -67,6 +67,16 @@ export class UpstreamError extends Error {
 export class NetworkError extends Error {
   constructor() { super('NETWORK_ERROR') }
 }
+// Entitlement gates from the pipeline (402 vs 403). Both are fallback-worthy in
+// auto mode, but they carry distinct prompts to the UI:
+//   SubscriptionInactiveError → no active sub → "Subscribe to use Unmute"
+//   UpgradeRequiredError       → active but not the unmute plan → "Upgrade for Remote"
+export class SubscriptionInactiveError extends Error {
+  constructor(public subscribeUrl?: string) { super('SUBSCRIPTION_INACTIVE') }
+}
+export class UpgradeRequiredError extends Error {
+  constructor(public subscribeUrl?: string) { super('UPGRADE_REQUIRED') }
+}
 
 // ─── Pure picker — testable, no side effects ───────────────────
 
@@ -213,6 +223,8 @@ function shouldFallback(provider: Provider, e: Error): boolean {
   if (provider === 'managed') {
     return (
       e instanceof InsufficientBalanceError ||
+      e instanceof SubscriptionInactiveError ||
+      e instanceof UpgradeRequiredError ||
       e instanceof RateLimitedError ||
       e instanceof UpstreamError ||
       e instanceof NetworkError

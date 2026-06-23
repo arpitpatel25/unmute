@@ -254,6 +254,37 @@ async function handleSubscriptionCheckout(
     )
   }
 
+  // Double-subscribe guard: if the caller already has an active subscription,
+  // creating a second Dodo checkout would charge them twice. Read their active
+  // sub from Supabase via PostgREST (same query handleChangePlan uses) and
+  // refuse with 409 { already_subscribed } so the UI can surface it gently.
+  try {
+    const subUrl =
+      `${env.SUPABASE_URL}/rest/v1/subscriptions` +
+      `?user_id=eq.${userId}&status=eq.active` +
+      `&select=dodo_subscription_id&order=updated_at.desc&limit=1`
+    const res = await fetch(subUrl, {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        Accept: 'application/json',
+      },
+    })
+    if (res.ok) {
+      const rows = (await res.json()) as Array<{ dodo_subscription_id: string | null }>
+      if (rows[0]?.dodo_subscription_id) {
+        return json({ ok: false, error: 'already_subscribed' }, 409)
+      }
+    } else {
+      // A read failure here shouldn't hard-block checkout — log and proceed.
+      // The worst case is a rare double-sub, which the portal can refund; a
+      // false 500 here would block a legitimate first subscription.
+      console.warn('[checkout:sub] active-sub guard read failed:', res.status)
+    }
+  } catch (e) {
+    console.warn('[checkout:sub] active-sub guard threw:', (e as Error).message)
+  }
+
   try {
     const session = await createSubscriptionCheckout({
       apiBase: env.DODO_API_BASE,

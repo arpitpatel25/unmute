@@ -46,8 +46,13 @@ function shouldFallThrough(): boolean {
   return mode === 'auto'
 }
 
-/** Notify the renderer that we fell back from managed → local. */
-function notifyFellBack(): void {
+/** Notify the renderer that we fell back from managed → local.
+ *  `reason` distinguishes the entitlement gate (Item 4):
+ *    'subscription_inactive' (402, no active sub) → renderer shows "Subscribe"
+ *    'upgrade_required'       (403, wrong plan)    → renderer shows "Upgrade for Remote"
+ *    'cloud_unreachable'      (5xx / network)      → generic subscribe prompt
+ *  The distinct upgrade case fires its own event so the banner copy can differ. */
+function notifyFellBack(reason: 'subscription_inactive' | 'upgrade_required' | 'cloud_unreachable' = 'cloud_unreachable'): void {
   if (fellBackThisSession) return
   fellBackThisSession = true
   // Reset for next session
@@ -55,9 +60,39 @@ function notifyFellBack(): void {
   try {
     const { BrowserWindow } = require('electron')
     for (const w of BrowserWindow.getAllWindows()) {
-      w.webContents.send('paywall:fell-back-to-local', 'https://unmute.app/subscribe')
+      if (reason === 'upgrade_required') {
+        w.webContents.send('paywall:upgrade-required', 'https://unmute.app/subscribe')
+      } else {
+        w.webContents.send('paywall:fell-back-to-local', 'https://unmute.app/subscribe')
+      }
     }
   } catch { /* ignore */ }
+}
+
+/** Item 5 (fair-use): a successful managed STT may carry the
+ *  `x-unmute-fair-use: notify` response header when the user is over the hidden
+ *  cap. Emit a one-time soft toast to the renderer. Best-effort & non-blocking —
+ *  this must NEVER affect the dictation success path. */
+let fairUseNotifiedAt = 0
+const FAIR_USE_COOLDOWN_MS = 60 * 60 * 1000
+function maybeNotifyFairUse(res: Response): void {
+  try {
+    if (res.headers.get('x-unmute-fair-use') !== 'notify') return
+    const now = Date.now()
+    if (now - fairUseNotifiedAt < FAIR_USE_COOLDOWN_MS) return
+    fairUseNotifiedAt = now
+    const { BrowserWindow } = require('electron')
+    for (const w of BrowserWindow.getAllWindows()) {
+      w.webContents.send('paywall:fair-use-notify')
+    }
+  } catch { /* best-effort */ }
+}
+
+/** Map a pipeline failure to the right fallback reason for notifyFellBack. */
+function fallbackReasonFor(status: number, code?: string): 'subscription_inactive' | 'upgrade_required' | 'cloud_unreachable' {
+  if (status === 402 || code === 'SUBSCRIPTION_INACTIVE') return 'subscription_inactive'
+  if (status === 403 || code === 'UPGRADE_REQUIRED') return 'upgrade_required'
+  return 'cloud_unreachable'
 }
 
 /**
@@ -168,13 +203,15 @@ export async function tryManagedSTT(
       )
       if (body.balance_cents !== undefined) updateBalanceFromResponse(body.balance_cents)
       if (shouldFallThrough()) {
-        notifyFellBack()
+        notifyFellBack(fallbackReasonFor(res.status, body.code))
         return null
       }
       throw new Error(`Managed STT failed: ${body.message || res.status}`)
     }
 
     if (body.balance_cents !== undefined) updateBalanceFromResponse(body.balance_cents)
+    // Item 5: soft fair-use heads-up on a successful call. Non-blocking.
+    maybeNotifyFairUse(res)
 
     // ─── Latency breakdown ───────────────────────────────────────
     // Total client-observed = network up + worker + network down
@@ -259,13 +296,14 @@ export async function tryManagedLLM(
       console.warn('[paywall-route] managed LLM failed:', res.status, body.code, body.message)
       if (body.balance_cents !== undefined) updateBalanceFromResponse(body.balance_cents)
       if (shouldFallThrough()) {
-        notifyFellBack()
+        notifyFellBack(fallbackReasonFor(res.status, body.code))
         return null
       }
       throw new Error(`Managed LLM failed: ${body.message || res.status}`)
     }
 
     if (body.balance_cents !== undefined) updateBalanceFromResponse(body.balance_cents)
+    maybeNotifyFairUse(res)
     return {
       text: body.data!.text,
       costCents: body.cost_cents ?? 0,

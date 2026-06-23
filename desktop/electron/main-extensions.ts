@@ -73,7 +73,7 @@ function localReason(state: ProviderState, mode: EngineMode): OnDeviceReason {
 
 export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
   // initPaywallGlue does most of the wiring: registerAuthIPC,
-  // registerBalanceIPC, registerSessionBridge (paywall:set-session — the
+  // registerSessionBridge (paywall:set-session — the
   // missing wire that left tryManagedSTT silently falling back to local),
   // the streaming POST IPC handlers (paywall:stream-open/chunk/close),
   // token refresh scheduler, HTTPS pre-warm, the keep-alive ping, balance

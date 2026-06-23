@@ -6,7 +6,7 @@
 import { app, ipcMain, BrowserWindow } from 'electron'
 import path from 'path'
 import { registerAuthIPC, setPendingDeepLink } from './auth-ipc'
-import { registerBalanceIPC, startBalancePolling } from './balance-ipc'
+import { startBalancePolling } from './balance-ipc'
 import Store from 'electron-store'
 import { paywallFetch, verifyKeepAlive, startPoolStatsSampling } from './paywall-net'
 
@@ -400,7 +400,6 @@ function registerSessionBridge() {
 
 export function initPaywallGlue(): void {
   registerAuthIPC()
-  registerBalanceIPC()
   registerSessionBridge()
 
   // Push the persisted instruction-enabled setting to the keyListener so

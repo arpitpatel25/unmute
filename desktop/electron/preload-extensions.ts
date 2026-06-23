@@ -41,6 +41,7 @@ export const paywallPreloadExtensions = {
   ): Promise<{
     ok: boolean
     checkoutUrl?: string
+    alreadySubscribed?: boolean
     code?: string
     message?: string
   }> => ipcRenderer.invoke('paywall:create-subscription', plan, interval),
@@ -101,15 +102,6 @@ export const paywallPreloadExtensions = {
   paywallSetLaunchAtLogin: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('paywall:set-launch-at-login', enabled),
 
-  // Balance state
-  paywallGetBalance: (): Promise<{ balanceCents: number; topUpUrl: string }> =>
-    ipcRenderer.invoke('paywall:get-balance'),
-  paywallRefreshBalance: (): Promise<{ balanceCents: number; topUpUrl: string }> =>
-    ipcRenderer.invoke('paywall:refresh-balance'),
-  paywallOnBalanceUpdated: (cb: (state: { balanceCents: number; topUpUrl: string }) => void) => {
-    ipcRenderer.on('paywall:balance-updated', (_e, state) => cb(state))
-  },
-
   // Engine mode + sign-in
   paywallGetEngineMode: (): Promise<'auto' | 'managed' | 'local'> =>
     ipcRenderer.invoke('paywall:get-engine-mode'),
@@ -166,9 +158,24 @@ export const paywallPreloadExtensions = {
   paywallPasteAuthUrl: (url: string): Promise<boolean> =>
     ipcRenderer.invoke('paywall:paste-auth-url', url),
 
-  // Fallback notification (managed → local because balance ran out)
-  paywallOnFellBackToLocal: (cb: (topUpUrl: string) => void) => {
+  // Fallback notification (managed → local because subscription inactive / cloud
+  // unreachable) — generic "subscribe" prompt.
+  paywallOnFellBackToLocal: (cb: (subscribeUrl: string) => void) => {
     ipcRenderer.on('paywall:fell-back-to-local', (_e, url) => cb(url))
+  },
+
+  // Item 4: distinct entitlement gate — the user HAS an active subscription but
+  // not the Unmute plan (403 UPGRADE_REQUIRED), so Remote/LLM is gated. The
+  // renderer shows an "Upgrade to Unmute for Remote" prompt, not "Subscribe".
+  paywallOnUpgradeRequired: (cb: (subscribeUrl: string) => void) => {
+    ipcRenderer.on('paywall:upgrade-required', (_e, url) => cb(url))
+  },
+
+  // Item 5: soft, dismissible fair-use heads-up. Fired (at most once per
+  // cooldown) on a successful managed STT/LLM when the user is over the hidden
+  // cap. Purely informational — their plan still covers them.
+  paywallOnFairUseNotify: (cb: () => void) => {
+    ipcRenderer.on('paywall:fair-use-notify', () => cb())
   },
 
   // Awareness widget — pre-call peek tells us which provider would route

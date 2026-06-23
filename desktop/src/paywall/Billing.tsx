@@ -86,6 +86,10 @@ export function Billing() {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const [portalNote, setPortalNote] = useState<string | null>(null)
   const [upgrading, setUpgrading] = useState(false)
+  // Item 1: in-card confirmation gate before the prorated Dictation→Unmute
+  // upgrade actually charges. Clicking "Upgrade to Unmute" flips this true and
+  // renders an inline confirm panel; only "Confirm upgrade" runs upgrade().
+  const [confirmingUpgrade, setConfirmingUpgrade] = useState(false)
 
   // Refresh subscription status on mount, and again when a checkout lands.
   useEffect(() => {
@@ -114,6 +118,15 @@ export function Billing() {
     setPortalNote(null)
     setPhase({ kind: 'opening', plan })
     const result = await window.electronAPI.paywallCreateSubscription?.(plan, billingInterval)
+    // Item 2: the user already has an active subscription — the worker refused
+    // to mint a second checkout (409). Don't open checkout; refresh status (so
+    // the card flips to the ACTIVE view) and note why.
+    if (result?.alreadySubscribed) {
+      setPhase({ kind: 'idle' })
+      setPortalNote('You already have an active subscription.')
+      await refresh()
+      return
+    }
     if (!result?.ok || !result.checkoutUrl) {
       setPhase({
         kind: 'error',
@@ -155,6 +168,7 @@ export function Billing() {
       return
     }
     setPortalNote(null)
+    setConfirmingUpgrade(false)
     setUpgrading(true)
     try {
       const result = await window.electronAPI.paywallChangePlan?.()
@@ -278,31 +292,77 @@ export function Billing() {
               : 'Fast, accurate cloud dictation everywhere. Cloud dictation is on.'}
           </p>
 
-          {/* Dictation subscribers get a prorated upgrade path (via portal) */}
+          {/* Dictation subscribers get a prorated in-app upgrade path. */}
           {sub.plan === 'dictation' && (
             <div className="mt-4 rounded-xl border border-border bg-white/60 p-3">
               <p className="text-[12px] font-semibold text-ink">Want Remote too?</p>
               <p className="text-[11px] text-ink-60 mt-0.5 leading-snug">
                 Upgrade to <span className="font-semibold">Unmute</span> to voice-control your Claude
-                Code. You only pay the prorated difference — handled in the billing portal.
+                Code. You only pay the prorated difference — no second subscription.
               </p>
-              <button
-                onClick={upgrade}
-                disabled={busy || upgrading}
-                className="mt-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-ink text-white hover:opacity-90 disabled:opacity-50"
-              >
-                {upgrading ? 'Upgrading…' : 'Upgrade to Unmute →'}
-              </button>
+
+              {confirmingUpgrade ? (
+                /* Item 1: explicit confirmation step — no accidental charges. */
+                <div className="mt-3 rounded-lg border border-ink/30 bg-cream-mid/50 p-3">
+                  <p className="text-[12px] font-bold text-ink">Upgrade to Unmute?</p>
+                  <p className="text-[11px] text-ink-60 mt-1 leading-snug">
+                    You'll be charged the prorated difference now (about $3 — the gap to $8.99/mo),
+                    and your plan switches to Unmute immediately. If you pay by UPI, the charge
+                    settles in the background over ~24h.
+                  </p>
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <button
+                      onClick={upgrade}
+                      disabled={busy || upgrading}
+                      className="px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-ink text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      {upgrading ? 'Upgrading…' : 'Confirm upgrade'}
+                    </button>
+                    <button
+                      onClick={() => setConfirmingUpgrade(false)}
+                      disabled={upgrading}
+                      className="px-3 py-1.5 rounded-lg text-[12px] font-semibold border border-border text-ink hover:bg-cream-mid disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setPortalNote(null)
+                    setConfirmingUpgrade(true)
+                  }}
+                  disabled={busy || upgrading}
+                  className="mt-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-ink text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {upgrading ? 'Upgrading…' : 'Upgrade to Unmute →'}
+                </button>
+              )}
             </div>
           )}
 
-          <div className="mt-3">
-            <button
-              onClick={openPortal}
-              className="text-[11px] text-ink-60 hover:text-ink underline underline-offset-2"
-            >
-              Manage subscription
-            </button>
+          {/* Item 3: prominent cancel / manage. Both open the Dodo portal —
+              Dodo hosts the cancel + payment-method flows. */}
+          <div className="mt-4 pt-3 border-t border-border">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={openPortal}
+                className="px-3 py-1.5 rounded-lg text-[12px] font-semibold border border-warm/40 text-warm hover:bg-warm/10"
+              >
+                Cancel subscription
+              </button>
+              <button
+                onClick={openPortal}
+                className="text-[11px] text-ink-60 hover:text-ink underline underline-offset-2"
+              >
+                Manage billing
+              </button>
+            </div>
+            <p className="text-[10px] text-ink-35 mt-2 leading-snug">
+              Cancel or manage anytime — you keep access until the end of your billing period. UPI
+              users can also revoke the AutoPay mandate in their UPI app.
+            </p>
             {portalNote && <p className="text-[11px] text-ink-35 mt-1.5">{portalNote}</p>}
           </div>
         </div>

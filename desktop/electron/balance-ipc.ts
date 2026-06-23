@@ -1,38 +1,34 @@
 // Balance state in the main process.
-// Polls /v1/me periodically when signed in, broadcasts to all renderers.
+//
+// NOTE (subscription migration): pay-per-use balance is no longer surfaced in
+// the UI — provider-router gates on subActive and BalancePill reads the
+// subscription status, not a cents balance. The renderer-facing balance
+// plumbing (paywall:get-balance / paywall:refresh-balance / the
+// paywall:balance-updated broadcast) was removed as dead code.
+//
+// What remains is the lightweight /v1/me poll: it keeps the cached cents value
+// fresh for any future internal use and, importantly, doubles as a periodic
+// authenticated ping. The cached value is also updated inline from successful
+// managed responses via updateBalanceFromResponse (cheaper than waiting for the
+// next poll). Nothing broadcasts to the renderer anymore.
 
-import { ipcMain, BrowserWindow } from 'electron'
 import { fetchMe } from './managed-client'
 
 const POLL_INTERVAL_MS = 60_000 // 1 minute when active
 let pollTimer: NodeJS.Timeout | null = null
 let currentBalanceCents = 0
-let topUpUrl = ''
 let getTokenFn: (() => Promise<string | null>) | null = null
-
-function broadcast(): void {
-  for (const w of BrowserWindow.getAllWindows()) {
-    w.webContents.send('paywall:balance-updated', {
-      balanceCents: currentBalanceCents,
-      topUpUrl,
-    })
-  }
-}
 
 async function poll(): Promise<void> {
   if (!getTokenFn) return
   const token = await getTokenFn()
   if (!token) {
     currentBalanceCents = 0
-    topUpUrl = ''
-    broadcast()
     return
   }
   const me = await fetchMe(token)
   if (me) {
     currentBalanceCents = me.balanceCents
-    topUpUrl = me.topUpUrl
-    broadcast()
   }
 }
 
@@ -56,25 +52,11 @@ export function stopBalancePolling(): void {
     pollTimer = null
   }
   currentBalanceCents = 0
-  topUpUrl = ''
   getTokenFn = null
-  broadcast()
 }
 
 /** Updated after every successful managed call — the response carries the
  *  fresh balance so we don't need to wait for the next poll. */
 export function updateBalanceFromResponse(balanceCents: number): void {
   currentBalanceCents = balanceCents
-  broadcast()
-}
-
-export function registerBalanceIPC(): void {
-  ipcMain.handle('paywall:get-balance', () => ({
-    balanceCents: currentBalanceCents,
-    topUpUrl,
-  }))
-  ipcMain.handle('paywall:refresh-balance', async () => {
-    await poll()
-    return { balanceCents: currentBalanceCents, topUpUrl }
-  })
 }

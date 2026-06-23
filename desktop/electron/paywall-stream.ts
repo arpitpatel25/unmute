@@ -25,6 +25,24 @@ import { getPaywallAccessToken, getPaywallEngineMode, getSTTLanguageForRequest, 
 import { updateBalanceFromResponse } from './balance-ipc'
 import { paywallFetch } from './paywall-net'
 
+/** Item 5 (fair-use): one-time soft toast when a successful streamed STT carries
+ *  the `x-unmute-fair-use: notify` header. Best-effort & non-blocking — must
+ *  never affect the dictation success path. */
+let fairUseNotifiedAt = 0
+const FAIR_USE_COOLDOWN_MS = 60 * 60 * 1000
+function maybeNotifyFairUse(res: Response): void {
+  try {
+    if (res.headers.get('x-unmute-fair-use') !== 'notify') return
+    const now = Date.now()
+    if (now - fairUseNotifiedAt < FAIR_USE_COOLDOWN_MS) return
+    fairUseNotifiedAt = now
+    const { BrowserWindow } = require('electron')
+    for (const w of BrowserWindow.getAllWindows()) {
+      w.webContents.send('paywall:fair-use-notify')
+    }
+  } catch { /* best-effort */ }
+}
+
 interface StreamSession {
   chunkIndex: number
   controller: ReadableStreamDefaultController<Uint8Array>
@@ -259,6 +277,9 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
     }
 
     if (body.balance_cents !== undefined) updateBalanceFromResponse(body.balance_cents)
+    // Item 5 (fair-use): soft, one-time heads-up on a successful streamed chunk
+    // when the pipeline flags the user over the hidden cap. Non-blocking.
+    maybeNotifyFairUse(res)
 
     const tDone = tBodyParsed
     const totalElapsed = tDone - session.tOpenedAt

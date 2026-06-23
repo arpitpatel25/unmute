@@ -15,6 +15,8 @@ import {
   RateLimitedError,
   UpstreamError,
   NetworkError,
+  SubscriptionInactiveError,
+  UpgradeRequiredError,
 } from './provider-router'
 
 // Substituted by the build script. Examples:
@@ -30,6 +32,27 @@ interface PipelineEnvelope<T> {
   code?: string
   message?: string
   top_up_url?: string
+  subscribe_url?: string
+}
+
+/** Item 5 (fair-use): one-time soft toast signal to the renderer. Fired at most
+ *  once per cooldown window so a power user isn't spammed. Best-effort and
+ *  silent — must never affect the STT/LLM success path. */
+let fairUseNotifiedAt = 0
+const FAIR_USE_COOLDOWN_MS = 60 * 60 * 1000 // at most once an hour
+function notifyFairUse(): void {
+  try {
+    const now = Date.now()
+    if (now - fairUseNotifiedAt < FAIR_USE_COOLDOWN_MS) return
+    fairUseNotifiedAt = now
+    // Lazy require so this module stays importable in non-electron test contexts.
+    const { BrowserWindow } = require('electron') as typeof import('electron')
+    for (const w of BrowserWindow.getAllWindows()) {
+      w.webContents.send('paywall:fair-use-notify')
+    }
+  } catch {
+    /* best-effort — never block the call path */
+  }
 }
 
 async function callPipeline<T>(
@@ -50,6 +73,15 @@ async function callPipeline<T>(
     throw new NetworkError()
   }
 
+  // Item 5 (fair-use): on a SUCCESSFUL managed call the pipeline may set
+  // `x-unmute-fair-use: notify` when the user is over the hidden cap. Read it
+  // BEFORE parsing the body so a body-parse failure can't swallow it, and emit
+  // a soft, one-time renderer toast. NEVER block or throw on this — it's purely
+  // informational, so any failure here is swallowed.
+  if (res.ok && res.headers.get('x-unmute-fair-use') === 'notify') {
+    notifyFairUse()
+  }
+
   let body: PipelineEnvelope<T>
   try {
     body = (await res.json()) as PipelineEnvelope<T>
@@ -57,11 +89,17 @@ async function callPipeline<T>(
     throw new UpstreamError(res.status)
   }
 
-  // TODO(fair-use): the pipeline may set `x-unmute-fair-use: notify` on the
-  // response (res.headers.get('x-unmute-fair-use')). Surfacing it as a soft,
-  // dismissible renderer toast needs new main→renderer header plumbing that
-  // doesn't exist yet, so it's intentionally skipped here to keep scope tight.
   if (!res.ok || !body.ok) {
+    // Item 4: distinguish the two entitlement gates so the UI can show the
+    // right prompt (subscribe vs upgrade) rather than a generic error.
+    //   402 SUBSCRIPTION_INACTIVE → no active sub → "Subscribe to use Unmute"
+    //   403 UPGRADE_REQUIRED      → active but wrong plan → "Upgrade for Remote"
+    if (res.status === 402 || body.code === 'SUBSCRIPTION_INACTIVE') {
+      throw new SubscriptionInactiveError(body.subscribe_url ?? body.top_up_url)
+    }
+    if (res.status === 403 || body.code === 'UPGRADE_REQUIRED') {
+      throw new UpgradeRequiredError(body.subscribe_url ?? body.top_up_url)
+    }
     if (body.code === 'INSUFFICIENT_BALANCE') {
       throw new InsufficientBalanceError(body.balance_cents ?? 0)
     }

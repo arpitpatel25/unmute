@@ -60,6 +60,7 @@ export type SubscriptionInterval = 'month' | 'year'
 export interface CreateSubscriptionResult {
   ok: boolean
   checkoutUrl?: string
+  alreadySubscribed?: boolean
   code?: string
   message?: string
 }
@@ -78,6 +79,13 @@ export async function createSubscriptionCheckout(
     },
     token,
   )
+  // Worker returns 409 { error: 'already_subscribed' } when the caller already
+  // has an active subscription — creating a second checkout would double-charge.
+  // Surface as a friendly flag so the UI can refresh + note rather than open
+  // a duplicate checkout.
+  if (env.status === 409 || env.error === 'already_subscribed') {
+    return { ok: false, alreadySubscribed: true, code: env.code, message: env.message ?? env.error }
+  }
   return {
     ok: !!env.ok,
     checkoutUrl: env.checkoutUrl ?? env.checkout_url,
