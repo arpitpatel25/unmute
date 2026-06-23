@@ -91,6 +91,13 @@ export interface TaskManagerOpts {
    *  submitting a multi-line payload (proven: a manual Enter unsticks it), so we
    *  always send a second Enter once the input has settled. Default 450. */
   submitConfirmMs?: number
+  /** ms after dispatch to verify the prompt actually submitted (via the
+   *  UserPromptSubmit hook touching .unmute-activity). If no submit is seen by
+   *  then, the payload was swallowed (e.g. REPL tipped into reverse-search while
+   *  painting) — we Esc-clear and re-inject. Default 7000. */
+  verifyAfterMs?: number
+  /** Max times to re-inject a dispatch that never submitted. Default 2. */
+  maxReinjects?: number
   /** Keep a session WARM this long after it reaches done/failed, so a follow-up
    *  ("now reply to #2") can continue it with full context (minimal continuation).
    *  After this idle window with no follow-up, the session is hard-killed.
@@ -162,6 +169,8 @@ export class TaskManager extends EventEmitter {
       staleMs: opts.staleMs ?? 4 * 60_000,
       trustAcceptMs: opts.trustAcceptMs ?? 2000,
       submitConfirmMs: opts.submitConfirmMs ?? 450,
+      verifyAfterMs: opts.verifyAfterMs ?? 7000,
+      maxReinjects: opts.maxReinjects ?? 2,
       warmMs: opts.warmMs ?? 15 * 60_000,
       detachGraceMs: opts.detachGraceMs ?? 1500,
       purgeAgeMs: opts.purgeAgeMs ?? 24 * 60 * 60_000, // 24h — "gone by end of day"
@@ -259,6 +268,7 @@ export class TaskManager extends EventEmitter {
       tlog.event('folder-trust-accepted', {})
 
       const payload = buildDispatch({ intent, statusPath, recipeScratchPath })
+      const dispatchedAt = Date.now()
       ex.writeStdin(payload)
       tlog.event('task-dispatched', {})
 
@@ -274,11 +284,56 @@ export class TaskManager extends EventEmitter {
       }
 
       this.startPolling(id)
+      // Verify the prompt ACTUALLY submitted, and self-heal if not. The
+      // multi-line payload can get swallowed if it lands while the REPL is still
+      // painting — Claude's TUI mis-reads the embedded newlines and tips into
+      // reverse-search ("(search up)"), so the task sits at 0s forever with an
+      // empty prompt. We detect this via the UserPromptSubmit hook (it touches
+      // .unmute-activity ONLY on a real submit); if no such activity appears, we
+      // press Esc to clear any stuck search/input mode and re-inject. Background,
+      // fire-and-forget — adds ZERO latency to the happy path.
+      void this.verifyDispatch(id, ex, payload, dir, dispatchedAt)
     } catch (e) {
       tlog.error('dispatch failed before polling', { error: (e as Error).message })
       this.transition(id, 'failed', { error: { reason: 'Could not start the task', detail: (e as Error).message } })
     }
     return id
+  }
+
+  /** Verify the dispatched prompt actually SUBMITTED; self-heal if it didn't.
+   *  Signal: the UserPromptSubmit hook touches .unmute-activity ONLY on a real
+   *  submit, so hookActivityMs() returning null/old after dispatch means the
+   *  payload was swallowed (e.g. the REPL tipped into reverse-search while still
+   *  painting — the task then sits at 0s forever). We press Esc to clear any
+   *  stuck search/input mode, then re-inject. Bounded retries; only ever fires
+   *  on a genuinely-unsubmitted prompt, so it can't double-dispatch a live one. */
+  private async verifyDispatch(
+    id: string,
+    ex: AgentExecutor,
+    payload: string,
+    dir: string,
+    dispatchedAt: number,
+  ): Promise<void> {
+    const tlog = log.child({ taskId: id })
+    for (let attempt = 1; attempt <= this.opts.maxReinjects; attempt++) {
+      await new Promise((r) => setTimeout(r, this.opts.verifyAfterMs))
+      const task = this.tasks.get(id)
+      // Stop if the task is gone, the PTY died, or it already finished.
+      if (!task || !ex.alive || task.state === 'done' || task.state === 'failed') return
+      const activity = await hookActivityMs(dir)
+      // A UserPromptSubmit at/after our dispatch = the prompt submitted → done.
+      // (1s slack absorbs clock/mtime granularity.)
+      if (activity !== null && activity >= dispatchedAt - 1000) return
+      // Never submitted → clear any stuck reverse-search / partial input, re-inject.
+      tlog.warn('dispatch not confirmed (no submit) — clearing input and re-injecting', { attempt })
+      ex.write('\x1b') // Esc — exit reverse-search / clear the input line
+      await new Promise((r) => setTimeout(r, 200))
+      if (!ex.alive) return
+      ex.writeStdin(payload)
+      await new Promise((r) => setTimeout(r, this.opts.submitConfirmMs))
+      if (ex.alive) ex.write('\r')
+      tlog.event('dispatch-reinjected', { attempt })
+    }
   }
 
   /** Poll the status file + run the staleness backstop until terminal. */
