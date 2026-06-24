@@ -72,12 +72,14 @@ function RemoteBadge() {
           justifyContent: 'center',
         }}
       >
-        {/* boxed terminal >_ glyph */}
+        {/* remote-control glyph: body + power button + button rows */}
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-          stroke={GLYPH_COLOR} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
-          <polyline points="7 9.5 10 12 7 14.5" />
-          <line x1="12.5" y1="14.5" x2="16" y2="14.5" />
+          stroke={GLYPH_COLOR} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="8" y="2.5" width="8" height="19" rx="3" />
+          <circle cx="12" cy="6.5" r="1.25" fill={GLYPH_COLOR} stroke="none" />
+          <line x1="10.5" y1="11" x2="13.5" y2="11" />
+          <line x1="10.5" y1="14" x2="13.5" y2="14" />
+          <line x1="10.5" y1="17" x2="13.5" y2="17" />
         </svg>
       </div>
     </div>
