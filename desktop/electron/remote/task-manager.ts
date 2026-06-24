@@ -104,8 +104,8 @@ export interface TaskManagerOpts {
    *  Default 15 min; 0 = kill immediately on done (pure one-shot). The window
    *  resets on every follow-up, so an actively-continued thread stays alive. */
   warmMs?: number
-  /** ms to wait after asking a fire-and-forget (consume/navigate) session to QUIT
-   *  cleanly — so claude-in-chrome disconnects from the tab and the extension
+  /** ms to wait after asking a fire-and-forget (consume/watch/navigate) session
+   *  to QUIT cleanly — so claude-in-chrome disconnects from the tab and the extension
    *  "glow" clears — before hard-killing as a backstop. Default 1500. */
   detachGraceMs?: number
   /** Recipe librarian (PRD §9). When set, a 'done' task that proposed a recipe
@@ -461,13 +461,14 @@ export class TaskManager extends EventEmitter {
             transcript: cleanTranscriptTail(this.outputBuffers.get(task.id) ?? ''),
           }).catch((e) => tlog.error('librarian submit failed', { error: (e as Error).message }))
         }
-        // Lifecycle by category (DECIDED): consume/navigate are fire-and-forget
-        // — DETACH now (quit the session cleanly so the Claude-in-Chrome "glow"
-        // clears on the tab you're just watching/reading), and don't hold a
-        // session. info/act (and unknown) keep a warm window for a follow-up
-        // ("now reply to #2", "what about his assists") — extension stays
-        // attached so the user can continue acting in Sheets/Docs/Gmail.
-        if (task.category === 'consume' || task.category === 'navigate') {
+        // Lifecycle by category (DECIDED): consume/watch/navigate are
+        // fire-and-forget — DETACH now (quit the session cleanly so the
+        // Claude-in-Chrome "glow" clears on the tab you're just
+        // watching/reading), and don't hold a session. info/act (and unknown)
+        // keep a warm window for a follow-up ("now reply to #2", "what about
+        // his assists") — extension stays attached so the user can continue
+        // acting in Sheets/Docs/Gmail.
+        if (task.category === 'consume' || task.category === 'watch' || task.category === 'navigate') {
           this.detachAndKill(id)
         } else {
           this.parkWarm(id)
@@ -889,7 +890,7 @@ export class TaskManager extends EventEmitter {
     log.child({ taskId: id }).event('task-finished', { state: this.tasks.get(id)?.state })
   }
 
-  /** Fire-and-forget cleanup for consume/navigate: ask the REPL to QUIT cleanly
+  /** Fire-and-forget cleanup for consume/watch/navigate: ask the REPL to QUIT cleanly
    *  first, so claude-in-chrome disconnects from the tab it was driving and the
    *  extension "glow" clears (an abrupt SIGHUP never disconnects, so the glow
    *  lingers). The tab keeps playing/displaying; control is re-acquired by a

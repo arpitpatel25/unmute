@@ -30,10 +30,13 @@ export type TaskState = 'processing' | 'needs-user' | 'done' | 'failed' // PRD �
 // lifecycle (DECIDED). The executor knows best — it's the one doing the work.
 //   info     — a fetch/answer; the deliverable is TEXT → show the full `detail`.
 //   navigate — open/land the user on something (page, tab, app) → focus it.
-//   consume  — start media to watch/listen (video, podcast) → kill on done so
-//              the browser-extension glow clears; the tab keeps playing.
+//   watch    — start VIDEO the user wants to watch (YouTube, Netflix, an OTT
+//              show) → focus the tab so they land on it, then detach glow-free;
+//              the tab keeps playing.
+//   consume  — start AUDIO to listen to in the background (music, podcast) →
+//              detach glow-free WITHOUT stealing focus; the tab keeps playing.
 //   act      — an action/edit with a side effect → keep warm for a follow-up.
-export type TaskCategory = 'info' | 'navigate' | 'consume' | 'act'
+export type TaskCategory = 'info' | 'navigate' | 'watch' | 'consume' | 'act'
 
 export interface TaskResult {
   summary: string

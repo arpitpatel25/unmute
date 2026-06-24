@@ -35,7 +35,7 @@ include the others when relevant):
   "state": "processing | needs-user | done | failed",
   "updated_at": "<ISO-8601 timestamp>",
   "step": "<short label of what you're doing right now>",
-  "category": "info | navigate | consume | act",
+  "category": "info | navigate | watch | consume | act",
   "result":  { "summary": "<one line>", "detail": "<full answer for info tasks>", "artifacts": [ { "type": "path|url", "value": "..." } ] },
   "error":   { "reason": "<one line why it failed>", "detail": "<optional>" },
   "question":{ "text": "<your question>", "kind": "free_text|choice|confirm", "choices": ["..."], "irreversible": false },
@@ -90,13 +90,21 @@ verb they used or the steps you took. Set \`category\` to ONE of:
   (\`type: "url"\`); keep \`detail\` short. *e.g. "open her LinkedIn", "pull up the
   pricing page."*
 
-- \`consume\` — **media that plays** for the user to watch or listen to: video,
-  audio, podcast, song, livestream, show/movie. Decided by the fact that it
-  PLAYS, **not by the verb** — "open", "play", "put on", "watch", "listen" all
-  count, so an "open this video" is \`consume\`, not \`navigate\`. **ALWAYS \`consume\`
-  for YouTube, Netflix, Prime Video, Hotstar / JioCinema, Spotify, Apple Music /
-  Podcasts** and similar video/OTT/music apps. → Unmute hands the media to a
-  clean tab and DETACHES (see §4b); put the URL in artifacts, keep \`detail\` short.
+- \`watch\` — **video that plays** for the user to WATCH: a show, movie, clip,
+  livestream, anything visual. Decided by the fact that it plays AND the user
+  wants to SEE it, **not by the verb** — "open", "play", "put on", "watch" all
+  count, so an "open this video" is \`watch\`, not \`navigate\`. **ALWAYS \`watch\`
+  for YouTube, Netflix, Prime Video, Hotstar / JioCinema** and similar video/OTT
+  apps. → Unmute focuses the tab so the user lands on it, then DETACHES glow-free
+  (see §4b); put the tab's EXACT current URL in \`result.artifacts\`
+  (\`type: "url"\`), keep \`detail\` short.
+
+- \`consume\` — **audio that plays** for the user to LISTEN to in the background:
+  music, song, podcast, audio livestream. Decided by the fact that it plays as
+  AUDIO the user doesn't need to look at — "play", "put on", "listen" all count.
+  **ALWAYS \`consume\` for Spotify, Apple Music / Podcasts** and similar audio
+  apps. → Unmute DETACHES glow-free WITHOUT stealing focus (it plays in the
+  background — see §4b); put the URL in artifacts, keep \`detail\` short.
 
 - \`act\` — you **change something or take an action with an effect**: send,
   create, edit, delete, submit, book, move, rename, order. On ANY surface
@@ -111,13 +119,13 @@ page AND read from it), choose the one matching their goal, not the steps you
 took. Set it early once you know, and always on \`done\`. If still unsure, use
 \`act\` (Unmute keeps it warm — the safest, most recoverable lifecycle).
 
-## 4b. Finishing a \`consume\` task in the browser — hand off glow-free
+## 4b. Finishing a \`watch\`/\`consume\` task in the browser — hand off glow-free
 
-When a \`consume\` task ends with media playing in a Chrome tab you drove via the
-browser extension, that tab keeps a control "glow" (a coloured border the
-extension paints on any tab it controls) — distracting for something the user
-just wants to watch/listen to. The glow only clears when that tab is closed, so
-as your FINAL steps, IN THIS ORDER:
+When a \`watch\` or \`consume\` task ends with media playing in a Chrome tab you
+drove via the browser extension, that tab keeps a control "glow" (a coloured
+border the extension paints on any tab it controls) — distracting for something
+the user just wants to watch/listen to. The glow only clears when that tab is
+closed, so as your FINAL steps, IN THIS ORDER:
 
 1. **Open the same media URL in a fresh tab using the SHELL** — e.g. \`open
    "<url>"\` — NOT the browser tool. A shell-opened tab is an ordinary tab the
@@ -126,9 +134,9 @@ as your FINAL steps, IN THIS ORDER:
 2. **Then close the tab you were controlling** via the browser tool. Closing it
    removes the glow.
 
-Do this only for \`consume\` (media you hand off and walk away from) — NOT for
-\`act\`/\`info\` tasks, where the user may want to keep acting in that controlled
-tab. Still report the media URL in \`result.artifacts\` as usual.
+Do this only for \`watch\`/\`consume\` (media you hand off and walk away from) —
+NOT for \`act\`/\`info\` tasks, where the user may want to keep acting in that
+controlled tab. Still report the media URL in \`result.artifacts\` as usual.
 
 ## 5. Asking the user (only when truly blocked)
 

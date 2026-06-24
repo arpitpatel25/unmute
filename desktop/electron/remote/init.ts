@@ -300,12 +300,13 @@ function focusTarget(task: Task): void {
 
 /** Present a terminal/attention state, keyed on category (DECIDED):
  *   navigate → focus the target tab/app, no popup.
- *   consume  → stay out of the way (it's playing); no popup.
+ *   watch    → focus the video tab (the user wants to see it); no popup.
+ *   consume  → stay out of the way (audio playing in the background); no popup.
  *   info/act/needs-user/unknown → the overlay.
  *  Honors the auto-present toggle (off ⇒ user opens the app manually). */
 function maybePresent(task: Task): void {
   if (settings.get('overlayAutoPresent') === false) return
-  if (task.state === 'done' && task.category === 'navigate') { focusTarget(task); return }
+  if (task.state === 'done' && (task.category === 'navigate' || task.category === 'watch')) { focusTarget(task); return }
   if (task.state === 'done' && task.category === 'consume') return
   presentOverlay(task.id)
 }
