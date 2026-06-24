@@ -91,17 +91,11 @@ function NeedsYouCard({
                   <button key={c} className="text-[11px] px-2 py-1 rounded-lg bg-amber-400/12 text-amber-200/90 hover:bg-amber-400/25"
                     onClick={() => onAnswer(task.id, c)}>{c}</button>
                 ))}
-                <button className="text-[11px] px-1.5 py-1 text-white/40 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
-                  {showTerminal ? 'hide terminal' : 'open terminal'}
-                </button>
               </div>
             ) : isConfirm ? (
               <div className="flex items-center gap-3 text-[12px]">
                 <button className="text-emerald-300/90 hover:text-emerald-200" onClick={() => onAnswer(task.id, 'yes')}>yes ↗</button>
                 <button className="text-white/55 hover:text-white/85" onClick={() => onAnswer(task.id, 'no')}>no</button>
-                <button className="text-white/40 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
-                  {showTerminal ? 'hide terminal' : 'open terminal'}
-                </button>
               </div>
             ) : (
               <form className="flex gap-1.5"
@@ -111,11 +105,17 @@ function NeedsYouCard({
                   style={{ caretColor: '#ffffff' }} placeholder="type your answer…"
                   value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus />
                 <button className="text-[11px] px-2.5 py-1 rounded-lg bg-amber-400/20 text-amber-100" type="submit">send</button>
-                <button type="button" className="text-[11px] px-1.5 text-white/40 hover:text-white/80" onClick={() => onKill(task.id)}>stop</button>
               </form>
             )}
           </div>
           <div className="text-[10px] text-white/30 mt-1.5">🎙 or hold the Remote key and speak your answer</div>
+          {/* always-present actions */}
+          <div className="flex items-center gap-3 mt-2 text-[11px]">
+            <button className="text-white/40 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
+              {showTerminal ? 'hide terminal' : 'terminal'}
+            </button>
+            <button className="text-rose-300/70 hover:text-rose-300 ml-auto" onClick={() => onKill(task.id)}>kill</button>
+          </div>
           {showTerminal && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
         </div>
       </div>
@@ -168,56 +168,67 @@ function RecentRow({
   const title = failed
     ? (task.mcpGap?.message ?? task.error?.reason ?? 'Failed')
     : (task.result?.summary ?? task.intent)
+  const hasDetail = !!(task.result?.detail || task.result?.artifacts?.length || (failed && task.mcpGap))
   return (
-    <div className="border-t border-white/[0.06] first:border-t-0">
-      <button className="w-full flex items-start gap-2.5 py-2 text-left" onClick={onToggle}>
+    <div className="border-t border-white/[0.06] first:border-t-0 py-2">
+      <div className="flex items-start gap-2.5">
         <span className="mt-[3px] shrink-0 text-[12px] leading-none" style={{ color: failed ? '#fb7185' : '#34d399' }}>
           {failed ? '⚠' : '✓'}
         </span>
         <div className="flex-1 min-w-0">
-          <div className="text-[13px] font-semibold text-white/90 leading-snug">{title}</div>
-          <div className="text-[11.5px] text-white/45 leading-relaxed truncate">
-            {failed
-              ? <span className="text-rose-300/70">{task.error?.detail ?? task.intent}</span>
-              : <>“{task.intent}” · {duration(task)}</>}
-          </div>
-        </div>
-        {failed && (
-          <span className="text-[11px] text-sky-300/85 hover:text-sky-200 shrink-0"
-            onClick={(e) => { e.stopPropagation(); onRerun(task.intent) }}>re-run ↗</span>
-        )}
-      </button>
+          {/* title + subtitle toggle the detail */}
+          <button className="w-full text-left" onClick={onToggle}>
+            <div className="text-[13px] font-semibold text-white/90 leading-snug">{title}</div>
+            <div className="text-[11.5px] text-white/45 leading-relaxed truncate">
+              {failed
+                ? <span className="text-rose-300/70">{task.error?.detail ?? task.intent}</span>
+                : <>“{task.intent}” · {duration(task)}</>}
+            </div>
+          </button>
 
-      <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}>
-        <div className="overflow-hidden">
-          {expanded && (
-            <div className="pb-2.5 pl-[22px]">
-              {task.result?.detail && (
-                <div className="max-h-72 overflow-auto text-[12px] text-white/70 border-l border-white/10 pl-2">
-                  <Markdown text={task.result.detail} />
+          {/* always-visible actions */}
+          <div className="flex items-center gap-3 mt-1.5 text-[11px]">
+            <button className="text-white/35 hover:text-white/80" onClick={() => onRerun(task.intent)}>re-run</button>
+            <button className="text-white/35 hover:text-white/80" title="Continue this exact session with full prior context"
+              onClick={() => onResume(task.id)}>resume</button>
+            <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
+              {showTerminal ? 'hide terminal' : 'terminal'}
+            </button>
+            <button className="text-rose-300/60 hover:text-rose-300 ml-auto" title="Kill the session and erase this task"
+              onClick={() => { if (window.confirm('Kill this task and erase it?')) onRemove(task.id) }}>kill</button>
+          </div>
+
+          {/* detail (full answer / fix command / artifacts) behind the expand toggle */}
+          <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}>
+            <div className="overflow-hidden">
+              {expanded && (
+                <div className="pt-1.5">
+                  {task.result?.detail && (
+                    <div className="max-h-72 overflow-auto text-[12px] text-white/70 border-l border-white/10 pl-2">
+                      <Markdown text={task.result.detail} />
+                    </div>
+                  )}
+                  {failed && task.mcpGap && (
+                    <code className="mt-1 inline-block px-1.5 py-0.5 rounded bg-white/10 text-[11px] text-white/80 cursor-pointer"
+                      title="Copy" onClick={() => void navigator.clipboard?.writeText(task.mcpGap!.fixCommand)}>
+                      {task.mcpGap.fixCommand}
+                    </code>
+                  )}
+                  <ArtifactLinks task={task} />
                 </div>
               )}
-              {failed && task.mcpGap && (
-                <code className="mt-1 inline-block px-1.5 py-0.5 rounded bg-white/10 text-[11px] text-white/80 cursor-pointer"
-                  title="Copy" onClick={() => void navigator.clipboard?.writeText(task.mcpGap!.fixCommand)}>
-                  {task.mcpGap.fixCommand}
-                </code>
-              )}
-              <ArtifactLinks task={task} />
-              <div className="flex items-center gap-3 mt-2 text-[11px]">
-                <button className="text-white/35 hover:text-white/80" onClick={() => onRerun(task.intent)}>re-run</button>
-                <button className="text-white/35 hover:text-white/80" title="Continue this exact session with full prior context"
-                  onClick={() => onResume(task.id)}>resume</button>
-                <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
-                  {showTerminal ? 'hide terminal' : 'terminal'}
-                </button>
-                <button className="text-rose-300/60 hover:text-rose-300 ml-auto" title="Kill the session and erase this task"
-                  onClick={() => { if (window.confirm('Kill this task and erase it?')) onRemove(task.id) }}>kill</button>
-              </div>
-              {showTerminal && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
             </div>
-          )}
+          </div>
+          {showTerminal && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
         </div>
+
+        {/* expand chevron — only when there's detail to reveal */}
+        {hasDetail && (
+          <button className="shrink-0 text-white/30 hover:text-white/70 text-[12px] leading-none mt-[3px]"
+            onClick={onToggle} title={expanded ? 'Hide detail' : 'Show detail'}>
+            {expanded ? '⌄' : '›'}
+          </button>
+        )}
       </div>
     </div>
   )
