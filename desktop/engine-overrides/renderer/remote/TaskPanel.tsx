@@ -38,32 +38,24 @@ export function TaskPanel() {
 
   return (
     <div className="p-4">
-      <div className="flex items-center justify-between mb-1">
-        <div className="text-sm font-semibold text-ink">Remote tasks</div>
-        {tasks.length > 0 && (
-          <button
-            className="text-[11px] px-2 py-0.5 rounded border border-red-200 text-red-700 hover:bg-red-50"
-            title="Terminate every running session"
-            onClick={() => {
-              if (window.confirm('Kill ALL tasks? Every running Claude session is terminated immediately.')) killAll()
-            }}
-          >
-            Kill all{activeCount ? ` (${activeCount} running)` : ''}
-          </button>
-        )}
-      </div>
+      <div className="text-sm font-semibold text-ink mb-1">Remote tasks</div>
 
-      <div className="text-[12px] text-ink/50 mb-2">
+      <div className="text-[12px] text-ink/50 mb-3">
         Hold the Remote key and speak a command — it runs on your machine via Claude Code.
       </div>
 
-      {/* Page nav: the two explainer/setup surfaces. */}
-      <div className="flex items-center gap-3 mb-3 text-[11px]">
-        <button className="text-accent hover:underline" onClick={() => setPage('how')}>
+      {/* Page nav: the two explainer/setup surfaces, as proper outlined buttons. */}
+      <div className="flex items-center gap-2 mb-3">
+        <button
+          className="text-[12px] font-medium px-3 py-1.5 rounded-md border border-black/15 bg-white text-ink hover:bg-black/5"
+          onClick={() => setPage('how')}
+        >
           How it works
         </button>
-        <span className="text-ink/20">·</span>
-        <button className="text-accent hover:underline flex items-center gap-1" onClick={() => setPage('setup')}>
+        <button
+          className="text-[12px] font-medium px-3 py-1.5 rounded-md border border-black/15 bg-white text-ink hover:bg-black/5 flex items-center gap-1.5"
+          onClick={() => setPage('setup')}
+        >
           Set up Remote
           {setupComplete === false && <span className="w-1.5 h-1.5 rounded-full bg-accent inline-block" />}
         </button>
@@ -87,9 +79,27 @@ export function TaskPanel() {
           No tasks yet. Try “extract the zip I just downloaded” or “find the contract PDF and open it”.
         </div>
       ) : (
-        tasks.map((t) => (
-          <TaskRow key={t.id} task={t} onAnswer={answer} onKill={kill} onRerun={rerun} onRemove={remove} />
-        ))
+        <>
+          {/* Tasks header — Kill all sits right above the list it acts on. */}
+          <div className="flex items-center justify-between mt-1 mb-2">
+            <div className="text-[12px] font-semibold text-ink/70">
+              {tasks.length} task{tasks.length === 1 ? '' : 's'}
+              {activeCount ? <span className="text-ink/40 font-normal"> · {activeCount} running</span> : null}
+            </div>
+            <button
+              className="text-[11px] font-medium px-2.5 py-1 rounded-md border border-red-300 text-red-700 hover:bg-red-50"
+              title="Terminate every running session"
+              onClick={() => {
+                if (window.confirm('Kill ALL tasks? Every running Claude session is terminated immediately.')) killAll()
+              }}
+            >
+              Kill all
+            </button>
+          </div>
+          {tasks.map((t) => (
+            <TaskRow key={t.id} task={t} onAnswer={answer} onKill={kill} onRerun={rerun} onRemove={remove} />
+          ))}
+        </>
       )}
     </div>
   )
