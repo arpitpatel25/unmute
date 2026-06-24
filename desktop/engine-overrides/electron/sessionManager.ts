@@ -601,8 +601,11 @@ class SessionManager {
     // and can briefly interfere with macOS window focus/ordering
     showHUD()
     setTrayRecording(mode)
-    sendToWidget('recording:start', mode, this.currentSession.sessionId)
-    console.log('[session] HUD shown, recording:start sent for mode:', mode)
+    // 4th arg = capture KIND ('dictation' | 'remote'); the base onRecordingStart
+    // bridge ignores it, the additive remoteOnCaptureKind listener reads it to
+    // show the Remote badge on the pill.
+    sendToWidget('recording:start', mode, this.currentSession.sessionId, this.currentSession.kind)
+    console.log('[session] HUD shown, recording:start sent for mode:', mode, 'kind:', this.currentSession.kind)
 
     // Warm the cloud path NOW — in parallel with the user speaking — so the STT
     // call rides a LIVE socket + FRESH token instead of a cold connection that
@@ -742,7 +745,7 @@ class SessionManager {
     this.cancelAutoHide()
     showHUD()
     setTrayRecording(mode)
-    sendToWidget('recording:start', mode, this.currentSession?.sessionId)
+    sendToWidget('recording:start', mode, this.currentSession?.sessionId, this.currentSession?.kind)
 
     this.onRecordingStarted?.()
   }

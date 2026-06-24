@@ -144,6 +144,16 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('remote:task-failed', (_e, t) => cb(t)),
   remoteOnTaskStuck: (cb: (t: RemoteTaskSnapshot) => void) =>
     ipcRenderer.on('remote:task-stuck', (_e, t) => cb(t)),
+
+  // ── Capture kind (drives the pill's Remote badge) ──
+  // The 4th arg of 'recording:start' carries the session KIND ('dictation' |
+  // 'remote'). The base onRecordingStart bridge ignores extra args, so this is a
+  // second, additive listener that surfaces the kind to the HUD — letting the
+  // pill show a distinct Remote marker so the user can tell a Remote capture
+  // (dispatches a task) from a dictation capture (types text).
+  remoteOnCaptureKind: (cb: (kind: 'dictation' | 'remote') => void) =>
+    ipcRenderer.on('recording:start', (_e, _mode, _sessionId, kind) =>
+      cb(kind === 'remote' ? 'remote' : 'dictation')),
 }
 
 export type RemoteAPI = typeof remotePreloadExtensions

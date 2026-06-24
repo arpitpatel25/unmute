@@ -48,6 +48,53 @@ function playClickSound(type: 'start' | 'stop') {
 // restart resets it (which is what we want).
 let sessionDismissed = false
 
+// Remote capture marker — a circular companion shown to the LEFT of the pill
+// (with a gap) ONLY during a Remote capture, so the user can tell it from a
+// dictation. Same dark fill (#0E0E10) as the pill so they read as one family;
+// a soft lavender ring, an accent terminal glyph, and an accent dot badge.
+const ACCENT = '#8B7CF6'
+function RemoteBadge() {
+  return (
+    <div style={{ position: 'relative', flex: 'none', width: 44, height: 44 }}>
+      <div
+        style={{
+          width: 44,
+          height: 44,
+          borderRadius: 9999,
+          background: '#0E0E10',
+          border: '1px solid rgba(255, 255, 255, 0.55)',
+          boxShadow:
+            '0 0 0 3px rgba(139, 124, 246, 0.45), 0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255,255,255,0.04) inset',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {/* boxed terminal >_ glyph */}
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+          stroke={ACCENT} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+          <polyline points="7 9.5 10 12 7 14.5" />
+          <line x1="12.5" y1="14.5" x2="16" y2="14.5" />
+        </svg>
+      </div>
+      {/* accent dot badge, top-right */}
+      <span
+        style={{
+          position: 'absolute',
+          top: -1,
+          right: -1,
+          width: 12,
+          height: 12,
+          borderRadius: 9999,
+          background: ACCENT,
+          border: '2px solid #0E0E10',
+        }}
+      />
+    </div>
+  )
+}
+
 export default function WidgetApp() {
   const [state, setState] = useState<WidgetState>('hidden')
   const [outputPreview, setOutputPreview] = useState('')
@@ -57,6 +104,10 @@ export default function WidgetApp() {
   const [engineNotice, setEngineNotice] = useState<string | null>(null)
   const [offlineReason, setOfflineReason] = useState<OfflineReason | null>(null)
   const [dismissedTick, setDismissedTick] = useState(0)
+  // Is the CURRENT capture a Remote one (dispatches a task) vs a dictation
+  // (types text)? Drives the Remote badge next to the pill. Set on every
+  // recording:start from its kind, so it's always fresh for this capture.
+  const [isRemote, setIsRemote] = useState(false)
   const { analyserNode, maxDurationSeconds, startRecording, stopRecording } = useAudioRecorder()
 
   const autoHideRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -120,6 +171,13 @@ export default function WidgetApp() {
     api.getSoundFeedback().then((enabled: boolean) => {
       soundEnabled = enabled
     }).catch(() => { /* default true */ })
+
+    // Additive Remote-kind listener (also fires on recording:start, reading its
+    // 4th arg). Tells us whether this capture is Remote so the pill can badge it.
+    const remoteApi = api as unknown as {
+      remoteOnCaptureKind?: (cb: (kind: 'dictation' | 'remote') => void) => void
+    }
+    remoteApi.remoteOnCaptureKind?.((kind) => setIsRemote(kind === 'remote'))
 
     api.onRecordingStart(async (mode, sessionId) => {
       clearAutoHide()
@@ -237,19 +295,24 @@ export default function WidgetApp() {
       className="w-full h-full flex flex-col items-center"
       style={{ background: 'transparent', paddingTop: '8px' }}
     >
-      <Widget
-        state={state}
-        analyserNode={analyserNode}
-        maxDurationSeconds={maxDurationSeconds}
-        outputPreview={outputPreview}
-        fallbackMessage={fallbackMessage}
-        errorMessage={errorMessage}
-        showDiscardHint={showDiscardHint}
-        engineNotice={engineNotice}
-        onCancel={handleCancel}
-        onStop={handleStop}
-        onUndo={handleUndo}
-      />
+      {/* Remote capture → circular badge to the LEFT of the pill, with a gap.
+          Dictation → pill only. */}
+      <div className="flex items-center justify-center" style={{ gap: '16px' }}>
+        {isRemote && pillShowing && <RemoteBadge />}
+        <Widget
+          state={state}
+          analyserNode={analyserNode}
+          maxDurationSeconds={maxDurationSeconds}
+          outputPreview={outputPreview}
+          fallbackMessage={fallbackMessage}
+          errorMessage={errorMessage}
+          showDiscardHint={showDiscardHint}
+          engineNotice={engineNotice}
+          onCancel={handleCancel}
+          onStop={handleStop}
+          onUndo={handleUndo}
+        />
+      </div>
       {showAwareness && (
         <OfflineAwarenessCard
           reason={offlineReason}
