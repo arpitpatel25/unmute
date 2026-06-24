@@ -318,6 +318,7 @@ function serializeTask(t: Task) {
     intent: t.intent,
     state: t.state,
     category: t.category ?? null,
+    step: t.step ?? null,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     result: t.result ?? null,

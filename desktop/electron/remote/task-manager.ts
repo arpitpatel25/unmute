@@ -65,6 +65,9 @@ export interface Task {
   lastHeartbeatMs: number
   /** Executor self-classification (drives presentation + lifecycle). */
   category?: StatusPayload['category']
+  /** Latest short progress label the executor wrote ("Editing X · 12/18 tests").
+   *  Surfaced on running tasks in the overlay; purely informational. */
+  step?: string
   result?: StatusPayload['result']
   error?: StatusPayload['error']
   question?: StatusPayload['question']
@@ -427,6 +430,7 @@ export class TaskManager extends EventEmitter {
     task.state = next
     task.updatedAt = this.clock()
     if (payload?.category) task.category = payload.category
+    if (payload?.step) task.step = payload.step
     if (payload?.result) task.result = payload.result
     if (payload?.error) task.error = payload.error
     if (payload?.question) task.question = payload.question

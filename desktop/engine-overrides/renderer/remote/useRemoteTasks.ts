@@ -10,7 +10,8 @@ export interface RemoteTask {
   id: string
   intent: string
   state: 'processing' | 'needs-user' | 'stuck' | 'done' | 'failed'
-  category?: 'info' | 'navigate' | 'consume' | 'act' | null
+  category?: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
+  step?: string | null
   createdAt: number
   updatedAt: number
   result: { summary: string; detail?: string; artifacts?: Array<{ type: 'path' | 'url'; value: string }> } | null
