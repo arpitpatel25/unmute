@@ -73,8 +73,10 @@ function RemoteBadge() {
         }}
       >
         {/* The app's own Remote icon (matches the Remote tab in App.tsx). */}
+        {/* strokeWidth ~0.75 viewBox units → ~1px on screen at 21px render, so the
+            icon line matches the 1px white border on the circle and the pill. */}
         <svg width="21" height="21" viewBox="0 0 16 16" fill="none"
-          stroke={GLYPH_COLOR} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          stroke={GLYPH_COLOR} strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round">
           <path d="M10.5 5V1.8" />
           <rect x="4.5" y="5" width="7" height="9.5" rx="1.8" />
           <path d="M6.4 7.4h3.2" />
