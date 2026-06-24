@@ -129,6 +129,9 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
     optional: true,
   })
 
+  // Recommended integrations are OPTIONAL — Remote works with just the Chrome
+  // extension. These add capability (email, Sheets, etc.) and the user grants
+  // them as-needed, so they must NOT gate "setup complete" (DECIDED).
   for (const rec of RECOMMENDED_MCPS) {
     const hit = servers.find((s) => rec.match.test(s.name) && s.connected)
     steps.push({
@@ -138,6 +141,7 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
       command: rec.command,
       status: hit ? 'done' : 'todo',
       auto: true,
+      optional: true,
     })
   }
 
