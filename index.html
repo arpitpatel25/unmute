@@ -49,7 +49,8 @@
     box-shadow: 0 8px 30px rgba(26,22,19,0.08);
   }
   .brand { display: inline-flex; align-items: center; text-decoration: none; }
-  .brand img { height: 21px; width: auto; display: block; }
+  .brand img { height: 32px; width: auto; display: block; }
+  @media (max-width: 600px) { .brand img { height: 27px; } }
   .nav-links { display: flex; align-items: center; gap: 26px; }
   .nav-links a { color: var(--ink-60); text-decoration: none; font-size: 14.5px; font-weight: 500; transition: color .15s; }
   .nav-links a:hover { color: var(--ink); }
@@ -218,7 +219,7 @@
 
   footer { border-top: 1px solid var(--ink-12); margin-top: 70px; padding: 34px 0 50px; }
   .foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--ink-45); align-items: center; }
-  .foot img { height: 18px; opacity: 0.8; }
+  .foot img { height: 26px; opacity: 0.85; }
   .foot .links a { color: var(--ink-60); text-decoration: none; margin-left: 18px; }
   .foot .links a:hover { color: var(--ink); }
 </style>
