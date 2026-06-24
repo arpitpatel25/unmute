@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>unmute — it types what you say. it also does what you say.</title>
-<meta name="description" content="A Mac dictation app at a steady ~1s, no spinner. Then Remote: hold the other key and it runs the task on your Mac. It's Claude Code. We gave it a mouth." />
+<meta name="description" content="A Mac dictation app at a steady ~1s, no spinner. Then Remote: a voice remote for Claude Code. Say it, it happens on your Mac. unmute has no intelligence of its own — that's the point." />
 <link rel="icon" type="image/png" href="icon.png" />
 <meta property="og:title" content="unmute" />
 <meta property="og:description" content="It types what you say. It also does what you say." />
@@ -26,38 +26,56 @@
     </div>
 
     <p class="lede"><b>unmute</b> does two things: it types what you say, and it does what you say.</p>
-    <p class="sublede">A Mac dictation app that also, quietly, runs your entire computer. Hold a key. Talk. Typing was a mistake and we're here to help.</p>
+    <p class="sublede">A Mac dictation app that also, casually, runs your entire computer. Hold a key. Talk. Typing was a mistake; we're walking it back.</p>
 
     <section>
       <p class="mark">// the first key — dictation</p>
-      <p>Hold <kbd>Fn</kbd>, talk, let go. Words appear at your cursor — Slack, email, code, anywhere. That's the whole thing. It took two years to build something this annoying to describe at a party.</p>
+      <p>Hold <kbd>Fn</kbd>, talk, let go. Words land at your cursor — Slack, email, code, anywhere. Steady ~1 second whether you said five words or five paragraphs.</p>
+      <p>No spinner has ever eaten your words here. <b>Wispr Flow couldn't manage that. So we had to.</b></p>
     </section>
 
     <section>
-      <p class="mark">// the second key — remote (this is the new bit, pay attention)</p>
-      <h2>Dictation types it. Remote just… does it.</h2>
-      <p>Hold <kbd>right ⌥</kbd> and say the thing. "Extract that zip." "Reply to that email." "Put on the next episode." It happens — on your <em>real</em> Mac, your real files, your real browser. Not a sandbox. Not a demo that only works in the demo.</p>
-      <p>The honest pitch, since nobody else will say it out loud: <b>it's Claude Code. We gave it a mouth.</b> That's the innovation. We're weirdly proud of it.</p>
-      <p>So yes — it needs a <b>Claude Code Pro or Max plan</b>, because it literally is one and it uses yours. No, we can't sell you Anthropic's plan. We asked. They said no.</p>
-      <p class="dim">And be honest: you pay $200 a month and open it twice a day. That's not a subscription, it's a donation. Remote is how you finally spend the thing you're already funding. <a class="arrow" href="remote.html">how remote works</a></p>
+      <p class="mark">// the second key — remote · a voice remote for Claude Code</p>
+      <h2>Dictation types it. Remote does it.</h2>
+      <p>Hold <kbd>right ⌥</kbd>, say the thing, it happens — on your actual Mac.</p>
+
+      <p>Here's the twist: <b>unmute is dumb. Proudly, aggressively dumb.</b> We didn't train a model — the smartest one already exists, you're already paying for it, and ours would only get in the way. We just gave it ears.</p>
+
+      <p>Which is the entire point. You already trust Claude Code — it's the best agent anyone has shipped. Remote <em>is</em> Claude Code: your own terminal session, just voice-driven. Nothing new to trust, nothing new to learn. Friendly neighborhood Claude Code.</p>
+
+      <p>And Claude Code can do, conservatively, anything. Most people use it for code, twice a day. Then Remote shows up and the list gets unhinged. Press a key, say it, done:</p>
+      <ul class="dash">
+        <li>"who won the match last night?"</li>
+        <li>"put on the next episode."</li>
+        <li>"what's eating my battery — and kill it."</li>
+        <li>"rename these 40 screenshots by date."</li>
+        <li>"open Skyscanner, London to Tokyo, next Friday, cheapest."</li>
+        <li>"my flight's at 6 — when do I leave the house?"</li>
+        <li>"drop this tweet URL in my Google Sheet with a one-line summary."</li>
+        <li>"total every invoice in my Downloads and put it in a sheet."</li>
+        <li>"read this repo and tell me what it actually does."</li>
+        <li>"go through my last 50 emails and flag the 3 that actually need me."</li>
+      </ul>
+      <p class="aside">None of these are features we built. It's just Claude Code, finally within reach. The bottleneck was never the model — it was the keyboard.</p>
+
+      <p class="dim">Two honest things: it needs a <b>Claude Code Pro or Max plan</b>, because it is one and it uses yours — that Max plan you open twice a day is about to earn its keep. And it's as fast as Claude Code (not instant) and as reliable as Claude Code (the most reliable agent there is). Every time Claude Code gets smarter, so does unmute. For free. <a class="arrow" href="remote.html">how remote works</a></p>
     </section>
 
     <hr />
 
     <section>
-      <p class="mark">// why the dictation half is the fastest one</p>
+      <p class="mark">// the fine print on speed</p>
       <ul class="dash">
-        <li><b>~1 second. Always.</b> <span class="note">We timed it obsessively so you'll never have to.</span></li>
-        <li><b>10 seconds of audio or 10 minutes</b> — same ~1 second. <span class="note">Ramble freely. We can take it.</span></li>
-        <li><b>Cloud when your Wi-Fi behaves, on-device the second it doesn't.</b> <span class="note">No spinner has ever eaten your words here.</span></li>
+        <li><b>~1 second. Always.</b> <span class="note">Not "usually." Not "once the API wakes up."</span></li>
+        <li><b>Five words or five minutes</b> — same ~1 second. <span class="note">Ramble. We're built for it.</span></li>
+        <li><b>Cloud when your Wi-Fi cooperates, on-device the instant it doesn't.</b> <span class="note">You'll never lose a thought to a loading bar.</span></li>
       </ul>
-      <p class="aside">Wispr Flow times out and loses the whole monologue. We treat that as a bug. They seem to treat it as a personality. <a class="arrow" href="https://x.com/just_unmute">the receipts</a></p>
     </section>
 
     <section>
       <p class="mark">// raw by default</p>
-      <p>We paste exactly what you said. No auto-punctuation. No autocorrect deciding you meant "ducking." Half of it ends up in ChatGPT anyway, which has never once cared about your commas.</p>
-      <p class="dim">Want it formatted? Tap <kbd>Caps Lock</kbd> and ask — "clean this up," "three bullets," "less corporate." On demand. Not forced on you like some kind of grammar hostage situation.</p>
+      <p>We paste exactly what you said. No auto-punctuation, no autocorrect deciding you meant "ducking." Half of it's going into ChatGPT anyway, and ChatGPT has never once cared about your commas.</p>
+      <p class="dim">Want it cleaned up? Tap <kbd>Caps Lock</kbd> and ask — "clean this up," "three bullets," "less corporate." On demand, not forced on you like a haunted Word document.</p>
     </section>
 
     <hr />
