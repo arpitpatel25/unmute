@@ -1,0 +1,86 @@
+/* ───────────────────────────────────────────────────────────
+   unmute — "raw docs" theme
+   Warm paper, black ink, monospace. The logo is the only colour.
+   ─────────────────────────────────────────────────────────── */
+
+:root {
+  --paper: #F4EFE3;        /* warm paper */
+  --ink:   #14110D;        /* near-black */
+  --ink-60: rgba(20,17,13,0.62);
+  --ink-40: rgba(20,17,13,0.40);
+  --rule:  rgba(20,17,13,0.16);
+  --mark:  rgba(20,17,13,0.34);   /* // comment colour */
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15.5px;
+  line-height: 1.72;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page { max-width: 720px; margin: 0 auto; padding: 56px 28px 90px; }
+@media (max-width: 620px) { .page { padding: 40px 20px 70px; } }
+
+/* top line: logo + tiny right-aligned nav */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 46px; }
+.top .logo img { height: 30px; width: auto; display: block; }
+.top nav { display: flex; gap: 18px; font-size: 13px; }
+.top nav a { color: var(--ink-60); }
+.top nav a:hover { color: var(--ink); }
+
+/* the one-line intro under the logo */
+.lede { font-size: 18px; line-height: 1.55; margin: 0 0 6px; }
+.lede b { font-weight: 700; }
+.sublede { color: var(--ink-60); margin: 0 0 8px; }
+
+/* section blocks */
+section { margin: 44px 0 0; }
+.mark { color: var(--mark); font-size: 13px; letter-spacing: 0.02em; margin: 0 0 8px; }
+h1, h2 { font-weight: 700; letter-spacing: -0.01em; }
+h1 { font-size: 22px; line-height: 1.3; margin: 0 0 10px; }
+h2 { font-size: 18px; line-height: 1.35; margin: 0 0 10px; }
+p { margin: 0 0 10px; }
+.dim { color: var(--ink-60); }
+.aside { color: var(--ink-40); font-size: 13.5px; }
+
+/* doc-style bullet list */
+ul.dash { list-style: none; margin: 10px 0; padding: 0; }
+ul.dash li { position: relative; padding-left: 22px; margin: 0 0 7px; }
+ul.dash li::before { content: '—'; position: absolute; left: 0; color: var(--mark); }
+ul.dash li b { font-weight: 700; }
+ul.dash li .note { color: var(--ink-60); }
+
+/* inline keycap, kept monochrome to fit the docs vibe */
+kbd {
+  font-family: inherit; font-size: 0.86em; font-weight: 700;
+  padding: 1px 7px; border: 1px solid var(--ink); border-radius: 5px;
+  background: transparent; line-height: 1;
+}
+
+/* links — black, underlined, no colour */
+a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a:hover { background: var(--ink); color: var(--paper); text-decoration: none; }
+a.arrow::after { content: ' →'; }
+
+/* the single allowed button */
+.btn {
+  display: inline-block; margin: 6px 0; padding: 11px 20px;
+  background: var(--ink); color: var(--paper); text-decoration: none;
+  border-radius: 8px; font-weight: 700; font-size: 14.5px;
+}
+.btn:hover { background: #000; color: var(--paper); }
+
+hr { border: none; border-top: 1px solid var(--rule); margin: 44px 0 0; }
+
+/* footer */
+footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--ink-40); }
+footer .links { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 12px; }
+footer .links a { color: var(--ink-60); }
+footer .links a:hover { color: var(--paper); }
+footer .logo img { height: 22px; opacity: 0.85; display: block; margin-bottom: 14px; }
