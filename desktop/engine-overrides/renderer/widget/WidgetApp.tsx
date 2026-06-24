@@ -50,8 +50,8 @@ let sessionDismissed = false
 
 // Remote capture marker — a circular companion shown to the LEFT of the pill
 // (with a gap) ONLY during a Remote capture, so the user can tell it from a
-// dictation. Same dark fill (#0E0E10) as the pill so they read as one family;
-// a soft lavender ring, an accent terminal glyph, and an accent dot badge.
+// dictation. Same dark fill (#0E0E10), whitish border, and drop shadow as the
+// pill so they read as one family; the accent terminal glyph marks it Remote.
 const ACCENT = '#8B7CF6'
 function RemoteBadge() {
   return (
@@ -62,9 +62,10 @@ function RemoteBadge() {
           height: 44,
           borderRadius: 9999,
           background: '#0E0E10',
+          // Match the pill exactly: whitish border + the pill's drop shadow
+          // (no purple ring).
           border: '1px solid rgba(255, 255, 255, 0.55)',
-          boxShadow:
-            '0 0 0 3px rgba(139, 124, 246, 0.45), 0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255,255,255,0.04) inset',
+          boxShadow: '0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255,255,255,0.04) inset',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
