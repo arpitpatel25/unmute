@@ -35,7 +35,7 @@ export function OnboardingCards({ onComplete }: Props) {
         <Card
           title="Local (fully offline)"
           tag="Privacy"
-          description="On-device whisper.cpp. Slower, but works offline and your voice never leaves your Mac. ~75MB model download."
+          description="On-device Parakeet v3 (multilingual). Works fully offline and your voice never leaves your Mac. ~480MB model download."
           accent="success"
           onHover={() => setHovered('local')}
           onLeave={() => setHovered(null)}

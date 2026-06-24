@@ -432,7 +432,7 @@ function LocalCard(props: {
         onClick={props.onDownload}
         className="px-4 py-2 rounded-[10px] bg-ink text-white text-[12px] font-semibold hover:opacity-90 transition-opacity"
       >
-        Download model (~75 MB)
+        Download model (~480 MB)
       </button>
     )
   }
@@ -445,7 +445,7 @@ function LocalCard(props: {
       ready={props.ready}
       icon={<LaptopIcon />}
       title="On-device"
-      valueProp="Runs on this Mac. Private and offline."
+      valueProp="Parakeet v3 (multilingual, on-device). Runs on this Mac. Private and offline."
       statusBlock={statusBlock}
       setupBlock={setupBlock}
       bestFor="Reliable fallback when internet is flaky — kicks in automatically when cloud is slow."

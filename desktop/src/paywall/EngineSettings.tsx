@@ -21,7 +21,7 @@ const OPTIONS: Array<{ value: EngineMode; label: string; description: string }> 
   {
     value: 'local',
     label: 'Local',
-    description: 'Fully offline — whisper.cpp on this Mac',
+    description: 'Fully offline — Parakeet v3 on this Mac',
   },
 ]
 

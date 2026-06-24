@@ -1,6 +1,6 @@
 // OSSAdapter implementation that the paywall layer's initPaywall() expects.
 //
-// Wraps the OSS engine's Local (whisper.cpp) provider + session helpers so the
+// Wraps the on-device Parakeet (sherpa-onnx) provider + session helpers so the
 // ProviderRouter can route Local calls through them. Until this existed we
 // passed `{} as any` and the router silently no-op'd on every non-managed path.
 //
@@ -8,7 +8,7 @@
 // overlays engine-overrides/, so imports are relative siblings of main.ts.
 
 import { BrowserWindow } from 'electron'
-import { whisperManager } from './whisper'
+import { parakeetManager } from './parakeet'
 import { getPaywallAccessToken, getPaywallUser } from './paywall/paywall-glue'
 
 interface STTOpts {
@@ -22,7 +22,7 @@ export function buildOSSAdapter() {
   return {
     localSTT: {
       transcribe: async (opts: STTOpts) => {
-        const text = await whisperManager.transcribe(opts.audio)
+        const text = await parakeetManager.transcribe(opts.audio)
         return {
           text,
           durationSeconds: opts.durationSeconds,

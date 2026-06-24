@@ -17,13 +17,13 @@ export default function Privacy() {
 
       <PillarCard
         icon={<LaptopIcon />}
-        title="On-device (whisper.cpp)"
+        title="On-device (Parakeet v3)"
         tag="Most private"
         tagTone="green"
         body={
           <>
             <p>
-              Audio is transcribed locally by whisper.cpp on this Mac. Nothing
+              Audio is transcribed locally by Parakeet v3 on this Mac. Nothing
               is sent over the network. No account, no server, fully offline.
             </p>
             <p>

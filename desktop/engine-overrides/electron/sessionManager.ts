@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid'
 import { pipelineTranscribe, pipelineDualTranscribe, pipelineProcess, pipelineTransform, localTransformText, getCachedConfig, QuotaExceededError, type ServerConfig, type TransformResult, type PipelineResult } from './api'
-import { whisperManager } from './whisper'
+import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
 import { captureSelectedText, injectOutput, copyToClipboard } from './clipboard'
 import { saveAudioFile, saveAudioChunk } from './audio'
@@ -293,13 +293,13 @@ class SessionManager {
     let localPromise: Promise<string | null> | null = null
     const tryStartLocal = (): void => {
       if (localPromise) return
-      if (!whisperManager.isModelReady() || !whisperManager.isBinaryReady()) {
+      if (!parakeetManager.isModelReady() || !parakeetManager.isBinaryReady()) {
         console.log(`[session:race] ${label}: local model not ready — speculative fallback unavailable`)
         return
       }
       const tStart = Date.now()
       console.log(`[session:race] ${label}: starting speculative local whisper at +${tStart - t0}ms`)
-      localPromise = whisperManager
+      localPromise = parakeetManager
         .transcribe(audio)
         .then((text) => {
           console.log(`[session:race] ${label}: local whisper produced ${text.length} chars in ${Date.now() - tStart}ms`)
@@ -870,7 +870,7 @@ class SessionManager {
   private async transcribeChunk(buffer: Buffer, chunkIndex: number): Promise<string> {
     const t0 = Date.now()
     const effectiveSTT = this.getEffectiveSTTProvider()
-    const useLocalWhisper = effectiveSTT === 'local' && whisperManager.isModelReady() && whisperManager.isBinaryReady()
+    const useLocalWhisper = effectiveSTT === 'local' && parakeetManager.isModelReady() && parakeetManager.isBinaryReady()
     const useFasterWhisper = features.localModels && effectiveSTT === 'faster-whisper' && fasterWhisperManager.isReady()
     const useCartesia = effectiveSTT === 'cartesia'
     const useSarvam = effectiveSTT === 'sarvam'
@@ -920,7 +920,7 @@ class SessionManager {
         transcript = await fasterWhisperManager.transcribe(buffer)
         setLastEngine('local')
       } else if (useLocalWhisper) {
-        transcript = await whisperManager.transcribe(buffer)
+        transcript = await parakeetManager.transcribe(buffer)
         setLastEngine('local')
       } else {
         // pipelineTranscribe handles cloud→on-device fallback (and no-key→on-device)
@@ -1098,7 +1098,7 @@ class SessionManager {
     }, timeoutMs)
 
     try {
-      if (!hasApiKey() && !whisperManager.isAvailable()) {
+      if (!hasApiKey() && !parakeetManager.isAvailable()) {
         throw new Error('Add a Groq key in Settings, or wait for the on-device model to finish downloading.')
       }
 
@@ -1400,7 +1400,7 @@ class SessionManager {
 
       // Transcribe audio(s) — cloud (groq/cartesia/sarvam), local whisper.cpp, or faster-whisper
       const effectiveSTT = this.getEffectiveSTTProvider()
-      const useLocalWhisper = effectiveSTT === 'local' && whisperManager.isModelReady() && whisperManager.isBinaryReady()
+      const useLocalWhisper = effectiveSTT === 'local' && parakeetManager.isModelReady() && parakeetManager.isBinaryReady()
       const useFasterWhisper = features.localModels && effectiveSTT === 'faster-whisper' && fasterWhisperManager.isReady()
       const useCartesia = effectiveSTT === 'cartesia'
       const useSarvam = effectiveSTT === 'sarvam'
@@ -1476,7 +1476,7 @@ class SessionManager {
           session.dictationTranscript = await fasterWhisperManager.transcribe(session.dictationAudio)
           setLastEngine('local')
         } else if (useLocalWhisper) {
-          session.dictationTranscript = await whisperManager.transcribe(session.dictationAudio)
+          session.dictationTranscript = await parakeetManager.transcribe(session.dictationAudio)
           setLastEngine('local')
         } else {
           const cloudProvider = useSarvam ? 'sarvam' as const : useCartesia ? 'cartesia' as const : 'groq' as const
@@ -1503,7 +1503,7 @@ class SessionManager {
         if (useFasterWhisper) {
           session.instructionTranscript = await fasterWhisperManager.transcribe(session.instructionAudio)
         } else if (useLocalWhisper) {
-          session.instructionTranscript = await whisperManager.transcribe(session.instructionAudio)
+          session.instructionTranscript = await parakeetManager.transcribe(session.instructionAudio)
         } else {
           const cloudProvider = useSarvam ? 'sarvam' as const : useCartesia ? 'cartesia' as const : 'groq' as const
           session.instructionTranscript = await pipelineTranscribe(session.instructionAudio, this.authToken, {

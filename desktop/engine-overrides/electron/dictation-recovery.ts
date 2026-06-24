@@ -18,7 +18,7 @@
 import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { whisperManager } from './whisper'
+import { parakeetManager } from './parakeet'
 import { getSession, saveSession } from './db'
 
 const TAG = '[dictation-recovery]'
@@ -39,10 +39,10 @@ function chunkIndex(filename: string): number {
 async function waitForWhisper(maxWaitMs = 60_000): Promise<boolean> {
   const start = Date.now()
   while (Date.now() - start < maxWaitMs) {
-    if (whisperManager.isAvailable()) return true
+    if (parakeetManager.isAvailable()) return true
     await new Promise((r) => setTimeout(r, 2_000))
   }
-  return whisperManager.isAvailable()
+  return parakeetManager.isAvailable()
 }
 
 /** Reassemble a dictation's audio: prefer a complete file, else cat the chunks
@@ -101,7 +101,7 @@ export async function recoverOrphanDictations(): Promise<void> {
     try {
       const audio = await readDictationAudio(dir, files, id)
       if (!audio || audio.byteLength < 100) continue // nothing usable
-      const transcript = (await whisperManager.transcribe(audio)).trim()
+      const transcript = (await parakeetManager.transcribe(audio)).trim()
       if (!transcript) continue
       let createdAt = Date.now()
       try { createdAt = (await fs.stat(path.join(dir, files.find((f) => f.startsWith(id)) ?? ''))).mtimeMs } catch { /* keep now */ }

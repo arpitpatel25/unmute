@@ -69,7 +69,7 @@ export function OutOfCreditBanner() {
       {shownSubscribe && (
         <div className="pointer-events-auto mt-2 flex items-center gap-3 px-4 py-2.5 rounded-full bg-warm/95 text-white shadow-lg border border-warm/30 animate-fade-up-in">
           <span className="text-[12px] font-medium">
-            Subscription inactive — using <span className="font-bold">local whisper</span> for now.
+            Subscription inactive — using <span className="font-bold">on-device Parakeet</span> for now.
           </span>
           <button
             onClick={() => window.electronAPI.paywallOpenExternal(subscribeUrl)}

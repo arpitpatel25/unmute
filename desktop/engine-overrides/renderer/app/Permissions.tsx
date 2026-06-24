@@ -147,7 +147,7 @@ export default function Permissions() {
                       onClick={handleDownloadWhisper}
                       className="px-3 py-1.5 rounded-full bg-ink text-white text-[11px] font-semibold hover:opacity-90 transition-opacity"
                     >
-                      Download model (~75MB)
+                      Download model (~480MB)
                     </button>
                   )}
                 </div>

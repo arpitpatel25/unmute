@@ -122,10 +122,39 @@ wire_paywall() {
     // not native.
     pkg.dependencies['@xterm/xterm'] = '^5.5.0'
     pkg.dependencies['@xterm/addon-fit'] = '^0.10.0'
+    // Parakeet on-device STT: the OSS engine doesn't depend on sherpa-onnx, so
+    // declare it here. electron-builder's install-app-deps then installs it
+    // (pulling the sherpa-onnx-darwin-arm64 optional-dep with the native addon
+    // + dylibs) and bundles it into the app. Without this, a fresh sync_engine
+    // re-clone wipes the dep and the whisper.ts→parakeet override's
+    // require('sherpa-onnx-node') fails at runtime.
+    pkg.dependencies['sherpa-onnx-node'] = '^1.13.3'
     pkg.build = pkg.build || {}
     pkg.build.asarUnpack = pkg.build.asarUnpack || []
     if (!pkg.build.asarUnpack.includes('**/node_modules/node-pty/**')) {
       pkg.build.asarUnpack.push('**/node_modules/node-pty/**')
+    }
+    // Parakeet on-device STT: sherpa-onnx ships native dylibs
+    // (libsherpa-onnx-c-api.dylib, libsherpa-onnx-cxx-api.dylib,
+    // libonnxruntime*.dylib) alongside the .node addon. The existing
+    // '**/*.node' rule unpacks the addon but NOT the sibling dylibs, so they'd
+    // stay inside the asar and fail to dlopen at runtime. Unpack both packages
+    // wholesale; electron-builder's notarize:true then signs the unpacked
+    // dylibs. Dedup so a re-wire doesn't push twice.
+    for (const glob of [
+      '**/node_modules/sherpa-onnx-darwin-arm64/**',
+      '**/node_modules/sherpa-onnx-node/**',
+    ]) {
+      if (!pkg.build.asarUnpack.includes(glob)) pkg.build.asarUnpack.push(glob)
+    }
+    // Drop the unused faster-whisper extraResource. Parakeet replaced the
+    // whisper engines; faster-whisper was never invoked. Leaving resources/bin
+    // + resources/lib (whisper-cli/server + ggml dylibs) alone — harmless and
+    // safer than risking a missing-resource build error.
+    if (Array.isArray(pkg.build.extraResources)) {
+      pkg.build.extraResources = pkg.build.extraResources.filter(
+        (r) => !(r && typeof r === 'object' && /faster-whisper/.test(String(r.from)))
+      )
     }
     if (process.env.PAYWALL_APP_ID) {
       pkg.build = pkg.build || {}
