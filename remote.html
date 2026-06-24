@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>unmute Remote — a new way to control your Mac, by voice</title>
+<meta name="description" content="Hold a key, say what you want, and it gets done on your Mac via Claude Code — your files, terminal, browser, apps. You're always the driver." />
+<link rel="icon" type="image/png" href="icon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  /* This page lives in the dark "night" world end-to-end. */
+  body { background: var(--night); color: var(--cream); }
+  .bg { display: none; }
+  nav a.link { color: var(--cream-70); }
+  nav a.link:hover { color: var(--cream); border-bottom-color: rgba(242,233,223,0.4); }
+  nav a.link.cta { color: var(--ember); }
+
+  .rhero { padding: 9vh 0 0; text-align: center; }
+  .rhero .eyebrow {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--ember); margin: 0 0 24px;
+  }
+  .rhero h1 {
+    font-family: 'Instrument Serif', serif; font-weight: 400;
+    font-size: clamp(40px, 7vw, 82px); line-height: 0.98; letter-spacing: -0.025em;
+    margin: 0 0 22px; color: var(--cream);
+  }
+  .rhero h1 em { font-style: italic; color: var(--ember); }
+  .rhero .lede {
+    font-family: 'Instrument Serif', serif; font-size: clamp(20px, 2.3vw, 26px);
+    color: var(--cream-70); max-width: 660px; margin: 0 auto 36px; line-height: 1.45;
+  }
+
+  .section { padding: 8vh 0 0; }
+  .section h2 {
+    font-family: 'Instrument Serif', serif; font-weight: 400;
+    font-size: clamp(28px, 4vw, 46px); line-height: 1.06; letter-spacing: -0.025em;
+    margin: 0 0 16px; color: var(--cream); text-align: center;
+  }
+  .section h2 em { font-style: italic; color: var(--ember); }
+  .section .lead { text-align: center; color: var(--cream-70); max-width: 660px; margin: 0 auto 40px; font-size: 16.5px; line-height: 1.6; }
+  .rmark {
+    font-family: 'Instrument Serif', serif; font-style: italic; font-size: 13px;
+    color: var(--ember); text-align: center; margin: 0 0 14px;
+  }
+
+  /* steps */
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 1100px; margin: 0 auto; text-align: left; }
+  @media (max-width: 860px) { .steps { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 520px) { .steps { grid-template-columns: 1fr; } }
+  .step { background: var(--night-2); border: 1px solid rgba(242,233,223,0.1); border-radius: 14px; padding: 22px; }
+  .step .n { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ember); margin-bottom: 12px; }
+  .step h3 { font-family: 'Instrument Serif', serif; font-weight: 500; font-size: 20px; margin: 0 0 7px; color: var(--cream); }
+  .step p { margin: 0; font-size: 14px; color: var(--cream-70); line-height: 1.55; }
+
+  /* examples */
+  .examples { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; max-width: 880px; margin: 0 auto; }
+  .ex {
+    font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--cream);
+    background: var(--night-2); border: 1px solid rgba(232,99,63,0.3); border-radius: 999px;
+    padding: 10px 18px;
+  }
+  .ex::before { content: '🎙 '; opacity: 0.8; }
+
+  /* trust */
+  .trust-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 920px; margin: 0 auto; text-align: left; }
+  @media (max-width: 700px) { .trust-grid { grid-template-columns: 1fr; } }
+  .trust { background: var(--night-2); border: 1px solid rgba(242,233,223,0.1); border-radius: 14px; padding: 22px 24px; }
+  .trust h3 { margin: 0 0 6px; font-size: 16px; color: var(--cream); }
+  .trust h3::before { content: '✓ '; color: var(--term); }
+  .trust p { margin: 0; font-size: 14.5px; color: var(--cream-70); line-height: 1.55; }
+
+  /* setup */
+  .setup { max-width: 640px; margin: 0 auto; text-align: left; background: var(--night-2); border: 1px solid rgba(242,233,223,0.1); border-radius: 16px; padding: 28px 30px; }
+  .setup ol { margin: 0; padding-left: 20px; }
+  .setup li { color: var(--cream-70); font-size: 15px; line-height: 1.6; margin-bottom: 12px; }
+  .setup li b { color: var(--cream); }
+  .setup .note { font-size: 13px; color: var(--cream-50); margin: 16px 0 0; line-height: 1.55; }
+
+  .rcta { text-align: center; padding: 9vh 0 2vh; }
+  .rcta .price { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--cream-50); margin-top: 14px; }
+
+  footer { border-top-color: rgba(242,233,223,0.1); }
+  .foot { color: var(--cream-50); }
+  .foot a { color: var(--cream-70); }
+  .foot a:hover { color: var(--cream); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a href="./" class="brand" aria-label="unmute">
+        <img src="icon.png" alt="" class="brand-icon" />
+        <img src="unmute-logo.png" alt="unmute" class="brand-mark" style="filter:brightness(0) invert(0.92);" />
+      </a>
+      <div class="right">
+        <a class="link" href="./">Home</a>
+        <a class="link" href="pricing.html">Pricing</a>
+        <a class="link cta" href="pricing.html">Get unmute</a>
+      </div>
+    </nav>
+
+    <section class="rhero">
+      <p class="eyebrow">unmute Remote</p>
+      <h1>A new way to <em>control your Mac.</em></h1>
+      <p class="lede">Hold <b>right&nbsp;⌥</b> (Option). Say what you want. It gets done — on your machine, by Claude Code. You shouldn't have to think about the terminal ever again.</p>
+      <a class="btn btn-ember" href="pricing.html">Get unmute — $8.99/mo</a>
+    </section>
+  </div>
+
+  <!-- The why -->
+  <div class="wrap mid">
+    <section class="section">
+      <p class="rmark">— The point</p>
+      <h2>You pay for Claude Code. <em>You leave most of it on the table.</em></h2>
+      <p class="lead">$100, $200 a month — and you reach for it a few times a day for the "big" stuff. But it can do almost anything on your computer. What stops you is the terminal and the friction of typing into it. Remote deletes both. You talk; it acts. The plan you already pay for, finally spent.</p>
+    </section>
+  </div>
+
+  <!-- How it works -->
+  <div class="wrap mid">
+    <section class="section">
+      <p class="rmark">— How Remote works</p>
+      <h2>Talk. <em>It does the rest.</em></h2>
+      <div class="steps">
+        <div class="step"><div class="n">01</div><h3>Speak the task</h3><p>Hold <b>right ⌥</b> (Option) and say it plainly. No prompt-craft, no syntax, no terminal.</p></div>
+        <div class="step"><div class="n">02</div><h3>It runs on your Mac</h3><p>Claude Code does the work right here — your files, terminal, your real logged-in Chrome, your apps.</p></div>
+        <div class="step"><div class="n">03</div><h3>You watch, or don't</h3><p>A live view shows what it's doing. An ambient indicator flags "running" or "needs you."</p></div>
+        <div class="step"><div class="n">04</div><h3>It comes back</h3><p>The result surfaces where you're working — with files and links you can click. Answer follow-ups by voice.</p></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Examples -->
+  <div class="wrap mid">
+    <section class="section">
+      <p class="rmark">— Things people actually say</p>
+      <h2>No commands to memorize.</h2>
+      <div class="examples">
+        <span class="ex">"Extract the zip I just downloaded"</span>
+        <span class="ex">"Reply to that email — I'm out sick"</span>
+        <span class="ex">"Rename these screenshots by date"</span>
+        <span class="ex">"Find the invoice from March and open it"</span>
+        <span class="ex">"Put on the next episode"</span>
+        <span class="ex">"Summarize this repo's README"</span>
+      </div>
+    </section>
+  </div>
+
+  <!-- Trust -->
+  <div class="wrap mid">
+    <section class="section">
+      <p class="rmark">— You're always the driver</p>
+      <h2>Powerful, <em>not unsupervised.</em></h2>
+      <p class="lead">To get things done without nagging you about every step, Remote runs Claude Code with elevated permissions. Here's what keeps that safe.</p>
+      <div class="trust-grid">
+        <div class="trust"><h3>Human-initiated, always</h3><p>It only ever runs the one thing you asked, when you ask it. It is not an autonomous agent looping on its own.</p></div>
+        <div class="trust"><h3>Kill it instantly</h3><p>Stop any task mid-run. Nothing keeps going in the background once you say stop.</p></div>
+        <div class="trust"><h3>Ask-before-acting, optional</h3><p>Prefer a checkpoint? Turn on per-action approval, or sandbox it to a single folder.</p></div>
+        <div class="trust"><h3>Your credentials stay yours</h3><p>unmute never handles your keys or logins. You authorize integrations in your own Claude Code, never through us.</p></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Setup -->
+  <div class="wrap">
+    <section class="section">
+      <p class="rmark">— Setup</p>
+      <h2>One thing, ~30 seconds.</h2>
+      <div class="setup">
+        <ol>
+          <li>Install the <b>Claude for Chrome extension</b> from the Chrome Web Store.</li>
+          <li>Keep one Chrome window open with the extension active.</li>
+          <li>That's it — hold <b>right ⌥</b> and start talking.</li>
+        </ol>
+        <p class="note">Everything else is optional. Add integrations like Gmail or Google Drive whenever you like — you authorize each one in your own Claude Code, in that same Chrome window. unmute never sees your credentials.</p>
+      </div>
+    </section>
+  </div>
+
+  <!-- CTA -->
+  <div class="wrap">
+    <section class="rcta">
+      <h2>Stop leaving it on the table.</h2>
+      <a class="btn btn-ember" href="pricing.html">Get unmute — $8.99/mo</a>
+      <p class="price">Dictation + Remote, one price · cancel anytime</p>
+    </section>
+
+    <footer>
+      <div class="foot">
+        <div>© 2026 unmute</div>
+        <div class="links">
+          <a href="./">Home</a>
+          <a href="pricing.html">Pricing</a>
+          <a href="refund.html">Refund</a>
+          <a href="terms.html">Terms</a>
+          <a href="privacy.html">Privacy</a>
+          <a href="https://x.com/just_unmute">Twitter</a>
+        </div>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
