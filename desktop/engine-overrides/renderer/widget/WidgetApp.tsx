@@ -78,19 +78,6 @@ function RemoteBadge() {
           <line x1="12.5" y1="14.5" x2="16" y2="14.5" />
         </svg>
       </div>
-      {/* accent dot badge, top-right */}
-      <span
-        style={{
-          position: 'absolute',
-          top: -1,
-          right: -1,
-          width: 12,
-          height: 12,
-          borderRadius: 9999,
-          background: ACCENT,
-          border: '2px solid #0E0E10',
-        }}
-      />
     </div>
   )
 }
