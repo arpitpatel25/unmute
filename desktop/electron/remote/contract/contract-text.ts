@@ -119,24 +119,27 @@ page AND read from it), choose the one matching their goal, not the steps you
 took. Set it early once you know, and always on \`done\`. If still unsure, use
 \`act\` (Unmute keeps it warm — the safest, most recoverable lifecycle).
 
-## 4b. Finishing a \`watch\`/\`consume\` task in the browser — hand off glow-free
+## 4b. Finishing a \`watch\`/\`consume\`/\`navigate\` task in the browser — hand off glow-free
 
-When a \`watch\` or \`consume\` task ends with media playing in a Chrome tab you
-drove via the browser extension, that tab keeps a control "glow" (a coloured
-border the extension paints on any tab it controls) — distracting for something
-the user just wants to watch/listen to. The glow only clears when that tab is
-closed, so as your FINAL steps, IN THIS ORDER:
+When a \`watch\`, \`consume\`, or \`navigate\` task ends on a Chrome tab you drove
+via the browser extension, that tab keeps a control "glow" (a coloured border the
+extension paints on any tab it controls) — distracting on something the user just
+wants to watch, listen to, or read. The glow only clears when that controlled tab
+is closed, so as your FINAL steps, IN THIS ORDER:
 
-1. **Open the same media URL in a fresh tab using the SHELL** — e.g. \`open
-   "<url>"\` — NOT the browser tool. A shell-opened tab is an ordinary tab the
-   extension never controls, so it plays with no glow. Do this FIRST so playback
+1. **Open the same URL in a fresh tab using the SHELL** — e.g. \`open "<url>"\` —
+   NOT the browser tool. A shell-opened tab is an ordinary tab the extension never
+   controls, so it shows with no glow. Do this FIRST so playback / the page
    continues seamlessly.
 2. **Then close the tab you were controlling** via the browser tool. Closing it
    removes the glow.
 
-Do this only for \`watch\`/\`consume\` (media you hand off and walk away from) —
-NOT for \`act\`/\`info\` tasks, where the user may want to keep acting in that
-controlled tab. Still report the media URL in \`result.artifacts\` as usual.
+This releases the tab WITHOUT ending your session. For \`navigate\`, Unmute then
+keeps your session warm briefly so the user can correct it (&ldquo;no, the other
+one&rdquo;) as one continuous flow with full context — you&rsquo;ll simply open a
+fresh tab if that follow-up needs the browser again. Do this for
+\`watch\`/\`consume\`/\`navigate\` — NOT for \`act\`/\`info\`, where the user may want to
+keep acting in the controlled tab. Always report the URL in \`result.artifacts\`.
 
 ## 5. Asking the user (only when truly blocked)
 

@@ -104,6 +104,11 @@ export interface TaskManagerOpts {
    *  Default 15 min; 0 = kill immediately on done (pure one-shot). The window
    *  resets on every follow-up, so an actively-continued thread stays alive. */
   warmMs?: number
+  /** Warm window for \`navigate\` specifically. Navigate releases its browser tab
+   *  glow-free (PRD §4b) but stays alive this long so the user can correct it
+   *  ("no, the other one") as one continuous flow — shorter than warmMs since
+   *  it's a quick correction window, not a long work thread. Default 8 min. */
+  navigateWarmMs?: number
   /** ms to wait after asking a fire-and-forget (consume/watch/navigate) session
    *  to QUIT cleanly — so claude-in-chrome disconnects from the tab and the extension
    *  "glow" clears — before hard-killing as a backstop. Default 1500. */
@@ -172,6 +177,7 @@ export class TaskManager extends EventEmitter {
       verifyAfterMs: opts.verifyAfterMs ?? 7000,
       maxReinjects: opts.maxReinjects ?? 2,
       warmMs: opts.warmMs ?? 15 * 60_000,
+      navigateWarmMs: opts.navigateWarmMs ?? 8 * 60_000,
       detachGraceMs: opts.detachGraceMs ?? 1500,
       purgeAgeMs: opts.purgeAgeMs ?? 24 * 60 * 60_000, // 24h — "gone by end of day"
       purgeSweepMs: opts.purgeSweepMs ?? 60 * 60_000,  // hourly
@@ -461,14 +467,15 @@ export class TaskManager extends EventEmitter {
             transcript: cleanTranscriptTail(this.outputBuffers.get(task.id) ?? ''),
           }).catch((e) => tlog.error('librarian submit failed', { error: (e as Error).message }))
         }
-        // Lifecycle by category (DECIDED): consume/watch/navigate are
-        // fire-and-forget — DETACH now (quit the session cleanly so the
-        // Claude-in-Chrome "glow" clears on the tab you're just
-        // watching/reading), and don't hold a session. info/act (and unknown)
-        // keep a warm window for a follow-up ("now reply to #2", "what about
-        // his assists") — extension stays attached so the user can continue
-        // acting in Sheets/Docs/Gmail.
-        if (task.category === 'consume' || task.category === 'watch' || task.category === 'navigate') {
+        // Lifecycle by category (DECIDED): consume/watch are fire-and-forget —
+        // DETACH now (quit the session cleanly so the Claude-in-Chrome "glow"
+        // clears) and don't hold a session; the user just walks away from the
+        // media. navigate, info, and act all PARK WARM for a follow-up — the
+        // executor already released the tab glow-free (PRD §4b), so a warm
+        // navigate session holds NO glow, it just stays alive briefly (shorter
+        // window, see navigateWarmMs) so a correction ("no, the other one")
+        // continues the same session with full context instead of respawning.
+        if (task.category === 'consume' || task.category === 'watch') {
           this.detachAndKill(id)
         } else {
           this.parkWarm(id)
@@ -862,21 +869,30 @@ export class TaskManager extends EventEmitter {
     if (timer) { clearInterval(timer); this.timers.delete(id) }
   }
 
+  /** Warm window for a task, by category. navigate gets a shorter window
+   *  (navigateWarmMs) — it's a quick "correct what I just opened" flow, not a
+   *  long work thread like info/act (warmMs). */
+  private warmMsFor(id: string): number {
+    return this.tasks.get(id)?.category === 'navigate' ? this.opts.navigateWarmMs : this.opts.warmMs
+  }
+
   /** Natural completion: stop polling but keep the session WARM for a follow-up
-   *  window (minimal continuation). After warmMs idle with no follow-up, hard-kill.
-   *  Status file (result/error) stays on disk for history regardless (§10.2). */
+   *  window (minimal continuation). After the (per-category) warm window idle
+   *  with no follow-up, hard-kill. Status file (result/error) stays on disk for
+   *  history regardless (§10.2). */
   private parkWarm(id: string): void {
     this.stopPolling(id)
     const ex = this.executors.get(id)
-    if (!ex?.alive || this.opts.warmMs <= 0) { this.hardKill(id); return }
+    const warmMs = this.warmMsFor(id)
+    if (!ex?.alive || warmMs <= 0) { this.hardKill(id); return }
     const tlog = log.child({ taskId: id })
     const t = setTimeout(() => {
-      tlog.event('warm-idle-timeout', { warmMs: this.opts.warmMs })
+      tlog.event('warm-idle-timeout', { warmMs })
       this.hardKill(id)
-    }, this.opts.warmMs)
+    }, warmMs)
     t.unref?.() // don't block process exit on the warm window
     this.warmTimers.set(id, t)
-    tlog.event('parked-warm', { warmMs: this.opts.warmMs })
+    tlog.event('parked-warm', { warmMs })
   }
 
   /** Hard close: stop polling, cancel warm timer, kill the PTY (PRD §4.5). */
