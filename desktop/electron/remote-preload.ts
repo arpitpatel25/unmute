@@ -88,6 +88,8 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-os-notifications', on),
 
   // ── Floating overlay window ──
+  /** Manually open the overlay (a button in the app). */
+  remoteOpenOverlay: (): void => ipcRenderer.send('remote:overlay-open'),
   /** User-triggered dismiss (Escape / ✕). Never auto-dismissed. */
   remoteOverlayDismiss: (): void => ipcRenderer.send('remote:overlay-dismiss'),
   /** Main tells the overlay which task to expand when it auto-presents. */

@@ -16,7 +16,10 @@ import { RemoteSetup } from './RemoteSetup'
 
 type Page = 'tasks' | 'how' | 'setup'
 
-type SetupAPI = { remoteGetSetupStatus?: () => Promise<{ complete: boolean }> }
+type SetupAPI = {
+  remoteGetSetupStatus?: () => Promise<{ complete: boolean }>
+  remoteOpenOverlay?: () => void
+}
 function setupApi(): SetupAPI {
   return (window as unknown as { electronAPI?: SetupAPI }).electronAPI ?? {}
 }
@@ -86,15 +89,24 @@ export function TaskPanel() {
               {tasks.length} task{tasks.length === 1 ? '' : 's'}
               {activeCount ? <span className="text-ink/40 font-normal"> · {activeCount} running</span> : null}
             </div>
-            <button
-              className="text-[11px] font-medium px-2.5 py-1 rounded-md border border-red-300 text-red-700 hover:bg-red-50"
-              title="Terminate every running session"
-              onClick={() => {
-                if (window.confirm('Kill ALL tasks? Every running Claude session is terminated immediately.')) killAll()
-              }}
-            >
-              Kill all
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                className="text-[11px] font-medium px-2.5 py-1 rounded-md border border-black/15 text-ink hover:bg-black/5"
+                title="Open the floating overlay"
+                onClick={() => setupApi().remoteOpenOverlay?.()}
+              >
+                Open overlay
+              </button>
+              <button
+                className="text-[11px] font-medium px-2.5 py-1 rounded-md border border-red-300 text-red-700 hover:bg-red-50"
+                title="Terminate every running session"
+                onClick={() => {
+                  if (window.confirm('Kill ALL tasks? Every running Claude session is terminated immediately.')) killAll()
+                }}
+              >
+                Kill all
+              </button>
+            </div>
           </div>
           {tasks.map((t) => (
             <TaskRow key={t.id} task={t} onAnswer={answer} onKill={kill} onRerun={rerun} onRemove={remove} />

@@ -32,7 +32,7 @@ import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { buildSetupChecklist, setupComplete } from './setup-status'
-import { createOverlayWindow, presentOverlay, dismissOverlay, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
+import { createOverlayWindow, presentOverlay, openOverlay, dismissOverlay, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
 import { Router, type RoutableTask } from './router'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 
@@ -622,6 +622,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:open-in-terminal', async (_e, id: string) => openInTerminal(id))
   // Floating overlay: user-triggered dismiss (never auto) + the auto-present toggle.
   ipcMain.on('remote:overlay-dismiss', () => dismissOverlay())
+  // Manual open from the app (a button next to "Kill all").
+  ipcMain.on('remote:overlay-open', () => openOverlay())
   ipcMain.handle('remote:set-overlay-auto-present', async (_e, on: boolean) => {
     settings.set('overlayAutoPresent', !!on)
     log.event('overlay-auto-present-set', { on: !!on })

@@ -135,6 +135,18 @@ export function presentOverlay(taskId: string): void {
   log.event('overlay-presented', { taskId })
 }
 
+/** Manually open the overlay (e.g. a button in the app) — show it without
+ *  focusing any particular task. Mirrors presentOverlay minus the task focus. */
+export function openOverlay(): void {
+  const win = createOverlayWindow()
+  win.setBounds(overlayBounds()) // re-anchor to the active display
+  if (!win.isVisible()) win.showInactive() // appear WITHOUT taking focus
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
+  win.setAlwaysOnTop(true, 'screen-saver')
+  grabEscape()
+  log.event('overlay-opened', {})
+}
+
 /** Hide the overlay (user-triggered dismiss). The task stays in the app. */
 export function dismissOverlay(): void {
   releaseEscape()
