@@ -36,6 +36,23 @@ export function RemoteHowItWorks({ onBack, onOpenSetup }: Props) {
         want, and it gets done — the result comes back to you.
       </div>
 
+      <Section title="It’s a remote, not a brain">
+        <p>
+          Unmute Remote has no intelligence of its own — it&rsquo;s a remote
+          control. All the thinking — understanding what you asked, figuring out
+          how to do it, and doing it — is <b>Claude Code</b>, Anthropic&rsquo;s
+          agent running on the latest Opus model.
+        </p>
+        <p>
+          That&rsquo;s a deliberate choice. Claude Code is already excellent — at
+          everyday tasks and specialized ones alike — so we don&rsquo;t sit between
+          you and it and water that down. The hard part was never the
+          intelligence; it was the <b>interface</b>. Unmute makes Claude Code
+          effortless to reach by voice. Claude Code does the rest — and as it gets
+          better, so does Remote, automatically.
+        </p>
+      </Section>
+
       <Section title="What happens when you speak a task">
         <p>
           <b>1.</b> You hold the Remote key and speak a command — &ldquo;extract the
