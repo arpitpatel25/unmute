@@ -142,9 +142,12 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
   }, [taskId])
 
   return (
-    <div className="mt-2 rounded-md border border-black/15 bg-[#0a0a0a] overflow-hidden">
-      <div className="flex items-center justify-between px-2 py-1 border-b border-white/10">
-        <span className="text-[10px] uppercase tracking-wider text-white/50">
+    // Light border + a slightly-lighter title bar + a drop shadow so the panel
+    // has a CLEAR edge on the dark overlay (where a black border vanished) while
+    // staying fine on the light in-app card (the black body provides contrast there).
+    <div className="mt-2.5 rounded-lg border border-white/20 bg-black overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.55)]">
+      <div className="flex items-center justify-between px-2.5 py-1.5 bg-white/[0.05] border-b border-white/15">
+        <span className="text-[10px] uppercase tracking-wider text-white/55">
           live terminal · type to take over · scroll to see full width
         </span>
         <div className="flex items-center gap-3">
