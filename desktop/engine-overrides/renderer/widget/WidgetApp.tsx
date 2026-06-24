@@ -52,7 +52,8 @@ let sessionDismissed = false
 // (with a gap) ONLY during a Remote capture, so the user can tell it from a
 // dictation. Same dark fill (#0E0E10), whitish border, and drop shadow as the
 // pill so they read as one family; the accent terminal glyph marks it Remote.
-const ACCENT = '#8B7CF6'
+// Whitish, matching the pill's light contents (not accent-purple).
+const GLYPH_COLOR = 'rgba(255, 255, 255, 0.92)'
 function RemoteBadge() {
   return (
     <div style={{ position: 'relative', flex: 'none', width: 44, height: 44 }}>
@@ -73,7 +74,7 @@ function RemoteBadge() {
       >
         {/* boxed terminal >_ glyph */}
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-          stroke={ACCENT} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          stroke={GLYPH_COLOR} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
           <polyline points="7 9.5 10 12 7 14.5" />
           <line x1="12.5" y1="14.5" x2="16" y2="14.5" />
