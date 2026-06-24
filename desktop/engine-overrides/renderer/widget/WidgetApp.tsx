@@ -127,6 +127,20 @@ export default function WidgetApp() {
     }
   }, [])
 
+  // Keep the Remote badge coupled to the pill. The badge and the pill are two
+  // separate elements gated by different conditions (badge: isRemote; pill:
+  // state), so a latched isRemote could let the badge appear/linger without the
+  // pill. The moment the pill leaves an ACTIVE state (→ output/hidden/error/…),
+  // drop isRemote so the badge can never outlive the pill. A new Remote capture
+  // re-sets isRemote via remoteOnCaptureKind on the next recording:start.
+  useEffect(() => {
+    const active =
+      state === 'dictation-active' ||
+      state === 'instruction-active' ||
+      state === 'processing'
+    if (!active) setIsRemote(false)
+  }, [state])
+
   // ─── Peek the current engine each time a dictation starts ───
   // We don't block the recording on this; we just enrich the awareness
   // card asynchronously. Clearing offlineReason on 'hidden' makes the
