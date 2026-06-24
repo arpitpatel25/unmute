@@ -118,9 +118,25 @@ export function createOverlayWindow(): BrowserWindow {
   return overlayWindow
 }
 
+/** Make sure the window is on the #/overlay route before we show it. In dev a
+ *  Vite HMR full-reload can navigate the window to the base URL and drop the
+ *  hash, so the shared renderer falls back to the main <App> (and Esc/✕ — which
+ *  live in OverlayApp — stop working). If the hash drifted, reload onto the
+ *  route. No-op in the normal case; can't happen in a packaged build. */
+function ensureOverlayRoute(win: BrowserWindow): void {
+  if (win.webContents.getURL().includes('#/overlay')) return
+  log.event('overlay-route-reasserted', {})
+  if (process.env.ELECTRON_RENDERER_URL) {
+    void win.loadURL(`${process.env.ELECTRON_RENDERER_URL}#/overlay`)
+  } else {
+    void win.loadFile(join(__dirname, '../renderer/index.html'), { hash: '/overlay' })
+  }
+}
+
 /** Present the overlay (without stealing focus) and tell it which task to expand. */
 export function presentOverlay(taskId: string): void {
   const win = createOverlayWindow()
+  ensureOverlayRoute(win)
   win.setBounds(overlayBounds()) // re-anchor to the active display
   win.webContents.send('remote:overlay-focus', { taskId })
   if (!win.isVisible()) win.showInactive() // appear WITHOUT taking focus
@@ -139,6 +155,7 @@ export function presentOverlay(taskId: string): void {
  *  focusing any particular task. Mirrors presentOverlay minus the task focus. */
 export function openOverlay(): void {
   const win = createOverlayWindow()
+  ensureOverlayRoute(win)
   win.setBounds(overlayBounds()) // re-anchor to the active display
   if (!win.isVisible()) win.showInactive() // appear WITHOUT taking focus
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
