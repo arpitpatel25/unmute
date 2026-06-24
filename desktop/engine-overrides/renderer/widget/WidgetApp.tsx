@@ -72,14 +72,13 @@ function RemoteBadge() {
           justifyContent: 'center',
         }}
       >
-        {/* remote-control glyph: body + power button + button rows */}
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-          stroke={GLYPH_COLOR} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="8" y="2.5" width="8" height="19" rx="3" />
-          <circle cx="12" cy="6.5" r="1.25" fill={GLYPH_COLOR} stroke="none" />
-          <line x1="10.5" y1="11" x2="13.5" y2="11" />
-          <line x1="10.5" y1="14" x2="13.5" y2="14" />
-          <line x1="10.5" y1="17" x2="13.5" y2="17" />
+        {/* The app's own Remote icon (matches the Remote tab in App.tsx). */}
+        <svg width="21" height="21" viewBox="0 0 16 16" fill="none"
+          stroke={GLYPH_COLOR} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M10.5 5V1.8" />
+          <rect x="4.5" y="5" width="7" height="9.5" rx="1.8" />
+          <path d="M6.4 7.4h3.2" />
+          <circle cx="8" cy="11.4" r="1.2" />
         </svg>
       </div>
     </div>
