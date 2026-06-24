@@ -41,6 +41,18 @@ import type { AgentExecutor, ExecutorFactory } from './executor'
 
 const log = createLogger('task-manager')
 
+// Strip ANSI escapes + whitespace so Claude's TUI text (which positions with
+// cursor moves, not spaces) matches as contiguous tokens.
+const ANSI_RE = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][A-B0-2]|\x1b[=>]/g
+function stripTui(s: string): string {
+  return s.replace(ANSI_RE, '').replace(/\s+/g, '').toLowerCase()
+}
+// The idle input-prompt footer, always shown in --dangerously-skip-permissions
+// mode → our "the REPL is ready, dispatch now" signal (validated by the Task-0
+// probe). The trust-dialog markers are only for logging which state we cleared.
+const REPL_READY_RE = /bypasspermissions/
+const TRUST_DIALOG_RE = /trustthisfolder|no,exit|esctocancel/
+
 // ── UI-facing task state. Adds 'stuck' (PRD §5.3) on top of the file states. ──
 export type UiTaskState = TaskState | 'stuck'
 
@@ -268,12 +280,45 @@ export class TaskManager extends EventEmitter {
       await ex.spawn({ cwd: dir, env: process.env, taskId: id })
       await ex.isReady()
 
-      // Accept Claude Code's folder-trust prompt. It appears on the first run in
-      // a fresh dir EVEN with --dangerously-skip-permissions (validated by the
-      // Task-0 probe). Enter accepts the highlighted "Yes, I trust this folder";
-      // a no-op empty submit if no prompt is shown. Then let the REPL boot.
-      ex.writeStdin('')
-      await new Promise((r) => setTimeout(r, this.opts.trustAcceptMs))
+      // Drive past Claude Code's folder-trust prompt (and any boot prompts) using
+      // ONLY Enter, gated on OBSERVED output — never a timer, never Esc. The trust
+      // dialog appears on the first run in a fresh dir EVEN with
+      // --dangerously-skip-permissions (validated by the Task-0 probe); its footer
+      // is literally "Enter to confirm · Esc to cancel", so Esc = "No, exit" and
+      // QUITS Claude. Enter accepts the pre-selected "Yes, I trust this folder" and
+      // is a harmless no-op on an empty prompt. We send Enter whenever output goes
+      // quiet, and stop only once the REPL reaches its idle input prompt (the
+      // "bypass permissions" footer) or we hit the bounds — THEN we dispatch, so
+      // the prompt can never land mid-dialog or mid-paint (the old race that left
+      // the prompt unsubmitted and got the session Esc-killed by recovery).
+      // Gated on trustAcceptMs>0 so tests (which pass 0 with a no-output fake
+      // executor) dispatch instantly; production keeps the default (>0).
+      if (this.opts.trustAcceptMs > 0) {
+        const QUIET_MS = 700, POLL_MS = 150, MAX_ENTERS = 6, MAX_WAIT_MS = 14_000
+        const t0 = Date.now()
+        let enters = 0, lastLen = -1, lastChange = Date.now()
+        while (Date.now() - t0 < MAX_WAIT_MS && ex.alive) {
+          await new Promise((r) => setTimeout(r, POLL_MS))
+          const len = (this.outputBuffers.get(id) ?? '').length
+          if (len !== lastLen) { lastLen = len; lastChange = Date.now(); continue }
+          if (Date.now() - lastChange < QUIET_MS) continue // not quiet yet
+          const raw = this.outputBuffers.get(id) ?? ''
+          // No output at all after going quiet → nothing to settle (claude always
+          // paints a TUI, so this is a no-output executor, e.g. tests). Proceed.
+          if (raw.length === 0) { tlog.event('repl-settled', { enters, reason: 'no-output' }); break }
+          const out = stripTui(raw.slice(-4000))
+          if (REPL_READY_RE.test(out)) { tlog.event('repl-settled', { enters }); break }
+          if (enters < MAX_ENTERS) {
+            ex.write('\r') // Enter = accept trust / no-op on empty prompt; NEVER Esc
+            enters += 1
+            lastChange = Date.now() // give it a beat to react before the next Enter
+            tlog.event('settle-enter', { attempt: enters, dialog: TRUST_DIALOG_RE.test(out) })
+            continue
+          }
+          tlog.warn('repl not settled after max Enters — dispatching anyway', { enters })
+          break
+        }
+      }
       tlog.event('folder-trust-accepted', {})
 
       const payload = buildDispatch({ intent, statusPath, recipeScratchPath })
@@ -299,8 +344,9 @@ export class TaskManager extends EventEmitter {
       // reverse-search ("(search up)"), so the task sits at 0s forever with an
       // empty prompt. We detect this via the UserPromptSubmit hook (it touches
       // .unmute-activity ONLY on a real submit); if no such activity appears, we
-      // press Esc to clear any stuck search/input mode and re-inject. Background,
-      // fire-and-forget — adds ZERO latency to the happy path.
+      // clear the input line with Ctrl-U (NEVER Esc — Esc = "No, exit" on a
+      // dialog and QUITS Claude) and re-inject. Background, fire-and-forget —
+      // adds ZERO latency to the happy path.
       void this.verifyDispatch(id, ex, payload, dir, dispatchedAt)
     } catch (e) {
       tlog.error('dispatch failed before polling', { error: (e as Error).message })
@@ -313,9 +359,10 @@ export class TaskManager extends EventEmitter {
    *  Signal: the UserPromptSubmit hook touches .unmute-activity ONLY on a real
    *  submit, so hookActivityMs() returning null/old after dispatch means the
    *  payload was swallowed (e.g. the REPL tipped into reverse-search while still
-   *  painting — the task then sits at 0s forever). We press Esc to clear any
-   *  stuck search/input mode, then re-inject. Bounded retries; only ever fires
-   *  on a genuinely-unsubmitted prompt, so it can't double-dispatch a live one. */
+   *  painting — the task then sits at 0s forever). We clear the input line with
+   *  Ctrl-U (NEVER Esc — Esc = "No, exit" on a dialog and QUITS Claude), then
+   *  re-inject. Bounded retries; only ever fires on a genuinely-unsubmitted
+   *  prompt, so it can't double-dispatch a live one. */
   private async verifyDispatch(
     id: string,
     ex: AgentExecutor,
@@ -333,9 +380,9 @@ export class TaskManager extends EventEmitter {
       // A UserPromptSubmit at/after our dispatch = the prompt submitted → done.
       // (1s slack absorbs clock/mtime granularity.)
       if (activity !== null && activity >= dispatchedAt - 1000) return
-      // Never submitted → clear any stuck reverse-search / partial input, re-inject.
+      // Never submitted → clear any stuck partial input, re-inject.
       tlog.warn('dispatch not confirmed (no submit) — clearing input and re-injecting', { attempt })
-      ex.write('\x1b') // Esc — exit reverse-search / clear the input line
+      ex.write('\x15') // Ctrl-U — clear the input line; safe (NEVER Esc, which quits Claude)
       await new Promise((r) => setTimeout(r, 200))
       if (!ex.alive) return
       ex.writeStdin(payload)
