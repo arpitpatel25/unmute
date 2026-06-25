@@ -7,6 +7,10 @@
 import { ipcRenderer } from 'electron'
 
 export const paywallPreloadExtensions = {
+  // App version (for the Settings footer build-number display)
+  paywallAppVersion: (): Promise<string> =>
+    ipcRenderer.invoke('paywall:app-version'),
+
   // Keychain bridge (used by supabase-js storage adapter)
   paywallKeychainGet: (key: string): Promise<string | null> =>
     ipcRenderer.invoke('paywall:keychain-get', key),

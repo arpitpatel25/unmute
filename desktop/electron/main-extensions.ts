@@ -71,7 +71,7 @@ function localReason(state: ProviderState, mode: EngineMode): OnDeviceReason {
   return 'chose_on_device' // catch-all for unusual configs
 }
 
-export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
+export function initPaywall(appHandle: App, oss: OSSAdapter): ProviderRouter {
   // initPaywallGlue does most of the wiring: registerAuthIPC,
   // registerSessionBridge (paywall:set-session — the
   // missing wire that left tryManagedSTT silently falling back to local),
@@ -98,6 +98,12 @@ export function initPaywall(_appHandle: App, oss: OSSAdapter): ProviderRouter {
     focused?.webContents.send('paywall:show-sign-in')
     return true
   })
+
+  // App version for the Settings footer — so users can see which build they're
+  // on and we can tell them when to update. Sourced from app.getVersion(), which
+  // returns the version electron-builder baked into the package (the real build
+  // number), so it can never drift from what's installed.
+  ipcMain.handle('paywall:app-version', () => appHandle.getVersion())
 
   // Shared state-builder — used by the router AND the awareness widget's
   // peek IPC so they can never disagree on what we'd route to.

@@ -42,9 +42,16 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
   const [instructionEnabled, setInstructionEnabled] = useState<boolean>(true)
   const [lowercaseOutput, setLowercaseOutput] = useState<boolean>(false)
+  const [appVersion, setAppVersion] = useState<string | null>(null)
 
   useEffect(() => {
     loadAudioDevices()
+    // Build number — shown subtly at the bottom so users know which version
+    // they're on (and we can tell them when to update). Optional-chained so it
+    // no-ops gracefully against an older main process in dev.
+    window.electronAPI.paywallAppVersion?.()
+      .then((v: string) => setAppVersion(v))
+      .catch(() => {})
     window.electronAPI.getWidgetPosition().then((v: string) => {
       if (v === 'center' || v === 'right') setWidgetPosition(v)
     })
@@ -293,6 +300,11 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
           </button>
         </SettingRow>
       </div>
+
+      {/* ═══ Version (subtle build number) ═══ */}
+      <p className="mt-1 mb-3 text-center text-[11px] text-ink-35 select-text">
+        Unmute {appVersion ? `v${appVersion}` : ''}
+      </p>
     </div>
   )
 }
