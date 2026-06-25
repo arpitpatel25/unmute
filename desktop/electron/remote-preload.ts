@@ -91,6 +91,19 @@ export const remotePreloadExtensions = {
   remoteSetOsNotifications: (on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-os-notifications', on),
 
+  // ── Doer model selector (Remote only) ──
+  /** Current doer model ('haiku' | 'sonnet' | 'opus'). */
+  remoteGetModel: (): Promise<string> => ipcRenderer.invoke('remote:get-model'),
+  /** Set the doer model; applies to the next dispatched task. Returns the
+   *  validated value actually stored. */
+  remoteSetModel: (m: string): Promise<string> => ipcRenderer.invoke('remote:set-model', m),
+  /** Fires when the model changes from EITHER surface, so both stay in sync. */
+  remoteOnModelChanged: (cb: (model: string) => void): (() => void) => {
+    const handler = (_e: unknown, model: string) => cb(model)
+    ipcRenderer.on('remote:model-changed', handler)
+    return () => ipcRenderer.removeListener('remote:model-changed', handler)
+  },
+
   // ── Floating overlay window ──
   /** Manually open the overlay (a button in the app). */
   remoteOpenOverlay: (): void => ipcRenderer.send('remote:overlay-open'),

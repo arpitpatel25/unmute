@@ -95,7 +95,10 @@ const settings = new Store<RemoteSettings>({
     dictationKey: 'fn',
     agent: 'claude',
     sandboxRoots: [],
-    model: 'opus',
+    // DECIDED: Sonnet is the default doer model — fast AND capable for agentic
+    // remote tasks. Users switch to Haiku (faster) or Opus (most capable) from
+    // the Remote settings or the capture-widget model selector.
+    model: 'sonnet',
     browserEnabled: true,
     setupConfirmations: {},
     osNotifications: false,
@@ -364,7 +367,7 @@ function executorFactory(resume = false) {
   const agent = settings.get('agent')
   const sandboxRoots = settings.get('sandboxRoots') ?? []
   const sandboxed = sandboxRoots.length > 0
-  const model = settings.get('model') || 'opus'
+  const model = settings.get('model') || 'sonnet'
   const browser = settings.get('browserEnabled') !== false
   log.event('executor-factory', { agent, permissionMode: mode, sandboxed, sandboxRoots, model, browser, resume })
   if (agent === 'codex') {
@@ -507,7 +510,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // This is what lets the curation prompt actually submit instead of sitting at
   // an idle welcome screen until the backstop kills it.
   function librarianExecutorFactory() {
-    const model = settings.get('model') || 'opus'
+    // PINNED to opus, independent of the user's doer-model selection: curation
+    // is background (latency-insensitive) and benefits from strong reasoning, so
+    // picking Haiku for speed on tasks shouldn't degrade long-term memory.
+    const model = 'opus'
     const tmux = tmuxBin ? { bin: tmuxBin, confPath: tmuxConfPath, cols: 120, rows: 40 } : undefined
     log.event('librarian-executor-factory', { model })
     return new ClaudeCodeExecutor({
@@ -681,6 +687,20 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('overlay-auto-present-set', { on: !!on })
     return true
   })
+  // Doer model selector (Remote only). Validated to the three supported tiers;
+  // applies to the NEXT dispatched task (each task reads the setting at spawn).
+  // Broadcast so both surfaces — Remote settings + the capture-widget badge —
+  // stay in sync when either changes it.
+  ipcMain.handle('remote:get-model', async () => settings.get('model') || 'sonnet')
+  ipcMain.handle('remote:set-model', async (_e, m: string) => {
+    const model = (m === 'haiku' || m === 'sonnet' || m === 'opus') ? m : (settings.get('model') || 'sonnet')
+    settings.set('model', model)
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('remote:model-changed', model)
+    }
+    log.event('model-set', { model })
+    return model
+  })
   ipcMain.handle('remote:set-overlay-docked', async (_e, on: boolean) => {
     settings.set('overlayDocked', !!on)
     setDockedMode(!!on)
@@ -698,7 +718,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     remoteKey: getRemoteKey(),
     agent: settings.get('agent'),
     sandboxRoots: settings.get('sandboxRoots') ?? [],
-    model: settings.get('model') || 'opus',
+    model: settings.get('model') || 'sonnet',
     browserEnabled: settings.get('browserEnabled') !== false,
     overlayAutoPresent: settings.get('overlayAutoPresent') !== false,
     overlayDocked: settings.get('overlayDocked') !== false,

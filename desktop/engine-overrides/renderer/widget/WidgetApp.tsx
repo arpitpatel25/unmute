@@ -48,40 +48,96 @@ function playClickSound(type: 'start' | 'stop') {
 // restart resets it (which is what we want).
 let sessionDismissed = false
 
-// Remote capture marker — a circular companion shown to the LEFT of the pill
-// (with a gap) ONLY during a Remote capture, so the user can tell it from a
-// dictation. Same dark fill (#0E0E10), whitish border, and drop shadow as the
-// pill so they read as one family; the accent terminal glyph marks it Remote.
-// Whitish, matching the pill's light contents (not accent-purple).
-const GLYPH_COLOR = 'rgba(255, 255, 255, 0.92)'
+// Remote capture marker — a dark chip shown to the LEFT of the pill (with a gap)
+// ONLY during a Remote capture. Same dark fill (#0E0E10), whitish border, and
+// drop shadow as the pill so they read as one family. Instead of an icon it
+// shows the active DOER MODEL name in Claude's orange, so the user always knows
+// which model the task will run on. Hovering expands an inline selector
+// (Haiku · Sonnet · Opus) so they can switch ON THE FLY while speaking — the
+// choice applies to THIS task on submit (and persists as the default).
+const CLAUDE_ORANGE = '#D97757'
+const MODELS = ['haiku', 'sonnet', 'opus'] as const
+type ModelId = (typeof MODELS)[number]
+const isModelId = (m: unknown): m is ModelId => m === 'haiku' || m === 'sonnet' || m === 'opus'
+
+function remoteModelApi() {
+  return window.electronAPI as unknown as {
+    remoteGetModel?: () => Promise<string>
+    remoteSetModel?: (m: string) => Promise<string>
+    remoteOnModelChanged?: (cb: (model: string) => void) => () => void
+  }
+}
+
 function RemoteBadge() {
+  const [model, setModel] = useState<ModelId>('sonnet')
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    const api = remoteModelApi()
+    void api.remoteGetModel?.().then((m) => { if (isModelId(m)) setModel(m) })
+    const off = api.remoteOnModelChanged?.((m) => { if (isModelId(m)) setModel(m) })
+    return () => off?.()
+  }, [])
+
+  const pick = (m: ModelId) => {
+    setModel(m) // optimistic — reflects instantly; the next task reads the setting
+    void remoteModelApi().remoteSetModel?.(m)
+    setExpanded(false)
+  }
+
   return (
-    <div style={{ position: 'relative', flex: 'none', width: 44, height: 44 }}>
+    <div
+      style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center' }}
+      onMouseEnter={() => setExpanded(true)}
+      onMouseLeave={() => setExpanded(false)}
+    >
       <div
         style={{
-          width: 44,
           height: 44,
           borderRadius: 9999,
           background: '#0E0E10',
-          // Match the pill exactly: whitish border + the pill's drop shadow
-          // (no purple ring).
+          // Match the pill exactly: whitish border + the pill's drop shadow.
           border: '1px solid rgba(255, 255, 255, 0.55)',
           boxShadow: '0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255,255,255,0.04) inset',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
+          padding: expanded ? '0 5px' : '0 14px',
+          gap: 3,
+          transition: 'padding 140ms ease',
         }}
       >
-        {/* The app's own Remote icon (matches the Remote tab in App.tsx). */}
-        {/* strokeWidth ~0.75 viewBox units → ~1px on screen at 21px render, so the
-            icon line matches the 1px white border on the circle and the pill. */}
-        <svg width="21" height="21" viewBox="0 0 16 16" fill="none"
-          stroke={GLYPH_COLOR} strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M10.5 5V1.8" />
-          <rect x="4.5" y="5" width="7" height="9.5" rx="1.8" />
-          <path d="M6.4 7.4h3.2" />
-          <circle cx="8" cy="11.4" r="1.2" />
-        </svg>
+        {expanded ? (
+          MODELS.map((m) => {
+            const active = m === model
+            return (
+              <button
+                key={m}
+                onClick={() => pick(m)}
+                style={{
+                  height: 32,
+                  padding: '0 10px',
+                  borderRadius: 9999,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  textTransform: 'capitalize',
+                  background: active ? 'rgba(217,119,87,0.18)' : 'transparent',
+                  color: active ? CLAUDE_ORANGE : 'rgba(255,255,255,0.5)',
+                  transition: 'color 120ms ease, background 120ms ease',
+                }}
+                onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = 'rgba(255,255,255,0.9)' }}
+                onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = 'rgba(255,255,255,0.5)' }}
+              >
+                {m}
+              </button>
+            )
+          })
+        ) : (
+          <span style={{ fontSize: 13, fontWeight: 600, color: CLAUDE_ORANGE, textTransform: 'capitalize', letterSpacing: 0.2 }}>
+            {model}
+          </span>
+        )}
       </div>
     </div>
   )

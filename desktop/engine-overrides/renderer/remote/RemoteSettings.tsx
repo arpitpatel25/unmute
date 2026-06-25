@@ -25,6 +25,8 @@ type API = {
   remoteSetAgent?: (a: 'claude' | 'codex') => Promise<boolean>
   remoteSetSandboxRoots?: (r: string[]) => Promise<boolean>
   remoteSetBrowserEnabled?: (enabled: boolean) => Promise<boolean>
+  remoteSetModel?: (m: string) => Promise<string>
+  remoteOnModelChanged?: (cb: (model: string) => void) => () => void
   remoteSetOverlayAutoPresent?: (on: boolean) => Promise<boolean>
   remoteSetOverlayDocked?: (on: boolean) => Promise<boolean>
   remoteSetOsNotifications?: (on: boolean) => Promise<boolean>
@@ -37,7 +39,12 @@ export function RemoteSettings() {
   const [s, setS] = useState<Settings | null>(null)
   const [newRoot, setNewRoot] = useState('')
 
-  useEffect(() => { void api().remoteGetSettings?.().then((v) => v && setS(v)) }, [])
+  useEffect(() => {
+    void api().remoteGetSettings?.().then((v) => v && setS(v))
+    // Stay in sync when the model is changed from the capture-widget badge.
+    const off = api().remoteOnModelChanged?.((model) => setS((prev) => (prev ? { ...prev, model } : prev)))
+    return () => off?.()
+  }, [])
   if (!s) return null
 
   const update = (patch: Partial<Settings>) => setS((prev) => (prev ? { ...prev, ...patch } : prev))
@@ -48,6 +55,33 @@ export function RemoteSettings() {
 
       <div className="text-[11px] text-ink/50 mb-2">
         Remote key: <b>{s.remoteKey === 'fn' ? 'Function key' : 'Right-option'}</b> (the key not used for dictation).
+      </div>
+
+      {/* Doer model — Remote tasks run on this. Applies to the next task. */}
+      <div className="py-1.5 border-t border-black/5">
+        <div className="mb-1.5">Model <span className="text-ink/40">(Remote tasks — applies to the next one)</span></div>
+        <div className="flex gap-1.5">
+          {(['haiku', 'sonnet', 'opus'] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => { update({ model: m }); void api().remoteSetModel?.(m) }}
+              className={`flex-1 px-2 py-1.5 rounded-lg text-[12px] font-semibold capitalize border transition-colors ${
+                s.model === m
+                  ? 'bg-[#D97757] text-white border-[#D97757]'
+                  : 'bg-white text-ink/70 border-border hover:bg-cream-mid'
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <div className="mt-1 text-[10.5px] text-ink/40">
+          {s.model === 'haiku'
+            ? 'Fastest — best for simple, quick tasks.'
+            : s.model === 'opus'
+              ? 'Most capable — best for complex, multi-step tasks.'
+              : 'Balanced — fast and capable. Recommended default.'}
+        </div>
       </div>
 
       {/* Permission mode (§10.1) */}
