@@ -1,0 +1,200 @@
+/* ─────────────────────────────────────────────────────────────
+   unmute — shared design system
+   Warm "paper" for dictation, dark "night" for Remote.
+   Display: Instrument Serif · Body: Inter · Mono: JetBrains Mono
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  --ink: #2A1E18;
+  --ink-70: rgba(42,30,24,0.72);
+  --ink-50: rgba(42,30,24,0.50);
+  --ink-30: rgba(42,30,24,0.30);
+  --ink-15: rgba(42,30,24,0.15);
+  --ink-08: rgba(42,30,24,0.08);
+  --paper: #FDF8F4;
+  --accent: #C44A2E;
+
+  /* Night palette — used for the Remote surfaces */
+  --night: #16100C;
+  --night-2: #1E1610;
+  --cream: #F2E9DF;
+  --cream-70: rgba(242,233,223,0.70);
+  --cream-50: rgba(242,233,223,0.46);
+  --cream-15: rgba(242,233,223,0.14);
+  --ember: #E8633F;          /* brighter terracotta for dark bg */
+  --term: #9FE0A6;           /* soft terminal green, used sparingly */
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.55;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ─── Watercolor BG ─── */
+.bg {
+  position: fixed; inset: 0; z-index: -2;
+  background:
+    linear-gradient(180deg, rgba(253,248,244,0) 0%, rgba(253,248,244,0.55) 70%, rgba(253,248,244,0.92) 100%),
+    url('bg.avif') center / cover no-repeat;
+  background-color: var(--paper);
+}
+.bg::after {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 30%, transparent 0%, rgba(253,248,244,0.35) 65%, rgba(253,248,244,0.75) 100%);
+  pointer-events: none;
+}
+
+/* ─── Layout ─── */
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; text-align: center; }
+.wrap.mid { max-width: 1400px; }
+@media (max-width: 1100px) {
+  .wrap.mid { max-width: 100%; padding: 0 36px; }
+}
+nav {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 36px 0 0;
+}
+.brand { display: inline-flex; align-items: center; gap: 11px; text-decoration: none; }
+.brand-icon { width: 32px; height: 32px; border-radius: 8px; display: block; }
+.brand-mark { height: 36px; width: auto; display: block; }
+@media (max-width: 600px) {
+  .brand-mark { height: 30px; }
+  .brand-icon { width: 28px; height: 28px; }
+}
+nav .right { display: flex; gap: 22px; font-size: 13px; align-items: baseline; }
+nav a.link {
+  color: var(--ink-70); text-decoration: none;
+  border-bottom: 1px solid transparent; transition: all .2s;
+}
+nav a.link:hover { color: var(--ink); border-bottom-color: var(--ink-30); }
+nav a.link.cta {
+  color: var(--accent); font-weight: 600;
+}
+@media (max-width: 600px) {
+  nav .right { gap: 16px; font-size: 12px; }
+  nav a.link.hide-sm { display: none; }
+}
+
+/* ─── Mac keycap chip ─── */
+.kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 6px 11px; min-height: 30px; min-width: 30px;
+  font-family: 'Inter', system-ui; font-size: 12.5px; font-weight: 700;
+  letter-spacing: -0.01em; color: var(--ink);
+  background: linear-gradient(180deg, #FFFFFF 0%, #EFE8DC 100%);
+  border: 1px solid rgba(42,30,24,0.20);
+  border-radius: 8px;
+  box-shadow:
+    0 3px 0 rgba(42,30,24,0.22),
+    0 4px 10px rgba(42,30,24,0.08),
+    inset 0 1px 0 rgba(255,255,255,0.95);
+  user-select: none; vertical-align: middle;
+}
+.kbd-lg {
+  padding: 12px 18px; min-height: 46px; min-width: 46px;
+  font-size: 14.5px; border-radius: 10px;
+  box-shadow:
+    0 4px 0 rgba(42,30,24,0.22),
+    0 6px 14px rgba(42,30,24,0.10),
+    inset 0 1px 0 rgba(255,255,255,0.95);
+}
+.kbd-black {
+  background: linear-gradient(180deg, #2E2A25 0%, #14110F 100%);
+  color: rgba(255,255,255,0.95);
+  border-color: rgba(0,0,0,0.55);
+  box-shadow:
+    0 3px 0 rgba(0,0,0,0.55),
+    0 4px 10px rgba(0,0,0,0.22),
+    inset 0 1px 0 rgba(255,255,255,0.14);
+}
+.kbd-black.kbd-lg {
+  box-shadow:
+    0 4px 0 rgba(0,0,0,0.55),
+    0 6px 14px rgba(0,0,0,0.30),
+    inset 0 1px 0 rgba(255,255,255,0.18);
+}
+.kbd-red {
+  background: linear-gradient(180deg, #F04040 0%, #C82828 100%);
+  color: white;
+  border-color: rgba(0,0,0,0.35);
+  box-shadow:
+    0 3px 0 #8a1a1a,
+    0 4px 10px rgba(200,30,30,0.22),
+    inset 0 1px 0 rgba(255,255,255,0.25);
+}
+.kbd-red.kbd-lg {
+  box-shadow:
+    0 4px 0 #7a1010,
+    0 6px 14px rgba(200,30,30,0.30),
+    inset 0 1px 0 rgba(255,255,255,0.22);
+}
+.combo { display: inline-flex; align-items: center; gap: 8px; }
+.combo .arrow { color: var(--ink-30); font-size: 13px; }
+
+/* ─── Buttons ─── */
+.btn {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 13px 22px;
+  border-radius: 999px;
+  font-size: 14px; font-weight: 500;
+  text-decoration: none;
+  transition: all .2s;
+  cursor: pointer; border: none;
+}
+.btn-primary { background: var(--ink); color: var(--paper); }
+.btn-primary:hover { background: #1B130D; transform: translateY(-1px); }
+.btn-quiet {
+  background: transparent; color: var(--ink-70);
+  border: 1px solid var(--ink-15);
+}
+.btn-quiet:hover { color: var(--ink); border-color: var(--ink-30); background: rgba(255,255,255,0.4); }
+.btn-ember { background: var(--ember); color: #fff; }
+.btn-ember:hover { background: #d9542f; transform: translateY(-1px); }
+.btn-onnight {
+  background: var(--cream); color: var(--night);
+}
+.btn-onnight:hover { background: #fff; transform: translateY(-1px); }
+.btn-ghost-night {
+  background: transparent; color: var(--cream-70);
+  border: 1px solid var(--cream-15);
+}
+.btn-ghost-night:hover { color: var(--cream); border-color: rgba(242,233,223,0.4); }
+.micro { font-size: 12px; color: var(--ink-50); margin-top: 8px; }
+
+/* ─── Section marks / headings ─── */
+.mark {
+  font-family: 'Instrument Serif', 'Times New Roman', serif;
+  font-weight: 500; font-style: italic; font-size: 13px;
+  color: var(--accent); letter-spacing: 0.02em; margin: 0 0 14px;
+}
+.serif-h2 {
+  font-family: 'Instrument Serif', 'Times New Roman', serif;
+  font-weight: 400; font-size: clamp(26px, 3.4vw, 38px);
+  letter-spacing: -0.022em; line-height: 1.13;
+  margin: 0 0 16px; color: var(--ink);
+}
+.serif-h2 em { font-style: italic; color: var(--accent); font-weight: 300; }
+
+/* ─── Footer ─── */
+footer {
+  padding: 60px 0 50px;
+  border-top: 1px solid var(--ink-08);
+  margin-top: 60px;
+}
+.foot {
+  display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 14px;
+  font-size: 12px; color: var(--ink-50);
+}
+.foot .links { display: flex; gap: 18px; flex-wrap: wrap; }
+.foot a { color: var(--ink-70); text-decoration: none; transition: color .15s; }
+.foot a:hover { color: var(--ink); }
