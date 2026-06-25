@@ -42,9 +42,17 @@ body {
 /* top line: logo + tiny right-aligned nav */
 .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 46px; }
 .top .logo img { height: 30px; width: auto; display: block; }
-.top nav { display: flex; align-items: center; gap: 18px; font-size: 13px; }
+.top nav { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 16px; font-size: 13px; }
 .top nav a { color: var(--ink-60); }
 .top nav a:hover { color: var(--ink); }
+
+/* the always-present download CTA in the nav */
+.top nav .nav-cta {
+  background: var(--ink); color: var(--paper);
+  padding: 6px 14px; border-radius: 7px; font-weight: 700; text-decoration: none;
+}
+.top nav .nav-cta:hover { background: var(--ink); color: var(--paper); opacity: 0.85; }
+@media (max-width: 560px) { .top nav { gap: 12px; font-size: 12px; } }
 
 /* logo swaps with theme: black wordmark on light, white on dark.
    Covers both the header (.top) and the footer; selectors are scoped so
