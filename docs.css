@@ -12,14 +12,14 @@
   --mark:  rgba(20,17,13,0.34);   /* // comment colour */
 }
 
-/* dark mode — warm dark grey, not pitch black */
+/* dark mode — neutral near-black, a hair of grey (no brown/warm tint) */
 html[data-theme="dark"] {
-  --paper: #1E1B17;        /* warm charcoal */
-  --ink:   #EDE6D8;        /* warm off-white */
-  --ink-60: rgba(237,230,216,0.64);
-  --ink-40: rgba(237,230,216,0.42);
-  --rule:  rgba(237,230,216,0.16);
-  --mark:  rgba(237,230,216,0.36);
+  --paper: #19191B;        /* neutral charcoal */
+  --ink:   #ECECEC;        /* neutral off-white */
+  --ink-60: rgba(236,236,236,0.62);
+  --ink-40: rgba(236,236,236,0.40);
+  --rule:  rgba(236,236,236,0.15);
+  --mark:  rgba(236,236,236,0.34);
 }
 
 * { box-sizing: border-box; }
