@@ -482,9 +482,29 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // on-demand instead: from the onboarding step (user clicks "Launch"), when the
   // user toggles the browser lane on, and lazily before a browser task needs it.
 
-  // PRD §9: the serialized recipe librarian, sharing the same executor factory
-  // (another interactive claude session on the user's plan — §9.3).
-  const librarian = new Librarian({ executorFactory })
+  // PRD §9: the serialized recipe librarian — another interactive claude session
+  // on the user's plan (§9.3), but it gets its OWN factory, NOT the doer's. The
+  // librarian runs fully autonomously (no user present to answer anything) and
+  // never touches the browser, so it must:
+  //   * ALWAYS --dangerously-skip-permissions — a permission prompt would hang it
+  //     forever with no one to confirm (regardless of the doer's permissionMode).
+  //   * NEVER --chrome — it does no browser work, and attaching contends with the
+  //     doer's parked Chrome session, which wedged the librarian.
+  //   * No sandbox/--add-dir — it only writes the skill library under ~/.unmute.
+  // This is what lets the curation prompt actually submit instead of sitting at
+  // an idle welcome screen until the backstop kills it.
+  function librarianExecutorFactory() {
+    const model = settings.get('model') || 'opus'
+    const tmux = tmuxBin ? { bin: tmuxBin, confPath: tmuxConfPath, cols: 120, rows: 40 } : undefined
+    log.event('librarian-executor-factory', { model })
+    return new ClaudeCodeExecutor({
+      extraArgs: ['--dangerously-skip-permissions'],
+      model,
+      chrome: false,
+      tmux,
+    })
+  }
+  const librarian = new Librarian({ executorFactory: librarianExecutorFactory })
   manager = new TaskManager({
     executorFactory,
     librarian,

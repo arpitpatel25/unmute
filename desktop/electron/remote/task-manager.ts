@@ -38,20 +38,9 @@ import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
+import { settleRepl } from './repl-settle'
 
 const log = createLogger('task-manager')
-
-// Strip ANSI escapes + whitespace so Claude's TUI text (which positions with
-// cursor moves, not spaces) matches as contiguous tokens.
-const ANSI_RE = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][A-B0-2]|\x1b[=>]/g
-function stripTui(s: string): string {
-  return s.replace(ANSI_RE, '').replace(/\s+/g, '').toLowerCase()
-}
-// The idle input-prompt footer, always shown in --dangerously-skip-permissions
-// mode → our "the REPL is ready, dispatch now" signal (validated by the Task-0
-// probe). The trust-dialog markers are only for logging which state we cleared.
-const REPL_READY_RE = /bypasspermissions/
-const TRUST_DIALOG_RE = /trustthisfolder|no,exit|esctocancel/
 
 // ── UI-facing task state. Adds 'stuck' (PRD §5.3) on top of the file states. ──
 export type UiTaskState = TaskState | 'stuck'
@@ -294,30 +283,12 @@ export class TaskManager extends EventEmitter {
       // Gated on trustAcceptMs>0 so tests (which pass 0 with a no-output fake
       // executor) dispatch instantly; production keeps the default (>0).
       if (this.opts.trustAcceptMs > 0) {
-        const QUIET_MS = 700, POLL_MS = 150, MAX_ENTERS = 6, MAX_WAIT_MS = 14_000
-        const t0 = Date.now()
-        let enters = 0, lastLen = -1, lastChange = Date.now()
-        while (Date.now() - t0 < MAX_WAIT_MS && ex.alive) {
-          await new Promise((r) => setTimeout(r, POLL_MS))
-          const len = (this.outputBuffers.get(id) ?? '').length
-          if (len !== lastLen) { lastLen = len; lastChange = Date.now(); continue }
-          if (Date.now() - lastChange < QUIET_MS) continue // not quiet yet
-          const raw = this.outputBuffers.get(id) ?? ''
-          // No output at all after going quiet → nothing to settle (claude always
-          // paints a TUI, so this is a no-output executor, e.g. tests). Proceed.
-          if (raw.length === 0) { tlog.event('repl-settled', { enters, reason: 'no-output' }); break }
-          const out = stripTui(raw.slice(-4000))
-          if (REPL_READY_RE.test(out)) { tlog.event('repl-settled', { enters }); break }
-          if (enters < MAX_ENTERS) {
-            ex.write('\r') // Enter = accept trust / no-op on empty prompt; NEVER Esc
-            enters += 1
-            lastChange = Date.now() // give it a beat to react before the next Enter
-            tlog.event('settle-enter', { attempt: enters, dialog: TRUST_DIALOG_RE.test(out) })
-            continue
-          }
-          tlog.warn('repl not settled after max Enters — dispatching anyway', { enters })
-          break
-        }
+        await settleRepl({
+          getOutput: () => this.outputBuffers.get(id) ?? '',
+          isAlive: () => ex.alive,
+          sendEnter: () => ex.write('\r'),
+          onEvent: (event, fields) => tlog.event(event, fields),
+        })
       }
       tlog.event('folder-trust-accepted', {})
 

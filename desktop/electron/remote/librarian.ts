@@ -20,6 +20,7 @@ import { scaffoldStatusFile, readStatus } from './status-file'
 import { installContract } from './contract/installer'
 import { sharedSkillsDir, skillsIndex, readUserProfile, userProfilePath } from './skills'
 import type { ExecutorFactory } from './executor'
+import { settleRepl } from './repl-settle'
 
 const log = createLogger('librarian')
 
@@ -132,14 +133,32 @@ export class Librarian {
     const profile = await readUserProfile(this.opts.baseDir || undefined)
     llog.event('librarian-start', { skillsDir, profilePath, existingSkills: index.length, hasProfile: !!profile.trim() })
 
+    // Accumulate the PTY output so the settle loop can observe when the REPL is
+    // actually at its idle prompt (capped — we only ever read the tail).
+    const OUT_CAP = 64_000
+    let outBuf = ''
     const ex = this.opts.executorFactory()
-    ex.onData((c) => llog.debug('librarian-pty', { chunk: c }))
+    ex.onData((c) => {
+      outBuf += c
+      if (outBuf.length > OUT_CAP) outBuf = outBuf.slice(-OUT_CAP)
+      llog.debug('librarian-pty', { chunk: c })
+    })
     await ex.spawn({ cwd: libCwd, env: process.env, taskId: `${s.taskId}-librarian` })
     await ex.isReady()
-    // Accept the folder-trust prompt (fresh dir) before dispatching — same as
-    // the doer path. Enter = "Yes, I trust"; harmless if absent.
-    ex.writeStdin('')
-    await new Promise((r) => setTimeout(r, this.opts.trustAcceptMs))
+    // Clear the folder-trust prompt (fresh dir) and reach the idle REPL using the
+    // SAME observed-output settle loop as the doer — never a blind timer (which
+    // raced and left the prompt unsubmitted, wedging the session) and NEVER Esc
+    // (Esc = "No, exit" → quits Claude). Only then dispatch, so the prompt can't
+    // land mid-dialog/mid-paint. Gated on trustAcceptMs>0 so the no-output test
+    // fake dispatches instantly.
+    if (this.opts.trustAcceptMs > 0) {
+      await settleRepl({
+        getOutput: () => outBuf,
+        isAlive: () => ex.alive,
+        sendEnter: () => ex.write('\r'),
+        onEvent: (event, fields) => llog.event(event, fields),
+      })
+    }
 
     ex.writeStdin(this.buildPrompt(s, skillsDir, profilePath, statusPath, index, profile))
 
