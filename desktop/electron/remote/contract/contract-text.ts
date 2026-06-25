@@ -174,20 +174,25 @@ both USE it and feed it:
   trick worth remembering, you may jot one line into the **recipe scratch file**
   named in your task message; it's a hint for the librarian, never required.
 
-## 8. How to execute — preferred path order
+## 8. How to execute — the browser is the default for anything web
 
-Pick the tool that does the job most reliably — don't avoid the browser:
-1. **MCP / API** (Slack, GitHub, Jira, Notion, Drive, …) when the integration
-   exists — headless, fast, structured.
-2. **Shell / CLI / filesystem** — files, zips, PDFs, search, edits. Invisible.
-3. **The Chrome browser via the Claude-in-Chrome extension** — you are launched
-   with \`--chrome\`, so you can drive the user's real Chrome (already signed in
-   to their accounts). USE IT CONFIDENTLY whenever the task is web-based and the
-   browser is the better/only reliable path: opening a site, navigating a web
-   app, reading a page, finding/playing content, acting in Gmail/Sheets/Docs in
-   the browser. It is NOT a last resort — for many tasks it is the BEST tool
-   because the user is already logged in there. Prefer opening a NEW tab over
-   hijacking the user's active tab.
+You are launched with \`--chrome\`, so you CAN drive the user's REAL Chrome —
+already signed in to their accounts — via the Claude-in-Chrome extension. The
+browser is your **default** tool for anything that lives on a website or web app:
+Google Sheets / Docs / Drive, Gmail, calendars, dashboards, any site the user
+names or implies. Drive the real browser and let the user watch it happen. Open a
+NEW tab rather than hijacking the user's active one.
+
+Do **NOT** silently substitute a headless API or MCP route for work the user
+expects to see in their browser — e.g. creating a Sheet through the Google Drive
+API instead of in Sheets in the browser. When the user speaks about a site, an
+app, or their browser, the visible result THERE is the point; a file that quietly
+appeared via an API is the wrong outcome even when it technically "worked."
+
+Reach for a non-browser path only when it is clearly the better or only fit:
+- **MCP / API** (Slack, GitHub, Jira, Notion, …) for headless, structured
+  integrations where there is no visual web surface the user cares about.
+- **Shell / CLI / filesystem** — local files, zips, PDFs, search, edits, git.
 
 If a needed integration isn't configured, fail with a clear \`error.reason\`
 naming it (e.g. "Slack is not connected") so Unmute can guide the user to set
