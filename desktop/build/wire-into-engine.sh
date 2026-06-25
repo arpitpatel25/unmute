@@ -28,6 +28,19 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$ROOT/work"
+
+# Inject the cloud env (Supabase / pipeline / payments URLs) into ALL builds —
+# the same vars run-dev.sh loads. electron.vite.config.ts reads these from
+# process.env at build time and bakes them into the renderer; WITHOUT them a
+# production build ships empty/localhost URLs and sign-in (Supabase OAuth)
+# breaks. Sourcing here makes `build` and `compile` correct by default instead
+# of relying on the caller to export them.
+if [[ -f "$ROOT/.env.dev" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env.dev"
+  set +a
+fi
 ENGINE_TAG="${ENGINE_TAG:-v1.3.6}"
 OSS_REPO="${OSS_REPO:-https://github.com/arpitpatel25/unmute-dictation.git}"
 
