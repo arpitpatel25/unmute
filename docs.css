@@ -12,8 +12,20 @@
   --mark:  rgba(20,17,13,0.34);   /* // comment colour */
 }
 
+/* dark mode — warm dark grey, not pitch black */
+html[data-theme="dark"] {
+  --paper: #1E1B17;        /* warm charcoal */
+  --ink:   #EDE6D8;        /* warm off-white */
+  --ink-60: rgba(237,230,216,0.64);
+  --ink-40: rgba(237,230,216,0.42);
+  --rule:  rgba(237,230,216,0.16);
+  --mark:  rgba(237,230,216,0.36);
+}
+
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
+html, body { background: var(--paper); }
+body, .btn, a, .top nav a, .theme-toggle { transition: background-color .18s ease, color .18s ease, border-color .18s ease; }
 body {
   margin: 0;
   background: var(--paper);
@@ -30,9 +42,26 @@ body {
 /* top line: logo + tiny right-aligned nav */
 .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 46px; }
 .top .logo img { height: 30px; width: auto; display: block; }
-.top nav { display: flex; gap: 18px; font-size: 13px; }
+.top nav { display: flex; align-items: center; gap: 18px; font-size: 13px; }
 .top nav a { color: var(--ink-60); }
 .top nav a:hover { color: var(--ink); }
+
+/* logo swaps with theme: black wordmark on light, white on dark
+   (selectors include .top so they out-specify `.top .logo img`) */
+.top .logo .logo-dark { display: none; }
+html[data-theme="dark"] .top .logo .logo-light { display: none; }
+html[data-theme="dark"] .top .logo .logo-dark { display: block; }
+
+/* dark/light toggle */
+.theme-toggle {
+  background: none; border: none; cursor: pointer; padding: 4px;
+  color: var(--ink-60); display: inline-flex; align-items: center; line-height: 0;
+}
+.theme-toggle:hover { color: var(--ink); }
+.theme-toggle svg { width: 18px; height: 18px; display: block; }
+.theme-toggle .sun { display: none; }
+html[data-theme="dark"] .theme-toggle .moon { display: none; }
+html[data-theme="dark"] .theme-toggle .sun { display: block; }
 
 /* the one-line intro under the logo */
 .lede { font-size: 18px; line-height: 1.55; margin: 0 0 6px; }
@@ -74,7 +103,7 @@ a.arrow::after { content: ' →'; }
   background: var(--ink); color: var(--paper); text-decoration: none;
   border-radius: 8px; font-weight: 700; font-size: 14.5px;
 }
-.btn:hover { background: #000; color: var(--paper); }
+.btn:hover { opacity: 0.85; }
 
 hr { border: none; border-top: 1px solid var(--rule); margin: 44px 0 0; }
 
