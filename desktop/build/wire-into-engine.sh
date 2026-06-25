@@ -170,6 +170,16 @@ wire_paywall() {
       owner: 'arpitpatel25',
       repo: 'unmute',
     }]
+    // Auto-update artifacts: macOS electron-updater consumes a .zip + the
+    // generated latest-mac.yml — the DMG is ONLY for first-install website
+    // downloads, the updater can't read it. Build BOTH: dmg for the website,
+    // zip (+ latest-mac.yml) for hands-free in-app updates. Without the zip
+    // target there is nothing for installed apps to update from.
+    pkg.build.mac = pkg.build.mac || {}
+    pkg.build.mac.target = [
+      { target: 'dmg', arch: ['arm64'] },
+      { target: 'zip', arch: ['arm64'] },
+    ]
     // Version bump from env. Required for electron-updater to recognize
     // releases as newer than what the user has installed; the OSS
     // package.json stays on 1.3.6 and DMG names follow it unless we
