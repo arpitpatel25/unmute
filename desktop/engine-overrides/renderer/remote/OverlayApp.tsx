@@ -14,14 +14,26 @@ import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
 import { LiveTerminal } from './LiveTerminal'
 import { Markdown } from './Markdown'
 
+type OverlayModeInfo = { mode: 'hidden' | 'docked' | 'expanded'; docked: boolean }
 type API = {
   remoteOverlayDismiss?: () => void
+  remoteOverlayExpand?: () => void
+  remoteOverlayGetMode?: () => Promise<OverlayModeInfo>
+  remoteOnOverlayMode?: (cb: (d: OverlayModeInfo) => void) => () => void
   remoteOnOverlayFocus?: (cb: (d: { taskId: string }) => void) => () => void
   remoteOpenArtifact?: (type: 'url' | 'path', value: string) => Promise<boolean>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
 }
+
+// Content-level entrance animations (the window snaps instantly; this is what
+// gives the dock↔panel transition its smoothness). Origin is bottom-right so
+// the panel grows out of / shrinks toward the dock corner.
+const POP_CSS = `
+@keyframes unmuteOverlayPop { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+@keyframes unmuteDockPop { from { opacity: 0; transform: translateY(8px) scale(0.9); } to { opacity: 1; transform: translateY(0) scale(1); } }
+`
 
 const TAG: Record<RemoteTask['state'], { label: string; text: string; dot: string }> = {
   processing: { label: 'working', text: 'text-sky-300/90', dot: '#38bdf8' },
@@ -222,13 +234,81 @@ function Row({
   )
 }
 
+/** The docked pill — compact bottom-right summary of live work. Click anywhere
+ *  to expand into the full panel; ✕ closes it for the session. */
+function DockPill({
+  running, attention, onExpand, onDismiss,
+}: {
+  running: number
+  attention: number
+  onExpand: () => void
+  onDismiss: () => void
+}) {
+  // Match OverlayApp's forced-transparent document so only the glass pill shows.
+  useEffect(() => {
+    const prevHtml = document.documentElement.style.background
+    const prevBody = document.body.style.background
+    document.documentElement.style.background = 'transparent'
+    document.body.style.background = 'transparent'
+    return () => {
+      document.documentElement.style.background = prevHtml
+      document.body.style.background = prevBody
+    }
+  }, [])
+
+  return (
+    <div className="h-screen w-screen p-2 flex items-end justify-end" style={{ background: 'transparent' }}>
+      <style>{POP_CSS}</style>
+      <button
+        className="group flex items-center gap-2 rounded-full pl-3.5 pr-2 py-2 cursor-pointer transition-colors hover:bg-black/90"
+        style={{
+          background: 'rgba(0,0,0,0.8)',
+          backdropFilter: 'blur(18px)',
+          WebkitBackdropFilter: 'blur(18px)',
+          transformOrigin: 'bottom right',
+          animation: 'unmuteDockPop 300ms cubic-bezier(0.16,1,0.3,1)',
+        }}
+        onClick={onExpand}
+        title="Click to expand"
+      >
+        <span className="inline-block w-[7px] h-[7px] rounded-full animate-pulse shrink-0" style={{ background: '#38bdf8' }} />
+        <span className="text-[11.5px] text-white/85 whitespace-nowrap">
+          {running} running
+          {attention > 0 && <span className="text-amber-300/90"> · {attention} stuck</span>}
+        </span>
+        <span
+          className="ml-1 text-[12px] leading-none text-white/25 hover:text-white/80 px-1"
+          onClick={(e) => { e.stopPropagation(); onDismiss() }}
+          title="Close"
+          role="button"
+          aria-label="Close"
+        >✕</span>
+      </button>
+    </div>
+  )
+}
+
 export function OverlayApp() {
   const { tasks, activeCount, answer, kill, remove, killAll, rerun, resume } = useRemoteTasks()
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  // 'docked' → compact pill; 'expanded' → full panel. dockedEnabled mirrors the
+  // setting so Esc can be labelled "collapse" (docked) vs "dismiss" (legacy).
+  const [mode, setMode] = useState<'docked' | 'expanded'>('expanded')
+  const [dockedEnabled, setDockedEnabled] = useState(true)
 
   useEffect(() => {
     const off = api().remoteOnOverlayFocus?.((d) => setExpandedId(d.taskId))
-    return () => off?.()
+    // Fetch the current presentation on mount (avoids a mode-event race), then
+    // stay in sync. 'hidden' draws as the full panel — we only render while the
+    // window is visible; the main process owns show/hide.
+    void api().remoteOverlayGetMode?.().then((m) => {
+      if (m) { setMode(m.mode === 'docked' ? 'docked' : 'expanded'); setDockedEnabled(m.docked) }
+    })
+    const offMode = api().remoteOnOverlayMode?.((m) => {
+      setMode(m.mode === 'docked' ? 'docked' : 'expanded')
+      setDockedEnabled(m.docked)
+    })
+    return () => { off?.(); offMode?.() }
   }, [])
 
   // The window body defaults to the app's light background, which (1) shows as a
@@ -246,18 +326,30 @@ export function OverlayApp() {
     }
   }, [])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); api().remoteOverlayDismiss?.() }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  // Esc is owned by the MAIN process (a global shortcut) so it works even when
+  // the overlay is unfocused, and routes to collapse-vs-dismiss based on the
+  // docked setting — so there's intentionally no Esc keydown handler here.
 
   const dismiss = () => api().remoteOverlayDismiss?.()
 
+  const running = tasks.filter((t) => t.state === 'processing').length
+  const attention = tasks.filter((t) => t.state === 'needs-user' || t.state === 'stuck').length
+
+  // Docked: a compact pill (counts only). Click to expand; ✕ to close.
+  if (mode === 'docked') {
+    return (
+      <DockPill
+        running={running}
+        attention={attention}
+        onExpand={() => api().remoteOverlayExpand?.()}
+        onDismiss={dismiss}
+      />
+    )
+  }
+
   return (
     <div className="h-screen w-screen p-2" style={{ background: 'transparent' }}>
+      <style>{POP_CSS}</style>
       <div
         className="h-full flex flex-col rounded-[18px] overflow-hidden"
         style={{
@@ -266,6 +358,8 @@ export function OverlayApp() {
           background: 'rgba(0,0,0,0.8)',
           backdropFilter: 'blur(18px)',
           WebkitBackdropFilter: 'blur(18px)',
+          transformOrigin: 'bottom right',
+          animation: 'unmuteOverlayPop 300ms cubic-bezier(0.16,1,0.3,1)',
         }}
       >
         <div className="flex items-center justify-between px-4 pt-3 pb-2">
@@ -305,7 +399,7 @@ export function OverlayApp() {
         </div>
 
         <div className="px-4 py-2 text-[9.5px] tracking-wide text-white/25">
-          hold the Remote key to answer · esc to dismiss
+          hold the Remote key to answer · {dockedEnabled ? 'esc to collapse' : 'esc to dismiss'}
         </div>
       </div>
     </div>

@@ -15,6 +15,7 @@ interface Settings {
   model: string
   browserEnabled: boolean
   overlayAutoPresent: boolean
+  overlayDocked: boolean
   osNotifications: boolean
   logFile: string | null
 }
@@ -25,6 +26,7 @@ type API = {
   remoteSetSandboxRoots?: (r: string[]) => Promise<boolean>
   remoteSetBrowserEnabled?: (enabled: boolean) => Promise<boolean>
   remoteSetOverlayAutoPresent?: (on: boolean) => Promise<boolean>
+  remoteSetOverlayDocked?: (on: boolean) => Promise<boolean>
   remoteSetOsNotifications?: (on: boolean) => Promise<boolean>
 }
 function api(): API {
@@ -72,6 +74,20 @@ export function RemoteSettings() {
             const on = e.target.checked
             update({ overlayAutoPresent: on })
             void api().remoteSetOverlayAutoPresent?.(on)
+          }}
+        />
+      </label>
+
+      {/* Docked overlay — a small bottom-right pill that expands on activity */}
+      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
+        <span>Dock the overlay <span className="text-ink/40">(small bottom-right pill with task counts; expands on done/needs-you, esc collapses)</span></span>
+        <input
+          type="checkbox"
+          checked={s.overlayDocked}
+          onChange={(e) => {
+            const on = e.target.checked
+            update({ overlayDocked: on })
+            void api().remoteSetOverlayDocked?.(on)
           }}
         />
       </label>

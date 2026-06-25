@@ -33,7 +33,7 @@ import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete } from './setup-status'
-import { createOverlayWindow, presentOverlay, openOverlay, dismissOverlay, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
+import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
 import { Router, type RoutableTask } from './router'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 
@@ -81,6 +81,11 @@ interface RemoteSettings {
   // DECIDED: the floating overlay auto-presents on terminal/attention states.
   // User can turn the auto-popup off (then they open the app manually).
   overlayAutoPresent: boolean
+  // DECIDED: docked mode — a compact bottom-right pill (running/stuck counts)
+  // that expands into the full panel on a notify-state event or click, and
+  // collapses back on Esc. ON by default; OFF reverts to the legacy pop-the-
+  // full-panel behavior.
+  overlayDocked: boolean
 }
 
 const settings = new Store<RemoteSettings>({
@@ -95,6 +100,7 @@ const settings = new Store<RemoteSettings>({
     setupConfirmations: {},
     osNotifications: false,
     overlayAutoPresent: true,
+    overlayDocked: true,
   },
 })
 
@@ -309,7 +315,14 @@ function maybePresent(task: Task): void {
   if (settings.get('overlayAutoPresent') === false) return
   if (task.state === 'done' && (task.category === 'navigate' || task.category === 'watch')) { focusTarget(task); return }
   if (task.state === 'done' && task.category === 'consume') return
-  presentOverlay(task.id)
+  presentOrExpand(task.id)
+}
+
+/** Count of tasks that are running or awaiting attention — drives the dock. */
+function activeTaskCount(): number {
+  return (manager?.list() ?? []).filter(
+    (t) => t.state === 'processing' || t.state === 'needs-user' || t.state === 'stuck',
+  ).length
 }
 
 /** Plain, structured-clone-safe snapshot of a task for IPC. */
@@ -552,35 +565,43 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
 
   // Pre-warm the floating overlay window (hidden) so the first present is instant.
   createOverlayWindow()
+  // Apply the docked-mode preference (default ON).
+  setDockedMode(settings.get('overlayDocked') !== false)
 
   // Fan task lifecycle out to renderers (PRD §13). Terminal/attention states
   // also AUTO-PRESENT the overlay (the canonical surface; OS notifications off).
-  manager.on('created', (t: Task) => broadcast('remote:task-created', t))
-  manager.on('updated', (t: Task) => broadcast('remote:task-updated', t))
+  // A new task clears any prior ✕ dismissal and re-shows the dock (docked mode).
+  manager.on('created', (t: Task) => { broadcast('remote:task-created', t); onNewTask(activeTaskCount()) })
+  manager.on('updated', (t: Task) => { broadcast('remote:task-updated', t); reconcileDock(activeTaskCount()) })
   manager.on('needs-user', (t: Task) => {
     broadcast('remote:task-needs-user', t)
     maybePresent(t)
+    reconcileDock(activeTaskCount())
   })
   manager.on('done', (t: Task) => {
     broadcast('remote:task-done', t)
     maybePresent(t)
+    reconcileDock(activeTaskCount())
     notify('Task done', t.result?.summary ? `${t.intent} — ${t.result.summary}` : t.intent)
   })
   manager.on('failed', (t: Task) => {
     broadcast('remote:task-failed', t)
     maybePresent(t)
+    reconcileDock(activeTaskCount())
     notify('Task failed', t.mcpGap ? t.mcpGap.message : (t.error?.reason ?? t.intent))
   })
   manager.on('stuck', (t: Task) => {
     broadcast('remote:task-stuck', t)
     maybePresent(t)
+    reconcileDock(activeTaskCount())
     notify('Task may be stuck', t.intent)
   })
-  // Task erased (Kill/Delete) → tell renderers to drop the row.
+  // Task erased (Kill/Delete) → tell renderers to drop the row + update the dock.
   manager.on('removed', (t: Task) => {
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) w.webContents.send('remote:task-removed', { id: t.id })
     }
+    reconcileDock(activeTaskCount())
   })
 
   // Master kill switch: closing Unmute terminates every Claude/tmux session so
@@ -647,13 +668,24 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Pop the live terminal out to a real terminal app — SAME tmux session.
   ipcMain.handle('remote:tmux-available', async () => tmuxBin !== null)
   ipcMain.handle('remote:open-in-terminal', async (_e, id: string) => openInTerminal(id))
-  // Floating overlay: user-triggered dismiss (never auto) + the auto-present toggle.
+  // Floating overlay: user-triggered dismiss (✕ → dismiss for the session).
   ipcMain.on('remote:overlay-dismiss', () => dismissOverlay())
+  // Dock pill clicked → expand to the full panel.
+  ipcMain.on('remote:overlay-expand', () => expandOverlay())
+  // Renderer asks for the current presentation on mount (avoids a mode race).
+  ipcMain.handle('remote:overlay-get-mode', async () => getOverlayMode())
   // Manual open from the app (a button next to "Kill all").
   ipcMain.on('remote:overlay-open', () => openOverlay())
   ipcMain.handle('remote:set-overlay-auto-present', async (_e, on: boolean) => {
     settings.set('overlayAutoPresent', !!on)
     log.event('overlay-auto-present-set', { on: !!on })
+    return true
+  })
+  ipcMain.handle('remote:set-overlay-docked', async (_e, on: boolean) => {
+    settings.set('overlayDocked', !!on)
+    setDockedMode(!!on)
+    reconcileDock(activeTaskCount())
+    log.event('overlay-docked-set', { on: !!on })
     return true
   })
   ipcMain.handle('remote:set-os-notifications', async (_e, on: boolean) => {
@@ -669,6 +701,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     model: settings.get('model') || 'opus',
     browserEnabled: settings.get('browserEnabled') !== false,
     overlayAutoPresent: settings.get('overlayAutoPresent') !== false,
+    overlayDocked: settings.get('overlayDocked') !== false,
     osNotifications: settings.get('osNotifications') === true,
     logFile: getRemoteLogFilePath(),
   }))

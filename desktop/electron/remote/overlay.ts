@@ -1,17 +1,25 @@
 // Unmute Remote — floating task overlay window (DECIDED: replaces OS notifications).
 //
 // A second always-on-top, transparent, cross-Space window (separate from the
-// dictation pill). It AUTO-PRESENTS when a task enters a terminal/attention
-// state (done / failed / needs-user / stuck) so the user sees the result/answer
-// WHERE THEY ARE — zero context switch — and answers needs-user in place (by
-// voice via the Remote key, or by typing into the task's terminal).
+// dictation pill). It has two presentations:
 //
-// Rules (agreed with the owner):
-//   * Auto = present only. NEVER auto-dismiss — dismissal is always a user action
-//     (Escape when focused, or the ✕).
-//   * Shown with showInactive() so it never steals focus from what the user is
-//     doing; they click it to interact, which focuses it.
-//   * A setting (overlayAutoPresent) turns the auto-popup off entirely.
+//   * EXPANDED — the full translucent task panel (right-center, 400px). Auto-
+//     presents when a task enters a terminal/attention state (done / failed /
+//     needs-user / stuck) so the user sees the result/answer WHERE THEY ARE.
+//   * DOCKED — a compact pill in the bottom-right showing just the live counts
+//     ("N running · M stuck"). Present whenever there's an active task. Clicking
+//     it (or a notify-state event) animates it up into the EXPANDED panel; Esc
+//     collapses it back down.
+//
+// Docked mode is governed by the `overlayDocked` setting (default ON). With it
+// OFF, the window behaves exactly as before: no dock, auto-present pops the full
+// panel, Esc/✕ hide it.
+//
+// Rules:
+//   * NEVER auto-dismiss — the panel/dock only closes on a user action (Esc, ✕)
+//     or when there's genuinely nothing active (the dock auto-hides when idle).
+//   * ✕ dismisses for the SESSION; a NEW task brings the dock back.
+//   * Shown with showInactive() so it never steals focus.
 //
 // Electron glue (BrowserWindow/screen), so — like init.ts — not unit-tested.
 
@@ -21,18 +29,29 @@ import { createLogger } from './log'
 
 const log = createLogger('overlay')
 
+export type OverlayMode = 'hidden' | 'docked' | 'expanded'
+
 let overlayWindow: BrowserWindow | null = null
 // Whether WE currently hold the global Escape shortcut (vs the engine, which
 // grabs it during a dictation/remote capture so its cancel wins). We only take
-// Escape while the overlay is visible AND no capture owns it.
+// Escape while the overlay is EXPANDED and no capture owns it.
 let escHeldByOverlay = false
+// Mirror of the `overlayDocked` setting (init pushes it in). When false we use
+// the legacy behavior (no dock; auto-present pops the full panel).
+let dockedEnabled = true
+let mode: OverlayMode = 'hidden'
+// Set by the ✕; suppresses re-docking until a NEW task arrives (then reset).
+let sessionDismissed = false
+// Most recent count of running/needs-user/stuck tasks — drives whether a
+// collapse lands on the dock (something active) or hides entirely (nothing).
+let lastActiveCount = 0
 
-/** Take global Escape → dismiss (only if no one else — i.e. a capture — holds it). */
+/** Take global Escape → collapse/dismiss (only if no capture holds it). */
 function grabEscape(): void {
   if (escHeldByOverlay) return
   try {
     if (!globalShortcut.isRegistered('Escape')) {
-      escHeldByOverlay = globalShortcut.register('Escape', () => dismissOverlay())
+      escHeldByOverlay = globalShortcut.register('Escape', () => handleEscape())
     }
   } catch (e) { log.warn('grabEscape failed', { error: (e as Error).message }) }
 }
@@ -47,11 +66,18 @@ function releaseEscape(): void {
  *  (capture-first priority). The overlay stays visible. */
 export function pauseOverlayEscape(): void { releaseEscape() }
 
-/** Called when a capture ends: reclaim Escape if the overlay is still up. */
-export function resumeOverlayEscape(): void { if (isOverlayVisible()) grabEscape() }
+/** Called when a capture ends: reclaim Escape if the overlay is still EXPANDED. */
+export function resumeOverlayEscape(): void { if (mode === 'expanded') grabEscape() }
 
-/** Right-edge bounds: a tall, narrow panel on the active display's right side. */
-function overlayBounds(): { x: number; y: number; width: number; height: number } {
+/** Escape while EXPANDED: in docked mode, collapse back to the pill (or hide if
+ *  nothing's active); in legacy mode, hide the panel (today's behavior). */
+function handleEscape(): void {
+  if (dockedEnabled) collapseOrHide()
+  else hideOverlay()
+}
+
+/** Expanded bounds: a tall, narrow panel on the active display's right side. */
+function expandedBounds(): { x: number; y: number; width: number; height: number } {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const wa = display.workArea
   const width = 400
@@ -65,10 +91,25 @@ function overlayBounds(): { x: number; y: number; width: number; height: number 
   }
 }
 
+/** Docked bounds: a small pill in the bottom-right of the active display. */
+function dockedBounds(): { x: number; y: number; width: number; height: number } {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const wa = display.workArea
+  const width = 260
+  const height = 64
+  const margin = 16
+  return {
+    width,
+    height,
+    x: wa.x + wa.width - width - margin,
+    y: wa.y + wa.height - height - margin,
+  }
+}
+
 /** Create the overlay window (hidden). Idempotent. */
 export function createOverlayWindow(): BrowserWindow {
   if (overlayWindow && !overlayWindow.isDestroyed()) return overlayWindow
-  const { x, y, width, height } = overlayBounds()
+  const { x, y, width, height } = expandedBounds()
 
   overlayWindow = new BrowserWindow({
     width, height, x, y,
@@ -113,7 +154,7 @@ export function createOverlayWindow(): BrowserWindow {
     void overlayWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: '/overlay' })
   }
 
-  overlayWindow.on('closed', () => { releaseEscape(); overlayWindow = null })
+  overlayWindow.on('closed', () => { releaseEscape(); overlayWindow = null; mode = 'hidden' })
   log.event('overlay-window-created', {})
   return overlayWindow
 }
@@ -133,44 +174,114 @@ function ensureOverlayRoute(win: BrowserWindow): void {
   }
 }
 
-/** Present the overlay (without stealing focus) and tell it which task to expand. */
-export function presentOverlay(taskId: string): void {
-  const win = createOverlayWindow()
-  ensureOverlayRoute(win)
-  win.setBounds(overlayBounds()) // re-anchor to the active display
-  win.webContents.send('remote:overlay-focus', { taskId })
-  if (!win.isVisible()) win.showInactive() // appear WITHOUT taking focus
-  // Re-assert the all-Spaces + level flags on every present — macOS can drop the
-  // collection behavior after a show/hide, which is what let it slip back to a
-  // single Space. Re-applying here keeps it omnipresent.
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
-  win.setAlwaysOnTop(true, 'screen-saver')
-  // Escape dismisses even though the window is unfocused (we show it inactive) —
-  // a global shortcut, taken only while no capture owns Escape.
-  grabEscape()
-  log.event('overlay-presented', { taskId })
+/** Tell the renderer which presentation to draw (pill vs full panel) + whether
+ *  docked mode is on (so it can label Esc as "collapse" vs "dismiss"). */
+function sendMode(win: BrowserWindow): void {
+  win.webContents.send('remote:overlay-mode', { mode, docked: dockedEnabled })
 }
 
-/** Manually open the overlay (e.g. a button in the app) — show it without
- *  focusing any particular task. Mirrors presentOverlay minus the task focus. */
-export function openOverlay(): void {
-  const win = createOverlayWindow()
-  ensureOverlayRoute(win)
-  win.setBounds(overlayBounds()) // re-anchor to the active display
-  if (!win.isVisible()) win.showInactive() // appear WITHOUT taking focus
+/** Re-assert the all-Spaces + level flags — macOS can drop the collection
+ *  behavior after a show/hide, which is what let it slip back to a single Space. */
+function reassertOmnipresence(win: BrowserWindow): void {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
   win.setAlwaysOnTop(true, 'screen-saver')
-  grabEscape()
+}
+
+/** Show/resize the window to the given presentation. Animates the resize when
+ *  the window is already visible (so dock↔expand glides); just places it when
+ *  appearing fresh. Shown inactive so it never steals focus. */
+function showAs(m: 'docked' | 'expanded', bounds: { x: number; y: number; width: number; height: number }): BrowserWindow {
+  const win = createOverlayWindow()
+  ensureOverlayRoute(win)
+  mode = m
+  sendMode(win)
+  // Snap the window instantly (NO native bounds animation): the macOS frame
+  // animation runs independently of the React content, which desyncs and looks
+  // distorted/shaky. The dock↔panel transition is animated in CSS instead (the
+  // content is always sized correctly, so it's smooth). See OverlayApp.
+  win.setBounds(bounds)
+  if (!win.isVisible()) win.showInactive()
+  reassertOmnipresence(win)
+  if (m === 'expanded') grabEscape()
+  else releaseEscape() // no Esc handling while docked — ✕ closes, click expands
+  return win
+}
+
+/** Push the docked-mode setting in (init owns the settings store). Turning it
+ *  off while docked hides the pill (legacy has no dock). */
+export function setDockedMode(enabled: boolean): void {
+  dockedEnabled = enabled
+  if (!enabled && mode === 'docked') hideOverlay()
+  log.event('overlay-docked-mode-set', { enabled })
+}
+
+/** Reconcile the docked pill with the live active-task count. Shows the pill
+ *  when something's active, hides it when nothing is. No-op in legacy mode, and
+ *  never disturbs an already-expanded panel. */
+export function reconcileDock(activeCount: number): void {
+  lastActiveCount = activeCount
+  if (!dockedEnabled || mode === 'expanded' || sessionDismissed) return
+  if (activeCount > 0) showAs('docked', dockedBounds())
+  else if (mode === 'docked') hideOverlay()
+}
+
+/** A new task arrived → clear a prior ✕ dismissal so the dock comes back. */
+export function onNewTask(activeCount: number): void {
+  sessionDismissed = false
+  reconcileDock(activeCount)
+}
+
+/** Expand to the full panel, optionally focusing a task. Used by the dock click,
+ *  the auto-present trigger (docked mode), and the manual "open" button. */
+export function expandOverlay(taskId?: string): void {
+  const win = showAs('expanded', expandedBounds())
+  if (taskId) win.webContents.send('remote:overlay-focus', { taskId })
+  log.event('overlay-expanded', { taskId: taskId ?? null })
+}
+
+/** Terminal/attention trigger (done / failed / needs-user / stuck). In docked
+ *  mode this animates the dock up into the full panel; in legacy mode it pops
+ *  the full panel as before. Honors a prior ✕ dismissal (docked mode only). */
+export function presentOrExpand(taskId: string): void {
+  if (dockedEnabled && sessionDismissed) return // user closed it; wait for a new task
+  expandOverlay(taskId)
+}
+
+/** Manual open from the app (a button next to "Kill all") — full panel, no focus. */
+export function openOverlay(): void {
+  expandOverlay()
   log.event('overlay-opened', {})
 }
 
-/** Hide the overlay (user-triggered dismiss). The task stays in the app. */
-export function dismissOverlay(): void {
+/** Esc while expanded: collapse to the dock if something's active, else hide. */
+function collapseOrHide(): void {
+  if (lastActiveCount > 0) {
+    showAs('docked', dockedBounds())
+    log.event('overlay-collapsed', {})
+  } else {
+    hideOverlay()
+  }
+}
+
+/** Hide the window without marking the session dismissed (idle auto-hide / Esc
+ *  in legacy mode). The task stays in the app. */
+function hideOverlay(): void {
   releaseEscape()
+  mode = 'hidden'
   if (overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
     overlayWindow.hide()
-    log.event('overlay-dismissed', {})
   }
+}
+
+/** ✕ — dismiss for this session. Won't re-dock until a NEW task arrives. */
+export function dismissOverlay(): void {
+  sessionDismissed = true
+  hideOverlay()
+  log.event('overlay-dismissed', {})
+}
+
+export function getOverlayMode(): { mode: OverlayMode; docked: boolean } {
+  return { mode, docked: dockedEnabled }
 }
 
 export function isOverlayVisible(): boolean {

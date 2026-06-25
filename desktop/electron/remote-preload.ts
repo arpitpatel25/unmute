@@ -31,6 +31,7 @@ export interface RemoteSettingsSnapshot {
   model: string
   browserEnabled: boolean
   overlayAutoPresent: boolean
+  overlayDocked: boolean
   osNotifications: boolean
   logFile: string | null
 }
@@ -84,14 +85,28 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-browser-enabled', enabled),
   remoteSetOverlayAutoPresent: (on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-overlay-auto-present', on),
+  /** Toggle docked mode (compact bottom-right pill that expands on demand). */
+  remoteSetOverlayDocked: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-overlay-docked', on),
   remoteSetOsNotifications: (on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-os-notifications', on),
 
   // ── Floating overlay window ──
   /** Manually open the overlay (a button in the app). */
   remoteOpenOverlay: (): void => ipcRenderer.send('remote:overlay-open'),
-  /** User-triggered dismiss (Escape / ✕). Never auto-dismissed. */
+  /** User-triggered dismiss (✕) — closes for the session. */
   remoteOverlayDismiss: (): void => ipcRenderer.send('remote:overlay-dismiss'),
+  /** Dock pill clicked → expand to the full panel. */
+  remoteOverlayExpand: (): void => ipcRenderer.send('remote:overlay-expand'),
+  /** Current presentation (pill vs panel) — fetched on mount to avoid a race. */
+  remoteOverlayGetMode: (): Promise<{ mode: 'hidden' | 'docked' | 'expanded'; docked: boolean }> =>
+    ipcRenderer.invoke('remote:overlay-get-mode'),
+  /** Main tells the overlay which presentation to draw. */
+  remoteOnOverlayMode: (cb: (d: { mode: 'hidden' | 'docked' | 'expanded'; docked: boolean }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { mode: 'hidden' | 'docked' | 'expanded'; docked: boolean }) => cb(d)
+    ipcRenderer.on('remote:overlay-mode', handler)
+    return () => ipcRenderer.removeListener('remote:overlay-mode', handler)
+  },
   /** Main tells the overlay which task to expand when it auto-presents. */
   remoteOnOverlayFocus: (cb: (d: { taskId: string }) => void): (() => void) => {
     const handler = (_e: unknown, d: { taskId: string }) => cb(d)
