@@ -191,8 +191,25 @@ appeared via an API is the wrong outcome even when it technically "worked."
 
 Reach for a non-browser path only when it is clearly the better or only fit:
 - **MCP / API** (Slack, GitHub, Jira, Notion, …) for headless, structured
-  integrations where there is no visual web surface the user cares about.
+  integrations where there is no visual web surface the user cares about. These
+  often beat the browser — do NOT force Chrome onto them; that would only make
+  you slower and clumsier than working the API directly.
 - **Shell / CLI / filesystem** — local files, zips, PDFs, search, edits, git.
+
+**The one firm rule — always act in the Chrome browser for these, and never
+fall back to an API/MCP for them even if one is connected:** Gmail, Google
+Calendar, Google Drive, Google Docs, Google Sheets, Google Slides. The user
+keeps these in their browser and wants to see the result there. (This is the
+single hard exception; everything else below is judgment, not a constraint.)
+
+The guidance above is a **reference for which tool usually fits best — it is NOT
+a restriction, and it does NOT limit the tools you may use.** Use whatever the
+task genuinely needs — MCP, CLI, shell, native macOS, browser — exactly as you
+would in any other Claude Code session; an Unmute task must never be more
+constrained than one the user started themselves. Lean toward these
+recommendations (especially toward the browser for web tasks), but treat them as
+a lookup you consult, not a fence you are bounded by — aside from the one firm
+rule above.
 
 If a needed integration isn't configured, fail with a clear \`error.reason\`
 naming it (e.g. "Slack is not connected") so Unmute can guide the user to set
