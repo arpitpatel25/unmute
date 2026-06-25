@@ -46,11 +46,14 @@ body {
 .top nav a { color: var(--ink-60); }
 .top nav a:hover { color: var(--ink); }
 
-/* logo swaps with theme: black wordmark on light, white on dark
-   (selectors include .top so they out-specify `.top .logo img`) */
-.top .logo .logo-dark { display: none; }
-html[data-theme="dark"] .top .logo .logo-light { display: none; }
-html[data-theme="dark"] .top .logo .logo-dark { display: block; }
+/* logo swaps with theme: black wordmark on light, white on dark.
+   Covers both the header (.top) and the footer; selectors are scoped so
+   they out-specify the `.top .logo img` / `footer .logo img` size rules. */
+.top .logo .logo-dark, footer .logo .logo-dark { display: none; }
+html[data-theme="dark"] .top .logo .logo-light,
+html[data-theme="dark"] footer .logo .logo-light { display: none; }
+html[data-theme="dark"] .top .logo .logo-dark,
+html[data-theme="dark"] footer .logo .logo-dark { display: block; }
 
 /* dark/light toggle */
 .theme-toggle {
