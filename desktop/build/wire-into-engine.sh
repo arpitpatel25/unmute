@@ -193,6 +193,17 @@ wire_paywall() {
       { target: 'dmg', arch: ['arm64'] },
       { target: 'zip', arch: ['arm64'] },
     ]
+    // Register the unmute:// URL scheme in the macOS Info.plist
+    // (CFBundleURLTypes). WITHOUT this, a notarized app never receives the
+    // unmute://auth/callback (sign-in) or unmute://payment-success (Dodo return)
+    // deep links — app.setAsDefaultProtocolClient() at runtime is NOT enough for
+    // a packaged macOS app, so sign-in can't complete and the payment-success
+    // bounce is lost. electron-builder writes the plist entry from build.protocols.
+    pkg.build.protocols = [{
+      name: 'Unmute',
+      schemes: ['unmute'],
+      role: 'Viewer',
+    }]
     // Version bump from env. Required for electron-updater to recognize
     // releases as newer than what the user has installed; the OSS
     // package.json stays on 1.3.6 and DMG names follow it unless we
