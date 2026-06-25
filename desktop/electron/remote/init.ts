@@ -31,6 +31,7 @@ import { CodexExecutor, type AgentKind } from './codex-executor'
 import { cleanIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
+import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOverlay, openOverlay, dismissOverlay, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
 import { Router, type RoutableTask } from './router'
@@ -456,6 +457,12 @@ export function setDictationKey(key: TriggerKey): void {
 
 export function initRemote(deps: RemoteInitDeps): TaskManager {
   if (manager) return manager
+
+  // Adopt the user's real login-shell PATH FIRST. A Finder/Dock-launched app
+  // gets a minimal PATH without ~/.local/bin etc., so `claude` isn't found and
+  // sessions die at 0s. Sessions spawn with env: process.env, so this fixes them
+  // all. Must run before claudeMcpList() / any spawn below.
+  fixPath()
 
   const logDir = join(homedir(), '.unmute', 'remote', 'logs')
   const runId = String(Date.now())
