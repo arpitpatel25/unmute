@@ -18,6 +18,7 @@ type OverlayModeInfo = { mode: 'hidden' | 'docked' | 'expanded'; docked: boolean
 type API = {
   remoteOverlayDismiss?: () => void
   remoteOverlayExpand?: () => void
+  remoteOverlaySetInteractive?: (on: boolean) => void
   remoteOverlayGetMode?: () => Promise<OverlayModeInfo>
   remoteOnOverlayMode?: (cb: (d: OverlayModeInfo) => void) => () => void
   remoteOnOverlayFocus?: (cb: (d: { taskId: string }) => void) => () => void
@@ -244,23 +245,23 @@ function DockPill({
   onExpand: () => void
   onDismiss: () => void
 }) {
-  // Match OverlayApp's forced-transparent document so only the glass pill shows.
-  useEffect(() => {
-    const prevHtml = document.documentElement.style.background
-    const prevBody = document.body.style.background
-    document.documentElement.style.background = 'transparent'
-    document.body.style.background = 'transparent'
-    return () => {
-      document.documentElement.style.background = prevHtml
-      document.body.style.background = prevBody
-    }
-  }, [])
+  // NOTE: the transparent document background is set once by OverlayApp's stable
+  // top-level effect (it runs regardless of mode), so we deliberately do NOT set
+  // it here — a per-mode effect that restores on unmount raced on every dock↔panel
+  // switch and caused flashes.
+
+  // The dock window is click-through by default so it never blocks the apps
+  // behind it; flip it interactive only while the cursor is over the pill.
+  const enter = () => api().remoteOverlaySetInteractive?.(true)
+  const leave = () => api().remoteOverlaySetInteractive?.(false)
 
   return (
     <div className="h-screen w-screen p-2 flex items-end justify-end" style={{ background: 'transparent' }}>
       <style>{POP_CSS}</style>
       <button
         className="group flex items-center gap-2 rounded-full pl-3.5 pr-2 py-2 cursor-pointer transition-colors hover:bg-black/90"
+        onMouseEnter={enter}
+        onMouseLeave={leave}
         style={{
           background: 'rgba(0,0,0,0.8)',
           backdropFilter: 'blur(18px)',

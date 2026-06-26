@@ -115,10 +115,19 @@ export function createOverlayWindow(): BrowserWindow {
     width, height, x, y,
     frame: false,
     transparent: true,
+    // Native transparent backing — without this the window flashes an opaque
+    // fill during resizes / Space transitions before the CSS paints.
+    backgroundColor: '#00000000',
     resizable: false,
     hasShadow: false,
     skipTaskbar: true,
     show: false,
+    // Keep painting even when the window is backgrounded / on a non-active Space.
+    // Default throttling pauses the renderer there, so a resize (dock↔panel) or
+    // mode change left a STALE frame (the distorted black box) until the user
+    // interacted. This is the core fix for "it gets stuck / distorts when I'm on
+    // another screen."
+    paintWhenInitiallyHidden: true,
     // Focusable so the user can click a card / type an answer — but we present
     // with showInactive() so it never grabs focus on its own.
     focusable: true,
@@ -131,6 +140,7 @@ export function createOverlayWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
     },
   })
 
@@ -180,6 +190,14 @@ function sendMode(win: BrowserWindow): void {
   win.webContents.send('remote:overlay-mode', { mode, docked: dockedEnabled })
 }
 
+/** setIgnoreMouseEvents isn't in our trimmed Electron typings. `forward: true`
+ *  keeps mousemove flowing to the renderer while click-through (harmless when
+ *  not ignoring). */
+function setClickThrough(win: BrowserWindow, ignore: boolean): void {
+  ;(win as unknown as { setIgnoreMouseEvents: (ignore: boolean, options?: { forward?: boolean }) => void })
+    .setIgnoreMouseEvents(ignore, { forward: true })
+}
+
 /** Re-assert the all-Spaces + level flags — macOS can drop the collection
  *  behavior after a show/hide, which is what let it slip back to a single Space. */
 function reassertOmnipresence(win: BrowserWindow): void {
@@ -202,9 +220,25 @@ function showAs(m: 'docked' | 'expanded', bounds: { x: number; y: number; width:
   win.setBounds(bounds)
   if (!win.isVisible()) win.showInactive()
   reassertOmnipresence(win)
-  if (m === 'expanded') grabEscape()
-  else releaseEscape() // no Esc handling while docked — ✕ closes, click expands
+  if (m === 'expanded') {
+    setClickThrough(win, false) // the full panel is interactive everywhere
+    grabEscape()
+  } else {
+    // Dock: click-through by default so the small pill NEVER blocks clicks to the
+    // apps behind it (the "makes the Mac inaccessible" problem). The renderer
+    // flips it interactive while the cursor is actually over the pill.
+    setClickThrough(win, true)
+    releaseEscape() // no Esc grab while docked — keeps Esc free for the user's apps
+  }
   return win
+}
+
+/** Renderer hover-toggle (dock mode only): catch clicks while the cursor is over
+ *  the pill, pass them through otherwise — so the empty area stays usable. */
+export function setOverlayInteractive(on: boolean): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  if (mode !== 'docked') return // the expanded panel is always fully interactive
+  setClickThrough(overlayWindow, !on)
 }
 
 /** Push the docked-mode setting in (init owns the settings store). Turning it

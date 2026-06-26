@@ -33,7 +33,7 @@ import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete } from './setup-status'
-import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
+import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
 import { Router, type RoutableTask } from './router'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 
@@ -681,6 +681,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.on('remote:overlay-dismiss', () => dismissOverlay())
   // Dock pill clicked → expand to the full panel.
   ipcMain.on('remote:overlay-expand', () => expandOverlay())
+  // Dock hover-toggle → make the click-through window catch clicks over the pill.
+  ipcMain.on('remote:overlay-set-interactive', (_e, on: boolean) => setOverlayInteractive(!!on))
   // Renderer asks for the current presentation on mount (avoids a mode race).
   ipcMain.handle('remote:overlay-get-mode', async () => getOverlayMode())
   // Manual open from the app (a button next to "Kill all").

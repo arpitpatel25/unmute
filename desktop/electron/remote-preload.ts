@@ -111,6 +111,8 @@ export const remotePreloadExtensions = {
   remoteOverlayDismiss: (): void => ipcRenderer.send('remote:overlay-dismiss'),
   /** Dock pill clicked → expand to the full panel. */
   remoteOverlayExpand: (): void => ipcRenderer.send('remote:overlay-expand'),
+  /** Dock hover-toggle: catch clicks while over the pill, pass through otherwise. */
+  remoteOverlaySetInteractive: (on: boolean): void => ipcRenderer.send('remote:overlay-set-interactive', on),
   /** Current presentation (pill vs panel) — fetched on mount to avoid a race. */
   remoteOverlayGetMode: (): Promise<{ mode: 'hidden' | 'docked' | 'expanded'; docked: boolean }> =>
     ipcRenderer.invoke('remote:overlay-get-mode'),
