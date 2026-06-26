@@ -424,6 +424,11 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
   if [[ -f "$css" ]]; then
     sed -i.bak 's|border: 1px solid rgba(255, 255, 255, 0.06);|border: 1px solid rgba(255, 255, 255, 0.55);|' "$css"
     rm -f "$css.bak"
+    # Zero shadow on the recording pill (user request). Appended last so it wins
+    # over the base .unmute-pill box-shadow; idempotent (only add once).
+    if ! grep -q 'unmute: recording pill — no drop shadow' "$css"; then
+      printf '\n/* unmute: recording pill — no drop shadow */\n.unmute-pill { box-shadow: none; }\n' >> "$css"
+    fi
   fi
 
   # ─── Dictation crash-recovery wiring (main.ts) ─────────────────
