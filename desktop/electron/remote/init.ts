@@ -67,8 +67,11 @@ interface RemoteSettings {
   agent: AgentKind
   // PRD §10.6: path sandbox — allowlisted roots. Empty ⇒ OFF (default posture).
   sandboxRoots: string[]
-  // DECIDED: executor runs Opus (router uses a lighter model). '' ⇒ inherit default.
+  // DECIDED: Sonnet by default (router uses a lighter model). '' ⇒ inherit default.
   model: string
+  // True once the user explicitly picks a model in the selector — gates the
+  // one-time opus→sonnet default migration so an explicit choice is never reset.
+  modelUserSet: boolean
   // DECIDED: connect Claude-in-Chrome by default (browser tasks need it; others
   // ignore it). User can disable. Setup of the extension is guided/one-time.
   browserEnabled: boolean
@@ -99,6 +102,7 @@ const settings = new Store<RemoteSettings>({
     // remote tasks. Users switch to Haiku (faster) or Opus (most capable) from
     // the Remote settings or the capture-widget model selector.
     model: 'sonnet',
+    modelUserSet: false,
     browserEnabled: true,
     setupConfirmations: {},
     osNotifications: false,
@@ -573,6 +577,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   createOverlayWindow()
   // Apply the docked-mode preference (default ON).
   setDockedMode(settings.get('overlayDocked') !== false)
+  // One-time: move users still on the OLD opus default to the new sonnet default
+  // — but ONLY if they never explicitly picked a model (modelUserSet stays false
+  // until they touch the selector, so a deliberate opus choice is preserved).
+  if (!settings.get('modelUserSet') && settings.get('model') === 'opus') {
+    settings.set('model', 'sonnet')
+    log.event('model-migrated-opus-to-sonnet', {})
+  }
   // Codex isn't wired yet (shown as "coming soon"). If a past build stored it as
   // the agent, reset to claude so Remote works instead of failing every task.
   if (settings.get('agent') === 'codex') { settings.set('agent', 'claude'); log.event('agent-reset-codex-to-claude', {}) }
@@ -700,6 +711,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:set-model', async (_e, m: string) => {
     const model = (m === 'haiku' || m === 'sonnet' || m === 'opus') ? m : (settings.get('model') || 'sonnet')
     settings.set('model', model)
+    settings.set('modelUserSet', true) // explicit choice — never auto-migrate it
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) w.webContents.send('remote:model-changed', model)
     }

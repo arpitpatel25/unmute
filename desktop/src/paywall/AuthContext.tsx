@@ -64,8 +64,33 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 // user isn't stuck looking at a spinner. Tunable.
 const OAUTH_WAIT_TIMEOUT_MS = 5 * 60 * 1000
 
+// Last-known signed-in user, cached SYNCHRONOUSLY in localStorage so the very
+// first render already shows the signed-in UI. Without this, `user` starts null
+// and the app flashes the signed-out state for the ~beat it takes the async
+// keychain session check (getSession) to resolve. This is just an optimistic UI
+// hint — getSession remains the source of truth and corrects it if the cached
+// session is actually gone.
+const CACHED_USER_KEY = 'unmute_cached_user'
+function readCachedUser(): AuthUser | null {
+  try {
+    const raw = localStorage.getItem(CACHED_USER_KEY)
+    if (!raw) return null
+    const u = JSON.parse(raw) as { id?: unknown; email?: unknown }
+    return typeof u?.id === 'string' ? { id: u.id, email: typeof u.email === 'string' ? u.email : null } : null
+  } catch { return null }
+}
+function writeCachedUser(u: AuthUser | null): void {
+  try {
+    if (u) localStorage.setItem(CACHED_USER_KEY, JSON.stringify({ id: u.id, email: u.email }))
+    else localStorage.removeItem(CACHED_USER_KEY)
+  } catch { /* ignore */ }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null)
+  // Seed from the synchronous cache so the first paint is already signed-in.
+  const [user, setUserState] = useState<AuthUser | null>(() => readCachedUser())
+  // Every user change also updates the cache (covers sign-out → cache cleared).
+  const setUser = useCallback((u: AuthUser | null) => { setUserState(u); writeCachedUser(u) }, [])
   const [authState, setAuthState] = useState<AuthState>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [showSignIn, setShowSignIn] = useState(false)
