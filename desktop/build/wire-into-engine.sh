@@ -204,6 +204,13 @@ wire_paywall() {
       schemes: ['unmute'],
       role: 'Viewer',
     }]
+    // Bundle ONLY English. Electron ships ~50+ locale .lproj/.pak files; codesign
+    // makes a separate Apple timestamp round-trip PER FILE, so signing fires
+    // hundreds of network calls and a single drop aborts the whole sign (the
+    // 'A timestamp was expected but was not found' failures). The app is
+    // English-only, so pruning to en-US cuts those files to ~1 and makes signing
+    // reliable. (Also shrinks the bundle a little.)
+    pkg.build.electronLanguages = ['en-US']
     // Version bump from env. Required for electron-updater to recognize
     // releases as newer than what the user has installed; the OSS
     // package.json stays on 1.3.6 and DMG names follow it unless we
