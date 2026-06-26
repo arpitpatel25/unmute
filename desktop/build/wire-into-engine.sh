@@ -414,6 +414,16 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
     if ! grep -q 'patched: was 140' "$wm"; then
       log "WARN: windowManager.ts HUD_HEIGHT patch did not apply"
     fi
+    # Make the HUD click-through by DEFAULT so the empty area around the pill
+    # never blocks clicks to the apps behind it. The renderer flips it interactive
+    # (hud:set-interactive, wired in main-extensions) only while the cursor is
+    # actually over the pill/badge/card. forward:true keeps mousemove flowing so
+    # the renderer can hit-test.
+    sed -i.bak 's/hudWindow.setIgnoreMouseEvents(false)/hudWindow.setIgnoreMouseEvents(true, { forward: true }) \/\/ patched: click-through; renderer toggles/' "$wm"
+    rm -f "$wm.bak"
+    if ! grep -q 'patched: click-through' "$wm"; then
+      log "WARN: windowManager.ts HUD click-through patch did not apply"
+    fi
   fi
 
   # ─── Pill white border ─────────────────────────────────────────

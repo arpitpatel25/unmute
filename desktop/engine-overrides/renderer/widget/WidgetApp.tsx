@@ -173,6 +173,25 @@ export default function WidgetApp() {
   const { analyserNode, maxDurationSeconds, startRecording, stopRecording } = useAudioRecorder()
 
   const autoHideRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  // The HUD window is click-through by default (so the empty area around the
+  // pill never blocks the apps behind it). Hit-test the cursor on every move and
+  // flip the window interactive ONLY while it's over actual content (anything
+  // that isn't the bare transparent root). Change-tracked so we don't spam IPC.
+  useEffect(() => {
+    const hud = window.electronAPI as unknown as { hudSetInteractive?: (on: boolean) => void }
+    let last = false
+    const onMove = (e: MouseEvent) => {
+      const root = rootRef.current
+      if (!root) return
+      const el = document.elementFromPoint(e.clientX, e.clientY)
+      const interactive = !!el && el !== root && root.contains(el)
+      if (interactive !== last) { last = interactive; hud.hudSetInteractive?.(interactive) }
+    }
+    window.addEventListener('mousemove', onMove)
+    return () => window.removeEventListener('mousemove', onMove)
+  }, [])
 
   const clearAutoHide = useCallback(() => {
     if (autoHideRef.current) {
@@ -368,6 +387,7 @@ export default function WidgetApp() {
 
   return (
     <div
+      ref={rootRef}
       className="w-full h-full flex flex-col items-center"
       style={{ background: 'transparent', paddingTop: '8px' }}
     >

@@ -204,6 +204,9 @@ export const paywallPreloadExtensions = {
   // height changes. Clamped in main to [72, 220].
   paywallSetHUDHeight: (height: number): Promise<boolean> =>
     ipcRenderer.invoke('hud:set-height', height),
+  // HUD click-through toggle (renderer hit-test flips it while over the pill).
+  hudSetInteractive: (on: boolean): void =>
+    ipcRenderer.send('hud:set-interactive', on),
 
   // Token refresh sync — main broadcasts new tokens when paywall-route
   // forces a refresh on 401. Renderer subscribes and pushes them into

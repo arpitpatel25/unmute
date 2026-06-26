@@ -169,6 +169,15 @@ export function initPaywall(appHandle: App, oss: OSSAdapter): ProviderRouter {
   // canvas to sit below the pill. We grow the window only when the card
   // mounts and shrink back on dismiss/hide so the empty area below the pill
   // doesn't reintroduce a click-blocking dead zone.
+  // HUD click-through toggle: the window is click-through by default (so the
+  // empty area around the pill doesn't block the apps behind it); the renderer
+  // flips it interactive while the cursor is over the pill/badge/card.
+  ipcMain.on('hud:set-interactive', (_e, on: boolean) => {
+    const w = getWidgetWindow()
+    if (!w || w.isDestroyed()) return
+    ;(w as unknown as { setIgnoreMouseEvents: (ignore: boolean, options?: { forward?: boolean }) => void })
+      .setIgnoreMouseEvents(!on, { forward: true })
+  })
   ipcMain.handle('hud:set-height', (_e, height: number) => {
     const w = getWidgetWindow()
     if (!w) return false
