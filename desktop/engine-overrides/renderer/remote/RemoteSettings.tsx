@@ -159,15 +159,17 @@ export function RemoteSettings() {
         <span>Executor</span>
         <select
           className="text-[12px] border border-black/15 rounded px-1 py-0.5 bg-white"
-          value={s.agent}
+          // Codex is shown but not selectable yet — coerce a stale value to claude.
+          value={s.agent === 'codex' ? 'claude' : s.agent}
           onChange={(e) => {
             const agent = e.target.value as 'claude' | 'codex'
+            if (agent !== 'claude') return // Codex is coming soon — ignore
             update({ agent })
             void api().remoteSetAgent?.(agent)
           }}
         >
           <option value="claude">Claude Code</option>
-          <option value="codex">Codex</option>
+          <option value="codex" disabled>Codex (coming soon)</option>
         </select>
       </label>
 

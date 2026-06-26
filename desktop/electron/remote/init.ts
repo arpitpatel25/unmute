@@ -573,6 +573,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   createOverlayWindow()
   // Apply the docked-mode preference (default ON).
   setDockedMode(settings.get('overlayDocked') !== false)
+  // Codex isn't wired yet (shown as "coming soon"). If a past build stored it as
+  // the agent, reset to claude so Remote works instead of failing every task.
+  if (settings.get('agent') === 'codex') { settings.set('agent', 'claude'); log.event('agent-reset-codex-to-claude', {}) }
 
   // Fan task lifecycle out to renderers (PRD §13). Terminal/attention states
   // also AUTO-PRESENT the overlay (the canonical surface; OS notifications off).
@@ -763,8 +766,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return true
   })
   ipcMain.handle('remote:set-agent', async (_e, agent: AgentKind) => {
-    settings.set('agent', agent)
-    log.event('agent-set', { agent }) // PRD §11
+    // Codex isn't wired yet (shown as "coming soon", not selectable). Coerce any
+    // non-claude request to claude so Remote can't be put into a broken state.
+    const a: AgentKind = agent === 'codex' ? 'claude' : agent
+    settings.set('agent', a)
+    log.event('agent-set', { agent: a, requested: agent }) // PRD §11
     return true
   })
   ipcMain.handle('remote:set-sandbox-roots', async (_e, roots: string[]) => {
