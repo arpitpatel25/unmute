@@ -265,6 +265,11 @@ function DockPill({
           background: 'rgba(0,0,0,0.8)',
           backdropFilter: 'blur(18px)',
           WebkitBackdropFilter: 'blur(18px)',
+          // Hairline border + soft shadow (same recipe as the recording pill) so
+          // it has a defined edge on dark surfaces (terminals) where a shadow
+          // alone is invisible — and the shadow covers light backgrounds.
+          border: '1px solid rgba(255, 255, 255, 0.55)',
+          boxShadow: '0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255,255,255,0.04) inset',
           transformOrigin: 'bottom right',
           animation: 'unmuteDockPop 300ms cubic-bezier(0.16,1,0.3,1)',
         }}
