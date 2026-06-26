@@ -71,6 +71,7 @@ function remoteModelApi() {
 function RemoteBadge() {
   const [model, setModel] = useState<ModelId>('sonnet')
   const [expanded, setExpanded] = useState(false)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const api = remoteModelApi()
@@ -78,6 +79,15 @@ function RemoteBadge() {
     const off = api.remoteOnModelChanged?.((m) => { if (isModelId(m)) setModel(m) })
     return () => off?.()
   }, [])
+  useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
+
+  const open = () => {
+    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null }
+    setExpanded(true)
+  }
+  // Small grace before collapsing — the chip widening shifts the layout, which
+  // can drop the cursor out of the box and cause expand/collapse flicker.
+  const scheduleClose = () => { closeTimer.current = setTimeout(() => setExpanded(false), 150) }
 
   const pick = (m: ModelId) => {
     setModel(m) // optimistic — reflects instantly; the next task reads the setting
@@ -88,8 +98,8 @@ function RemoteBadge() {
   return (
     <div
       style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center' }}
-      onMouseEnter={() => setExpanded(true)}
-      onMouseLeave={() => setExpanded(false)}
+      onMouseEnter={open}
+      onMouseLeave={scheduleClose}
     >
       <div
         style={{
@@ -101,43 +111,47 @@ function RemoteBadge() {
           boxShadow: '0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255,255,255,0.04) inset',
           display: 'flex',
           alignItems: 'center',
-          padding: expanded ? '0 5px' : '0 14px',
-          gap: 3,
-          transition: 'padding 140ms ease',
+          padding: '0 6px',
+          gap: 2,
         }}
       >
-        {expanded ? (
-          MODELS.map((m) => {
-            const active = m === model
-            return (
-              <button
-                key={m}
-                onClick={() => pick(m)}
-                style={{
-                  height: 32,
-                  padding: '0 10px',
-                  borderRadius: 9999,
-                  border: 'none',
-                  cursor: 'pointer',
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                  textTransform: 'capitalize',
-                  background: active ? 'rgba(217,119,87,0.18)' : 'transparent',
-                  color: active ? CLAUDE_ORANGE : 'rgba(255,255,255,0.5)',
-                  transition: 'color 120ms ease, background 120ms ease',
-                }}
-                onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = 'rgba(255,255,255,0.9)' }}
-                onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = 'rgba(255,255,255,0.5)' }}
-              >
-                {m}
-              </button>
-            )
-          })
-        ) : (
-          <span style={{ fontSize: 13, fontWeight: 600, color: CLAUDE_ORANGE, textTransform: 'capitalize', letterSpacing: 0.2 }}>
-            {model}
-          </span>
-        )}
+        {/* All three are ALWAYS rendered. The active one is always visible; the
+            other two collapse to zero width/opacity when not hovered and animate
+            their max-width on reveal — so the chip (and the pill it pushes) GLIDE
+            instead of hard-swapping the content. */}
+        {MODELS.map((m) => {
+          const active = m === model
+          const shown = expanded || active
+          return (
+            <button
+              key={m}
+              onClick={() => pick(m)}
+              tabIndex={shown ? 0 : -1}
+              style={{
+                height: 32,
+                maxWidth: shown ? 88 : 0,
+                opacity: shown ? 1 : 0,
+                padding: shown ? '0 10px' : '0',
+                overflow: 'hidden',
+                whiteSpace: 'nowrap',
+                borderRadius: 9999,
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: 12.5,
+                fontWeight: 600,
+                textTransform: 'capitalize',
+                background: active && expanded ? 'rgba(217,119,87,0.18)' : 'transparent',
+                color: active ? CLAUDE_ORANGE : 'rgba(255,255,255,0.5)',
+                transition:
+                  'max-width 220ms cubic-bezier(0.16,1,0.3,1), opacity 200ms ease, padding 220ms cubic-bezier(0.16,1,0.3,1), color 140ms ease, background 140ms ease',
+              }}
+              onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = 'rgba(255,255,255,0.9)' }}
+              onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = 'rgba(255,255,255,0.5)' }}
+            >
+              {m}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
