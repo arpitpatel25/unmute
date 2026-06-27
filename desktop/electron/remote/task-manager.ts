@@ -253,10 +253,6 @@ export class TaskManager extends EventEmitter {
 
     try {
       await scaffoldStatusFile(statusPath) // Unmute owns creation (PRD §6.1)
-      // Persist a tiny receipt so the task survives an app crash/restart. The
-      // intent (what the user asked) lives only in memory + here — status.json
-      // holds the result, never the original ask. rehydrate() reads it on launch.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, createdAt: now, surface, mode }))
       // Seed the heartbeat clock from the scaffold's real mtime so staleness is
       // measured from "task start", not the logical createdAt.
       task.lastMtimeMs = task.lastHeartbeatMs = (await statusMtimeMs(statusPath)) ?? now
@@ -275,9 +271,15 @@ export class TaskManager extends EventEmitter {
       if (mode === 'managed') {
         await installSkillsIntoCwd(dir, { surface, baseDir: this.opts.baseDir }) // graduated skills auto-discovery, surface-scoped (PRD §8.3)
         await installProfileIntoCwd(dir, this.opts.baseDir) // user facts/prefs the doer Reads on demand
-        const nursery = await readNurseryRecipes(surface, this.opts.baseDir)
+        const nursery = await readNurseryRecipes(surface, this.opts.baseDir).catch((e) => {
+          // TEMP(memory-debug): remove after calibration
+          tlog.warn('nursery read failed — no leads injected', { MEMORY_DEBUG: true, error: (e as Error).message }); return []
+        })
         nurseryForDispatch = nursery.map((r) => ({ name: r.frontmatter.name, confidence: r.frontmatter.confidence, body: r.body }))
-        const graduated = await listRecipes({ tier: 'skill', surface, baseDir: this.opts.baseDir })
+        const graduated = await listRecipes({ tier: 'skill', surface, baseDir: this.opts.baseDir }).catch((e) => {
+          // TEMP(memory-debug): remove after calibration
+          tlog.warn('graduated read failed', { MEMORY_DEBUG: true, error: (e as Error).message }); return []
+        })
         staleNotes = graduated
           .filter((r) => isStaleHigh(r, this.clock()))
           .map((r) => `${r.frontmatter.name} is high-confidence but unverified for a while — confirm before relying.`)
@@ -286,6 +288,11 @@ export class TaskManager extends EventEmitter {
           ...graduated.map((r) => ({ name: r.frontmatter.name, tier: 'skill' as const, surface })),
         ]
       }
+      // Persist a tiny receipt so the task survives an app crash/restart. The
+      // intent (what the user asked) lives only in memory + here — status.json
+      // holds the result, never the original ask. rehydrate() reads it on launch.
+      // Written AFTER injectedRecipes is computed so the persisted value is correct.
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes }))
       // TEMP(memory-debug): remove after calibration
       tlog.event('dispatch-memory', { MEMORY_DEBUG: true, surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
 
@@ -666,7 +673,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw' }
+      let meta: { intent?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }> }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       const statusPath = join(dir, 'status.json')
@@ -693,6 +700,7 @@ export class TaskManager extends EventEmitter {
         question: status?.question,
         surface: meta.surface,
         mode: meta.mode ?? 'managed',
+        injectedRecipes: meta.injectedRecipes ?? [],
       }
       this.tasks.set(id, task)
       this.emit('created', task)
