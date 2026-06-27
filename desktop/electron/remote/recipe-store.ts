@@ -82,8 +82,15 @@ const FM_ORDER: Array<keyof RecipeFrontmatter> = [
   'runs_confirmed', 'runs_contradicted', 'created', 'last_used', 'last_verified',
 ]
 
+/** Frontmatter is single-line scalars only (dependency-free parsing). A stray
+ *  newline in a string scalar (e.g. a write-mode librarian-authored description)
+ *  would corrupt the block, so collapse interior whitespace on serialize. */
+function scalar(v: string | number): string {
+  return typeof v === 'number' ? String(v) : String(v).replace(/\s+/g, ' ').trim()
+}
+
 export function serializeRecipe(r: Pick<Recipe, 'frontmatter' | 'body'>): string {
-  const lines = FM_ORDER.map((k) => `${k}: ${r.frontmatter[k]}`)
+  const lines = FM_ORDER.map((k) => `${k}: ${scalar(r.frontmatter[k])}`)
   return `---\n${lines.join('\n')}\n---\n\n${r.body.replace(/^\n+/, '')}`
 }
 

@@ -30,7 +30,10 @@ export async function locateTranscript(taskCwd: string, opts: { projectsDir?: st
     log.event('locate-transcript', { taskId, matched: true, resolved: null })
     return null
   }
-  const withMtime = await Promise.all(files.map(async (f) => ({ f, m: (await fs.stat(join(dir, f))).mtimeMs })))
+  // stat can race a concurrent delete; a vanished file sorts last (m: -1) rather than throwing.
+  const withMtime = await Promise.all(files.map(async (f) => {
+    try { return { f, m: (await fs.stat(join(dir, f))).mtimeMs } } catch { return { f, m: -1 } }
+  }))
   withMtime.sort((a, b) => b.m - a.m)
   const resolved = join(dir, withMtime[0].f)
   // TEMP(memory-debug): remove after calibration
@@ -54,7 +57,7 @@ export function reduceTranscript(jsonl: string, opts: { maxChars?: number } = {}
     for (const block of content) {
       if (block?.type === 'tool_use') {
         const input = JSON.stringify(block.input ?? {})
-        out.push(`TOOL ${block.name}: ${input.slice(0, 240)}`)
+        out.push(`TOOL ${block.name ?? 'unknown'}: ${input.slice(0, 240)}`)
       } else if (block?.type === 'tool_result') {
         const isErr = block.is_error === true
         const text = typeof block.content === 'string'

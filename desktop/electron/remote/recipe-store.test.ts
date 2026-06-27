@@ -41,6 +41,22 @@ test('serializeRecipe round-trips', () => {
   assert.equal(again.body.trim(), r.body.trim())
 })
 
+test('serializeRecipe collapses newlines in string scalars so frontmatter stays single-line', () => {
+  const out = serializeRecipe({
+    frontmatter: {
+      name: 'x', surface: 'gmail', description: 'line one\nline two\n  tabbed', confidence: 'low',
+      runs_confirmed: 0, runs_contradicted: 0, created: '', last_used: '', last_verified: '',
+    },
+    body: 'b',
+  })
+  // The description must not introduce a second line inside the frontmatter block.
+  const fm = out.slice(3, out.indexOf('\n---', 3))
+  const scalarLines = fm.split('\n').filter((l) => l.trim())
+  assert.ok(scalarLines.every((l) => l.includes(':')), 'every scalar line must keep its key')
+  const back = parseRecipe(out, '/tmp/x.md')!
+  assert.equal(back.frontmatter.description, 'line one line two tabbed')
+})
+
 // ── Task 2: tier↔folder mapping, paths, list/read/write ──────────────────────
 import { promises as fs2 } from 'node:fs'
 import os from 'node:os'
