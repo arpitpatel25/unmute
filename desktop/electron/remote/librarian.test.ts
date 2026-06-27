@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { Librarian } from './librarian.ts'
+import { Librarian, buildLibrarianPrompt } from './librarian.ts'
 import { sharedSkillsDir } from './skills.ts'
 import type { AgentExecutor, SpawnOpts } from './executor.ts'
 
@@ -88,4 +88,29 @@ test('librarian is serialized — only one session runs at a time (PRD §9.3)', 
     lib.submit({ taskId: 'b', intent: 'y', scratchPath: path.join(cwd2, 'r.json'), cwd: cwd2 }),
   ])
   assert.equal(maxConcurrent, 1, 'librarian must never run two sessions at once')
+})
+
+test('librarian prompt encodes the dials + read-only proposal in gated mode', () => {
+  const p = buildLibrarianPrompt({
+    intent: 'scan my inboxes', outcome: 'failed',
+    injectedRecipes: [{ name: 'gmail-inbox-sweep', tier: 'nursery', surface: 'gmail' }],
+    reducedTrace: 'TOOL Bash: gmail\n  -> ERROR: profile 3 not found',
+    existing: [], profile: '', writeEnabled: false,
+    recipesDir: '/m/recipes', skillsDir: '/m/skills', proposalPath: '/lib/proposal.json', statusPath: '/lib/status.json',
+  })
+  assert.match(p, /Invariants|Definition of done/)        // hard-section rule present
+  assert.match(p, /Defaults|Procedure/)                   // soft-section rule present
+  assert.match(p, /down fast|demote/i)
+  assert.match(p, /proposal\.json/)                       // read-only target
+  assert.match(p, /do not (modify|write|change)/i)        // gated: no store mutation
+  assert.match(p, /gmail-inbox-sweep/)                    // injected recipe named
+})
+
+test('librarian prompt allows writes when enabled', () => {
+  const p = buildLibrarianPrompt({
+    intent: 'x', outcome: 'done', injectedRecipes: [], reducedTrace: '', existing: [], profile: '',
+    writeEnabled: true, recipesDir: '/m/recipes', skillsDir: '/m/skills', proposalPath: '/lib/proposal.json', statusPath: '/lib/status.json',
+  })
+  assert.match(p, /recipes\//)
+  assert.doesNotMatch(p, /proposal\.json/)
 })

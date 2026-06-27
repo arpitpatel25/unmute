@@ -18,9 +18,11 @@ import { join } from 'node:path'
 import { createLogger } from './log'
 import { scaffoldStatusFile, readStatus } from './status-file'
 import { installContract } from './contract/installer'
-import { sharedSkillsDir, skillsIndex, readUserProfile, userProfilePath } from './skills'
+import { readUserProfile, userProfilePath } from './skills'
 import type { ExecutorFactory } from './executor'
 import { settleRepl } from './repl-settle'
+import { locateTranscript, reduceTranscript } from './trace-reducer'
+import { listRecipes, recipesDir, graduatedDir } from './recipe-store'
 
 const log = createLogger('librarian')
 
@@ -42,6 +44,10 @@ export interface RecipeSuggestion {
   category?: string
   /** A cleaned tail of the task transcript (the doer's real actions/tools). */
   transcript?: string
+  /** Recipes injected into the doer's run — the librarian judges these. */
+  injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>
+  /** Whether the task run completed successfully or failed. */
+  outcome?: 'done' | 'failed'
 }
 
 export interface LibrarianOpts {
@@ -58,7 +64,106 @@ export interface LibrarianOpts {
   nudgeMs?: number
   /** ms to wait after accepting the folder-trust prompt for the REPL to boot. */
   trustAcceptMs?: number
+  /** Whether the librarian may write directly to the recipe/skills store. When
+   *  false (default, calibration mode) it writes a proposal.json instead. */
+  writeEnabled?: boolean
   now?: () => number
+}
+
+export interface LibrarianPromptInput {
+  intent: string
+  outcome: 'done' | 'failed'
+  injectedRecipes: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>
+  reducedTrace: string
+  existing: Array<{ name: string; surface: string; confidence: string; description: string }>
+  profile: string
+  writeEnabled: boolean
+  recipesDir: string
+  skillsDir: string
+  proposalPath: string
+  statusPath: string
+}
+
+export function buildLibrarianPrompt(i: LibrarianPromptInput): string {
+  const injected = i.injectedRecipes.length
+    ? i.injectedRecipes.map((r) => `  - ${r.name} (${r.tier}, surface=${r.surface})`).join('\n')
+    : '  (none injected this run)'
+  const index = i.existing.length
+    ? i.existing.map((e) => `  - ${e.name} [${e.confidence}, ${e.surface}]: ${e.description}`).join('\n')
+    : '  (memory is empty)'
+  const writeRules = i.writeEnabled
+    ? [
+      `WRITE MODE: apply your decision directly to the store.`,
+      `- Nursery (low/medium) recipes live under ${i.recipesDir}/<surface>/<name>.md`,
+      `- Graduated (high) recipes live under ${i.skillsDir}/<surface>/<name>.md`,
+      `- Promote/demote = move the file between those folders AND set the confidence field to match.`,
+      `- New knowledge is ALWAYS created low-confidence in ${i.recipesDir}/<surface>/ — NEVER directly in ${i.skillsDir}/.`,
+    ].join('\n')
+    : [
+      `READ-ONLY MODE (calibration): DO NOT modify, create, move, or delete ANY file under`,
+      `${i.recipesDir} or ${i.skillsDir}, and DO NOT edit the profile.`,
+      `Instead write your INTENDED decision as JSON to ${i.proposalPath} with shape:`,
+      `{ "action": "no-op|create|promote|demote|update-counters", "name": "...", "surface": "...",`,
+      `  "from_confidence": "low|medium|high|null", "to_confidence": "low|medium|high|null", "reason": "..." }`,
+    ].join('\n')
+
+  return [
+    `[Unmute Remote — librarian]`,
+    `You curate the user's long-term MEMORY so future terse commands succeed. You are the`,
+    `ONLY writer. Be conservative: MOST runs change NOTHING — when in doubt, NO-OP.`,
+    ``,
+    `You run AUTONOMOUSLY — no user is watching. NEVER ask a question, NEVER wait for input.`,
+    `Make the smallest safe change (or no-op) and finish.`,
+    ``,
+    `── The run that just finished ──`,
+    `Intent: ${i.intent}`,
+    `Outcome: ${i.outcome}`,
+    `Recipes injected into this run:`,
+    injected,
+    ``,
+    `What the executor ACTUALLY did (reduced action trace):`,
+    i.reducedTrace || '  (no trace available)',
+    ``,
+    `── How to judge confidence (the dials) ──`,
+    `Judge each INJECTED recipe by whether its claims were corroborated or CONTRADICTED by the`,
+    `trace — NOT by whether the task merely succeeded or failed.`,
+    `Only the HARD sections move confidence: "Invariants", "Definition of done", and named`,
+    `structural facts (enumerations, locations, stable identifiers, documented gotchas).`,
+    `The SOFT sections — "Defaults" and "Procedure" — are DESIGNED to be adapted; a deviation`,
+    `there is NEVER a contradiction.`,
+    `- CORROBORATED: the trace exercised a hard claim and it held -> runs_confirmed += 1, stamp`,
+    `  last_used + last_verified. If thresholds are met, PROMOTE one tier`,
+    `  (low->medium after 2 confirmations; medium->high after 3, both with no contradiction).`,
+    `- CONTRADICTED: the trace shows a hard claim was FALSE (a named fact didn't hold and the`,
+    `  model had to discover a different one, or a Definition-of-done invariant failed) ->`,
+    `  DEMOTE one tier, runs_contradicted += 1, REWRITE the wrong part as a fresh LOW-confidence`,
+    `  claim, re-hedge the phrasing.`,
+    `- AMBIGUOUS (deviation only in soft sections, recipe not really exercised, or failure`,
+    `  unrelated to the recipe — auth/network/novel sub-task) -> NO-OP (at most stamp last_used).`,
+    ``,
+    `── When to CREATE a new recipe (high bar) ──`,
+    `Create a NEW low-confidence nursery recipe ONLY if ALL hold: (a) the run surfaced a`,
+    `DURABLE, environmental fact worth a real Invariant or Known-failure-mode (not transient,`,
+    `not situation-specific reasoning); (b) it cost non-trivial exploration the model would`,
+    `otherwise redo; (c) the surface is plausibly recurring. Otherwise NO-OP. Unsure -> don't.`,
+    ``,
+    `── Posture ──`,
+    `Lenient about creating (bloat is the enemy), SLOW to promote (needs repetition), FAST to`,
+    `demote (one proven hard-fact contradiction). Never harden on one run. Never store brittle`,
+    `UI steps as fact. Never persist transient state. Never merge two surfaces. A user FACT`,
+    `(accounts, prefs, contacts) goes in the PROFILE (${i.profile ? 'see current profile below' : 'currently empty'}), not a recipe.`,
+    i.profile.trim() ? `\nCurrent profile:\n${i.profile}` : '',
+    ``,
+    `── Existing memory (name [confidence, surface]: description) ──`,
+    index,
+    ``,
+    `── Your output ──`,
+    writeRules,
+    ``,
+    `When finished, write your status file (${i.statusPath}) state=done with a one-line`,
+    `result.summary of your decision (e.g. "no-op", "demoted gmail-inbox-sweep low",`,
+    `"created canva-export low"). Follow the loaded Unmute contract for the status write.`,
+  ].filter((l) => l !== '').join('\n')
 }
 
 export class Librarian {
@@ -74,6 +179,7 @@ export class Librarian {
       timeoutMs: opts.timeoutMs ?? 5 * 60_000,
       nudgeMs: opts.nudgeMs ?? 20_000,
       trustAcceptMs: opts.trustAcceptMs ?? 2000,
+      writeEnabled: opts.writeEnabled ?? false,
       now: opts.now,
     }
   }
@@ -119,9 +225,11 @@ export class Librarian {
   private async runOne(s: RecipeSuggestion): Promise<void> {
     const llog = log.child({ taskId: s.taskId })
     const t0 = this.clock()
-    const skillsDir = sharedSkillsDir(this.opts.baseDir || undefined)
     const profilePath = userProfilePath(this.opts.baseDir || undefined)
-    await fs.mkdir(skillsDir, { recursive: true })
+
+    // Ensure the shared memory dirs exist (first run may pre-date them).
+    await fs.mkdir(graduatedDir(this.opts.baseDir || undefined), { recursive: true })
+    await fs.mkdir(recipesDir(this.opts.baseDir || undefined), { recursive: true })
 
     // The librarian gets its own working dir + status file under the task dir.
     const libCwd = join(s.cwd, 'librarian')
@@ -129,9 +237,65 @@ export class Librarian {
     await scaffoldStatusFile(statusPath)
     await installContract(libCwd)
 
-    const index = await skillsIndex(this.opts.baseDir || undefined)
+    // Resolve trace: prefer JSONL, fall back to PTY tail from suggestion.
+    const tFile = await locateTranscript(s.cwd)
+    const reducedTrace = tFile
+      ? reduceTranscript(await fs.readFile(tFile, 'utf8'))
+      : (s.transcript ?? '')
+    const reducedTraceBytes = reducedTrace.length
+
+    // Load existing memory for librarian context.
+    const recipes = await listRecipes({ baseDir: this.opts.baseDir || undefined })
+    const existing = recipes.map((r) => ({
+      name: r.frontmatter.name,
+      surface: r.frontmatter.surface,
+      confidence: r.frontmatter.confidence,
+      description: r.frontmatter.description,
+    }))
+
     const profile = await readUserProfile(this.opts.baseDir || undefined)
-    llog.event('librarian-start', { skillsDir, profilePath, existingSkills: index.length, hasProfile: !!profile.trim() })
+    const proposalPath = join(libCwd, 'proposal.json')
+
+    const intent = s.intent
+    const outcome = s.outcome ?? 'done'
+    const injectedRecipes = s.injectedRecipes ?? []
+    const writeEnabled = this.opts.writeEnabled
+
+    llog.event('librarian-start', {
+      profilePath,
+      existingRecipes: existing.length,
+      hasProfile: !!profile.trim(),
+      traceSource: tFile ? 'jsonl' : 'pty-fallback',
+    })
+
+    // Build and persist the full prompt for inspection.
+    const prompt = buildLibrarianPrompt({
+      intent,
+      outcome,
+      injectedRecipes,
+      reducedTrace,
+      existing,
+      profile,
+      writeEnabled,
+      recipesDir: recipesDir(this.opts.baseDir || undefined),
+      skillsDir: graduatedDir(this.opts.baseDir || undefined),
+      proposalPath,
+      statusPath,
+    })
+
+    await fs.writeFile(join(libCwd, 'librarian-prompt.txt'), prompt)
+
+    // TEMP(memory-debug): remove after calibration
+    llog.event('librarian-inputs', {
+      MEMORY_DEBUG: true,
+      intent,
+      outcome,
+      injectedRecipes,
+      reducedTraceBytes,
+      existingCount: existing.length,
+      writeEnabled,
+      traceSource: tFile ? 'jsonl' : 'pty-fallback',
+    })
 
     // Accumulate the PTY output so the settle loop can observe when the REPL is
     // actually at its idle prompt (capped — we only ever read the tail).
@@ -160,7 +324,7 @@ export class Librarian {
       })
     }
 
-    ex.writeStdin(this.buildPrompt(s, skillsDir, profilePath, statusPath, index, profile))
+    ex.writeStdin(prompt)
 
     // Wait (bounded) for the librarian to finish, signalled via its status file.
     // A stuck-nudge fires an Enter if the status file stalls — a Claude Code
@@ -187,77 +351,5 @@ export class Librarian {
     ex.kill()
     // Phase timing: how long the librarian held this submission end-to-end.
     llog.event('phase-timing', { taskId: s.taskId, phase: 'librarian', ms: this.clock() - t0, finished: done })
-  }
-
-  /** The curation CHARTER for the librarian session — the heart of the system.
-   *  It curates DURABLE knowledge that lets future terse commands succeed, with
-   *  a hard bias toward no-op; it is NOT a step-logger. */
-  private buildPrompt(
-    s: RecipeSuggestion,
-    skillsDir: string,
-    profilePath: string,
-    statusPath: string,
-    index: Array<{ name: string; description: string }>,
-    profile: string,
-  ): string {
-    const indexLines = index.length
-      ? index.map((i) => `  - ${i.name}: ${i.description || '(no description)'}`).join('\n')
-      : '  (the skills library is empty)'
-    return [
-      `[Unmute Remote — librarian]`,
-      `You curate the user's long-term MEMORY so that, over time, they can say`,
-      `LESS and still get tasks done. You learn from a task that just finished.`,
-      `You are the ONLY writer to this memory. Be conservative: MOST tasks teach`,
-      `nothing new — when in doubt, NO-OP.`,
-      ``,
-      `You run AUTONOMOUSLY in the background — there is NO user watching and no`,
-      `one to answer you. NEVER ask a question, NEVER pause for confirmation, and`,
-      `NEVER wait for input. You have full authority to write, update, or delete`,
-      `in the memory yourself. If something is unclear, make the smallest safe`,
-      `change or no-op and finish — but never block waiting for an answer.`,
-      ``,
-      `── The task that just finished ──`,
-      `Intent: ${s.intent}`,
-      s.category ? `Category: ${s.category}` : null,
-      s.summary ? `Result summary: ${s.summary}` : null,
-      s.detail ? `Result detail: ${s.detail}` : null,
-      s.scratchPath ? `Optional doer note (may be empty/absent): ${s.scratchPath}` : null,
-      s.transcript ? `\nWhat the doer actually did (transcript tail):\n${s.transcript}` : null,
-      ``,
-      `── The two memory stores you maintain ──`,
-      `1. USER PROFILE — durable FACTS & PREFERENCES about this user: which`,
-      `   accounts they use (and for what), preferred apps/services, main email,`,
-      `   key people, naming conventions, defaults. This is what lets "open my`,
-      `   show" or "any meetings today" work without them specifying where/which.`,
-      `   File: ${profilePath} (plain markdown, sectioned by topic).`,
-      profile.trim() ? `   Current profile:\n${profile}` : `   The profile is currently empty.`,
-      `2. SKILLS — reusable METHODS for a CLASS of task, capturing the reliable`,
-      `   approach + the non-obvious GOTCHA (e.g. "use get_page_text not`,
-      `   screenshots, which hide late events"). File per skill in ${skillsDir},`,
-      `   OpenClaw format: YAML frontmatter (\`name\` + a SPECIFIC \`description\` —`,
-      `   the description is what future tasks match on) then a markdown body.`,
-      `   Existing skills (name: description):`,
-      indexLines,
-      ``,
-      `── What to capture (and what NOT to) ──`,
-      `- Capture only DURABLE knowledge: a user fact/preference, or a reusable`,
-      `  method + its gotcha. NEVER store brittle UI steps ("click here, scroll`,
-      `  there") — they break and add noise.`,
-      `- If nothing was non-obvious — the task was simple, or any competent model`,
-      `  would do it right next time — NO-OP. Simplicity is the common case.`,
-      `- CONSOLIDATE, don't fragment: prefer UPDATING the profile or an existing`,
-      `  skill over creating a new one. One skill per task-CLASS, kept coarse.`,
-      `  Delete a skill only if it's now wrong or superseded.`,
-      `- A user fact (accounts, prefs, contacts) goes in the PROFILE, not a skill.`,
-      ``,
-      `── Decide, then act ──`,
-      `Choose: update the profile, create/update/delete a skill, or no-op. Make`,
-      `at most the minimal change. Use REAL identifiers (account indexes, paths,`,
-      `handles) but no pixel-level steps.`,
-      ``,
-      `When finished, write your status file (${statusPath}) state=done with a`,
-      `one-line result.summary of exactly what you changed — or "no-op: <reason>"`,
-      `if nothing was worth keeping. Follow the loaded Unmute contract for writes.`,
-    ].filter((l): l is string => l !== null).join('\n')
   }
 }
