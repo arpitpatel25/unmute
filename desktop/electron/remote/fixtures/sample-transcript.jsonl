@@ -1,0 +1,12 @@
+{"type":"user","message":{"role":"user","content":"[Unmute Remote task] Task: list the markdown files in this folder"},"uuid":"u1","timestamp":"2026-06-27T10:00:00.000Z","sessionId":"sess-1"}
+{"type":"mode","mode":"default","uuid":"n1","timestamp":"2026-06-27T10:00:00.100Z"}
+{"type":"permission-mode","permissionMode":"bypassPermissions","uuid":"n2","timestamp":"2026-06-27T10:00:00.200Z"}
+{"type":"file-history-snapshot","uuid":"n3","timestamp":"2026-06-27T10:00:00.300Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"The user wants the markdown files. I'll run ls."},{"type":"text","text":"I'll list the markdown files."},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls *.md","description":"List markdown files"},"caller":"direct"}],"usage":{"input_tokens":120,"output_tokens":40,"cache_creation_input_tokens":15,"cache_read_input_tokens":2000}},"uuid":"a1","timestamp":"2026-06-27T10:00:01.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"README.md\nNOTES.md","is_error":false}]},"uuid":"u2","timestamp":"2026-06-27T10:00:01.500Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/tmp/uttest/README.md"},"caller":"direct"}],"usage":{"input_tokens":130,"output_tokens":12}},"uuid":"a2","timestamp":"2026-06-27T10:00:02.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"Error: file not found","is_error":true}]},"uuid":"u3","timestamp":"2026-06-27T10:00:02.300Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done — the folder has README.md and NOTES.md."}],"usage":{"input_tokens":140,"output_tokens":18}},"uuid":"a3","timestamp":"2026-06-27T10:00:03.000Z"}
+{"type":"system","content":"post-turn hook fired","uuid":"s1","timestamp":"2026-06-27T10:00:03.100Z"}
+not valid json — the reducer must tolerate this line
+{"type":"attachment","uuid":"at1","timestamp":"2026-06-27T10:00:03.200Z"}
