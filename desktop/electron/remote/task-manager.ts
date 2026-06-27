@@ -35,6 +35,8 @@ import { buildDispatch } from './dispatch-prompt'
 import { installContract } from './contract/installer'
 import { installHooks, hookActivityMs } from './hooks'
 import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
+import { detectSurface } from './surface'
+import { readNurseryRecipes, listRecipes, isStaleHigh, type Confidence } from './recipe-store'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
@@ -75,6 +77,16 @@ export interface Task {
   recipeSuggestion?: StatusPayload['recipe_suggestion']
   /** Set on failure when the error looks like a missing-integration gap (PRD §12.3). */
   mcpGap?: McpGap
+  /** The detected (or router-emitted) surface this task operates on — scopes
+   *  memory injection (recipes/skills) + the librarian handoff. */
+  surface?: string
+  /** managed = Unmute injects its memory (recipes/profile/skills) + arms the
+   *  librarian handoff; raw = no Unmute memory injection, no handoff. Default
+   *  'managed' (status quo). */
+  mode?: 'managed' | 'raw'
+  /** What memory Unmute injected at dispatch (graduated skills matched + nursery
+   *  leads). Recorded so the librarian can grade the trace against it. */
+  injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>
 }
 
 export interface TaskManagerOpts {
@@ -218,17 +230,20 @@ export class TaskManager extends EventEmitter {
    * Dispatch a new task. Returns the taskId immediately; execution + polling
    * proceed asynchronously (PRD §4.4 — dispatch and forget).
    */
-  async dispatch(intent: string): Promise<string> {
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw' } = {}): Promise<string> {
     const id = randomUUID()
     const dir = join(this.opts.baseDir, this.opts.userKey!, id)
     const statusPath = join(dir, 'status.json')
     const recipeScratchPath = join(dir, 'recipe.json')
     const now = this.clock()
     const tlog = log.child({ taskId: id })
+    const surface = opts.surface ?? detectSurface(intent)
+    const mode = opts.mode ?? 'managed'
 
     const task: Task = {
       id, intent, state: 'processing', createdAt: now, updatedAt: now,
       cwd: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
+      surface, mode, injectedRecipes: [],
     }
     this.tasks.set(id, task)
     tlog.event('task-created', { intent, cwd: dir })
@@ -241,7 +256,7 @@ export class TaskManager extends EventEmitter {
       // Persist a tiny receipt so the task survives an app crash/restart. The
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, createdAt: now }))
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, createdAt: now, surface, mode }))
       // Seed the heartbeat clock from the scaffold's real mtime so staleness is
       // measured from "task start", not the logical createdAt.
       task.lastMtimeMs = task.lastHeartbeatMs = (await statusMtimeMs(statusPath)) ?? now
@@ -251,8 +266,28 @@ export class TaskManager extends EventEmitter {
       // block dispatch (without hooks the task runs on the status-file path, i.e.
       // today's behaviour). See hooks.ts.
       await installHooks(dir).catch((e) => tlog.warn('installHooks failed — running without hooks', { error: (e as Error).message }))
-      await installSkillsIntoCwd(dir, { baseDir: this.opts.baseDir }) // recipes auto-discovery (PRD §8.3)
-      await installProfileIntoCwd(dir, this.opts.baseDir) // user facts/prefs the doer Reads on demand
+
+      // ── Memory injection (managed mode only). Raw mode SKIPS all three Unmute
+      //    memory injections (skills copy, profile, nursery leads) — protocol +
+      //    orchestration (scaffold/meta/contract/hooks above) still run. (§4.2) ──
+      let nurseryForDispatch: Array<{ name: string; confidence: Confidence; body: string }> = []
+      let staleNotes: string[] = []
+      if (mode === 'managed') {
+        await installSkillsIntoCwd(dir, { surface, baseDir: this.opts.baseDir }) // graduated skills auto-discovery, surface-scoped (PRD §8.3)
+        await installProfileIntoCwd(dir, this.opts.baseDir) // user facts/prefs the doer Reads on demand
+        const nursery = await readNurseryRecipes(surface, this.opts.baseDir)
+        nurseryForDispatch = nursery.map((r) => ({ name: r.frontmatter.name, confidence: r.frontmatter.confidence, body: r.body }))
+        const graduated = await listRecipes({ tier: 'skill', surface, baseDir: this.opts.baseDir })
+        staleNotes = graduated
+          .filter((r) => isStaleHigh(r, this.clock()))
+          .map((r) => `${r.frontmatter.name} is high-confidence but unverified for a while — confirm before relying.`)
+        task.injectedRecipes = [
+          ...nursery.map((r) => ({ name: r.frontmatter.name, tier: 'nursery' as const, surface })),
+          ...graduated.map((r) => ({ name: r.frontmatter.name, tier: 'skill' as const, surface })),
+        ]
+      }
+      // TEMP(memory-debug): remove after calibration
+      tlog.event('dispatch-memory', { MEMORY_DEBUG: true, surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
 
       const ex = this.opts.executorFactory()
       this.executors.set(id, ex)
@@ -292,7 +327,9 @@ export class TaskManager extends EventEmitter {
       }
       tlog.event('folder-trust-accepted', {})
 
-      const payload = buildDispatch({ intent, statusPath, recipeScratchPath })
+      const payload = mode === 'managed'
+        ? buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes: nurseryForDispatch, staleNotes })
+        : buildDispatch({ intent, statusPath, recipeScratchPath })
       const dispatchedAt = Date.now()
       ex.writeStdin(payload)
       tlog.event('task-dispatched', {})
@@ -476,19 +513,7 @@ export class TaskManager extends EventEmitter {
         // forget: the user already has their result; the librarian NEVER blocks
         // 'done'. It curates from what the task actually DID (summary/detail +
         // transcript), so the doer no longer needs to flag anything.
-        if (this.opts.librarian) {
-          tlog.event('librarian-handoff', { taskId: task.id })
-          void this.opts.librarian.submit({
-            taskId: task.id,
-            intent: task.intent,
-            scratchPath: task.recipeScratchPath,
-            cwd: task.cwd,
-            summary: task.result?.summary,
-            detail: task.result?.detail,
-            category: task.category,
-            transcript: cleanTranscriptTail(this.outputBuffers.get(task.id) ?? ''),
-          }).catch((e) => tlog.error('librarian submit failed', { error: (e as Error).message }))
-        }
+        this.handToLibrarian(task, 'done')
         // Lifecycle by category (DECIDED): consume/watch are fire-and-forget —
         // DETACH now (quit the session cleanly so the Claude-in-Chrome "glow"
         // clears) and don't hold a session; the user just walks away from the
@@ -514,6 +539,10 @@ export class TaskManager extends EventEmitter {
           tlog.ui('task-row.mcp-gap', { integration: gap.integration, fixCommand: gap.fixCommand })
         }
         this.emit('failed', task)
+        // PRD §9 (delta F): a task that FAILED while carrying an injected recipe
+        // is exactly a contradiction signal — hand it off so the librarian can
+        // demote. handToLibrarian gates on managed + non-empty injectedRecipes.
+        this.handToLibrarian(task, 'failed')
         this.parkWarm(id) // a failed task can still be continued/retried while warm
         break
       }
@@ -521,6 +550,33 @@ export class TaskManager extends EventEmitter {
         if (payload?.step) tlog.ui('task-row.step', { step: payload.step })
     }
     this.emit('updated', task)
+  }
+
+  /** Hand a terminal task to the (serialized) librarian for curation (PRD §9).
+   *  Fire-and-forget — the user already has their result; this NEVER blocks the
+   *  UI. Gated: only MANAGED tasks (raw tasks injected no memory, so there is
+   *  nothing to grade), only when a librarian is wired. On 'failed' it fires ONLY
+   *  if the task carried injected memory (a wrong injected recipe is a
+   *  contradiction signal — delta F); a recipe-less failure is just noise. The
+   *  librarian grades the trace against `injectedRecipes` + outcome. */
+  private handToLibrarian(task: Task, outcome: 'done' | 'failed'): void {
+    if (task.mode !== 'managed' || !this.opts.librarian) return
+    if (outcome === 'failed' && !task.injectedRecipes?.length) return
+    const tlog = log.child({ taskId: task.id })
+    // TEMP(memory-debug): remove after calibration
+    tlog.event('librarian-handoff', { taskId: task.id, outcome, MEMORY_DEBUG: true, fired: true, injectedRecipes: task.injectedRecipes?.length ?? 0 })
+    void this.opts.librarian.submit({
+      taskId: task.id,
+      intent: task.intent,
+      scratchPath: task.recipeScratchPath,
+      cwd: task.cwd,
+      summary: task.result?.summary,
+      detail: task.result?.detail,
+      category: task.category,
+      transcript: cleanTranscriptTail(this.outputBuffers.get(task.id) ?? ''),
+      injectedRecipes: task.injectedRecipes ?? [],
+      outcome,
+    }).catch((e) => tlog.error('librarian submit failed', { error: (e as Error).message }))
   }
 
   /**
@@ -610,7 +666,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; createdAt?: number }
+      let meta: { intent?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw' }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       const statusPath = join(dir, 'status.json')
@@ -635,6 +691,8 @@ export class TaskManager extends EventEmitter {
         result: status?.result,
         error: terminal ? status?.error : { reason: 'Interrupted by an app restart — resume to continue' },
         question: status?.question,
+        surface: meta.surface,
+        mode: meta.mode ?? 'managed',
       }
       this.tasks.set(id, task)
       this.emit('created', task)

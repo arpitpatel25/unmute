@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { once } from 'node:events'
 import { TaskManager } from './task-manager.ts'
+import { writeRecipe } from './recipe-store.ts'
 import type { AgentExecutor, SpawnOpts } from './executor.ts'
 
 // A fake executor that records what's written and lets the test play "Claude"
@@ -365,4 +366,94 @@ test('killAll terminates every session and marks running tasks stopped (PRD §10
   assert.equal(tm.get(a)!.state, 'failed')
   assert.equal(tm.get(b)!.state, 'failed')
   assert.equal(tm.activeCount(), 0)
+})
+
+// ── Memory layer: surface + mode, nursery injection, recipe-bearing handoff ──
+
+async function seedGmailNursery(baseDir: string) {
+  await writeRecipe({
+    frontmatter: {
+      name: 'gmail-inbox-sweep', surface: 'gmail',
+      description: 'scan my inboxes, check my email',
+      confidence: 'low', runs_confirmed: 0, runs_contradicted: 0,
+      created: '2026-06-27T00:00:00Z', last_used: '2026-06-27T00:00:00Z', last_verified: '2026-06-27T00:00:00Z',
+    },
+    body: '## Invariants\nSweep inbox, group by sender.\n',
+  }, baseDir)
+}
+
+test('managed dispatch injects + records the gmail nursery lead for the detected surface', async () => {
+  const baseDir = await tmpBase()
+  await seedGmailNursery(baseDir)
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25 })
+  const id = await tm.dispatch('scan my inboxes') // detectSurface -> gmail, default managed
+  // hedged nursery lead is typed into the payload
+  assert.match(fake.writes.join(''), /unverified lead/i)
+  // and recorded on the task (tier nursery, surface gmail)
+  const injected = tm.get(id)!.injectedRecipes ?? []
+  assert.ok(injected.some((r) => r.name === 'gmail-inbox-sweep' && r.tier === 'nursery' && r.surface === 'gmail'),
+    'gmail nursery recipe recorded')
+  assert.equal(tm.get(id)!.mode, 'managed')
+  assert.equal(tm.get(id)!.surface, 'gmail')
+  tm.kill(id)
+})
+
+test('raw dispatch skips injection, records no recipes, and never hands off on done', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  await seedGmailNursery(baseDir)
+  const submits: any[] = []
+  const librarian = { submit: async (s: any) => { submits.push(s) } } as any
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
+  const id = await tm.dispatch('open me a coding session', { mode: 'raw' })
+  assert.doesNotMatch(fake.writes.join(''), /unverified lead/i)
+  assert.equal((tm.get(id)!.injectedRecipes ?? []).length, 0)
+  const donePromise = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'ok' } })
+  await donePromise
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(submits.length, 0) // raw mode never hands off
+})
+
+test('managed done with an injected recipe hands off to the librarian once with outcome done', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  await seedGmailNursery(baseDir)
+  const submits: any[] = []
+  const librarian = { submit: async (s: any) => { submits.push(s) } } as any
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
+  const id = await tm.dispatch('scan my inboxes')
+  const donePromise = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'swept' } })
+  await donePromise
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(submits.length, 1)
+  assert.equal(submits[0].outcome, 'done')
+  assert.ok(submits[0].injectedRecipes.some((r: any) => r.name === 'gmail-inbox-sweep'))
+})
+
+test('managed failed hands off ONLY when an injected recipe is present', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  await seedGmailNursery(baseDir)
+  const submits: any[] = []
+  const librarian = { submit: async (s: any) => { submits.push(s) } } as any
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
+
+  // (a) gmail surface has a recipe → failed hands off with outcome 'failed'
+  const withRecipe = await tm.dispatch('scan my inboxes')
+  const failedA = once(tm, 'failed')
+  await claudeWrites(tm.get(withRecipe)!.statusPath, { state: 'failed', error: { reason: 'boom' } })
+  await failedA
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(submits.length, 1)
+  assert.equal(submits[0].outcome, 'failed')
+
+  // (b) general surface, no recipes → injectedRecipes empty → failed does NOT hand off
+  const noRecipe = await tm.dispatch('refactor the thing') // -> general, empty
+  assert.equal((tm.get(noRecipe)!.injectedRecipes ?? []).length, 0)
+  const failedB = once(tm, 'failed')
+  await claudeWrites(tm.get(noRecipe)!.statusPath, { state: 'failed', error: { reason: 'boom2' } })
+  await failedB
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(submits.length, 1) // unchanged — recipe-less failure is not handed off
 })
