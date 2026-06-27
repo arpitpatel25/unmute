@@ -23,6 +23,7 @@ import { join } from 'node:path'
 import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { createLogger } from './log'
+import { SURFACES, normalizeSurface } from './surface'
 import type { AgentExecutor, ExecutorFactory } from './executor'
 
 const log = createLogger('router')
@@ -113,7 +114,7 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `exact meaning).`,
     ``,
     `Write exactly: {"action":"new"|"continue","targetTaskId":"<id when continue>","intent":"<cleaned one-line command>","surface":"<app/tool or omit>","mode":"managed"|"raw"}`,
-    `surface: the app/tool the task operates on (gmail, google-sheets, google-calendar, google-docs, google-drive, canva, youtube) or omit if none applies.`,
+    `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
     `mode: use "raw" for "open me a session to work in" / open-ended coding where injected memory hints would pollute long reasoning; use "managed" for short, surface-operating dictated tasks. If ambiguous, choose "raw".`,
   ].join('\n')
 }
@@ -141,7 +142,10 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
   const intent = (obj.intent && obj.intent.trim()) || fallbackIntent
   const mode = obj.mode === 'raw' ? 'raw' : 'managed'
-  const surface = typeof obj.surface === 'string' && obj.surface.trim() ? obj.surface.trim() : undefined
+  // Pin to the canonical vocabulary: an off-list / invented surface (the LM
+  // emitted "jiohotstar", "x", etc. freely) becomes undefined, and the caller
+  // falls back to the deterministic detectSurface — so the store can't fragment.
+  const surface = normalizeSurface(obj.surface)
   if (obj.action === 'continue' && obj.targetTaskId && validIds.has(obj.targetTaskId)) {
     return { action: 'continue', targetTaskId: obj.targetTaskId, intent, mode, surface }
   }

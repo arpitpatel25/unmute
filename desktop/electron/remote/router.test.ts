@@ -50,6 +50,10 @@ test('parseDecision: explicit decisions honored; failures use failsafe', () => {
   assert.equal(parseDecision(null, 'x', TWO).action, 'new')
   // unknown id ⇒ failsafe (single ⇒ continue latest)
   assert.equal(parseDecision('{"action":"continue","targetTaskId":"zzz","intent":"x"}', 'x', ONE).targetTaskId, 't1')
+  // a canonical surface is kept (lowercased); an invented one is dropped to undefined
+  assert.equal(parseDecision('{"action":"new","intent":"tweet","surface":"X"}', 'r', ONE).surface, 'x')
+  assert.equal(parseDecision('{"action":"new","intent":"watch","surface":"jiohotstar"}', 'r', ONE).surface, 'jiohotstar')
+  assert.equal(parseDecision('{"action":"new","intent":"x","surface":"frobnicate"}', 'r', ONE).surface, undefined)
 })
 
 // A fake classifier session: when it receives the routing prompt, it writes the

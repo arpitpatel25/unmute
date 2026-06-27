@@ -23,6 +23,7 @@ import type { ExecutorFactory } from './executor'
 import { settleRepl } from './repl-settle'
 import { locateTranscript, reduceTranscript } from './trace-reducer'
 import { listRecipes, recipesDir, graduatedDir } from './recipe-store'
+import { SURFACES } from './surface'
 
 const log = createLogger('librarian')
 
@@ -176,9 +177,15 @@ export function buildLibrarianPrompt(i: LibrarianPromptInput): string {
     index,
     ``,
     `── Recipe shape (when you DO create one) ──`,
-    `Markdown file, single-line frontmatter scalars (name, surface, description, confidence:`,
-    `low, runs_confirmed: 0, runs_contradicted: 0, created/last_used/last_verified ISO dates),`,
-    `then a body distilled to the durable skeleton — NOT a click log:`,
+    `Markdown file. ALWAYS write the FULL single-line frontmatter, every field present:`,
+    `  name, surface, description, confidence: low, runs_confirmed: 0, runs_contradicted: 0,`,
+    `  created/last_used/last_verified (today's ISO date).`,
+    `A BRAND-NEW recipe ALWAYS starts runs_confirmed: 0 AND runs_contradicted: 0 (you have not`,
+    `confirmed it yet — creating is not confirming). The frontmatter "surface:" MUST be one of`,
+    `the canonical surfaces [${SURFACES.join(', ')}] (or general) and MUST equal the <surface>`,
+    `folder you place the file in — never put a recipe under a folder whose name differs from its`,
+    `surface field, and never invent a new surface label.`,
+    `Then a body distilled to the durable skeleton — NOT a click log:`,
     `  ## Preconditions   — stable setup (e.g. "Chrome profile arpitpatel20121999 / u1 for @just_unmute")`,
     `  ## Procedure       — ordered steps by intent/label, no coordinates (adaptable; soft section)`,
     `  ## Invariants      — what must hold / stable entry URLs / named locations (hard section)`,
