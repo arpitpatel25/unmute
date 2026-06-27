@@ -21,11 +21,6 @@ import { GENERAL_SURFACE } from './surface'
 
 const log = createLogger('skills')
 
-/** The shared skill/recipe library — the single source of truth (PRD §9.2). */
-export function sharedSkillsDir(baseDir?: string): string {
-  return join(baseDir ?? join(homedir(), '.unmute', 'remote'), 'skills')
-}
-
 /** Where Claude Code auto-discovers skills inside a session cwd. */
 export function sessionSkillsDir(cwd: string): string {
   return join(cwd, '.claude', 'skills')
@@ -58,15 +53,6 @@ export async function installSkillsIntoCwd(cwd: string, opts: { surface?: string
   // TEMP(memory-debug): remove after calibration
   log.event('skills-installed-into-cwd', { MEMORY_DEBUG: true, cwd, surfaces, copied })
   return copied
-}
-
-/** List recipe/skill files in the shared dir (for the librarian's context). */
-export async function listSharedSkills(baseDir?: string): Promise<string[]> {
-  try {
-    return await fs.readdir(sharedSkillsDir(baseDir))
-  } catch {
-    return []
-  }
 }
 
 // ─── User profile (the SECOND store) ──────────────────────────────────────
@@ -105,25 +91,3 @@ export async function installProfileIntoCwd(cwd: string, baseDir?: string): Prom
   }
 }
 
-/** The skills "index": each skill's `name` + first-line `description` from its
- *  frontmatter, so the librarian sees what already exists WITHOUT loading every
- *  body. Keeps the librarian's context bounded as the library grows. */
-export async function skillsIndex(baseDir?: string): Promise<Array<{ name: string; description: string }>> {
-  const dir = sharedSkillsDir(baseDir)
-  let names: string[]
-  try { names = await fs.readdir(dir) } catch { return [] }
-  const out: Array<{ name: string; description: string }> = []
-  for (const name of names) {
-    let description = ''
-    try {
-      // Skill may be a dir (SKILL.md) or a flat .md file.
-      const stat = await fs.stat(join(dir, name))
-      const file = stat.isDirectory() ? join(dir, name, 'SKILL.md') : join(dir, name)
-      const text = await fs.readFile(file, 'utf8')
-      const m = text.match(/^description:\s*(.+)$/m)
-      description = m ? m[1].trim().replace(/^["']|["']$/g, '') : ''
-    } catch { /* unreadable skill — list name only */ }
-    out.push({ name, description })
-  }
-  return out
-}

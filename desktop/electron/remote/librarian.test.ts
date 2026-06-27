@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Librarian, buildLibrarianPrompt } from './librarian.ts'
-import { sharedSkillsDir } from './skills.ts'
+import { graduatedDir } from './recipe-store.ts'
 import type { AgentExecutor, SpawnOpts } from './executor.ts'
 
 async function tmpBase(): Promise<string> {
@@ -49,8 +49,9 @@ test('librarian applies a suggestion by writing into the shared skills dir', { t
     pollMs: 25,
     executorFactory: () => makeLibrarianExecutor({
       onWrite: async (libCwd) => {
-        // write a skill into the shared dir, then mark librarian status done
-        await fs.writeFile(path.join(sharedSkillsDir(base), 'extract-zip.md'), '---\nname: extract-zip\n---\nsteps')
+        // write a skill into the graduated dir, then mark librarian status done
+        await fs.mkdir(path.join(graduatedDir(base), 'general'), { recursive: true })
+        await fs.writeFile(path.join(graduatedDir(base), 'general', 'extract-zip.md'), '---\nname: extract-zip\n---\nsteps')
         await writeDone(path.join(libCwd, 'status.json'), 'created extract-zip')
       },
     }),
@@ -58,7 +59,7 @@ test('librarian applies a suggestion by writing into the shared skills dir', { t
 
   await lib.submit({ taskId: 't1', intent: 'extract a zip', scratchPath: path.join(taskCwd, 'recipe.json'), cwd: taskCwd })
   // the shared skill now exists
-  assert.ok((await fs.readFile(path.join(sharedSkillsDir(base), 'extract-zip.md'), 'utf8')).includes('extract-zip'))
+  assert.ok((await fs.readFile(path.join(graduatedDir(base), 'general', 'extract-zip.md'), 'utf8')).includes('extract-zip'))
 })
 
 test('librarian is serialized — only one session runs at a time (PRD §9.3)', { timeout: 8000 }, async () => {
