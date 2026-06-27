@@ -40,3 +40,43 @@ test('serializeRecipe round-trips', () => {
   assert.deepEqual(again.frontmatter, r.frontmatter)
   assert.equal(again.body.trim(), r.body.trim())
 })
+
+// ── Task 2: tier↔folder mapping, paths, list/read/write ──────────────────────
+import { promises as fs2 } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import {
+  tierForConfidence, dirForRecipe, listRecipes, readNurseryRecipes, writeRecipe, recipesDir, graduatedDir,
+} from './recipe-store.ts'
+
+async function tmpBase() { return fs2.mkdtemp(path.join(os.tmpdir(), 'recipe-')) }
+function fm(over = {}) {
+  return { name: 'r', surface: 'gmail', description: 'd', confidence: 'low',
+    runs_confirmed: 0, runs_contradicted: 0, created: '', last_used: '', last_verified: '', ...over } as any
+}
+
+test('tierForConfidence: high is skill, else nursery', () => {
+  assert.equal(tierForConfidence('high'), 'skill')
+  assert.equal(tierForConfidence('medium'), 'nursery')
+  assert.equal(tierForConfidence('low'), 'nursery')
+})
+
+test('dirForRecipe routes by tier+surface', () => {
+  const base = '/b'
+  assert.equal(dirForRecipe(fm({ confidence: 'low' }), base), path.join(recipesDir(base), 'gmail'))
+  assert.equal(dirForRecipe(fm({ confidence: 'high' }), base), path.join(graduatedDir(base), 'gmail'))
+})
+
+test('writeRecipe + listRecipes + readNurseryRecipes', async () => {
+  const base = await tmpBase()
+  await writeRecipe({ frontmatter: fm({ name: 'a', confidence: 'low' }), body: '## Invariants\n- x\n' }, base)
+  await writeRecipe({ frontmatter: fm({ name: 'b', confidence: 'high' }), body: '## Invariants\n- y\n' }, base)
+  const all = await listRecipes({ baseDir: base })
+  assert.equal(all.length, 2)
+  const nursery = await listRecipes({ tier: 'nursery', baseDir: base })
+  assert.equal(nursery.length, 1)
+  assert.equal(nursery[0].frontmatter.name, 'a')
+  const gmailNursery = await readNurseryRecipes('gmail', base)
+  assert.equal(gmailNursery.length, 1)
+  assert.equal(gmailNursery[0].frontmatter.name, 'a')
+})
