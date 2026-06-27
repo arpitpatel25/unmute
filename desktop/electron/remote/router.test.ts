@@ -22,7 +22,7 @@ test('buildRoutingPrompt includes the utterance, task line, and decision path', 
 })
 
 test('failsafeDecision: one recent task continues it; multiple or stale or none ⇒ new', () => {
-  assert.deepEqual(failsafeDecision(ONE, 'and 2015?'), { action: 'continue', targetTaskId: 't1', intent: 'and 2015?' })
+  assert.deepEqual(failsafeDecision(ONE, 'and 2015?'), { action: 'continue', targetTaskId: 't1', intent: 'and 2015?', mode: 'managed' })
   assert.equal(failsafeDecision(TWO, 'x').action, 'new')               // ambiguous ⇒ new
   assert.equal(failsafeDecision([], 'x').action, 'new')                // nothing to continue
   const stale: RoutableTask[] = [{ ...ONE[0], ageSec: 99999 }]
@@ -41,9 +41,9 @@ test('parseDecision: explicit decisions honored; failures use failsafe', () => {
   assert.equal(parseDecision('{"action":"new","intent":"fresh"}', 'raw', ONE).action, 'new')
   // explicit continue to a known id
   assert.deepEqual(parseDecision('{"action":"continue","targetTaskId":"t1","intent":"reply"}', 'raw', ONE),
-    { action: 'continue', targetTaskId: 't1', intent: 'reply' })
+    { action: 'continue', targetTaskId: 't1', intent: 'reply', mode: 'managed', surface: undefined })
   // timeout (null) with one recent task ⇒ continue it (the flip)
-  assert.deepEqual(parseDecision(null, 'and 2015?', ONE), { action: 'continue', targetTaskId: 't1', intent: 'and 2015?' })
+  assert.deepEqual(parseDecision(null, 'and 2015?', ONE), { action: 'continue', targetTaskId: 't1', intent: 'and 2015?', mode: 'managed' })
   // malformed with one recent task ⇒ continue it
   assert.equal(parseDecision('not json', 'x', ONE).action, 'continue')
   // null with multiple tasks ⇒ new (can't guess)
@@ -182,4 +182,33 @@ test('Router.route fails safe on timeout: ONE recent task ⇒ CONTINUE it (the f
   assert.equal(d.action, 'continue')
   assert.equal(d.targetTaskId, 't1')
   router.dispose()
+})
+
+// ─── surface + mode tests ─────────────────────────────────────────
+
+test('parseDecision: surface and mode parsed correctly for new action with gmail', () => {
+  const d = parseDecision('{"action":"new","intent":"scan inboxes","surface":"gmail","mode":"managed"}', 'fb', [])
+  assert.equal(d.action, 'new')
+  assert.equal(d.surface, 'gmail')
+  assert.equal(d.mode, 'managed')
+})
+
+test('parseDecision: mode raw parsed; surface omitted when absent', () => {
+  const d = parseDecision('{"action":"new","intent":"open me a coding session","mode":"raw"}', 'fb', [])
+  assert.equal(d.mode, 'raw')
+  assert.equal(d.surface, undefined)
+})
+
+test('parseDecision: mode defaults to managed when absent', () => {
+  const d = parseDecision('{"action":"new","intent":"x"}', 'fb', [])
+  assert.equal(d.mode, 'managed')
+})
+
+test('parseDecision: continue decision also carries mode and surface', () => {
+  const tasks: RoutableTask[] = [{ id: 't1', intent: 'scan inboxes', state: 'running', ageSec: 10 }]
+  const d = parseDecision('{"action":"continue","targetTaskId":"t1","intent":"add label","surface":"gmail","mode":"managed"}', 'fb', tasks)
+  assert.equal(d.action, 'continue')
+  assert.equal(d.targetTaskId, 't1')
+  assert.equal(d.surface, 'gmail')
+  assert.equal(d.mode, 'managed')
 })

@@ -48,6 +48,12 @@ export interface RouteDecision {
   targetTaskId?: string
   /** cleaned intent (router folds in transcript cleanup). */
   intent: string
+  /** the app/tool surface this task operates on (e.g. gmail, google-sheets), or
+   *  undefined when none applies — caller falls back to detectSurface. */
+  surface?: string
+  /** managed = short dictated task; raw = open-ended session where injected
+   *  memory hints would pollute long reasoning. Default: managed. */
+  mode?: 'managed' | 'raw'
 }
 
 // ─── Pure helpers (unit-tested) ───────────────────────────────────
@@ -106,7 +112,9 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `Also clean the command into one natural line (fix transcription slips, keep the`,
     `exact meaning).`,
     ``,
-    `Write exactly: {"action":"new"|"continue","targetTaskId":"<id when continue>","intent":"<cleaned one-line command>"}`,
+    `Write exactly: {"action":"new"|"continue","targetTaskId":"<id when continue>","intent":"<cleaned one-line command>","surface":"<app/tool or omit>","mode":"managed"|"raw"}`,
+    `surface: the app/tool the task operates on (gmail, google-sheets, google-calendar, google-docs, google-drive, canva, youtube) or omit if none applies.`,
+    `mode: use "raw" for "open me a session to work in" / open-ended coding where injected memory hints would pollute long reasoning; use "managed" for short, surface-operating dictated tasks. If ambiguous, choose "raw".`,
   ].join('\n')
 }
 
@@ -118,9 +126,9 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
 export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSec = 180): RouteDecision {
   const clean = (intent || '').trim()
   if (tasks.length === 1 && tasks[0].ageSec <= maxAgeSec) {
-    return { action: 'continue', targetTaskId: tasks[0].id, intent: clean }
+    return { action: 'continue', targetTaskId: tasks[0].id, intent: clean, mode: 'managed' }
   }
-  return { action: 'new', intent: clean }
+  return { action: 'new', intent: clean, mode: 'managed' }
 }
 
 /** Parse the decision file. EXPLICIT router decisions (new, or continue→known id)
@@ -129,13 +137,15 @@ export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSe
 export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[]): RouteDecision {
   const validIds = new Set(tasks.map((t) => t.id))
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
-  let obj: { action?: string; targetTaskId?: string; intent?: string }
+  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
   const intent = (obj.intent && obj.intent.trim()) || fallbackIntent
+  const mode = obj.mode === 'raw' ? 'raw' : 'managed'
+  const surface = typeof obj.surface === 'string' && obj.surface.trim() ? obj.surface.trim() : undefined
   if (obj.action === 'continue' && obj.targetTaskId && validIds.has(obj.targetTaskId)) {
-    return { action: 'continue', targetTaskId: obj.targetTaskId, intent }
+    return { action: 'continue', targetTaskId: obj.targetTaskId, intent, mode, surface }
   }
-  if (obj.action === 'new') return { action: 'new', intent }
+  if (obj.action === 'new') return { action: 'new', intent, mode, surface }
   return failsafeDecision(tasks, intent)
 }
 
@@ -224,7 +234,8 @@ export class Router {
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
       const raw = await this.waitForDecision()
       const decision = parseDecision(raw, fallback, tasks)
-      log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length })
+      // TEMP(memory-debug)
+      log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, MEMORY_DEBUG: true })
       return decision
     } catch (e) {
       log.warn('route failed — using failsafe', { error: (e as Error).message })
