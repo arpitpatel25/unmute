@@ -251,7 +251,7 @@ export class TaskManager extends EventEmitter {
       // block dispatch (without hooks the task runs on the status-file path, i.e.
       // today's behaviour). See hooks.ts.
       await installHooks(dir).catch((e) => tlog.warn('installHooks failed — running without hooks', { error: (e as Error).message }))
-      await installSkillsIntoCwd(dir, this.opts.baseDir) // recipes auto-discovery (PRD §8.3)
+      await installSkillsIntoCwd(dir, { baseDir: this.opts.baseDir }) // recipes auto-discovery (PRD §8.3)
       await installProfileIntoCwd(dir, this.opts.baseDir) // user facts/prefs the doer Reads on demand
 
       const ex = this.opts.executorFactory()

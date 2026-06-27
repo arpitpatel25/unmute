@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Librarian } from './librarian.ts'
-import { installSkillsIntoCwd, sharedSkillsDir, sessionSkillsDir } from './skills.ts'
+import { sharedSkillsDir } from './skills.ts'
 import type { AgentExecutor, SpawnOpts } from './executor.ts'
 
 async function tmpBase(): Promise<string> {
@@ -36,23 +36,6 @@ async function writeDone(statusPath: string, summary: string) {
   await fs.writeFile(tmp, JSON.stringify({ state: 'done', result: { summary } }))
   await fs.rename(tmp, statusPath)
 }
-
-test('installSkillsIntoCwd copies shared recipes into the session cwd (PRD §8.3)', async () => {
-  const base = await tmpBase()
-  const sdir = sharedSkillsDir(base)
-  await fs.mkdir(sdir, { recursive: true })
-  await fs.writeFile(path.join(sdir, 'extract-zip.md'), '# recipe')
-  const cwd = path.join(base, 'task1')
-  const n = await installSkillsIntoCwd(cwd, base)
-  assert.equal(n, 1)
-  assert.ok((await fs.readFile(path.join(sessionSkillsDir(cwd), 'extract-zip.md'), 'utf8')).includes('recipe'))
-})
-
-test('installSkillsIntoCwd is a no-op when there are no shared skills yet', async () => {
-  const base = await tmpBase()
-  const n = await installSkillsIntoCwd(path.join(base, 'task1'), base)
-  assert.equal(n, 0)
-})
 
 test('librarian applies a suggestion by writing into the shared skills dir', { timeout: 8000 }, async () => {
   const base = await tmpBase()

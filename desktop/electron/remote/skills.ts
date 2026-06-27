@@ -16,6 +16,8 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createLogger } from './log'
+import { graduatedDir } from './recipe-store'
+import { GENERAL_SURFACE } from './surface'
 
 const log = createLogger('skills')
 
@@ -30,30 +32,31 @@ export function sessionSkillsDir(cwd: string): string {
 }
 
 /**
- * Copy the shared skill set into a task's cwd so the doer auto-discovers them
- * (PRD §8.3). Best-effort: a missing shared dir just means "no recipes yet".
+ * Copy graduated skills for the given surface + general into a task's cwd so
+ * the doer auto-discovers them (PRD §8.3). Best-effort: a missing dir means
+ * "no recipes yet" for that surface.
  */
-export async function installSkillsIntoCwd(cwd: string, baseDir?: string): Promise<number> {
-  const src = sharedSkillsDir(baseDir)
+export async function installSkillsIntoCwd(cwd: string, opts: { surface?: string; baseDir?: string } = {}): Promise<number> {
   const dst = sessionSkillsDir(cwd)
-  let names: string[]
-  try {
-    names = await fs.readdir(src)
-  } catch {
-    log.debug('no shared skills dir yet — task runs with curated skills only', { src })
-    return 0
-  }
-  await fs.mkdir(dst, { recursive: true })
+  const surfaces = Array.from(new Set([opts.surface, GENERAL_SURFACE].filter(Boolean) as string[]))
   let copied = 0
-  for (const name of names) {
-    try {
-      await fs.cp(join(src, name), join(dst, name), { recursive: true })
-      copied++
-    } catch (e) {
-      log.warn('skill copy failed', { name, error: (e as Error).message })
+  for (const surface of surfaces) {
+    const src = join(graduatedDir(opts.baseDir), surface)
+    let names: string[]
+    try { names = await fs.readdir(src) } catch { continue }
+    await fs.mkdir(dst, { recursive: true })
+    for (const name of names) {
+      if (!name.endsWith('.md')) continue
+      try {
+        await fs.cp(join(src, name), join(dst, name), { recursive: true })
+        copied++
+      } catch (e) {
+        log.warn('skill copy failed', { name, error: (e as Error).message })
+      }
     }
   }
-  log.event('skills-installed-into-cwd', { cwd, copied })
+  // TEMP(memory-debug): remove after calibration
+  log.event('skills-installed-into-cwd', { MEMORY_DEBUG: true, cwd, surfaces, copied })
   return copied
 }
 
