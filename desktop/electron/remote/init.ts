@@ -36,6 +36,7 @@ import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
 import { Router, type RoutableTask } from './router'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
+import { planGardening, applyGardening } from './gardening'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -89,6 +90,10 @@ interface RemoteSettings {
   // collapses back on Esc. ON by default; OFF reverts to the legacy pop-the-
   // full-panel behavior.
   overlayDocked: boolean
+  // PRD §9: gate for the Librarian's write path. OFF by default (calibration
+  // mode — proposals written to proposal.json, never applied). ON ⇒ curation
+  // writes are live.
+  librarianWriteEnabled: boolean
 }
 
 const settings = new Store<RemoteSettings>({
@@ -108,6 +113,7 @@ const settings = new Store<RemoteSettings>({
     osNotifications: false,
     overlayAutoPresent: true,
     overlayDocked: true,
+    librarianWriteEnabled: false,
   },
 })
 
@@ -449,8 +455,8 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
           return tid
         }
       }
-      log.event('routed-as-new', { via: 'router' })
-      return manager.dispatch(decision.intent || raw)
+      log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: decision.mode ?? null })
+      return manager.dispatch(decision.intent || raw, { surface: decision.surface, mode: decision.mode })
     } catch (e) {
       log.warn('router error — dispatching new', { error: (e as Error).message })
       return manager.dispatch(raw)
@@ -527,7 +533,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       tmux,
     })
   }
-  const librarian = new Librarian({ executorFactory: librarianExecutorFactory })
+  const librarian = new Librarian({ executorFactory: librarianExecutorFactory, writeEnabled: settings.get('librarianWriteEnabled') === true })
   manager = new TaskManager({
     executorFactory,
     librarian,
@@ -549,6 +555,19 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // row. Runs once now then hourly. Never touches ~/.claude.
     manager?.startMaintenance()
   })
+  // Daily gardening sweep — consolidates/prunes the skill library. Gated on the
+  // write-enabled setting so calibration-mode users are never affected.
+  const GARDEN_MS = 24 * 60 * 60 * 1000
+  const gardenTimer = setInterval(() => {
+    if (settings.get('librarianWriteEnabled') !== true) return
+    void (async () => {
+      const actions = await planGardening({ nowMs: Date.now() })
+      // TEMP(memory-debug): remove after calibration
+      log.event('gardening-sweep', { MEMORY_DEBUG: true, planned: actions.length })
+      await applyGardening(actions, {})
+    })().catch((e) => log.warn('gardening sweep failed', { error: (e as Error).message }))
+  }, GARDEN_MS)
+  ;(gardenTimer as { unref?: () => void }).unref?.()
   // The warm routing classifier (lazy — spawns on the first routed utterance,
   // idle-kills itself; tool-less, no glow). Star topology: Unmute is the hub.
   router = new Router({ executorFactory: routerExecutorFactory })
@@ -730,6 +749,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('os-notifications-set', { on: !!on })
     return true
   })
+  ipcMain.handle('remote:set-librarian-write-enabled', async (_e, on: boolean) => {
+    settings.set('librarianWriteEnabled', !!on)
+    log.event('librarian-write-enabled-set', { on: !!on })
+    return true
+  })
   ipcMain.handle('remote:get-settings', async () => ({
     permissionMode: settings.get('permissionMode'),
     remoteKey: getRemoteKey(),
@@ -740,6 +764,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     overlayAutoPresent: settings.get('overlayAutoPresent') !== false,
     overlayDocked: settings.get('overlayDocked') !== false,
     osNotifications: settings.get('osNotifications') === true,
+    librarianWriteEnabled: settings.get('librarianWriteEnabled') === true,
     logFile: getRemoteLogFilePath(),
   }))
   // ── Onboarding / guided one-time setup (PRD §12) ──
