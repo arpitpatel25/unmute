@@ -128,7 +128,7 @@ test('librarian prompt encodes the dials + read-only proposal in gated mode', ()
     injectedRecipes: [{ name: 'gmail-inbox-sweep', tier: 'nursery', surface: 'gmail' }],
     reducedTrace: 'TOOL Bash: gmail\n  -> ERROR: profile 3 not found',
     existing: [], profile: '', writeEnabled: false,
-    recipesDir: '/m/recipes', skillsDir: '/m/skills', proposalPath: '/lib/proposal.json', statusPath: '/lib/status.json',
+    recipesDir: '/m/recipes', skillsDir: '/m/skills', profilePath: '/m/profile.md', proposalPath: '/lib/proposal.json', statusPath: '/lib/status.json',
   })
   assert.match(p, /Invariants|Definition of done/)        // hard-section rule present
   assert.match(p, /Defaults|Procedure/)                   // soft-section rule present
@@ -141,8 +141,11 @@ test('librarian prompt encodes the dials + read-only proposal in gated mode', ()
 test('librarian prompt allows writes when enabled', () => {
   const p = buildLibrarianPrompt({
     intent: 'x', outcome: 'done', injectedRecipes: [], reducedTrace: '', existing: [], profile: '',
-    writeEnabled: true, recipesDir: '/m/recipes', skillsDir: '/m/skills', proposalPath: '/lib/proposal.json', statusPath: '/lib/status.json',
+    writeEnabled: true, recipesDir: '/m/recipes', skillsDir: '/m/skills', profilePath: '/canonical/profile.md', proposalPath: '/lib/proposal.json', statusPath: '/lib/status.json',
   })
   assert.match(p, /recipes\//)
   assert.doesNotMatch(p, /proposal\.json/)
+  // Profile facts must target the canonical path, never a task-local PROFILE.md copy.
+  assert.match(p, /\/canonical\/profile\.md/)             // exact canonical path given
+  assert.match(p, /NEVER[^\n]*PROFILE\.md|task director/i) // forbids the throwaway copy
 })

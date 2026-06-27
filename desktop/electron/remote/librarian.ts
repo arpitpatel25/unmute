@@ -80,6 +80,10 @@ export interface LibrarianPromptInput {
   writeEnabled: boolean
   recipesDir: string
   skillsDir: string
+  /** Absolute path of the CANONICAL durable profile. The librarian must edit
+   *  this file for user facts — never the throwaway PROFILE.md copy that lives
+   *  inside each task's cwd (which gets purged). */
+  profilePath: string
   proposalPath: string
   statusPath: string
 }
@@ -98,6 +102,8 @@ export function buildLibrarianPrompt(i: LibrarianPromptInput): string {
       `- Graduated (high) recipes live under ${i.skillsDir}/<surface>/<name>.md`,
       `- Promote/demote = move the file between those folders AND set the confidence field to match.`,
       `- New knowledge is ALWAYS created low-confidence in ${i.recipesDir}/<surface>/ — NEVER directly in ${i.skillsDir}/.`,
+      `- USER FACTS (accounts, prefs, contacts, durable IDs) → edit the canonical profile file at ${i.profilePath} DIRECTLY.`,
+      `  NEVER edit a PROFILE.md inside a task directory (e.g. .../local/<taskId>/PROFILE.md) — those are throwaway per-task copies and your edit would be lost.`,
     ].join('\n')
     : [
       `READ-ONLY MODE (calibration): DO NOT modify, create, move, or delete ANY file under`,
@@ -320,6 +326,7 @@ export class Librarian {
       writeEnabled,
       recipesDir: recipesDir(this.opts.baseDir || undefined),
       skillsDir: graduatedDir(this.opts.baseDir || undefined),
+      profilePath,
       proposalPath,
       statusPath,
     })
