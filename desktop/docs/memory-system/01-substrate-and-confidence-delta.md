@@ -386,6 +386,46 @@ The diff:
 7. **Output target = a folder/file move + frontmatter counter update**, not free-form skill
    authoring. In **step 2 (read-only)** it instead *logs the intended move* (gate, §4.4).
 
+### 5.1 Decided calibration dials (DECIDED — starting rules, calibrated in read-only)
+
+These two dials set "how harsh" the librarian is. They are decided now (not deferred); the
+read-only phase tunes the wording, not the principle.
+
+**Dial 1 — contradiction vs corroboration vs ambiguous. The line is the recipe's own
+section structure** — only the *hard* sections can move confidence:
+
+- Governing sections: `Invariants`, `Definition of done`, and named **structural facts**
+  (an enumeration like "4 profiles," a location, a stable identifier, a documented gotcha).
+- **CORROBORATED** (`runs_confirmed++`, stamp, promote-if-threshold): the trace exercised a
+  hard claim and it held; task succeeded.
+- **CONTRADICTED** (demote one tier, `runs_contradicted++`, rewrite the wrong part as a fresh
+  low-confidence claim, re-hedge): the trace shows a hard claim was **false** — a named fact
+  didn't hold and the model had to discover a different one to proceed, or a Definition-of-done
+  invariant failed.
+- **AMBIGUOUS → no-op** (at most stamp `last_used`): the deviation was in a **soft** section
+  (`Defaults`/`Procedure` are *designed* to be adapted — a deviation there is **never** a
+  contradiction); OR the recipe wasn't really exercised; OR the task failed for reasons
+  unrelated to the recipe's claims (auth, rate limit, network, a genuinely novel sub-task).
+
+  *Why mechanical:* hard sections govern confidence, soft sections never do — so the
+  classifier keys off *which section* a deviation touches, not a vibe.
+
+**Dial 2 — create-worthiness bar (deliberately HIGH).** Create a nursery recipe only if
+**all three** hold: (a) the run surfaced at least one **durable, environmental** fact worth a
+real `Invariant` or `Known failure mode` (not transient, not situation-specific reasoning);
+(b) it cost **non-trivial exploration** the model would otherwise redo; (c) the surface is
+**plausibly recurring** (email, sheets, a tool — not a literal one-off). If the task was
+trivial, any competent model one-shots it next time, or nothing non-obvious surfaced →
+**no create.** (Consistent with the existing charter's "if nothing was non-obvious … NO-OP,"
+`librarian.ts:246-247`.)
+
+**Overall posture & tie-breakers:** lenient about **creating** (high bar — bloat is the
+enemy), **slow** to promote (needs repetition, §5.3), **fast** to demote (one proven hard-fact
+contradiction). Unsure whether to create → **don't**. Unsure whether a deviation is a
+contradiction or noise → **ambiguous/no-op**, *unless* a named hard fact provably failed →
+then demote. Rationale (the asymmetry that runs through the whole design): a missed harvest is
+just a future cold-start; an over-eager write is active pollution.
+
 **Preserved guarantee:** the new prompt must remain a *tight* charter — longer, but still
 no-op-by-default. A trigger-happy librarian is worse than none (spec §9 throughline).
 
@@ -399,11 +439,11 @@ window where it writes the *old* flat format into the *new* layout. Sequencing:
 - **Step 1 (substrate + injection):**
   - Add `recipes/` + `skills/<surface>/` layout, frontmatter parsing, nursery injection,
     `injectedRecipes` recording.
-  - **Keep the existing librarian writing as-is**, but **point its skill writes at
-    `skills/_legacy/` (or leave the flat dir readable)** so new injection works while the old
-    curator is untouched. Net: floor is preserved, injection is live, no confidence yet.
-  - **OD-1** decides whether existing flat skills are migrated into surfaces now or read
-    in-place via a back-compat path.
+  - **Clean slate (OD-1 resolved):** abandon the old flat `skills/*.md` entirely — `recipes/`
+    and `skills/<surface>/` start empty. The existing librarian's flat-curation write path is
+    disabled in step 1 (it would write the old format into the new world); the new
+    confidence-aware writes arrive gated-off in step 2 and live in step 3. Net for step 1:
+    new substrate + nursery injection live, no librarian writes at all.
 - **Step 2 (librarian read-only):**
   - Swap the librarian feed to the reduced JSONL trace (+ PTY fallback), install the §5
     constitution, but **gate writes off** (`LIBRARIAN_WRITE_ENABLED=false`). It logs intended
@@ -418,13 +458,9 @@ current floor.
 
 ## 7. Open decisions (need your ruling before/within implementation)
 
-- **OD-1 — Existing flat skills migration.** Today there may be real curated skills in
-  `~/.unmute/remote/skills/*.md` (e.g. the profile shows mature methods like the
-  youtube-latest-video / apple-notes-create patterns). On adopting the new layout: (a) migrate
-  each into a `skills/<surface>/` at `confidence: high` (treat as already-graduated), (b) drop
-  them all to nursery to re-earn confidence, or (c) read them via a flat back-compat path
-  until they're naturally rewritten. *Recommendation: (a)* — they're battle-tested; demoting
-  proven knowledge is the wrong default.
+- **OD-1 — Existing flat skills migration. RESOLVED: clean slate.** We do **not** migrate or
+  read any existing `~/.unmute/remote/skills/*.md`. `recipes/` and `skills/` start empty and
+  accrue from scratch. No back-compat path; the old flat library is abandoned. (Owner ruling.)
 - **OD-2 — Injection breadth.** Copy *all* surfaces' graduated skills into each task's
   `.claude/skills/` (today's behavior, max recall, more dilution) or only the detected
   surface's (less dilution, risk of a missed surface)? *Recommendation: detected surface +
