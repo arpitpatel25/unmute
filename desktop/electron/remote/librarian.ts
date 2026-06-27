@@ -238,20 +238,31 @@ export class Librarian {
     await installContract(libCwd)
 
     // Resolve trace: prefer JSONL, fall back to PTY tail from suggestion.
-    const tFile = await locateTranscript(s.cwd)
-    const reducedTrace = tFile
-      ? reduceTranscript(await fs.readFile(tFile, 'utf8'))
-      : (s.transcript ?? '')
+    let reducedTrace = s.transcript ?? ''
+    let traceSource: 'jsonl' | 'pty-fallback' = 'pty-fallback'
+    try {
+      const tFile = await locateTranscript(s.cwd)
+      if (tFile) { reducedTrace = reduceTranscript(await fs.readFile(tFile, 'utf8')); traceSource = 'jsonl' }
+    } catch (e) {
+      // TEMP(memory-debug): remove after calibration
+      llog.warn('trace resolve failed — using PTY fallback', { MEMORY_DEBUG: true, error: (e as Error).message })
+    }
     const reducedTraceBytes = reducedTrace.length
 
     // Load existing memory for librarian context.
-    const recipes = await listRecipes({ baseDir: this.opts.baseDir || undefined })
-    const existing = recipes.map((r) => ({
-      name: r.frontmatter.name,
-      surface: r.frontmatter.surface,
-      confidence: r.frontmatter.confidence,
-      description: r.frontmatter.description,
-    }))
+    let existing: Array<{ name: string; surface: string; confidence: string; description: string }> = []
+    try {
+      const recipes = await listRecipes({ baseDir: this.opts.baseDir || undefined })
+      existing = recipes.map((r) => ({
+        name: r.frontmatter.name,
+        surface: r.frontmatter.surface,
+        confidence: r.frontmatter.confidence,
+        description: r.frontmatter.description,
+      }))
+    } catch (e) {
+      // TEMP(memory-debug): remove after calibration
+      llog.warn('listRecipes failed — continuing with empty memory', { MEMORY_DEBUG: true, error: (e as Error).message })
+    }
 
     const profile = await readUserProfile(this.opts.baseDir || undefined)
     const proposalPath = join(libCwd, 'proposal.json')
@@ -265,7 +276,7 @@ export class Librarian {
       profilePath,
       existingRecipes: existing.length,
       hasProfile: !!profile.trim(),
-      traceSource: tFile ? 'jsonl' : 'pty-fallback',
+      traceSource,
     })
 
     // Build and persist the full prompt for inspection.
@@ -283,7 +294,8 @@ export class Librarian {
       statusPath,
     })
 
-    await fs.writeFile(join(libCwd, 'librarian-prompt.txt'), prompt)
+    try { await fs.writeFile(join(libCwd, 'librarian-prompt.txt'), prompt) }
+    catch (e) { llog.warn('prompt-file write failed (continuing)', { MEMORY_DEBUG: true, error: (e as Error).message }) }
 
     // TEMP(memory-debug): remove after calibration
     llog.event('librarian-inputs', {
@@ -294,7 +306,7 @@ export class Librarian {
       reducedTraceBytes,
       existingCount: existing.length,
       writeEnabled,
-      traceSource: tFile ? 'jsonl' : 'pty-fallback',
+      traceSource,
     })
 
     // Accumulate the PTY output so the settle loop can observe when the REPL is
