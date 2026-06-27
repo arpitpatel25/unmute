@@ -7,6 +7,6 @@
 //
 // This also keeps the deliberately HEAVY memory-system instrumentation (tagged
 // `TEMP(memory-debug)`) from polluting test stdout while it exists.
-import { setConsoleMirror } from './log.ts'
+import { setConsoleMirror } from './log'
 
 setConsoleMirror(false)

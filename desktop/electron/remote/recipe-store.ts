@@ -2,7 +2,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { createLogger } from './log.ts'
+import { createLogger } from './log'
 
 const log = createLogger('recipe-store')
 
