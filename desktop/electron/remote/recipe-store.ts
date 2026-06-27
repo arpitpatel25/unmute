@@ -154,3 +154,25 @@ export async function writeRecipe(r: Pick<Recipe, 'frontmatter' | 'body'>, baseD
   log.event('recipe-written', { MEMORY_DEBUG: true, name: r.frontmatter.name, confidence: r.frontmatter.confidence, surface: r.frontmatter.surface, dest })
   return dest
 }
+
+// ── Task 3: promote/demote (move) + freshness predicate ──────────────────────
+
+export const FRESHNESS_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+
+export async function moveRecipe(r: Recipe, toConfidence: Confidence, baseDir?: string): Promise<Recipe> {
+  const next: Recipe = { ...r, frontmatter: { ...r.frontmatter, confidence: toConfidence } }
+  const newPath = await writeRecipe(next, baseDir)
+  if (r.path && r.path !== newPath) {
+    try { await fs.rm(r.path, { force: true }) } catch { /* best-effort */ }
+  }
+  // TEMP(memory-debug): remove after calibration
+  log.event('recipe-moved', { MEMORY_DEBUG: true, name: r.frontmatter.name, from: r.frontmatter.confidence, to: toConfidence })
+  return { ...next, path: newPath }
+}
+
+export function isStaleHigh(r: Recipe, nowMs: number, windowMs = FRESHNESS_WINDOW_MS): boolean {
+  if (r.frontmatter.confidence !== 'high') return false
+  const t = Date.parse(r.frontmatter.last_verified)
+  if (Number.isNaN(t)) return true // high but never verified -> treat as stale
+  return nowMs - t > windowMs
+}

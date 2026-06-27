@@ -80,3 +80,27 @@ test('writeRecipe + listRecipes + readNurseryRecipes', async () => {
   assert.equal(gmailNursery.length, 1)
   assert.equal(gmailNursery[0].frontmatter.name, 'a')
 })
+
+// ── Task 3: promote/demote (move) + freshness predicate ──────────────────────
+import { moveRecipe, isStaleHigh, FRESHNESS_WINDOW_MS, parseRecipe as _p } from './recipe-store.ts'
+
+test('moveRecipe promotes nursery->skill and removes the old file', async () => {
+  const base = await tmpBase()
+  const p = await writeRecipe({ frontmatter: fm({ name: 'm', confidence: 'medium' }), body: '## Invariants\n- z\n' }, base)
+  const r = parseRecipe(await fs2.readFile(p, 'utf8'), p)!
+  const moved = await moveRecipe(r, 'high', base)
+  assert.equal(moved.frontmatter.confidence, 'high')
+  assert.equal((await listRecipes({ tier: 'skill', baseDir: base })).length, 1)
+  assert.equal((await listRecipes({ tier: 'nursery', baseDir: base })).length, 0)
+  await assert.rejects(fs2.access(p)) // old file gone
+})
+
+test('isStaleHigh: only high + past window', () => {
+  const now = 1_000_000_000_000
+  const fresh = { frontmatter: fm({ confidence: 'high', last_verified: new Date(now - 1000).toISOString() }), body: '', path: '' } as any
+  const stale = { frontmatter: fm({ confidence: 'high', last_verified: new Date(now - FRESHNESS_WINDOW_MS - 1000).toISOString() }), body: '', path: '' } as any
+  const lowOld = { frontmatter: fm({ confidence: 'low', last_verified: new Date(now - FRESHNESS_WINDOW_MS - 1000).toISOString() }), body: '', path: '' } as any
+  assert.equal(isStaleHigh(fresh, now), false)
+  assert.equal(isStaleHigh(stale, now), true)
+  assert.equal(isStaleHigh(lowOld, now), false)
+})
