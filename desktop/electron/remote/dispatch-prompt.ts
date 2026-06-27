@@ -11,8 +11,15 @@
 // Keep this terse. The obligations are in the loaded contract, not here.
 
 import { createLogger } from './log'
+import type { Confidence } from './recipe-store'
 
 const log = createLogger('dispatch-prompt')
+
+const STANCE: Record<Confidence, string> = {
+  low: 'Unverified lead from a past run — treat skeptically and derive independently if it fails',
+  medium: 'Usually-right approach from past runs — confirm as you go',
+  high: 'Established approach',
+}
 
 export interface DispatchInput {
   /** The cleaned intent string (post intent-cleanup, PRD §13.7). */
@@ -21,13 +28,17 @@ export interface DispatchInput {
   statusPath: string
   /** Absolute path of THIS task's recipe-suggestion scratch file (PRD §8.1). */
   recipeScratchPath?: string
+  /** Nursery (low/medium) leads to inject HEDGED — never auto-fired skills. */
+  nurseryRecipes?: Array<{ name: string; confidence: Confidence; body: string }>
+  /** One-line "confirm before relying" notes for stale-high graduated skills. */
+  staleNotes?: string[]
 }
 
 /**
  * Build the exact text typed into the REPL's stdin to dispatch one task.
  * Short by construction — the full contract is already loaded (decision #3).
  */
-export function buildDispatch({ intent, statusPath, recipeScratchPath }: DispatchInput): string {
+export function buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes, staleNotes }: DispatchInput): string {
   const lines = [
     `[Unmute Remote task]`,
     `Task: ${intent}`,
@@ -36,8 +47,22 @@ export function buildDispatch({ intent, statusPath, recipeScratchPath }: Dispatc
   if (recipeScratchPath) {
     lines.push(`Recipe-suggestion scratch file (write a suggestion here only if you learned a better/repeatable way): ${recipeScratchPath}`)
   }
+  for (const note of staleNotes ?? []) lines.push(`Note: ${note}`)
+  for (const r of nurseryRecipes ?? []) {
+    lines.push('', `--- Memory lead (${STANCE[r.confidence]}): ${r.name} ---`, r.body.trim(), `--- end lead ---`)
+  }
   lines.push(`Act now. Follow the Unmute status-file contract that is already loaded.`)
   const payload = lines.join('\n')
-  log.event('dispatch-payload-built', { intent, statusPath, bytes: payload.length })
+  const injectedRecipes = nurseryRecipes ?? []
+  log.event('dispatch-payload-built', {
+    intent,
+    statusPath,
+    bytes: payload.length,
+    nursery: injectedRecipes.length,
+    // TEMP(memory-debug): remove after calibration
+    MEMORY_DEBUG: true,
+    nurseryNames: injectedRecipes.map(r => r.name),
+    nurseryConfidences: injectedRecipes.map(r => r.confidence),
+  })
   return payload
 }

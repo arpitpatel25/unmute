@@ -18,3 +18,20 @@ test('recipe scratch path is included only when provided', () => {
   const withScratch = buildDispatch({ intent: 'x', statusPath: '/s.json', recipeScratchPath: '/r/recipe.json' })
   assert.match(withScratch, /\/r\/recipe\.json/)
 })
+
+test('buildDispatch renders a hedged nursery block with confidence stance', () => {
+  const out = buildDispatch({
+    intent: 'scan my inboxes',
+    statusPath: '/t/status.json',
+    nurseryRecipes: [{ name: 'gmail-inbox-sweep', confidence: 'low', body: '## Invariants\n- check all profiles' }],
+  })
+  assert.match(out, /unverified lead/i)         // low-confidence stance
+  assert.match(out, /derive independently/i)
+  assert.match(out, /check all profiles/)        // body included
+})
+
+test('buildDispatch with no nursery recipes is unchanged (terse)', () => {
+  const out = buildDispatch({ intent: 'do x', statusPath: '/t/status.json' })
+  assert.match(out, /\[Unmute Remote task\]/)
+  assert.doesNotMatch(out, /unverified lead/i)
+})
