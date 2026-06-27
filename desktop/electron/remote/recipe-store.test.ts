@@ -97,6 +97,19 @@ test('writeRecipe + listRecipes + readNurseryRecipes', async () => {
   assert.equal(gmailNursery[0].frontmatter.name, 'a')
 })
 
+test('concurrent writeRecipe to the same name never corrupts or leaves a .tmp (unique tmp)', async () => {
+  const base = await tmpBase()
+  // 8 writers race on the SAME recipe path. With a shared tmp name one rename
+  // would hit ENOENT and reject; with a unique tmp all succeed, last wins.
+  await Promise.all(Array.from({ length: 8 }, (_, i) =>
+    writeRecipe({ frontmatter: fm({ name: 'hot', confidence: 'low', description: `d${i}` }), body: `body ${i}\n` }, base)))
+  const all = await listRecipes({ baseDir: base, surface: 'gmail' })
+  assert.equal(all.length, 1, 'exactly one recipe file, parseable (not partial)')
+  assert.equal(all[0].frontmatter.name, 'hot')
+  const files = await fs2.readdir(path.join(recipesDir(base), 'gmail'))
+  assert.ok(files.every((f) => !f.endsWith('.tmp')), 'no orphan .tmp left behind')
+})
+
 // ── Task 3: promote/demote (move) + freshness predicate ──────────────────────
 import { moveRecipe, isStaleHigh, FRESHNESS_WINDOW_MS, parseRecipe as _p } from './recipe-store.ts'
 

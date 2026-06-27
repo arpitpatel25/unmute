@@ -149,12 +149,16 @@ export async function readNurseryRecipes(surface: string, baseDir?: string): Pro
   return listRecipes({ tier: 'nursery', surface, baseDir })
 }
 
+// Monotonic counter so two concurrent writers (e.g. a write-mode librarian and
+// a maintenance pass) never share a tmp path and clobber each other's rename.
+let tmpSeq = 0
+
 /** Atomic write into the tier+surface folder. Returns the absolute path. */
 export async function writeRecipe(r: Pick<Recipe, 'frontmatter' | 'body'>, baseDir?: string): Promise<string> {
   const dir = dirForRecipe(r.frontmatter, baseDir)
   await fs.mkdir(dir, { recursive: true })
   const dest = join(dir, fileNameFor(r.frontmatter.name))
-  const tmp = `${dest}.tmp`
+  const tmp = `${dest}.${process.pid}.${tmpSeq++}.tmp`
   await fs.writeFile(tmp, serializeRecipe(r), 'utf8')
   await fs.rename(tmp, dest)
   // TEMP(memory-debug): remove after calibration

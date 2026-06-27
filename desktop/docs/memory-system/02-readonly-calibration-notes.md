@@ -76,38 +76,49 @@ _(append dated entries here during calibration)_
 
 ---
 
-## 3. Gates that MUST close before `librarianWriteEnabled` = ON
+## 3. Write-mode safety — race conditions
 
-Surfaced by the final whole-branch review. Both are inert while the write-gate is
-OFF; they only bite once writes are enabled, so they are deliberately deferred to
-the write-enable milestone — not to merge.
+The plan is to switch `librarianWriteEnabled` ON before live testing, so the
+write path must be race-safe even though the gate currently ships OFF. The
+concurrency hardening below was implemented up-front (write-gate stays OFF).
 
-### Gate A — gardening is a second writer
+### Gate A — gardening was a second writer — CLOSED
 
-`applyGardening` (`gardening.ts`) deletes pruned nursery files from the `init.ts`
+`applyGardening` (`gardening.ts`) used to delete pruned files from the `init.ts`
 daily `setInterval` on the main process — outside the librarian's serialized
-write queue. With writes ON, a gardening prune can race a concurrent librarian
-`moveRecipe`. Both deletes are `force: true` best-effort, so the worst case is a
-benign lost delete, not a crash — but it violates the "only the librarian writes,
-serialized" invariant.
+queue, so with writes ON a prune could race a librarian session.
 
-**Before enabling writes:** either route `applyGardening` through the same
-serialization as librarian writes (a shared store lock spanning the librarian's
-spawned session), or make a documented, deliberate decision to accept gardening
-as a second deterministic writer and bound the race.
+**Fixed:** the librarian's serial queue now carries two job kinds — `curate`
+(a finished task) and `maint` (gardening). `Librarian.runMaintenance(fn)`
+enqueues the prune behind any active session and blocks a new session until it
+finishes, so gardening and the librarian can never mutate the store at once. The
+`init.ts` garden timer now calls `librarian.runMaintenance(...)` instead of
+running the pass directly. Covered by `librarian.test.ts`
+("runMaintenance is serialized against librarian sessions").
 
-### Gate B — read-only enforcement is prompt-only
+### Atomic writes — CLOSED
 
-In read-only mode the librarian still spawns with `--dangerously-skip-permissions`
-and is handed the real store paths; the only thing preventing a write is the
-prompt saying "do not modify." Calibration's whole value is zero-risk observation,
-and that guarantee is currently soft.
+`writeRecipe` used a fixed `${dest}.tmp` path, so two concurrent writers to the
+same recipe clobbered each other's tmp and one `rename` hit ENOENT. Now the tmp
+name carries `pid + a monotonic counter`, so concurrent writes each rename their
+own tmp (last-writer-wins, no partial file, no orphan `.tmp`). Covered by
+`recipe-store.test.ts` ("concurrent writeRecipe … unique tmp"). Combined with the
+existing tmp-then-rename, every store reader (task dispatch `listRecipes` /
+`installSkillsIntoCwd`) sees either the old or the new file, never a partial — and
+`parseRecipe` is tolerant, so a malformed read degrades to skip, not crash.
 
-**Decision needed:** either harden read-only mode (hand the librarian a read-only
-copy/temp clone of the store for reads, or drop `--dangerously-skip-permissions`
-for the read-only librarian so an autonomous write is auto-denied), or explicitly
-accept prompt-only enforcement on the grounds that the system already trusts the
-librarian as sole writer in write mode — and log that acceptance here.
+### Accepted residual risks (no code; deliberate)
+
+- **Gate B — read-only enforcement is prompt-only.** In read-only mode the
+  librarian still spawns with `--dangerously-skip-permissions` and is told (not
+  forced) "do not modify." This is **moot once writes are ON** — the chosen path —
+  and in write mode the system already trusts the librarian as sole writer.
+  Accepted; revisit only if a long read-only calibration phase is reintroduced.
+- **Librarian subprocess writes are not guaranteed atomic.** The librarian is a
+  Claude Code subprocess using its own `Write` tool, which may not write via
+  tmp+rename. A reader could momentarily catch a half-written skill file. Bounded
+  and self-healing: `parseRecipe` tolerance skips it, and the next task sees the
+  finished file. Accepted; not worth intercepting subprocess I/O.
 
 ---
 

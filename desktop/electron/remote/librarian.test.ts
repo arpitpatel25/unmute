@@ -91,6 +91,37 @@ test('librarian is serialized — only one session runs at a time (PRD §9.3)', 
   assert.equal(maxConcurrent, 1, 'librarian must never run two sessions at once')
 })
 
+test('runMaintenance is serialized against librarian sessions — never two writers at once', { timeout: 8000 }, async () => {
+  const base = await tmpBase()
+  let active = 0
+  let maxActive = 0
+  const bump = async (ms: number) => {
+    active++; maxActive = Math.max(maxActive, active)
+    await new Promise((r) => setTimeout(r, ms))
+    active--
+  }
+  const lib = new Librarian({
+    baseDir: base,
+    trustAcceptMs: 0,
+    pollMs: 20,
+    executorFactory: () => makeLibrarianExecutor({
+      onWrite: async (libCwd) => {
+        await bump(60)
+        await writeDone(path.join(libCwd, 'status.json'), 'ok')
+      },
+    }),
+  })
+  const cwd1 = path.join(base, 'a')
+  await fs.mkdir(cwd1, { recursive: true })
+  // A librarian session and a gardening maintenance pass kick off together;
+  // the maintenance job must wait for the session (single-writer invariant).
+  await Promise.all([
+    lib.submit({ taskId: 'a', intent: 'x', scratchPath: path.join(cwd1, 'r.json'), cwd: cwd1 }),
+    lib.runMaintenance(async () => { await bump(60) }),
+  ])
+  assert.equal(maxActive, 1, 'gardening must never overlap a librarian session')
+})
+
 test('librarian prompt encodes the dials + read-only proposal in gated mode', () => {
   const p = buildLibrarianPrompt({
     intent: 'scan my inboxes', outcome: 'failed',

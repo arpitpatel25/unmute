@@ -166,8 +166,15 @@ export function buildLibrarianPrompt(i: LibrarianPromptInput): string {
   ].filter((l) => l !== '').join('\n')
 }
 
+// The serial queue holds two kinds of work: curating a finished task, and
+// deterministic store maintenance (gardening). Both mutate the store, so they
+// share ONE queue — the single-writer invariant covers gardening too.
+type LibrarianJob =
+  | { kind: 'curate'; s: RecipeSuggestion }
+  | { kind: 'maint'; run: () => Promise<void>; done: () => void; fail: (e: unknown) => void }
+
 export class Librarian {
-  private queue: RecipeSuggestion[] = []
+  private queue: LibrarianJob[] = []
   private running = false
   private readonly opts: Required<Omit<LibrarianOpts, 'now'>> & Pick<LibrarianOpts, 'now'>
 
@@ -199,8 +206,21 @@ export class Librarian {
    */
   async submit(s: RecipeSuggestion): Promise<void> {
     log.event('suggestion-submitted', { taskId: s.taskId, intent: s.intent })
-    this.queue.push(s)
+    this.queue.push({ kind: 'curate', s })
     await this.drain()
+  }
+
+  /**
+   * Run a deterministic store-maintenance pass (gardening) on the SAME serial
+   * queue as librarian sessions, so a prune can never race a write-mode
+   * librarian's create/move. Resolves when the pass has run (or rejects if it
+   * throws). Fire-and-forget from callers.
+   */
+  runMaintenance(run: () => Promise<void>): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this.queue.push({ kind: 'maint', run, done: resolve, fail: reject })
+      void this.drain()
+    })
   }
 
   /** Process the queue one-at-a-time (serialized single writer, §9.2/§9.3). */
@@ -209,11 +229,21 @@ export class Librarian {
     this.running = true
     try {
       while (this.queue.length > 0) {
-        const s = this.queue.shift()!
-        try {
-          await this.runOne(s)
-        } catch (e) {
-          log.error('librarian run failed (suggestion dropped)', { taskId: s.taskId, error: (e as Error).message })
+        const job = this.queue.shift()!
+        if (job.kind === 'curate') {
+          try {
+            await this.runOne(job.s)
+          } catch (e) {
+            log.error('librarian run failed (suggestion dropped)', { taskId: job.s.taskId, error: (e as Error).message })
+          }
+        } else {
+          try {
+            await job.run()
+            job.done()
+          } catch (e) {
+            log.error('librarian maintenance failed', { error: (e as Error).message })
+            job.fail(e)
+          }
         }
       }
     } finally {

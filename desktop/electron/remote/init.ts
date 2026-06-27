@@ -560,12 +560,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const GARDEN_MS = 24 * 60 * 60 * 1000
   const gardenTimer = setInterval(() => {
     if (settings.get('librarianWriteEnabled') !== true) return
-    void (async () => {
+    // Run the prune INSIDE the librarian's serial queue so it never overlaps a
+    // write-mode librarian session (single-writer invariant covers gardening).
+    void librarian.runMaintenance(async () => {
       const actions = await planGardening({ nowMs: Date.now() })
       // TEMP(memory-debug): remove after calibration
       log.event('gardening-sweep', { MEMORY_DEBUG: true, planned: actions.length })
       await applyGardening(actions, {})
-    })().catch((e) => log.warn('gardening sweep failed', { error: (e as Error).message }))
+    }).catch((e) => log.warn('gardening sweep failed', { error: (e as Error).message }))
   }, GARDEN_MS)
   ;(gardenTimer as { unref?: () => void }).unref?.()
   // The warm routing classifier (lazy — spawns on the first routed utterance,
