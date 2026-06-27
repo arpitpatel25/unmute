@@ -41,13 +41,38 @@ export async function locateTranscript(taskCwd: string, opts: { projectsDir?: st
   return resolved
 }
 
+/** Render one tool_use as a SEMANTIC trace line. Browser/GUI interactions are
+ *  distilled to their intent (the action verb + entry URL + typed text) with
+ *  raw pixel COORDINATES stripped — those are brittle and worthless to the
+ *  librarian. A durable recipe needs "click Post", not "click (834,221)". */
+function toolLine(name: string, input: any): string {
+  const n = name ?? 'unknown'
+  // chrome browser navigation: the URL is the durable entry point.
+  if (/navigate/.test(n)) return `NAV ${input?.url ?? ''}`.trim()
+  // chrome computer/GUI interaction: keep the action verb + typed text, drop coordinates.
+  if (/computer|mouse|click|keyboard/.test(n) && input && typeof input.action === 'string') {
+    const txt = typeof input.text === 'string' ? ` "${input.text.slice(0, 80)}"`
+      : typeof input.key === 'string' ? ` ${input.key}` : ''
+    return `UI ${input.action}${txt}`
+  }
+  return `TOOL ${n}: ${JSON.stringify(input ?? {}).slice(0, 240)}`
+}
+
 /** Distill a noisy Claude Code JSONL into an ordered, bounded markdown "action
- *  trace": tool calls (+ key inputs), tool results (ok/error), and the final
- *  assistant text. Deterministic extraction only — judgment is the librarian's.
- *  Selector paths reflect the verified fixture schema (README.md). */
+ *  trace": tool calls (semantic, no pixel coordinates), tool results (ok/error),
+ *  and the assistant's narration. Deterministic extraction only — judgment is
+ *  the librarian's. Selector paths reflect the verified fixture schema (README.md). */
 export function reduceTranscript(jsonl: string, opts: { maxChars?: number } = {}): string {
   const maxChars = opts.maxChars ?? 8000
   const out: string[] = []
+  // Collapse consecutive identical lines (e.g. a run of clicks) into "… (xN)"
+  // so brittle UI churn never drowns the semantic story.
+  const push = (line: string) => {
+    const prev = out[out.length - 1]
+    const m = prev && prev.match(/^(.*?)(?: \(x(\d+)\))?$/)
+    if (m && m[1] === line) { out[out.length - 1] = `${line} (x${(Number(m[2]) || 1) + 1})` }
+    else out.push(line)
+  }
   for (const line of jsonl.split('\n')) {
     if (!line.trim()) continue
     let ev: any
@@ -56,17 +81,21 @@ export function reduceTranscript(jsonl: string, opts: { maxChars?: number } = {}
     const content = Array.isArray(msg?.content) ? msg.content : []
     for (const block of content) {
       if (block?.type === 'tool_use') {
-        const input = JSON.stringify(block.input ?? {})
-        out.push(`TOOL ${block.name ?? 'unknown'}: ${input.slice(0, 240)}`)
+        push(toolLine(block.name, block.input))
       } else if (block?.type === 'tool_result') {
         const isErr = block.is_error === true
         const text = typeof block.content === 'string'
           ? block.content
           : Array.isArray(block.content) ? block.content.map((c: any) => c?.text ?? '').join(' ') : ''
-        out.push(`  -> ${isErr ? 'ERROR' : 'ok'}: ${String(text).replace(/\s+/g, ' ').slice(0, 200)}`)
+        const clean = String(text).replace(/\s+/g, ' ').trim()
+        // Errors always matter. Empty "ok" results (e.g. a GUI screenshot with no
+        // text) are noise — drop them so consecutive UI actions stay adjacent and
+        // collapse, and the semantic story isn't buried.
+        if (isErr) push(`  -> ERROR: ${clean.slice(0, 200)}`)
+        else if (clean) push(`  -> ok: ${clean.slice(0, 200)}`)
       } else if (block?.type === 'text' && msg?.role === 'assistant') {
         const t = String(block.text ?? '').replace(/\s+/g, ' ').trim()
-        if (t) out.push(`SAY: ${t.slice(0, 300)}`)
+        if (t) push(`SAY: ${t.slice(0, 300)}`)
       }
     }
   }

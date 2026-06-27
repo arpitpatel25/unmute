@@ -34,6 +34,32 @@ test('reduceTranscript distills tool calls + outcomes from the real fixture', as
   assert.match(out, /SAY:.*Done/, 'must include final assistant SAY')
 })
 
+test('reduceTranscript distills GUI/browser actions to semantics — drops pixel coordinates', () => {
+  const jsonl = [
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'n1', name: 'mcp__claude-in-chrome__navigate', input: { tabId: 3, url: 'https://x.com/compose/post' } },
+    ] } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'c1', name: 'mcp__claude-in-chrome__computer', input: { action: 'left_click', tabId: 3, coordinate: [834, 221] } },
+    ] } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'c2', name: 'mcp__claude-in-chrome__computer', input: { action: 'left_click', tabId: 3, coordinate: [410, 980] } },
+    ] } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'c3', name: 'mcp__claude-in-chrome__computer', input: { action: 'type', tabId: 3, text: 'hello world' } },
+    ] } }),
+  ].join('\n')
+  const out = reduceTranscript(jsonl)
+  // pixel coordinates must NOT survive — they are brittle and useless to the librarian
+  assert.doesNotMatch(out, /834|221|410|980|coordinate/, 'raw coordinates must be stripped')
+  // the SEMANTIC signal must survive: the entry URL and the action verbs
+  assert.match(out, /NAV https:\/\/x\.com\/compose\/post/, 'navigation URL is the semantic entry point')
+  assert.match(out, /UI left_click/, 'click actions kept as semantic verbs')
+  assert.match(out, /UI type.*hello world/, 'typed text kept, coordinates not')
+  // consecutive identical UI actions collapse so clicks do not drown the trace
+  assert.match(out, /UI left_click \(x2\)/, 'repeated identical UI actions collapse with a count')
+})
+
 test('reduceTranscript tolerates malformed lines', () => {
   const out = reduceTranscript('not json\n{"broken":')
   assert.equal(typeof out, 'string', 'must return a string')

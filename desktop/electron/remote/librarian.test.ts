@@ -149,3 +149,18 @@ test('librarian prompt allows writes when enabled', () => {
   assert.match(p, /\/canonical\/profile\.md/)             // exact canonical path given
   assert.match(p, /NEVER[^\n]*PROFILE\.md|task director/i) // forbids the throwaway copy
 })
+
+test('librarian prompt tells it to DISTIL browser runs into a semantic recipe (not no-op everything)', () => {
+  const p = buildLibrarianPrompt({
+    intent: 'post a tweet from my unmute account', outcome: 'done', injectedRecipes: [],
+    reducedTrace: 'NAV https://x.com/compose\nUI left_click (x4)\nUI type "hi"', existing: [], profile: '',
+    writeEnabled: true, recipesDir: '/m/recipes', skillsDir: '/m/skills', profilePath: '/m/profile.md',
+    proposalPath: '/lib/proposal.json', statusPath: '/lib/status.json',
+  })
+  assert.match(p, /SEMANTIC PROCEDURE|semantic skeleton/i)   // browser procedures ARE recipe-worthy
+  assert.match(p, /DISTILL|distil/i)                         // distill, don't transcribe
+  assert.match(p, /coordinates|pixel/i)                      // raw coordinates explicitly excluded
+  assert.match(p, /Preconditions/)                           // recipe template present
+  assert.match(p, /Gotchas/)
+  assert.match(p, /COMPLETED|completed the task/i)           // only from completed runs
+})
