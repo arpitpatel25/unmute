@@ -130,6 +130,10 @@ export default function History() {
           const isCopied = copiedId === session.id
           const isRetrying = retryingIds.has(session.id)
           const hasAudio = !!session.audioFilePath
+          // Copy whatever text is actually shown (line-clamped below). A recovered
+          // dictation has no `output` — its text lives in `dictationTranscript` — so
+          // gating copy on `output` alone hid the button for recovered rows.
+          const copyText = session.output || session.dictationTranscript || ''
 
           return (
             <div
@@ -203,9 +207,9 @@ export default function History() {
                 {/* Actions — hidden while retrying */}
                 {!isRetrying && (
                   <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-200 shrink-0 translate-y-1 group-hover:translate-y-0">
-                    {session.output && (
+                    {copyText && (
                       <button
-                        onClick={() => copyOutput(session.output!, session.id)}
+                        onClick={() => copyOutput(copyText, session.id)}
                         className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all duration-200 ${
                           isCopied
                             ? 'bg-success/10 text-success'
