@@ -54,41 +54,55 @@ export async function applyGardening(actions: GardenAction[], opts: { baseDir?: 
 
 export const IDLE_EVICT_MS = 45 * 86_400_000 // a low lead unused this long, never confirmed → evict
 const CONF_RANK: Record<Confidence, number> = { high: 3, medium: 2, low: 1 }
-const lastActivity = (f: RecipeFrontmatter): number =>
+// Most recent activity timestamp, or 0 when the recipe carries NO parseable date.
+// 0 means "unknown" — eviction must never fire on it (a freshly-written recipe
+// that hasn't been dated yet must not read as infinitely stale).
+const activityMs = (f: RecipeFrontmatter): number =>
   Math.max(Date.parse(f.last_used) || 0, Date.parse(f.last_verified) || 0, Date.parse(f.created) || 0)
 
 export interface CleanupResult { pruned: string[]; evicted: string[]; demoted: string[]; deduped: string[] }
 
 export async function cleanupMemory(opts: { baseDir?: string; nowMs: number; idleEvictMs?: number }): Promise<CleanupResult> {
   const idleMs = opts.idleEvictMs ?? IDLE_EVICT_MS
-  const recipes = await listRecipes({ baseDir: opts.baseDir })
+  // Tier matters: prune/evict are NURSERY-only. A graduated skill must NEVER be
+  // deleted by the low-confidence rules — skills can lack confidence frontmatter
+  // (which parses as 'low'), and deleting them would destroy real learned memory.
+  const nursery = await listRecipes({ tier: 'nursery', baseDir: opts.baseDir })
+  const skills = await listRecipes({ tier: 'skill', baseDir: opts.baseDir })
   const res: CleanupResult = { pruned: [], evicted: [], demoted: [], deduped: [] }
   const toDelete = new Set<string>()        // paths slated for removal
   const dedupLosers = new Set<string>()     // exclude from prune/evict double-counting
 
-  // 1. Exact-name dedup — keep the best per name (confidence, then recency).
+  // 1. Exact-name dedup across both tiers — keep the best per name. A graduated
+  //    skill always beats a nursery copy of the same name; then confidence, then
+  //    recency.
+  const tierRank = (r: Recipe): number => (skills.includes(r) ? 1 : 0)
   const byName = new Map<string, Recipe[]>()
-  for (const r of recipes) {
+  for (const r of [...skills, ...nursery]) {
     const g = byName.get(r.frontmatter.name) ?? []
     g.push(r); byName.set(r.frontmatter.name, g)
   }
   for (const [name, group] of byName) {
     if (group.length < 2) continue
     const sorted = [...group].sort((a, b) =>
-      CONF_RANK[b.frontmatter.confidence] - CONF_RANK[a.frontmatter.confidence] || lastActivity(b.frontmatter) - lastActivity(a.frontmatter))
+      tierRank(b) - tierRank(a)
+      || CONF_RANK[b.frontmatter.confidence] - CONF_RANK[a.frontmatter.confidence]
+      || activityMs(b.frontmatter) - activityMs(a.frontmatter))
     for (const loser of sorted.slice(1)) if (loser.path) { toDelete.add(loser.path); dedupLosers.add(loser.path) }
     res.deduped.push(name)
   }
 
-  // 2. Prune proven junk + 3. LRU-evict stale never-confirmed leads.
-  for (const r of recipes) {
+  // 2. Prune proven junk + 3. LRU-evict stale never-confirmed leads — NURSERY only.
+  for (const r of nursery) {
     if (r.path && dedupLosers.has(r.path)) continue
     const f = r.frontmatter
-    if (f.confidence !== 'high' && f.runs_contradicted >= 2 && f.runs_confirmed === 0) {
+    if (f.runs_contradicted >= 2 && f.runs_confirmed === 0) {
       if (r.path) { toDelete.add(r.path); res.pruned.push(f.name) }
       continue
     }
-    if (f.confidence === 'low' && f.runs_confirmed === 0 && opts.nowMs - lastActivity(f) > idleMs) {
+    const am = activityMs(f)
+    // am > 0 guard: never evict a recipe with no real date (unknown ≠ stale).
+    if (f.confidence === 'low' && f.runs_confirmed === 0 && am > 0 && opts.nowMs - am > idleMs) {
       if (r.path) { toDelete.add(r.path); res.evicted.push(f.name) }
     }
   }
@@ -98,8 +112,9 @@ export async function cleanupMemory(opts: { baseDir?: string; nowMs: number; idl
     catch (e) { log.warn('cleanup delete failed', { path: p, error: (e as Error).message }) }
   }
 
-  // 4. Retire stale-high → demote to medium (survivors only).
-  for (const r of recipes) {
+  // 4. Retire stale-high → demote to medium (graduated skills only; isStaleHigh
+  //    already requires confidence === 'high', so undated flat skills are untouched).
+  for (const r of skills) {
     if (r.path && toDelete.has(r.path)) continue
     if (isStaleHigh(r, opts.nowMs)) {
       try { await moveRecipe(r, 'medium', opts.baseDir); res.demoted.push(r.frontmatter.name) }

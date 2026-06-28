@@ -62,6 +62,23 @@ test('cleanupMemory removes exact-name duplicates, keeping the highest-confidenc
   assert.equal(left[0].frontmatter.confidence, 'high') // the graduated copy survives
 })
 
+test('cleanupMemory never deletes graduated skills lacking confidence frontmatter, nor undated nursery recipes', async () => {
+  const base = await tmp()
+  const now = 1_800_000_000_000
+  // A real graduated skill with MINIMAL frontmatter (no confidence/dates → parses
+  // as low/undated). It lives in skills/ and must survive untouched.
+  const skillDir = path.join(base, 'skills', 'youtube')
+  await fs.mkdir(skillDir, { recursive: true })
+  await fs.writeFile(path.join(skillDir, 'yt-latest.md'), '---\nname: yt-latest\ndescription: open latest video\n---\n# body')
+  // A freshly-written nursery recipe with NO date set — must not read as stale.
+  await writeRecipe({ frontmatter: fm({ name: 'fresh-low', confidence: 'low', runs_confirmed: 0 }), body: 'b' }, base)
+  const res = await cleanupMemory({ baseDir: base, nowMs: now })
+  assert.deepEqual(res.evicted, [])
+  assert.deepEqual(res.demoted, [])
+  assert.equal((await listRecipes({ tier: 'skill', baseDir: base })).length, 1) // skill kept
+  assert.ok((await listRecipes({ tier: 'nursery', baseDir: base })).some((r) => r.frontmatter.name === 'fresh-low'))
+})
+
 test('memoryUsage reports total bytes and recipe/skill counts', async () => {
   const base = await tmp()
   await writeRecipe({ frontmatter: fm({ name: 'a', confidence: 'low' }), body: 'hello' }, base)
