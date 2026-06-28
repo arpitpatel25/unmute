@@ -157,6 +157,67 @@ function RemoteBadge() {
   )
 }
 
+// Per-SESSION raw toggle, shown next to the model badge during a Remote capture.
+// RAW = no Unmute memory injection (a clean Claude Code session). Reflects the
+// effective state (session override over the saved default); clicking sets a
+// session-only override that resets on relaunch.
+function rawApi() {
+  return window.electronAPI as unknown as {
+    remoteGetRawState?: () => Promise<{ effectiveRaw: boolean }>
+    remoteSetSessionRaw?: (on: boolean | null) => Promise<boolean>
+  }
+}
+
+function RawToggle() {
+  const [raw, setRaw] = useState(false)
+  useEffect(() => {
+    void rawApi().remoteGetRawState?.().then((s) => { if (s) setRaw(!!s.effectiveRaw) })
+  }, [])
+  const toggle = () => {
+    const next = !raw
+    setRaw(next) // optimistic
+    void rawApi().remoteSetSessionRaw?.(next)
+  }
+  return (
+    <div style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center' }}>
+      <button
+        onClick={toggle}
+        title={raw
+          ? 'Raw mode ON — this Remote session runs with NO Unmute memory injection. Click to turn off.'
+          : 'Raw mode OFF — Unmute injects relevant memory. Click for a clean Claude Code session.'}
+        style={{
+          height: 44,
+          borderRadius: 9999,
+          background: '#0E0E10',
+          border: '1px solid rgba(255, 255, 255, 0.55)',
+          boxShadow: '0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255,255,255,0.04) inset',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 12px',
+          gap: 6,
+          cursor: 'pointer',
+          fontSize: 12.5,
+          fontWeight: 700,
+          letterSpacing: 0.3,
+          whiteSpace: 'nowrap',
+          color: raw ? CLAUDE_ORANGE : 'rgba(255,255,255,0.45)',
+          transition: 'color 140ms ease',
+        }}
+      >
+        <span
+          style={{
+            width: 7, height: 7, borderRadius: 9999,
+            background: raw ? CLAUDE_ORANGE : 'rgba(255,255,255,0.28)',
+            boxShadow: raw ? `0 0 8px ${CLAUDE_ORANGE}` : 'none',
+            transition: 'background 140ms ease, box-shadow 140ms ease',
+          }}
+        />
+        RAW
+      </button>
+    </div>
+  )
+}
+
 export default function WidgetApp() {
   const [state, setState] = useState<WidgetState>('hidden')
   const [outputPreview, setOutputPreview] = useState('')
@@ -395,6 +456,7 @@ export default function WidgetApp() {
           Dictation → pill only. */}
       <div className="flex items-center justify-center" style={{ gap: '16px' }}>
         {isRemote && pillShowing && <RemoteBadge />}
+        {isRemote && pillShowing && <RawToggle />}
         <Widget
           state={state}
           analyserNode={analyserNode}

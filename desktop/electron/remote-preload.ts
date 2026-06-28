@@ -33,6 +33,8 @@ export interface RemoteSettingsSnapshot {
   overlayAutoPresent: boolean
   overlayDocked: boolean
   osNotifications: boolean
+  /** Persistent default: force RAW (no Unmute injection/librarian) for all tasks. */
+  forceRawMode: boolean
   logFile: string | null
 }
 
@@ -97,6 +99,15 @@ export const remotePreloadExtensions = {
   /** Set the doer model; applies to the next dispatched task. Returns the
    *  validated value actually stored. */
   remoteSetModel: (m: string): Promise<string> => ipcRenderer.invoke('remote:set-model', m),
+  // ── Raw mode (no Unmute memory injection / librarian) ──
+  /** Current raw state: the saved default, the session override (null = none), and
+   *  what's effectively in force right now. */
+  remoteGetRawState: (): Promise<{ persistentRawDefault: boolean; sessionOverride: boolean | null; effectiveRaw: boolean }> =>
+    ipcRenderer.invoke('remote:get-raw-state'),
+  /** Set the PERSISTENT raw default (Remote screen) — applies to all future sessions. */
+  remoteSetForceRaw: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-force-raw', on),
+  /** Set the per-SESSION raw override (pill) — resets on relaunch; null clears it. */
+  remoteSetSessionRaw: (on: boolean | null): Promise<boolean> => ipcRenderer.invoke('remote:set-session-raw', on),
   /** Fires when the model changes from EITHER surface, so both stay in sync. */
   remoteOnModelChanged: (cb: (model: string) => void): (() => void) => {
     const handler = (_e: unknown, model: string) => cb(model)

@@ -17,6 +17,7 @@ interface Settings {
   overlayAutoPresent: boolean
   overlayDocked: boolean
   osNotifications: boolean
+  forceRawMode: boolean
   logFile: string | null
 }
 type API = {
@@ -30,6 +31,7 @@ type API = {
   remoteSetOverlayAutoPresent?: (on: boolean) => Promise<boolean>
   remoteSetOverlayDocked?: (on: boolean) => Promise<boolean>
   remoteSetOsNotifications?: (on: boolean) => Promise<boolean>
+  remoteSetForceRaw?: (on: boolean) => Promise<boolean>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -136,6 +138,21 @@ export function RemoteSettings() {
             const on = e.target.checked
             update({ osNotifications: on })
             void api().remoteSetOsNotifications?.(on)
+          }}
+        />
+      </label>
+
+      {/* Raw mode — run Claude Code clean, with NO Unmute memory injection. The
+          pill widget can flip this per-session; this is the saved default. */}
+      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
+        <span>Raw mode <span className="text-ink/40">(no Unmute memory injection — a clean Claude Code session; toggle per-session from the pill)</span></span>
+        <input
+          type="checkbox"
+          checked={s.forceRawMode}
+          onChange={(e) => {
+            const on = e.target.checked
+            update({ forceRawMode: on })
+            void api().remoteSetForceRaw?.(on)
           }}
         />
       </label>

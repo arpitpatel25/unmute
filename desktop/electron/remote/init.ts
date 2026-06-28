@@ -94,6 +94,11 @@ interface RemoteSettings {
   // mode — proposals written to proposal.json, never applied). ON ⇒ curation
   // writes are live.
   librarianWriteEnabled: boolean
+  // Persistent default: force every Remote task to RAW mode (no Unmute memory
+  // injection + no librarian) regardless of what the router would pick. OFF by
+  // default. The pill widget can override this per-session; this is the saved
+  // default the Remote screen controls.
+  forceRawMode: boolean
 }
 
 const settings = new Store<RemoteSettings>({
@@ -114,8 +119,21 @@ const settings = new Store<RemoteSettings>({
     overlayAutoPresent: true,
     overlayDocked: true,
     librarianWriteEnabled: false,
+    forceRawMode: false,
   },
 })
+
+// Per-SESSION override of forceRawMode, set from the pill widget. null = no
+// override (use the persistent setting); true/false = force on/off for this app
+// session only (resets to null on relaunch). The pill decides "for this session";
+// the Remote screen sets the persistent default above.
+let sessionForceRaw: boolean | null = null
+
+/** Effective "skip all Unmute injection + librarian" decision: the per-session
+ *  override wins; otherwise the saved default. */
+function injectionDisabled(): boolean {
+  return sessionForceRaw ?? (settings.get('forceRawMode') === true)
+}
 
 /**
  * Run `claude mcp list` (read-only) to discover which integrations the user has
@@ -455,11 +473,15 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
           return tid
         }
       }
-      log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: decision.mode ?? null })
-      return manager.dispatch(decision.intent || raw, { surface: decision.surface, mode: decision.mode })
+      // The user's raw override (pill/Remote screen) forces RAW regardless of
+      // the router's pick — a clean Claude Code session with no Unmute injection.
+      const forcedRaw = injectionDisabled()
+      const mode = forcedRaw ? 'raw' as const : decision.mode
+      log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: mode ?? null, forcedRaw })
+      return manager.dispatch(decision.intent || raw, { surface: decision.surface, mode })
     } catch (e) {
       log.warn('router error — dispatching new', { error: (e as Error).message })
-      return manager.dispatch(raw)
+      return manager.dispatch(raw, { mode: injectionDisabled() ? 'raw' : undefined })
     }
   }
 
@@ -467,7 +489,7 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
   //    executor tolerates raw); use the managed LLM only if it's wired.
   const cleaned = completeFn ? (await cleanIntent(raw, completeFn)).intent : raw
   if (!cleaned) { log.warn('empty intent after cleanup — not dispatching', {}); return null }
-  return manager.dispatch(cleaned)
+  return manager.dispatch(cleaned, { mode: injectionDisabled() ? 'raw' : undefined })
 }
 
 /** Read the current Remote trigger key (derived from the dictation key, §2.4.4). */
@@ -756,6 +778,27 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('librarian-write-enabled-set', { on: !!on })
     return true
   })
+  // Raw-mode (no-injection) controls. Persistent default — set from the Remote
+  // screen; applies to all future sessions.
+  ipcMain.handle('remote:set-force-raw', async (_e, on: boolean) => {
+    settings.set('forceRawMode', !!on)
+    log.event('force-raw-set', { on: !!on, scope: 'persistent' })
+    return true
+  })
+  // Per-session override — set from the pill widget; resets on relaunch. Passing
+  // null clears the override (fall back to the persistent default).
+  ipcMain.handle('remote:set-session-raw', async (_e, on: boolean | null) => {
+    sessionForceRaw = on === null ? null : !!on
+    log.event('force-raw-set', { on: sessionForceRaw, scope: 'session' })
+    return true
+  })
+  // The effective state for UIs: the saved default, and what's in force right now
+  // (session override applied over the default).
+  ipcMain.handle('remote:get-raw-state', async () => ({
+    persistentRawDefault: settings.get('forceRawMode') === true,
+    sessionOverride: sessionForceRaw, // null | boolean
+    effectiveRaw: injectionDisabled(),
+  }))
   ipcMain.handle('remote:get-settings', async () => ({
     permissionMode: settings.get('permissionMode'),
     remoteKey: getRemoteKey(),
@@ -767,6 +810,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     overlayDocked: settings.get('overlayDocked') !== false,
     osNotifications: settings.get('osNotifications') === true,
     librarianWriteEnabled: settings.get('librarianWriteEnabled') === true,
+    forceRawMode: settings.get('forceRawMode') === true,
     logFile: getRemoteLogFilePath(),
   }))
   // ── Onboarding / guided one-time setup (PRD §12) ──
