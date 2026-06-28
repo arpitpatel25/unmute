@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { promises as fs, utimesSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { TaskManager } from './task-manager.ts'
 import { writeRecipe } from './recipe-store.ts'
@@ -57,7 +58,30 @@ test('dispatch → scaffolds, installs contract, types payload, starts processin
   assert.ok((await fs.readFile(path.join(task.cwd, 'CLAUDE.md'), 'utf8')).includes('Unmute Remote'))
   // dispatch payload typed, carrying the status path
   assert.ok(spawned, 'executor spawned')
+  // sessionId minted, set on the task, passed to the spawn (→ --session-id), and persisted.
+  assert.ok(task.sessionId, 'task carries a minted sessionId')
+  assert.equal(spawned!.sessionId, task.sessionId, 'sessionId handed to the executor for --session-id')
+  const meta = JSON.parse(await fs.readFile(path.join(task.cwd, 'meta.json'), 'utf8'))
+  assert.equal(meta.sessionId, task.sessionId, 'sessionId persisted in meta.json')
   tm.kill(id) // stop polling
+})
+
+test('rehydrate recovers sessionId from meta.json, falling back to the task id for old receipts', async () => {
+  const baseDir = await tmpBase()
+  const root = path.join(baseDir, 'local')
+  // A new-style receipt carrying a sessionId, and an old-style one without.
+  const withSid = randomUUID(); const oldNoSid = randomUUID()
+  for (const [tid, sid] of [[withSid, 'sess-abc'], [oldNoSid, null]] as const) {
+    const dir = path.join(root, tid)
+    await fs.mkdir(dir, { recursive: true })
+    const meta: Record<string, unknown> = { id: tid, intent: 'x', createdAt: Date.now() }
+    if (sid) meta.sessionId = sid
+    await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify(meta))
+  }
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm.rehydrate()
+  assert.equal(tm.get(withSid)!.sessionId, 'sess-abc')   // recovered as written
+  assert.equal(tm.get(oldNoSid)!.sessionId, oldNoSid)    // fallback to task id
 })
 
 test('done status transition emits done with inline result (PRD §13.4 #3, §13.6)', { timeout: 5000 }, async () => {

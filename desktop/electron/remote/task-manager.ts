@@ -50,6 +50,10 @@ export type UiTaskState = TaskState | 'stuck'
 export interface Task {
   id: string
   intent: string
+  /** Claude Code session id pinned for this task (minted at dispatch, passed as
+   *  `--session-id`). A stable handle to THE session this task drives — used for
+   *  resume, reading Claude's session store, and future orchestration. */
+  sessionId: string
   state: UiTaskState
   createdAt: number
   updatedAt: number
@@ -232,6 +236,9 @@ export class TaskManager extends EventEmitter {
    */
   async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw' } = {}): Promise<string> {
     const id = randomUUID()
+    // Mint the Claude session id up front so we own a stable handle to the
+    // session this task will spawn (passed as --session-id below).
+    const sessionId = randomUUID()
     const dir = join(this.opts.baseDir, this.opts.userKey!, id)
     const statusPath = join(dir, 'status.json')
     const recipeScratchPath = join(dir, 'recipe.json')
@@ -241,7 +248,7 @@ export class TaskManager extends EventEmitter {
     const mode = opts.mode ?? 'managed'
 
     const task: Task = {
-      id, intent, state: 'processing', createdAt: now, updatedAt: now,
+      id, intent, sessionId, state: 'processing', createdAt: now, updatedAt: now,
       cwd: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
       surface, mode, injectedRecipes: [],
     }
@@ -301,7 +308,7 @@ export class TaskManager extends EventEmitter {
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes }))
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes }))
       // TEMP(memory-debug): remove after calibration
       tlog.event('dispatch-memory', { MEMORY_DEBUG: true, surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
 
@@ -317,7 +324,7 @@ export class TaskManager extends EventEmitter {
         this.emit('output', { taskId: id, chunk })
       })
 
-      await ex.spawn({ cwd: dir, env: process.env, taskId: id })
+      await ex.spawn({ cwd: dir, env: process.env, taskId: id, sessionId })
       await ex.isReady()
 
       // Drive past Claude Code's folder-trust prompt (and any boot prompts) using
@@ -682,7 +689,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }> }
+      let meta: { intent?: string; sessionId?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }> }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       const statusPath = join(dir, 'status.json')
@@ -692,6 +699,9 @@ export class TaskManager extends EventEmitter {
       const task: Task = {
         id,
         intent: meta.intent,
+        // Pre-sessionId receipts won't carry one; fall back to the task id so the
+        // field is always present (older tasks simply aren't session-pinned).
+        sessionId: meta.sessionId ?? id,
         // A non-terminal task whose session died with the app is, to the user,
         // interrupted — surface it as failed (still resumable) rather than a
         // forever-spinning 'processing'.

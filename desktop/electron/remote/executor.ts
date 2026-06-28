@@ -15,6 +15,11 @@ export interface SpawnOpts {
   env: NodeJS.ProcessEnv
   /** Correlation id for logging. */
   taskId: string
+  /** Claude Code session id to PIN for this spawn (passed as `--session-id`).
+   *  We mint it so the session is addressable by a stable handle (resume, read
+   *  Claude's session store, future orchestration). Omitted on resume — there the
+   *  cwd's existing session is continued via `--continue`, which keeps this id. */
+  sessionId?: string
 }
 
 export interface AgentExecutor {

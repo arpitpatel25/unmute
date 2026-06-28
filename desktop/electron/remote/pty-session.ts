@@ -99,11 +99,17 @@ export class CliAgentExecutor implements AgentExecutor {
     //    tmux client. Env is still the stripped one above — and the private
     //    socket (-L) means our OWN tmux server with that env (PRD §3.2). ──
     let bin = this.cfg.bin
-    let args = this.cfg.extraArgs
+    // Pin the Claude session id when the caller minted one (fresh spawns only;
+    // resume omits it and relies on --continue). Folded into extraArgs so it flows
+    // through BOTH the direct and tmux-wrapped launch paths identically.
+    const extraArgs = spawnOpts.sessionId
+      ? [...this.cfg.extraArgs, '--session-id', spawnOpts.sessionId]
+      : this.cfg.extraArgs
+    let args = extraArgs
     if (this.cfg.tmux) {
       const session = sessionNameFor(this.taskId)
       this.tmuxSession = session
-      const command = buildCommand(this.cfg.bin, this.cfg.extraArgs)
+      const command = buildCommand(this.cfg.bin, extraArgs)
       bin = this.cfg.tmux.bin
       args = tmuxNewSessionArgs({ session, command, confPath: this.cfg.tmux.confPath, cols: this.cfg.tmux.cols, rows: this.cfg.tmux.rows })
       slog.event('tmux-wrap', { session, tmuxBin: this.cfg.tmux.bin, command })
