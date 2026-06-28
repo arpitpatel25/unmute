@@ -106,9 +106,11 @@ function RemoteBadge() {
           height: 44,
           borderRadius: 9999,
           background: '#0E0E10',
-          // Match the pill exactly: whitish border + the pill's drop shadow.
+          // Match the pill exactly: whitish border, dark fill, and — like the
+          // pill — NO drop shadow. (The pill's shadow was removed in styles.css;
+          // the fill + border alone make the chip read as the same family.)
           border: '1px solid rgba(255, 255, 255, 0.55)',
-          boxShadow: '0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255,255,255,0.04) inset',
+          boxShadow: 'none',
           display: 'flex',
           alignItems: 'center',
           padding: '0 6px',
@@ -190,7 +192,8 @@ function RawToggle() {
           borderRadius: 9999,
           background: '#0E0E10',
           border: '1px solid rgba(255, 255, 255, 0.55)',
-          boxShadow: '0 12px 36px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255,255,255,0.04) inset',
+          // Match the shadowless pill (see RemoteBadge note above).
+          boxShadow: 'none',
           display: 'flex',
           alignItems: 'center',
           padding: '0 12px',
