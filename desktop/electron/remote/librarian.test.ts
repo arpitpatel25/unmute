@@ -164,3 +164,25 @@ test('librarian prompt tells it to DISTIL browser runs into a semantic recipe (n
   assert.match(p, /Gotchas/)
   assert.match(p, /COMPLETED|completed the task/i)           // only from completed runs
 })
+
+test('librarian prompt harvests silent-consequential deltas generically + names skills for auto-fire', () => {
+  const p = buildLibrarianPrompt({
+    intent: 'draft a tweet', outcome: 'done', injectedRecipes: [{ name: 'x-draft', tier: 'skill', surface: 'x' }],
+    reducedTrace: 'wrong account, switched', existing: [], profile: '',
+    writeEnabled: true, recipesDir: '/m/recipes', skillsDir: '/m/skills', profilePath: '/m/profile.md',
+    proposalPath: '/lib/proposal.json', statusPath: '/lib/status.json',
+  })
+  // Harvest-the-delta: enrich on corroborate, generalized beyond account-switching
+  assert.match(p, /Harvest the delta/i)
+  assert.match(p, /wrong account|wrong workspace|wrong destination/i)  // examples of the silent class
+  assert.match(p, /not one app|every app|generaliz|ANY app/i)          // explicitly generic, not X-only
+  // The anti-bloat filter (consequential + non-obvious + durable, default don't)
+  assert.match(p, /CONSEQUENTIAL/)
+  assert.match(p, /NON-OBVIOUS|SILENT/)
+  assert.match(p, /DURABLE/)
+  assert.match(p, /when unsure, ?DON'?T|default is NO change/i)
+  // Naming + "Use when" description convention with format examples
+  assert.match(p, /surface-verb-object/)
+  assert.match(p, /Use when the user asks to/)
+  assert.match(p, /x-draft-tweet-no-post/)
+})
