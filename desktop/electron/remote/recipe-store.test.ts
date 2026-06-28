@@ -133,3 +133,33 @@ test('isStaleHigh: only high + past window', () => {
   assert.equal(isStaleHigh(stale, now), true)
   assert.equal(isStaleHigh(lowOld, now), false)
 })
+
+import { selectNurseryWithinBudget } from './recipe-store.ts'
+
+const rec = (over: any, bodyLen: number) =>
+  ({ frontmatter: fm(over), body: 'x'.repeat(bodyLen), path: '' } as any)
+
+test('selectNurseryWithinBudget: under budget keeps everything (executor judges relevance)', () => {
+  const recipes = [rec({ name: 'a' }, 100), rec({ name: 'b' }, 100), rec({ name: 'c' }, 100)]
+  const { kept, trimmed } = selectNurseryWithinBudget(recipes, 6000)
+  assert.equal(kept.length, 3)
+  assert.equal(trimmed, 0)
+})
+
+test('selectNurseryWithinBudget: over budget trims the least-proven/oldest, in rank order', () => {
+  // Budget fits ~2.5 bodies. Ranking: confidence desc, then recency desc.
+  const hi = rec({ name: 'hi', confidence: 'medium', last_used: '2026-06-01' }, 1000)
+  const midRecent = rec({ name: 'mid', confidence: 'low', last_used: '2026-06-20' }, 1000)
+  const lowOld = rec({ name: 'old', confidence: 'low', last_used: '2026-01-01' }, 1000)
+  const { kept, trimmed } = selectNurseryWithinBudget([lowOld, midRecent, hi], 2200)
+  assert.deepEqual(kept.map((r: any) => r.frontmatter.name), ['hi', 'mid']) // medium first, then recenter low
+  assert.equal(trimmed, 1) // the oldest low got trimmed
+})
+
+test('selectNurseryWithinBudget: always keeps the top-ranked recipe even if it alone exceeds budget', () => {
+  const big = rec({ name: 'big', confidence: 'medium' }, 9000)
+  const { kept, trimmed } = selectNurseryWithinBudget([big, rec({ name: 'b' }, 100)], 6000)
+  assert.equal(kept.length, 1)
+  assert.equal(kept[0].frontmatter.name, 'big')
+  assert.equal(trimmed, 1)
+})

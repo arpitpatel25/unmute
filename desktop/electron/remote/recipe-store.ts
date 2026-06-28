@@ -187,3 +187,41 @@ export function isStaleHigh(r: Recipe, nowMs: number, windowMs = FRESHNESS_WINDO
   if (Number.isNaN(t)) return true // high but never verified -> treat as stale
   return nowMs - t > windowMs
 }
+
+// Generous flood-backstop on nursery injection. NOT a relevance filter: under
+// budget we inject EVERYTHING for the surface and let the executor judge what's
+// relevant (it's good at ignoring irrelevant hedged leads). The budget only ever
+// bites in the pathological case (a surface bloated with many recipes), where it
+// keeps the best-ranked until full and trims the rest — and the caller logs the
+// trim, so it reads as a cleanup signal, never a silent drop of a good recipe.
+export const NURSERY_INJECT_BUDGET_CHARS = 6000
+const CONF_RANK: Record<Confidence, number> = { high: 3, medium: 2, low: 1 }
+const recencyMs = (fm: RecipeFrontmatter): number =>
+  Date.parse(fm.last_used) || Date.parse(fm.created) || 0
+
+/** Rank recipes (confidence, then recency, then confirmations) and keep the top
+ *  ones whose bodies fit within `budgetChars`. The single highest-ranked recipe
+ *  is always kept, even if it alone exceeds the budget. Returns the kept set (in
+ *  rank order) and how many were trimmed. */
+export function selectNurseryWithinBudget(
+  recipes: Recipe[],
+  budgetChars = NURSERY_INJECT_BUDGET_CHARS,
+): { kept: Recipe[]; trimmed: number } {
+  const ranked = [...recipes].sort((a, b) => {
+    const af = a.frontmatter, bf = b.frontmatter
+    if (CONF_RANK[bf.confidence] !== CONF_RANK[af.confidence]) return CONF_RANK[bf.confidence] - CONF_RANK[af.confidence]
+    const ar = recencyMs(af), br = recencyMs(bf)
+    if (br !== ar) return br - ar
+    if (bf.runs_confirmed !== af.runs_confirmed) return bf.runs_confirmed - af.runs_confirmed
+    return af.name.localeCompare(bf.name)
+  })
+  const kept: Recipe[] = []
+  let used = 0
+  for (const r of ranked) {
+    const cost = r.body.trim().length
+    if (kept.length === 0) { kept.push(r); used += cost; continue } // always keep the top one
+    if (used + cost > budgetChars) break // rank-respecting: stop at the first that doesn't fit
+    kept.push(r); used += cost
+  }
+  return { kept, trimmed: recipes.length - kept.length }
+}

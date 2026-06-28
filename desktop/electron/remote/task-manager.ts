@@ -36,7 +36,7 @@ import { installContract } from './contract/installer'
 import { installHooks, hookActivityMs } from './hooks'
 import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
 import { detectSurface } from './surface'
-import { readNurseryRecipes, listRecipes, isStaleHigh, type Confidence } from './recipe-store'
+import { readNurseryRecipes, listRecipes, isStaleHigh, selectNurseryWithinBudget, type Confidence } from './recipe-store'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
@@ -271,10 +271,19 @@ export class TaskManager extends EventEmitter {
       if (mode === 'managed') {
         await installSkillsIntoCwd(dir, { surface, baseDir: this.opts.baseDir }) // graduated skills auto-discovery, surface-scoped (PRD §8.3)
         await installProfileIntoCwd(dir, this.opts.baseDir) // user facts/prefs the doer Reads on demand
-        const nursery = await readNurseryRecipes(surface, this.opts.baseDir).catch((e) => {
+        const nurseryAll = await readNurseryRecipes(surface, this.opts.baseDir).catch((e) => {
           // TEMP(memory-debug): remove after calibration
           tlog.warn('nursery read failed — no leads injected', { MEMORY_DEBUG: true, error: (e as Error).message }); return []
         })
+        // Flood-backstop: in healthy operation this keeps everything (executor
+        // judges relevance); it only trims when a surface is bloated — and a trim
+        // is a CLEANUP signal (logged), never a silent drop of a relevant recipe.
+        const { kept: nursery, trimmed } = selectNurseryWithinBudget(nurseryAll)
+        if (trimmed > 0) {
+          tlog.warn('nursery injection trimmed to budget — surface may be bloated, consider cleanup', {
+            MEMORY_DEBUG: true, surface, total: nurseryAll.length, kept: nursery.length, trimmed,
+          })
+        }
         nurseryForDispatch = nursery.map((r) => ({ name: r.frontmatter.name, confidence: r.frontmatter.confidence, body: r.body }))
         const graduated = await listRecipes({ tier: 'skill', surface, baseDir: this.opts.baseDir }).catch((e) => {
           // TEMP(memory-debug): remove after calibration
