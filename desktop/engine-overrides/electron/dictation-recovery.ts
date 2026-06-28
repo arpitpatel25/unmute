@@ -9,11 +9,18 @@
 //
 // THE JOURNAL IS IMPLICIT — audio-on-disk vs the DB. A completed dictation has
 // BOTH (audio + a session row carrying its transcript). A crashed one has audio
-// but no row (saveSession only runs on completion). So there are NO markers and
-// NO changes to the live recording path — this module never touches it.
+// but no row (saveSession only runs on completion). This module never touches
+// the live recording path.
 //
-// FAIL-OPEN at every step: any error skips that one recording. Worst case is
-// "didn't recover one" (it'll retry next launch); never a broken dictation.
+// FAIL-OPEN at every step: any CATCHABLE error skips that one recording and it
+// retries next launch; never a broken dictation. But transcription runs in the
+// native ASR (onnxruntime), and a malformed recording can make it ABORT the whole
+// process — an uncatchable crash that the try/catch below can't see. Without a
+// durable record of "we already tried this one", the same poison recording would
+// re-crash on every launch: a permanent boot-crash loop. So before transcribing
+// an orphan we drop a `<id>.recovery-attempted` QUARANTINE MARKER that survives a
+// process kill; a recording that already hard-crashed once is skipped thereafter.
+// Catchable failures delete the marker, preserving the retry-next-launch behavior.
 
 import { app } from 'electron'
 import { promises as fs } from 'node:fs'
@@ -27,6 +34,15 @@ const SESSION_ID_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 function audioDir(): string {
   return path.join(app.getPath('userData'), 'audio')
+}
+
+/** Durable "we already attempted recovery of this id" marker. Survives a process
+ *  kill, so a recording that hard-crashed the native ASR once is never retried. */
+function attemptMarker(dir: string, id: string): string {
+  return path.join(dir, `${id}.recovery-attempted`)
+}
+async function recoveryAttempted(dir: string, id: string): Promise<boolean> {
+  try { await fs.access(attemptMarker(dir, id)); return true } catch { return false }
 }
 
 /** Numeric index of a chunk file (handles both -chunk-N and -final-chunk-N). */
@@ -82,12 +98,18 @@ export async function recoverOrphanDictations(): Promise<void> {
   }
   if (!ids.size) return
 
-  // Orphans = audio exists but no completed DB session (no transcript).
+  // Orphans = audio exists but no completed DB session (no transcript) AND not
+  // already quarantined by a prior attempt that hard-crashed the process.
   const orphans: string[] = []
   for (const id of ids) {
     let sess: ReturnType<typeof getSession>
     try { sess = getSession(id) } catch { sess = undefined }
-    if (!sess || !sess.dictation_transcript) orphans.push(id)
+    if (sess && sess.dictation_transcript) continue // already recovered
+    if (await recoveryAttempted(dir, id)) {
+      console.warn(`${TAG} skipping ${id} — a prior recovery attempt crashed; quarantined`)
+      continue
+    }
+    orphans.push(id)
   }
   if (!orphans.length) return
 
@@ -98,11 +120,16 @@ export async function recoverOrphanDictations(): Promise<void> {
   }
 
   for (const id of orphans) {
+    const marker = attemptMarker(dir, id)
     try {
+      // Drop the quarantine marker BEFORE the native transcribe. If that aborts
+      // the process (malformed audio), the marker survives and this id is skipped
+      // next launch — breaking the crash loop. Caught failures below remove it.
+      await fs.writeFile(marker, new Date().toISOString())
       const audio = await readDictationAudio(dir, files, id)
-      if (!audio || audio.byteLength < 100) continue // nothing usable
+      if (!audio || audio.byteLength < 100) { await fs.rm(marker, { force: true }); continue } // nothing usable
       const transcript = (await parakeetManager.transcribe(audio)).trim()
-      if (!transcript) continue
+      if (!transcript) { await fs.rm(marker, { force: true }); continue }
       let createdAt = Date.now()
       try { createdAt = (await fs.stat(path.join(dir, files.find((f) => f.startsWith(id)) ?? ''))).mtimeMs } catch { /* keep now */ }
       saveSession({
@@ -118,8 +145,13 @@ export async function recoverOrphanDictations(): Promise<void> {
         errorMessage: null,
         createdAt,
       })
+      await fs.rm(marker, { force: true }) // recovered cleanly — clear the marker
       console.log(`${TAG} recovered dictation ${id} (${transcript.length} chars)`)
     } catch (e) {
+      // A CATCHABLE failure (not a process abort): clear the marker so this one
+      // still retries next launch — preserving the original fail-open behavior.
+      // Only a hard native crash leaves the marker behind (we never reach here).
+      await fs.rm(marker, { force: true }).catch(() => {})
       console.warn(`${TAG} recovery failed for ${id}: ${(e as Error).message}`)
     }
   }
