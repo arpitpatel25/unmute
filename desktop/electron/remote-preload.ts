@@ -108,6 +108,14 @@ export const remotePreloadExtensions = {
   remoteSetForceRaw: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-force-raw', on),
   /** Set the per-SESSION raw override (pill) — resets on relaunch; null clears it. */
   remoteSetSessionRaw: (on: boolean | null): Promise<boolean> => ipcRenderer.invoke('remote:set-session-raw', on),
+  // ── Memory footprint + on-demand cleanup ──
+  /** On-disk footprint of the memory store + recipe/skill counts (for the UI). */
+  remoteGetMemoryUsage: (): Promise<{ bytes: number; recipeCount: number; skillCount: number }> =>
+    ipcRenderer.invoke('remote:get-memory-usage'),
+  /** Run the deterministic cleanup (dedup + prune + LRU-evict + retire stale-high).
+   *  Returns the names touched in each category. */
+  remoteCleanupMemory: (): Promise<{ pruned: string[]; evicted: string[]; demoted: string[]; deduped: string[] } | null> =>
+    ipcRenderer.invoke('remote:cleanup-memory'),
   /** Fires when the model changes from EITHER surface, so both stay in sync. */
   remoteOnModelChanged: (cb: (model: string) => void): (() => void) => {
     const handler = (_e: unknown, model: string) => cb(model)

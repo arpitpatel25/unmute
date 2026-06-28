@@ -1,6 +1,8 @@
 import { promises as fs } from 'node:fs'
+import { join } from 'node:path'
 import { createLogger } from './log'
-import { listRecipes, isStaleHigh, type Recipe } from './recipe-store'
+import { listRecipes, isStaleHigh, moveRecipe, recipesDir, graduatedDir, type Confidence, type Recipe, type RecipeFrontmatter } from './recipe-store'
+import { userProfilePath } from './skills'
 
 const log = createLogger('gardening')
 
@@ -42,4 +44,90 @@ export async function applyGardening(actions: GardenAction[], opts: { baseDir?: 
     }
     catch (e) { log.warn('gardening prune failed', { name: a.name, error: (e as Error).message }) }
   }
+}
+
+// ── On-demand cleanup (user-triggered; deterministic, no LLM) ──────────────────
+// Storage is cheap, so this is OPT-IN: the UI shows usage and the user presses a
+// button. It does the deterministic gardening — exact-name dedup, prune of proven
+// junk, LRU eviction of stale never-confirmed leads, and retiring stale-high to
+// medium. Semantic (meaning-based) dedup is deferred to a future librarian pass.
+
+export const IDLE_EVICT_MS = 45 * 86_400_000 // a low lead unused this long, never confirmed → evict
+const CONF_RANK: Record<Confidence, number> = { high: 3, medium: 2, low: 1 }
+const lastActivity = (f: RecipeFrontmatter): number =>
+  Math.max(Date.parse(f.last_used) || 0, Date.parse(f.last_verified) || 0, Date.parse(f.created) || 0)
+
+export interface CleanupResult { pruned: string[]; evicted: string[]; demoted: string[]; deduped: string[] }
+
+export async function cleanupMemory(opts: { baseDir?: string; nowMs: number; idleEvictMs?: number }): Promise<CleanupResult> {
+  const idleMs = opts.idleEvictMs ?? IDLE_EVICT_MS
+  const recipes = await listRecipes({ baseDir: opts.baseDir })
+  const res: CleanupResult = { pruned: [], evicted: [], demoted: [], deduped: [] }
+  const toDelete = new Set<string>()        // paths slated for removal
+  const dedupLosers = new Set<string>()     // exclude from prune/evict double-counting
+
+  // 1. Exact-name dedup — keep the best per name (confidence, then recency).
+  const byName = new Map<string, Recipe[]>()
+  for (const r of recipes) {
+    const g = byName.get(r.frontmatter.name) ?? []
+    g.push(r); byName.set(r.frontmatter.name, g)
+  }
+  for (const [name, group] of byName) {
+    if (group.length < 2) continue
+    const sorted = [...group].sort((a, b) =>
+      CONF_RANK[b.frontmatter.confidence] - CONF_RANK[a.frontmatter.confidence] || lastActivity(b.frontmatter) - lastActivity(a.frontmatter))
+    for (const loser of sorted.slice(1)) if (loser.path) { toDelete.add(loser.path); dedupLosers.add(loser.path) }
+    res.deduped.push(name)
+  }
+
+  // 2. Prune proven junk + 3. LRU-evict stale never-confirmed leads.
+  for (const r of recipes) {
+    if (r.path && dedupLosers.has(r.path)) continue
+    const f = r.frontmatter
+    if (f.confidence !== 'high' && f.runs_contradicted >= 2 && f.runs_confirmed === 0) {
+      if (r.path) { toDelete.add(r.path); res.pruned.push(f.name) }
+      continue
+    }
+    if (f.confidence === 'low' && f.runs_confirmed === 0 && opts.nowMs - lastActivity(f) > idleMs) {
+      if (r.path) { toDelete.add(r.path); res.evicted.push(f.name) }
+    }
+  }
+
+  for (const p of toDelete) {
+    try { await fs.rm(p, { force: true }) }
+    catch (e) { log.warn('cleanup delete failed', { path: p, error: (e as Error).message }) }
+  }
+
+  // 4. Retire stale-high → demote to medium (survivors only).
+  for (const r of recipes) {
+    if (r.path && toDelete.has(r.path)) continue
+    if (isStaleHigh(r, opts.nowMs)) {
+      try { await moveRecipe(r, 'medium', opts.baseDir); res.demoted.push(r.frontmatter.name) }
+      catch (e) { log.warn('cleanup demote failed', { name: r.frontmatter.name, error: (e as Error).message }) }
+    }
+  }
+  // TEMP(memory-debug): remove after calibration
+  log.event('cleanup-memory', { MEMORY_DEBUG: true, pruned: res.pruned.length, evicted: res.evicted.length, demoted: res.demoted.length, deduped: res.deduped.length })
+  return res
+}
+
+/** Total on-disk footprint of the memory store (recipes + skills + profile) plus
+ *  recipe/skill counts — what the UI shows so the user can decide to clean up. */
+export async function memoryUsage(opts: { baseDir?: string }): Promise<{ bytes: number; recipeCount: number; skillCount: number }> {
+  let bytes = 0
+  const walk = async (dir: string): Promise<void> => {
+    let ents
+    try { ents = await fs.readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of ents) {
+      const p = join(dir, e.name)
+      if (e.isDirectory()) await walk(p)
+      else { try { bytes += (await fs.stat(p)).size } catch { /* vanished mid-scan */ } }
+    }
+  }
+  await walk(recipesDir(opts.baseDir))
+  await walk(graduatedDir(opts.baseDir))
+  try { bytes += (await fs.stat(userProfilePath(opts.baseDir))).size } catch { /* no profile yet */ }
+  const recipeCount = (await listRecipes({ tier: 'nursery', baseDir: opts.baseDir })).length
+  const skillCount = (await listRecipes({ tier: 'skill', baseDir: opts.baseDir })).length
+  return { bytes, recipeCount, skillCount }
 }

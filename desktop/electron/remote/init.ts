@@ -36,7 +36,7 @@ import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
 import { Router, type RoutableTask } from './router'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
-import { planGardening, applyGardening } from './gardening'
+import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -799,6 +799,21 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     sessionOverride: sessionForceRaw, // null | boolean
     effectiveRaw: injectionDisabled(),
   }))
+  // ── Memory footprint + on-demand cleanup (user-triggered; storage courtesy) ──
+  ipcMain.handle('remote:get-memory-usage', async () => {
+    try { return await memoryUsage({}) }
+    catch (e) { log.warn('memory-usage failed', { error: (e as Error).message }); return { bytes: 0, recipeCount: 0, skillCount: 0 } }
+  })
+  ipcMain.handle('remote:cleanup-memory', async () => {
+    // A writer — run inside the librarian's serial queue (single-writer invariant).
+    // runMaintenance resolves void, so capture the result via closure.
+    let res: CleanupResult | null = null
+    await librarian.runMaintenance(async () => { res = await cleanupMemory({ nowMs: Date.now() }) })
+    const r = res as CleanupResult | null
+    log.event('cleanup-memory-ipc', { MEMORY_DEBUG: true,
+      pruned: r?.pruned.length ?? 0, evicted: r?.evicted.length ?? 0, demoted: r?.demoted.length ?? 0, deduped: r?.deduped.length ?? 0 })
+    return r
+  })
   ipcMain.handle('remote:get-settings', async () => ({
     permissionMode: settings.get('permissionMode'),
     remoteKey: getRemoteKey(),

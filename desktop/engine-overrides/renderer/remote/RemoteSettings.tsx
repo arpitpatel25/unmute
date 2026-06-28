@@ -32,7 +32,17 @@ type API = {
   remoteSetOverlayDocked?: (on: boolean) => Promise<boolean>
   remoteSetOsNotifications?: (on: boolean) => Promise<boolean>
   remoteSetForceRaw?: (on: boolean) => Promise<boolean>
+  remoteGetMemoryUsage?: () => Promise<MemoryUsage>
+  remoteCleanupMemory?: () => Promise<CleanupResult | null>
 }
+interface MemoryUsage { bytes: number; recipeCount: number; skillCount: number }
+interface CleanupResult { pruned: string[]; evicted: string[]; demoted: string[]; deduped: string[] }
+
+// Soft, informational thresholds — NOT a limit. Past either, the UI gently
+// suggests a cleanup; the user is always free to ignore it.
+const SOFT_BYTES = 2 * 1024 * 1024
+const SOFT_COUNT = 150
+const fmtBytes = (b: number) => (b < 1024 ? `${b} B` : b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`)
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
 }
@@ -40,9 +50,15 @@ function api(): API {
 export function RemoteSettings() {
   const [s, setS] = useState<Settings | null>(null)
   const [newRoot, setNewRoot] = useState('')
+  const [usage, setUsage] = useState<MemoryUsage | null>(null)
+  const [cleaning, setCleaning] = useState(false)
+  const [cleanupNote, setCleanupNote] = useState<string | null>(null)
+
+  const refreshUsage = () => void api().remoteGetMemoryUsage?.().then((u) => u && setUsage(u))
 
   useEffect(() => {
     void api().remoteGetSettings?.().then((v) => v && setS(v))
+    refreshUsage()
     // Stay in sync when the model is changed from the capture-widget badge.
     const off = api().remoteOnModelChanged?.((model) => setS((prev) => (prev ? { ...prev, model } : prev)))
     return () => off?.()
@@ -50,6 +66,17 @@ export function RemoteSettings() {
   if (!s) return null
 
   const update = (patch: Partial<Settings>) => setS((prev) => (prev ? { ...prev, ...patch } : prev))
+
+  const runCleanup = async () => {
+    setCleaning(true); setCleanupNote(null)
+    try {
+      const r = await api().remoteCleanupMemory?.()
+      const removed = (r?.evicted.length ?? 0) + (r?.pruned.length ?? 0) + (r?.deduped.length ?? 0)
+      const demoted = r?.demoted.length ?? 0
+      setCleanupNote(removed === 0 && demoted === 0 ? 'Nothing to clean — your memory is tidy.' : `Removed ${removed}, retired ${demoted}.`)
+      refreshUsage()
+    } finally { setCleaning(false) }
+  }
 
   return (
     <div className="rounded-lg border border-black/10 p-3 mb-3 bg-cream-mid/40 text-[12px]">
@@ -230,6 +257,29 @@ export function RemoteSettings() {
           <button className="text-[11px] px-2 py-1 rounded border border-black/15 hover:bg-black/5" type="submit">Add</button>
         </form>
       </div>
+
+      {/* Memory footprint + on-demand cleanup. Informational, never a hard limit —
+          storage is tiny; this is a courtesy so the user stays in control. */}
+      {usage && (
+        <div className="py-1.5 border-t border-black/5">
+          <div className="flex items-center justify-between">
+            <span>
+              Unmute memory <span className="text-ink/40">({usage.recipeCount} recipes · {usage.skillCount} skills · {fmtBytes(usage.bytes)})</span>
+            </span>
+            <button
+              className="text-[11px] px-2 py-1 rounded border border-black/15 hover:bg-black/5 disabled:opacity-50"
+              disabled={cleaning}
+              onClick={() => void runCleanup()}
+            >{cleaning ? 'Cleaning…' : 'Clean up'}</button>
+          </div>
+          {(usage.bytes > SOFT_BYTES || usage.recipeCount + usage.skillCount > SOFT_COUNT) && (
+            <div className="mt-1 text-[10.5px] text-ink/50">
+              Unmute is holding a fair bit of learned memory. Nothing's wrong — clear unused leads anytime to keep it lean.
+            </div>
+          )}
+          {cleanupNote && <div className="mt-1 text-[10.5px] text-ink/50">{cleanupNote}</div>}
+        </div>
+      )}
     </div>
   )
 }
