@@ -39,12 +39,14 @@ export function TaskRow({
   onKill,
   onRerun,
   onRemove,
+  onResume,
 }: {
   task: RemoteTask
   onAnswer: (id: string, text: string) => void
   onKill: (id: string) => void
   onRerun: (intent: string) => void
   onRemove?: (id: string) => void
+  onResume?: (id: string) => void
 }) {
   const [draft, setDraft] = useState('')
   const [showTerminal, setShowTerminal] = useState(false)
@@ -171,6 +173,15 @@ export function TaskRow({
         {!active && (
           <button className="text-[11px] px-2 py-0.5 rounded border border-black/15 hover:bg-black/5" onClick={() => onRerun(task.intent)}>
             Re-run
+          </button>
+        )}
+        {!active && onResume && (
+          <button
+            className="text-[11px] px-2 py-0.5 rounded border border-black/15 hover:bg-black/5"
+            title="Continue this exact session with full prior context (resumes interrupted work)"
+            onClick={() => onResume(task.id)}
+          >
+            Resume
           </button>
         )}
         {/* #8 render-on-demand terminal */}

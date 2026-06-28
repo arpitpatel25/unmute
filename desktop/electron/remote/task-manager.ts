@@ -31,7 +31,7 @@ import {
   type StatusPayload,
   type TaskState,
 } from './status-file'
-import { buildDispatch } from './dispatch-prompt'
+import { buildDispatch, buildResumeNudge } from './dispatch-prompt'
 import { installContract } from './contract/installer'
 import { installHooks, hookActivityMs } from './hooks'
 import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
@@ -906,13 +906,33 @@ export class TaskManager extends EventEmitter {
       await ex.isReady()
       ex.writeStdin('') // accept folder-trust; session reopens with full prior context
       await new Promise((r) => setTimeout(r, this.opts.trustAcceptMs))
-      // Alive + idle at the prompt: treat it like a warm session — re-arm the
-      // idle window; followUp()/terminal can use it. No polling (status is
-      // terminal; a follow-up will drive fresh updates).
+
+      // Two scenarios, distinguished by whether the task ever completed:
+      //  1. UNFINISHED (interrupted/killed mid-work, status never reached 'done')
+      //     → the session is back but idle; NUDGE it to continue so it actually
+      //       resumes the work, flip to processing, and re-start polling.
+      //  2. FINISHED ('done') → leave it warm and silent for the user's next
+      //     prompt — exactly the prior behavior (no regression to this path).
+      const status = await readStatus(task.statusPath)
+      const unfinished = status?.state !== 'done'
+      if (unfinished) {
+        const nudge = buildResumeNudge(task.intent, task.statusPath)
+        ex.writeStdin(nudge)
+        // Same submit-reliability fix as dispatch: a follow Enter guarantees the
+        // multi-line prompt submits; a spare Enter on an empty prompt is a no-op.
+        await new Promise((r) => setTimeout(r, this.opts.submitConfirmMs))
+        if (ex.alive) ex.write('\r')
+        task.error = undefined // clear the "interrupted" reason; it's running again
+        this.transition(id, 'processing', {})
+        this.startPolling(id)
+        tlog.event('resume-continued', { unfinished: true })
+        return true
+      }
+      // Finished task: warm + silent, awaiting the user's next prompt (unchanged).
       task.updatedAt = this.clock()
       this.parkWarm(id)
       this.emit('updated', task)
-      tlog.event('resume-ready', {})
+      tlog.event('resume-ready', { unfinished: false })
       return true
     } catch (e) {
       tlog.error('resume failed', { error: (e as Error).message })

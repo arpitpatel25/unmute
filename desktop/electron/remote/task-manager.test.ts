@@ -66,6 +66,44 @@ test('dispatch → scaffolds, installs contract, types payload, starts processin
   tm.kill(id) // stop polling
 })
 
+test('resume NUDGES an unfinished (interrupted) task to continue, and goes back to processing', async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  // Simulate an interrupted task: a meta receipt + a NON-done status on disk.
+  const tid = randomUUID()
+  const dir = path.join(baseDir, 'local', tid)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'scroll my feed', createdAt: Date.now() }))
+  await claudeWrites(path.join(dir, 'status.json'), { state: 'processing' })
+  await tm.rehydrate() // rehydrate sets no executor, so resume will spawn a fresh one
+  const ok = await tm.resume(tid)
+  assert.equal(ok, true)
+  // A continuation nudge was typed (re-grounding it with the original intent).
+  assert.ok(fake.writes.some((w) => /resumed|continue/i.test(w) && w.includes('scroll my feed')),
+    'a continue nudge carrying the intent was sent')
+  assert.equal(tm.get(tid)!.state, 'processing') // tracking again
+  tm.kill(tid) // stop polling so the test process exits cleanly
+})
+
+test('resume does NOT nudge a task that already completed (no regression to the finished case)', async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const tid = randomUUID()
+  const dir = path.join(baseDir, 'local', tid)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'find a file', createdAt: Date.now() }))
+  await claudeWrites(path.join(dir, 'status.json'), { state: 'done', result: { summary: 'found it' } })
+  await tm.rehydrate()
+  const ok = await tm.resume(tid)
+  assert.equal(ok, true)
+  // Only the empty folder-trust accept — NO continue nudge.
+  assert.ok(!fake.writes.some((w) => /resumed|continue now/i.test(w)), 'no nudge for a finished task')
+  assert.equal(tm.get(tid)!.state, 'done') // stays done, warm and waiting
+  tm.kill(tid) // cancel the warm timer so the test process exits cleanly
+})
+
 test('rehydrate recovers sessionId from meta.json, falling back to the task id for old receipts', async () => {
   const baseDir = await tmpBase()
   const root = path.join(baseDir, 'local')

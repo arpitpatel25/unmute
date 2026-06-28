@@ -25,7 +25,7 @@ function setupApi(): SetupAPI {
 }
 
 export function TaskPanel() {
-  const { tasks, activeCount, answer, kill, remove, killAll, rerun } = useRemoteTasks()
+  const { tasks, activeCount, answer, kill, remove, killAll, rerun, resume } = useRemoteTasks()
   const [page, setPage] = useState<Page>('tasks')
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null)
 
@@ -109,7 +109,7 @@ export function TaskPanel() {
             </div>
           </div>
           {tasks.map((t) => (
-            <TaskRow key={t.id} task={t} onAnswer={answer} onKill={kill} onRerun={rerun} onRemove={remove} />
+            <TaskRow key={t.id} task={t} onAnswer={answer} onKill={kill} onRerun={rerun} onRemove={remove} onResume={resume} />
           ))}
         </>
       )}

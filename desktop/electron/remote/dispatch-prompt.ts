@@ -66,3 +66,22 @@ export function buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRe
   })
   return payload
 }
+
+/**
+ * Built ONLY when resuming a task that did NOT finish (interrupted/killed
+ * mid-work). `--continue` restores the session's full prior context, but the REPL
+ * comes back idle — so without a nudge it just sits there. This is that nudge: it
+ * tells the agent to pick up where it left off and finish, re-grounding it with
+ * the original ask + its status path (belt-and-suspenders in case the restored
+ * context is thin). NEVER sent to a task that already completed.
+ */
+export function buildResumeNudge(intent: string, statusPath: string): string {
+  return [
+    `[Unmute Remote — resumed]`,
+    `This task was interrupted before it finished and has just been resumed with your full prior context.`,
+    `Pick up exactly where you left off and complete it — do NOT restart from scratch.`,
+    `Original request: ${intent}`,
+    `Keep updating your status file per the loaded Unmute contract: ${statusPath}`,
+    `Continue now.`,
+  ].join('\n')
+}
