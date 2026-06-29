@@ -9,6 +9,7 @@ import { createRoot } from 'react-dom/client'
 import App from './app/App'
 import WidgetApp from './widget/WidgetApp'
 import { OverlayApp } from './remote/OverlayApp'
+import OrchestrateWall from './remote/OrchestrateWall'
 import './styles.css'
 
 const hash = window.location.hash
@@ -16,6 +17,7 @@ const hash = window.location.hash
 function RootApp() {
   if (hash === '#/widget') return <WidgetApp />
   if (hash === '#/overlay') return <OverlayApp />
+  if (hash === '#/orchestrate') return <OrchestrateWall />
   return <App />
 }
 
