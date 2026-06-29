@@ -392,7 +392,7 @@ function ManagedCard(props: {
       setupBlock={setupBlock}
       expandedBlock={expandedBlock}
       bestFor="Anyone who wants it to just work. Faster than mainstream dictation tools — optimized end to end."
-      tradeOff="Requires an active subscription. From $5.99/mo — cancel any time."
+      tradeOff="Requires an active subscription. From $4.99/mo — cancel any time."
       onSelect={props.onSelect}
       verifyBlock={
         props.ready ? (

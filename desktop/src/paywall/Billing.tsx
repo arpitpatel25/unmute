@@ -1,8 +1,8 @@
 // Billing pane — lives inside the managed card (EnginePillars) / Settings.
 //
 // Subscription model (two tiers, hard paywall, no free trial):
-//   * Dictation — $5.99/mo · $59/yr   (anchor $11.99)
-//   * Unmute    — $8.99/mo · $89/yr   (anchor $17.99)  ← recommended
+//   * Dictation — $4.99/mo · $49/yr   (anchor $11.99)
+//   * Unmute    — $7.99/mo · $79/yr   (anchor $17.99)  ← recommended
 //   Annual cards show "~2 months free".
 //
 // Two distinct views depending on subscription status:
@@ -50,16 +50,16 @@ const PLANS: PlanCopy[] = [
     name: 'Dictation',
     tagline: 'Fast, accurate cloud dictation everywhere.',
     anchorCents: 1199,
-    monthCents: 599,
-    yearCents: 5900,
+    monthCents: 499,
+    yearCents: 4900,
   },
   {
     plan: 'unmute',
     name: 'Unmute',
     tagline: 'Dictation + Remote. The whole thing.',
     anchorCents: 1799,
-    monthCents: 899,
-    yearCents: 8900,
+    monthCents: 799,
+    yearCents: 7900,
     recommended: true,
   },
 ]
@@ -306,7 +306,7 @@ export function Billing() {
                 <div className="mt-3 rounded-lg border border-ink/30 bg-cream-mid/50 p-3">
                   <p className="text-[12px] font-bold text-ink">Upgrade to Unmute?</p>
                   <p className="text-[11px] text-ink-60 mt-1 leading-snug">
-                    You'll be charged the prorated difference now (about $3 — the gap to $8.99/mo),
+                    You'll be charged the prorated difference now (about $3 — the gap to $7.99/mo),
                     and your plan switches to Unmute immediately. If you pay by UPI, the charge
                     settles in the background over ~24h.
                   </p>
