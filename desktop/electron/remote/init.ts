@@ -34,7 +34,7 @@ import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './lo
 import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
-import { registerOrchestrateShortcut } from './orchestrate'
+import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask } from './router'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
@@ -621,6 +621,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   createOverlayWindow()
   // Orchestrate cockpit (NEW surface, handoff §3 #3): register the ⌘⇧O toggle.
   registerOrchestrateShortcut()
+  // DEV-only convenience during build-out: auto-open the cockpit so it's
+  // discoverable without hunting for the shortcut. (ELECTRON_RENDERER_URL is set
+  // only in `electron-vite dev`.) Remove once a real entry point exists.
+  if (process.env.ELECTRON_RENDERER_URL) openOrchestrateWindow()
   // Apply the docked-mode preference (default ON).
   setDockedMode(settings.get('overlayDocked') !== false)
   // One-time: move users still on the OLD opus default to the new sonnet default

@@ -54,6 +54,13 @@ export function toggleOrchestrateWindow(): void {
   w.focus()
 }
 
+/** Open + focus the cockpit (idempotent). */
+export function openOrchestrateWindow(): void {
+  const w = createOrchestrateWindow()
+  w.show()
+  w.focus()
+}
+
 /** Dev/build-out affordance: ⌘⇧O toggles the wall. Best-effort. */
 export function registerOrchestrateShortcut(): void {
   try {
