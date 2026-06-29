@@ -339,6 +339,17 @@ export default function OrchestrateWall() {
           </div>
         )}
       </div>
+
+      {/* Voice address (§6.2): always shows where the NEXT utterance lands, so the
+          user sees it BEFORE speaking. The live hold-to-speak listening surface
+          layers on top of this once the capture-state broadcast is wired. */}
+      <div style={{ position: 'absolute', left: 14, bottom: 12, display: 'flex', alignItems: 'center', gap: 7, fontFamily: C.mono, fontSize: 11, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9999, padding: '5px 12px', pointerEvents: 'none' }}>
+        <span aria-hidden>🎙</span>
+        <span style={{ color: C.dimText }}>voice →</span>
+        <span style={{ color: focused ? '#3fb950' : C.midText, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {focused ? (focused.intent || 'this session') : 'new task'}
+        </span>
+      </div>
     </div>
   )
 }
