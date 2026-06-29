@@ -57,6 +57,10 @@ export const remotePreloadExtensions = {
   /** Dispatch a task by text (capture path types its own; this is for UI re-run/manual). */
   remoteDispatch: (intent: string): Promise<string | null> =>
     ipcRenderer.invoke('remote:dispatch', intent),
+  /** Orchestrate wall focus (§6.2). Tell the main process which session is focused
+   *  (or null) so a capture routes there deterministically. Additive. */
+  remoteSetOrchestrateFocus: (id: string | null): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-orchestrate-focus', id),
   /** All tasks, newest first (PRD §13.3 panel + §13.5 history). */
   remoteList: (): Promise<RemoteTaskSnapshot[]> => ipcRenderer.invoke('remote:list'),
   /** Answer a needs-user question — piped into the session stdin (PRD §7). */

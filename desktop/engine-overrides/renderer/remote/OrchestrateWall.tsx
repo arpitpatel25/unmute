@@ -79,6 +79,13 @@ function withMorph(fn: () => void) {
   else fn()
 }
 
+// Report the focused session to main — focus IS the voice address (§6.2). When set,
+// a capture routes here deterministically; null restores pure router behaviour.
+function setMainFocus(id: string | null) {
+  const api = (window as unknown as { electronAPI?: { remoteSetOrchestrateFocus?: (id: string | null) => Promise<boolean> } }).electronAPI
+  void api?.remoteSetOrchestrateFocus?.(id)
+}
+
 function Dot({ state }: { state: WallState }) {
   const { color } = statusOf(state)
   return (
@@ -234,7 +241,14 @@ export default function OrchestrateWall() {
   const focused = focusedId ? tasks.find((t) => t.id === focusedId) ?? null : null
   const top = queue[0] ?? null
 
-  const focus = useCallback((id: string | null) => withMorph(() => { setFocusedId(id); if (id == null) setFull(false) }), [])
+  const focus = useCallback((id: string | null) => {
+    setMainFocus(id) // tell main where the voice lands BEFORE any utterance (§6.2)
+    withMorph(() => { setFocusedId(id); if (id == null) setFull(false) })
+  }, [])
+
+  // Clear the focus address when the wall unmounts/closes, so a stale focus can't
+  // keep capturing the voice after the user leaves the cockpit.
+  useEffect(() => () => setMainFocus(null), [])
 
   // The crank (§6.4): YOU advance to the next queued item; the system never does.
   const crank = useCallback(() => {

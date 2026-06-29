@@ -438,6 +438,12 @@ export function registerIntentCleanupLLM(fn: CompleteFn): void {
  * (PRD §5.1). Cleans the intent (or passes through) then dispatches a task.
  * Returns the taskId.
  */
+// Orchestrate focus (§6.2 — "focus IS the address"). The wall's currently-focused
+// session id, or null. Set via remote:set-orchestrate-focus. When set, a capture
+// routes to it DETERMINISTICALLY (see the short-circuit below) — the offer-never-move
+// spine: the user can SEE where their voice lands before they speak.
+let orchestrateFocusId: string | null = null
+
 export async function dispatchFromCapture(rawTranscript: string): Promise<string | null> {
   if (!manager) {
     log.error('dispatchFromCapture before initRemote')
@@ -445,6 +451,26 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
   }
   const raw = (rawTranscript || '').trim()
   if (!raw) { log.warn('empty transcript — not dispatching', {}); return null }
+
+  // 0. ORCHESTRATE FOCUS short-circuit (§6.2). If the wall is focused on a session,
+  //    the utterance goes THERE — deterministically, bypassing the router. This is
+  //    PURELY ADDITIVE: with nothing focused (orchestrateFocusId === null) the block
+  //    is skipped and routing below is exactly as before. We reuse the SAME paths
+  //    the router uses (answer a blocked task / followUp to continue) — no new send.
+  if (orchestrateFocusId && manager.list().some((t) => t.id === orchestrateFocusId)) {
+    const fid = orchestrateFocusId
+    const awaiting = manager.tasksAwaitingUser().some((t) => t.id === fid)
+    if (awaiting) {
+      manager.answer(fid, raw)
+      log.event('routed-to-focus', { taskId: fid, kind: 'answer' })
+      return fid
+    }
+    if (manager.followUp(fid, raw)) {
+      log.event('routed-to-focus', { taskId: fid, kind: 'continue' })
+      return fid
+    }
+    // Focused task couldn't take it (terminal/gone) → fall through to normal routing.
+  }
 
   // 1. ALL routing goes through the warm router — including answering a task that
   //    is blocked on a question. There is no deterministic short-circuit: the
@@ -689,6 +715,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
 
   // ── IPC: actions the renderer (or a future menu) can trigger ──
   ipcMain.handle('remote:dispatch', async (_e, intent: string) => dispatchFromCapture(intent))
+  // The wall reports its focused session here; null clears it. Focus = the voice
+  // address (§6.2). Additive: clearing it restores pure router behaviour.
+  ipcMain.handle('remote:set-orchestrate-focus', async (_e, id: string | null) => {
+    orchestrateFocusId = id || null
+    log.event('orchestrate-focus-set', { taskId: orchestrateFocusId })
+    return true
+  })
   ipcMain.handle('remote:list', async () => (manager?.list() ?? []).map(serializeTask))
   ipcMain.handle('remote:answer', async (_e, id: string, answer: string) => {
     manager?.answer(id, answer)
