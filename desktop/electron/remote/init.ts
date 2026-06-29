@@ -34,6 +34,7 @@ import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './lo
 import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
+import { registerOrchestrateShortcut } from './orchestrate'
 import { Router, type RoutableTask } from './router'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
@@ -618,6 +619,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
 
   // Pre-warm the floating overlay window (hidden) so the first present is instant.
   createOverlayWindow()
+  // Orchestrate cockpit (NEW surface, handoff §3 #3): register the ⌘⇧O toggle.
+  registerOrchestrateShortcut()
   // Apply the docked-mode preference (default ON).
   setDockedMode(settings.get('overlayDocked') !== false)
   // One-time: move users still on the OLD opus default to the new sonnet default
