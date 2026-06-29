@@ -1,4 +1,4 @@
-// Unmute Orchestrate — the cockpit wall (NEW surface, §3 #3 of the handoff).
+// Unmute Orchestrate — the cockpit wall (NEW surface, handoff §3 #3).
 //
 // A voice-conducted cockpit for many concurrent Claude Code sessions. The human
 // stays the conductor; this surface owns the ATTENTION layer — always pointing the
@@ -6,30 +6,33 @@
 //
 // Visual direction: Ops Console (§7). Two hard rules, enforced here:
 //   R1 — color encodes EXACTLY ONE variable: status. Cards are structurally
-//        identical (same border/shape/neutral surface). The only color anywhere is
-//        the status dot + label. No colored bars, no multi-hue surfaces.
-//   R2 — hierarchy comes from CONTRAST, not whitespace: name brightest →
-//        needs-you status loudest → dir/elapsed/meta deliberately dimmed.
+//        identical. The only color anywhere is the status dot + label.
+//   R2 — hierarchy from CONTRAST, not whitespace: name brightest → needs-you
+//        status loudest → dir/elapsed/meta dimmed toward background.
 //
-// Data is REAL — driven by the existing useRemoteTasks (one task object, the same
-// one the overlay renders). This is the integration, not a parallel store.
+// Interaction (§8): click a card → it MORPHS in place into the big stage (FLIP via
+// the View Transitions API) while the others slide+shrink into a right rail. The
+// focused stage hoists the pending line VERBATIM (re-entry §6.5) over the REAL
+// terminal (LiveTerminal). Crank with `next`/Tab; `full`/F expands the terminal;
+// answer by chip, number key (1-9), or (later) voice; esc reverses the motion.
 //
-// FROZEN/UNTOUCHED: dictation core. COEXISTS: the one-offs overlay (rendered as a
-// region in the rail here; floats independently when the wall is down).
+// Data is REAL — the existing useRemoteTasks store (one task object, shared with
+// the overlay). Dictation core FROZEN; overlay COEXISTS.
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
+import { LiveTerminal } from './LiveTerminal'
 
-// ─── Ops Console palette ─── neutral everywhere; hue lives ONLY in `status`.
+// ─── Ops Console palette — neutral everywhere; hue lives ONLY in `status`. ───
 const C = {
   bg: '#0d0f12',
   surface: '#15181d',
   surfaceHi: '#191d23',
   border: '#23272e',
   borderHi: '#323843',
-  nameText: '#e8eaed', // brightest — session name only
+  nameText: '#e8eaed',
   midText: '#9aa0a8',
-  dimText: '#5b616b', // dir/branch/elapsed/meta — pushed toward background
+  dimText: '#5b616b',
   faintText: '#3b4047',
   mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
 }
@@ -45,6 +48,7 @@ const STATUS = {
 
 type WallState = RemoteTask['state']
 const statusOf = (s: WallState) => STATUS[s] ?? STATUS.processing
+const needsYou = (s: WallState) => s === 'needs-user' || s === 'stuck' || s === 'failed'
 
 function elapsed(fromMs: number, now: number): string {
   const s = Math.max(0, Math.floor((now - fromMs) / 1000))
@@ -55,120 +59,143 @@ function elapsed(fromMs: number, now: number): string {
   return `${h}h${m % 60 ? ` ${m % 60}m` : ''}`
 }
 
-// The one-line current activity, and (when focused) the line lifted VERBATIM from
-// the session — re-entry (§6.5): extraction, NOT an LLM summary.
+// One-line current activity, and (focused) the line lifted VERBATIM from the
+// session — re-entry (§6.5): extraction, NOT an LLM summary.
 function activityLine(t: RemoteTask): string {
   return t.question?.text || t.error?.reason || t.step || t.result?.summary || '…'
 }
 
-// ─── status dot ───
+// Placeholder dir/branch until the task payload carries it (disambiguates two
+// sessions on one repo — §7). Derived from intent for now.
+function dirLabel(t: RemoteTask): string {
+  return `~/…/${(t.intent || 'session').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 18)}`
+}
+
+// FLIP morph: wrap a state change so Chromium captures before/after and tweens
+// the matching view-transition-names. No-ops gracefully where unsupported.
+function withMorph(fn: () => void) {
+  const doc = document as Document & { startViewTransition?: (cb: () => void) => void }
+  if (typeof doc.startViewTransition === 'function') doc.startViewTransition(fn)
+  else fn()
+}
+
 function Dot({ state }: { state: WallState }) {
   const { color } = statusOf(state)
-  const needsYou = state === 'needs-user' || state === 'stuck' || state === 'failed'
   return (
-    <span
-      style={{
-        width: 8, height: 8, borderRadius: 9999, background: color, flex: 'none',
-        // "loudest" for needs-you (R2): a soft glow only on the states that pull you.
-        boxShadow: needsYou ? `0 0 7px ${color}` : 'none',
-      }}
-    />
+    <span style={{
+      width: 8, height: 8, borderRadius: 9999, background: color, flex: 'none',
+      boxShadow: needsYou(state) ? `0 0 7px ${color}` : 'none', // loud only when it pulls you (R2)
+    }} />
   )
 }
 
-// ─── one session card — structurally identical for every state (R1) ───
-function Card({
-  t, now, queuePos, focused, onClick,
-}: {
-  t: RemoteTask; now: number; queuePos: number | null; focused: boolean; onClick: () => void
-}) {
+// ─── full session card (resting grid) — structurally identical for every state ───
+function Card({ t, now, queuePos, onClick }: { t: RemoteTask; now: number; queuePos: number | null; onClick: () => void }) {
   const st = statusOf(t.state)
   return (
-    <button
-      onClick={onClick}
+    <button onClick={onClick}
       style={{
-        textAlign: 'left', cursor: 'pointer', fontFamily: C.mono,
-        background: focused ? C.surfaceHi : C.surface,
-        border: `1px solid ${focused ? C.borderHi : C.border}`,
-        borderRadius: 8, padding: '11px 13px',
+        textAlign: 'left', cursor: 'pointer', fontFamily: C.mono, background: C.surface,
+        border: `1px solid ${C.border}`, borderRadius: 8, padding: '11px 13px',
         display: 'flex', flexDirection: 'column', gap: 7, minWidth: 0,
-        transition: 'background 120ms ease, border-color 120ms ease',
-      }}
-    >
-      {/* row 1: status (loud) + queue badge */}
+        viewTransitionName: `card-${t.id}`,
+      } as React.CSSProperties}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Dot state={t.state} />
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: st.color, textTransform: 'uppercase' }}>
-          {st.label}
-        </span>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: st.color, textTransform: 'uppercase' }}>{st.label}</span>
         {queuePos != null && (
-          <span style={{ marginLeft: 'auto', fontSize: 10, color: C.dimText, border: `1px solid ${C.border}`, borderRadius: 4, padding: '1px 5px' }}>
-            Q{queuePos}
-          </span>
+          <span style={{ marginLeft: 'auto', fontSize: 10, color: C.dimText, border: `1px solid ${C.border}`, borderRadius: 4, padding: '1px 5px' }}>Q{queuePos}</span>
         )}
       </div>
-
-      {/* row 2: NAME — brightest thing on the card (R2) */}
       <div style={{ fontSize: 13.5, fontWeight: 600, color: C.nameText, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {t.intent || t.id.slice(0, 8)}
       </div>
-
-      {/* row 3: one-line current activity — mid */}
-      <div style={{ fontSize: 11.5, color: C.midText, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {activityLine(t)}
-      </div>
-
-      {/* row 4: meta — deliberately DIMMED toward background (R2) */}
+      <div style={{ fontSize: 11.5, color: C.midText, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activityLine(t)}</div>
       <div style={{ display: 'flex', gap: 10, fontSize: 10.5, color: C.dimText }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {/* dir/branch disambiguates two sessions on one repo — not exposed on the task yet, placeholder */}
-          ~/…/{(t.intent || 'session').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 18)}
-        </span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dirLabel(t)}</span>
         <span style={{ marginLeft: 'auto', flex: 'none' }}>{elapsed(t.createdAt, now)}</span>
       </div>
     </button>
   )
 }
 
-// ─── focused stage: the real terminal + the hoisted pending line (re-entry) ───
-function Stage({ t, now, onAnswer, onClose }: { t: RemoteTask; now: number; onAnswer: (text: string) => void; onClose: () => void }) {
+// ─── compact card for the focused right-rail (the others, shrunk) ───
+function MiniCard({ t, queuePos, onClick }: { t: RemoteTask; queuePos: number | null; onClick: () => void }) {
   const st = statusOf(t.state)
-  const pending = t.question
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontFamily: C.mono, minWidth: 0 }}>
-      {/* hoisted header — what this session is waiting on, at eye level */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderBottom: `1px solid ${C.border}` }}>
+    <button onClick={onClick}
+      style={{
+        textAlign: 'left', cursor: 'pointer', fontFamily: C.mono, background: C.surface,
+        border: `1px solid ${C.border}`, borderRadius: 7, padding: '8px 10px',
+        display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, width: '100%',
+        viewTransitionName: `card-${t.id}`,
+      } as React.CSSProperties}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <Dot state={t.state} />
+        <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.3, color: st.color, textTransform: 'uppercase' }}>{st.label}</span>
+        {queuePos != null && <span style={{ marginLeft: 'auto', fontSize: 9, color: C.dimText }}>Q{queuePos}</span>}
+      </div>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: C.nameText, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {t.intent || t.id.slice(0, 8)}
+      </div>
+    </button>
+  )
+}
+
+// ─── focused stage: hoisted pending line + the REAL terminal ───
+function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
+  t: RemoteTask; now: number; full: boolean
+  onAnswer: (text: string) => void; onClose: () => void; onNext: () => void; onToggleFull: () => void
+}) {
+  const st = statusOf(t.state)
+  const choices = t.question?.choices ?? []
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontFamily: C.mono, minWidth: 0, viewTransitionName: `card-${t.id}` } as React.CSSProperties}>
+      {/* hoisted header — what this session is, and its controls */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
         <Dot state={t.state} />
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: st.color, textTransform: 'uppercase' }}>{st.label}</span>
         <span style={{ fontSize: 14, fontWeight: 600, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.intent}</span>
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: C.dimText }}>{elapsed(t.createdAt, now)}</span>
-        <button onClick={onClose} style={{ background: 'none', border: `1px solid ${C.border}`, color: C.midText, borderRadius: 5, fontSize: 11, padding: '2px 8px', cursor: 'pointer', fontFamily: C.mono }}>esc</button>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: C.dimText, flex: 'none' }}>{elapsed(t.createdAt, now)}</span>
+        <Key label="next" onClick={onNext} />
+        <Key label={full ? 'split' : 'full'} onClick={onToggleFull} />
+        <Key label="esc" onClick={onClose} />
       </div>
 
-      {/* the pending line, lifted VERBATIM (extraction, not generation §6.5) */}
-      <div style={{ padding: '14px', background: C.surfaceHi, borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ fontSize: 14, color: C.nameText, lineHeight: 1.5 }}>{activityLine(t)}</div>
-        {pending?.choices?.length ? (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 11 }}>
-            {pending.choices.map((c, i) => (
-              <button key={c} onClick={() => onAnswer(c)}
-                style={{ fontFamily: C.mono, fontSize: 12, color: C.nameText, background: C.surface, border: `1px solid ${C.borderHi}`, borderRadius: 6, padding: '5px 11px', cursor: 'pointer' }}>
-                <span style={{ color: C.dimText, marginRight: 6 }}>{i + 1}</span>{c}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
+      {/* pending line, lifted VERBATIM (extraction, not generation §6.5) */}
+      {needsYou(t.state) && (
+        <div style={{ padding: '13px 14px', background: C.surfaceHi, borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
+          <div style={{ fontSize: 14, color: C.nameText, lineHeight: 1.5 }}>{activityLine(t)}</div>
+          {choices.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 11 }}>
+              {choices.map((c, i) => (
+                <button key={c} onClick={() => onAnswer(c)}
+                  style={{ fontFamily: C.mono, fontSize: 12, color: C.nameText, background: C.surface, border: `1px solid ${C.borderHi}`, borderRadius: 6, padding: '5px 11px', cursor: 'pointer' }}>
+                  <span style={{ color: C.dimText, marginRight: 6 }}>{i + 1}</span>{c}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
-      {/* the REAL terminal sits untouched here (§3, §6.5). Wired next; placeholder for now. */}
-      <div style={{ flex: 1, padding: '14px', overflow: 'auto', color: C.midText, fontSize: 12, lineHeight: 1.6 }}>
-        <div style={{ color: C.faintText }}>{/* LiveTerminal taskId={t.id} mounts here — real PTY, full fidelity */}— terminal —</div>
+      {/* the REAL terminal — full fidelity, untouched (§3, §6.5) */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        <LiveTerminal taskId={t.id} onClose={onClose} />
       </div>
     </div>
   )
 }
 
-// ─── the rail (Queue / One-offs / Skills) ───
+function Key({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick}
+      style={{ flex: 'none', background: 'none', border: `1px solid ${C.border}`, color: C.midText, borderRadius: 5, fontSize: 11, padding: '2px 8px', cursor: 'pointer', fontFamily: C.mono }}>
+      {label}
+    </button>
+  )
+}
+
 function RailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -181,18 +208,20 @@ function RailSection({ title, children }: { title: string; children: React.React
 export default function OrchestrateWall() {
   const { tasks, answer } = useRemoteTasks()
   const [focusedId, setFocusedId] = useState<string | null>(null)
+  const [full, setFull] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  const tasksRef = useRef(tasks)
+  tasksRef.current = tasks
 
   useEffect(() => {
     const i = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(i)
   }, [])
 
-  // queue: everything that needs the user (not 'working'), ordered
-  // errored → question → done (§4). Sort key is trivial to change (open, §10).
+  // queue: everything needing the user (not 'working'), ordered errored→question→done
+  // (§4). Sort key trivial to change (§10 open).
   const queue = useMemo(
-    () => tasks
-      .filter((t) => statusOf(t.state).rank < 99)
+    () => tasks.filter((t) => statusOf(t.state).rank < 99)
       .sort((a, b) => statusOf(a.state).rank - statusOf(b.state).rank || b.updatedAt - a.updatedAt),
     [tasks],
   )
@@ -205,24 +234,45 @@ export default function OrchestrateWall() {
   const focused = focusedId ? tasks.find((t) => t.id === focusedId) ?? null : null
   const top = queue[0] ?? null
 
-  // esc reverses focus; you ADVANCE the crank, the system never auto-advances (§6.4)
+  const focus = useCallback((id: string | null) => withMorph(() => { setFocusedId(id); if (id == null) setFull(false) }), [])
+
+  // The crank (§6.4): YOU advance to the next queued item; the system never does.
+  const crank = useCallback(() => {
+    const q = queue
+    if (q.length === 0) return
+    const idx = focusedId ? q.findIndex((t) => t.id === focusedId) : -1
+    const nextTask = q[(idx + 1) % q.length]
+    if (nextTask) focus(nextTask.id)
+  }, [queue, focusedId, focus])
+
+  // keyboard: esc reverses (full→split→wall); Tab cranks; F toggles full; 1-9 answer.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFocusedId(null) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { if (full) setFull(false); else focus(null); return }
+      if (!focusedId) return
+      if (e.key === 'Tab') { e.preventDefault(); crank(); return }
+      if (e.key === 'f' || e.key === 'F') { setFull((v) => !v); return }
+      if (/^[1-9]$/.test(e.key)) {
+        const t = tasksRef.current.find((x) => x.id === focusedId)
+        const choice = t?.question?.choices?.[Number(e.key) - 1]
+        if (choice) { answer(t!.id, choice); focus(null) }
+      }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [focusedId, full, crank, focus, answer])
 
-  const stepIn = useCallback(() => { if (top) setFocusedId(top.id) }, [top])
+  const others = focused ? tasks.filter((t) => t.id !== focused.id) : []
 
   return (
     <div style={{ position: 'absolute', inset: 0, background: C.bg, color: C.midText, fontFamily: C.mono, display: 'flex', flexDirection: 'column' }}>
       {/* tap banner — highest-priority queued item, always at the top (§8) */}
-      {top && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', borderBottom: `1px solid ${C.border}`, background: C.surface }}>
+      {top && !full && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', borderBottom: `1px solid ${C.border}`, background: C.surface, flex: 'none' }}>
           <Dot state={top.state} />
-          <span style={{ fontSize: 12.5, color: C.nameText, fontWeight: 600 }}>{top.intent}</span>
+          <span style={{ fontSize: 12.5, color: C.nameText, fontWeight: 600, flex: 'none' }}>{top.intent}</span>
           <span style={{ fontSize: 12, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>— {activityLine(top)}</span>
-          <button onClick={stepIn}
+          <button onClick={() => focus(top.id)}
             style={{ marginLeft: 'auto', flex: 'none', fontFamily: C.mono, fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: C.bg, background: statusOf(top.state).color, border: 'none', borderRadius: 5, padding: '4px 11px', cursor: 'pointer' }}>
             STEP IN ▸
           </button>
@@ -230,46 +280,50 @@ export default function OrchestrateWall() {
       )}
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        {/* main: grid of cards (resting) OR the focused stage */}
-        <div style={{ flex: 1, minWidth: 0, padding: 14, overflow: 'auto' }}>
+        {/* main: grid (resting) OR the focused stage */}
+        <div style={{ flex: 1, minWidth: 0, padding: focused ? 0 : 14, overflow: focused ? 'hidden' : 'auto' }}>
           {focused ? (
-            <Stage t={focused} now={now} onAnswer={(text) => { answer(focused.id, text); setFocusedId(null) }} onClose={() => setFocusedId(null)} />
+            <Stage t={focused} now={now} full={full}
+              onAnswer={(text) => { answer(focused.id, text); focus(null) }}
+              onClose={() => focus(null)} onNext={crank} onToggleFull={() => setFull((v) => !v)} />
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))', gap: 11, alignContent: 'start' }}>
-              {tasks.length === 0 && (
-                <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>
-              )}
-              {tasks.map((t) => (
-                <Card key={t.id} t={t} now={now} queuePos={queuePos.get(t.id) ?? null} focused={false} onClick={() => setFocusedId(t.id)} />
-              ))}
+              {tasks.length === 0 && <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>}
+              {tasks.map((t) => <Card key={t.id} t={t} now={now} queuePos={queuePos.get(t.id) ?? null} onClick={() => focus(t.id)} />)}
             </div>
           )}
         </div>
 
-        {/* right rail */}
-        <div style={{ width: 230, flex: 'none', borderLeft: `1px solid ${C.border}`, padding: 14, display: 'flex', flexDirection: 'column', gap: 18, overflow: 'auto' }}>
-          <RailSection title={`Queue · ${queue.length}`}>
-            {queue.length === 0 && <div style={{ fontSize: 11, color: C.faintText }}>clear</div>}
-            {queue.map((t, i) => (
-              <button key={t.id} onClick={() => setFocusedId(t.id)}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '3px 0', fontFamily: C.mono }}>
-                <span style={{ fontSize: 10, color: C.dimText, width: 16 }}>Q{i + 1}</span>
-                <Dot state={t.state} />
-                <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.intent}</span>
-              </button>
-            ))}
-          </RailSection>
-
-          {/* one-offs region — the existing overlay, absorbed when the wall is up (§3 #2) */}
-          <RailSection title="One-offs">
-            <div style={{ fontSize: 11, color: C.faintText }}>short-lived tasks resolve here</div>
-          </RailSection>
-
-          {/* skills — glanceable list of the user's frequent skills (§8) */}
-          <RailSection title="Skills">
-            <div style={{ fontSize: 11, color: C.faintText }}>—</div>
-          </RailSection>
-        </div>
+        {/* right rail — Queue/One-offs/Skills when resting; the OTHER sessions when focused (unless full) */}
+        {!full && (
+          <div style={{ width: focused ? 210 : 230, flex: 'none', borderLeft: `1px solid ${C.border}`, padding: 14, display: 'flex', flexDirection: 'column', gap: 16, overflow: 'auto' }}>
+            {focused ? (
+              <RailSection title={`Sessions · ${others.length}`}>
+                {others.map((t) => <MiniCard key={t.id} t={t} queuePos={queuePos.get(t.id) ?? null} onClick={() => focus(t.id)} />)}
+              </RailSection>
+            ) : (
+              <>
+                <RailSection title={`Queue · ${queue.length}`}>
+                  {queue.length === 0 && <div style={{ fontSize: 11, color: C.faintText }}>clear</div>}
+                  {queue.map((t, i) => (
+                    <button key={t.id} onClick={() => focus(t.id)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '3px 0', fontFamily: C.mono }}>
+                      <span style={{ fontSize: 10, color: C.dimText, width: 16 }}>Q{i + 1}</span>
+                      <Dot state={t.state} />
+                      <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.intent}</span>
+                    </button>
+                  ))}
+                </RailSection>
+                <RailSection title="One-offs">
+                  <div style={{ fontSize: 11, color: C.faintText }}>short-lived tasks resolve here</div>
+                </RailSection>
+                <RailSection title="Skills">
+                  <div style={{ fontSize: 11, color: C.faintText }}>—</div>
+                </RailSection>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
