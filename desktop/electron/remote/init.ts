@@ -722,6 +722,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('orchestrate-focus-set', { taskId: orchestrateFocusId })
     return true
   })
+  // Open the cockpit from the in-app Remote screen (the user-facing entry point;
+  // ⌘⇧O stays as the power-user toggle).
+  ipcMain.handle('remote:open-orchestrate', async () => { openOrchestrateWindow(); return true })
   ipcMain.handle('remote:list', async () => (manager?.list() ?? []).map(serializeTask))
   ipcMain.handle('remote:answer', async (_e, id: string, answer: string) => {
     manager?.answer(id, answer)

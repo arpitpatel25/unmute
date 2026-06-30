@@ -61,6 +61,8 @@ export const remotePreloadExtensions = {
    *  (or null) so a capture routes there deterministically. Additive. */
   remoteSetOrchestrateFocus: (id: string | null): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-orchestrate-focus', id),
+  /** Open the Orchestrate cockpit window from the in-app Remote screen. */
+  remoteOpenOrchestrate: (): Promise<boolean> => ipcRenderer.invoke('remote:open-orchestrate'),
   /** All tasks, newest first (PRD §13.3 panel + §13.5 history). */
   remoteList: (): Promise<RemoteTaskSnapshot[]> => ipcRenderer.invoke('remote:list'),
   /** Answer a needs-user question — piped into the session stdin (PRD §7). */
