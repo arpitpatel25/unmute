@@ -9,6 +9,11 @@ import { useEffect, useState, useCallback } from 'react'
 export interface RemoteTask {
   id: string
   intent: string
+  /** Short session name (2-5 words), generated async after dispatch; null until it
+   *  lands. UIs show this instead of the full intent, falling back to a truncation. */
+  name?: string | null
+  /** The session's working directory (its real spawn cwd). */
+  cwd?: string
   state: 'processing' | 'needs-user' | 'stuck' | 'done' | 'failed'
   category?: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
   step?: string | null

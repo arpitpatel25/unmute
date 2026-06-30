@@ -50,6 +50,10 @@ export type UiTaskState = TaskState | 'stuck'
 export interface Task {
   id: string
   intent: string
+  /** Short display name for the session (2-5 words), generated async just after
+   *  dispatch. The UI shows this instead of the full intent; undefined until it
+   *  lands (UI falls back to a truncated intent). */
+  name?: string
   /** Claude Code session id pinned for this task (minted at dispatch, passed as
    *  `--session-id`). A stable handle to THE session this task drives — used for
    *  resume, reading Claude's session store, and future orchestration. */
@@ -822,6 +826,17 @@ export class TaskManager extends EventEmitter {
    * into the kept-alive PTY and resumes. Returns false if the session is gone
    * (caller should dispatch a fresh task instead).
    */
+  /** Set the session's short display name (generated async after dispatch). Emits
+   *  'updated' so the UI swaps the truncated-intent fallback for the real name. */
+  setName(id: string, name: string): void {
+    const task = this.tasks.get(id)
+    const n = (name || '').trim()
+    if (!task || !n || task.name === n) return
+    task.name = n
+    task.updatedAt = Date.now()
+    this.emit('updated', task)
+  }
+
   followUp(id: string, text: string): boolean {
     const tlog = log.child({ taskId: id })
     const ex = this.executors.get(id)

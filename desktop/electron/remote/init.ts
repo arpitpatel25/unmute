@@ -28,7 +28,7 @@ import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, type AgentKind } from './codex-executor'
-import { cleanIntent, type CompleteFn } from './intent-cleanup'
+import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
@@ -362,6 +362,8 @@ function serializeTask(t: Task) {
   return {
     id: t.id,
     intent: t.intent,
+    name: t.name ?? null,
+    cwd: t.cwd,
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,
@@ -667,7 +669,15 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Fan task lifecycle out to renderers (PRD §13). Terminal/attention states
   // also AUTO-PRESENT the overlay (the canonical surface; OS notifications off).
   // A new task clears any prior ✕ dismissal and re-shows the dock (docked mode).
-  manager.on('created', (t: Task) => { broadcast('remote:task-created', t); onNewTask(activeTaskCount()) })
+  manager.on('created', (t: Task) => {
+    broadcast('remote:task-created', t)
+    onNewTask(activeTaskCount())
+    // Async: derive a short session name (non-blocking — the capture/dispatch path
+    // already returned; this just swaps the truncated-intent fallback in the UI).
+    if (completeFn) {
+      void nameIntent(t.intent, completeFn).then((n) => { if (n) manager?.setName(t.id, n) }).catch(() => {})
+    }
+  })
   manager.on('updated', (t: Task) => { broadcast('remote:task-updated', t); reconcileDock(activeTaskCount()) })
   manager.on('needs-user', (t: Task) => {
     broadcast('remote:task-needs-user', t)

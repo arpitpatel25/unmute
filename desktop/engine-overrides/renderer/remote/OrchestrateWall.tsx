@@ -65,10 +65,20 @@ function activityLine(t: RemoteTask): string {
   return t.question?.text || t.error?.reason || t.step || t.result?.summary || '…'
 }
 
-// Placeholder dir/branch until the task payload carries it (disambiguates two
-// sessions on one repo — §7). Derived from intent for now.
+// What the user reads as the session's NAME: the generated short name (2-5 words),
+// falling back to a truncated intent until the name lands. Never the full utterance.
+function nameOf(t: RemoteTask): string {
+  if (t.name) return t.name
+  const s = (t.intent || t.id.slice(0, 8)).trim()
+  return s.length > 44 ? `${s.slice(0, 44).trimEnd()}…` : s
+}
+
+// The session's REAL working directory, compacted (home → ~). For one-off voice
+// tasks this is the isolated scratch dir by design; empty if unknown.
 function dirLabel(t: RemoteTask): string {
-  return `~/…/${(t.intent || 'session').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 18)}`
+  const cwd = t.cwd || ''
+  if (!cwd) return ''
+  return cwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
 }
 
 // FLIP morph: wrap a state change so Chromium captures before/after and tweens
@@ -115,7 +125,7 @@ function Card({ t, now, queuePos, onClick }: { t: RemoteTask; now: number; queue
         )}
       </div>
       <div style={{ fontSize: 13.5, fontWeight: 600, color: C.nameText, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {t.intent || t.id.slice(0, 8)}
+        {nameOf(t)}
       </div>
       <div style={{ fontSize: 11.5, color: C.midText, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activityLine(t)}</div>
       <div style={{ display: 'flex', gap: 10, fontSize: 10.5, color: C.dimText }}>
@@ -143,7 +153,7 @@ function MiniCard({ t, queuePos, onClick }: { t: RemoteTask; queuePos: number | 
         {queuePos != null && <span style={{ marginLeft: 'auto', fontSize: 9, color: C.dimText }}>Q{queuePos}</span>}
       </div>
       <div style={{ fontSize: 11.5, fontWeight: 600, color: C.nameText, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {t.intent || t.id.slice(0, 8)}
+        {nameOf(t)}
       </div>
     </button>
   )
@@ -162,7 +172,7 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
         <Dot state={t.state} />
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: st.color, textTransform: 'uppercase' }}>{st.label}</span>
-        <span style={{ fontSize: 14, fontWeight: 600, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.intent}</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameOf(t)}</span>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: C.dimText, flex: 'none' }}>{elapsed(t.createdAt, now)}</span>
         <Key label="next" onClick={onNext} />
         <Key label={full ? 'split' : 'full'} onClick={onToggleFull} />
@@ -285,7 +295,7 @@ export default function OrchestrateWall() {
       {top && !full && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', borderBottom: `1px solid ${C.border}`, background: C.surface, flex: 'none' }}>
           <Dot state={top.state} />
-          <span style={{ fontSize: 12.5, color: C.nameText, fontWeight: 600, flex: 'none' }}>{top.intent}</span>
+          <span style={{ fontSize: 12.5, color: C.nameText, fontWeight: 600, flex: 'none' }}>{nameOf(top)}</span>
           <span style={{ fontSize: 12, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>— {activityLine(top)}</span>
           <button onClick={() => focus(top.id)}
             style={{ marginLeft: 'auto', flex: 'none', fontFamily: C.mono, fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: C.bg, background: statusOf(top.state).color, border: 'none', borderRadius: 5, padding: '4px 11px', cursor: 'pointer' }}>
@@ -325,7 +335,7 @@ export default function OrchestrateWall() {
                       style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '3px 0', fontFamily: C.mono }}>
                       <span style={{ fontSize: 10, color: C.dimText, width: 16 }}>Q{i + 1}</span>
                       <Dot state={t.state} />
-                      <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.intent}</span>
+                      <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameOf(t)}</span>
                     </button>
                   ))}
                 </RailSection>
@@ -348,7 +358,7 @@ export default function OrchestrateWall() {
         <span aria-hidden>🎙</span>
         <span style={{ color: C.dimText }}>voice →</span>
         <span style={{ color: focused ? '#3fb950' : C.midText, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {focused ? (focused.intent || 'this session') : 'new task'}
+          {focused ? nameOf(focused) : 'new task'}
         </span>
       </div>
     </div>
