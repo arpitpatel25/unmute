@@ -510,18 +510,40 @@ run_build() {
     : "${APPLE_ID:?APPLE_ID required for signed build}"
     : "${APPLE_TEAM_ID:?APPLE_TEAM_ID required}"
     : "${APPLE_APP_SPECIFIC_PASSWORD:?APPLE_APP_SPECIFIC_PASSWORD required}"
-    log "Signing + notarizing DMG (this can take 5-15 min for the Apple notary trip)"
-    # --publish always: ensures latest-mac.yml + blockmap are generated AND
-    # uploaded to the GitHub release matching the version in package.json.
-    # Requires GH_TOKEN (set from the environment so we can read it in CI
-    # too). PAYWALL_PUBLISH=skip turns off the upload but still generates
-    # the manifest locally — useful when you want to upload manually
-    # (e.g. via `gh release upload`).
+    log "Signing + notarizing the app (Apple notary trip, 5-15 min)"
+    # Build LOCALLY only — do NOT let electron-builder publish yet. electron-builder
+    # notarizes + staples the .app, but it leaves the DMG itself UN-notarized. A bare
+    # DMG is an untrusted download: the stapled app runs fine FROM the DMG, but once
+    # dragged into /Applications macOS flags it "damaged". So we notarize + staple the
+    # DMG ourselves below, THEN publish the stapled artifacts.
+    npx electron-builder --mac --publish never
+
+    local rel="$engine/release"
+    local dmg; dmg="$(ls "$rel"/*.dmg | head -1)"
+    log "Notarizing + stapling the DMG itself (second notary trip) — so downloads aren't flagged 'damaged'"
+    xcrun notarytool submit "$dmg" \
+      --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+      --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
+    xcrun stapler staple "$dmg"
+    xcrun stapler validate "$dmg"  # aborts loudly (set -e) if the ticket didn't attach
+
+    # Publish the STAPLED artifacts ourselves as a single draft. Doing it via gh
+    # (instead of electron-builder --publish) also avoids electron-builder's parallel
+    # dmg/zip upload racing into two duplicate drafts. PAYWALL_PUBLISH=skip|never
+    # builds + staples locally without uploading.
     local pub_flag="${PAYWALL_PUBLISH:-always}"
-    if [[ "$pub_flag" == "skip" ]]; then
-      pub_flag="never"
+    if [[ "$pub_flag" != "skip" && "$pub_flag" != "never" ]]; then
+      : "${GH_TOKEN:?GH_TOKEN required to publish (export GH_TOKEN=\"\$(gh auth token)\")}"
+      local ver; ver="$(node -p "require('$engine/package.json').version")"
+      log "Publishing v$ver to GitHub as a DRAFT (stapled DMG + zip + latest-mac.yml)"
+      gh release create "v$ver" \
+        "$rel"/*.dmg "$rel"/*.zip "$rel"/*.blockmap "$rel/latest-mac.yml" \
+        --repo arpitpatel25/unmute --draft --title "$ver" --notes "Automated release $ver." \
+      || gh release upload "v$ver" \
+        "$rel"/*.dmg "$rel"/*.zip "$rel"/*.blockmap "$rel/latest-mac.yml" \
+        --clobber --repo arpitpatel25/unmute
+      log "Draft v$ver is up. VERIFY then go live: gh release edit v$ver --draft=false --latest --repo arpitpatel25/unmute"
     fi
-    npx electron-builder --mac --publish "$pub_flag"
   fi
 
   log "Build complete — output in $engine/release/"
