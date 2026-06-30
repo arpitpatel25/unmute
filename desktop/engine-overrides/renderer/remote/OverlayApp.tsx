@@ -23,6 +23,8 @@ type API = {
   remoteOnOverlayMode?: (cb: (d: OverlayModeInfo) => void) => () => void
   remoteOnOverlayFocus?: (cb: (d: { taskId: string }) => void) => () => void
   remoteOpenArtifact?: (type: 'url' | 'path', value: string) => Promise<boolean>
+  remoteOnOrchestrateOwner?: (cb: (d: { taskId: string | null }) => void) => () => void
+  remoteGetOrchestrateOwner?: () => Promise<string | null>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -80,6 +82,18 @@ function Expanded({
   const [draft, setDraft] = useState('')
   const [showTerminal, setShowTerminal] = useState(false)
   const active = task.state === 'processing' || task.state === 'needs-user' || task.state === 'stuck'
+
+  // Single-owner terminal: when the wall is focused on THIS session it owns the PTY
+  // size, so the overlay must NOT also render a terminal (two LiveTerminals would
+  // fight over the width). Collapse to a glance whenever the wall owns us.
+  const [wallOwned, setWallOwned] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void api().remoteGetOrchestrateOwner?.().then((id) => { if (alive) setWallOwned(id === task.id) })
+    const off = api().remoteOnOrchestrateOwner?.((d) => setWallOwned(d.taskId === task.id))
+    return () => { alive = false; off?.() }
+  }, [task.id])
+  useEffect(() => { if (wallOwned) setShowTerminal(false) }, [wallOwned])
 
   const openArtifact = (type: 'url' | 'path', value: string) => {
     const fn = api().remoteOpenArtifact
@@ -186,9 +200,13 @@ function Expanded({
             onClick={() => onResume(task.id)}
           >resume</button>
         )}
-        <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
-          {showTerminal ? 'hide terminal' : 'terminal'}
-        </button>
+        {wallOwned ? (
+          <span className="text-white/30" title="This session's terminal is open in the Orchestrate cockpit">in cockpit ↗</span>
+        ) : (
+          <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
+            {showTerminal ? 'hide terminal' : 'terminal'}
+          </button>
+        )}
         <button
           className="text-rose-300/60 hover:text-rose-300 ml-auto"
           title="Kill the session and erase this task"
@@ -198,7 +216,7 @@ function Expanded({
         </button>
       </div>
 
-      {showTerminal && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
+      {showTerminal && !wallOwned && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
     </div>
   )
 }

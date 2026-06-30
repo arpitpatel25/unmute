@@ -720,11 +720,20 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:set-orchestrate-focus', async (_e, id: string | null) => {
     orchestrateFocusId = id || null
     log.event('orchestrate-focus-set', { taskId: orchestrateFocusId })
+    // Announce the new terminal owner to every renderer. The overlay defers to a
+    // glance for the wall-owned session, so exactly one surface renders a terminal
+    // for a session at a time — no two LiveTerminals fighting over the PTY width.
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('remote:orchestrate-owner', { taskId: orchestrateFocusId })
+    }
     return true
   })
   // Open the cockpit from the in-app Remote screen (the user-facing entry point;
   // ⌘⇧O stays as the power-user toggle).
   ipcMain.handle('remote:open-orchestrate', async () => { openOrchestrateWindow(); return true })
+  // Current terminal owner — lets a freshly-mounted overlay card learn it owns
+  // nothing (or that the wall already owns its session) without waiting for an event.
+  ipcMain.handle('remote:get-orchestrate-owner', async () => orchestrateFocusId)
   ipcMain.handle('remote:list', async () => (manager?.list() ?? []).map(serializeTask))
   ipcMain.handle('remote:answer', async (_e, id: string, answer: string) => {
     manager?.answer(id, answer)

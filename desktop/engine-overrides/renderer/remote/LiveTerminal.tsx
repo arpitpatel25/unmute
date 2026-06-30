@@ -31,7 +31,12 @@ function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
 }
 
-export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () => void }) {
+// `fill` (the wall stage): instead of pinning to FIXED_COLS and scrolling, fit BOTH
+// cols and rows to the container and resize the PTY to match — Claude Code reflows
+// to fill the screen, a TRUE full terminal. The overlay keeps the fixed-120 model.
+// Single-owner (see remote:orchestrate-owner) guarantees only ONE LiveTerminal
+// drives a given PTY's size at a time, so the two width models never fight.
+export function LiveTerminal({ taskId, onClose, fill = false }: { taskId: string; onClose: () => void; fill?: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const popRef = useRef<HTMLButtonElement | null>(null)
 
@@ -67,20 +72,29 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
     // extra px is harmless (a hair of scroll slack), whereas too narrow would clip
     // the last column. Font-metric derived ⇒ it can never feed back from xterm.
     const pinHostWidth = () => {
+      // Fill mode: the host spans the container; FitAddon derives cols from it.
+      if (fill) { if (host.style.width !== '100%') host.style.width = '100%'; return }
       const w = Math.ceil(measureCellWidth() * FIXED_COLS) + 16
       if (host.style.width !== `${w}px`) host.style.width = `${w}px`
     }
 
-    // Fit the ROWS to the pane height, but FORCE the width to FIXED_COLS so the
-    // TUI is never squeezed into a narrow box; the pane scrolls horizontally.
+    // Fixed mode: fit ROWS to the pane height, FORCE width to FIXED_COLS (pane scrolls).
+    // Fill mode: fit BOTH cols and rows to the container and resize the PTY to match,
+    // so the TUI reflows to fill the stage — no fixed grid, no gap, no scroll.
     const sync = () => {
       if (!term || !fit || !host.clientHeight) return
       try {
-        // Fit ROWS to the pane height; PIN cols to FIXED_COLS (the PTY width) so the
-        // TUI never reflows. Use proposeDimensions (a pure read) + an explicit resize
-        // rather than fit.fit(), so we never momentarily resize to a wrong width and
-        // flash a reflow. proposeDimensions can return undefined before layout.
+        // proposeDimensions is a pure read (no reflow flash); it can be undefined
+        // before first layout. Resize explicitly rather than fit.fit().
         const dims = fit.proposeDimensions()
+        if (fill) {
+          const cols = dims?.cols ?? term.cols
+          const rows = dims?.rows ?? term.rows
+          if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows)
+          api().remoteTerminalResize?.(taskId, term.cols, term.rows)
+          pinHostWidth()
+          return
+        }
         const rows = dims?.rows ?? term.rows
         if (term.cols !== FIXED_COLS || term.rows !== rows) term.resize(FIXED_COLS, rows)
         api().remoteTerminalResize?.(taskId, FIXED_COLS, term.rows)
@@ -141,28 +155,45 @@ export function LiveTerminal({ taskId, onClose }: { taskId: string; onClose: () 
     }
   }, [taskId])
 
+  const TitleBar = (
+    <div className="flex items-center justify-between px-3 py-1.5 bg-white/[0.05] border-b border-white/15 flex-none">
+      <span className="text-[10px] uppercase tracking-wider text-white/55">
+        live terminal · type to take over{fill ? '' : ' · scroll to see full width'}
+      </span>
+      <div className="flex items-center gap-3">
+        <button
+          ref={popRef}
+          className="text-[11px] text-white/60 hover:text-white"
+          style={{ display: 'none' }}
+          title="Open this exact session in your terminal app"
+          onClick={() => void api().remoteOpenInTerminal?.(taskId)}
+        >
+          open in terminal ↗
+        </button>
+        <button className="text-[11px] text-white/60 hover:text-white" onClick={onClose}>close</button>
+      </div>
+    </div>
+  )
+
+  // Fill (the wall stage): edge-to-edge, fills the stage height; the host fills BOTH
+  // dimensions and FitAddon fits cols+rows to it → a real full terminal.
+  if (fill) {
+    return (
+      <div className="h-full flex flex-col bg-black overflow-hidden">
+        {TitleBar}
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <div ref={hostRef} className="h-full w-full" />
+        </div>
+      </div>
+    )
+  }
+
   return (
     // Light border + a slightly-lighter title bar + a drop shadow so the panel
     // has a CLEAR edge on the dark overlay (where a black border vanished) while
     // staying fine on the light in-app card (the black body provides contrast there).
     <div className="mt-2.5 rounded-lg border border-white/20 bg-black overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.55)]">
-      <div className="flex items-center justify-between px-2.5 py-1.5 bg-white/[0.05] border-b border-white/15">
-        <span className="text-[10px] uppercase tracking-wider text-white/55">
-          live terminal · type to take over · scroll to see full width
-        </span>
-        <div className="flex items-center gap-3">
-          <button
-            ref={popRef}
-            className="text-[11px] text-white/60 hover:text-white"
-            style={{ display: 'none' }}
-            title="Open this exact session in your terminal app"
-            onClick={() => void api().remoteOpenInTerminal?.(taskId)}
-          >
-            open in terminal ↗
-          </button>
-          <button className="text-[11px] text-white/60 hover:text-white" onClick={onClose}>close</button>
-        </div>
-      </div>
+      {TitleBar}
       {/* Horizontal scroll reveals the fixed-width (120-col) TUI; xterm owns VERTICAL
           via its own scrollback. NO outer vertical scroll (overflow-y-hidden) — that
           double-scroll was what hid the last line below an outer fold. The host fills

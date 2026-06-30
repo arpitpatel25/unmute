@@ -63,6 +63,8 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-orchestrate-focus', id),
   /** Open the Orchestrate cockpit window from the in-app Remote screen. */
   remoteOpenOrchestrate: (): Promise<boolean> => ipcRenderer.invoke('remote:open-orchestrate'),
+  /** Current wall-owned terminal session (or null) — read once on mount. */
+  remoteGetOrchestrateOwner: (): Promise<string | null> => ipcRenderer.invoke('remote:get-orchestrate-owner'),
   /** All tasks, newest first (PRD §13.3 panel + §13.5 history). */
   remoteList: (): Promise<RemoteTaskSnapshot[]> => ipcRenderer.invoke('remote:list'),
   /** Answer a needs-user question — piped into the session stdin (PRD §7). */
@@ -152,6 +154,13 @@ export const remotePreloadExtensions = {
     const handler = (_e: unknown, d: { taskId: string }) => cb(d)
     ipcRenderer.on('remote:overlay-focus', handler)
     return () => ipcRenderer.removeListener('remote:overlay-focus', handler)
+  },
+  /** Which session the wall currently OWNS the terminal for (or null). The overlay
+   *  collapses its terminal to a glance for that session so the two never conflict. */
+  remoteOnOrchestrateOwner: (cb: (d: { taskId: string | null }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { taskId: string | null }) => cb(d)
+    ipcRenderer.on('remote:orchestrate-owner', handler)
+    return () => ipcRenderer.removeListener('remote:orchestrate-owner', handler)
   },
 
   // ── Onboarding / guided one-time setup (PRD §12) ──

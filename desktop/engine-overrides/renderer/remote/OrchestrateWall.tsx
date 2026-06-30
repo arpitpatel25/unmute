@@ -186,9 +186,10 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
         </div>
       )}
 
-      {/* the REAL terminal — full fidelity, untouched (§3, §6.5) */}
+      {/* the REAL terminal — fills the stage (the wall OWNS the PTY size while
+          focused; the overlay defers to a glance — single-owner, no width fight) */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        <LiveTerminal taskId={t.id} onClose={onClose} />
+        <LiveTerminal taskId={t.id} onClose={onClose} fill />
       </div>
     </div>
   )
