@@ -58,10 +58,25 @@ export interface Task {
    *  `--session-id`). A stable handle to THE session this task drives — used for
    *  resume, reading Claude's session store, and future orchestration. */
   sessionId: string
+  /** Species (Orchestrate). 'oneoff' = today's fire-and-forget errand: scratch
+   *  cwd, warm-window idle-kill, 24h purge. 'session' = a persistent working
+   *  session (often multi-day, often project-bound): NEVER idle-killed, NEVER
+   *  auto-purged — it lives until the user explicitly kills/removes it, and
+   *  survives app restarts as interrupted-but-resumable (`--continue` restores
+   *  full context). Default 'oneoff' (status quo). */
+  kind?: 'oneoff' | 'session'
   state: UiTaskState
   createdAt: number
   updatedAt: number
+  /** Where the agent RUNS. For oneoffs this is the scratch dir (=== home). For
+   *  project-bound sessions this is the user's real project directory — which
+   *  Unmute must treat as READ-ONLY territory (no meta/status/contract files). */
   cwd: string
+  /** The Unmute-OWNED dir for this task (~/.unmute/remote/<u>/<id>): meta.json,
+   *  status.json, recipe.json, attachments. Always ours to create/delete; cwd may
+   *  equal it (scratch oneoff) or point elsewhere (project session). Deletion
+   *  paths MUST use home, never cwd. */
+  home: string
   statusPath: string
   recipeScratchPath: string
   /** mtime (ms) of the last status write we APPLIED — purely the read cursor for
@@ -238,7 +253,7 @@ export class TaskManager extends EventEmitter {
    * Dispatch a new task. Returns the taskId immediately; execution + polling
    * proceed asynchronously (PRD §4.4 — dispatch and forget).
    */
-  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw' } = {}): Promise<string> {
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session' } = {}): Promise<string> {
     const id = randomUUID()
     // Mint the Claude session id up front so we own a stable handle to the
     // session this task will spawn (passed as --session-id below).
@@ -250,10 +265,11 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     const surface = opts.surface ?? detectSurface(intent)
     const mode = opts.mode ?? 'managed'
+    const kind = opts.kind ?? 'oneoff'
 
     const task: Task = {
-      id, intent, sessionId, state: 'processing', createdAt: now, updatedAt: now,
-      cwd: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
+      id, intent, sessionId, kind, state: 'processing', createdAt: now, updatedAt: now,
+      cwd: dir, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
       surface, mode, injectedRecipes: [],
     }
     this.tasks.set(id, task)
@@ -312,7 +328,7 @@ export class TaskManager extends EventEmitter {
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes }))
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes }))
       // TEMP(memory-debug): remove after calibration
       tlog.event('dispatch-memory', { MEMORY_DEBUG: true, surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
 
@@ -666,7 +682,10 @@ export class TaskManager extends EventEmitter {
     this.tasks.delete(id)
     this.outputBuffers.delete(id)
     if (task) {
-      try { await fs.rm(task.cwd, { recursive: true, force: true }) } catch (e) {
+      // Delete HOME (our scratch/receipt dir), NEVER cwd: for a project-bound
+      // session cwd is the user's real project directory — rm'ing it would
+      // destroy their repo. home === cwd for scratch oneoffs (same behavior).
+      try { await fs.rm(task.home, { recursive: true, force: true }) } catch (e) {
         tlog.warn('remove: scratch dir delete failed', { error: (e as Error).message })
       }
     }
@@ -693,7 +712,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }> }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }> }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       const statusPath = join(dir, 'status.json')
@@ -703,16 +722,21 @@ export class TaskManager extends EventEmitter {
       const task: Task = {
         id,
         intent: meta.intent,
+        name: meta.name,
         // Pre-sessionId receipts won't carry one; fall back to the task id so the
         // field is always present (older tasks simply aren't session-pinned).
         sessionId: meta.sessionId ?? id,
+        kind: meta.kind ?? 'oneoff',
         // A non-terminal task whose session died with the app is, to the user,
         // interrupted — surface it as failed (still resumable) rather than a
         // forever-spinning 'processing'.
         state: terminal ? status!.state : 'failed',
         createdAt: meta.createdAt ?? now,
         updatedAt: (await statusMtimeMs(statusPath)) ?? meta.createdAt ?? now,
-        cwd: dir,
+        // Project-bound sessions ran in the user's real dir (meta.cwd); resume
+        // must respawn THERE (`--continue` is cwd-scoped). home is always ours.
+        cwd: meta.cwd ?? dir,
+        home: dir,
         statusPath,
         recipeScratchPath: join(dir, 'recipe.json'),
         lastMtimeMs: now,
@@ -763,7 +787,10 @@ export class TaskManager extends EventEmitter {
   async purgeStale(): Promise<void> {
     const cutoff = this.clock() - this.opts.purgeAgeMs
     // 1. IN-MEMORY tasks that have aged out — remove() kills the live session too.
-    const stale = [...this.tasks.values()].filter((t) => t.updatedAt < cutoff)
+    //    PERSISTENT SESSIONS ARE EXEMPT: a multi-day working session is untouched
+    //    "by updatedAt" for days by design — auto-purging it would delete the
+    //    user's living workspace. Sessions die only by explicit kill/remove.
+    const stale = [...this.tasks.values()].filter((t) => t.updatedAt < cutoff && t.kind !== 'session')
     if (stale.length) {
       log.event('purge-sweep', { count: stale.length })
       for (const t of stale) await this.remove(t.id)
@@ -792,6 +819,13 @@ export class TaskManager extends EventEmitter {
         mtimeMs = st.mtimeMs // dir mtime advances on every status (atomic rename) ≈ last activity
       } catch { continue }
       if (mtimeMs >= cutoff) continue // recent orphan (e.g. a just-crashed run) — keep
+      // Persistent-session receipts are NEVER orphan-purged (same exemption as
+      // pass 1): if one isn't in memory (e.g. this sweep ran before rehydrate),
+      // deleting it would erase a multi-day session behind the user's back.
+      try {
+        const meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) as { kind?: string }
+        if (meta.kind === 'session') continue
+      } catch { /* junk/pre-receipt dir — purgeable as before */ }
       try { this.opts.reapSession?.(id) } catch { /* best-effort */ }
       try { await fs.rm(dir, { recursive: true, force: true }) } catch { /* ignore */ }
       removed++
@@ -827,14 +861,21 @@ export class TaskManager extends EventEmitter {
    * (caller should dispatch a fresh task instead).
    */
   /** Set the session's short display name (generated async after dispatch). Emits
-   *  'updated' so the UI swaps the truncated-intent fallback for the real name. */
+   *  'updated' so the UI swaps the truncated-intent fallback for the real name,
+   *  and persists it into meta.json so the name survives an app restart. */
   setName(id: string, name: string): void {
     const task = this.tasks.get(id)
     const n = (name || '').trim()
     if (!task || !n || task.name === n) return
     task.name = n
-    task.updatedAt = Date.now()
+    task.updatedAt = this.clock()
     this.emit('updated', task)
+    // Durability (best-effort): fold the name into the receipt. Read-modify-write
+    // is safe here — meta.json is written once at dispatch and only we touch it.
+    const metaPath = join(task.home, 'meta.json')
+    void fs.readFile(metaPath, 'utf8')
+      .then((raw) => fs.writeFile(metaPath, JSON.stringify({ ...JSON.parse(raw), name: n })))
+      .catch((e) => log.child({ taskId: id }).warn('setName: meta persist failed', { error: (e as Error).message }))
   }
 
   followUp(id: string, text: string): boolean {
@@ -1025,9 +1066,17 @@ export class TaskManager extends EventEmitter {
   private parkWarm(id: string): void {
     this.stopPolling(id)
     const ex = this.executors.get(id)
+    const tlog = log.child({ taskId: id })
+    // Persistent sessions park warm with NO idle timer: a working session must
+    // never be reaped under the user between interactions — hours can pass
+    // between "done" and the next spoken follow-up. Lives until explicit kill.
+    if (this.tasks.get(id)?.kind === 'session') {
+      if (!ex?.alive) { this.hardKill(id); return }
+      tlog.event('parked-warm', { warmMs: null, persistent: true })
+      return
+    }
     const warmMs = this.warmMsFor(id)
     if (!ex?.alive || warmMs <= 0) { this.hardKill(id); return }
-    const tlog = log.child({ taskId: id })
     const t = setTimeout(() => {
       tlog.event('warm-idle-timeout', { warmMs })
       this.hardKill(id)

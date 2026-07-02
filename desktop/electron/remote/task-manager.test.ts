@@ -519,3 +519,100 @@ test('managed failed hands off ONLY when an injected recipe is present', { timeo
   await new Promise((r) => setTimeout(r, 50))
   assert.equal(submits.length, 1) // unchanged — recipe-less failure is not handed off
 })
+
+// ─── Durable session model (Orchestrate): kind 'oneoff' | 'session' ───────────
+
+test('dispatch persists kind in meta.json; defaults to oneoff with home === cwd', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const oneoff = await tm.dispatch('open my mail')
+  const session = await tm.dispatch('work on the gating feature', { kind: 'session' })
+  assert.equal(tm.get(oneoff)!.kind, 'oneoff')
+  assert.equal(tm.get(oneoff)!.home, tm.get(oneoff)!.cwd, 'scratch oneoff: home === cwd')
+  assert.equal(tm.get(session)!.kind, 'session')
+  const meta = JSON.parse(await fs.readFile(path.join(tm.get(session)!.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.kind, 'session', 'kind persisted in the receipt')
+  tm.killAll()
+})
+
+test('persistent session parks warm with NO idle timer (never reaped); oneoff still idle-kills', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fakes: ReturnType<typeof makeFakeExecutor>[] = []
+  const tm = new TaskManager({
+    executorFactory: () => { const f = makeFakeExecutor(); fakes.push(f); return f },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 120,
+  })
+  const sid = await tm.dispatch('long-lived repo session', { kind: 'session' })
+  const oid = await tm.dispatch('quick errand')
+  const doneS = once(tm, 'done')
+  await claudeWrites(tm.get(sid)!.statusPath, { state: 'done', result: { summary: 'checkpoint' } })
+  await doneS
+  const doneO = once(tm, 'done')
+  await claudeWrites(tm.get(oid)!.statusPath, { state: 'done', result: { summary: 'errand done' } })
+  await doneO
+  await new Promise((r) => setTimeout(r, 250)) // past the 120ms warm window
+  assert.equal(fakes[0].alive, true, 'persistent session survives past the warm window')
+  assert.equal(fakes[1].alive, false, 'oneoff idle-killed after the warm window (unchanged)')
+  tm.killAll()
+})
+
+test('purgeStale never touches persistent sessions — in memory or as on-disk receipts', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0,
+    pollMs: 9999, purgeAgeMs: 60_000, userKey: 'local',
+  })
+  // In-memory: an aged-out session vs an aged-out oneoff.
+  const sid = await tm.dispatch('multi-day refactor', { kind: 'session' })
+  const oid = await tm.dispatch('stale errand')
+  tm.get(sid)!.updatedAt = Date.now() - 120_000
+  tm.get(oid)!.updatedAt = Date.now() - 120_000
+  // On-disk orphan receipts from a "past run" (not in memory), both aged out.
+  const root = path.join(baseDir, 'local')
+  for (const [tid, kind] of [[randomUUID(), 'session'], [randomUUID(), 'oneoff']] as const) {
+    const dir = path.join(root, tid)
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'past-run task', kind, createdAt: Date.now() - 120_000 }))
+    const old = new Date(Date.now() - 120_000)
+    utimesSync(dir, old, old)
+  }
+  await tm.purgeStale()
+  assert.ok(tm.get(sid), 'in-memory persistent session survives the sweep')
+  assert.equal(tm.get(oid), undefined, 'in-memory stale oneoff purged (unchanged)')
+  const left = await fs.readdir(root)
+  const metas = await Promise.all(left.map(async (d) => {
+    try { return JSON.parse(await fs.readFile(path.join(root, d, 'meta.json'), 'utf8')) } catch { return null }
+  }))
+  assert.ok(metas.some((m) => m?.kind === 'session' && m.intent === 'past-run task'), 'on-disk session receipt survives')
+  assert.ok(!metas.some((m) => m?.kind === 'oneoff' && m.intent === 'past-run task'), 'on-disk oneoff orphan purged')
+  tm.killAll()
+})
+
+test('rehydrate restores kind, name, and a project cwd from the receipt', async () => {
+  const baseDir = await tmpBase()
+  const id = randomUUID()
+  const dir = path.join(baseDir, 'local', id)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({
+    id, intent: 'work on unmute gating', name: 'Gating feature work', kind: 'session',
+    cwd: '/Users/someone/tools/unmute', createdAt: Date.now(),
+  }))
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm.rehydrate()
+  const task = tm.get(id)!
+  assert.equal(task.kind, 'session')
+  assert.equal(task.name, 'Gating feature work')
+  assert.equal(task.cwd, '/Users/someone/tools/unmute', 'resume will respawn in the real project dir')
+  assert.equal(task.home, dir, 'home stays the Unmute-owned receipt dir')
+})
+
+test('setName persists the generated name into meta.json (survives restart)', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('can you check the twitter strategy folder for me')
+  tm.setName(id, 'Twitter strategy summary')
+  await new Promise((r) => setTimeout(r, 50)) // persistence is async best-effort
+  const meta = JSON.parse(await fs.readFile(path.join(tm.get(id)!.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.name, 'Twitter strategy summary')
+  tm.killAll()
+})
