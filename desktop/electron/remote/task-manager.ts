@@ -1057,6 +1057,34 @@ export class TaskManager extends EventEmitter {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
+  /** Attach an image (or any file) to a session — the voice-era equivalent of
+   *  dragging a screenshot into the terminal. Saves the bytes under the task's
+   *  OWN dir (home/attachments — never the user's project), then TYPES the path
+   *  into the session's input box WITHOUT submitting: the user can keep speaking
+   *  and their next utterance submits together with the image as one message
+   *  (exactly the drag-a-file-into-a-terminal contract). Claude Code reads the
+   *  image from the path. Returns the saved path, or null if the session is gone.
+   */
+  async attachFile(id: string, data: Uint8Array, ext: string): Promise<string | null> {
+    const tlog = log.child({ taskId: id })
+    const task = this.tasks.get(id)
+    const ex = this.executors.get(id)
+    if (!task || !ex?.alive) {
+      tlog.warn('attachFile: no live session to attach to', {})
+      return null
+    }
+    const safeExt = (ext || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
+    const dir = join(task.home, 'attachments')
+    await fs.mkdir(dir, { recursive: true })
+    const file = join(dir, `attachment-${this.clock()}.${safeExt}`)
+    await fs.writeFile(file, data)
+    // Space-padded so the path never fuses with text already in the input box;
+    // NO carriage return — submission belongs to the user's next utterance/keys.
+    this.sendInput(id, ` ${file} `)
+    tlog.event('file-attached', { file, bytes: data.byteLength })
+    return file
+  }
+
   /** Forward RAW keystrokes from the live terminal into the session's PTY
    *  (PRD §4.3 typeable terminal). No carriage return is appended — xterm sends
    *  the exact bytes (including Enter as \r) the user typed. No-op if dead. */

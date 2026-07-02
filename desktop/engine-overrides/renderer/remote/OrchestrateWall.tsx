@@ -159,6 +159,16 @@ function MiniCard({ t, queuePos, onClick }: { t: RemoteTask; queuePos: number | 
   )
 }
 
+// Attach an image blob to a session: bytes go to main, which saves them under the
+// task's dir and TYPES the path (unsubmitted) into the session — the user's next
+// utterance or keystrokes submit it together. The voice-era screenshot paste.
+async function attachImageBlob(taskId: string, blob: Blob): Promise<string | null> {
+  const api = (window as unknown as { electronAPI?: { remoteAttachImage?: (id: string, data: ArrayBuffer, ext: string) => Promise<string | null> } }).electronAPI
+  if (!api?.remoteAttachImage) return null
+  const ext = (blob.type.split('/')[1] || 'png').split('+')[0]
+  return api.remoteAttachImage(taskId, await blob.arrayBuffer(), ext)
+}
+
 // ─── focused stage: hoisted pending line + the REAL terminal ───
 function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
   t: RemoteTask; now: number; full: boolean
@@ -166,8 +176,43 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
 }) {
   const st = statusOf(t.state)
   const choices = t.question?.choices ?? []
+
+  // Multimodal (images): ⌘V an image or drop a file anywhere on the stage.
+  // The toast teaches the contract: attached ≠ sent — speak (or type) to send.
+  const [attachNote, setAttachNote] = useState<string | null>(null)
+  const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showNote = useCallback((msg: string) => {
+    setAttachNote(msg)
+    if (noteTimer.current) clearTimeout(noteTimer.current)
+    noteTimer.current = setTimeout(() => setAttachNote(null), 4500)
+  }, [])
+  useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current) }, [])
+
+  const attach = useCallback(async (blob: Blob) => {
+    const path = await attachImageBlob(t.id, blob)
+    showNote(path ? 'image attached — speak or type to send it' : 'could not attach — session not running')
+  }, [t.id, showNote])
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const item = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'))
+      const file = item?.getAsFile()
+      if (file) { e.preventDefault(); void attach(file) }
+      // No image in the clipboard → normal paste (e.g. text into the terminal).
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [attach])
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontFamily: C.mono, minWidth: 0, viewTransitionName: `card-${t.id}` } as React.CSSProperties}>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', height: '100%', fontFamily: C.mono, minWidth: 0, position: 'relative', viewTransitionName: `card-${t.id}` } as React.CSSProperties}
+      onDragOver={(e) => { e.preventDefault() }}
+      onDrop={(e) => {
+        e.preventDefault()
+        const img = Array.from(e.dataTransfer?.files ?? []).find((f) => f.type.startsWith('image/'))
+        if (img) void attach(img)
+      }}
+    >
       {/* hoisted header — what this session is, and its controls */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
         <Dot state={t.state} />
@@ -201,6 +246,13 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <LiveTerminal taskId={t.id} onClose={onClose} fill />
       </div>
+
+      {/* attach toast — confirms the image landed and teaches "speak to send" */}
+      {attachNote && (
+        <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', background: C.surfaceHi, border: `1px solid ${C.borderHi}`, borderRadius: 7, padding: '7px 14px', fontSize: 12, color: C.nameText, pointerEvents: 'none' }}>
+          🖼 {attachNote}
+        </div>
+      )}
     </div>
   )
 }

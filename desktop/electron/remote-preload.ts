@@ -65,6 +65,10 @@ export const remotePreloadExtensions = {
   remoteOpenOrchestrate: (): Promise<boolean> => ipcRenderer.invoke('remote:open-orchestrate'),
   /** Current wall-owned terminal session (or null) — read once on mount. */
   remoteGetOrchestrateOwner: (): Promise<string | null> => ipcRenderer.invoke('remote:get-orchestrate-owner'),
+  /** Attach an image to a session: bytes are saved under the task's dir and the
+   *  path is typed (unsubmitted) into the session's input — speak to send. */
+  remoteAttachImage: (taskId: string, data: ArrayBuffer, ext: string): Promise<string | null> =>
+    ipcRenderer.invoke('remote:attach-image', taskId, data, ext),
   /** All tasks, newest first (PRD §13.3 panel + §13.5 history). */
   remoteList: (): Promise<RemoteTaskSnapshot[]> => ipcRenderer.invoke('remote:list'),
   /** Answer a needs-user question — piped into the session stdin (PRD §7). */

@@ -666,3 +666,24 @@ test('project-bound dispatch falls back to scratch when the dir is unusable', as
   assert.ok((await fs.readFile(path.join(task.home, 'CLAUDE.md'), 'utf8')).includes('Unmute'))
   tm.killAll()
 })
+
+// ─── Multimodal attachments: the voice-era screenshot paste ───────────────────
+
+test('attachFile saves under home/attachments and TYPES the path unsubmitted (no Enter)', async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('look at this design')
+  const beforeRaw = fake.raw.length
+  const saved = await tm.attachFile(id, new Uint8Array([137, 80, 78, 71]), 'png')
+  assert.ok(saved, 'returns the saved path')
+  assert.ok(saved!.startsWith(path.join(tm.get(id)!.home, 'attachments')), 'stored in OUR dir, never the project')
+  assert.ok((await fs.stat(saved!)).isFile())
+  // Typed into the input box via raw keystrokes, space-padded, and NOT submitted.
+  const typed = fake.raw.slice(beforeRaw).join('')
+  assert.ok(typed.includes(` ${saved} `), 'path typed with separating spaces')
+  assert.ok(!typed.includes('\r'), 'no Enter — submission belongs to the next utterance')
+  // Dead session → null, no throw.
+  tm.kill(id)
+  assert.equal(await tm.attachFile(id, new Uint8Array([1]), 'png'), null)
+})

@@ -25,6 +25,7 @@ type API = {
   remoteOpenArtifact?: (type: 'url' | 'path', value: string) => Promise<boolean>
   remoteOnOrchestrateOwner?: (cb: (d: { taskId: string | null }) => void) => () => void
   remoteGetOrchestrateOwner?: () => Promise<string | null>
+  remoteAttachImage?: (taskId: string, data: ArrayBuffer, ext: string) => Promise<string | null>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -101,9 +102,41 @@ function Expanded({
     else void navigator.clipboard?.writeText(value)
   }
 
+  // Multimodal: drop a screenshot on the expanded card (or ⌘V while it's open) —
+  // saved under the task's dir, path typed UNSUBMITTED into the session; the next
+  // utterance/keystrokes send it. Mirrors the wall stage's contract.
+  const [attachNote, setAttachNote] = useState<string | null>(null)
+  const attach = async (blob: Blob) => {
+    const fn = api().remoteAttachImage
+    if (!fn) return
+    const ext = (blob.type.split('/')[1] || 'png').split('+')[0]
+    const path = await fn(task.id, await blob.arrayBuffer(), ext)
+    setAttachNote(path ? 'image attached — speak to send' : 'could not attach — session not running')
+    setTimeout(() => setAttachNote(null), 4000)
+  }
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const item = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'))
+      const file = item?.getAsFile()
+      if (file) { e.preventDefault(); void attach(file) }
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id])
+
   return (
-    <div className="px-2.5 pb-2.5 pt-1">
+    <div
+      className="px-2.5 pb-2.5 pt-1"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault()
+        const img = Array.from(e.dataTransfer?.files ?? []).find((f) => f.type.startsWith('image/'))
+        if (img) void attach(img)
+      }}
+    >
       <div className="text-[10px] text-white/30 mb-1.5">{duration(task)}</div>
+      {attachNote && <div className="text-[11px] text-white/60 mb-1.5">🖼 {attachNote}</div>}
 
       {/* done → summary + artifacts */}
       {task.state === 'done' && task.result && (

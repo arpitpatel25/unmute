@@ -753,6 +753,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Current terminal owner — lets a freshly-mounted overlay card learn it owns
   // nothing (or that the wall already owns its session) without waiting for an event.
   ipcMain.handle('remote:get-orchestrate-owner', async () => orchestrateFocusId)
+  // Attach an image to a session (voice-era screenshot paste/drag). Bytes arrive
+  // as an ArrayBuffer from the renderer; saved under the task's own dir and the
+  // path is TYPED (unsubmitted) into the session — see TaskManager.attachFile.
+  ipcMain.handle('remote:attach-image', async (_e, taskId: string, data: ArrayBuffer, ext: string) => {
+    if (!manager) return null
+    try { return await manager.attachFile(taskId, new Uint8Array(data), ext) } catch (e) {
+      log.warn('attach-image failed', { taskId, error: (e as Error).message })
+      return null
+    }
+  })
   ipcMain.handle('remote:list', async () => (manager?.list() ?? []).map(serializeTask))
   ipcMain.handle('remote:answer', async (_e, id: string, answer: string) => {
     manager?.answer(id, answer)
