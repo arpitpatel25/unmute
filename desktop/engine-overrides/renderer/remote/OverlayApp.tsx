@@ -296,7 +296,7 @@ function DockPill({
 }
 
 export function OverlayApp() {
-  const { tasks, activeCount, answer, kill, remove, killAll, rerun, resume } = useRemoteTasks()
+  const { tasks, activeCount, refresh, answer, kill, remove, killAll, rerun, resume } = useRemoteTasks()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   // 'docked' → compact pill; 'expanded' → full panel. dockedEnabled mirrors the
   // setting so Esc can be labelled "collapse" (docked) vs "dismiss" (legacy).
@@ -304,7 +304,7 @@ export function OverlayApp() {
   const [dockedEnabled, setDockedEnabled] = useState(true)
 
   useEffect(() => {
-    const off = api().remoteOnOverlayFocus?.((d) => setExpandedId(d.taskId))
+    const off = api().remoteOnOverlayFocus?.((d) => { setExpandedId(d.taskId); refresh() })
     // Fetch the current presentation on mount (avoids a mode-event race), then
     // stay in sync. 'hidden' draws as the full panel — we only render while the
     // window is visible; the main process owns show/hide.
@@ -314,9 +314,17 @@ export function OverlayApp() {
     const offMode = api().remoteOnOverlayMode?.((m) => {
       setMode(m.mode === 'docked' ? 'docked' : 'expanded')
       setDockedEnabled(m.docked)
+      // The overlay is a long-lived background window: every time it's (re)presented
+      // it reconciles the FULL task list, so a missed live event can't leave it
+      // permanently showing stale/old tasks (the drift bug).
+      refresh()
     })
-    return () => { off?.(); offMode?.() }
-  }, [])
+    // Belt-and-suspenders: the overlay can stay up (docked) for a long time while
+    // tasks change. A slow periodic reconcile guarantees convergence even if both a
+    // live event AND a present-event are somehow missed. Cheap (a snapshot every 20s).
+    const tick = setInterval(refresh, 20_000)
+    return () => { off?.(); offMode?.(); clearInterval(tick) }
+  }, [refresh])
 
   // The window body defaults to the app's light background, which (1) shows as a
   // white frame around the card and (2) sits behind the translucent panel, making

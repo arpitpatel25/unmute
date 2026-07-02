@@ -72,8 +72,11 @@ export const remotePreloadExtensions = {
   /** Master kill switch — terminate every task's session at once. */
   remoteKillAll: (): Promise<boolean> => ipcRenderer.invoke('remote:kill-all'),
   /** A task was erased — drop its row. */
-  remoteOnTaskRemoved: (cb: (d: { id: string }) => void) =>
-    ipcRenderer.on('remote:task-removed', (_e, d) => cb(d)),
+  remoteOnTaskRemoved: (cb: (d: { id: string }) => void) => {
+    const h = (_e: unknown, d: { id: string }) => cb(d)
+    ipcRenderer.on('remote:task-removed', h)
+    return () => ipcRenderer.removeListener('remote:task-removed', h)
+  },
 
   // ── Settings ──
   remoteGetSettings: (): Promise<RemoteSettingsSnapshot> => ipcRenderer.invoke('remote:get-settings'),
@@ -185,18 +188,39 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:open-in-terminal', taskId),
 
   // ── Live task events (drive the ambient pill + task panel) ──
-  remoteOnTaskCreated: (cb: (t: RemoteTaskSnapshot) => void) =>
-    ipcRenderer.on('remote:task-created', (_e, t) => cb(t)),
-  remoteOnTaskUpdated: (cb: (t: RemoteTaskSnapshot) => void) =>
-    ipcRenderer.on('remote:task-updated', (_e, t) => cb(t)),
-  remoteOnTaskNeedsUser: (cb: (t: RemoteTaskSnapshot) => void) =>
-    ipcRenderer.on('remote:task-needs-user', (_e, t) => cb(t)),
-  remoteOnTaskDone: (cb: (t: RemoteTaskSnapshot) => void) =>
-    ipcRenderer.on('remote:task-done', (_e, t) => cb(t)),
-  remoteOnTaskFailed: (cb: (t: RemoteTaskSnapshot) => void) =>
-    ipcRenderer.on('remote:task-failed', (_e, t) => cb(t)),
-  remoteOnTaskStuck: (cb: (t: RemoteTaskSnapshot) => void) =>
-    ipcRenderer.on('remote:task-stuck', (_e, t) => cb(t)),
+  // Each returns an UNSUBSCRIBE fn. Without it the renderer hook leaked a listener
+  // per mount; over a long-lived window (the overlay) those pile up. The renderer
+  // now calls the returned fn on unmount.
+  remoteOnTaskCreated: (cb: (t: RemoteTaskSnapshot) => void) => {
+    const h = (_e: unknown, t: RemoteTaskSnapshot) => cb(t)
+    ipcRenderer.on('remote:task-created', h)
+    return () => ipcRenderer.removeListener('remote:task-created', h)
+  },
+  remoteOnTaskUpdated: (cb: (t: RemoteTaskSnapshot) => void) => {
+    const h = (_e: unknown, t: RemoteTaskSnapshot) => cb(t)
+    ipcRenderer.on('remote:task-updated', h)
+    return () => ipcRenderer.removeListener('remote:task-updated', h)
+  },
+  remoteOnTaskNeedsUser: (cb: (t: RemoteTaskSnapshot) => void) => {
+    const h = (_e: unknown, t: RemoteTaskSnapshot) => cb(t)
+    ipcRenderer.on('remote:task-needs-user', h)
+    return () => ipcRenderer.removeListener('remote:task-needs-user', h)
+  },
+  remoteOnTaskDone: (cb: (t: RemoteTaskSnapshot) => void) => {
+    const h = (_e: unknown, t: RemoteTaskSnapshot) => cb(t)
+    ipcRenderer.on('remote:task-done', h)
+    return () => ipcRenderer.removeListener('remote:task-done', h)
+  },
+  remoteOnTaskFailed: (cb: (t: RemoteTaskSnapshot) => void) => {
+    const h = (_e: unknown, t: RemoteTaskSnapshot) => cb(t)
+    ipcRenderer.on('remote:task-failed', h)
+    return () => ipcRenderer.removeListener('remote:task-failed', h)
+  },
+  remoteOnTaskStuck: (cb: (t: RemoteTaskSnapshot) => void) => {
+    const h = (_e: unknown, t: RemoteTaskSnapshot) => cb(t)
+    ipcRenderer.on('remote:task-stuck', h)
+    return () => ipcRenderer.removeListener('remote:task-stuck', h)
+  },
 
   // ── Capture kind (drives the pill's Remote badge) ──
   // The 4th arg of 'recording:start' carries the session KIND ('dictation' |

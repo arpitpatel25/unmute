@@ -31,13 +31,14 @@ type RemoteAPIShape = {
   remoteResume?: (id: string) => Promise<boolean>
   remoteKillAll?: () => Promise<boolean>
   remoteDispatch?: (intent: string) => Promise<string | null>
-  remoteOnTaskCreated?: (cb: (t: RemoteTask) => void) => void
-  remoteOnTaskUpdated?: (cb: (t: RemoteTask) => void) => void
-  remoteOnTaskNeedsUser?: (cb: (t: RemoteTask) => void) => void
-  remoteOnTaskDone?: (cb: (t: RemoteTask) => void) => void
-  remoteOnTaskFailed?: (cb: (t: RemoteTask) => void) => void
-  remoteOnTaskStuck?: (cb: (t: RemoteTask) => void) => void
-  remoteOnTaskRemoved?: (cb: (d: { id: string }) => void) => void
+  // Each returns an unsubscribe fn (older preloads returned void — tolerated).
+  remoteOnTaskCreated?: (cb: (t: RemoteTask) => void) => void | (() => void)
+  remoteOnTaskUpdated?: (cb: (t: RemoteTask) => void) => void | (() => void)
+  remoteOnTaskNeedsUser?: (cb: (t: RemoteTask) => void) => void | (() => void)
+  remoteOnTaskDone?: (cb: (t: RemoteTask) => void) => void | (() => void)
+  remoteOnTaskFailed?: (cb: (t: RemoteTask) => void) => void | (() => void)
+  remoteOnTaskStuck?: (cb: (t: RemoteTask) => void) => void | (() => void)
+  remoteOnTaskRemoved?: (cb: (d: { id: string }) => void) => void | (() => void)
 }
 function api(): RemoteAPIShape {
   return (window as unknown as { electronAPI?: RemoteAPIShape }).electronAPI ?? {}
@@ -57,19 +58,31 @@ export function useRemoteTasks() {
     })
   }, [])
 
+  // Pull the WHOLE snapshot from the main process. The event stream keeps us live,
+  // but events can be missed (a background window that stalls or is re-shown, a
+  // dropped IPC) — and with only a one-shot initial load, a single miss leaves the
+  // surface permanently drifted (the overlay showing stale tasks). refresh() is the
+  // reconcile: callers invoke it on show / periodically so drift can't persist.
+  const refresh = useCallback(() => {
+    api().remoteList?.().then((list) => { if (Array.isArray(list)) setTasks(list) }).catch(() => {})
+  }, [])
+
   useEffect(() => {
-    let alive = true
-    api().remoteList?.().then((list) => { if (alive && Array.isArray(list)) setTasks(list) }).catch(() => {})
+    refresh()
     // Every lifecycle channel funnels through upsert — the snapshot is whole.
-    api().remoteOnTaskCreated?.(upsert)
-    api().remoteOnTaskUpdated?.(upsert)
-    api().remoteOnTaskNeedsUser?.(upsert)
-    api().remoteOnTaskDone?.(upsert)
-    api().remoteOnTaskFailed?.(upsert)
-    api().remoteOnTaskStuck?.(upsert)
-    api().remoteOnTaskRemoved?.((d) => setTasks((prev) => prev.filter((x) => x.id !== d.id)))
-    return () => { alive = false }
-  }, [upsert])
+    // Capture each subscription's unsubscribe fn and tear them ALL down on unmount
+    // (the old cleanup left them attached — a listener leak on long-lived windows).
+    const offs: Array<void | (() => void)> = [
+      api().remoteOnTaskCreated?.(upsert),
+      api().remoteOnTaskUpdated?.(upsert),
+      api().remoteOnTaskNeedsUser?.(upsert),
+      api().remoteOnTaskDone?.(upsert),
+      api().remoteOnTaskFailed?.(upsert),
+      api().remoteOnTaskStuck?.(upsert),
+      api().remoteOnTaskRemoved?.((d) => setTasks((prev) => prev.filter((x) => x.id !== d.id))),
+    ]
+    return () => { for (const off of offs) if (typeof off === 'function') off() }
+  }, [upsert, refresh])
 
   const activeCount = tasks.filter((t) => !TERMINAL.has(t.state)).length
   const anyNeedsUser = tasks.some((t) => t.state === 'needs-user')
@@ -81,5 +94,5 @@ export function useRemoteTasks() {
   const rerun = useCallback((intent: string) => { void api().remoteDispatch?.(intent) }, [])
   const resume = useCallback((id: string) => { void api().remoteResume?.(id) }, [])
 
-  return { tasks, activeCount, anyNeedsUser, answer, kill, remove, killAll, rerun, resume }
+  return { tasks, activeCount, anyNeedsUser, refresh, answer, kill, remove, killAll, rerun, resume }
 }
