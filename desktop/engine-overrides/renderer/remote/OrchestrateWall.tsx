@@ -73,11 +73,12 @@ function nameOf(t: RemoteTask): string {
   return s.length > 44 ? `${s.slice(0, 44).trimEnd()}…` : s
 }
 
-// The session's REAL working directory, compacted (home → ~). For one-off voice
-// tasks this is the isolated scratch dir by design; empty if unknown.
+// The session's REAL working directory, compacted (home → ~) — shown only when it
+// MEANS something: a project-bound session's repo. A one-off's isolated scratch
+// dir (~/.unmute/…/uuid) is machinery, not information — hidden.
 function dirLabel(t: RemoteTask): string {
   const cwd = t.cwd || ''
-  if (!cwd) return ''
+  if (!cwd || cwd.includes('/.unmute/')) return ''
   return cwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
 }
 
@@ -129,7 +130,9 @@ function Card({ t, now, queuePos, onClick }: { t: RemoteTask; now: number; queue
       </div>
       <div style={{ fontSize: 11.5, color: C.midText, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activityLine(t)}</div>
       <div style={{ display: 'flex', gap: 10, fontSize: 10.5, color: C.dimText }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dirLabel(t)}</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {dirLabel(t) || (t.kind === 'session' ? 'session' : 'one-off')}
+        </span>
         <span style={{ marginLeft: 'auto', flex: 'none' }}>{elapsed(t.createdAt, now)}</span>
       </div>
     </button>
@@ -305,6 +308,14 @@ export default function OrchestrateWall() {
   const focused = focusedId ? tasks.find((t) => t.id === focusedId) ?? null : null
   const top = queue[0] ?? null
 
+  // Species split (§5): the grid is the space of WORKING SESSIONS; one-off
+  // errands live (and resolve) in the rail. Until the user has any sessions,
+  // the grid shows everything — an empty wall over a busy rail helps no one.
+  const sessions = useMemo(() => tasks.filter((t) => t.kind === 'session'), [tasks])
+  const oneoffs = useMemo(() => tasks.filter((t) => t.kind !== 'session'), [tasks])
+  const gridTasks = sessions.length ? sessions : tasks
+  const railOneoffs = sessions.length ? oneoffs : []
+
   const focus = useCallback((id: string | null) => {
     setMainFocus(id) // tell main where the voice lands BEFORE any utterance (§6.2)
     withMorph(() => { setFocusedId(id); if (id == null) setFull(false) })
@@ -376,8 +387,8 @@ export default function OrchestrateWall() {
               onClose={() => focus(null)} onNext={crank} onToggleFull={() => setFull((v) => !v)} />
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))', gap: 11, alignContent: 'start' }}>
-              {tasks.length === 0 && <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>}
-              {tasks.map((t) => <Card key={t.id} t={t} now={now} queuePos={queuePos.get(t.id) ?? null} onClick={() => focus(t.id)} />)}
+              {gridTasks.length === 0 && <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>}
+              {gridTasks.map((t) => <Card key={t.id} t={t} now={now} queuePos={queuePos.get(t.id) ?? null} onClick={() => focus(t.id)} />)}
             </div>
           )}
         </div>
@@ -402,11 +413,18 @@ export default function OrchestrateWall() {
                     </button>
                   ))}
                 </RailSection>
-                <RailSection title="One-offs">
-                  <div style={{ fontSize: 11, color: C.faintText }}>short-lived tasks resolve here</div>
-                </RailSection>
-                <RailSection title="Skills">
-                  <div style={{ fontSize: 11, color: C.faintText }}>—</div>
+                <RailSection title={`One-offs${railOneoffs.length ? ` · ${railOneoffs.length}` : ''}`}>
+                  {railOneoffs.length === 0 && (
+                    <div style={{ fontSize: 11, color: C.faintText }}>short-lived tasks resolve here</div>
+                  )}
+                  {railOneoffs.map((t) => (
+                    <button key={t.id} onClick={() => focus(t.id)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '3px 0', fontFamily: C.mono }}>
+                      <Dot state={t.state} />
+                      <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{nameOf(t)}</span>
+                      <span style={{ fontSize: 10, color: C.faintText, flex: 'none' }}>{elapsed(t.createdAt, now)}</span>
+                    </button>
+                  ))}
                 </RailSection>
               </>
             )}

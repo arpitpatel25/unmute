@@ -14,6 +14,9 @@ export interface RemoteTask {
   name?: string | null
   /** The session's working directory (its real spawn cwd). */
   cwd?: string
+  /** Species: 'session' = persistent working session (never idle-killed/purged);
+   *  'oneoff' = fire-and-forget errand (default). */
+  kind?: 'oneoff' | 'session'
   state: 'processing' | 'needs-user' | 'stuck' | 'done' | 'failed'
   category?: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
   step?: string | null
