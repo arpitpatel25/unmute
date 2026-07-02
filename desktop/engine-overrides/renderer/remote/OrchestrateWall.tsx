@@ -236,10 +236,11 @@ export default function OrchestrateWall() {
     return () => clearInterval(i)
   }, [])
 
-  // queue: everything needing the user (not 'working'), ordered errored→question→done
-  // (§4). Sort key trivial to change (§10 open).
+  // queue: ONLY what needs the user — errored/stuck first, then questions (§4).
+  // 'done' is information, not a pull: it shows as a normal card but never queues,
+  // never banners "STEP IN" — attention is pulled exclusively by needs-you states.
   const queue = useMemo(
-    () => tasks.filter((t) => statusOf(t.state).rank < 99)
+    () => tasks.filter((t) => needsYou(t.state))
       .sort((a, b) => statusOf(a.state).rank - statusOf(b.state).rank || b.updatedAt - a.updatedAt),
     [tasks],
   )
@@ -271,10 +272,20 @@ export default function OrchestrateWall() {
   }, [queue, focusedId, focus])
 
   // keyboard: esc reverses (full→split→wall); Tab cranks; F toggles full; 1-9 answer.
+  //
+  // CRITICAL GUARD: the focused stage's terminal is TYPEABLE — keystrokes there
+  // belong to the SESSION, not the wall. Without this, typing an "f" into Claude
+  // Code toggles full mode, "1" answers a chip, and Esc — which Claude Code uses
+  // to INTERRUPT the agent — would instead unfocus the stage. So: if the event
+  // originates inside the terminal (xterm's textarea) or any input, the wall
+  // takes nothing; the header buttons (next/full/esc) remain the affordance.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.closest?.('.xterm'))) return
       if (e.key === 'Escape') { if (full) setFull(false); else focus(null); return }
       if (!focusedId) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return // never swallow app/OS combos (⌘F etc.)
       if (e.key === 'Tab') { e.preventDefault(); crank(); return }
       if (e.key === 'f' || e.key === 'F') { setFull((v) => !v); return }
       if (/^[1-9]$/.test(e.key)) {
