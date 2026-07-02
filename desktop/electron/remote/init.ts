@@ -20,7 +20,7 @@
 
 import { ipcMain, BrowserWindow, Notification, shell, app } from 'electron'
 import Store from 'electron-store'
-import { join, dirname } from 'node:path'
+import { join, dirname, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { execFile } from 'node:child_process'
@@ -36,6 +36,7 @@ import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask } from './router'
+import { knownProjects } from './projects'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
 
@@ -219,7 +220,12 @@ function routableSnapshot(now: number): RoutableTask[] {
   return manager.routableTasks().map((t, i) => ({
     id: t.id,
     intent: t.intent,
+    name: t.name ?? null,
     state: t.state,
+    kind: t.kind ?? 'oneoff',
+    // What the user SAYS to address a project session ("the unmute one") — only
+    // meaningful when the task runs outside our scratch dir.
+    project: t.cwd !== t.home ? basename(t.cwd) : null,
     category: t.category ?? null,
     ageSec: Math.max(0, Math.round((now - t.updatedAt) / 1000)),
     surfaced: i === 0,
@@ -476,17 +482,19 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
   }
 
   // 1. ALL routing goes through the warm router — including answering a task that
-  //    is blocked on a question. There is no deterministic short-circuit: the
-  //    router sees blocked tasks (flagged "awaiting" with their question) in its
-  //    snapshot and decides intelligently whether this utterance answers one,
-  //    continues another, or starts something new. The router is resident/warm,
-  //    so routing everything through it is still instant.
-  const routable = manager.routableTasks()
-  if (routable.length && router) {
+  //    is blocked on a question, and including the ZERO-open-tasks case: the
+  //    router also decides the new task's species (oneoff vs persistent session)
+  //    and its project binding ("work on the unmute repo" → that exact dir), so
+  //    even a cold first utterance needs its judgement. It folds transcript
+  //    cleanup into the same turn, and it's resident/warm — still instant.
+  if (router) {
     const awaitingIds = new Set(manager.tasksAwaitingUser().map((t) => t.id))
     try {
       const tRoute = Date.now()
-      const decision = await router.route(raw, routableSnapshot(Date.now()))
+      // The user's real project universe (curated + recency-ranked, read-only
+      // from ~/.claude.json) — what lets the router bind a session to a repo.
+      const projects = await knownProjects().catch(() => [])
+      const decision = await router.route(raw, routableSnapshot(Date.now()), projects)
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       if (decision.action === 'continue' && decision.targetTaskId) {
@@ -507,8 +515,8 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
       // the router's pick — a clean Claude Code session with no Unmute injection.
       const forcedRaw = injectionDisabled()
       const mode = forcedRaw ? 'raw' as const : decision.mode
-      log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: mode ?? null, forcedRaw })
-      return manager.dispatch(decision.intent || raw, { surface: decision.surface, mode })
+      log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: mode ?? null, forcedRaw, kind: decision.kind ?? null, dir: decision.dir ?? null })
+      return manager.dispatch(decision.intent || raw, { surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir })
     } catch (e) {
       log.warn('router error — dispatching new', { error: (e as Error).message })
       return manager.dispatch(raw, { mode: injectionDisabled() ? 'raw' : undefined })

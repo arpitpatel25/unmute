@@ -216,3 +216,40 @@ test('parseDecision: continue decision also carries mode and surface', () => {
   assert.equal(d.surface, 'gmail')
   assert.equal(d.mode, 'managed')
 })
+
+// ─── Orchestrate enrichment: species/name/project in the snapshot; kind/dir out ──
+
+test('buildRoutingPrompt carries name, species, project, humanized age, and the known-projects list', () => {
+  const tasks: RoutableTask[] = [{
+    id: 's1', intent: 'work on the gating feature', name: 'Gating feature work',
+    state: 'processing', kind: 'session', project: 'unmute-cloud', ageSec: 200_000,
+  }]
+  const p = buildRoutingPrompt('keep going on gating', tasks, '/d/decision.json',
+    [{ name: 'unmute-cloud', path: '/Users/u/tools/unmute/unmute-cloud' }])
+  assert.ok(p.includes('"Gating feature work"'), 'name in the task line')
+  assert.ok(p.includes('PERSISTENT SESSION'), 'species called out')
+  assert.ok(p.includes('project: unmute-cloud'), 'project label in the task line')
+  assert.ok(p.includes('2d ago'), 'age humanized, not 200000s')
+  assert.ok(p.includes('unmute-cloud → /Users/u/tools/unmute/unmute-cloud'), 'known projects offered')
+  assert.ok(p.includes('"kind"'), 'JSON shape includes kind')
+  // Without projects, the section disappears entirely.
+  const bare = buildRoutingPrompt('x', tasks, '/d/decision.json')
+  assert.ok(!bare.includes('Known project directories'))
+})
+
+test('parseDecision: kind/dir honored on new; dir only from the offered list; dir implies session', () => {
+  const projects = [{ name: 'app', path: '/Users/u/tools/app' }]
+  const d1 = parseDecision('{"action":"new","intent":"work on app","kind":"session","dir":"/Users/u/tools/app"}', 'r', [], projects)
+  assert.equal(d1.kind, 'session')
+  assert.equal(d1.dir, '/Users/u/tools/app')
+  // An invented path never becomes a spawn cwd.
+  const d2 = parseDecision('{"action":"new","intent":"x","dir":"/etc"}', 'r', [], projects)
+  assert.equal(d2.dir, undefined)
+  // dir from the list implies kind session even if the model said oneoff.
+  const d3 = parseDecision('{"action":"new","intent":"x","kind":"oneoff","dir":"/Users/u/tools/app"}', 'r', [], projects)
+  assert.equal(d3.kind, 'session')
+  // No dir + no kind → oneoff (status quo).
+  const d4 = parseDecision('{"action":"new","intent":"open mail"}', 'r', [], projects)
+  assert.equal(d4.kind, 'oneoff')
+  assert.equal(d4.dir, undefined)
+})
