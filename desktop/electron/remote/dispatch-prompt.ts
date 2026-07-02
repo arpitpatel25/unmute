@@ -32,17 +32,22 @@ export interface DispatchInput {
   nurseryRecipes?: Array<{ name: string; confidence: Confidence; body: string }>
   /** One-line "confirm before relying" notes for stale-high graduated skills. */
   staleNotes?: string[]
+  /** The full operating contract, INLINE. Only for project-bound spawns: the
+   *  agent runs in the USER'S directory, where we never write a CLAUDE.md — so
+   *  the contract can't auto-load and rides in the payload instead. */
+  contractText?: string
 }
 
 /**
  * Build the exact text typed into the REPL's stdin to dispatch one task.
- * Short by construction — the full contract is already loaded (decision #3).
+ * Short by construction — the full contract is already loaded (decision #3) —
+ * EXCEPT project-bound spawns, which carry the contract inline (contractText).
  */
-export function buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes, staleNotes }: DispatchInput): string {
+export function buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes, staleNotes, contractText }: DispatchInput): string {
   const lines = [
     `[Unmute Remote task]`,
     `Task: ${intent}`,
-    `Status file (yours to update per the loaded Unmute contract): ${statusPath}`,
+    `Status file (yours to update per the ${contractText ? 'Unmute contract below' : 'loaded Unmute contract'}): ${statusPath}`,
   ]
   if (recipeScratchPath) {
     lines.push(`Recipe-suggestion scratch file (write a suggestion here only if you learned a better/repeatable way): ${recipeScratchPath}`)
@@ -51,7 +56,12 @@ export function buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRe
   for (const r of nurseryRecipes ?? []) {
     lines.push('', `--- Memory lead (${STANCE[r.confidence]}): ${r.name} ---`, r.body.trim(), `--- end lead ---`)
   }
-  lines.push(`Act now. Follow the Unmute status-file contract that is already loaded.`)
+  if (contractText) {
+    lines.push('', `--- Unmute operating contract (not auto-loaded in this directory — follow it as written) ---`, contractText.trim(), `--- end contract ---`)
+    lines.push(`Act now. Follow the Unmute status-file contract above.`)
+  } else {
+    lines.push(`Act now. Follow the Unmute status-file contract that is already loaded.`)
+  }
   const payload = lines.join('\n')
   const injectedRecipes = nurseryRecipes ?? []
   log.event('dispatch-payload-built', {

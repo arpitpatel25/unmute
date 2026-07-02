@@ -35,3 +35,14 @@ test('buildDispatch with no nursery recipes is unchanged (terse)', () => {
   assert.match(out, /\[Unmute Remote task\]/)
   assert.doesNotMatch(out, /unverified lead/i)
 })
+
+test('buildDispatch inlines the contract for project-bound spawns (and only then)', () => {
+  const base = { intent: 'fix the bug', statusPath: '/tmp/s.json' }
+  const without = buildDispatch(base)
+  assert.ok(without.includes('already loaded'), 'scratch spawn: points at the auto-loaded contract')
+  assert.ok(!without.includes('end contract'))
+  const withContract = buildDispatch({ ...base, contractText: 'WRITE status.json atomically.' })
+  assert.ok(withContract.includes('Unmute operating contract'), 'contract block present')
+  assert.ok(withContract.includes('WRITE status.json atomically.'), 'contract text carried verbatim')
+  assert.ok(withContract.includes('contract above'), 'closing line points at the inline contract')
+})

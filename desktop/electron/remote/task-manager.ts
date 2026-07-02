@@ -32,7 +32,7 @@ import {
   type TaskState,
 } from './status-file'
 import { buildDispatch, buildResumeNudge } from './dispatch-prompt'
-import { installContract } from './contract/installer'
+import { installContract, readContractText } from './contract/installer'
 import { installHooks, hookActivityMs } from './hooks'
 import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
 import { detectSurface } from './surface'
@@ -253,7 +253,7 @@ export class TaskManager extends EventEmitter {
    * Dispatch a new task. Returns the taskId immediately; execution + polling
    * proceed asynchronously (PRD §4.4 — dispatch and forget).
    */
-  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session' } = {}): Promise<string> {
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string } = {}): Promise<string> {
     const id = randomUUID()
     // Mint the Claude session id up front so we own a stable handle to the
     // session this task will spawn (passed as --session-id below).
@@ -267,9 +267,28 @@ export class TaskManager extends EventEmitter {
     const mode = opts.mode ?? 'managed'
     const kind = opts.kind ?? 'oneoff'
 
+    // Project-bound spawn (Orchestrate): when a real directory is supplied, the
+    // agent RUNS there — its git, its CLAUDE.md, its tooling all just work. The
+    // user's directory is READ-ONLY territory for Unmute: every Unmute file
+    // (meta/status/recipe/contract/hooks/skills) stays in `home` (our scratch
+    // dir), and the contract travels INLINE in the dispatch payload instead of
+    // being written as a CLAUDE.md. Validated + fail-safe: an unusable dir falls
+    // back to the scratch spawn rather than failing the dispatch.
+    let runCwd = dir
+    if (opts.cwd) {
+      try {
+        const st = await fs.stat(opts.cwd)
+        if (st.isDirectory()) runCwd = opts.cwd
+        else tlog.warn('dispatch: cwd is not a directory — falling back to scratch', { cwd: opts.cwd })
+      } catch {
+        tlog.warn('dispatch: cwd does not exist — falling back to scratch', { cwd: opts.cwd })
+      }
+    }
+    const external = runCwd !== dir
+
     const task: Task = {
       id, intent, sessionId, kind, state: 'processing', createdAt: now, updatedAt: now,
-      cwd: dir, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
+      cwd: runCwd, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
       surface, mode, injectedRecipes: [],
     }
     this.tasks.set(id, task)
@@ -283,12 +302,20 @@ export class TaskManager extends EventEmitter {
       // Seed the heartbeat clock from the scaffold's real mtime so staleness is
       // measured from "task start", not the logical createdAt.
       task.lastMtimeMs = task.lastHeartbeatMs = (await statusMtimeMs(statusPath)) ?? now
-      await installContract(dir) // CLAUDE.md auto-load (#3)
-      // Deterministic lifecycle hooks: heartbeat on real progress + enforce a
-      // status write before the turn ends. Best-effort — a failure here must not
-      // block dispatch (without hooks the task runs on the status-file path, i.e.
-      // today's behaviour). See hooks.ts.
-      await installHooks(dir).catch((e) => tlog.warn('installHooks failed — running without hooks', { error: (e as Error).message }))
+      // Contract + hooks are CWD-COUPLED (CLAUDE.md auto-load; .claude/settings.json
+      // hooks) — installed only for the scratch spawn, where the cwd is ours. For a
+      // project-bound session, writing either into the user's repo would pollute it
+      // (and .claude/settings.json could CLOBBER the project's own); the contract
+      // travels inline in the payload instead, and lifecycle falls back to the
+      // status-file path (the documented pre-hooks behaviour — fail-open).
+      if (!external) {
+        await installContract(dir) // CLAUDE.md auto-load (#3)
+        // Deterministic lifecycle hooks: heartbeat on real progress + enforce a
+        // status write before the turn ends. Best-effort — a failure here must not
+        // block dispatch (without hooks the task runs on the status-file path, i.e.
+        // today's behaviour). See hooks.ts.
+        await installHooks(dir).catch((e) => tlog.warn('installHooks failed — running without hooks', { error: (e as Error).message }))
+      }
 
       // ── Memory injection (managed mode only). Raw mode SKIPS all three Unmute
       //    memory injections (skills copy, profile, nursery leads) — protocol +
@@ -328,7 +355,7 @@ export class TaskManager extends EventEmitter {
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes }))
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}) }))
       // TEMP(memory-debug): remove after calibration
       tlog.event('dispatch-memory', { MEMORY_DEBUG: true, surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
 
@@ -344,7 +371,7 @@ export class TaskManager extends EventEmitter {
         this.emit('output', { taskId: id, chunk })
       })
 
-      await ex.spawn({ cwd: dir, env: process.env, taskId: id, sessionId })
+      await ex.spawn({ cwd: runCwd, env: process.env, taskId: id, sessionId })
       await ex.isReady()
 
       // Drive past Claude Code's folder-trust prompt (and any boot prompts) using
@@ -370,9 +397,12 @@ export class TaskManager extends EventEmitter {
       }
       tlog.event('folder-trust-accepted', {})
 
+      // Project-bound spawn: the contract can't auto-load from a CLAUDE.md we
+      // never wrote, so it rides inline in the payload (same obligations).
+      const contractText = external ? await readContractText() : undefined
       const payload = mode === 'managed'
-        ? buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes: nurseryForDispatch, staleNotes })
-        : buildDispatch({ intent, statusPath, recipeScratchPath })
+        ? buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes: nurseryForDispatch, staleNotes, contractText })
+        : buildDispatch({ intent, statusPath, recipeScratchPath, contractText })
       const dispatchedAt = Date.now()
       ex.writeStdin(payload)
       tlog.event('task-dispatched', {})
@@ -398,7 +428,11 @@ export class TaskManager extends EventEmitter {
       // clear the input line with Ctrl-U (NEVER Esc — Esc = "No, exit" on a
       // dialog and QUITS Claude) and re-inject. Background, fire-and-forget —
       // adds ZERO latency to the happy path.
-      void this.verifyDispatch(id, ex, payload, dir, dispatchedAt)
+      // SKIPPED for project-bound spawns: no hooks there means no submit signal —
+      // the verifier would read "never submitted" forever and re-inject a payload
+      // that DID land, double-dispatching the session. Fail-open instead.
+      if (!external) void this.verifyDispatch(id, ex, payload, dir, dispatchedAt)
+      else tlog.event('dispatch-verify-skipped', { reason: 'external-cwd-no-hooks', cwd: runCwd })
     } catch (e) {
       tlog.error('dispatch failed before polling', { error: (e as Error).message })
       this.transition(id, 'failed', { error: { reason: 'Could not start the task', detail: (e as Error).message } })

@@ -616,3 +616,53 @@ test('setName persists the generated name into meta.json (survives restart)', as
   assert.equal(meta.name, 'Twitter strategy summary')
   tm.killAll()
 })
+
+// ─── Project-bound spawn (Orchestrate): the agent runs IN the user's dir ──────
+
+test('project-bound dispatch: spawns in the project dir, pollutes NOTHING there, contract rides inline', async () => {
+  const baseDir = await tmpBase()
+  const project = await fs.mkdtemp(path.join(os.tmpdir(), 'user-project-'))
+  let spawned: SpawnOpts | null = null
+  const fake = makeFakeExecutor({ onSpawn: (o) => { spawned = o } })
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('work on the gating feature', { kind: 'session', cwd: project })
+  const task = tm.get(id)!
+
+  // Runs THERE; bookkeeping stays HOME.
+  assert.equal(spawned!.cwd, project, 'agent spawns in the real project dir')
+  assert.equal(task.cwd, project)
+  assert.notEqual(task.home, project)
+  assert.ok(task.statusPath.startsWith(task.home), 'status file lives in our dir, not the repo')
+
+  // The user's directory is READ-ONLY territory: no CLAUDE.md, no .claude, no hooks.
+  const written = await fs.readdir(project)
+  assert.deepEqual(written, [], 'nothing written into the user project dir')
+
+  // The contract can't auto-load from a CLAUDE.md we never wrote → inline payload.
+  assert.ok(fake.writes[0].includes('Unmute operating contract'), 'contract inline in the payload')
+  assert.ok(fake.writes[0].includes(task.statusPath), 'status path in the payload')
+
+  // Receipt carries the project cwd so resume() respawns there after a restart.
+  const meta = JSON.parse(await fs.readFile(path.join(task.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.cwd, project)
+  assert.equal(meta.kind, 'session')
+
+  tm.killAll()
+  await fs.rm(project, { recursive: true, force: true })
+})
+
+test('project-bound dispatch falls back to scratch when the dir is unusable', async () => {
+  const baseDir = await tmpBase()
+  let spawned: SpawnOpts | null = null
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor({ onSpawn: (o) => { spawned = o } }),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  const id = await tm.dispatch('a task', { cwd: '/definitely/not/a/real/dir' })
+  const task = tm.get(id)!
+  assert.equal(task.cwd, task.home, 'fell back to the scratch spawn')
+  assert.equal(spawned!.cwd, task.home)
+  // Scratch spawn = full machinery: CLAUDE.md installed as usual.
+  assert.ok((await fs.readFile(path.join(task.home, 'CLAUDE.md'), 'utf8')).includes('Unmute'))
+  tm.killAll()
+})
