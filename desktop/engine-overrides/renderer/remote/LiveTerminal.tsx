@@ -139,6 +139,7 @@ export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: {
       term.open(host)
       sync()
       term.onData((data) => api().remoteTerminalInput?.(taskId, data))
+      let sawOutput = false
       if (replay) {
         void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf && term) term.write(buf) })
       } else {
@@ -151,9 +152,19 @@ export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: {
         const rows = term.rows
         api().remoteTerminalResize?.(taskId, term.cols, Math.max(2, rows - 1))
         setTimeout(() => { if (!disposed && term) api().remoteTerminalResize?.(taskId, term.cols, rows) }, 60)
+        // BACKSTOP: a nominally-alive session can still be unable to repaint —
+        // e.g. a watch/consume one-off mid-graceful-detach (/exit sent, alive flag
+        // not yet flipped). If NOTHING arrives shortly after the nudge, fall back
+        // to the buffered record: an imperfect-width replay beats a black void.
+        setTimeout(() => {
+          if (disposed || sawOutput || !term) return
+          void api().remoteGetOutput?.(taskId).then((buf) => {
+            if (!disposed && !sawOutput && buf && term) term.write(buf)
+          })
+        }, 600)
       }
       off = api().remoteOnOutput?.((d) => {
-        if (!disposed && d.taskId === taskId && term) term.write(d.chunk)
+        if (!disposed && d.taskId === taskId && term) { sawOutput = true; term.write(d.chunk) }
       })
     }
 
