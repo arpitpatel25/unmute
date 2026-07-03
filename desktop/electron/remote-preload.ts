@@ -173,6 +173,16 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('remote:capture-phase', handler)
     return () => ipcRenderer.removeListener('remote:capture-phase', handler)
   },
+  /** Declinable route offer: the router chose NEW but nearly chose altTaskId.
+   *  One-tap redirect; ignoring it costs nothing (it expires in the UI). */
+  remoteOnRouteOffer: (cb: (d: { newTaskId: string; altTaskId: string; altName: string }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { newTaskId: string; altTaskId: string; altName: string }) => cb(d)
+    ipcRenderer.on('remote:route-offer', handler)
+    return () => ipcRenderer.removeListener('remote:route-offer', handler)
+  },
+  /** Accept the pending offer: erases the mis-spawn, reroutes the utterance. */
+  remoteAcceptRouteOffer: (newTaskId: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:accept-route-offer', newTaskId),
 
   // ── Onboarding / guided one-time setup (PRD §12) ──
   /** The setup checklist: auto-detected (MCP/Chrome profile) + user-confirmed steps. */

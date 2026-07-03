@@ -26,6 +26,8 @@ type API = {
   remoteOnOrchestrateOwner?: (cb: (d: { taskId: string | null }) => void) => () => void
   remoteGetOrchestrateOwner?: () => Promise<string | null>
   remoteAttachImage?: (taskId: string, data: ArrayBuffer, ext: string) => Promise<string | null>
+  remoteOnRouteOffer?: (cb: (d: { newTaskId: string; altTaskId: string; altName: string }) => void) => () => void
+  remoteAcceptRouteOffer?: (newTaskId: string) => Promise<boolean>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -353,6 +355,19 @@ export function OverlayApp() {
   const [mode, setMode] = useState<'docked' | 'expanded'>('expanded')
   const [dockedEnabled, setDockedEnabled] = useState(true)
 
+  // Declinable route offer (ambient surface — the wall may not be open):
+  // "started new — send to X instead?". One tap redirects; expires in 8s.
+  const [offer, setOffer] = useState<{ newTaskId: string; altTaskId: string; altName: string } | null>(null)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const off = api().remoteOnRouteOffer?.((d) => {
+      setOffer(d)
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => setOffer(null), 8000)
+    })
+    return () => { off?.(); if (timer) clearTimeout(timer) }
+  }, [])
+
   useEffect(() => {
     const off = api().remoteOnOverlayFocus?.((d) => setExpandedId(d.taskId))
     // Fetch the current presentation on mount (avoids a mode-event race), then
@@ -434,6 +449,21 @@ export function OverlayApp() {
             <button className="text-[13px] leading-none text-white/25 hover:text-white/70" onClick={dismiss} title="Dismiss (Esc)">✕</button>
           </div>
         </div>
+
+        {/* Declinable route offer strip — one tap redirects, ignoring costs nothing. */}
+        {offer && (
+          <button
+            className="mx-2 mb-1 rounded-lg border border-white/15 bg-white/[0.06] px-3 py-2 text-left text-[11.5px] text-white/85 hover:bg-white/[0.12]"
+            onClick={() => {
+              const o = offer
+              setOffer(null)
+              void api().remoteAcceptRouteOffer?.(o.newTaskId).then((ok) => { if (ok) setExpandedId(o.altTaskId) })
+            }}
+          >
+            <span className="text-white/45">started new — </span>
+            send to “{offer.altName.length > 38 ? `${offer.altName.slice(0, 38)}…` : offer.altName}” instead?
+          </button>
+        )}
 
         <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
           {tasks.length === 0 ? (

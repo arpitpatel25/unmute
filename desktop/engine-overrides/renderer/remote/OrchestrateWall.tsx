@@ -308,6 +308,31 @@ export default function OrchestrateWall() {
     return () => { off?.(); if (landedTimer.current) clearTimeout(landedTimer.current) }
   }, [])
 
+  // Declinable route offer (§6.2): "started new — or send to X?". One tap
+  // redirects (mis-spawn erased, utterance rerouted); ignoring costs nothing —
+  // it expires after 8s. NEVER a silent reroute, never a blocking prompt.
+  const [offer, setOffer] = useState<{ newTaskId: string; altTaskId: string; altName: string } | null>(null)
+  const offerTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    const api = (window as unknown as { electronAPI?: { remoteOnRouteOffer?: (cb: (d: { newTaskId: string; altTaskId: string; altName: string }) => void) => () => void } }).electronAPI
+    const off = api?.remoteOnRouteOffer?.((d) => {
+      setOffer(d)
+      if (offerTimer.current) clearTimeout(offerTimer.current)
+      offerTimer.current = setTimeout(() => setOffer(null), 8000)
+    })
+    return () => { off?.(); if (offerTimer.current) clearTimeout(offerTimer.current) }
+  }, [])
+  const acceptOffer = useCallback(() => {
+    const o = offer
+    setOffer(null)
+    if (!o) return
+    const api = (window as unknown as { electronAPI?: { remoteAcceptRouteOffer?: (id: string) => Promise<boolean> } }).electronAPI
+    void api?.remoteAcceptRouteOffer?.(o.newTaskId).then((ok) => { if (ok) focusRef.current?.(o.altTaskId) })
+  }, [offer])
+  // focus() is declared below; a ref bridges the declaration order without
+  // widening the dependency graph of this callback.
+  const focusRef = useRef<((id: string | null) => void) | null>(null)
+
   useEffect(() => {
     const i = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(i)
@@ -342,6 +367,7 @@ export default function OrchestrateWall() {
     setMainFocus(id) // tell main where the voice lands BEFORE any utterance (§6.2)
     withMorph(() => { setFocusedId(id); if (id == null) setFull(false) })
   }, [])
+  focusRef.current = focus
 
   // Clear the focus address when the wall unmounts/closes, so a stale focus can't
   // keep capturing the voice after the user leaves the cockpit.
@@ -453,6 +479,15 @@ export default function OrchestrateWall() {
           </div>
         )}
       </div>
+
+      {/* Declinable route offer: one tap redirects, ignoring costs nothing. */}
+      {offer && (
+        <button onClick={acceptOffer}
+          style={{ position: 'absolute', right: 14, bottom: 12, display: 'flex', alignItems: 'center', gap: 7, fontFamily: C.mono, fontSize: 11.5, background: C.surfaceHi, border: `1px solid ${C.borderHi}`, borderRadius: 9999, padding: '6px 13px', cursor: 'pointer', color: C.nameText }}>
+          <span style={{ color: C.dimText }}>started new —</span>
+          <span>send to “{offer.altName.length > 34 ? `${offer.altName.slice(0, 34)}…` : offer.altName}” instead?</span>
+        </button>
+      )}
 
       {/* The listening surface (§6.2/§9): live voice lifecycle. Idle → where the
           NEXT utterance lands (visible BEFORE speaking). Listening → pulsing mic.

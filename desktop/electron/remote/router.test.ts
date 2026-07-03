@@ -253,3 +253,14 @@ test('parseDecision: kind/dir honored on new; dir only from the offered list; di
   assert.equal(d4.kind, 'oneoff')
   assert.equal(d4.dir, undefined)
 })
+
+test('parseDecision: alternate honored on new only when it names an offered task', () => {
+  const tasks: RoutableTask[] = [{ id: 't1', intent: 'check emails', state: 'processing', ageSec: 30 }]
+  const d1 = parseDecision('{"action":"new","intent":"draft a tweet","alternate":"t1"}', 'r', tasks)
+  assert.equal(d1.alternate, 't1')
+  const d2 = parseDecision('{"action":"new","intent":"x","alternate":"ghost"}', 'r', tasks)
+  assert.equal(d2.alternate, undefined)
+  // Never on continue.
+  const d3 = parseDecision('{"action":"continue","targetTaskId":"t1","intent":"x","alternate":"t1"}', 'r', tasks)
+  assert.equal(d3.alternate, undefined)
+})

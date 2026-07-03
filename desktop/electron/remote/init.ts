@@ -464,6 +464,12 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
   }
 }
 
+/** The one pending "or send it there?" route offer (only the LATEST matters —
+ *  a new utterance supersedes any stale offer). Accepting kills the seconds-old
+ *  mis-spawn and reroutes the SAME intent into the alternate; ignoring it costs
+ *  nothing and it simply expires in the UI. */
+let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; at: number } | null = null
+
 export async function dispatchFromCapture(rawTranscript: string): Promise<string | null> {
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
@@ -541,7 +547,19 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       const forcedRaw = injectionDisabled()
       const mode = forcedRaw ? 'raw' as const : decision.mode
       log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: mode ?? null, forcedRaw, kind: decision.kind ?? null, dir: decision.dir ?? null })
-      return manager.dispatch(decision.intent || raw, { surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir })
+      const newId = await manager.dispatch(decision.intent || raw, { surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir })
+      // Declinable offer (§6.2 — never a silent reroute, never a blocking prompt):
+      // the router chose NEW but seriously weighed one open task. Surface a
+      // one-tap "or send it there?"; ignoring it costs nothing.
+      if (decision.alternate && manager.get(decision.alternate)) {
+        pendingRouteOffer = { newTaskId: newId, altTaskId: decision.alternate, intent: decision.intent || raw, at: Date.now() }
+        const altName = manager.get(decision.alternate)!.name ?? manager.get(decision.alternate)!.intent
+        for (const w of BrowserWindow.getAllWindows()) {
+          if (!w.isDestroyed()) w.webContents.send('remote:route-offer', { newTaskId: newId, altTaskId: decision.alternate, altName })
+        }
+        log.event('route-offer-surfaced', { newTaskId: newId, altTaskId: decision.alternate })
+      }
+      return newId
     } catch (e) {
       log.warn('router error — dispatching new', { error: (e as Error).message })
       return manager.dispatch(raw, { mode: injectionDisabled() ? 'raw' : undefined })
@@ -780,6 +798,27 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Current terminal owner — lets a freshly-mounted overlay card learn it owns
   // nothing (or that the wall already owns its session) without waiting for an event.
   ipcMain.handle('remote:get-orchestrate-owner', async () => orchestrateFocusId)
+  // Accept the pending route offer: erase the seconds-old mis-spawn and deliver
+  // the SAME intent to the alternate task instead (answer if blocked, else
+  // follow-up — the router's own delivery paths). Validated against main's own
+  // pendingRouteOffer state, so a stale/forged accept is a no-op.
+  ipcMain.handle('remote:accept-route-offer', async (_e, newTaskId: string) => {
+    const offer = pendingRouteOffer
+    if (!manager || !offer || offer.newTaskId !== newTaskId) return false
+    pendingRouteOffer = null
+    const alt = manager.get(offer.altTaskId)
+    if (!alt) return false
+    log.event('route-offer-accepted', { newTaskId, altTaskId: offer.altTaskId })
+    await manager.remove(newTaskId) // the mis-spawn: seconds old, nothing of value
+    if (manager.tasksAwaitingUser().some((t) => t.id === offer.altTaskId)) {
+      manager.answer(offer.altTaskId, offer.intent)
+    } else if (!manager.followUp(offer.altTaskId, offer.intent)) {
+      // Alternate no longer warm — resume it, then the user can re-speak. Honest
+      // fallback; never silently lose the utterance (it stays visible in the log).
+      void manager.resume(offer.altTaskId)
+    }
+    return true
+  })
   // Attach an image to a session (voice-era screenshot paste/drag). Bytes arrive
   // as an ArrayBuffer from the renderer; saved under the task's own dir and the
   // path is TYPED (unsubmitted) into the session — see TaskManager.attachFile.

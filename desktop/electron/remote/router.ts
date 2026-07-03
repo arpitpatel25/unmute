@@ -77,6 +77,11 @@ export interface RouteDecision {
    *  project paths offered in the prompt (validated at parse; anything else is
    *  dropped). The task then runs IN that directory. */
   dir?: string
+  /** For action 'new' only: the open task the router NEARLY chose instead (a
+   *  plausible continue-target that lost). Powers the declinable offer — "started
+   *  new — or send to X?" — never a silent reroute. Validated against the
+   *  snapshot ids at parse. */
+  alternate?: string
 }
 
 // ─── Pure helpers (unit-tested) ───────────────────────────────────
@@ -162,7 +167,8 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `Also clean the command into one natural line (fix transcription slips, keep the`,
     `exact meaning).`,
     ``,
-    `Write exactly: {"action":"new"|"continue","targetTaskId":"<id when continue>","intent":"<cleaned one-line command>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>"}`,
+    `Write exactly: {"action":"new"|"continue","targetTaskId":"<id when continue>","intent":"<cleaned one-line command>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>"}`,
+    `alternate (only with action "new", optional): if exactly one open task was a PLAUSIBLE alternative you seriously weighed before choosing NEW, give its id — the user gets a one-tap "or send it there?" offer. Omit it when nothing came close (most of the time).`,
     `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
     `mode: use "raw" for "open me a session to work in" / open-ended coding where injected memory hints would pollute long reasoning; use "managed" for short, surface-operating dictated tasks. If ambiguous, choose "raw".`,
     `kind (only for action "new"): "session" for a working session the user will keep coming back to — coding, a project (anything with "dir"), open-ended "work on X" — it stays alive until they end it. "oneoff" for a quick errand they fire and forget (open/check/find something). If ambiguous, "oneoff".`,
@@ -188,7 +194,7 @@ export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSe
 export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = []): RouteDecision {
   const validIds = new Set(tasks.map((t) => t.id))
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
-  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string }
+  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
   const intent = (obj.intent && obj.intent.trim()) || fallbackIntent
   const mode = obj.mode === 'raw' ? 'raw' : 'managed'
@@ -207,7 +213,9 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
     // A project-bound task is inherently a working session, whatever the model
     // labeled it — dir implies kind.
     const kind = obj.kind === 'session' || dir ? 'session' as const : 'oneoff' as const
-    return { action: 'new', intent, mode, surface, kind, dir }
+    // alternate must name a task we actually offered — else dropped.
+    const alternate = obj.alternate && validIds.has(obj.alternate) ? obj.alternate : undefined
+    return { action: 'new', intent, mode, surface, kind, dir, alternate }
   }
   return failsafeDecision(tasks, intent)
 }
