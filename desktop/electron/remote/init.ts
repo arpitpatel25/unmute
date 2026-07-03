@@ -39,6 +39,7 @@ import { Router, type RoutableTask } from './router'
 import { knownProjects } from './projects'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
+import { listRecipes } from './recipe-store'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -923,6 +924,33 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // fallback; never silently lose the utterance (it stays visible in the log).
       void manager.resume(offer.altTaskId)
     }
+    return true
+  })
+  // Glance vocabulary (the rails): skills + projects, read straight from disk —
+  // zero tokens. Skills have no surface anywhere in Claude Code's own UX; giving
+  // them a face is what makes people actually say them.
+  ipcMain.handle('remote:list-skills', async () => {
+    const recipes = await listRecipes({ tier: 'skill' }).catch(() => [])
+    return recipes
+      .map((r) => ({
+        name: r.frontmatter.name,
+        description: r.frontmatter.description ?? '',
+        surface: r.frontmatter.surface ?? 'general',
+        lastUsed: r.frontmatter.last_used || r.frontmatter.created || '',
+        runs: r.frontmatter.runs_confirmed ?? 0,
+      }))
+      .sort((a, b) => (b.lastUsed || '').localeCompare(a.lastUsed || ''))
+      .slice(0, 8)
+  })
+  ipcMain.handle('remote:list-projects', async () => {
+    const projects = await knownProjects(6).catch(() => [])
+    return projects.map((p) => ({ name: p.name, path: p.path }))
+  })
+  // Rename a task — names are VOICE ADDRESSES, so users must be able to fix a
+  // bad auto-name. Persists via setName (survives restarts).
+  ipcMain.handle('remote:rename-task', async (_e, id: string, name: string) => {
+    if (!manager || !name?.trim()) return false
+    manager.setName(id, name.trim().slice(0, 48))
     return true
   })
   // Staging tray: stage an image with no target (rides with the next utterance).

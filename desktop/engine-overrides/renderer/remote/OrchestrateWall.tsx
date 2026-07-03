@@ -199,6 +199,17 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
   const st = statusOf(t.state)
   const choices = t.question?.choices ?? []
 
+  // Inline rename — names are VOICE ADDRESSES; a bad auto-name must be fixable
+  // right where you read it. Click the title → edit → Enter/blur saves, Esc drops.
+  const [editingName, setEditingName] = useState(false)
+  const saveName = useCallback((value: string) => {
+    setEditingName(false)
+    const v = value.trim()
+    if (!v || v === nameOf(t)) return
+    const api = (window as unknown as { electronAPI?: { remoteRenameTask?: (id: string, name: string) => Promise<boolean> } }).electronAPI
+    void api?.remoteRenameTask?.(t.id, v)
+  }, [t])
+
   // Multimodal (images): ⌘V an image or drop a file anywhere on the stage.
   // The toast teaches the contract: attached ≠ sent — speak (or type) to send.
   const [attachNote, setAttachNote] = useState<string | null>(null)
@@ -239,7 +250,20 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
         <Dot state={t.state} />
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: st.color, textTransform: 'uppercase' }}>{st.label}</span>
-        <span style={{ fontSize: 14, fontWeight: 600, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameOf(t)}</span>
+        {editingName ? (
+          <input autoFocus defaultValue={nameOf(t)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') saveName((e.target as HTMLInputElement).value)
+              if (e.key === 'Escape') { e.stopPropagation(); setEditingName(false) }
+            }}
+            onBlur={(e) => saveName(e.target.value)}
+            style={{ fontFamily: C.mono, fontSize: 14, fontWeight: 600, color: C.nameText, background: C.surfaceHi, border: `1px solid ${C.borderHi}`, borderRadius: 5, padding: '2px 8px', outline: 'none', minWidth: 220 }} />
+        ) : (
+          <span onClick={() => setEditingName(true)} title="click to rename (names are voice addresses)"
+            style={{ fontSize: 14, fontWeight: 600, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'text' }}>
+            {nameOf(t)}
+          </span>
+        )}
         <span style={{ marginLeft: 'auto', fontSize: 11, color: C.dimText, flex: 'none' }}>{elapsed(t.createdAt, now)}</span>
         {/* pin (§5): promote an errand to a persistent session (or release one).
             Sessions are exempt from idle-kill + purge — they live until you end them. */}
@@ -385,6 +409,25 @@ export default function OrchestrateWall() {
     const api = (window as unknown as { electronAPI?: { remoteAcceptRouteOffer?: (id: string) => Promise<boolean> } }).electronAPI
     void api?.remoteAcceptRouteOffer?.(o.newTaskId).then((ok) => { if (ok) focusRef.current?.(o.altTaskId) })
   }, [offer])
+
+  // Glance vocabulary (rails): skills + projects from disk, so the words you can
+  // SAY are always in front of you. Loaded on mount, refreshed every 5 min.
+  const [skills, setSkills] = useState<Array<{ name: string; lastUsed: string }>>([])
+  const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
+  useEffect(() => {
+    const api = (window as unknown as { electronAPI?: { remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string }>>; remoteListProjects?: () => Promise<Array<{ name: string; path: string }>> } }).electronAPI
+    const load = () => {
+      void api?.remoteListSkills?.().then((s) => setSkills(s ?? [])).catch(() => {})
+      void api?.remoteListProjects?.().then((p) => setProjects(p ?? [])).catch(() => {})
+    }
+    load()
+    const i = setInterval(load, 5 * 60_000)
+    return () => clearInterval(i)
+  }, [])
+  const spawnInProject = useCallback((p: { name: string; path: string }) => {
+    const api = (window as unknown as { electronAPI?: { remoteDispatch?: (intent: string) => Promise<string | null> } }).electronAPI
+    void api?.remoteDispatch?.(`Start a working session in the ${p.name} project (${p.path}).`)
+  }, [])
 
   // Staging tray (capture first, speak second): images pasted/dropped with NO
   // focused stage stage in main and ride with the NEXT utterance to wherever it
@@ -682,6 +725,28 @@ export default function OrchestrateWall() {
                     </button>
                   ))}
                 </RailSection>
+                {projects.length > 0 && (
+                  <RailSection title="Projects">
+                    {projects.map((p) => (
+                      <button key={p.path} onClick={() => spawnInProject(p)} title={`Start a session in ${p.path}`}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '3px 0', fontFamily: C.mono }}>
+                        <span style={{ fontSize: 11, color: C.faintText }}>▸</span>
+                        <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+                      </button>
+                    ))}
+                  </RailSection>
+                )}
+                {skills.length > 0 && (
+                  <RailSection title="Skills">
+                    {/* glance vocabulary — say a skill's name to use it */}
+                    {skills.map((s) => (
+                      <div key={s.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '3px 0' }}>
+                        <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{s.name}</span>
+                        <span style={{ fontSize: 10, color: C.faintText, flex: 'none' }}>{s.lastUsed ? s.lastUsed.slice(5, 10) : ''}</span>
+                      </div>
+                    ))}
+                  </RailSection>
+                )}
               </>
             )}
           </div>

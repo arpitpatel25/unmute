@@ -69,6 +69,14 @@ export const remotePreloadExtensions = {
    *  path is typed (unsubmitted) into the session's input — speak to send. */
   remoteAttachImage: (taskId: string, data: ArrayBuffer, ext: string): Promise<string | null> =>
     ipcRenderer.invoke('remote:attach-image', taskId, data, ext),
+  /** Glance vocabulary: graduated skills (recency-ranked) + known projects. */
+  remoteListSkills: (): Promise<Array<{ name: string; description: string; surface: string; lastUsed: string; runs: number }>> =>
+    ipcRenderer.invoke('remote:list-skills'),
+  remoteListProjects: (): Promise<Array<{ name: string; path: string }>> =>
+    ipcRenderer.invoke('remote:list-projects'),
+  /** Rename a task (names are voice addresses — fixable by the user). */
+  remoteRenameTask: (id: string, name: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:rename-task', id, name),
   /** Staging tray: stage an image with NO target — it rides with the next
    *  utterance to wherever that lands (new task / continuation / answer). */
   remoteStageImage: (data: ArrayBuffer, ext: string): Promise<string | null> =>
