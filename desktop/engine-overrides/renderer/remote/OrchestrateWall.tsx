@@ -437,8 +437,8 @@ export default function OrchestrateWall() {
   // lands. The natural order — grab screenshots, then say what they mean.
   const [stagedCount, setStagedCount] = useState(0)
   useEffect(() => {
-    const api = (window as unknown as { electronAPI?: { remoteGetStaged?: () => Promise<number>; remoteOnStagedChanged?: (cb: (d: { count: number }) => void) => () => void } }).electronAPI
-    void api?.remoteGetStaged?.().then((n) => setStagedCount(n ?? 0))
+    const api = (window as unknown as { electronAPI?: { remoteGetStaged?: () => Promise<string[]>; remoteOnStagedChanged?: (cb: (d: { count: number }) => void) => () => void } }).electronAPI
+    void api?.remoteGetStaged?.().then((paths) => setStagedCount(paths?.length ?? 0))
     const off = api?.remoteOnStagedChanged?.((d) => setStagedCount(d.count))
     return () => off?.()
   }, [])

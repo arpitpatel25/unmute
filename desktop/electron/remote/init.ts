@@ -465,6 +465,10 @@ let orchestrateFocusId: string | null = null
 type CapturePhase = 'listening' | 'transcribing' | 'routing' | 'idle'
 function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): void {
   captureBusy = phase !== 'idle' // the doorbell stays silent while the user speaks
+  // The screenshot ledger follows the capture window (remote captures only —
+  // this broadcast never fires for plain dictation).
+  if (phase === 'listening') startCaptureWatch()
+  else if (phase === 'idle') stopCaptureWatch()
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
   }
@@ -486,8 +490,103 @@ const STAGING_DIR = join(homedir(), '.unmute', 'remote', 'staging')
 let stagedAttachments: string[] = []
 function broadcastStaged(): void {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length })
+    if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length, paths: stagedAttachments })
   }
+}
+
+// ── Utterance-scoped screenshot capture (the pill ledger). The dictation window
+// is the CONSENT signal: screenshots taken while addressing Unmute — or in the
+// short gap since the last utterance — belong to what's being said. Everything
+// staged is VISIBLE on the pill (🖼 n, prunable with ✕) before it sends; nothing
+// rides invisibly. Only ever active for REMOTE captures, never plain dictation.
+const PREHOLD_WINDOW_MS = 3 * 60_000
+const CAPTURE_MAX_AUTO = 5
+let lastUtteranceEndedAt = 0
+let lastClipboardHash = ''
+let captureWatchTimer: ReturnType<typeof setInterval> | null = null
+let screenshotDirCache: string | null = null
+
+function clipboardImage(): { hash: string; buf: Buffer } | null {
+  try {
+    // Lazy-require: electron.clipboard is main-process-safe but keep the top
+    // import surface unchanged.
+    const { clipboard } = require('electron') as { clipboard: { readImage(): { isEmpty(): boolean; toPNG(): Buffer } } }
+    const img = clipboard.readImage()
+    if (img.isEmpty()) return null
+    const buf = img.toPNG()
+    const hash = require('node:crypto').createHash('md5').update(buf).digest('hex') as string
+    return { hash, buf }
+  } catch { return null }
+}
+
+function screenshotDir(): string {
+  if (screenshotDirCache) return screenshotDirCache
+  screenshotDirCache = join(homedir(), 'Desktop') // macOS default
+  try {
+    execFile('defaults', ['read', 'com.apple.screencapture', 'location'], { timeout: 2000 }, (err, stdout) => {
+      const loc = (stdout || '').trim()
+      if (!err && loc) screenshotDirCache = loc.replace(/^~/, homedir())
+    })
+  } catch { /* keep Desktop */ }
+  return screenshotDirCache
+}
+
+function stageBuffer(buf: Buffer, tag: string): void {
+  if (stagedAttachments.length >= CAPTURE_MAX_AUTO) return
+  try {
+    mkdirSync(STAGING_DIR, { recursive: true })
+    const file = join(STAGING_DIR, `capture-${Date.now()}-${tag}.png`)
+    writeFileSync(file, buf)
+    stagedAttachments.push(file)
+    broadcastStaged()
+    log.event('capture-staged', { file, via: tag })
+  } catch (e) { log.warn('stageBuffer failed', { error: (e as Error).message }) }
+}
+
+/** Stage screenshot FILES newer than `sinceMs` from the user's screenshot dir. */
+function stageRecentScreenshotFiles(sinceMs: number): void {
+  try {
+    const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+    const dir = screenshotDir()
+    for (const entry of readdirSync(dir)) {
+      if (stagedAttachments.length >= CAPTURE_MAX_AUTO) break
+      if (!/^screen ?shot/i.test(entry) || !/\.(png|jpe?g)$/i.test(entry)) continue
+      const full = join(dir, entry)
+      try {
+        const st = statSync(full)
+        if (st.mtimeMs > sinceMs && !stagedAttachments.includes(full)) {
+          stagedAttachments.push(full) // reference in place — never copy/move user files
+          broadcastStaged()
+          log.event('capture-staged', { file: full, via: 'file' })
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* no screenshot dir — fine */ }
+}
+
+/** Remote capture began: sweep the pre-hold window, then watch live. */
+function startCaptureWatch(): void {
+  const preholdSince = Math.max(lastUtteranceEndedAt, Date.now() - PREHOLD_WINDOW_MS)
+  // Pre-hold: a clipboard image that changed since the last utterance + recent files.
+  const clip = clipboardImage()
+  if (clip && clip.hash !== lastClipboardHash) { stageBuffer(clip.buf, 'clipboard'); lastClipboardHash = clip.hash }
+  stageRecentScreenshotFiles(preholdSince)
+  // Live: poll while the capture is in flight (listening → routing).
+  if (captureWatchTimer) clearInterval(captureWatchTimer)
+  const startedAt = Date.now()
+  captureWatchTimer = setInterval(() => {
+    const c = clipboardImage()
+    if (c && c.hash !== lastClipboardHash) { stageBuffer(c.buf, 'clipboard'); lastClipboardHash = c.hash }
+    stageRecentScreenshotFiles(startedAt)
+  }, 700)
+  ;(captureWatchTimer as { unref?: () => void }).unref?.()
+}
+
+function stopCaptureWatch(): void {
+  if (captureWatchTimer) { clearInterval(captureWatchTimer); captureWatchTimer = null }
+  lastUtteranceEndedAt = Date.now()
+  const c = clipboardImage()
+  lastClipboardHash = c?.hash ?? lastClipboardHash // same image never re-attaches next time
 }
 /** Consume the tray (one landing takes everything). */
 function takeStaged(): string[] {
@@ -1006,8 +1105,15 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       return null
     }
   })
-  ipcMain.handle('remote:get-staged', async () => stagedAttachments.length)
+  ipcMain.handle('remote:get-staged', async () => stagedAttachments)
   ipcMain.handle('remote:clear-staged', async () => { stagedAttachments = []; broadcastStaged(); return true })
+  // Prune one staged image (the pill strip's ✕) — reversibility before send.
+  ipcMain.handle('remote:unstage-image', async (_e, path: string) => {
+    const before = stagedAttachments.length
+    stagedAttachments = stagedAttachments.filter((p) => p !== path)
+    if (stagedAttachments.length !== before) broadcastStaged()
+    return true
+  })
   // Attach an image to a session (voice-era screenshot paste/drag). Bytes arrive
   // as an ArrayBuffer from the renderer; saved under the task's own dir and the
   // path is TYPED (unsubmitted) into the session — see TaskManager.attachFile.

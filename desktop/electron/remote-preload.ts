@@ -82,10 +82,11 @@ export const remotePreloadExtensions = {
    *  utterance to wherever that lands (new task / continuation / answer). */
   remoteStageImage: (data: ArrayBuffer, ext: string): Promise<string | null> =>
     ipcRenderer.invoke('remote:stage-image', data, ext),
-  remoteGetStaged: (): Promise<number> => ipcRenderer.invoke('remote:get-staged'),
+  remoteGetStaged: (): Promise<string[]> => ipcRenderer.invoke('remote:get-staged'),
   remoteClearStaged: (): Promise<boolean> => ipcRenderer.invoke('remote:clear-staged'),
-  remoteOnStagedChanged: (cb: (d: { count: number }) => void): (() => void) => {
-    const handler = (_e: unknown, d: { count: number }) => cb(d)
+  remoteUnstageImage: (path: string): Promise<boolean> => ipcRenderer.invoke('remote:unstage-image', path),
+  remoteOnStagedChanged: (cb: (d: { count: number; paths: string[] }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { count: number; paths: string[] }) => cb(d)
     ipcRenderer.on('remote:staged-changed', handler)
     return () => ipcRenderer.removeListener('remote:staged-changed', handler)
   },

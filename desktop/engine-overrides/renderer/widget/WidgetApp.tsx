@@ -159,6 +159,83 @@ function RemoteBadge() {
   )
 }
 
+// ── Staged-images chip (the attachment LEDGER, shown only during a Remote
+// capture). Screenshots captured while addressing Unmute — or in the short
+// window just before — stage automatically; this chip is the truth of what
+// rides with the utterance: 🖼 n, hover → numbered ✕ buttons to prune. What
+// you see is what sends. Same chip family as the model badge: dark fill,
+// whitish border, NO shadow, horizontal glide (nothing pops outside the
+// widget window).
+function stagedApi() {
+  return window.electronAPI as unknown as {
+    remoteGetStaged?: () => Promise<string[]>
+    remoteOnStagedChanged?: (cb: (d: { count: number; paths: string[] }) => void) => () => void
+    remoteUnstageImage?: (path: string) => Promise<boolean>
+  }
+}
+
+function StagedImagesChip() {
+  const [paths, setPaths] = useState<string[]>([])
+  const [expanded, setExpanded] = useState(false)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    const api = stagedApi()
+    void api.remoteGetStaged?.().then((p) => { if (Array.isArray(p)) setPaths(p) })
+    const off = api.remoteOnStagedChanged?.((d) => setPaths(d.paths ?? []))
+    return () => off?.()
+  }, [])
+  useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
+
+  if (paths.length === 0) return null
+
+  const open = () => {
+    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null }
+    setExpanded(true)
+  }
+  const scheduleClose = () => { closeTimer.current = setTimeout(() => setExpanded(false), 150) }
+
+  return (
+    <div
+      style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center' }}
+      onMouseEnter={open}
+      onMouseLeave={scheduleClose}
+    >
+      <div
+        style={{
+          height: 44,
+          borderRadius: 9999,
+          background: '#0E0E10',
+          border: '1px solid rgba(255, 255, 255, 0.55)',
+          boxShadow: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 10px',
+          gap: 4,
+        }}
+      >
+        <span style={{ fontSize: 13, lineHeight: 1 }} aria-hidden>🖼</span>
+        <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.85)', fontVariantNumeric: 'tabular-nums' }}>{paths.length}</span>
+        {/* hover → one numbered ✕ per image; click prunes it before it sends */}
+        {expanded && paths.map((p, i) => (
+          <button
+            key={p}
+            title={`Remove image ${i + 1} (${p.split('/').pop()})`}
+            onClick={() => void stagedApi().remoteUnstageImage?.(p)}
+            style={{
+              background: 'rgba(255,255,255,0.10)', border: 'none', borderRadius: 9999,
+              color: 'rgba(255,255,255,0.85)', fontSize: 11, lineHeight: 1,
+              padding: '4px 7px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3,
+            }}
+          >
+            {i + 1}<span style={{ opacity: 0.7 }}>✕</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // Per-SESSION raw toggle, shown next to the model badge during a Remote capture.
 // RAW = no Unmute memory injection (a clean Claude Code session). Reflects the
 // effective state (session override over the saved default); clicking sets a
@@ -460,6 +537,7 @@ export default function WidgetApp() {
       <div className="flex items-center justify-center" style={{ gap: '16px' }}>
         {isRemote && pillShowing && <RemoteBadge />}
         {isRemote && pillShowing && <RawToggle />}
+        {isRemote && pillShowing && <StagedImagesChip />}
         <Widget
           state={state}
           analyserNode={analyserNode}
