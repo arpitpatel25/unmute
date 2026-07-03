@@ -504,6 +504,7 @@ const CAPTURE_MAX_AUTO = 5
 let lastUtteranceEndedAt = 0
 let lastClipboardHash = ''
 let captureWatchTimer: ReturnType<typeof setInterval> | null = null
+let captureWatchGen = 0 // generation guard: a stale safety-stop must not kill a newer watch
 let screenshotDirCache: string | null = null
 
 function clipboardImage(): { hash: string; buf: Buffer } | null {
@@ -564,8 +565,9 @@ function stageRecentScreenshotFiles(sinceMs: number): void {
   } catch { /* no screenshot dir — fine */ }
 }
 
-/** Remote capture began: sweep the pre-hold window, then watch live. */
+/** A capture began (remote OR dictation): sweep the pre-hold window, then watch live. */
 function startCaptureWatch(): void {
+  captureWatchGen++
   const preholdSince = Math.max(lastUtteranceEndedAt, Date.now() - PREHOLD_WINDOW_MS)
   // Pre-hold: a clipboard image that changed since the last utterance + recent files.
   const clip = clipboardImage()
@@ -587,6 +589,14 @@ function stopCaptureWatch(): void {
   lastUtteranceEndedAt = Date.now()
   const c = clipboardImage()
   lastClipboardHash = c?.hash ?? lastClipboardHash // same image never re-attaches next time
+}
+
+/** Dictation delivery seam (clipboard.ts calls this after pasting the text):
+ *  hand over everything staged and close the watch window. The ledger's contract
+ *  holds across BOTH capture kinds — what the pill showed is what got delivered. */
+export function consumeStagedForDictation(): string[] {
+  stopCaptureWatch()
+  return takeStaged()
 }
 /** Consume the tray (one landing takes everything). */
 function takeStaged(): string[] {
@@ -884,6 +894,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       resumeOverlayEscape() // give Escape back to a still-visible overlay
       void deps.sessionManager.stopRemoteCapture()
       broadcastCapturePhase('transcribing')
+    } else if (e.type === 'session-start') {
+      // DICTATION captures get the screenshot ledger too (the pill 🖼 chip):
+      // capture-while-dictating pastes the images into the target app right
+      // after the text (see clipboard.ts injectOutput). Watch-only — the
+      // dictation flow itself is untouched.
+      startCaptureWatch()
+    } else if (e.type === 'session-stop') {
+      // Delivery consumes+stops in injectOutput; this is the safety stop for a
+      // cancelled/failed dictation so the watcher never polls indefinitely.
+      // Generation-guarded: never kills a NEWER capture's watch.
+      const gen = captureWatchGen
+      setTimeout(() => { if (captureWatchGen === gen) stopCaptureWatch() }, 20_000)
     }
   })
 

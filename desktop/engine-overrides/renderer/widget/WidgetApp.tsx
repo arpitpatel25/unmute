@@ -537,7 +537,10 @@ export default function WidgetApp() {
       <div className="flex items-center justify-center" style={{ gap: '16px' }}>
         {isRemote && pillShowing && <RemoteBadge />}
         {isRemote && pillShowing && <RawToggle />}
-        {isRemote && pillShowing && <StagedImagesChip />}
+        {/* the screenshot ledger shows for BOTH capture kinds — dictation pastes
+            the images into the target app after the text; Remote attaches them
+            to the task. Self-hides at zero. */}
+        {pillShowing && <StagedImagesChip />}
         <Widget
           state={state}
           analyserNode={analyserNode}

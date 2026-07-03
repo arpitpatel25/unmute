@@ -361,6 +361,33 @@ export async function injectOutput(text: string): Promise<void> {
     console.error(`[clipboard] Auto-paste FAILED after ${Date.now() - tStart}ms:`, err instanceof Error ? err.message : err)
     console.log('[clipboard] Text is in clipboard, user can Cmd+V manually')
   }
+
+  // ── Staged screenshots (ADDITIVE, fail-open): images captured during/just
+  // before this dictation ride into the SAME app, pasted right after the text —
+  // identical mechanism (clipboard + Cmd+V), one image per paste. The staging
+  // ledger (pill 🖼 chip) already gave the user visibility + pruning. Lazy
+  // require avoids an import cycle; ANY failure leaves dictation exactly as it
+  // was — text already delivered above.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const remote = require('./paywall/remote/init') as { consumeStagedForDictation?: () => string[] }
+    const staged = remote.consumeStagedForDictation?.() ?? []
+    if (staged.length) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { nativeImage } = require('electron') as typeof import('electron')
+      for (const path of staged) {
+        const img = nativeImage.createFromPath(path)
+        if (img.isEmpty()) continue
+        clipboard.writeImage(img)
+        await sleep(60) // pasteboard sync, then paste — per image
+        await simulateKeyCombo('v', 'command')
+        await sleep(140) // let the target app ingest before the next image
+      }
+      console.log(`[clipboard] pasted ${staged.length} staged screenshot(s) after dictation`)
+    }
+  } catch (err) {
+    console.warn('[clipboard] staged-screenshot paste skipped:', err instanceof Error ? err.message : err)
+  }
 }
 
 export function copyToClipboard(text: string): void {
