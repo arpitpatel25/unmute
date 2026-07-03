@@ -169,7 +169,7 @@ function RemoteBadge() {
 function stagedApi() {
   return window.electronAPI as unknown as {
     remoteGetStaged?: () => Promise<string[]>
-    remoteOnStagedChanged?: (cb: (d: { count: number; paths: string[] }) => void) => () => void
+    remoteOnStagedChanged?: (cb: (d: { count: number; paths: string[]; pending?: number }) => void) => () => void
     remoteUnstageImage?: (path: string) => Promise<boolean>
     remoteGetStagedPreviews?: () => Promise<Array<{ path: string; dataUrl: string }>>
     paywallSetHUDHeight?: (height: number) => Promise<boolean>
@@ -189,6 +189,7 @@ function ImageGlyph() {
 
 function StagedImagesChip() {
   const [paths, setPaths] = useState<string[]>([])
+  const [pending, setPending] = useState(0) // clipboard screenshot noticed mid-recording (readable only at key-lift)
   const [previews, setPreviews] = useState<Array<{ path: string; dataUrl: string }>>([])
   const [expanded, setExpanded] = useState(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -196,7 +197,7 @@ function StagedImagesChip() {
   useEffect(() => {
     const api = stagedApi()
     void api.remoteGetStaged?.().then((p) => { if (Array.isArray(p)) setPaths(p) })
-    const off = api.remoteOnStagedChanged?.((d) => setPaths(d.paths ?? []))
+    const off = api.remoteOnStagedChanged?.((d) => { setPaths(d.paths ?? []); setPending(d.pending ?? 0) })
     return () => off?.()
   }, [])
   // Refresh thumbnails whenever the dropdown is open and the set changes.
@@ -208,13 +209,15 @@ function StagedImagesChip() {
   // open, restore on close/unmount. Same seam the awareness card uses.
   useEffect(() => {
     const api = stagedApi()
-    if (expanded && paths.length) void api.paywallSetHUDHeight?.(Math.min(220, 60 + paths.length * 42 + 16))
+    const rows = paths.length + pending
+    if (expanded && rows) void api.paywallSetHUDHeight?.(Math.min(220, 60 + rows * 42 + 16))
     else void api.paywallSetHUDHeight?.(72)
     return () => { void stagedApi().paywallSetHUDHeight?.(72) }
-  }, [expanded, paths.length])
+  }, [expanded, paths.length, pending])
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
 
-  if (paths.length === 0) return null
+  const total = paths.length + pending
+  if (total === 0) return null
 
   const open = () => {
     if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null }
@@ -243,7 +246,7 @@ function StagedImagesChip() {
         }}
       >
         <ImageGlyph />
-        <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>{paths.length}</span>
+        <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>{total}</span>
       </div>
 
       {/* vertical dropdown: one row per image — thumbnail preview + remove */}
@@ -256,6 +259,16 @@ function StagedImagesChip() {
             zIndex: 10,
           }}
         >
+          {pending > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 56, height: 34, borderRadius: 5, background: 'rgba(255,255,255,0.08)', flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.35)' }}>
+                <ImageGlyph />
+              </div>
+              <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.55)', flex: 1 }}>
+                screenshot — attaches when you release
+              </span>
+            </div>
+          )}
           {paths.map((p) => {
             const preview = previews.find((v) => v.path === p)?.dataUrl
             return (

@@ -491,9 +491,13 @@ let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; a
 // speak-time. Files live under ~/.unmute/remote/staging (tiny, swept with age).
 const STAGING_DIR = join(homedir(), '.unmute', 'remote', 'staging')
 let stagedAttachments: string[] = []
+/** Clipboard screenshots NOTICED during recording but not yet readable (reading
+ *  the image mid-recording corrupts audio; the FORMAT list is free metadata).
+ *  Purely a counter for the pill — the real read happens at key-lift. */
+let pendingClipboardCount = 0
 function broadcastStaged(): void {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length, paths: stagedAttachments })
+    if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length + pendingClipboardCount, paths: stagedAttachments, pending: pendingClipboardCount })
   }
 }
 
@@ -606,7 +610,30 @@ function startCaptureWatch(): void {
   stageRecentScreenshotFiles(preholdSince)
   if (captureWatchTimer) clearInterval(captureWatchTimer)
   const startedAt = Date.now()
-  captureWatchTimer = setInterval(() => stageRecentScreenshotFiles(startedAt), 700)
+  // Clipboard AWARENESS while recording, without reading the image: the format
+  // list is metadata (no decode, no bytes). A no-image → image transition means
+  // the user just took a ⌃-screenshot — count it live on the pill ("1 screenshot");
+  // the actual read happens at key-lift. Undercounts a second ⌃-shot (formats
+  // can't distinguish image→new-image) — the lift sweep still delivers correctly.
+  pendingClipboardCount = 0
+  let clipboardHadImage = true
+  try {
+    const { clipboard } = require('electron') as typeof import('electron')
+    clipboardHadImage = clipboard.availableFormats().some((f) => f.startsWith('image/'))
+  } catch { /* assume true — never overcount */ }
+  captureWatchTimer = setInterval(() => {
+    stageRecentScreenshotFiles(startedAt)
+    try {
+      const { clipboard } = require('electron') as typeof import('electron')
+      const hasImage = clipboard.availableFormats().some((f) => f.startsWith('image/'))
+      if (hasImage && !clipboardHadImage && pendingClipboardCount === 0) {
+        pendingClipboardCount = 1
+        broadcastStaged()
+        log.event('capture-pending-clipboard', {})
+      }
+      clipboardHadImage = hasImage
+    } catch { /* metadata read failed — skip */ }
+  }, 700)
   ;(captureWatchTimer as { unref?: () => void }).unref?.()
 }
 
@@ -621,8 +648,11 @@ function stopCaptureWatch(): void {
   if (captureWatchTimer) { clearInterval(captureWatchTimer); captureWatchTimer = null }
   lastUtteranceEndedAt = Date.now()
   // End-of-capture sweep — catches a ⌃-screenshot taken mid-hold (recording has
-  // stopped by now, so the cost can't touch audio).
+  // stopped by now, so the cost can't touch audio). The real staging replaces
+  // the pending counter.
+  pendingClipboardCount = 0
   sweepClipboardOnce()
+  broadcastStaged()
 }
 
 /** Dictation delivery seam (clipboard.ts calls this after pasting the text):
@@ -829,6 +859,21 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const runId = String(Date.now())
   const logFile = configureRemoteLogging({ dir: logDir, runId })
   log.event('init-remote', { logFile, permissionMode: settings.get('permissionMode') })
+
+  // Staging hygiene: clipboard screenshots are WRITTEN to the staging dir (file
+  // screenshots are only referenced, never copied) and can't be deleted at send
+  // time — a Remote session may read the path minutes later. Age-sweep instead:
+  // anything older than 48h goes, once per launch. Keeps the disk honest.
+  try {
+    const { readdirSync, statSync, rmSync } = require('node:fs') as typeof import('node:fs')
+    const cutoff = Date.now() - 48 * 3600_000
+    let swept = 0
+    for (const entry of readdirSync(STAGING_DIR)) {
+      const full = join(STAGING_DIR, entry)
+      try { if (statSync(full).mtimeMs < cutoff) { rmSync(full, { force: true }); swept++ } } catch { /* skip */ }
+    }
+    if (swept) log.event('staging-swept', { swept })
+  } catch { /* staging dir doesn't exist yet — fine */ }
 
   // Resolve tmux once: if present, sessions run inside it so the live terminal
   // can be popped out to a real terminal app (same session). Write the minimal

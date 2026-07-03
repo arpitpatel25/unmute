@@ -63,6 +63,7 @@ declare module 'electron' {
   export const clipboard: {
     readImage(): NativeImage
     writeText(text: string): void
+    availableFormats(): string[]
   }
   export interface App { on(event: string, cb: (...a: unknown[]) => void): void }
   export const app: App
