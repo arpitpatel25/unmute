@@ -1220,8 +1220,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // hid the older root-level skill files — so scan recursively ourselves:
     // ~/.unmute/remote/{skills,recipes}/**/*.md + ~/.claude/skills entries.
     // Name = filename (they ARE the names); recency = file mtime. Zero tokens.
-    const { readdirSync, statSync } = await import('node:fs')
-    const out: Array<{ name: string; lastUsed: string }> = []
+    const { readdirSync, statSync, readFileSync } = await import('node:fs')
+    // The tooltip's substance: the skill's own frontmatter description (first
+    // ~4KB read, single-line 'description:' field — the format both stores use).
+    const descriptionOf = (mdPath: string): string => {
+      try {
+        const head = readFileSync(mdPath, 'utf8').slice(0, 4096)
+        const m = /^description:\s*(.+)$/m.exec(head)
+        return (m?.[1] ?? '').trim().slice(0, 600)
+      } catch { return '' }
+    }
+    const out: Array<{ name: string; lastUsed: string; description: string }> = []
     const walk = (dir: string, depth: number) => {
       if (depth > 3) return
       let entries: string[]
@@ -1233,20 +1242,23 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           const st = statSync(full)
           if (st.isDirectory()) { walk(full, depth + 1); continue }
           if (!entry.endsWith('.md')) continue
-          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: new Date(st.mtimeMs).toISOString().slice(0, 10) })
+          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: new Date(st.mtimeMs).toISOString().slice(0, 10), description: descriptionOf(full) })
         } catch { /* skip unreadable */ }
       }
     }
     walk(join(homedir(), '.unmute', 'remote', 'skills'), 0)
     walk(join(homedir(), '.unmute', 'remote', 'recipes'), 0)
-    // ~/.claude/skills: loose .md files AND skill folders (dir name = skill name).
+    // ~/.claude/skills: loose .md files AND skill folders (dir name = skill name,
+    // description in <dir>/SKILL.md).
     const claudeDir = join(homedir(), '.claude', 'skills')
     try {
       for (const entry of readdirSync(claudeDir)) {
         if (entry.startsWith('.')) continue
         try {
-          const st = statSync(join(claudeDir, entry))
-          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: new Date(st.mtimeMs).toISOString().slice(0, 10) })
+          const full = join(claudeDir, entry)
+          const st = statSync(full)
+          const description = st.isDirectory() ? descriptionOf(join(full, 'SKILL.md')) : descriptionOf(full)
+          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: new Date(st.mtimeMs).toISOString().slice(0, 10), description })
         } catch { /* skip */ }
       }
     } catch { /* no ~/.claude/skills — fine */ }

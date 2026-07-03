@@ -71,7 +71,7 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:attach-image', taskId, data, ext),
   /** Glance vocabulary: ALL skills (both memory tiers + ~/.claude/skills,
    *  recency-ranked) + known projects. */
-  remoteListSkills: (): Promise<Array<{ name: string; lastUsed: string }>> =>
+  remoteListSkills: (): Promise<Array<{ name: string; lastUsed: string; description: string }>> =>
     ipcRenderer.invoke('remote:list-skills'),
   remoteListProjects: (): Promise<Array<{ name: string; path: string }>> =>
     ipcRenderer.invoke('remote:list-projects'),
