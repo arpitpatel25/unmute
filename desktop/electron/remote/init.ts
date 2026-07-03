@@ -475,7 +475,7 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
   // 'transcribing' (key just lifted, recording stopped) so a mid-hold
   // ⌃-screenshot rides with THIS utterance, before routing delivers it.
   if (phase === 'listening') startCaptureWatch()
-  else if (phase === 'transcribing') probeClipboardViaChild() // final probe — key just lifted
+  else if (phase === 'transcribing') secureAndClearClipboard() // key just lifted — secure, then clear if consumed
   else if (phase === 'idle') stopCaptureWatch()
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
@@ -537,8 +537,11 @@ function sigOf(buf: Buffer): string {
 // (APFS clone, ~instant) → the pill chip counts up live with a REAL file.
 const CLIP_PROBE_FILE = () => join(STAGING_DIR, '.clip-probe.png')
 let clipProbeBusy = false
-function probeClipboardViaChild(markOnly = false): void {
-  if (clipProbeBusy || (!markOnly && stagedAttachments.length >= CAPTURE_MAX_AUTO)) return
+/** Did any clipboard image get STAGED during the current capture? Drives the
+ *  consume-then-clear at key-lift (we only clear what we delivered). */
+let clipStagedThisCapture = false
+function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, stagedNew: boolean) => void): void {
+  if (clipProbeBusy || (!markOnly && stagedAttachments.length >= CAPTURE_MAX_AUTO)) { onDone?.(false, false); return }
   clipProbeBusy = true
   try { mkdirSync(STAGING_DIR, { recursive: true }) } catch { /* ignore */ }
   const probe = CLIP_PROBE_FILE()
@@ -554,27 +557,47 @@ function probeClipboardViaChild(markOnly = false): void {
   ].flatMap((l) => ['-e', l])
   execFile('osascript', script, { timeout: 5000 }, (err) => {
     clipProbeBusy = false
-    if (err) return
+    if (err) { onDone?.(false, false); return }
     try {
       const { statSync, openSync, readSync, closeSync, copyFileSync, rmSync } = require('node:fs') as typeof import('node:fs')
       const st = statSync(probe)
-      if (!st.size) return
+      if (!st.size) { onDone?.(false, false); return }
       const head = Buffer.alloc(Math.min(4096, st.size))
       const fd = openSync(probe, 'r')
       readSync(fd, head, 0, head.length, 0)
       closeSync(fd)
       const md5 = require('node:crypto').createHash('md5').update(head).digest('hex') as string
       const sig = `${st.size}:${md5}`
-      if (knownClipSigs.has(sig)) return
+      if (knownClipSigs.has(sig)) { onDone?.(true, false); return }
       knownClipSigs.add(sig)
-      if (markOnly) return // baseline: pre-dictation image learned, never attached
+      if (markOnly) { onDone?.(true, false); return } // baseline: pre-dictation image learned, never attached
       const dest = join(STAGING_DIR, `capture-${Date.now()}-clipboard.png`)
       copyFileSync(probe, dest)
       try { rmSync(probe, { force: true }) } catch { /* next probe overwrites anyway */ }
       stagedAttachments.push(dest)
+      clipStagedThisCapture = true
       broadcastStaged()
       log.event('capture-staged', { file: dest, via: 'clipboard-probe' })
-    } catch { /* probe unreadable — skip */ }
+      onDone?.(true, true)
+    } catch { onDone?.(false, false) /* probe unreadable — skip */ }
+  })
+}
+
+/** Key-lift: secure any last clipboard screenshot, then — if this capture
+ *  consumed clipboard images — CLEAR the clipboard. Transcription (1-3s) gives
+ *  the clear ages to propagate, so the TEXT paste later races against an empty,
+ *  long-settled pasteboard = the ancient fast path that never failed. We only
+ *  clear what we delivered: a pre-dictation image we never staged is left alone. */
+function secureAndClearClipboard(): void {
+  if (settings.get('screenshotCapture') === false) return
+  probeClipboardViaChild(false, (sawImage, stagedNew) => {
+    if (sawImage && (stagedNew || clipStagedThisCapture)) {
+      try {
+        const { clipboard } = require('electron') as typeof import('electron')
+        clipboard.clear()
+        log.event('clipboard-cleared-after-consume', {})
+      } catch { /* best-effort */ }
+    }
   })
 }
 
@@ -653,6 +676,7 @@ function startCaptureWatch(): void {
   if (captureWatchTimer) clearInterval(captureWatchTimer)
   const startedAt = Date.now()
   pendingClipboardCount = 0
+  clipStagedThisCapture = false
   log.event('capture-watch-start', { dir: screenshotDir() })
   // DURING-DICTATION ONLY (the whole idea): what existed before key-down never
   // attaches. Baseline probe LEARNS the pre-existing clipboard image (markOnly);
@@ -999,9 +1023,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // dictation flow itself is untouched.
       startCaptureWatch()
     } else if (e.type === 'session-stop') {
-      // Key lifted → recording ended → one final probe catches a last-second
-      // ⌃-shot; transcription (1-3s) gives it time to land before delivery.
-      probeClipboardViaChild()
+      // Key lifted → recording ended → secure a last-second ⌃-shot, then clear
+      // the clipboard if this capture consumed images — so the text paste later
+      // never races a slow image payload. Transcription absorbs the latency.
+      secureAndClearClipboard()
       // Safety stop for a cancelled/failed dictation (generation-guarded:
       // never kills a NEWER capture's watch).
       const gen = captureWatchGen

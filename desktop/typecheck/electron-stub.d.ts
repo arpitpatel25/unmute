@@ -64,6 +64,7 @@ declare module 'electron' {
     readImage(): NativeImage
     writeText(text: string): void
     availableFormats(): string[]
+    clear(): void
   }
   export interface App { on(event: string, cb: (...a: unknown[]) => void): void }
   export const app: App

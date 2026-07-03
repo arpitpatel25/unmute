@@ -342,6 +342,28 @@ export function getOutputMode(): 'paste' | 'clipboard' {
   return outputMode
 }
 
+/** Ask a SEPARATE process whether the system pasteboard serves a PNG of the
+ *  expected byte size (`clipboard info` is a tiny metadata listing — no image
+ *  data crosses). Resolves true on confirmation, false on timeout (caller
+ *  pastes anyway — bounded, never hangs). */
+function verifyPasteboardServesPNG(expectedBytes: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  return new Promise((resolve) => {
+    const attempt = () => {
+      execFile('osascript', ['-e', 'clipboard info'], { timeout: 2000 }, (err, stdout) => {
+        if (!err && stdout) {
+          // e.g. "«class PNGf», 2189440, TIFF picture, 9640988"
+          const m = /«class PNGf», (\d+)/.exec(stdout)
+          if (m && Number(m[1]) === expectedBytes) { resolve(true); return }
+        }
+        if (Date.now() >= deadline) { resolve(false); return }
+        setTimeout(attempt, 60)
+      })
+    }
+    attempt()
+  })
+}
+
 export async function injectOutput(text: string): Promise<void> {
   const tStart = Date.now()
   // Consume the screenshot ledger BEFORE the text write below overwrites the
@@ -360,17 +382,14 @@ export async function injectOutput(text: string): Promise<void> {
     return
   }
 
-  // VERIFIED sync (was a blind 8ms sleep): when the clipboard previously held a
-  // large image (screenshot flows), pasteboard sync can exceed 8ms — Cmd+V then
-  // pastes the STALE IMAGE instead of the text (proven live: note ends with two
-  // images and no text). Poll until our text is actually readable, then paste.
-  {
-    const tSync = Date.now()
-    while (Date.now() - tSync < 300) {
-      try { if (clipboard.readText() === padded) break } catch { /* retry */ }
-      await sleep(15)
-    }
-  }
+  // Brief wait so the pasteboard write is observable to the target app before
+  // we post Cmd+V. TEXT MUST BE INSTANT — no verification here. The old race
+  // (Cmd+V pasting a stale IMAGE) is eliminated upstream: any consumed
+  // screenshot is CLEARED from the clipboard at key-lift, seconds before this
+  // runs, so the text-write only ever races an empty, long-settled pasteboard —
+  // the ancient fast path that never failed. (Own-process readText cannot
+  // verify cross-process propagation; polling it was proven useless.)
+  await sleep(8)
 
   try {
     await simulateKeyCombo('v', 'command')
@@ -392,16 +411,16 @@ export async function injectOutput(text: string): Promise<void> {
       for (const p of staged) {
         const img = nativeImage.createFromPath(p)
         if (img.isEmpty()) continue
+        const expectedBytes = img.toPNG().length
         clipboard.writeImage(img)
-        // Verified sync, image edition: writeImage clears the text — wait until
-        // the pasteboard no longer reads back our text before pasting.
-        const tSync = Date.now()
-        while (Date.now() - tSync < 300) {
-          try { if (clipboard.readText() !== padded) break } catch { /* retry */ }
-          await sleep(15)
-        }
+        // CROSS-PROCESS verified handoff (image latency is allowed): ask a child
+        // process (osascript `clipboard info`) whether the SYSTEM pasteboard
+        // actually serves our PNG — own-process reads reflect our own write
+        // instantly and prove nothing. Paste only once another process sees the
+        // exact payload (byte size match); bounded fallback keeps it un-hangable.
+        await verifyPasteboardServesPNG(expectedBytes, 900)
         await simulateKeyCombo('v', 'command')
-        await sleep(160) // let the target app ingest before the next image
+        await sleep(180) // let the target app ingest before the next image
       }
       // Leave the TEXT on the clipboard, not the last image — otherwise the
       // pasted image lingers and the next dictation's probe re-discovers it
