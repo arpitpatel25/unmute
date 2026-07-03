@@ -186,6 +186,9 @@ export const remotePreloadExtensions = {
   /** Pin/unpin a task's species: 'session' = persistent (no idle-kill/purge). */
   remoteSetKind: (id: string, kind: 'oneoff' | 'session'): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-kind', id, kind),
+  /** Voice-as-doorbell (§6.4): spoken headlines for needs-you states. */
+  remoteGetVoiceHeadlines: (): Promise<boolean> => ipcRenderer.invoke('remote:get-voice-headlines'),
+  remoteSetVoiceHeadlines: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-voice-headlines', on),
 
   // ── Onboarding / guided one-time setup (PRD §12) ──
   /** The setup checklist: auto-detected (MCP/Chrome profile) + user-confirmed steps. */

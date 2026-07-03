@@ -367,6 +367,21 @@ export default function OrchestrateWall() {
     const api = (window as unknown as { electronAPI?: { remoteAcceptRouteOffer?: (id: string) => Promise<boolean> } }).electronAPI
     void api?.remoteAcceptRouteOffer?.(o.newTaskId).then((ok) => { if (ok) focusRef.current?.(o.altTaskId) })
   }, [offer])
+
+  // Voice-as-doorbell toggle (§6.4): spoken headlines for needs-you states —
+  // one toggle away, and the cockpit is fully usable dead silent.
+  const [doorbell, setDoorbell] = useState(true)
+  useEffect(() => {
+    const api = (window as unknown as { electronAPI?: { remoteGetVoiceHeadlines?: () => Promise<boolean> } }).electronAPI
+    void api?.remoteGetVoiceHeadlines?.().then((v) => setDoorbell(v !== false))
+  }, [])
+  const toggleDoorbell = useCallback(() => {
+    setDoorbell((v) => {
+      const api = (window as unknown as { electronAPI?: { remoteSetVoiceHeadlines?: (on: boolean) => Promise<boolean> } }).electronAPI
+      void api?.remoteSetVoiceHeadlines?.(!v)
+      return !v
+    })
+  }, [])
   // focus() is declared below; a ref bridges the declaration order without
   // widening the dependency graph of this callback.
   const focusRef = useRef<((id: string | null) => void) | null>(null)
@@ -529,6 +544,13 @@ export default function OrchestrateWall() {
           </div>
         )}
       </div>
+
+      {/* doorbell toggle — bottom-right, out of the way, always reachable */}
+      <button onClick={toggleDoorbell}
+        title={doorbell ? 'Spoken headlines ON (task needs you → one spoken line). Click to silence.' : 'Spoken headlines OFF — fully silent. Click to enable.'}
+        style={{ position: 'absolute', right: 14, bottom: offer ? 52 : 12, fontFamily: C.mono, fontSize: 13, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9999, padding: '4px 10px', cursor: 'pointer', color: doorbell ? C.midText : C.faintText }}>
+        {doorbell ? '🔔' : '🔕'}
+      </button>
 
       {/* Declinable route offer: one tap redirects, ignoring costs nothing. */}
       {offer && (

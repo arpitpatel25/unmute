@@ -101,6 +101,10 @@ interface RemoteSettings {
   // default. The pill widget can override this per-session; this is the saved
   // default the Remote screen controls.
   forceRawMode: boolean
+  // §6.4 voice-as-doorbell: speak one terse headline when a task becomes
+  // actionable (needs-you/stuck/errored). ON by default; the product stays fully
+  // usable dead silent with this off — one toggle away (cockpit 🔔 chip).
+  voiceHeadlines: boolean
 }
 
 const settings = new Store<RemoteSettings>({
@@ -122,6 +126,7 @@ const settings = new Store<RemoteSettings>({
     overlayDocked: true,
     librarianWriteEnabled: false,
     forceRawMode: false,
+    voiceHeadlines: true,
   },
 })
 
@@ -459,6 +464,7 @@ let orchestrateFocusId: string | null = null
  *  broadcast beside the existing capture calls, zero touch of the capture path. */
 type CapturePhase = 'listening' | 'transcribing' | 'routing' | 'idle'
 function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): void {
+  captureBusy = phase !== 'idle' // the doorbell stays silent while the user speaks
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
   }
@@ -469,6 +475,31 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
  *  mis-spawn and reroutes the SAME intent into the alternate; ignoring it costs
  *  nothing and it simply expires in the UI. */
 let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; at: number } | null = null
+
+// ── Voice-as-doorbell (§6.4): one terse spoken headline when a task becomes
+// actionable — names the task, states the state, nothing else. Spoken ONLY for
+// attention-required states (needs-you / stuck / errored); "done" pops silently.
+// Serialized (one line at a time), deduped per task+state, NEVER spoken while a
+// capture is live (talking over the user's own dictation is the cardinal sin of
+// audio), and one toggle away (settings.voiceHeadlines; default ON). macOS `say`
+// — zero dependencies, fully offline, no own intelligence.
+let captureBusy = false
+const spokenState = new Map<string, string>()
+let sayChain: Promise<void> = Promise.resolve()
+function speakHeadline(t: Task, state: 'needs-user' | 'stuck' | 'failed'): void {
+  if (settings.get('voiceHeadlines') === false) return
+  // Dedupe on state + question text: the same blocked question never re-rings,
+  // but a NEW question on the same task rings again (it IS newly actionable).
+  const ringKey = `${state}:${t.question?.text ?? ''}`
+  if (spokenState.get(t.id) === ringKey) return
+  spokenState.set(t.id, ringKey)
+  const label = state === 'needs-user' ? 'needs you' : state === 'stuck' ? 'is stuck' : 'failed'
+  const name = (t.name || t.intent || 'a task').slice(0, 60)
+  sayChain = sayChain.then(() => new Promise<void>((resolve) => {
+    if (captureBusy) { resolve(); return } // the user is speaking — stay silent
+    try { execFile('say', [`${name} ${label}`], () => resolve()) } catch { resolve() }
+  })).catch(() => {})
+}
 
 export async function dispatchFromCapture(rawTranscript: string): Promise<string | null> {
   // Observe the routing phase for the wall's listening surface — the dispatch
@@ -744,6 +775,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     broadcast('remote:task-needs-user', t)
     maybePresent(t)
     reconcileDock(activeTaskCount())
+    speakHeadline(t, 'needs-user') // §6.4 doorbell: terse, serialized, toggleable
   })
   manager.on('done', (t: Task) => {
     broadcast('remote:task-done', t)
@@ -756,12 +788,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     maybePresent(t)
     reconcileDock(activeTaskCount())
     notify('Task failed', t.mcpGap ? t.mcpGap.message : (t.error?.reason ?? t.intent))
+    speakHeadline(t, 'failed')
   })
   manager.on('stuck', (t: Task) => {
     broadcast('remote:task-stuck', t)
     maybePresent(t)
     reconcileDock(activeTaskCount())
     notify('Task may be stuck', t.intent)
+    speakHeadline(t, 'stuck')
   })
   // Task erased (Kill/Delete) → tell renderers to drop the row + update the dock.
   manager.on('removed', (t: Task) => {
@@ -805,6 +839,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Current terminal owner — lets a freshly-mounted overlay card learn it owns
   // nothing (or that the wall already owns its session) without waiting for an event.
   ipcMain.handle('remote:get-orchestrate-owner', async () => orchestrateFocusId)
+  // Voice-as-doorbell toggle (§6.4) — read + set from the cockpit's 🔔 chip.
+  ipcMain.handle('remote:get-voice-headlines', async () => settings.get('voiceHeadlines') !== false)
+  ipcMain.handle('remote:set-voice-headlines', async (_e, on: boolean) => { settings.set('voiceHeadlines', !!on); return true })
   // Pin/unpin a task's species from the UI (manual graduation §5): 'session'
   // exempts it from idle-kill + purge; 'oneoff' re-arms normal lifecycle.
   ipcMain.handle('remote:set-kind', async (_e, id: string, kind: 'oneoff' | 'session') => {
