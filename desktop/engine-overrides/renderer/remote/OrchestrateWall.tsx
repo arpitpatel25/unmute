@@ -413,7 +413,10 @@ export default function OrchestrateWall() {
   // Glance vocabulary (rails): skills + projects from disk, so the words you can
   // SAY are always in front of you. Loaded on mount, refreshed every 5 min.
   const [skills, setSkills] = useState<Array<{ name: string; lastUsed: string; description: string }>>([])
-  const [hoveredSkill, setHoveredSkill] = useState<string | null>(null)
+  // Anchor coords captured at hover time — the card renders at WINDOW level
+  // (position: fixed) because the rail is overflow:auto and clips anything
+  // placed outside it (the bug: tooltips positioned left of the rail never showed).
+  const [hoveredSkill, setHoveredSkill] = useState<{ name: string; top: number; rightPx: number } | null>(null)
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   useEffect(() => {
     const api = (window as unknown as { electronAPI?: { remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string }>>; remoteListProjects?: () => Promise<Array<{ name: string; path: string }>> } }).electronAPI
@@ -748,26 +751,15 @@ export default function OrchestrateWall() {
                     {skills.map((s) => (
                       <div
                         key={s.name}
-                        style={{ position: 'relative', display: 'flex', alignItems: 'baseline', gap: 8, padding: '3px 0', cursor: 'default' }}
-                        onMouseEnter={() => setHoveredSkill(s.name)}
-                        onMouseLeave={() => setHoveredSkill((h) => (h === s.name ? null : h))}
+                        style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '3px 0', cursor: 'default' }}
+                        onMouseEnter={(e) => {
+                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                          setHoveredSkill({ name: s.name, top: r.top, rightPx: window.innerWidth - r.left + 12 })
+                        }}
+                        onMouseLeave={() => setHoveredSkill((h) => (h?.name === s.name ? null : h))}
                       >
-                        <span style={{ fontSize: 11.5, color: hoveredSkill === s.name ? C.nameText : C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{s.name}</span>
+                        <span style={{ fontSize: 11.5, color: hoveredSkill?.name === s.name ? C.nameText : C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{s.name}</span>
                         <span style={{ fontSize: 10, color: C.faintText, flex: 'none' }}>{s.lastUsed ? s.lastUsed.slice(5, 10) : ''}</span>
-                        {hoveredSkill === s.name && (
-                          <div style={{
-                            position: 'absolute', right: 'calc(100% + 12px)', top: -6, width: 300, zIndex: 40,
-                            background: 'rgba(21, 24, 29, 0.96)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
-                            border: `1px solid ${C.borderHi}`, borderRadius: 9, padding: '11px 13px',
-                            pointerEvents: 'none', fontFamily: C.mono,
-                          }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: C.nameText, marginBottom: 5, wordBreak: 'break-all' }}>{s.name}</div>
-                            <div style={{ fontSize: 11.5, color: C.midText, lineHeight: 1.55, whiteSpace: 'normal' }}>
-                              {s.description || 'No description in this skill\u2019s frontmatter.'}
-                            </div>
-                            <div style={{ fontSize: 10, color: C.faintText, marginTop: 7 }}>last used {s.lastUsed || 'unknown'} · say its name to use it</div>
-                          </div>
-                        )}
                       </div>
                     ))}
                   </RailSection>
@@ -788,6 +780,26 @@ export default function OrchestrateWall() {
             style={{ background: 'none', border: 'none', color: C.dimText, cursor: 'pointer', fontFamily: C.mono, fontSize: 12, padding: 0 }}>✕</button>
         </div>
       )}
+
+      {/* skill hover card — WINDOW level (fixed) so the scrollable rail can't clip it */}
+      {hoveredSkill && (() => {
+        const sk = skills.find((x) => x.name === hoveredSkill.name)
+        if (!sk) return null
+        return (
+          <div style={{
+            position: 'fixed', right: hoveredSkill.rightPx, top: Math.max(10, Math.min(hoveredSkill.top - 6, window.innerHeight - 180)), width: 300, zIndex: 60,
+            background: 'rgba(21, 24, 29, 0.96)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+            border: `1px solid ${C.borderHi}`, borderRadius: 9, padding: '11px 13px',
+            pointerEvents: 'none', fontFamily: C.mono,
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.nameText, marginBottom: 5, wordBreak: 'break-all' }}>{sk.name}</div>
+            <div style={{ fontSize: 11.5, color: C.midText, lineHeight: 1.55, whiteSpace: 'normal' }}>
+              {sk.description || 'No description in this skill\u2019s frontmatter.'}
+            </div>
+            <div style={{ fontSize: 10, color: C.faintText, marginTop: 7 }}>last used {sk.lastUsed || 'unknown'} · say its name to use it</div>
+          </div>
+        )
+      })()}
 
       {/* doorbell toggle — bottom-right, out of the way, always reachable */}
       <button onClick={toggleDoorbell}
