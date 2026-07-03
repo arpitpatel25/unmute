@@ -1,8 +1,12 @@
-import { clipboard, app } from 'electron'
+import { clipboard, app, nativeImage } from 'electron'
 import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import path from 'path'
 import { keyListener } from './keyListener'
+// Static import (a lazy require of this path can't resolve inside the bundled
+// main — proven live: 'Cannot find module' swallowed by the fail-open catch).
+// No cycle: remote/init never imports clipboard.ts.
+import { consumeStagedForDictation } from './paywall/remote/init'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -369,14 +373,10 @@ export async function injectOutput(text: string): Promise<void> {
   // require avoids an import cycle; ANY failure leaves dictation exactly as it
   // was — text already delivered above.
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const remote = require('./paywall/remote/init') as { consumeStagedForDictation?: () => string[] }
-    const staged = remote.consumeStagedForDictation?.() ?? []
+    const staged = consumeStagedForDictation()
     if (staged.length) {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { nativeImage } = require('electron') as typeof import('electron')
-      for (const path of staged) {
-        const img = nativeImage.createFromPath(path)
+      for (const p of staged) {
+        const img = nativeImage.createFromPath(p)
         if (img.isEmpty()) continue
         clipboard.writeImage(img)
         await sleep(60) // pasteboard sync, then paste — per image
