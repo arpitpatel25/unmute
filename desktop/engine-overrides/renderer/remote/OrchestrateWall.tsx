@@ -278,6 +278,8 @@ function RailSection({ title, children }: { title: string; children: React.React
   )
 }
 
+type CapturePhase = 'listening' | 'transcribing' | 'routing' | 'idle'
+
 export default function OrchestrateWall() {
   const { tasks, answer } = useRemoteTasks()
   const [focusedId, setFocusedId] = useState<string | null>(null)
@@ -285,6 +287,26 @@ export default function OrchestrateWall() {
   const [now, setNow] = useState(() => Date.now())
   const tasksRef = useRef(tasks)
   tasksRef.current = tasks
+
+  // The listening surface: live voice lifecycle (listening → transcribing →
+  // routing → idle+landed). Observed from main's additive broadcast — the wall
+  // never drives the capture. `landedId` flashes target confirmation (§9):
+  // "your words went THERE."
+  const [capturePhase, setCapturePhase] = useState<CapturePhase>('idle')
+  const [landedId, setLandedId] = useState<string | null>(null)
+  const landedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    const api = (window as unknown as { electronAPI?: { remoteOnCapturePhase?: (cb: (d: { phase: CapturePhase; taskId: string | null }) => void) => () => void } }).electronAPI
+    const off = api?.remoteOnCapturePhase?.((d) => {
+      setCapturePhase(d.phase)
+      if (d.phase === 'idle' && d.taskId) {
+        setLandedId(d.taskId)
+        if (landedTimer.current) clearTimeout(landedTimer.current)
+        landedTimer.current = setTimeout(() => setLandedId(null), 3500)
+      }
+    })
+    return () => { off?.(); if (landedTimer.current) clearTimeout(landedTimer.current) }
+  }, [])
 
   useEffect(() => {
     const i = setInterval(() => setNow(Date.now()), 1000)
@@ -432,15 +454,46 @@ export default function OrchestrateWall() {
         )}
       </div>
 
-      {/* Voice address (§6.2): always shows where the NEXT utterance lands, so the
-          user sees it BEFORE speaking. The live hold-to-speak listening surface
-          layers on top of this once the capture-state broadcast is wired. */}
-      <div style={{ position: 'absolute', left: 14, bottom: 12, display: 'flex', alignItems: 'center', gap: 7, fontFamily: C.mono, fontSize: 11, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9999, padding: '5px 12px', pointerEvents: 'none' }}>
-        <span aria-hidden>🎙</span>
-        <span style={{ color: C.dimText }}>voice →</span>
-        <span style={{ color: focused ? '#3fb950' : C.midText, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {focused ? nameOf(focused) : 'new task'}
-        </span>
+      {/* The listening surface (§6.2/§9): live voice lifecycle. Idle → where the
+          NEXT utterance lands (visible BEFORE speaking). Listening → pulsing mic.
+          Transcribing/routing → in flight. Landed → target confirmation flash. */}
+      <style>{`@keyframes wall-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }`}</style>
+      <div style={{
+        position: 'absolute', left: 14, bottom: 12, display: 'flex', alignItems: 'center', gap: 7,
+        fontFamily: C.mono, fontSize: 11, background: C.surface, borderRadius: 9999, padding: '5px 12px', pointerEvents: 'none',
+        border: `1px solid ${capturePhase === 'listening' ? '#3fb950' : C.border}`,
+        transition: 'border-color 150ms',
+      }}>
+        {capturePhase === 'listening' ? (
+          <>
+            <span style={{ width: 8, height: 8, borderRadius: 9999, background: '#3fb950', animation: 'wall-pulse 1.1s ease-in-out infinite' }} />
+            <span style={{ color: C.nameText }}>listening →</span>
+            <span style={{ color: '#3fb950', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {focused ? nameOf(focused) : 'new task'}
+            </span>
+          </>
+        ) : capturePhase === 'transcribing' || capturePhase === 'routing' ? (
+          <>
+            <span style={{ width: 8, height: 8, borderRadius: 9999, background: '#d29922', animation: 'wall-pulse 0.7s ease-in-out infinite' }} />
+            <span style={{ color: C.midText }}>{capturePhase === 'routing' ? 'routing…' : 'transcribing…'}</span>
+          </>
+        ) : landedId ? (
+          <>
+            <span aria-hidden>🎙</span>
+            <span style={{ color: C.dimText }}>landed →</span>
+            <span style={{ color: '#3fb950', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {(() => { const lt = tasks.find((x) => x.id === landedId); return lt ? nameOf(lt) : 'new task' })()}
+            </span>
+          </>
+        ) : (
+          <>
+            <span aria-hidden>🎙</span>
+            <span style={{ color: C.dimText }}>voice →</span>
+            <span style={{ color: focused ? '#3fb950' : C.midText, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {focused ? nameOf(focused) : 'new task'}
+            </span>
+          </>
+        )}
       </div>
     </div>
   )

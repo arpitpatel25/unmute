@@ -453,7 +453,32 @@ export function registerIntentCleanupLLM(fn: CompleteFn): void {
 // spine: the user can SEE where their voice lands before they speak.
 let orchestrateFocusId: string | null = null
 
+/** The voice lifecycle, observed (never driven) for the wall's listening surface:
+ *  listening (key held) → transcribing (key up, STT running) → routing (deciding
+ *  where it lands) → idle (landed; taskId says where). PURELY ADDITIVE — a
+ *  broadcast beside the existing capture calls, zero touch of the capture path. */
+type CapturePhase = 'listening' | 'transcribing' | 'routing' | 'idle'
+function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
+  }
+}
+
 export async function dispatchFromCapture(rawTranscript: string): Promise<string | null> {
+  // Observe the routing phase for the wall's listening surface — the dispatch
+  // logic itself (the inner function) is untouched. `finally` guarantees the
+  // surface always returns to idle, whatever path the dispatch takes.
+  broadcastCapturePhase('routing')
+  let landed: string | null = null
+  try {
+    landed = await dispatchFromCaptureInner(rawTranscript)
+    return landed
+  } finally {
+    broadcastCapturePhase('idle', landed)
+  }
+}
+
+async function dispatchFromCaptureInner(rawTranscript: string): Promise<string | null> {
   if (!manager) {
     log.error('dispatchFromCapture before initRemote')
     return null
@@ -647,10 +672,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       void router?.warm() // ensure the classifier is ready before the utterance lands (re-warms if it died)
       pauseOverlayEscape() // capture owns Escape (cancel) while recording
       deps.sessionManager.startRemoteCapture()
+      broadcastCapturePhase('listening') // ADDITIVE observer — the capture itself is untouched
     } else if (e.type === 'remote-stop') {
       log.event('remote-key', { phase: 'stop' })
       resumeOverlayEscape() // give Escape back to a still-visible overlay
       void deps.sessionManager.stopRemoteCapture()
+      broadcastCapturePhase('transcribing')
     }
   })
 

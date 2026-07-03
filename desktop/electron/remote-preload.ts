@@ -166,6 +166,13 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('remote:orchestrate-owner', handler)
     return () => ipcRenderer.removeListener('remote:orchestrate-owner', handler)
   },
+  /** Voice lifecycle for the wall's listening surface: listening → transcribing →
+   *  routing → idle (taskId = where it landed). Observed, never driven. */
+  remoteOnCapturePhase: (cb: (d: { phase: 'listening' | 'transcribing' | 'routing' | 'idle'; taskId: string | null }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { phase: 'listening' | 'transcribing' | 'routing' | 'idle'; taskId: string | null }) => cb(d)
+    ipcRenderer.on('remote:capture-phase', handler)
+    return () => ipcRenderer.removeListener('remote:capture-phase', handler)
+  },
 
   // ── Onboarding / guided one-time setup (PRD §12) ──
   /** The setup checklist: auto-detected (MCP/Chrome profile) + user-confirmed steps. */
