@@ -1128,6 +1128,19 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     }
   })
   ipcMain.handle('remote:get-staged', async () => stagedAttachments)
+  // Thumbnails for the pill ledger's dropdown — you can't judge "should I remove
+  // this?" from a number. Small data-URLs (CSP-proof; file:// is blocked in the
+  // renderer), freshly derived per call.
+  ipcMain.handle('remote:staged-previews', async () => {
+    const { nativeImage } = require('electron') as typeof import('electron')
+    return stagedAttachments.map((path) => {
+      try {
+        const img = nativeImage.createFromPath(path)
+        if (img.isEmpty()) return { path, dataUrl: '' }
+        return { path, dataUrl: img.resize({ height: 80 }).toDataURL() }
+      } catch { return { path, dataUrl: '' } }
+    })
+  })
   ipcMain.handle('remote:clear-staged', async () => { stagedAttachments = []; broadcastStaged(); return true })
   // Prune one staged image (the pill strip's ✕) — reversibility before send.
   ipcMain.handle('remote:unstage-image', async (_e, path: string) => {

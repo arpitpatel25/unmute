@@ -171,11 +171,25 @@ function stagedApi() {
     remoteGetStaged?: () => Promise<string[]>
     remoteOnStagedChanged?: (cb: (d: { count: number; paths: string[] }) => void) => () => void
     remoteUnstageImage?: (path: string) => Promise<boolean>
+    remoteGetStagedPreviews?: () => Promise<Array<{ path: string; dataUrl: string }>>
+    paywallSetHUDHeight?: (height: number) => Promise<boolean>
   }
+}
+
+// Clean line-drawn image glyph (currentColor, no emoji).
+function ImageGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
+      <path d="M21 15l-5-5L5 21" />
+    </svg>
+  )
 }
 
 function StagedImagesChip() {
   const [paths, setPaths] = useState<string[]>([])
+  const [previews, setPreviews] = useState<Array<{ path: string; dataUrl: string }>>([])
   const [expanded, setExpanded] = useState(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -185,6 +199,19 @@ function StagedImagesChip() {
     const off = api.remoteOnStagedChanged?.((d) => setPaths(d.paths ?? []))
     return () => off?.()
   }, [])
+  // Refresh thumbnails whenever the dropdown is open and the set changes.
+  useEffect(() => {
+    if (!expanded) return
+    void stagedApi().remoteGetStagedPreviews?.().then((p) => { if (Array.isArray(p)) setPreviews(p) })
+  }, [expanded, paths])
+  // The dropdown extends below the pill row — grow the (72px) HUD window while
+  // open, restore on close/unmount. Same seam the awareness card uses.
+  useEffect(() => {
+    const api = stagedApi()
+    if (expanded && paths.length) void api.paywallSetHUDHeight?.(Math.min(220, 60 + paths.length * 42 + 16))
+    else void api.paywallSetHUDHeight?.(72)
+    return () => { void stagedApi().paywallSetHUDHeight?.(72) }
+  }, [expanded, paths.length])
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
 
   if (paths.length === 0) return null
@@ -193,11 +220,11 @@ function StagedImagesChip() {
     if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null }
     setExpanded(true)
   }
-  const scheduleClose = () => { closeTimer.current = setTimeout(() => setExpanded(false), 150) }
+  const scheduleClose = () => { closeTimer.current = setTimeout(() => setExpanded(false), 200) }
 
   return (
     <div
-      style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center' }}
+      style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center', position: 'relative' }}
       onMouseEnter={open}
       onMouseLeave={scheduleClose}
     >
@@ -210,28 +237,47 @@ function StagedImagesChip() {
           boxShadow: 'none',
           display: 'flex',
           alignItems: 'center',
-          padding: '0 10px',
-          gap: 4,
+          padding: '0 12px',
+          gap: 6,
+          color: 'rgba(255,255,255,0.85)',
         }}
       >
-        <span style={{ fontSize: 13, lineHeight: 1 }} aria-hidden>🖼</span>
-        <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.85)', fontVariantNumeric: 'tabular-nums' }}>{paths.length}</span>
-        {/* hover → one numbered ✕ per image; click prunes it before it sends */}
-        {expanded && paths.map((p, i) => (
-          <button
-            key={p}
-            title={`Remove image ${i + 1} (${p.split('/').pop()})`}
-            onClick={() => void stagedApi().remoteUnstageImage?.(p)}
-            style={{
-              background: 'rgba(255,255,255,0.10)', border: 'none', borderRadius: 9999,
-              color: 'rgba(255,255,255,0.85)', fontSize: 11, lineHeight: 1,
-              padding: '4px 7px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3,
-            }}
-          >
-            {i + 1}<span style={{ opacity: 0.7 }}>✕</span>
-          </button>
-        ))}
+        <ImageGlyph />
+        <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>{paths.length}</span>
       </div>
+
+      {/* vertical dropdown: one row per image — thumbnail preview + remove */}
+      {expanded && (
+        <div
+          style={{
+            position: 'absolute', top: 48, left: 0, minWidth: 168,
+            background: '#0E0E10', border: '1px solid rgba(255,255,255,0.35)',
+            borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 4,
+            zIndex: 10,
+          }}
+        >
+          {paths.map((p) => {
+            const preview = previews.find((v) => v.path === p)?.dataUrl
+            return (
+              <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {preview ? (
+                  <img src={preview} alt="" style={{ width: 56, height: 34, objectFit: 'cover', borderRadius: 5, border: '1px solid rgba(255,255,255,0.15)', flex: 'none' }} />
+                ) : (
+                  <div style={{ width: 56, height: 34, borderRadius: 5, background: 'rgba(255,255,255,0.08)', flex: 'none' }} />
+                )}
+                <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.55)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, maxWidth: 120 }}>
+                  {p.split('/').pop()}
+                </span>
+                <button
+                  title="Remove — won't be sent"
+                  onClick={() => void stagedApi().remoteUnstageImage?.(p)}
+                  style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)', fontSize: 13, lineHeight: 1, padding: '4px 6px', cursor: 'pointer', flex: 'none' }}
+                >✕</button>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

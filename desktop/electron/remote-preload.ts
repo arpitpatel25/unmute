@@ -85,6 +85,9 @@ export const remotePreloadExtensions = {
   remoteGetStaged: (): Promise<string[]> => ipcRenderer.invoke('remote:get-staged'),
   remoteClearStaged: (): Promise<boolean> => ipcRenderer.invoke('remote:clear-staged'),
   remoteUnstageImage: (path: string): Promise<boolean> => ipcRenderer.invoke('remote:unstage-image', path),
+  /** Small data-URL thumbnails of the staged images (for the pill dropdown). */
+  remoteGetStagedPreviews: (): Promise<Array<{ path: string; dataUrl: string }>> =>
+    ipcRenderer.invoke('remote:staged-previews'),
   remoteOnStagedChanged: (cb: (d: { count: number; paths: string[] }) => void): (() => void) => {
     const handler = (_e: unknown, d: { count: number; paths: string[] }) => cb(d)
     ipcRenderer.on('remote:staged-changed', handler)

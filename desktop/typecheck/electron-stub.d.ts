@@ -51,6 +51,19 @@ declare module 'electron' {
     openExternal(url: string, options?: { activate?: boolean }): Promise<void>
     openPath(path: string): Promise<string>
   }
+  export interface NativeImage {
+    isEmpty(): boolean
+    toPNG(): Buffer
+    resize(opts: { width?: number; height?: number }): NativeImage
+    toDataURL(): string
+  }
+  export const nativeImage: {
+    createFromPath(path: string): NativeImage
+  }
+  export const clipboard: {
+    readImage(): NativeImage
+    writeText(text: string): void
+  }
   export interface App { on(event: string, cb: (...a: unknown[]) => void): void }
   export const app: App
   export class Notification {
