@@ -489,6 +489,23 @@ export default function OrchestrateWall() {
   // keep capturing the voice after the user leaves the cockpit.
   useEffect(() => () => setMainFocus(null), [])
 
+  // Focus hygiene (the "Happy Rates!" lesson): the focused stage is the voice
+  // address ONLY while the cockpit window itself has the user's attention. The
+  // moment they switch to another app, the address is released (utterances route
+  // normally); returning to the cockpit re-asserts it. The visual stage never
+  // moves — only where the voice lands. Predictable: what you see is the address.
+  const [winFocused, setWinFocused] = useState(() => document.hasFocus())
+  useEffect(() => {
+    const onBlur = () => { setWinFocused(false); setMainFocus(null) }
+    const onFocus = () => { setWinFocused(true); setMainFocus(focusedId) }
+    window.addEventListener('blur', onBlur)
+    window.addEventListener('focus', onFocus)
+    return () => { window.removeEventListener('blur', onBlur); window.removeEventListener('focus', onFocus) }
+  }, [focusedId])
+  // What the voice chip must show: the ADDRESS, which is the focused task only
+  // while the window has attention. The chip may never lie (§6.2).
+  const voiceTarget = winFocused ? focused : null
+
   // The crank (§6.4): YOU advance to the next queued item; the system never does.
   const crank = useCallback(() => {
     const q = queue
@@ -657,7 +674,7 @@ export default function OrchestrateWall() {
             <span style={{ width: 8, height: 8, borderRadius: 9999, background: '#3fb950', animation: 'wall-pulse 1.1s ease-in-out infinite' }} />
             <span style={{ color: C.nameText }}>listening →</span>
             <span style={{ color: '#3fb950', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {focused ? nameOf(focused) : 'new task'}
+              {voiceTarget ? nameOf(voiceTarget) : 'new task'}
             </span>
           </>
         ) : capturePhase === 'transcribing' || capturePhase === 'routing' ? (
@@ -677,8 +694,8 @@ export default function OrchestrateWall() {
           <>
             <span aria-hidden>🎙</span>
             <span style={{ color: C.dimText }}>voice →</span>
-            <span style={{ color: focused ? '#3fb950' : C.midText, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {focused ? nameOf(focused) : 'new task'}
+            <span style={{ color: voiceTarget ? '#3fb950' : C.midText, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {voiceTarget ? nameOf(voiceTarget) : 'new task'}
             </span>
           </>
         )}

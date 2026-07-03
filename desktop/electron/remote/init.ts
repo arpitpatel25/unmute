@@ -530,13 +530,18 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
   //    the router uses (answer a blocked task / followUp to continue) — no new send.
   if (orchestrateFocusId && manager.list().some((t) => t.id === orchestrateFocusId)) {
     const fid = orchestrateFocusId
+    // Hygiene: the deterministic path skips the router, so it must not skip
+    // CLEANUP — an STT misfire ("Happy Rates!") would land verbatim otherwise.
+    // Best-effort: without a wired completeFn the raw transcript passes through
+    // (status quo); delivery stays deterministic either way.
+    const text = completeFn ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
     const awaiting = manager.tasksAwaitingUser().some((t) => t.id === fid)
     if (awaiting) {
-      manager.answer(fid, raw)
+      manager.answer(fid, text)
       log.event('routed-to-focus', { taskId: fid, kind: 'answer' })
       return fid
     }
-    if (manager.followUp(fid, raw)) {
+    if (manager.followUp(fid, text)) {
       log.event('routed-to-focus', { taskId: fid, kind: 'continue' })
       return fid
     }
@@ -556,7 +561,16 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // The user's real project universe (curated + recency-ranked, read-only
       // from ~/.claude.json) — what lets the router bind a session to a repo.
       const projects = await knownProjects().catch(() => [])
-      const decision = await router.route(raw, routableSnapshot(Date.now()), projects)
+      // Short-term memory: recently finished tasks (sessions gone) so "change
+      // the song" still resolves — as a self-contained NEW intent, never a
+      // resurrection.
+      const nowMs = Date.now()
+      const finished = manager.recentlyFinished().map((t) => ({
+        id: t.id, intent: t.intent, name: t.name ?? null, state: t.state,
+        kind: t.kind ?? 'oneoff', category: t.category ?? null,
+        ageSec: Math.max(0, Math.round((nowMs - t.updatedAt) / 1000)),
+      }))
+      const decision = await router.route(raw, routableSnapshot(nowMs), projects, finished)
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       if (decision.action === 'continue' && decision.targetTaskId) {

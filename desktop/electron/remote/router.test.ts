@@ -274,3 +274,15 @@ test('parseDecision: router-minted name honored on new; junk names dropped', () 
   const d3 = parseDecision(`{"action":"new","intent":"x","name":"${long}"}`, 'r', [])
   assert.equal(d3.name, undefined)
 })
+
+test('buildRoutingPrompt: recently-finished section is context-only (no ids, non-continuable framing)', () => {
+  const finished: RoutableTask[] = [{ id: 'dead1', intent: 'Play Wolf by Selena Gomez on YouTube', name: 'Selena Gomez song', state: 'done', ageSec: 150 }]
+  const p = buildRoutingPrompt('change the song to Charlie Puth', [], '/d/decision.json', [], finished)
+  assert.ok(p.includes('Recently FINISHED'), 'section present')
+  assert.ok(p.includes('Selena Gomez song'), 'finished task named for reference resolution')
+  assert.ok(p.includes('SELF-CONTAINED'), 'instructs carrying context into a new intent')
+  assert.ok(!p.includes('[dead1]'), 'finished ids are never offered as targets')
+  // continue → a finished id is rejected at parse (not in valid targets)
+  const d = parseDecision('{"action":"continue","targetTaskId":"dead1","intent":"x"}', 'x', [])
+  assert.equal(d.action, 'new', 'continue into the dead falls back safely')
+})

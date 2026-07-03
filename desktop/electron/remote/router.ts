@@ -100,7 +100,7 @@ export function fmtAge(ageSec: number): string {
 
 /** The instruction we type into the warm REPL each call. Self-contained: the
  *  router relies on THIS snapshot, not on accumulated memory (keeps it thin). */
-export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string, projects: RoutableProject[] = []): string {
+export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string, projects: RoutableProject[] = [], finished: RoutableTask[] = []): string {
   const lines = tasks.map((t) =>
     `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — ${t.state}` +
     `${t.kind === 'session' ? ' · PERSISTENT SESSION' : ''}${t.project ? ` · project: ${t.project}` : ''}` +
@@ -108,6 +108,9 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     (t.awaiting ? ` · ⏳ BLOCKED — awaiting your answer to: "${t.question || ''}"` : ''),
   )
   const projectLines = projects.map((p) => `  ${p.name} → ${p.path}`)
+  const finishedLines = finished.map((t) =>
+    `  ${t.name ? `"${t.name}" — ` : ''}"${t.intent}" — finished (${t.state}) · ${fmtAge(t.ageSec)}`,
+  )
   return [
     `[Unmute router] You route a spoken command to where it belongs. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else — no tools, no browser, no research.`,
     ``,
@@ -166,6 +169,16 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
       `open task already covers it, choose NEW with "dir" set to that EXACT path`,
       `(copy it verbatim; never invent or modify a path, never use one not listed):`,
       ...projectLines,
+    ] : []),
+    ...(finishedLines.length ? [
+      ``,
+      `Recently FINISHED tasks — their sessions are GONE and can NOT be continued`,
+      `(never emit their ids). They exist only as context: when the command refers`,
+      `to one — a pronoun, "change it", "close that", "the song" — choose NEW and`,
+      `write an intent that is fully SELF-CONTAINED, carrying whatever the finished`,
+      `task establishes (what's playing, what was opened, what was asked) so a`,
+      `fresh session can act with zero prior knowledge:`,
+      ...finishedLines,
     ] : []),
     ``,
     `Also clean the command into one natural line (fix transcription slips, keep the`,
@@ -280,8 +293,8 @@ export class Router {
 
   /** Classify one utterance against the current task snapshot. Single-flighted;
    *  always resolves (fail-safe to a new task). */
-  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = []): Promise<RouteDecision> {
-    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects))
+  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = []): Promise<RouteDecision> {
+    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects, finished))
     // After the decision resolves to the caller, keep the chain alive with
     // housekeeping (/clear + maybe-recycle) — off the hot path, but serialized
     // so it can never overlap the next route.
@@ -298,13 +311,13 @@ export class Router {
     return run
   }
 
-  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = []): Promise<RouteDecision> {
+  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = []): Promise<RouteDecision> {
     const fallback = (utterance || '').trim()
     try {
       await this.ensureSession()
       await fs.mkdir(this.dir, { recursive: true })
       await fs.rm(this.decisionPath, { force: true }).catch(() => {})
-      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects)
+      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished)
       this.ex!.writeStdin(prompt)
       // The multi-line prompt is captured by Claude's TUI as a paste that lands
       // one Enter short of submitting — so it sits as "[Pasted text]" and the

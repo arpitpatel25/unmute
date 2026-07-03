@@ -1092,6 +1092,19 @@ export class TaskManager extends EventEmitter {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
+  /** Recently FINISHED tasks whose sessions are gone (dead PTY), newest first.
+   *  The router's short-term memory: "change the song" 2 minutes after the
+   *  play-music errand died must still resolve — not by resurrecting the session,
+   *  but by letting the router carry the finished task's context into a fully
+   *  self-contained NEW intent (§6.6: own the pointer, not the plumbing). */
+  recentlyFinished(maxAgeMs = 10 * 60_000, limit = 5): Task[] {
+    const cutoff = this.clock() - maxAgeMs
+    return [...this.tasks.values()]
+      .filter((t) => TERMINAL.includes(t.state) && this.executors.get(t.id)?.alive !== true && t.updatedAt >= cutoff)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit)
+  }
+
   /** Attach an image (or any file) to a session — the voice-era equivalent of
    *  dragging a screenshot into the terminal. Saves the bytes under the task's
    *  OWN dir (home/attachments — never the user's project), then TYPES the path
