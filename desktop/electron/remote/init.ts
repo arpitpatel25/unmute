@@ -466,8 +466,11 @@ type CapturePhase = 'listening' | 'transcribing' | 'routing' | 'idle'
 function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): void {
   captureBusy = phase !== 'idle' // the doorbell stays silent while the user speaks
   // The screenshot ledger follows the capture window (remote captures only —
-  // this broadcast never fires for plain dictation).
+  // this broadcast never fires for plain dictation). The clipboard sweep runs at
+  // 'transcribing' (key just lifted, recording stopped) so a mid-hold
+  // ⌃-screenshot rides with THIS utterance, before routing delivers it.
   if (phase === 'listening') startCaptureWatch()
+  else if (phase === 'transcribing') sweepClipboardOnce()
   else if (phase === 'idle') stopCaptureWatch()
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
@@ -565,30 +568,43 @@ function stageRecentScreenshotFiles(sinceMs: number): void {
   } catch { /* no screenshot dir — fine */ }
 }
 
-/** A capture began (remote OR dictation): sweep the pre-hold window, then watch live. */
+/** A capture began (remote OR dictation): sweep the pre-hold window, then watch live.
+ *
+ *  PERFORMANCE IS SACRED HERE: this runs WHILE audio is being recorded. Reading
+ *  the clipboard image means decoding + PNG-encoding a potentially huge Retina
+ *  screenshot on the main process — doing that on an interval stalled the
+ *  recording pipeline and corrupted the audio (ffmpeg: "Invalid data"). So the
+ *  clipboard is read exactly TWICE per capture — once at start (pre-hold sweep),
+ *  once at stop — never on a timer. Only the cheap file-dir scan polls live
+ *  (readdir + stat, microseconds), so ⌘⇧3/⌘⇧4 file captures still count up in
+ *  real time; a ⌃-clipboard capture taken mid-hold appears when the key lifts. */
 function startCaptureWatch(): void {
   captureWatchGen++
   const preholdSince = Math.max(lastUtteranceEndedAt, Date.now() - PREHOLD_WINDOW_MS)
-  // Pre-hold: a clipboard image that changed since the last utterance + recent files.
+  // Pre-hold sweep: one clipboard read + recent screenshot files.
   const clip = clipboardImage()
   if (clip && clip.hash !== lastClipboardHash) { stageBuffer(clip.buf, 'clipboard'); lastClipboardHash = clip.hash }
   stageRecentScreenshotFiles(preholdSince)
-  // Live: poll while the capture is in flight (listening → routing).
+  // Live: FILES ONLY (cheap). No clipboard reads while recording.
   if (captureWatchTimer) clearInterval(captureWatchTimer)
   const startedAt = Date.now()
-  captureWatchTimer = setInterval(() => {
-    const c = clipboardImage()
-    if (c && c.hash !== lastClipboardHash) { stageBuffer(c.buf, 'clipboard'); lastClipboardHash = c.hash }
-    stageRecentScreenshotFiles(startedAt)
-  }, 700)
+  captureWatchTimer = setInterval(() => stageRecentScreenshotFiles(startedAt), 700)
   ;(captureWatchTimer as { unref?: () => void }).unref?.()
+}
+
+/** One clipboard read — only ever called when recording is NOT running. */
+function sweepClipboardOnce(): void {
+  const c = clipboardImage()
+  if (c && c.hash !== lastClipboardHash) { stageBuffer(c.buf, 'clipboard') }
+  lastClipboardHash = c?.hash ?? lastClipboardHash // same image never re-attaches
 }
 
 function stopCaptureWatch(): void {
   if (captureWatchTimer) { clearInterval(captureWatchTimer); captureWatchTimer = null }
   lastUtteranceEndedAt = Date.now()
-  const c = clipboardImage()
-  lastClipboardHash = c?.hash ?? lastClipboardHash // same image never re-attaches next time
+  // End-of-capture sweep — catches a ⌃-screenshot taken mid-hold (recording has
+  // stopped by now, so the cost can't touch audio).
+  sweepClipboardOnce()
 }
 
 /** Dictation delivery seam (clipboard.ts calls this after pasting the text):
