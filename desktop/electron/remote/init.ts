@@ -548,6 +548,9 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       const mode = forcedRaw ? 'raw' as const : decision.mode
       log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: mode ?? null, forcedRaw, kind: decision.kind ?? null, dir: decision.dir ?? null })
       const newId = await manager.dispatch(decision.intent || raw, { surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir })
+      // The router minted the display name in the same turn — instant, no extra
+      // call. (The completeFn-based nameIntent below stays as the non-router path.)
+      if (decision.name) manager.setName(newId, decision.name)
       // Declinable offer (§6.2 — never a silent reroute, never a blocking prompt):
       // the router chose NEW but seriously weighed one open task. Surface a
       // one-tap "or send it there?"; ignoring it costs nothing.
@@ -728,8 +731,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     onNewTask(activeTaskCount())
     // Async: derive a short session name (non-blocking — the capture/dispatch path
     // already returned; this just swaps the truncated-intent fallback in the UI).
+    // The router usually mints the name in its own turn (instant); this managed-LLM
+    // path is the fallback and must never OVERWRITE a name that already landed.
     if (completeFn) {
-      void nameIntent(t.intent, completeFn).then((n) => { if (n) manager?.setName(t.id, n) }).catch(() => {})
+      void nameIntent(t.intent, completeFn)
+        .then((n) => { if (n && !manager?.get(t.id)?.name) manager?.setName(t.id, n) })
+        .catch(() => {})
     }
   })
   manager.on('updated', (t: Task) => { broadcast('remote:task-updated', t); reconcileDock(activeTaskCount()) })

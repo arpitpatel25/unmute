@@ -82,6 +82,10 @@ export interface RouteDecision {
    *  new — or send to X?" — never a silent reroute. Validated against the
    *  snapshot ids at parse. */
   alternate?: string
+  /** For action 'new': a 2-4 word display name for the task ("Twitter strategy
+   *  summary"). Minted in the SAME routing turn — the warm session is the one
+   *  intelligence we already have, so naming costs zero extra calls. */
+  name?: string
 }
 
 // ─── Pure helpers (unit-tested) ───────────────────────────────────
@@ -167,7 +171,8 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `Also clean the command into one natural line (fix transcription slips, keep the`,
     `exact meaning).`,
     ``,
-    `Write exactly: {"action":"new"|"continue","targetTaskId":"<id when continue>","intent":"<cleaned one-line command>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>"}`,
+    `Write exactly: {"action":"new"|"continue","targetTaskId":"<id when continue>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>"}`,
+    `name (for action "new"): a 2-4 word title capturing the essence, for a session list in a UI — plain words, no quotes/punctuation (e.g. "Unmute pricing check", "WhatsApp message", "Gating feature work").`,
     `alternate (only with action "new", optional): if exactly one open task was a PLAUSIBLE alternative you seriously weighed before choosing NEW, give its id — the user gets a one-tap "or send it there?" offer. Omit it when nothing came close (most of the time).`,
     `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
     `mode: use "raw" for "open me a session to work in" / open-ended coding where injected memory hints would pollute long reasoning; use "managed" for short, surface-operating dictated tasks. If ambiguous, choose "raw".`,
@@ -194,7 +199,7 @@ export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSe
 export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = []): RouteDecision {
   const validIds = new Set(tasks.map((t) => t.id))
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
-  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string }
+  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
   const intent = (obj.intent && obj.intent.trim()) || fallbackIntent
   const mode = obj.mode === 'raw' ? 'raw' : 'managed'
@@ -215,7 +220,11 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
     const kind = obj.kind === 'session' || dir ? 'session' as const : 'oneoff' as const
     // alternate must name a task we actually offered — else dropped.
     const alternate = obj.alternate && validIds.has(obj.alternate) ? obj.alternate : undefined
-    return { action: 'new', intent, mode, surface, kind, dir, alternate }
+    // display name: trimmed, de-quoted, bounded — junk becomes undefined (the UI
+    // falls back to a truncated intent, never breaks).
+    const rawName = (obj.name ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
+    const name = rawName && rawName.length <= 48 ? rawName : undefined
+    return { action: 'new', intent, mode, surface, kind, dir, alternate, name }
   }
   return failsafeDecision(tasks, intent)
 }

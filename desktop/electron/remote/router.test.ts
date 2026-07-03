@@ -264,3 +264,13 @@ test('parseDecision: alternate honored on new only when it names an offered task
   const d3 = parseDecision('{"action":"continue","targetTaskId":"t1","intent":"x","alternate":"t1"}', 'r', tasks)
   assert.equal(d3.alternate, undefined)
 })
+
+test('parseDecision: router-minted name honored on new; junk names dropped', () => {
+  const d1 = parseDecision('{"action":"new","intent":"check pricing","name":"Unmute pricing check"}', 'r', [])
+  assert.equal(d1.name, 'Unmute pricing check')
+  const d2 = parseDecision('{"action":"new","intent":"x","name":"  \\"Quoted.\\" "}', 'r', [])
+  assert.equal(d2.name, 'Quoted')
+  const long = 'x'.repeat(60)
+  const d3 = parseDecision(`{"action":"new","intent":"x","name":"${long}"}`, 'r', [])
+  assert.equal(d3.name, undefined)
+})
