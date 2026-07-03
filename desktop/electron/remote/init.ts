@@ -581,11 +581,14 @@ function stageRecentScreenshotFiles(sinceMs: number): void {
 function startCaptureWatch(): void {
   captureWatchGen++
   const preholdSince = Math.max(lastUtteranceEndedAt, Date.now() - PREHOLD_WINDOW_MS)
-  // Pre-hold sweep: one clipboard read + recent screenshot files.
-  const clip = clipboardImage()
-  if (clip && clip.hash !== lastClipboardHash) { stageBuffer(clip.buf, 'clipboard'); lastClipboardHash = clip.hash }
+  // ZERO clipboard reads here — PROVEN live: one PNG encode of a Retina
+  // screenshot at key-down blocked main exactly as the recorder's FIRST chunk
+  // (the EBML header) arrived → corrupt webm → every dictation failed. The
+  // clipboard is swept ONLY at key-lift (recording stopped); a pre-hold
+  // clipboard screenshot still rides with the utterance — its chip just appears
+  // at lift instead of at start. Files are different: readdir+stat is
+  // microseconds, safe to sweep and poll live.
   stageRecentScreenshotFiles(preholdSince)
-  // Live: FILES ONLY (cheap). No clipboard reads while recording.
   if (captureWatchTimer) clearInterval(captureWatchTimer)
   const startedAt = Date.now()
   captureWatchTimer = setInterval(() => stageRecentScreenshotFiles(startedAt), 700)
