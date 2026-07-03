@@ -878,6 +878,24 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
           }
         }
       }
+      // RESUME-ROUTING: the utterance follows up a recently-finished one-off
+      // (≤15min, capped). Revive that exact session (`--continue` restores its
+      // full context), then deliver — the thread literally continues on its own
+      // card. Failure falls through to a safe new task; the utterance is never
+      // lost.
+      if (decision.action === 'resume' && decision.targetTaskId) {
+        const tid = decision.targetTaskId
+        log.event('routed-as-resume', { taskId: tid, via: 'router' })
+        try {
+          if (await manager.resume(tid)) {
+            typeStagedInto(tid, staged) // images + words submit as one message
+            if (manager.followUp(tid, decision.intent || raw)) return tid
+          }
+          log.warn('resume-routing failed — falling through to new task', { taskId: tid })
+        } catch (e) {
+          log.warn('resume-routing threw — falling through to new task', { taskId: tid, error: (e as Error).message })
+        }
+      }
       // The user's raw override (pill/Remote screen) forces RAW regardless of
       // the router's pick — a clean Claude Code session with no Unmute injection.
       const forcedRaw = injectionDisabled()

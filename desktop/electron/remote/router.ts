@@ -60,7 +60,9 @@ export interface RoutableProject {
 }
 
 export interface RouteDecision {
-  action: 'new' | 'continue'
+  /** 'resume' = revive a recently-finished one-off (session dead, window-capped)
+   *  and deliver this utterance inside it — the thread continues on its card. */
+  action: 'new' | 'continue' | 'resume'
   targetTaskId?: string
   /** cleaned intent (router folds in transcript cleanup). */
   intent: string
@@ -109,7 +111,9 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
   )
   const projectLines = projects.map((p) => `  ${p.name} → ${p.path}`)
   const finishedLines = finished.map((t) =>
-    `  ${t.name ? `"${t.name}" — ` : ''}"${t.intent}" — finished (${t.state}) · ${fmtAge(t.ageSec)}`,
+    t.state === 'done'
+      ? `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — finished · ${fmtAge(t.ageSec)} · RESUMABLE`
+      : `  ${t.name ? `"${t.name}" — ` : ''}"${t.intent}" — ${t.state} · ${fmtAge(t.ageSec)} (context only)`,
   )
   return [
     `[Unmute router] You route a spoken command to where it belongs. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else — no tools, no browser, no research.`,
@@ -182,19 +186,21 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     ] : []),
     ...(finishedLines.length ? [
       ``,
-      `Recently FINISHED tasks — their sessions are GONE and can NOT be continued`,
-      `(never emit their ids). They exist only as context: when the command refers`,
-      `to one — a pronoun, "change it", "close that", "the song" — choose NEW and`,
-      `write an intent that is fully SELF-CONTAINED, carrying whatever the finished`,
-      `task establishes (what's playing, what was opened, what was asked) so a`,
-      `fresh session can act with zero prior knowledge:`,
+      `Recently FINISHED tasks (their sessions closed, but the thread is still`,
+      `fresh). If the command is a FOLLOW-UP to one marked RESUMABLE — it builds`,
+      `on, corrects, or asks more about what that task just did — choose action`,
+      `"resume" with its id: Unmute revives that exact session with its full`,
+      `prior context and delivers this command inside it. For '(context only)'`,
+      `entries, or when the command merely references a finished task without`,
+      `truly following it up, choose NEW with a fully SELF-CONTAINED intent that`,
+      `carries whatever the finished task establishes:`,
       ...finishedLines,
     ] : []),
     ``,
     `Also clean the command into one natural line (fix transcription slips, keep the`,
     `exact meaning).`,
     ``,
-    `Write exactly: {"action":"new"|"continue","targetTaskId":"<id when continue>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>"}`,
+    `Write exactly: {"action":"new"|"continue"|"resume","targetTaskId":"<id when continue/resume>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>"}`,
     `name (for action "new"): a 2-4 word title capturing the essence, for a session list in a UI — plain words, no quotes/punctuation (e.g. "Unmute pricing check", "WhatsApp message", "Gating feature work").`,
     `alternate (only with action "new", optional): if exactly one open task was a PLAUSIBLE alternative you seriously weighed before choosing NEW, give its id — the user gets a one-tap "or send it there?" offer. Omit it when nothing came close (most of the time).`,
     `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
@@ -224,13 +230,17 @@ export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSe
 /** Parse the decision file. EXPLICIT router decisions (new, or continue→known id)
  *  are honored. Everything else — null/malformed/unknown-action/unknown-id —
  *  routes through failsafeDecision (continue-latest-if-single). */
-export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = [], coldSessions: RoutableTask[] = []): RouteDecision {
+export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = [], coldSessions: RoutableTask[] = [], finished: RoutableTask[] = []): RouteDecision {
   // CONSENT ENFORCEMENT (layer 2): continue-targets are ONLY the targetable
   // tasks; a cold session id in targetTaskId is rejected here no matter what
   // the model wrote (falls through to a safe NEW). Cold ids ARE valid for
   // `alternate` — the declinable one-tap offer is the consent path.
   const validIds = new Set(tasks.map((t) => t.id))
   const alternateIds = new Set([...tasks, ...coldSessions].map((t) => t.id))
+  // Resume targets: ONLY 'done' entries from the capped recently-finished pool
+  // (a failed task resumes via its own nudge path, not here; cold sessions and
+  // live tasks can never be 'resumed').
+  const resumeIds = new Set(finished.filter((t) => t.state === 'done').map((t) => t.id))
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
   let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
@@ -242,6 +252,9 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   const surface = normalizeSurface(obj.surface)
   if (obj.action === 'continue' && obj.targetTaskId && validIds.has(obj.targetTaskId)) {
     return { action: 'continue', targetTaskId: obj.targetTaskId, intent, mode, surface }
+  }
+  if (obj.action === 'resume' && obj.targetTaskId && resumeIds.has(obj.targetTaskId)) {
+    return { action: 'resume', targetTaskId: obj.targetTaskId, intent, mode, surface }
   }
   if (obj.action === 'new') {
     // dir is honored ONLY when it's one of the paths we offered — an invented
@@ -346,7 +359,7 @@ export class Router {
       await this.sleep(this.o.submitConfirmMs)
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
       const raw = await this.waitForDecision(prompt)
-      const decision = parseDecision(raw, fallback, tasks, projects, coldSessions)
+      const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished)
       // TEMP(memory-debug)
       log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, MEMORY_DEBUG: true })
       return decision

@@ -1100,15 +1100,23 @@ export class TaskManager extends EventEmitter {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
-  /** Recently FINISHED tasks whose sessions are gone (dead PTY), newest first.
-   *  The router's short-term memory: "change the song" 2 minutes after the
-   *  play-music errand died must still resolve — not by resurrecting the session,
-   *  but by letting the router carry the finished task's context into a fully
-   *  self-contained NEW intent (§6.6: own the pointer, not the plumbing). */
-  recentlyFinished(maxAgeMs = 10 * 60_000, limit = 5): Task[] {
+  /** Recently FINISHED one-off tasks whose sessions are gone (dead PTY), newest
+   *  first. The router's short-term memory AND resume-routing pool: a follow-up
+   *  within the window can RESURRECT a 'done' task (`--continue` restores its
+   *  full context — the thread literally continues on the same card); anything
+   *  else is context for a self-contained NEW intent. Tightly capped — nobody
+   *  follows up on an errand from an hour ago expecting the same conversation,
+   *  and a stale resume is worse than a fresh task. Persistent sessions are
+   *  EXCLUDED (they die only via restarts; rehydration owns that path, and the
+   *  consent policy owns their routing). */
+  recentlyFinished(maxAgeMs = 15 * 60_000, limit = 5): Task[] {
     const cutoff = this.clock() - maxAgeMs
     return [...this.tasks.values()]
-      .filter((t) => TERMINAL.includes(t.state) && this.executors.get(t.id)?.alive !== true && t.updatedAt >= cutoff)
+      .filter((t) =>
+        TERMINAL.includes(t.state) &&
+        (t.kind ?? 'oneoff') !== 'session' &&
+        this.executors.get(t.id)?.alive !== true &&
+        t.updatedAt >= cutoff)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, limit)
   }

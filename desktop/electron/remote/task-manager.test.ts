@@ -808,3 +808,23 @@ test('typed-turn detection ignores noise: bare Enters, arrows, /commands, backsp
   assert.equal(tm.get(id)!.state, 'processing')
   tm.killAll()
 })
+
+test('recentlyFinished: one-offs only, window- and count-capped (the resume pool)', async () => {
+  const baseDir = await tmpBase()
+  let t = 2_000_000
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 0, now: () => t })
+  const oneoff = await tm.dispatch('play a video')
+  const session = await tm.dispatch('long repo work', { kind: 'session' })
+  for (const [id, task] of [[oneoff, 'oneoff'], [session, 'session']] as const) {
+    const done = once(tm, 'done')
+    await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: `${task} done` } })
+    await done
+  }
+  tm.kill(session) // kill the session's PTY so !alive holds for it too
+  const pool = tm.recentlyFinished()
+  assert.deepEqual(pool.map((x) => x.id), [oneoff], 'sessions never enter the resume pool')
+  // window cap: age the oneoff past 15 minutes → pool empties
+  t += 16 * 60_000
+  assert.equal(tm.recentlyFinished().length, 0, 'stale finishes leave the pool')
+  tm.killAll()
+})

@@ -275,16 +275,16 @@ test('parseDecision: router-minted name honored on new; junk names dropped', () 
   assert.equal(d3.name, undefined)
 })
 
-test('buildRoutingPrompt: recently-finished section is context-only (no ids, non-continuable framing)', () => {
+test('buildRoutingPrompt: recently-finished section — reference resolution + no CONTINUE into the dead', () => {
   const finished: RoutableTask[] = [{ id: 'dead1', intent: 'Play Wolf by Selena Gomez on YouTube', name: 'Selena Gomez song', state: 'done', ageSec: 150 }]
   const p = buildRoutingPrompt('change the song to Charlie Puth', [], '/d/decision.json', [], finished)
   assert.ok(p.includes('Recently FINISHED'), 'section present')
   assert.ok(p.includes('Selena Gomez song'), 'finished task named for reference resolution')
-  assert.ok(p.includes('SELF-CONTAINED'), 'instructs carrying context into a new intent')
-  assert.ok(!p.includes('[dead1]'), 'finished ids are never offered as targets')
-  // continue → a finished id is rejected at parse (not in valid targets)
-  const d = parseDecision('{"action":"continue","targetTaskId":"dead1","intent":"x"}', 'x', [])
-  assert.equal(d.action, 'new', 'continue into the dead falls back safely')
+  assert.ok(p.includes('SELF-CONTAINED'), 'instructs carrying context into a new intent when not resuming')
+  // The design evolved: done one-offs ARE offered — but only via action "resume"
+  // (revive + deliver), never as continue targets (their sessions are dead).
+  const d = parseDecision('{"action":"continue","targetTaskId":"dead1","intent":"x"}', 'x', [], [], [], finished)
+  assert.equal(d.action, 'new', 'continue into the dead still falls back safely')
 })
 
 test('failsafe NEVER continues into a RUNNING task — a wrong new task is cheap, a wrong injection is destructive', () => {
@@ -326,4 +326,31 @@ test('cold sessions render as non-targetable context; continue into one is REJEC
   const d3 = parseDecision('{"action":"continue","targetTaskId":"hot1","intent":"add a section"}', 'r', hot, [], cold)
   assert.equal(d3.action, 'continue')
   assert.equal(d3.targetTaskId, 'hot1')
+})
+
+// ─── Resume-routing: recently-finished one-offs are revivable threads ─────────
+
+test('resume tier: done one-offs render RESUMABLE with ids; failed are context-only; parse enforces it', () => {
+  const finished: RoutableTask[] = [
+    { id: 'dead-done', intent: 'Play the Amrit video', name: 'Amrit video', state: 'done', ageSec: 120 },
+    { id: 'dead-fail', intent: 'Open some page', state: 'failed', ageSec: 200 },
+  ]
+  const p = buildRoutingPrompt('summarize the video you just played', [], '/d/decision.json', [], finished)
+  assert.ok(p.includes('[dead-done]') && p.includes('RESUMABLE'), 'done one-off is offered as a resume target')
+  assert.ok(!p.includes('[dead-fail]'), 'failed task gets no id — context only')
+  assert.ok(p.includes('"resume"'), 'JSON shape includes the resume action')
+
+  // resume → done id: accepted, thread revives.
+  const d1 = parseDecision('{"action":"resume","targetTaskId":"dead-done","intent":"summarize the video"}', 'r', [], [], [], finished)
+  assert.equal(d1.action, 'resume')
+  assert.equal(d1.targetTaskId, 'dead-done')
+
+  // resume → failed id: rejected → safe new.
+  const d2 = parseDecision('{"action":"resume","targetTaskId":"dead-fail","intent":"x"}', 'r', [], [], [], finished)
+  assert.equal(d2.action, 'new')
+
+  // resume → a cold SESSION id: rejected (consent policy holds even here).
+  const cold: RoutableTask[] = [{ id: 'sess1', intent: 'growth strategy', state: 'processing', kind: 'session', ageSec: 7200 }]
+  const d3 = parseDecision('{"action":"resume","targetTaskId":"sess1","intent":"x"}', 'r', [], [], cold, finished)
+  assert.equal(d3.action, 'new')
 })
