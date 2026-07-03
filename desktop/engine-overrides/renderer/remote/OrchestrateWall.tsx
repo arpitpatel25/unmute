@@ -127,7 +127,7 @@ function Dot({ state }: { state: WallState }) {
 function Card({ t, now, queuePos, promoted = false, onClick }: { t: RemoteTask; now: number; queuePos: number | null; promoted?: boolean; onClick: () => void }) {
   const st = statusOf(t.state)
   return (
-    <button onClick={onClick}
+    <button onClick={onClick} className="ow-card"
       style={{
         textAlign: 'left', cursor: 'pointer', fontFamily: C.mono, background: C.surface,
         border: `1px solid ${C.border}`, borderRadius: 8, padding: '11px 13px',
@@ -161,7 +161,7 @@ function Card({ t, now, queuePos, promoted = false, onClick }: { t: RemoteTask; 
 function MiniCard({ t, queuePos, onClick }: { t: RemoteTask; queuePos: number | null; onClick: () => void }) {
   const st = statusOf(t.state)
   return (
-    <button onClick={onClick}
+    <button onClick={onClick} className="ow-card"
       style={{
         textAlign: 'left', cursor: 'pointer', fontFamily: C.mono, background: C.surface,
         border: `1px solid ${C.border}`, borderRadius: 7, padding: '8px 10px',
@@ -283,6 +283,16 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
         <Key label="esc" onClick={onClose} />
       </div>
 
+      {/* warm-up: "where you left off" — the session's own rolling context,
+          shown on re-entry so the human never cold-starts. Framed as re-entry
+          aid, not truth; hidden while the task needs you (the question wins). */}
+      {!needsYou(t.state) && t.threadContext && (
+        <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase', marginRight: 9 }}>where you left off</span>
+          <span style={{ fontSize: 12.5, color: C.midText, lineHeight: 1.5 }}>{t.threadContext}</span>
+        </div>
+      )}
+
       {/* pending line, lifted VERBATIM (extraction, not generation §6.5) */}
       {needsYou(t.state) && (
         <div style={{ padding: '13px 14px', background: C.surfaceHi, borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
@@ -342,8 +352,8 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
 
 function Key({ label, onClick, danger = false }: { label: string; onClick: () => void; danger?: boolean }) {
   return (
-    <button onClick={onClick}
-      style={{ flex: 'none', background: 'none', border: `1px solid ${danger ? '#5b2a2e' : C.border}`, color: danger ? '#c56069' : C.midText, borderRadius: 5, fontSize: 11, padding: '2px 8px', cursor: 'pointer', fontFamily: C.mono }}>
+    <button onClick={onClick} className={danger ? undefined : 'ow-key'}
+      style={{ flex: 'none', background: 'none', border: `1px solid ${danger ? '#5b2a2e' : C.border}`, color: danger ? '#c56069' : C.midText, borderRadius: 5, fontSize: 11, padding: '3px 9px', cursor: 'pointer', fontFamily: C.mono }}>
       {label}
     </button>
   )
@@ -654,8 +664,8 @@ export default function OrchestrateWall() {
           <Dot state={top.state} />
           <span style={{ fontSize: 12.5, color: C.nameText, fontWeight: 600, flex: 'none' }}>{nameOf(top)}</span>
           <span style={{ fontSize: 12, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>— {activityLine(top)}</span>
-          <button onClick={() => focus(top.id)}
-            style={{ marginLeft: 'auto', flex: 'none', fontFamily: C.mono, fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: C.bg, background: statusOf(top.state).color, border: 'none', borderRadius: 5, padding: '4px 11px', cursor: 'pointer' }}>
+          <button onClick={() => focus(top.id)} className="ow-banner-btn"
+            style={{ marginLeft: 'auto', flex: 'none', fontFamily: C.mono, fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: C.bg, background: statusOf(top.state).color, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
             STEP IN ▸
           </button>
         </div>
@@ -703,8 +713,8 @@ export default function OrchestrateWall() {
                 <RailSection title={`Queue · ${queue.length}`}>
                   {queue.length === 0 && <div style={{ fontSize: 11, color: C.faintText }}>clear</div>}
                   {queue.map((t, i) => (
-                    <button key={t.id} onClick={() => focus(t.id)}
-                      style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '3px 0', fontFamily: C.mono }}>
+                    <button key={t.id} onClick={() => focus(t.id)} className="ow-row"
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', fontFamily: C.mono }}>
                       <span style={{ fontSize: 10, color: C.dimText, width: 16 }}>Q{i + 1}</span>
                       <Dot state={t.state} />
                       <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameOf(t)}</span>
@@ -724,8 +734,8 @@ export default function OrchestrateWall() {
                     </div>
                   )}
                   {railOneoffs.map((t) => (
-                    <button key={t.id} onClick={() => focus(t.id)}
-                      style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '3px 0', fontFamily: C.mono }}>
+                    <button key={t.id} onClick={() => focus(t.id)} className="ow-row"
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', fontFamily: C.mono }}>
                       <Dot state={t.state} />
                       <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{nameOf(t)}</span>
                       <span style={{ fontSize: 10, color: C.faintText, flex: 'none' }}>{elapsed(t.createdAt, now)}</span>
@@ -735,8 +745,8 @@ export default function OrchestrateWall() {
                 {projects.length > 0 && (
                   <RailSection title="Projects">
                     {projects.map((p) => (
-                      <button key={p.path} onClick={() => spawnInProject(p)} title={`Start a session in ${p.path}`}
-                        style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '3px 0', fontFamily: C.mono }}>
+                      <button key={p.path} onClick={() => spawnInProject(p)} title={`Start a session in ${p.path}`} className="ow-row"
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', fontFamily: C.mono }}>
                         <span style={{ fontSize: 11, color: C.faintText }}>▸</span>
                         <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
                       </button>
@@ -751,7 +761,8 @@ export default function OrchestrateWall() {
                     {skills.map((s) => (
                       <div
                         key={s.name}
-                        style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '3px 0', cursor: 'default' }}
+                        className="ow-row"
+                        style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 6px', margin: '0 -6px', cursor: 'default' }}
                         onMouseEnter={(e) => {
                           const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
                           setHoveredSkill({ name: s.name, top: r.top, rightPx: window.innerWidth - r.left + 12 })
@@ -820,7 +831,23 @@ export default function OrchestrateWall() {
       {/* The listening surface (§6.2/§9): live voice lifecycle. Idle → where the
           NEXT utterance lands (visible BEFORE speaking). Listening → pulsing mic.
           Transcribing/routing → in flight. Landed → target confirmation flash. */}
-      <style>{`@keyframes wall-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }`}</style>
+      <style>{`
+        @keyframes wall-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }
+        @keyframes ow-fade-in { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
+        ::-webkit-scrollbar { width: 8px; height: 8px }
+        ::-webkit-scrollbar-thumb { background: #23272e; border-radius: 4px }
+        ::-webkit-scrollbar-thumb:hover { background: #323843 }
+        ::-webkit-scrollbar-corner { background: transparent }
+        .ow-card { transition: border-color 140ms ease, background 140ms ease, transform 140ms ease; animation: ow-fade-in 180ms ease }
+        .ow-card:hover { border-color: #3a4150 !important; background: #181c22 !important; transform: translateY(-1px) }
+        .ow-card:active { transform: none }
+        .ow-key { transition: color 120ms ease, border-color 120ms ease, background 120ms ease }
+        .ow-key:hover { color: #e8eaed !important; border-color: #3a4150 !important; background: rgba(255,255,255,0.04) }
+        .ow-row { border-radius: 5px; transition: background 120ms ease }
+        .ow-row:hover { background: rgba(255,255,255,0.045) }
+        .ow-banner-btn { transition: filter 120ms ease }
+        .ow-banner-btn:hover { filter: brightness(1.15) }
+      `}</style>
       <div style={{
         position: 'absolute', left: 14, bottom: 12, display: 'flex', alignItems: 'center', gap: 7,
         fontFamily: C.mono, fontSize: 11, background: C.surface, borderRadius: 9999, padding: '5px 12px', pointerEvents: 'none',
