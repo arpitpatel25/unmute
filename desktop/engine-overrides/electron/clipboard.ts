@@ -360,10 +360,17 @@ export async function injectOutput(text: string): Promise<void> {
     return
   }
 
-  // Brief wait so the pasteboard write is observable to the target app before
-  // we post Cmd+V — defeats a cross-process pasteboard-sync race that can
-  // otherwise cause the paste to pick up stale clipboard content.
-  await sleep(8)
+  // VERIFIED sync (was a blind 8ms sleep): when the clipboard previously held a
+  // large image (screenshot flows), pasteboard sync can exceed 8ms — Cmd+V then
+  // pastes the STALE IMAGE instead of the text (proven live: note ends with two
+  // images and no text). Poll until our text is actually readable, then paste.
+  {
+    const tSync = Date.now()
+    while (Date.now() - tSync < 300) {
+      try { if (clipboard.readText() === padded) break } catch { /* retry */ }
+      await sleep(15)
+    }
+  }
 
   try {
     await simulateKeyCombo('v', 'command')
@@ -386,9 +393,15 @@ export async function injectOutput(text: string): Promise<void> {
         const img = nativeImage.createFromPath(p)
         if (img.isEmpty()) continue
         clipboard.writeImage(img)
-        await sleep(60) // pasteboard sync, then paste — per image
+        // Verified sync, image edition: writeImage clears the text — wait until
+        // the pasteboard no longer reads back our text before pasting.
+        const tSync = Date.now()
+        while (Date.now() - tSync < 300) {
+          try { if (clipboard.readText() !== padded) break } catch { /* retry */ }
+          await sleep(15)
+        }
         await simulateKeyCombo('v', 'command')
-        await sleep(140) // let the target app ingest before the next image
+        await sleep(160) // let the target app ingest before the next image
       }
       // Leave the TEXT on the clipboard, not the last image — otherwise the
       // pasted image lingers and the next dictation's probe re-discovers it
