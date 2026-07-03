@@ -69,8 +69,9 @@ export const remotePreloadExtensions = {
    *  path is typed (unsubmitted) into the session's input — speak to send. */
   remoteAttachImage: (taskId: string, data: ArrayBuffer, ext: string): Promise<string | null> =>
     ipcRenderer.invoke('remote:attach-image', taskId, data, ext),
-  /** Glance vocabulary: graduated skills (recency-ranked) + known projects. */
-  remoteListSkills: (): Promise<Array<{ name: string; description: string; surface: string; lastUsed: string; runs: number }>> =>
+  /** Glance vocabulary: ALL skills (both memory tiers + ~/.claude/skills,
+   *  recency-ranked) + known projects. */
+  remoteListSkills: (): Promise<Array<{ name: string; lastUsed: string }>> =>
     ipcRenderer.invoke('remote:list-skills'),
   remoteListProjects: (): Promise<Array<{ name: string; path: string }>> =>
     ipcRenderer.invoke('remote:list-projects'),

@@ -425,6 +425,9 @@ export default function OrchestrateWall() {
     return () => clearInterval(i)
   }, [])
   const spawnInProject = useCallback((p: { name: string; path: string }) => {
+    // A click must never silently spawn a whole session (learned the hard way —
+    // one grazed row created a task the user never asked for). Confirm first.
+    if (!window.confirm(`Start a working session in ${p.name}?\n${p.path}`)) return
     const api = (window as unknown as { electronAPI?: { remoteDispatch?: (intent: string) => Promise<string | null> } }).electronAPI
     void api?.remoteDispatch?.(`Start a working session in the ${p.name} project (${p.path}).`)
   }, [])

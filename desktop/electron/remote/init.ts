@@ -930,21 +930,46 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // zero tokens. Skills have no surface anywhere in Claude Code's own UX; giving
   // them a face is what makes people actually say them.
   ipcMain.handle('remote:list-skills', async () => {
-    const recipes = await listRecipes({ tier: 'skill' }).catch(() => [])
-    return recipes
-      .map((r) => ({
-        name: r.frontmatter.name,
-        description: r.frontmatter.description ?? '',
-        surface: r.frontmatter.surface ?? 'general',
-        lastUsed: r.frontmatter.last_used || r.frontmatter.created || '',
-        runs: r.frontmatter.runs_confirmed ?? 0,
-      }))
+    // ALL skills, not just graduated: both Unmute memory tiers + the user's own
+    // ~/.claude/skills (dirs with SKILL.md and loose .md files). The rail is the
+    // full vocabulary — an unlisted skill is a skill nobody says.
+    const recipes = await listRecipes({}).catch(() => []) // both tiers
+    const fromRecipes = recipes.map((r) => ({
+      name: r.frontmatter.name,
+      lastUsed: (r.frontmatter.last_used || r.frontmatter.created || '').slice(0, 10),
+    }))
+    const claudeSkills: Array<{ name: string; lastUsed: string }> = []
+    try {
+      const dir = join(homedir(), '.claude', 'skills')
+      const { readdirSync, statSync } = await import('node:fs')
+      for (const entry of readdirSync(dir)) {
+        if (entry.startsWith('.')) continue
+        const full = join(dir, entry)
+        try {
+          const st = statSync(full)
+          const name = entry.replace(/\.md$/, '')
+          claudeSkills.push({ name, lastUsed: new Date(st.mtimeMs).toISOString().slice(0, 10) })
+        } catch { /* skip unreadable */ }
+      }
+    } catch { /* no ~/.claude/skills — fine */ }
+    const seen = new Set<string>()
+    return [...fromRecipes, ...claudeSkills]
+      .filter((s) => s.name && !seen.has(s.name) && (seen.add(s.name), true))
       .sort((a, b) => (b.lastUsed || '').localeCompare(a.lastUsed || ''))
-      .slice(0, 8)
+      .slice(0, 20)
   })
   ipcMain.handle('remote:list-projects', async () => {
-    const projects = await knownProjects(6).catch(() => [])
-    return projects.map((p) => ({ name: p.name, path: p.path }))
+    const projects = await knownProjects(8).catch(() => [])
+    const home = homedir()
+    const kept = projects.filter((p) => p.path !== home) // ran-claude-in-~ is not a project
+    // Duplicate basenames (backend/calorify_ai vs frontend/calorify_ai) are
+    // indistinguishable — disambiguate with the parent dir.
+    const counts = new Map<string, number>()
+    for (const p of kept) counts.set(p.name, (counts.get(p.name) ?? 0) + 1)
+    return kept.slice(0, 6).map((p) => ({
+      name: (counts.get(p.name) ?? 0) > 1 ? `${basename(dirname(p.path))}/${p.name}` : p.name,
+      path: p.path,
+    }))
   })
   // Rename a task — names are VOICE ADDRESSES, so users must be able to fix a
   // bad auto-name. Persists via setName (survives restarts).
