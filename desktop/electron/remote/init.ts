@@ -507,24 +507,82 @@ function broadcastStaged(): void {
 // staged is VISIBLE on the pill (🖼 n, prunable with ✕) before it sends; nothing
 // rides invisibly. Only ever active for REMOTE captures, never plain dictation.
 const PREHOLD_WINDOW_MS = 3 * 60_000
-const CAPTURE_MAX_AUTO = 5
+const CAPTURE_MAX_AUTO = 12
 let lastUtteranceEndedAt = 0
-let lastClipboardHash = ''
 let captureWatchTimer: ReturnType<typeof setInterval> | null = null
 let captureWatchGen = 0 // generation guard: a stale safety-stop must not kill a newer watch
 let screenshotDirCache: string | null = null
+/** Signatures (size + head-hash) of every clipboard image we've seen — staged
+ *  OR marked known at a capture boundary. One image never attaches twice, and
+ *  a stale pre-existing clipboard image never auto-attaches. */
+const knownClipSigs = new Set<string>()
 
-function clipboardImage(): { hash: string; buf: Buffer } | null {
+/** Cheap, consistent signature: byte length + md5 of the first 4KB. Never
+ *  hashes a whole multi-MB PNG. */
+function sigOf(buf: Buffer): string {
+  const head = buf.subarray(0, 4096)
+  const md5 = require('node:crypto').createHash('md5').update(head).digest('hex') as string
+  return `${buf.length}:${md5}`
+}
+
+function clipboardImage(): { sig: string; buf: Buffer } | null {
   try {
     // Lazy-require: electron.clipboard is main-process-safe but keep the top
-    // import surface unchanged.
+    // import surface unchanged. ONLY called when recording is NOT running.
     const { clipboard } = require('electron') as { clipboard: { readImage(): { isEmpty(): boolean; toPNG(): Buffer } } }
     const img = clipboard.readImage()
     if (img.isEmpty()) return null
     const buf = img.toPNG()
-    const hash = require('node:crypto').createHash('md5').update(buf).digest('hex') as string
-    return { hash, buf }
+    return { sig: sigOf(buf), buf }
   } catch { return null }
+}
+
+// ── The multi-screenshot enabler: rescue each ⌃-clipboard screenshot the moment
+// it lands — BEFORE the next one overwrites it — without main ever touching the
+// image while recording. An osascript CHILD PROCESS dumps the pasteboard PNG to
+// a probe file (all decode/write cost lives in the child); main only stats the
+// result and reads 4KB for the signature. New signature → copy into staging
+// (APFS clone, ~instant) → the pill chip counts up live with a REAL file.
+const CLIP_PROBE_FILE = () => join(STAGING_DIR, '.clip-probe.png')
+let clipProbeBusy = false
+function probeClipboardViaChild(): void {
+  if (clipProbeBusy || stagedAttachments.length >= CAPTURE_MAX_AUTO) return
+  clipProbeBusy = true
+  try { mkdirSync(STAGING_DIR, { recursive: true }) } catch { /* ignore */ }
+  const probe = CLIP_PROBE_FILE()
+  const script = [
+    'try',
+    'set png to the clipboard as «class PNGf»',
+    `set f to open for access POSIX file "${probe}" with write permission`,
+    'set eof f to 0',
+    'write png to f',
+    'close access f',
+    'on error',
+    'end try',
+  ].flatMap((l) => ['-e', l])
+  execFile('osascript', script, { timeout: 5000 }, (err) => {
+    clipProbeBusy = false
+    if (err) return
+    try {
+      const { statSync, openSync, readSync, closeSync, copyFileSync, rmSync } = require('node:fs') as typeof import('node:fs')
+      const st = statSync(probe)
+      if (!st.size) return
+      const head = Buffer.alloc(Math.min(4096, st.size))
+      const fd = openSync(probe, 'r')
+      readSync(fd, head, 0, head.length, 0)
+      closeSync(fd)
+      const md5 = require('node:crypto').createHash('md5').update(head).digest('hex') as string
+      const sig = `${st.size}:${md5}`
+      if (knownClipSigs.has(sig)) return
+      knownClipSigs.add(sig)
+      const dest = join(STAGING_DIR, `capture-${Date.now()}-clipboard.png`)
+      copyFileSync(probe, dest)
+      try { rmSync(probe, { force: true }) } catch { /* next probe overwrites anyway */ }
+      stagedAttachments.push(dest)
+      broadcastStaged()
+      log.event('capture-staged', { file: dest, via: 'clipboard-probe' })
+    } catch { /* probe unreadable — skip */ }
+  })
 }
 
 function screenshotDir(): string {
@@ -610,38 +668,27 @@ function startCaptureWatch(): void {
   stageRecentScreenshotFiles(preholdSince)
   if (captureWatchTimer) clearInterval(captureWatchTimer)
   const startedAt = Date.now()
-  // Clipboard AWARENESS while recording, without reading the image: the format
-  // list is metadata (no decode, no bytes). A no-image → image transition means
-  // the user just took a ⌃-screenshot — count it live on the pill ("1 screenshot");
-  // the actual read happens at key-lift. Undercounts a second ⌃-shot (formats
-  // can't distinguish image→new-image) — the lift sweep still delivers correctly.
   pendingClipboardCount = 0
-  let clipboardHadImage = true
-  try {
-    const { clipboard } = require('electron') as typeof import('electron')
-    clipboardHadImage = clipboard.availableFormats().some((f) => f.startsWith('image/'))
-  } catch { /* assume true — never overcount */ }
+  // Live watch: file screenshots (cheap dir scan) + clipboard PROBES (child
+  // process does all the heavy pasteboard work — main never reads image bytes
+  // while recording). Each ⌃-shot is rescued before the next overwrites it, so
+  // 4, 5, 7 screenshots in one breath all stage and all count on the pill.
+  probeClipboardViaChild() // pre-hold clipboard image (dedup via knownClipSigs)
   captureWatchTimer = setInterval(() => {
     stageRecentScreenshotFiles(startedAt)
-    try {
-      const { clipboard } = require('electron') as typeof import('electron')
-      const hasImage = clipboard.availableFormats().some((f) => f.startsWith('image/'))
-      if (hasImage && !clipboardHadImage && pendingClipboardCount === 0) {
-        pendingClipboardCount = 1
-        broadcastStaged()
-        log.event('capture-pending-clipboard', {})
-      }
-      clipboardHadImage = hasImage
-    } catch { /* metadata read failed — skip */ }
-  }, 700)
+    probeClipboardViaChild()
+  }, 900)
   ;(captureWatchTimer as { unref?: () => void }).unref?.()
 }
 
-/** One clipboard read — only ever called when recording is NOT running. */
+/** One direct clipboard read — only ever called when recording is NOT running.
+ *  Catches a ⌃-shot from the final <1s the async probes missed. */
 function sweepClipboardOnce(): void {
   const c = clipboardImage()
-  if (c && c.hash !== lastClipboardHash) { stageBuffer(c.buf, 'clipboard') }
-  lastClipboardHash = c?.hash ?? lastClipboardHash // same image never re-attaches
+  if (c && !knownClipSigs.has(c.sig)) {
+    knownClipSigs.add(c.sig)
+    stageBuffer(c.buf, 'clipboard')
+  }
 }
 
 function stopCaptureWatch(): void {
@@ -1211,6 +1258,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // this?" from a number. Small data-URLs (CSP-proof; file:// is blocked in the
   // renderer), freshly derived per call.
   ipcMain.handle('remote:staged-previews', async () => {
+    // While a capture is live, decoding images for thumbnails is the SAME class
+    // of main-thread work that corrupted recordings — placeholder rows instead;
+    // real previews the moment the capture ends.
+    if (captureWatchTimer) return stagedAttachments.map((path) => ({ path, dataUrl: '' }))
     const { nativeImage } = require('electron') as typeof import('electron')
     return stagedAttachments.map((path) => {
       try {
