@@ -354,3 +354,33 @@ test('resume tier: done one-offs render RESUMABLE with ids; failed are context-o
   const d3 = parseDecision('{"action":"resume","targetTaskId":"sess1","intent":"x"}', 'r', [], [], cold, finished)
   assert.equal(d3.action, 'new')
 })
+
+// ─── speak verb + recall pointer ──────────────────────────────────────────────
+
+test('speak: meta-commands are read-only — any known id targetable, unknown → overall, never spawns', () => {
+  const tasks: RoutableTask[] = [{ id: 'q1', intent: 'draft email', state: 'needs-user', ageSec: 10 }]
+  const cold: RoutableTask[] = [{ id: 'sess1', intent: 'growth work', state: 'processing', kind: 'session', ageSec: 9000 }]
+  const p = buildRoutingPrompt('read me the question', tasks, '/d/decision.json', [], [], cold)
+  assert.ok(p.includes('META-COMMANDS'), 'speak instructions present')
+  const d1 = parseDecision('{"action":"speak","targetTaskId":"q1","intent":"read the question"}', 'r', tasks, [], cold)
+  assert.equal(d1.action, 'speak')
+  assert.equal(d1.targetTaskId, 'q1')
+  // cold sessions are speakable (hearing ≠ injecting)
+  const d2 = parseDecision('{"action":"speak","targetTaskId":"sess1","intent":"status"}', 'r', tasks, [], cold)
+  assert.equal(d2.targetTaskId, 'sess1')
+  // unknown id degrades to overall status, still speak
+  const d3 = parseDecision('{"action":"speak","targetTaskId":"ghost","intent":"status"}', 'r', tasks, [], cold)
+  assert.equal(d3.action, 'speak')
+  assert.equal(d3.targetTaskId, undefined)
+})
+
+test('recall: contextTaskId rides on NEW when it names a known task (cold included); junk dropped', () => {
+  const cold: RoutableTask[] = [{ id: 'sess1', intent: 'pricing work', name: 'Pricing session', state: 'processing', kind: 'session', ageSec: 9000 }]
+  const p = buildRoutingPrompt('what did the pricing session conclude?', [], '/d/decision.json', [], [], cold)
+  assert.ok(p.includes('RECALL'), 'recall instructions present')
+  const d1 = parseDecision('{"action":"new","intent":"what did pricing conclude","contextTaskId":"sess1"}', 'r', [], [], cold)
+  assert.equal(d1.action, 'new')
+  assert.equal(d1.contextTaskId, 'sess1')
+  const d2 = parseDecision('{"action":"new","intent":"x","contextTaskId":"ghost"}', 'r', [], [], cold)
+  assert.equal(d2.contextTaskId, undefined)
+})

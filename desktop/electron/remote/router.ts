@@ -61,8 +61,11 @@ export interface RoutableProject {
 
 export interface RouteDecision {
   /** 'resume' = revive a recently-finished one-off (session dead, window-capped)
-   *  and deliver this utterance inside it — the thread continues on its card. */
-  action: 'new' | 'continue' | 'resume'
+   *  and deliver this utterance inside it — the thread continues on its card.
+   *  'speak' = the user asked to HEAR something (a blocked task's question, a
+   *  task's state, overall status) — Unmute speaks it aloud; NOTHING is spawned
+   *  or injected. Read-only by construction. */
+  action: 'new' | 'continue' | 'resume' | 'speak'
   targetTaskId?: string
   /** cleaned intent (router folds in transcript cleanup). */
   intent: string
@@ -88,6 +91,11 @@ export interface RouteDecision {
    *  summary"). Minted in the SAME routing turn — the warm session is the one
    *  intelligence we already have, so naming costs zero extra calls. */
   name?: string
+  /** For action 'new': RECALL pointer — the command asks about what another/past
+   *  task did or found ("what did the pricing session conclude?"). The new task
+   *  gets that task's status + transcript paths appended so it reads the actual
+   *  record instead of guessing (§6.6: own the pointer, not the plumbing). */
+  contextTaskId?: string
 }
 
 // ─── Pure helpers (unit-tested) ───────────────────────────────────
@@ -200,7 +208,20 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `Also clean the command into one natural line (fix transcription slips, keep the`,
     `exact meaning).`,
     ``,
-    `Write exactly: {"action":"new"|"continue"|"resume","targetTaskId":"<id when continue/resume>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>"}`,
+    `META-COMMANDS (action "speak"): if the command asks to HEAR or KNOW something`,
+    `about the tasks themselves — "read me the question", "what does it need",`,
+    `"what's the status", "what's going on" — do NOT start any task: choose action`,
+    `"speak" with targetTaskId of the task being asked about (the blocked one when`,
+    `they say "the question"; omit targetTaskId for an overall status). Unmute`,
+    `speaks the answer aloud.`,
+    ``,
+    `RECALL (contextTaskId): if the command asks what ANOTHER listed task did,`,
+    `found, or concluded — "what did the pricing session conclude?", "summarize`,
+    `what the runbook one found" — choose NEW, write the question as the intent,`,
+    `and set "contextTaskId" to that task's id: the new task receives that task's`,
+    `actual record (status + transcript) to read before answering.`,
+    ``,
+    `Write exactly: {"action":"new"|"continue"|"resume"|"speak","targetTaskId":"<id when continue/resume/speak>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>","contextTaskId":"<task id whose record a NEW task should read, or omit>"}`,
     `name (for action "new"): a 2-4 word title capturing the essence, for a session list in a UI — plain words, no quotes/punctuation (e.g. "Unmute pricing check", "WhatsApp message", "Gating feature work").`,
     `alternate (only with action "new", optional): if exactly one open task was a PLAUSIBLE alternative you seriously weighed before choosing NEW, give its id — the user gets a one-tap "or send it there?" offer. Omit it when nothing came close (most of the time).`,
     `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
@@ -242,7 +263,7 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   // live tasks can never be 'resumed').
   const resumeIds = new Set(finished.filter((t) => t.state === 'done').map((t) => t.id))
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
-  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string }
+  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string; contextTaskId?: string }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
   const intent = (obj.intent && obj.intent.trim()) || fallbackIntent
   const mode = obj.mode === 'raw' ? 'raw' : 'managed'
@@ -256,6 +277,13 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   if (obj.action === 'resume' && obj.targetTaskId && resumeIds.has(obj.targetTaskId)) {
     return { action: 'resume', targetTaskId: obj.targetTaskId, intent, mode, surface }
   }
+  // speak: read-only by construction — any KNOWN id is fine (cold sessions too:
+  // hearing about a session is not injecting into it); unknown id → overall.
+  if (obj.action === 'speak') {
+    const anyKnown = new Set([...tasks, ...coldSessions, ...finished].map((t) => t.id))
+    const target = obj.targetTaskId && anyKnown.has(obj.targetTaskId) ? obj.targetTaskId : undefined
+    return { action: 'speak', targetTaskId: target, intent }
+  }
   if (obj.action === 'new') {
     // dir is honored ONLY when it's one of the paths we offered — an invented
     // or modified path must never become a spawn cwd (dispatch would fall back
@@ -266,11 +294,14 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
     const kind = obj.kind === 'session' || dir ? 'session' as const : 'oneoff' as const
     // alternate must name a task we actually offered (targetable OR cold) — else dropped.
     const alternate = obj.alternate && alternateIds.has(obj.alternate) ? obj.alternate : undefined
+    // recall pointer: any KNOWN task's record may be read (read-only) — else dropped.
+    const anyKnown = new Set([...tasks, ...coldSessions, ...finished].map((t) => t.id))
+    const contextTaskId = obj.contextTaskId && anyKnown.has(obj.contextTaskId) ? obj.contextTaskId : undefined
     // display name: trimmed, de-quoted, bounded — junk becomes undefined (the UI
     // falls back to a truncated intent, never breaks).
     const rawName = (obj.name ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
     const name = rawName && rawName.length <= 48 ? rawName : undefined
-    return { action: 'new', intent, mode, surface, kind, dir, alternate, name }
+    return { action: 'new', intent, mode, surface, kind, dir, alternate, name, contextTaskId }
   }
   return failsafeDecision(tasks, intent)
 }

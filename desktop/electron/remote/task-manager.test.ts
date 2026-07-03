@@ -828,3 +828,17 @@ test('recentlyFinished: one-offs only, window- and count-capped (the resume pool
   assert.equal(tm.recentlyFinished().length, 0, 'stale finishes leave the pool')
   tm.killAll()
 })
+
+test('thread_context from a status write lands on the task (bounded)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25 })
+  const id = await tm.dispatch('long doc work', { kind: 'session' })
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, {
+    state: 'done', result: { summary: 'checkpoint' },
+    thread_context: 'Drafted sections 1-2; pricing table pending; next: review tone.',
+  })
+  await done
+  assert.equal(tm.get(id)!.threadContext, 'Drafted sections 1-2; pricing table pending; next: review tone.')
+  tm.killAll()
+})

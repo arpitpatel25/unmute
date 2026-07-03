@@ -113,6 +113,8 @@ export interface Task {
   /** Follow-up turns the user has sent this task (graduation signal: a one-off
    *  that keeps receiving follow-ups is a working session in denial). */
   followUps?: number
+  /** Rolling "where you left off" (from status thread_context) — re-entry warm-up. */
+  threadContext?: string
   /** When the USER last put something into this task (dispatch/follow-up/answer/
    *  typed input) — NEVER advanced by status heartbeats. This is the consent
    *  clock: a session is auto-routable only while this is recent ("hot thread");
@@ -575,6 +577,7 @@ export class TaskManager extends EventEmitter {
     if (payload?.error) task.error = payload.error
     if (payload?.question) task.question = payload.question
     if (payload?.recipe_suggestion) task.recipeSuggestion = payload.recipe_suggestion
+    if (payload?.thread_context) task.threadContext = String(payload.thread_context).slice(0, 600)
 
     if (prev !== next) {
       tlog.event('state-transition', { from: prev, to: next, step: payload?.step })

@@ -17,6 +17,9 @@ export interface RemoteTask {
   /** Species: 'session' = persistent working session (never idle-killed/purged);
    *  'oneoff' = fire-and-forget errand (default). */
   kind?: 'oneoff' | 'session'
+  /** Rolling "where you left off" (2-3 sentences from the session itself,
+   *  refreshed every turn) — re-entry warm-up, never authoritative. */
+  threadContext?: string | null
   state: 'processing' | 'needs-user' | 'stuck' | 'done' | 'failed'
   category?: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
   step?: string | null

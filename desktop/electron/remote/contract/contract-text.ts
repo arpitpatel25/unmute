@@ -39,7 +39,8 @@ include the others when relevant):
   "result":  { "summary": "<one line>", "detail": "<full answer for info tasks>", "artifacts": [ { "type": "path|url", "value": "..." } ] },
   "error":   { "reason": "<one line why it failed>", "detail": "<optional>" },
   "question":{ "text": "<your question>", "kind": "free_text|choice|confirm", "choices": ["..."], "irreversible": false },
-  "recipe_suggestion": { "present": true, "scratch_path": "<recipe scratch path>" }
+  "recipe_suggestion": { "present": true, "scratch_path": "<recipe scratch path>" },
+  "thread_context": "<2-3 plain sentences: where this thread stands — what's decided, what's in progress, what's next. Update it on EVERY status write so a human returning cold can re-enter in one glance. Write it for the USER, not for yourself.>"
 }
 \`\`\`
 

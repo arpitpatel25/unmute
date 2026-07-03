@@ -72,6 +72,10 @@ export interface StatusPayload {
   error?: TaskError
   question?: TaskQuestion
   recipe_suggestion?: RecipeSuggestionPointer
+  /** Rolling re-entry summary (2-3 sentences), refreshed on every write — the
+   *  warm-up that kills the human's cold restart. Display-framed as "where you
+   *  left off", never as authoritative truth. */
+  thread_context?: string
 }
 
 export const CURRENT_SCHEMA_VERSION = 1

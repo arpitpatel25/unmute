@@ -36,7 +36,7 @@ import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask } from './router'
-import { knownProjects } from './projects'
+import { knownProjects, projectSlug } from './projects'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
 
@@ -406,6 +406,7 @@ function serializeTask(t: Task) {
     name: t.name ?? null,
     cwd: t.cwd,
     kind: t.kind ?? 'oneoff',
+    threadContext: t.threadContext ?? null,
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,
@@ -771,10 +772,55 @@ function speakHeadline(t: Task, state: 'needs-user' | 'stuck' | 'failed'): void 
   spokenState.set(t.id, ringKey)
   const label = state === 'needs-user' ? 'needs you' : state === 'stuck' ? 'is stuck' : 'failed'
   const name = (t.name || t.intent || 'a task').slice(0, 60)
+  speakLine(`${name} ${label}`)
+}
+
+/** Speak one line aloud (serialized; silent while the user is mid-capture).
+ *  Shared by the doorbell and the 'speak' router verb. */
+function speakLine(text: string): void {
+  const line = text.trim().slice(0, 500)
+  if (!line) return
   sayChain = sayChain.then(() => new Promise<void>((resolve) => {
     if (captureBusy) { resolve(); return } // the user is speaking — stay silent
-    try { execFile('say', [`${name} ${label}`], () => resolve()) } catch { resolve() }
+    try { execFile('say', [line], () => resolve()) } catch { resolve() }
   })).catch(() => {})
+}
+
+/** Compose + speak the answer to a 'speak' meta-command — DETERMINISTIC string
+ *  building from the task map, zero LLM in the speech path. The router only
+ *  picked the target; the data (question/state/context) is already here. */
+function speakAbout(taskId: string | undefined): void {
+  if (!manager) return
+  if (taskId) {
+    const t = manager.get(taskId)
+    if (!t) { speakLine('That task is gone.'); return }
+    const name = (t.name || t.intent || 'the task').slice(0, 60)
+    if (t.question?.text) {
+      let line = `${name} asks: ${t.question.text.slice(0, 280)}`
+      const choices = t.question.choices ?? []
+      if (choices.length) line += '. ' + choices.map((c, i) => `Option ${i + 1}: ${c}`).join('. ')
+      speakLine(line)
+    } else if (t.state === 'processing') {
+      speakLine(`${name} is working. ${t.step ? t.step : t.threadContext ?? ''}`)
+    } else if (t.state === 'failed' || t.state === 'stuck') {
+      speakLine(`${name} ${t.state === 'stuck' ? 'is stuck' : 'errored'}. ${t.error?.reason ?? ''}`)
+    } else {
+      speakLine(`${name} is done. ${t.result?.summary ?? t.threadContext ?? ''}`)
+    }
+    return
+  }
+  // Overall status — one glanceable sentence.
+  const all = manager.list()
+  const needs = all.filter((t) => t.state === 'needs-user' || t.state === 'failed' || t.state === 'stuck')
+  const working = all.filter((t) => t.state === 'processing')
+  if (!needs.length && !working.length) { speakLine('All clear. Nothing running.'); return }
+  const parts: string[] = []
+  if (needs.length) {
+    const first = needs[0]
+    parts.push(`${needs.length} need${needs.length === 1 ? 's' : ''} you — ${(first.name || first.intent).slice(0, 50)}${first.question?.text ? `, asking: ${first.question.text.slice(0, 120)}` : ''}`)
+  }
+  if (working.length) parts.push(`${working.length} working`)
+  speakLine(parts.join('. '))
 }
 
 export async function dispatchFromCapture(rawTranscript: string): Promise<string | null> {
@@ -878,6 +924,14 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
           }
         }
       }
+      // SPEAK (meta-command): the user asked to HEAR something — read-only,
+      // nothing spawned, nothing injected. Speech is composed deterministically
+      // from the task map; the router only chose the target.
+      if (decision.action === 'speak') {
+        log.event('routed-as-speak', { taskId: decision.targetTaskId ?? null })
+        speakAbout(decision.targetTaskId)
+        return null
+      }
       // RESUME-ROUTING: the utterance follows up a recently-finished one-off
       // (≤15min, capped). Revive that exact session (`--continue` restores its
       // full context), then deliver — the thread literally continues on its own
@@ -901,7 +955,20 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       const forcedRaw = injectionDisabled()
       const mode = forcedRaw ? 'raw' as const : decision.mode
       log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: mode ?? null, forcedRaw, kind: decision.kind ?? null, dir: decision.dir ?? null })
-      const newId = await manager.dispatch(intentWithStaged(decision.intent || raw, staged), { surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir })
+      // RECALL pointer (§6.6): the command asks about another task's work — hand
+      // the new task that task's ACTUAL record (status + Claude transcript) so it
+      // reads ground truth instead of guessing. Read-only; works for any known
+      // task including cold sessions (hearing about one is not injecting into it).
+      let intentText = decision.intent || raw
+      if (decision.contextTaskId) {
+        const ctx = manager.get(decision.contextTaskId)
+        if (ctx) {
+          const transcript = join(homedir(), '.claude', 'projects', projectSlug(ctx.cwd), `${ctx.sessionId}.jsonl`)
+          intentText += `\n[This refers to a previous task: "${(ctx.name || ctx.intent).slice(0, 80)}". Read its record before answering — status: ${ctx.statusPath}${existsSync(transcript) ? ` — full transcript: ${transcript}` : ''}. Answer from what it actually did, not from assumption.]`
+          log.event('recall-pointer-attached', { contextTaskId: decision.contextTaskId, transcript: existsSync(transcript) })
+        }
+      }
+      const newId = await manager.dispatch(intentWithStaged(intentText, staged), { surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir })
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
       if (decision.name) manager.setName(newId, decision.name)
