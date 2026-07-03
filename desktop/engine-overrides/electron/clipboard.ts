@@ -344,6 +344,13 @@ export function getOutputMode(): 'paste' | 'clipboard' {
 
 export async function injectOutput(text: string): Promise<void> {
   const tStart = Date.now()
+  // Consume the screenshot ledger BEFORE the text write below overwrites the
+  // clipboard — a ⌃-screenshot taken mid-dictation still lives there right now,
+  // and consume's sweep is what captures it. (Delivery happens after the text.)
+  let stagedImages: string[] = []
+  try { stagedImages = consumeStagedForDictation() } catch (err) {
+    console.warn('[clipboard] staged consume failed:', err instanceof Error ? err.message : err)
+  }
   const padded = padOutput(text)
   clipboard.writeText(padded)
   console.log(`[clipboard] writeText (${padded.length} chars) in ${Date.now() - tStart}ms`)
@@ -373,7 +380,7 @@ export async function injectOutput(text: string): Promise<void> {
   // require avoids an import cycle; ANY failure leaves dictation exactly as it
   // was — text already delivered above.
   try {
-    const staged = consumeStagedForDictation()
+    const staged = stagedImages
     if (staged.length) {
       for (const p of staged) {
         const img = nativeImage.createFromPath(p)

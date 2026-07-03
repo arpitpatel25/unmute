@@ -547,25 +547,39 @@ function stageBuffer(buf: Buffer, tag: string): void {
   } catch (e) { log.warn('stageBuffer failed', { error: (e as Error).message }) }
 }
 
-/** Stage screenshot FILES newer than `sinceMs` from the user's screenshot dir. */
+/** Stage screenshot FILES newer than `sinceMs`. Scans the system screenshot
+ *  location PLUS common user arrangements (a Screenshots subfolder on the
+ *  Desktop / in the location). Inside a dedicated Screenshots folder any image
+ *  counts; elsewhere only Screenshot-named files (never random Desktop pngs). */
 function stageRecentScreenshotFiles(sinceMs: number): void {
-  try {
-    const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
-    const dir = screenshotDir()
-    for (const entry of readdirSync(dir)) {
+  const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+  const base = screenshotDir()
+  const dirs = [
+    { dir: base, anyImage: false },
+    { dir: join(base, 'Screenshots'), anyImage: true },
+    { dir: join(homedir(), 'Desktop', 'Screenshots'), anyImage: true },
+  ]
+  for (const { dir, anyImage } of dirs) {
+    let entries: string[]
+    try { entries = readdirSync(dir) } catch { continue }
+    let matched = 0
+    for (const entry of entries) {
       if (stagedAttachments.length >= CAPTURE_MAX_AUTO) break
-      if (!/^screen ?shot/i.test(entry) || !/\.(png|jpe?g)$/i.test(entry)) continue
+      if (!/\.(png|jpe?g)$/i.test(entry)) continue
+      if (!anyImage && !/^screen ?shot/i.test(entry)) continue
       const full = join(dir, entry)
       try {
         const st = statSync(full)
         if (st.mtimeMs > sinceMs && !stagedAttachments.includes(full)) {
+          matched++
           stagedAttachments.push(full) // reference in place — never copy/move user files
           broadcastStaged()
           log.event('capture-staged', { file: full, via: 'file' })
         }
       } catch { /* skip */ }
     }
-  } catch { /* no screenshot dir — fine */ }
+    if (matched) log.event('capture-sweep', { dir, matched, sinceMs })
+  }
 }
 
 /** A capture began (remote OR dictation): sweep the pre-hold window, then watch live.
@@ -588,6 +602,7 @@ function startCaptureWatch(): void {
   // clipboard screenshot still rides with the utterance — its chip just appears
   // at lift instead of at start. Files are different: readdir+stat is
   // microseconds, safe to sweep and poll live.
+  log.event('capture-watch-start', { preholdSince, dir: screenshotDir() }) // diagnosis: prove the watcher armed
   stageRecentScreenshotFiles(preholdSince)
   if (captureWatchTimer) clearInterval(captureWatchTimer)
   const startedAt = Date.now()
