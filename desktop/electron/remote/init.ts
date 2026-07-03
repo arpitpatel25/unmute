@@ -39,7 +39,6 @@ import { Router, type RoutableTask } from './router'
 import { knownProjects } from './projects'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
-import { listRecipes } from './recipe-store'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -930,33 +929,46 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // zero tokens. Skills have no surface anywhere in Claude Code's own UX; giving
   // them a face is what makes people actually say them.
   ipcMain.handle('remote:list-skills', async () => {
-    // ALL skills, not just graduated: both Unmute memory tiers + the user's own
-    // ~/.claude/skills (dirs with SKILL.md and loose .md files). The rail is the
-    // full vocabulary — an unlisted skill is a skill nobody says.
-    const recipes = await listRecipes({}).catch(() => []) // both tiers
-    const fromRecipes = recipes.map((r) => ({
-      name: r.frontmatter.name,
-      lastUsed: (r.frontmatter.last_used || r.frontmatter.created || '').slice(0, 10),
-    }))
-    const claudeSkills: Array<{ name: string; lastUsed: string }> = []
-    try {
-      const dir = join(homedir(), '.claude', 'skills')
-      const { readdirSync, statSync } = await import('node:fs')
-      for (const entry of readdirSync(dir)) {
+    // ALL skills — the rail is the full vocabulary; an unlisted skill is a skill
+    // nobody says. The recipe-store reader only walks surface SUBFOLDERS, which
+    // hid the older root-level skill files — so scan recursively ourselves:
+    // ~/.unmute/remote/{skills,recipes}/**/*.md + ~/.claude/skills entries.
+    // Name = filename (they ARE the names); recency = file mtime. Zero tokens.
+    const { readdirSync, statSync } = await import('node:fs')
+    const out: Array<{ name: string; lastUsed: string }> = []
+    const walk = (dir: string, depth: number) => {
+      if (depth > 3) return
+      let entries: string[]
+      try { entries = readdirSync(dir) } catch { return }
+      for (const entry of entries) {
         if (entry.startsWith('.')) continue
         const full = join(dir, entry)
         try {
           const st = statSync(full)
-          const name = entry.replace(/\.md$/, '')
-          claudeSkills.push({ name, lastUsed: new Date(st.mtimeMs).toISOString().slice(0, 10) })
+          if (st.isDirectory()) { walk(full, depth + 1); continue }
+          if (!entry.endsWith('.md')) continue
+          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: new Date(st.mtimeMs).toISOString().slice(0, 10) })
         } catch { /* skip unreadable */ }
+      }
+    }
+    walk(join(homedir(), '.unmute', 'remote', 'skills'), 0)
+    walk(join(homedir(), '.unmute', 'remote', 'recipes'), 0)
+    // ~/.claude/skills: loose .md files AND skill folders (dir name = skill name).
+    const claudeDir = join(homedir(), '.claude', 'skills')
+    try {
+      for (const entry of readdirSync(claudeDir)) {
+        if (entry.startsWith('.')) continue
+        try {
+          const st = statSync(join(claudeDir, entry))
+          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: new Date(st.mtimeMs).toISOString().slice(0, 10) })
+        } catch { /* skip */ }
       }
     } catch { /* no ~/.claude/skills — fine */ }
     const seen = new Set<string>()
-    return [...fromRecipes, ...claudeSkills]
+    return out
       .filter((s) => s.name && !seen.has(s.name) && (seen.add(s.name), true))
       .sort((a, b) => (b.lastUsed || '').localeCompare(a.lastUsed || ''))
-      .slice(0, 20)
+      .slice(0, 30)
   })
   ipcMain.handle('remote:list-projects', async () => {
     const projects = await knownProjects(8).catch(() => [])

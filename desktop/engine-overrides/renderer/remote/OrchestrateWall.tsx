@@ -634,7 +634,7 @@ export default function OrchestrateWall() {
 
   return (
     <div
-      style={{ position: 'absolute', inset: 0, background: C.bg, color: C.midText, fontFamily: C.mono, display: 'flex', flexDirection: 'column' }}
+      style={{ position: 'absolute', inset: 0, background: C.bg, color: C.midText, fontFamily: C.mono, display: 'flex', flexDirection: 'column', padding: '14px 16px 16px' }}
       onDragOver={(e) => { if (!focused) e.preventDefault() }}
       onDrop={(e) => {
         if (focused) return // the Stage's own drop handler owns the focused case
