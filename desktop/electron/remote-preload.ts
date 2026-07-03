@@ -69,6 +69,17 @@ export const remotePreloadExtensions = {
    *  path is typed (unsubmitted) into the session's input — speak to send. */
   remoteAttachImage: (taskId: string, data: ArrayBuffer, ext: string): Promise<string | null> =>
     ipcRenderer.invoke('remote:attach-image', taskId, data, ext),
+  /** Staging tray: stage an image with NO target — it rides with the next
+   *  utterance to wherever that lands (new task / continuation / answer). */
+  remoteStageImage: (data: ArrayBuffer, ext: string): Promise<string | null> =>
+    ipcRenderer.invoke('remote:stage-image', data, ext),
+  remoteGetStaged: (): Promise<number> => ipcRenderer.invoke('remote:get-staged'),
+  remoteClearStaged: (): Promise<boolean> => ipcRenderer.invoke('remote:clear-staged'),
+  remoteOnStagedChanged: (cb: (d: { count: number }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { count: number }) => cb(d)
+    ipcRenderer.on('remote:staged-changed', handler)
+    return () => ipcRenderer.removeListener('remote:staged-changed', handler)
+  },
   /** All tasks, newest first (PRD §13.3 panel + §13.5 history). */
   remoteList: (): Promise<RemoteTaskSnapshot[]> => ipcRenderer.invoke('remote:list'),
   /** Answer a needs-user question — piped into the session stdin (PRD §7). */

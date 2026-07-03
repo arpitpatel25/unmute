@@ -386,6 +386,41 @@ export default function OrchestrateWall() {
     void api?.remoteAcceptRouteOffer?.(o.newTaskId).then((ok) => { if (ok) focusRef.current?.(o.altTaskId) })
   }, [offer])
 
+  // Staging tray (capture first, speak second): images pasted/dropped with NO
+  // focused stage stage in main and ride with the NEXT utterance to wherever it
+  // lands. The natural order — grab screenshots, then say what they mean.
+  const [stagedCount, setStagedCount] = useState(0)
+  useEffect(() => {
+    const api = (window as unknown as { electronAPI?: { remoteGetStaged?: () => Promise<number>; remoteOnStagedChanged?: (cb: (d: { count: number }) => void) => () => void } }).electronAPI
+    void api?.remoteGetStaged?.().then((n) => setStagedCount(n ?? 0))
+    const off = api?.remoteOnStagedChanged?.((d) => setStagedCount(d.count))
+    return () => off?.()
+  }, [])
+  const stageBlob = useCallback(async (blob: Blob) => {
+    const api = (window as unknown as { electronAPI?: { remoteStageImage?: (data: ArrayBuffer, ext: string) => Promise<string | null> } }).electronAPI
+    if (!api?.remoteStageImage) return
+    const ext = (blob.type.split('/')[1] || 'png').split('+')[0]
+    await api.remoteStageImage(await blob.arrayBuffer(), ext)
+  }, [])
+  // Paste with nothing focused → tray (the Stage's own paste handler covers the
+  // focused case; this one stands down whenever a stage is open).
+  const focusedIdRef = useRef(focusedId)
+  focusedIdRef.current = focusedId
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (focusedIdRef.current) return // Stage handles direct attach
+      const item = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'))
+      const file = item?.getAsFile()
+      if (file) { e.preventDefault(); void stageBlob(file) }
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [stageBlob])
+  const clearStaged = useCallback(() => {
+    const api = (window as unknown as { electronAPI?: { remoteClearStaged?: () => Promise<boolean> } }).electronAPI
+    void api?.remoteClearStaged?.()
+  }, [])
+
   // Voice-as-doorbell toggle (§6.4): spoken headlines for needs-you states —
   // one toggle away, and the cockpit is fully usable dead silent.
   const [doorbell, setDoorbell] = useState(true)
@@ -552,7 +587,17 @@ export default function OrchestrateWall() {
   const others = focused ? visible.filter((t) => t.id !== focused.id) : []
 
   return (
-    <div style={{ position: 'absolute', inset: 0, background: C.bg, color: C.midText, fontFamily: C.mono, display: 'flex', flexDirection: 'column' }}>
+    <div
+      style={{ position: 'absolute', inset: 0, background: C.bg, color: C.midText, fontFamily: C.mono, display: 'flex', flexDirection: 'column' }}
+      onDragOver={(e) => { if (!focused) e.preventDefault() }}
+      onDrop={(e) => {
+        if (focused) return // the Stage's own drop handler owns the focused case
+        e.preventDefault()
+        for (const f of Array.from(e.dataTransfer?.files ?? [])) {
+          if (f.type.startsWith('image/')) void stageBlob(f)
+        }
+      }}
+    >
       {/* tap banner — highest-priority queued item, always at the top (§8) */}
       {top && !full && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', borderBottom: `1px solid ${C.border}`, background: C.surface, flex: 'none' }}>
@@ -642,6 +687,17 @@ export default function OrchestrateWall() {
           </div>
         )}
       </div>
+
+      {/* staging tray chip — the images waiting for your next utterance */}
+      {stagedCount > 0 && (
+        <div style={{ position: 'absolute', left: 14, bottom: 46, display: 'flex', alignItems: 'center', gap: 8, fontFamily: C.mono, fontSize: 11, background: C.surfaceHi, border: `1px solid ${C.borderHi}`, borderRadius: 9999, padding: '5px 12px' }}>
+          <span aria-hidden>🖼</span>
+          <span style={{ color: C.nameText }}>{stagedCount} staged</span>
+          <span style={{ color: C.dimText }}>— speaks with your next task</span>
+          <button onClick={clearStaged} title="Drop the staged images"
+            style={{ background: 'none', border: 'none', color: C.dimText, cursor: 'pointer', fontFamily: C.mono, fontSize: 12, padding: 0 }}>✕</button>
+        </div>
+      )}
 
       {/* doorbell toggle — bottom-right, out of the way, always reachable */}
       <button onClick={toggleDoorbell}

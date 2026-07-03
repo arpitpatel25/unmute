@@ -476,6 +476,41 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
  *  nothing and it simply expires in the UI. */
 let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; at: number } | null = null
 
+// ── Staging tray (multimodal, capture-first): images pasted/dropped with NO
+// target stage here, then ride with the NEXT utterance to wherever it lands —
+// new task (paths join the intent), continuation/answer (paths typed into the
+// target right before the payload, submitting as ONE message). The tray is to
+// images what the router is to words: an address-free buffer resolved at
+// speak-time. Files live under ~/.unmute/remote/staging (tiny, swept with age).
+const STAGING_DIR = join(homedir(), '.unmute', 'remote', 'staging')
+let stagedAttachments: string[] = []
+function broadcastStaged(): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length })
+  }
+}
+/** Consume the tray (one landing takes everything). */
+function takeStaged(): string[] {
+  if (!stagedAttachments.length) return []
+  const taken = stagedAttachments
+  stagedAttachments = []
+  broadcastStaged()
+  return taken
+}
+/** Type staged paths into a live session's input (unsubmitted — the payload that
+ *  follows submits them together). Best-effort. */
+function typeStagedInto(taskId: string, staged: string[]): void {
+  if (!staged.length || !manager) return
+  manager.sendInput(taskId, ` ${staged.join(' ')} `)
+  log.event('staged-delivered', { taskId, count: staged.length, via: 'typed' })
+}
+/** Fold staged paths into a NEW task's intent (Claude Code reads images by path). */
+function intentWithStaged(intent: string, staged: string[]): string {
+  if (!staged.length) return intent
+  log.event('staged-delivered', { count: staged.length, via: 'intent' })
+  return `${intent}\n[The user attached ${staged.length} image${staged.length === 1 ? '' : 's'} — view: ${staged.join(' ')}]`
+}
+
 // ── Voice-as-doorbell (§6.4): one terse spoken headline when a task becomes
 // actionable — names the task, states the state, nothing else. Spoken ONLY for
 // attention-required states (needs-you / stuck / errored); "done" pops silently.
@@ -522,6 +557,8 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
   }
   const raw = (rawTranscript || '').trim()
   if (!raw) { log.warn('empty transcript — not dispatching', {}); return null }
+  // The staging tray rides with THIS utterance to wherever it lands.
+  const staged = takeStaged()
 
   // 0. ORCHESTRATE FOCUS short-circuit (§6.2). If the wall is focused on a session,
   //    the utterance goes THERE — deterministically, bypassing the router. This is
@@ -537,10 +574,12 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
     const text = completeFn ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
     const awaiting = manager.tasksAwaitingUser().some((t) => t.id === fid)
     if (awaiting) {
+      typeStagedInto(fid, staged) // images + answer submit as one message
       manager.answer(fid, text)
       log.event('routed-to-focus', { taskId: fid, kind: 'answer' })
       return fid
     }
+    typeStagedInto(fid, staged)
     if (manager.followUp(fid, text)) {
       log.event('routed-to-focus', { taskId: fid, kind: 'continue' })
       return fid
@@ -579,9 +618,11 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         // continuing a live task means a fresh follow-up turn.
         if (awaitingIds.has(tid)) {
           log.event('routed-as-answer', { taskId: tid, via: 'router' })
+          typeStagedInto(tid, staged)
           manager.answer(tid, decision.intent || raw)
           return tid
         }
+        typeStagedInto(tid, staged)
         if (manager.followUp(tid, decision.intent)) {
           log.event('routed-as-continuation', { taskId: tid, via: 'router' })
           return tid
@@ -592,7 +633,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       const forcedRaw = injectionDisabled()
       const mode = forcedRaw ? 'raw' as const : decision.mode
       log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: mode ?? null, forcedRaw, kind: decision.kind ?? null, dir: decision.dir ?? null })
-      const newId = await manager.dispatch(decision.intent || raw, { surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir })
+      const newId = await manager.dispatch(intentWithStaged(decision.intent || raw, staged), { surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir })
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
       if (decision.name) manager.setName(newId, decision.name)
@@ -618,7 +659,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
   //    executor tolerates raw); use the managed LLM only if it's wired.
   const cleaned = completeFn ? (await cleanIntent(raw, completeFn)).intent : raw
   if (!cleaned) { log.warn('empty intent after cleanup — not dispatching', {}); return null }
-  return manager.dispatch(cleaned, { mode: injectionDisabled() ? 'raw' : undefined })
+  return manager.dispatch(intentWithStaged(cleaned, staged), { mode: injectionDisabled() ? 'raw' : undefined })
 }
 
 /** Read the current Remote trigger key (derived from the dictation key, §2.4.4). */
@@ -884,6 +925,24 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     }
     return true
   })
+  // Staging tray: stage an image with no target (rides with the next utterance).
+  ipcMain.handle('remote:stage-image', async (_e, data: ArrayBuffer, ext: string) => {
+    try {
+      mkdirSync(STAGING_DIR, { recursive: true })
+      const safeExt = (ext || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
+      const file = join(STAGING_DIR, `staged-${Date.now()}-${stagedAttachments.length}.${safeExt}`)
+      writeFileSync(file, Buffer.from(data))
+      stagedAttachments.push(file)
+      broadcastStaged()
+      log.event('image-staged', { file, count: stagedAttachments.length })
+      return file
+    } catch (e) {
+      log.warn('stage-image failed', { error: (e as Error).message })
+      return null
+    }
+  })
+  ipcMain.handle('remote:get-staged', async () => stagedAttachments.length)
+  ipcMain.handle('remote:clear-staged', async () => { stagedAttachments = []; broadcastStaged(); return true })
   // Attach an image to a session (voice-era screenshot paste/drag). Bytes arrive
   // as an ArrayBuffer from the renderer; saved under the task's own dir and the
   // path is TYPED (unsubmitted) into the session — see TaskManager.attachFile.
