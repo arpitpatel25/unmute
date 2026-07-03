@@ -173,9 +173,10 @@ async function attachImageBlob(taskId: string, blob: Blob): Promise<string | nul
 }
 
 // ─── focused stage: hoisted pending line + the REAL terminal ───
-function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
+function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, onResume, onRerun, onRemove }: {
   t: RemoteTask; now: number; full: boolean
   onAnswer: (text: string) => void; onClose: () => void; onNext: () => void; onToggleFull: () => void
+  onKill: (id: string) => void; onResume: (id: string) => void; onRerun: (intent: string) => void; onRemove: (id: string) => void
 }) {
   const st = statusOf(t.state)
   const choices = t.question?.choices ?? []
@@ -228,6 +229,13 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
           const api = (window as unknown as { electronAPI?: { remoteSetKind?: (id: string, kind: 'oneoff' | 'session') => Promise<boolean> } }).electronAPI
           void api?.remoteSetKind?.(t.id, t.kind === 'session' ? 'oneoff' : 'session')
         }} />
+        {/* lifecycle controls — the manual fallback is always present (§9) */}
+        {t.alive ? (
+          <Key label="kill" danger onClick={() => { if (window.confirm('Stop this session?')) onKill(t.id) }} />
+        ) : (
+          <Key label="resume" onClick={() => onResume(t.id)} />
+        )}
+        <Key label="remove" danger onClick={() => { if (window.confirm('Remove this task entirely? Its session and scratch files are erased.')) { onRemove(t.id); onClose() } }} />
         <Key label="next" onClick={onNext} />
         <Key label={full ? 'split' : 'full'} onClick={onToggleFull} />
         <Key label="esc" onClick={onClose} />
@@ -250,10 +258,34 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
         </div>
       )}
 
-      {/* the REAL terminal — fills the stage (the wall OWNS the PTY size while
-          focused; the overlay defers to a glance — single-owner, no width fight) */}
+      {/* ALIVE → the REAL terminal, painted FRESH (no stale-width replay — the
+          live TUI repaints on SIGWINCH; replaying old-width frames is what
+          garbled the stage). DEAD → never an empty black void: the result/error
+          panel with resume / re-run as the obvious next move. */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        <LiveTerminal taskId={t.id} onClose={onClose} fill />
+        {t.alive ? (
+          <LiveTerminal taskId={t.id} onClose={onClose} fill replay={false} />
+        ) : (
+          <div style={{ height: '100%', overflow: 'auto', padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase' }}>
+              session ended · {st.label}
+            </div>
+            {t.result?.summary && <div style={{ fontSize: 14, color: C.nameText, lineHeight: 1.55 }}>{t.result.summary}</div>}
+            {t.result?.detail && <div style={{ fontSize: 12.5, color: C.midText, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{t.result.detail}</div>}
+            {t.error?.reason && <div style={{ fontSize: 13, color: C.midText, lineHeight: 1.5 }}>{t.error.reason}{t.error.detail ? ` — ${t.error.detail}` : ''}</div>}
+            {!t.result?.summary && !t.error?.reason && <div style={{ fontSize: 12.5, color: C.dimText }}>No recorded output.</div>}
+            <div style={{ display: 'flex', gap: 9, marginTop: 4 }}>
+              <button onClick={() => onResume(t.id)}
+                style={{ fontFamily: C.mono, fontSize: 12, fontWeight: 700, color: C.bg, background: '#3fb950', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer' }}>
+                resume — continue with full context
+              </button>
+              <button onClick={() => onRerun(t.intent)}
+                style={{ fontFamily: C.mono, fontSize: 12, color: C.nameText, background: C.surface, border: `1px solid ${C.borderHi}`, borderRadius: 6, padding: '7px 16px', cursor: 'pointer' }}>
+                re-run fresh
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* attach toast — confirms the image landed and teaches "speak to send" */}
@@ -266,10 +298,10 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
   )
 }
 
-function Key({ label, onClick }: { label: string; onClick: () => void }) {
+function Key({ label, onClick, danger = false }: { label: string; onClick: () => void; danger?: boolean }) {
   return (
     <button onClick={onClick}
-      style={{ flex: 'none', background: 'none', border: `1px solid ${C.border}`, color: C.midText, borderRadius: 5, fontSize: 11, padding: '2px 8px', cursor: 'pointer', fontFamily: C.mono }}>
+      style={{ flex: 'none', background: 'none', border: `1px solid ${danger ? '#5b2a2e' : C.border}`, color: danger ? '#c56069' : C.midText, borderRadius: 5, fontSize: 11, padding: '2px 8px', cursor: 'pointer', fontFamily: C.mono }}>
       {label}
     </button>
   )
@@ -287,7 +319,7 @@ function RailSection({ title, children }: { title: string; children: React.React
 type CapturePhase = 'listening' | 'transcribing' | 'routing' | 'idle'
 
 export default function OrchestrateWall() {
-  const { tasks, answer } = useRemoteTasks()
+  const { tasks, answer, kill, remove, resume, rerun } = useRemoteTasks()
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const [full, setFull] = useState(false)
   const [now, setNow] = useState(() => Date.now())
@@ -408,7 +440,12 @@ export default function OrchestrateWall() {
       if (/^[1-9]$/.test(e.key)) {
         const t = tasksRef.current.find((x) => x.id === focusedId)
         const choice = t?.question?.choices?.[Number(e.key) - 1]
-        if (choice) { answer(t!.id, choice); focus(null) }
+        if (choice) {
+          answer(t!.id, choice)
+          // throughput loop: straight to the next task needing you (wall if clear)
+          const next = tasksRef.current.find((x) => x.id !== focusedId && needsYou(x.state))
+          focus(next ? next.id : null)
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -437,8 +474,15 @@ export default function OrchestrateWall() {
         <div style={{ flex: 1, minWidth: 0, padding: focused ? 0 : 14, overflow: focused ? 'hidden' : 'auto' }}>
           {focused ? (
             <Stage t={focused} now={now} full={full}
-              onAnswer={(text) => { answer(focused.id, text); focus(null) }}
-              onClose={() => focus(null)} onNext={crank} onToggleFull={() => setFull((v) => !v)} />
+              onAnswer={(text) => {
+                answer(focused.id, text)
+                // The throughput loop (§3): acting on a task IS the crank — go
+                // straight to the next thing that needs you; wall when clear.
+                const next = queue.find((q) => q.id !== focused.id)
+                focus(next ? next.id : null)
+              }}
+              onClose={() => focus(null)} onNext={crank} onToggleFull={() => setFull((v) => !v)}
+              onKill={kill} onResume={resume} onRerun={rerun} onRemove={remove} />
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))', gap: 11, alignContent: 'start' }}>
               {gridTasks.length === 0 && <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>}

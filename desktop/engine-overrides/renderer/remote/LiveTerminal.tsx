@@ -36,7 +36,13 @@ function api(): API {
 // to fill the screen, a TRUE full terminal. The overlay keeps the fixed-120 model.
 // Single-owner (see remote:orchestrate-owner) guarantees only ONE LiveTerminal
 // drives a given PTY's size at a time, so the two width models never fight.
-export function LiveTerminal({ taskId, onClose, fill = false }: { taskId: string; onClose: () => void; fill?: boolean }) {
+//
+// `replay` (default true): paint the buffered history on mount. Set FALSE for a
+// LIVE session in fill mode — replaying frames painted at the OLD width into a
+// resized grid is exactly what garbled the stage (interleaved stale rows). A live
+// TUI repaints itself completely on SIGWINCH, so we resize and let it paint fresh;
+// the buffer replay is only for sessions that can no longer speak for themselves.
+export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: { taskId: string; onClose: () => void; fill?: boolean; replay?: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const popRef = useRef<HTMLButtonElement | null>(null)
 
@@ -133,7 +139,19 @@ export function LiveTerminal({ taskId, onClose, fill = false }: { taskId: string
       term.open(host)
       sync()
       term.onData((data) => api().remoteTerminalInput?.(taskId, data))
-      void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf && term) term.write(buf) })
+      if (replay) {
+        void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf && term) term.write(buf) })
+      } else {
+        // Live no-replay path: the TUI repaints itself completely on SIGWINCH.
+        // sync() above resized the PTY — but if it was ALREADY at these exact
+        // dims (e.g. re-focusing the same session at the same stage size) no
+        // SIGWINCH fires and the screen would sit blank until the next output.
+        // Deterministic nudge: bounce rows by one and back — two real SIGWINCHes,
+        // visually invisible, guarantees a fresh full paint.
+        const rows = term.rows
+        api().remoteTerminalResize?.(taskId, term.cols, Math.max(2, rows - 1))
+        setTimeout(() => { if (!disposed && term) api().remoteTerminalResize?.(taskId, term.cols, rows) }, 60)
+      }
       off = api().remoteOnOutput?.((d) => {
         if (!disposed && d.taskId === taskId && term) term.write(d.chunk)
       })
