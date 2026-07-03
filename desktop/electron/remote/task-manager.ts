@@ -1206,6 +1206,11 @@ export class TaskManager extends EventEmitter {
     this.executors.get(id)?.resize(cols, rows)
   }
 
+  /** Force a clean full redraw of a session's terminal (cures resize residue). */
+  refreshTerminal(id: string): void {
+    this.executors.get(id)?.refreshDisplay?.()
+  }
+
   /** Is the task's PTY still alive (running or parked-warm)? The live terminal
    *  uses this to decide: repaint a live session clean vs. replay history. */
   isAlive(id: string): boolean {

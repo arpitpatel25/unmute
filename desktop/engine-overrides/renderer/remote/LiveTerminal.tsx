@@ -24,6 +24,7 @@ type API = {
   remoteOnOutput?: (cb: (d: { taskId: string; chunk: string }) => void) => () => void
   remoteTerminalInput?: (taskId: string, data: string) => void
   remoteTerminalResize?: (taskId: string, cols: number, rows: number) => void
+  remoteTerminalRefresh?: (taskId: string) => void
   remoteOpenInTerminal?: (taskId: string) => Promise<boolean>
   remoteTmuxAvailable?: () => Promise<boolean>
 }
@@ -143,25 +144,27 @@ export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: {
       if (replay) {
         void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf && term) term.write(buf) })
       } else {
-        // Live no-replay path: the TUI repaints itself completely on SIGWINCH.
-        // sync() above resized the PTY — but if it was ALREADY at these exact
-        // dims (e.g. re-focusing the same session at the same stage size) no
-        // SIGWINCH fires and the screen would sit blank until the next output.
-        // Deterministic nudge: bounce rows by one and back — two real SIGWINCHes,
-        // visually invisible, guarantees a fresh full paint.
-        const rows = term.rows
-        api().remoteTerminalResize?.(taskId, term.cols, Math.max(2, rows - 1))
-        setTimeout(() => { if (!disposed && term) api().remoteTerminalResize?.(taskId, term.cols, rows) }, 60)
+        // Live no-replay path: sync() above resized the PTY; after the geometry
+        // settles, ask tmux for a FULL clean redraw (refresh-client). This
+        // replaces the old rows±1 "nudge" — three SIGWINCHes in <100ms raced the
+        // TUI's repaint pipeline and left mispainted residue (fused spinner
+        // fragments, scattered stale rows) that dirty-region repaints never
+        // cleared. One refresh = deterministic full paint, zero geometry games.
+        setTimeout(() => {
+          if (disposed || !term) return
+          term.clear()
+          api().remoteTerminalRefresh?.(taskId)
+        }, 350)
         // BACKSTOP: a nominally-alive session can still be unable to repaint —
         // e.g. a watch/consume one-off mid-graceful-detach (/exit sent, alive flag
-        // not yet flipped). If NOTHING arrives shortly after the nudge, fall back
-        // to the buffered record: an imperfect-width replay beats a black void.
+        // not yet flipped). If NOTHING arrives shortly after the refresh, fall
+        // back to the buffered record: an imperfect replay beats a black void.
         setTimeout(() => {
           if (disposed || sawOutput || !term) return
           void api().remoteGetOutput?.(taskId).then((buf) => {
             if (!disposed && !sawOutput && buf && term) term.write(buf)
           })
-        }, 600)
+        }, 1000)
       }
       off = api().remoteOnOutput?.((d) => {
         if (!disposed && d.taskId === taskId && term) { sawOutput = true; term.write(d.chunk) }

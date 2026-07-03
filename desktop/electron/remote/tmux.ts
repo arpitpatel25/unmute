@@ -83,6 +83,13 @@ export function tmuxKillSessionArgs(session: string): string[] {
   return ['-L', TMUX_SOCKET, 'kill-session', '-t', session]
 }
 
+/** Force a FULL clean redraw of the attached client — the deterministic cure for
+ *  resize-race residue (frames for a previous geometry landing after a switch
+ *  and never being repainted, since TUIs only redraw dirty regions). */
+export function tmuxRefreshClientArgs(session: string): string[] {
+  return ['-L', TMUX_SOCKET, 'refresh-client', '-t', session]
+}
+
 /** Resolve the tmux binary across common install locations (Homebrew, MacPorts,
  *  system). Returns null if not installed — caller falls back to a direct spawn. */
 export function resolveTmuxBin(

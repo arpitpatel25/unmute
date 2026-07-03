@@ -16,7 +16,7 @@
 
 import { createLogger } from './log'
 import type { AgentExecutor, SpawnOpts } from './executor'
-import { sessionNameFor, buildCommand, tmuxNewSessionArgs, tmuxKillSessionArgs } from './tmux'
+import { sessionNameFor, buildCommand, tmuxNewSessionArgs, tmuxKillSessionArgs, tmuxRefreshClientArgs } from './tmux'
 
 /** When set, the agent runs inside a tmux session (private socket) so it can be
  *  popped out to a real terminal as the SAME session. Session name is derived
@@ -189,6 +189,17 @@ export class CliAgentExecutor implements AgentExecutor {
 
   onData(cb: (chunk: string) => void): void {
     this.dataCbs.push(cb)
+  }
+
+  /** Full clean redraw of the tmux client (no-op without tmux). Cures stale
+   *  mispainted cells after resize races — the TUI repaints EVERYTHING. */
+  refreshDisplay(): void {
+    if (!this.tmuxSession || !this.cfg.tmux) return
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const cp = require('node:child_process') as typeof import('node:child_process')
+      cp.execFile(this.cfg.tmux.bin, tmuxRefreshClientArgs(this.tmuxSession), () => {})
+    } catch { /* cosmetic — never throw */ }
   }
 
   kill(): void {

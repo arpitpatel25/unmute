@@ -38,6 +38,9 @@ export interface AgentExecutor {
   resize(cols: number, rows: number): void
   /** Subscribe to the raw output stream (for render-on-demand + optional silence hint). */
   onData(cb: (chunk: string) => void): void
+  /** OPTIONAL: force a full clean redraw of the terminal display (tmux
+   *  refresh-client). Cosmetic cure for resize-race residue; safe no-op. */
+  refreshDisplay?(): void
   /** Kill the session immediately (PRD §10.4 instant kill switch). */
   kill(): void
   /** True while the PTY process is alive. */
