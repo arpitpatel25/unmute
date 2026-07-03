@@ -1153,7 +1153,44 @@ export class TaskManager extends EventEmitter {
     // cancel the idle-kill so their hands-on session isn't reaped under them.
     const wt = this.warmTimers.get(id)
     if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
+    this.trackTypedTurn(id, data)
     ex.write(data)
+  }
+
+  /** Typed-turn detection: a MANUAL prompt submitted into a finished session's
+   *  terminal is a real new turn — the card must leave 'done' and the status
+   *  polling must wake back up (it stopped at parkWarm, so even the agent's own
+   *  status writes were going unread — the stale-DONE bug). Deliberately fussy
+   *  about what counts as a prompt: escape sequences (arrows etc.) are stripped,
+   *  control chars don't count, bare Enters don't count, and `/commands`
+   *  (TUI actions like /clear) don't count — only ≥3 printable chars submitted
+   *  with Enter re-arm the lifecycle. Non-terminal tasks are untouched (their
+   *  polling is already live). */
+  private typedBuffers = new Map<string, string>()
+  private trackTypedTurn(id: string, data: string): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    let buf = this.typedBuffers.get(id) ?? ''
+    for (const chunk of data.split(/(\r)/)) {
+      if (chunk === '\r') {
+        const line = buf.replace(/\x1b\[[0-9;?]*[A-Za-z~]/g, '').replace(/[^\x20-\x7E]/g, '').trim()
+        buf = ''
+        if (line.length >= 3 && !line.startsWith('/') && TERMINAL.includes(task.state)) {
+          const tlog = log.child({ taskId: id })
+          tlog.event('typed-turn-detected', { chars: line.length })
+          task.error = undefined // a fresh manual turn clears the stale failure reason
+          this.transition(id, 'processing', {})
+          this.startPolling(id) // safe: terminal tasks have no live poller
+        }
+      } else {
+        for (const ch of chunk) {
+          if (ch === '\x7f' || ch === '\b') buf = buf.slice(0, -1) // backspace erases for real
+          else buf += ch
+        }
+        buf = buf.slice(-2000) // bounded — we only need "was it non-trivial"
+      }
+    }
+    this.typedBuffers.set(id, buf)
   }
 
   /** Resize a session's PTY to match the on-screen terminal (TUI reflow). */
@@ -1211,6 +1248,7 @@ export class TaskManager extends EventEmitter {
     this.stopPolling(id)
     const wt = this.warmTimers.get(id)
     if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
+    this.typedBuffers.delete(id)
     const ex = this.executors.get(id)
     if (ex?.alive) ex.kill() // the REPL won't exit on its own
     this.executors.delete(id)

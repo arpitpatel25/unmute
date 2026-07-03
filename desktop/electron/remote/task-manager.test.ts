@@ -764,3 +764,47 @@ test('lastUserInputAt: set at dispatch, advanced by followUp/answer/typed input 
   assert.equal(tm.get(id)!.lastUserInputAt, 1_800_000, 'typed input is consent')
   tm.killAll()
 })
+
+// ─── Typed turns: a manual prompt in the terminal re-arms the lifecycle ───────
+
+test('typing a prompt into a DONE session flips it to processing and REVIVES polling', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
+  const id = await tm.dispatch('draft the tweet thread', { kind: 'session' })
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'drafted' } })
+  await done // parked warm — polling STOPPED
+
+  // The user types a real prompt into the live terminal, char by char + Enter.
+  for (const ch of 'where are the other tweets?') tm.sendInput(id, ch)
+  tm.sendInput(id, '\r')
+  assert.equal(tm.get(id)!.state, 'processing', 'typed turn leaves done')
+
+  // The proof polling is back: the agent's next status write is actually READ.
+  const done2 = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'full thread posted' } })
+  await done2
+  assert.equal(tm.get(id)!.result?.summary, 'full thread posted')
+  tm.killAll()
+})
+
+test('typed-turn detection ignores noise: bare Enters, arrows, /commands, backspaced-away text', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
+  const id = await tm.dispatch('quick check')
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'ok' } })
+  await done
+
+  tm.sendInput(id, '\r')                       // bare Enter
+  tm.sendInput(id, '\x1b[A\x1b[B\r')           // arrow keys + Enter
+  tm.sendInput(id, '/clear\r')                 // TUI command
+  tm.sendInput(id, 'abc\x7f\x7f\x7f\r')        // typed then fully backspaced
+  assert.equal(tm.get(id)!.state, 'done', 'none of the noise re-arms the task')
+
+  tm.sendInput(id, 'ok fix the title\r')       // a real prompt
+  assert.equal(tm.get(id)!.state, 'processing')
+  tm.killAll()
+})
