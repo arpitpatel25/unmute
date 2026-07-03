@@ -50,6 +50,22 @@ type WallState = RemoteTask['state']
 const statusOf = (s: WallState) => STATUS[s] ?? STATUS.processing
 const needsYou = (s: WallState) => s === 'needs-user' || s === 'stuck' || s === 'failed'
 
+// ─── Present-tense visibility (the calm-wall rule): pixels are for NOW. ───
+// A finished one-off earns wall space only briefly — done fades after 15m,
+// errored/stuck after 60m (they were actionable; after an hour the user has
+// moved on). Sessions and anything running/needing-you never fade. Nothing is
+// ever LOST — every task lives on in the overlay panel + History; the wall just
+// stops showing the past. `clearedAt` is the "clear finished" sweep cutoff.
+const DONE_FADE_MS = 15 * 60_000
+const ATTN_FADE_MS = 60 * 60_000
+function visibleOnWall(t: RemoteTask, now: number, clearedAt: number): boolean {
+  if (t.kind === 'session') return true
+  if (t.state === 'processing' || t.state === 'needs-user') return true
+  if (t.updatedAt <= clearedAt) return false // user swept finished ones away
+  const age = now - t.updatedAt
+  return t.state === 'done' ? age < DONE_FADE_MS : age < ATTN_FADE_MS
+}
+
 function elapsed(fromMs: number, now: number): string {
   const s = Math.max(0, Math.floor((now - fromMs) / 1000))
   if (s < 60) return `${s}s`
@@ -108,7 +124,7 @@ function Dot({ state }: { state: WallState }) {
 }
 
 // ─── full session card (resting grid) — structurally identical for every state ───
-function Card({ t, now, queuePos, onClick }: { t: RemoteTask; now: number; queuePos: number | null; onClick: () => void }) {
+function Card({ t, now, queuePos, promoted = false, onClick }: { t: RemoteTask; now: number; queuePos: number | null; promoted?: boolean; onClick: () => void }) {
   const st = statusOf(t.state)
   return (
     <button onClick={onClick}
@@ -121,6 +137,8 @@ function Card({ t, now, queuePos, onClick }: { t: RemoteTask; now: number; queue
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Dot state={t.state} />
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: st.color, textTransform: 'uppercase' }}>{st.label}</span>
+        {/* graduation narration — the system explains the promotion it just made */}
+        {promoted && <span style={{ fontSize: 10, color: C.midText, border: `1px solid ${C.borderHi}`, borderRadius: 4, padding: '1px 6px' }}>↑ now a session</span>}
         {queuePos != null && (
           <span style={{ marginLeft: 'auto', fontSize: 10, color: C.dimText, border: `1px solid ${C.border}`, borderRadius: 4, padding: '1px 5px' }}>Q{queuePos}</span>
         )}
@@ -391,13 +409,56 @@ export default function OrchestrateWall() {
     return () => clearInterval(i)
   }, [])
 
+  // "Clear finished" sweep cutoff — hides terminal one-offs immediately.
+  const [clearedAt, setClearedAt] = useState(0)
+  const visible = useMemo(() => tasks.filter((t) => visibleOnWall(t, now, clearedAt)), [tasks, now, clearedAt])
+
+  // While-you-were-away digest (§4 re-entry): after a real absence, one quiet
+  // line instead of a wall of stale cards. Dismisses on click or first focus.
+  const [digest, setDigest] = useState<string | null>(null)
+  useEffect(() => {
+    const KEY = 'orchestrate-last-seen'
+    const last = Number(localStorage.getItem(KEY) || 0)
+    const away = Date.now() - last
+    if (last && away > 30 * 60_000 && tasks.length) {
+      const needs = tasks.filter((t) => needsYou(t.state) && t.updatedAt > last).length
+      const finished = tasks.filter((t) => t.state === 'done' && t.updatedAt > last).length
+      if (needs || finished) {
+        const parts = []
+        if (needs) parts.push(`${needs} need${needs === 1 ? 's' : ''} you`)
+        if (finished) parts.push(`${finished} errand${finished === 1 ? '' : 's'} finished`)
+        setDigest(`while you were away: ${parts.join(' · ')}`)
+      }
+    }
+    const mark = () => localStorage.setItem(KEY, String(Date.now()))
+    mark()
+    const i = setInterval(mark, 60_000) // keep fresh while the wall is open
+    return () => { clearInterval(i); mark() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Graduation narration: when a one-off promotes itself to a session, SAY SO —
+  // a card silently teleporting between lists reads as a glitch, not a feature.
+  const prevKinds = useRef(new Map<string, string>())
+  const [promotedAt, setPromotedAt] = useState(new Map<string, number>())
+  useEffect(() => {
+    for (const t of tasks) {
+      const prev = prevKinds.current.get(t.id)
+      if (prev === 'oneoff' && t.kind === 'session') {
+        setPromotedAt((m) => new Map(m).set(t.id, Date.now()))
+      }
+      prevKinds.current.set(t.id, t.kind ?? 'oneoff')
+    }
+  }, [tasks])
+
   // queue: ONLY what needs the user — errored/stuck first, then questions (§4).
   // 'done' is information, not a pull: it shows as a normal card but never queues,
   // never banners "STEP IN" — attention is pulled exclusively by needs-you states.
+  // Faded tasks don't queue either: a 12h-old failed errand must not hold Q1.
   const queue = useMemo(
-    () => tasks.filter((t) => needsYou(t.state))
+    () => visible.filter((t) => needsYou(t.state))
       .sort((a, b) => statusOf(a.state).rank - statusOf(b.state).rank || b.updatedAt - a.updatedAt),
-    [tasks],
+    [visible],
   )
   const queuePos = useMemo(() => {
     const m = new Map<string, number>()
@@ -411,10 +472,12 @@ export default function OrchestrateWall() {
   // Species split (§5): the grid is the space of WORKING SESSIONS; one-off
   // errands live (and resolve) in the rail. Until the user has any sessions,
   // the grid shows everything — an empty wall over a busy rail helps no one.
-  const sessions = useMemo(() => tasks.filter((t) => t.kind === 'session'), [tasks])
-  const oneoffs = useMemo(() => tasks.filter((t) => t.kind !== 'session'), [tasks])
-  const gridTasks = sessions.length ? sessions : tasks
+  // All present-tense (visibleOnWall): the past lives in History, not here.
+  const sessions = useMemo(() => visible.filter((t) => t.kind === 'session'), [visible])
+  const oneoffs = useMemo(() => visible.filter((t) => t.kind !== 'session'), [visible])
+  const gridTasks = sessions.length ? sessions : visible
   const railOneoffs = sessions.length ? oneoffs : []
+  const hiddenFinished = tasks.length - visible.length
 
   const focus = useCallback((id: string | null) => {
     setMainFocus(id) // tell main where the voice lands BEFORE any utterance (§6.2)
@@ -467,7 +530,9 @@ export default function OrchestrateWall() {
     return () => window.removeEventListener('keydown', onKey)
   }, [focusedId, full, crank, focus, answer])
 
-  const others = focused ? tasks.filter((t) => t.id !== focused.id) : []
+  // Focused rail = switch targets: sessions + LIVE one-offs only (present tense —
+  // no more "SESSIONS · 21" listing every dead errand of the day).
+  const others = focused ? visible.filter((t) => t.id !== focused.id) : []
 
   return (
     <div style={{ position: 'absolute', inset: 0, background: C.bg, color: C.midText, fontFamily: C.mono, display: 'flex', flexDirection: 'column' }}>
@@ -499,10 +564,18 @@ export default function OrchestrateWall() {
               onClose={() => focus(null)} onNext={crank} onToggleFull={() => setFull((v) => !v)}
               onKill={kill} onResume={resume} onRerun={rerun} onRemove={remove} />
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))', gap: 11, alignContent: 'start' }}>
-              {gridTasks.length === 0 && <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>}
-              {gridTasks.map((t) => <Card key={t.id} t={t} now={now} queuePos={queuePos.get(t.id) ?? null} onClick={() => focus(t.id)} />)}
-            </div>
+            <>
+              {digest && (
+                <button onClick={() => setDigest(null)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', fontFamily: C.mono, fontSize: 12, color: C.midText, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: '8px 13px', marginBottom: 11, cursor: 'pointer' }}>
+                  {digest} <span style={{ color: C.faintText }}>· dismiss</span>
+                </button>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))', gap: 11, alignContent: 'start' }}>
+                {gridTasks.length === 0 && <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>}
+                {gridTasks.map((t) => <Card key={t.id} t={t} now={now} queuePos={queuePos.get(t.id) ?? null} promoted={(promotedAt.get(t.id) ?? 0) > now - 8000} onClick={() => focus(t.id)} />)}
+              </div>
+            </>
           )}
         </div>
 
@@ -527,8 +600,16 @@ export default function OrchestrateWall() {
                   ))}
                 </RailSection>
                 <RailSection title={`One-offs${railOneoffs.length ? ` · ${railOneoffs.length}` : ''}`}>
+                  {railOneoffs.some((t) => t.state === 'done' || (needsYou(t.state) && t.state !== 'needs-user')) && (
+                    <button onClick={() => setClearedAt(Date.now())}
+                      style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, fontFamily: C.mono, fontSize: 10.5, color: C.faintText, cursor: 'pointer', textDecoration: 'underline' }}>
+                      clear finished
+                    </button>
+                  )}
                   {railOneoffs.length === 0 && (
-                    <div style={{ fontSize: 11, color: C.faintText }}>short-lived tasks resolve here</div>
+                    <div style={{ fontSize: 11, color: C.faintText }}>
+                      {hiddenFinished > 0 ? `${hiddenFinished} finished earlier — see History` : 'short-lived tasks resolve here'}
+                    </div>
                   )}
                   {railOneoffs.map((t) => (
                     <button key={t.id} onClick={() => focus(t.id)}
