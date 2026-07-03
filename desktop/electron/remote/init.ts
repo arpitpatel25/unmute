@@ -798,6 +798,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Current terminal owner — lets a freshly-mounted overlay card learn it owns
   // nothing (or that the wall already owns its session) without waiting for an event.
   ipcMain.handle('remote:get-orchestrate-owner', async () => orchestrateFocusId)
+  // Pin/unpin a task's species from the UI (manual graduation §5): 'session'
+  // exempts it from idle-kill + purge; 'oneoff' re-arms normal lifecycle.
+  ipcMain.handle('remote:set-kind', async (_e, id: string, kind: 'oneoff' | 'session') => {
+    if (!manager || (kind !== 'oneoff' && kind !== 'session')) return false
+    manager.setKind(id, kind)
+    return true
+  })
   // Accept the pending route offer: erase the seconds-old mis-spawn and deliver
   // the SAME intent to the alternate task instead (answer if blocked, else
   // follow-up — the router's own delivery paths). Validated against main's own

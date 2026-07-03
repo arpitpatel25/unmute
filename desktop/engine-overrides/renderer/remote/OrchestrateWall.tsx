@@ -222,6 +222,12 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull }: {
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: st.color, textTransform: 'uppercase' }}>{st.label}</span>
         <span style={{ fontSize: 14, fontWeight: 600, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameOf(t)}</span>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: C.dimText, flex: 'none' }}>{elapsed(t.createdAt, now)}</span>
+        {/* pin (§5): promote an errand to a persistent session (or release one).
+            Sessions are exempt from idle-kill + purge — they live until you end them. */}
+        <Key label={t.kind === 'session' ? 'unpin' : 'pin'} onClick={() => {
+          const api = (window as unknown as { electronAPI?: { remoteSetKind?: (id: string, kind: 'oneoff' | 'session') => Promise<boolean> } }).electronAPI
+          void api?.remoteSetKind?.(t.id, t.kind === 'session' ? 'oneoff' : 'session')
+        }} />
         <Key label="next" onClick={onNext} />
         <Key label={full ? 'split' : 'full'} onClick={onToggleFull} />
         <Key label="esc" onClick={onClose} />

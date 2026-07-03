@@ -183,6 +183,9 @@ export const remotePreloadExtensions = {
   /** Accept the pending offer: erases the mis-spawn, reroutes the utterance. */
   remoteAcceptRouteOffer: (newTaskId: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:accept-route-offer', newTaskId),
+  /** Pin/unpin a task's species: 'session' = persistent (no idle-kill/purge). */
+  remoteSetKind: (id: string, kind: 'oneoff' | 'session'): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-kind', id, kind),
 
   // ── Onboarding / guided one-time setup (PRD §12) ──
   /** The setup checklist: auto-detected (MCP/Chrome profile) + user-confirmed steps. */

@@ -110,6 +110,9 @@ export interface Task {
   /** What memory Unmute injected at dispatch (graduated skills matched + nursery
    *  leads). Recorded so the librarian can grade the trace against it. */
   injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>
+  /** Follow-up turns the user has sent this task (graduation signal: a one-off
+   *  that keeps receiving follow-ups is a working session in denial). */
+  followUps?: number
 }
 
 export interface TaskManagerOpts {
@@ -912,6 +915,31 @@ export class TaskManager extends EventEmitter {
       .catch((e) => log.child({ taskId: id }).warn('setName: meta persist failed', { error: (e as Error).message }))
   }
 
+  /** Change a task's species. Promotion (oneoff → session) CANCELS any armed
+   *  warm-kill timer — the whole point is that the session now outlives idle
+   *  windows. Demotion re-arms lifecycle on the next park. Persists to meta so
+   *  the species survives restarts; emits 'updated' for the UIs. */
+  setKind(id: string, kind: 'oneoff' | 'session'): void {
+    const task = this.tasks.get(id)
+    if (!task || task.kind === kind) return
+    task.kind = kind
+    task.updatedAt = this.clock()
+    if (kind === 'session') {
+      const wt = this.warmTimers.get(id)
+      if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
+    } else if (this.executors.get(id)?.alive && TERMINAL.includes(task.state)) {
+      // Demoted while parked-without-timer → re-enter the normal oneoff park
+      // (arms the warm window) so it can't linger forever as an unpinned oneoff.
+      this.parkWarm(id)
+    }
+    this.emit('updated', task)
+    log.child({ taskId: id }).event('kind-changed', { kind })
+    const metaPath = join(task.home, 'meta.json')
+    void fs.readFile(metaPath, 'utf8')
+      .then((raw) => fs.writeFile(metaPath, JSON.stringify({ ...JSON.parse(raw), kind })))
+      .catch((e) => log.child({ taskId: id }).warn('setKind: meta persist failed', { error: (e as Error).message }))
+  }
+
   followUp(id: string, text: string): boolean {
     const tlog = log.child({ taskId: id })
     const ex = this.executors.get(id)
@@ -919,6 +947,13 @@ export class TaskManager extends EventEmitter {
     if (!ex?.alive || !task) {
       tlog.warn('followUp: session no longer warm — caller should dispatch new', {})
       return false
+    }
+    // Graduation (§5): the 2nd follow-up proves this is a THREAD, not an errand —
+    // promote to a persistent session (one follow-up is a common quick correction).
+    task.followUps = (task.followUps ?? 0) + 1
+    if (task.kind !== 'session' && task.followUps >= 2) {
+      tlog.event('graduated-to-session', { followUps: task.followUps })
+      this.setKind(id, 'session')
     }
     // Cancel the idle-kill so the session can't be reaped while we wait below
     // for it to go idle.

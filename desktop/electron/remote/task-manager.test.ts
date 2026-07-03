@@ -687,3 +687,50 @@ test('attachFile saves under home/attachments and TYPES the path unsubmitted (no
   tm.kill(id)
   assert.equal(await tm.attachFile(id, new Uint8Array([1]), 'png'), null)
 })
+
+// ─── Graduation + pin (§5): errands that become threads become sessions ───────
+
+test('2nd follow-up graduates a oneoff to a session (and cancels its warm-kill)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 120 })
+  const id = await tm.dispatch('check the twitter folder')
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'found it' } })
+  await done
+  assert.equal(tm.followUp(id, 'now summarize the README'), true)
+  assert.equal(tm.get(id)!.kind, 'oneoff', 'one follow-up is a correction, not a thread')
+  // Finish the follow-up turn, then follow up AGAIN → thread → graduate.
+  const done2 = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'summarized' } })
+  await done2
+  assert.equal(tm.followUp(id, 'and the fastlane folder too'), true)
+  assert.equal(tm.get(id)!.kind, 'session', 'second follow-up proves a thread')
+  // Graduated ⇒ persistent: survives well past the 120ms warm window once parked.
+  const done3 = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'all done' } })
+  await done3
+  await new Promise((r) => setTimeout(r, 250))
+  assert.equal(fake.alive, true, 'graduated session is never idle-killed')
+  // Persisted for restarts.
+  const meta = JSON.parse(await fs.readFile(path.join(tm.get(id)!.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.kind, 'session')
+  tm.killAll()
+})
+
+test('setKind pin cancels an ALREADY-ARMED warm timer; unpin re-arms the park', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 150 })
+  const id = await tm.dispatch('quick errand')
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'ok' } })
+  await done // parked warm — 150ms timer armed
+  tm.setKind(id, 'session') // pin BEFORE the timer fires
+  await new Promise((r) => setTimeout(r, 300))
+  assert.equal(fake.alive, true, 'pin defused the armed warm-kill')
+  tm.setKind(id, 'oneoff') // unpin → re-parks → timer re-armed
+  await new Promise((r) => setTimeout(r, 300))
+  assert.equal(fake.alive, false, 'unpin re-armed normal lifecycle')
+  tm.killAll()
+})
