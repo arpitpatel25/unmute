@@ -194,13 +194,18 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
 }
 
 /** The default decision when the router gives us nothing usable (timeout, bad
- *  parse, unknown id). A follow-up is far likelier than a coincidental brand-new
- *  request when exactly ONE recent task is open — so continue it rather than
- *  start blind and lose its context (the cold-timeout bug). Anything ambiguous
- *  (0 or 2+ tasks, or a stale lone task) stays NEW. */
+ *  parse, unknown id). A follow-up is likelier than a coincidental brand-new
+ *  request when exactly ONE recent task is open — BUT the failsafe must NEVER
+ *  guess its way INTO A RUNNING TASK: injecting into a session that is mid-work
+ *  derails it (proven live: a router timeout sent "rephrase a tweet" into a
+ *  running growth-strategy session and hijacked it). A running task's heartbeat
+ *  also keeps it perpetually "recent", so the age gate is meaningless for it.
+ *  Continue only when the lone task is WAITING (needs-user — the utterance is
+ *  plausibly the answer) or parked after finishing (a follow-up window). A
+ *  wrong NEW task is visible and cheap; a wrong injection is destructive. */
 export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSec = 180): RouteDecision {
   const clean = (intent || '').trim()
-  if (tasks.length === 1 && tasks[0].ageSec <= maxAgeSec) {
+  if (tasks.length === 1 && tasks[0].ageSec <= maxAgeSec && tasks[0].state !== 'processing') {
     return { action: 'continue', targetTaskId: tasks[0].id, intent: clean, mode: 'managed' }
   }
   return { action: 'new', intent: clean, mode: 'managed' }
@@ -325,7 +330,7 @@ export class Router {
       // explicit confirm Enter to actually submit it. (Proven on the task lane.)
       await this.sleep(this.o.submitConfirmMs)
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
-      const raw = await this.waitForDecision()
+      const raw = await this.waitForDecision(prompt)
       const decision = parseDecision(raw, fallback, tasks, projects)
       // TEMP(memory-debug)
       log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, MEMORY_DEBUG: true })
@@ -398,10 +403,11 @@ export class Router {
   /** Test hook: await any trailing housekeeping queued on the chain. */
   settleHousekeeping(): Promise<void> { return this.chain.then(() => undefined, () => undefined) }
 
-  private async waitForDecision(): Promise<string | null> {
+  private async waitForDecision(prompt?: string): Promise<string | null> {
     const start = this.clock()
     const deadline = start + this.o.decisionTimeoutMs
     let lastBeat = 0
+    let reinjected = false
     while (this.clock() < deadline) {
       try {
         const raw = await fs.readFile(this.decisionPath, 'utf8')
@@ -410,9 +416,23 @@ export class Router {
           return raw
         }
       } catch { /* not written yet */ }
+      const elapsed = this.clock() - start
+      // SELF-HEAL (same disease the task lane cures with verifyDispatch): the
+      // multi-line prompt occasionally lands unsubmitted in the REPL's input box
+      // — the session then sits idle forever and the timeout fires (proven live:
+      // a 60s stall sent the failsafe into a running session). If no decision
+      // after 15s, clear the input line (Ctrl-U, NEVER Esc) and re-inject once.
+      if (!reinjected && prompt && elapsed >= 15_000 && this.ex?.alive) {
+        reinjected = true
+        log.warn('router slow — clearing input and re-injecting prompt once', { elapsedMs: elapsed })
+        this.ex.write('\x15')
+        await this.sleep(200)
+        this.ex.writeStdin(prompt)
+        await this.sleep(this.o.submitConfirmMs)
+        if (this.ex?.alive) this.ex.write('\r')
+      }
       // DIAGNOSTIC heartbeat: prove we are still polling and show elapsed, so a
       // slow-but-eventual write is distinguishable from a never-write.
-      const elapsed = this.clock() - start
       if (elapsed - lastBeat >= 5000) { lastBeat = elapsed; log.event('router-waiting', { elapsedMs: elapsed, decisionPath: this.decisionPath }) }
       await this.sleep(this.o.pollMs)
     }

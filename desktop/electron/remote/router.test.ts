@@ -286,3 +286,15 @@ test('buildRoutingPrompt: recently-finished section is context-only (no ids, non
   const d = parseDecision('{"action":"continue","targetTaskId":"dead1","intent":"x"}', 'x', [])
   assert.equal(d.action, 'new', 'continue into the dead falls back safely')
 })
+
+test('failsafe NEVER continues into a RUNNING task — a wrong new task is cheap, a wrong injection is destructive', () => {
+  const running: RoutableTask[] = [{ id: 'r1', intent: 'devise growth strategy', state: 'processing', ageSec: 20 }]
+  const d = failsafeDecision(running, 'rephrase this tweet and copy it')
+  assert.equal(d.action, 'new', 'running lone task → new, never inject')
+  // …but a lone task WAITING on the user is still the likely target (an answer).
+  const waiting: RoutableTask[] = [{ id: 'w1', intent: 'draft email', state: 'needs-user', ageSec: 20 }]
+  assert.equal(failsafeDecision(waiting, 'send it to Bob').action, 'continue')
+  // and a parked finished task keeps its follow-up window.
+  const parked: RoutableTask[] = [{ id: 'p1', intent: 'check emails', state: 'done', ageSec: 60 }]
+  assert.equal(failsafeDecision(parked, 'reply to the second one').action, 'continue')
+})
