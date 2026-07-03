@@ -213,6 +213,8 @@ export const remotePreloadExtensions = {
   /** Voice-as-doorbell (§6.4): spoken headlines for needs-you states. */
   remoteGetVoiceHeadlines: (): Promise<boolean> => ipcRenderer.invoke('remote:get-voice-headlines'),
   remoteSetVoiceHeadlines: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-voice-headlines', on),
+  /** Screenshot auto-capture during dictation/Remote (off = never touch screenshots). */
+  remoteSetScreenshotCapture: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-screenshot-capture', on),
 
   // ── Onboarding / guided one-time setup (PRD §12) ──
   /** The setup checklist: auto-detected (MCP/Chrome profile) + user-confirmed steps. */

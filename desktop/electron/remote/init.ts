@@ -105,6 +105,10 @@ interface RemoteSettings {
   // actionable (needs-you/stuck/errored). ON by default; the product stays fully
   // usable dead silent with this off — one toggle away (cockpit 🔔 chip).
   voiceHeadlines: boolean
+  // Screenshot capture during dictation/Remote: screenshots taken WHILE speaking
+  // auto-attach (dictation → pasted after the text; Remote → attached to the
+  // task). OFF reverts to plain behavior — Unmute never touches screenshots.
+  screenshotCapture: boolean
 }
 
 const settings = new Store<RemoteSettings>({
@@ -127,6 +131,7 @@ const settings = new Store<RemoteSettings>({
     librarianWriteEnabled: false,
     forceRawMode: false,
     voiceHeadlines: true,
+    screenshotCapture: true,
   },
 })
 
@@ -470,7 +475,7 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
   // 'transcribing' (key just lifted, recording stopped) so a mid-hold
   // ⌃-screenshot rides with THIS utterance, before routing delivers it.
   if (phase === 'listening') startCaptureWatch()
-  else if (phase === 'transcribing') sweepClipboardOnce()
+  else if (phase === 'transcribing') probeClipboardViaChild() // final probe — key just lifted
   else if (phase === 'idle') stopCaptureWatch()
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
@@ -506,9 +511,7 @@ function broadcastStaged(): void {
 // short gap since the last utterance — belong to what's being said. Everything
 // staged is VISIBLE on the pill (🖼 n, prunable with ✕) before it sends; nothing
 // rides invisibly. Only ever active for REMOTE captures, never plain dictation.
-const PREHOLD_WINDOW_MS = 3 * 60_000
 const CAPTURE_MAX_AUTO = 12
-let lastUtteranceEndedAt = 0
 let captureWatchTimer: ReturnType<typeof setInterval> | null = null
 let captureWatchGen = 0 // generation guard: a stale safety-stop must not kill a newer watch
 let screenshotDirCache: string | null = null
@@ -525,17 +528,6 @@ function sigOf(buf: Buffer): string {
   return `${buf.length}:${md5}`
 }
 
-function clipboardImage(): { sig: string; buf: Buffer } | null {
-  try {
-    // Lazy-require: electron.clipboard is main-process-safe but keep the top
-    // import surface unchanged. ONLY called when recording is NOT running.
-    const { clipboard } = require('electron') as { clipboard: { readImage(): { isEmpty(): boolean; toPNG(): Buffer } } }
-    const img = clipboard.readImage()
-    if (img.isEmpty()) return null
-    const buf = img.toPNG()
-    return { sig: sigOf(buf), buf }
-  } catch { return null }
-}
 
 // ── The multi-screenshot enabler: rescue each ⌃-clipboard screenshot the moment
 // it lands — BEFORE the next one overwrites it — without main ever touching the
@@ -545,8 +537,8 @@ function clipboardImage(): { sig: string; buf: Buffer } | null {
 // (APFS clone, ~instant) → the pill chip counts up live with a REAL file.
 const CLIP_PROBE_FILE = () => join(STAGING_DIR, '.clip-probe.png')
 let clipProbeBusy = false
-function probeClipboardViaChild(): void {
-  if (clipProbeBusy || stagedAttachments.length >= CAPTURE_MAX_AUTO) return
+function probeClipboardViaChild(markOnly = false): void {
+  if (clipProbeBusy || (!markOnly && stagedAttachments.length >= CAPTURE_MAX_AUTO)) return
   clipProbeBusy = true
   try { mkdirSync(STAGING_DIR, { recursive: true }) } catch { /* ignore */ }
   const probe = CLIP_PROBE_FILE()
@@ -575,6 +567,7 @@ function probeClipboardViaChild(): void {
       const sig = `${st.size}:${md5}`
       if (knownClipSigs.has(sig)) return
       knownClipSigs.add(sig)
+      if (markOnly) return // baseline: pre-dictation image learned, never attached
       const dest = join(STAGING_DIR, `capture-${Date.now()}-clipboard.png`)
       copyFileSync(probe, dest)
       try { rmSync(probe, { force: true }) } catch { /* next probe overwrites anyway */ }
@@ -655,25 +648,18 @@ function stageRecentScreenshotFiles(sinceMs: number): void {
  *  (readdir + stat, microseconds), so ⌘⇧3/⌘⇧4 file captures still count up in
  *  real time; a ⌃-clipboard capture taken mid-hold appears when the key lifts. */
 function startCaptureWatch(): void {
+  if (settings.get('screenshotCapture') === false) return // feature off — never touch screenshots
   captureWatchGen++
-  const preholdSince = Math.max(lastUtteranceEndedAt, Date.now() - PREHOLD_WINDOW_MS)
-  // ZERO clipboard reads here — PROVEN live: one PNG encode of a Retina
-  // screenshot at key-down blocked main exactly as the recorder's FIRST chunk
-  // (the EBML header) arrived → corrupt webm → every dictation failed. The
-  // clipboard is swept ONLY at key-lift (recording stopped); a pre-hold
-  // clipboard screenshot still rides with the utterance — its chip just appears
-  // at lift instead of at start. Files are different: readdir+stat is
-  // microseconds, safe to sweep and poll live.
-  log.event('capture-watch-start', { preholdSince, dir: screenshotDir() }) // diagnosis: prove the watcher armed
-  stageRecentScreenshotFiles(preholdSince)
   if (captureWatchTimer) clearInterval(captureWatchTimer)
   const startedAt = Date.now()
   pendingClipboardCount = 0
-  // Live watch: file screenshots (cheap dir scan) + clipboard PROBES (child
-  // process does all the heavy pasteboard work — main never reads image bytes
-  // while recording). Each ⌃-shot is rescued before the next overwrites it, so
-  // 4, 5, 7 screenshots in one breath all stage and all count on the pill.
-  probeClipboardViaChild() // pre-hold clipboard image (dedup via knownClipSigs)
+  log.event('capture-watch-start', { dir: screenshotDir() })
+  // DURING-DICTATION ONLY (the whole idea): what existed before key-down never
+  // attaches. Baseline probe LEARNS the pre-existing clipboard image (markOnly);
+  // file sweeps start from startedAt. Zero main-thread image work while
+  // recording — the osascript child does all pasteboard reads (the ONLY reader;
+  // a second reader with a different PNG encoder is what duplicated pastes).
+  probeClipboardViaChild(true)
   captureWatchTimer = setInterval(() => {
     stageRecentScreenshotFiles(startedAt)
     probeClipboardViaChild()
@@ -681,24 +667,10 @@ function startCaptureWatch(): void {
   ;(captureWatchTimer as { unref?: () => void }).unref?.()
 }
 
-/** One direct clipboard read — only ever called when recording is NOT running.
- *  Catches a ⌃-shot from the final <1s the async probes missed. */
-function sweepClipboardOnce(): void {
-  const c = clipboardImage()
-  if (c && !knownClipSigs.has(c.sig)) {
-    knownClipSigs.add(c.sig)
-    stageBuffer(c.buf, 'clipboard')
-  }
-}
 
 function stopCaptureWatch(): void {
   if (captureWatchTimer) { clearInterval(captureWatchTimer); captureWatchTimer = null }
-  lastUtteranceEndedAt = Date.now()
-  // End-of-capture sweep — catches a ⌃-screenshot taken mid-hold (recording has
-  // stopped by now, so the cost can't touch audio). The real staging replaces
-  // the pending counter.
   pendingClipboardCount = 0
-  sweepClipboardOnce()
   broadcastStaged()
 }
 
@@ -1027,9 +999,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // dictation flow itself is untouched.
       startCaptureWatch()
     } else if (e.type === 'session-stop') {
-      // Delivery consumes+stops in injectOutput; this is the safety stop for a
-      // cancelled/failed dictation so the watcher never polls indefinitely.
-      // Generation-guarded: never kills a NEWER capture's watch.
+      // Key lifted → recording ended → one final probe catches a last-second
+      // ⌃-shot; transcription (1-3s) gives it time to land before delivery.
+      probeClipboardViaChild()
+      // Safety stop for a cancelled/failed dictation (generation-guarded:
+      // never kills a NEWER capture's watch).
       const gen = captureWatchGen
       setTimeout(() => { if (captureWatchGen === gen) stopCaptureWatch() }, 20_000)
     }
@@ -1144,6 +1118,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Voice-as-doorbell toggle (§6.4) — read + set from the cockpit's 🔔 chip.
   ipcMain.handle('remote:get-voice-headlines', async () => settings.get('voiceHeadlines') !== false)
   ipcMain.handle('remote:set-voice-headlines', async (_e, on: boolean) => { settings.set('voiceHeadlines', !!on); return true })
+  ipcMain.handle('remote:set-screenshot-capture', async (_e, on: boolean) => {
+    settings.set('screenshotCapture', !!on)
+    if (!on) stopCaptureWatch() // kill a live watcher immediately on disable
+    log.event('screenshot-capture-set', { on: !!on })
+    return true
+  })
   // Pin/unpin a task's species from the UI (manual graduation §5): 'session'
   // exempts it from idle-kill + purge; 'oneoff' re-arms normal lifecycle.
   ipcMain.handle('remote:set-kind', async (_e, id: string, kind: 'oneoff' | 'session') => {
@@ -1433,6 +1413,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     osNotifications: settings.get('osNotifications') === true,
     librarianWriteEnabled: settings.get('librarianWriteEnabled') === true,
     forceRawMode: settings.get('forceRawMode') === true,
+    screenshotCapture: settings.get('screenshotCapture') !== false,
     logFile: getRemoteLogFilePath(),
   }))
   // ── Onboarding / guided one-time setup (PRD §12) ──

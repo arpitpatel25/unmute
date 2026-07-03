@@ -390,6 +390,11 @@ export async function injectOutput(text: string): Promise<void> {
         await simulateKeyCombo('v', 'command')
         await sleep(140) // let the target app ingest before the next image
       }
+      // Leave the TEXT on the clipboard, not the last image — otherwise the
+      // pasted image lingers and the next dictation's probe re-discovers it
+      // (the repeat-paste bug). Also matches pre-feature behavior: after a
+      // dictation, your clipboard holds what you dictated.
+      clipboard.writeText(padded)
       console.log(`[clipboard] pasted ${staged.length} staged screenshot(s) after dictation`)
     }
   } catch (err) {
