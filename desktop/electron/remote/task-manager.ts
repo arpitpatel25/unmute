@@ -113,6 +113,11 @@ export interface Task {
   /** Follow-up turns the user has sent this task (graduation signal: a one-off
    *  that keeps receiving follow-ups is a working session in denial). */
   followUps?: number
+  /** When the USER last put something into this task (dispatch/follow-up/answer/
+   *  typed input) — NEVER advanced by status heartbeats. This is the consent
+   *  clock: a session is auto-routable only while this is recent ("hot thread");
+   *  cold sessions are focus-only. */
+  lastUserInputAt?: number
 }
 
 export interface TaskManagerOpts {
@@ -292,7 +297,7 @@ export class TaskManager extends EventEmitter {
     const task: Task = {
       id, intent, sessionId, kind, state: 'processing', createdAt: now, updatedAt: now,
       cwd: runCwd, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
-      surface, mode, injectedRecipes: [],
+      surface, mode, injectedRecipes: [], lastUserInputAt: now,
     }
     this.tasks.set(id, task)
     tlog.event('task-created', { intent, cwd: dir })
@@ -671,6 +676,8 @@ export class TaskManager extends EventEmitter {
       tlog.warn('answer dropped — no live session', {})
       return
     }
+    const answered = this.tasks.get(id)
+    if (answered) answered.lastUserInputAt = this.clock() // consent clock
     tlog.ui('task-row.answer-submitted', { answer: userAnswer }) // user spoke/typed an answer
     ex.writeStdin(userAnswer)
     // Same submit-confirm as dispatch/followUp — the input occasionally lands one
@@ -948,6 +955,7 @@ export class TaskManager extends EventEmitter {
       tlog.warn('followUp: session no longer warm — caller should dispatch new', {})
       return false
     }
+    task.lastUserInputAt = this.clock() // user spoke to this thread — consent clock
     // Graduation (§5): the 2nd follow-up proves this is a THREAD, not an errand —
     // promote to a persistent session (one follow-up is a common quick correction).
     task.followUps = (task.followUps ?? 0) + 1
@@ -1139,6 +1147,8 @@ export class TaskManager extends EventEmitter {
   sendInput(id: string, data: string): void {
     const ex = this.executors.get(id)
     if (!ex?.alive) return
+    const t = this.tasks.get(id)
+    if (t) t.lastUserInputAt = this.clock() // typing into the terminal = consent
     // A user typing into a parked-warm session means they want to keep working;
     // cancel the idle-kill so their hands-on session isn't reaped under them.
     const wt = this.warmTimers.get(id)

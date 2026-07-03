@@ -100,7 +100,7 @@ export function fmtAge(ageSec: number): string {
 
 /** The instruction we type into the warm REPL each call. Self-contained: the
  *  router relies on THIS snapshot, not on accumulated memory (keeps it thin). */
-export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string, projects: RoutableProject[] = [], finished: RoutableTask[] = []): string {
+export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = []): string {
   const lines = tasks.map((t) =>
     `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — ${t.state}` +
     `${t.kind === 'session' ? ' · PERSISTENT SESSION' : ''}${t.project ? ` · project: ${t.project}` : ''}` +
@@ -170,6 +170,16 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
       `(copy it verbatim; never invent or modify a path, never use one not listed):`,
       ...projectLines,
     ] : []),
+    ...(coldSessions.length ? [
+      ``,
+      `The user's WORKING SESSIONS, currently untouched by them — you may NOT`,
+      `route into these (never emit their ids as targetTaskId; the user speaks to`,
+      `them by opening them). If the command clearly belongs to one of these`,
+      `sessions, choose NEW and set "alternate" to that session's id — the user`,
+      `gets a one-tap offer to redirect (their tap is the consent):`,
+      ...coldSessions.map((t) =>
+        `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}"${t.project ? ` · project: ${t.project}` : ''} · ${fmtAge(t.ageSec)}`),
+    ] : []),
     ...(finishedLines.length ? [
       ``,
       `Recently FINISHED tasks — their sessions are GONE and can NOT be continued`,
@@ -214,8 +224,13 @@ export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSe
 /** Parse the decision file. EXPLICIT router decisions (new, or continue→known id)
  *  are honored. Everything else — null/malformed/unknown-action/unknown-id —
  *  routes through failsafeDecision (continue-latest-if-single). */
-export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = []): RouteDecision {
+export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = [], coldSessions: RoutableTask[] = []): RouteDecision {
+  // CONSENT ENFORCEMENT (layer 2): continue-targets are ONLY the targetable
+  // tasks; a cold session id in targetTaskId is rejected here no matter what
+  // the model wrote (falls through to a safe NEW). Cold ids ARE valid for
+  // `alternate` — the declinable one-tap offer is the consent path.
   const validIds = new Set(tasks.map((t) => t.id))
+  const alternateIds = new Set([...tasks, ...coldSessions].map((t) => t.id))
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
   let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
@@ -236,8 +251,8 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
     // A project-bound task is inherently a working session, whatever the model
     // labeled it — dir implies kind.
     const kind = obj.kind === 'session' || dir ? 'session' as const : 'oneoff' as const
-    // alternate must name a task we actually offered — else dropped.
-    const alternate = obj.alternate && validIds.has(obj.alternate) ? obj.alternate : undefined
+    // alternate must name a task we actually offered (targetable OR cold) — else dropped.
+    const alternate = obj.alternate && alternateIds.has(obj.alternate) ? obj.alternate : undefined
     // display name: trimmed, de-quoted, bounded — junk becomes undefined (the UI
     // falls back to a truncated intent, never breaks).
     const rawName = (obj.name ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
@@ -298,8 +313,8 @@ export class Router {
 
   /** Classify one utterance against the current task snapshot. Single-flighted;
    *  always resolves (fail-safe to a new task). */
-  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = []): Promise<RouteDecision> {
-    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects, finished))
+  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = []): Promise<RouteDecision> {
+    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects, finished, coldSessions))
     // After the decision resolves to the caller, keep the chain alive with
     // housekeeping (/clear + maybe-recycle) — off the hot path, but serialized
     // so it can never overlap the next route.
@@ -316,13 +331,13 @@ export class Router {
     return run
   }
 
-  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = []): Promise<RouteDecision> {
+  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = []): Promise<RouteDecision> {
     const fallback = (utterance || '').trim()
     try {
       await this.ensureSession()
       await fs.mkdir(this.dir, { recursive: true })
       await fs.rm(this.decisionPath, { force: true }).catch(() => {})
-      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished)
+      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished, coldSessions)
       this.ex!.writeStdin(prompt)
       // The multi-line prompt is captured by Claude's TUI as a paste that lands
       // one Enter short of submitting — so it sits as "[Pasted text]" and the
@@ -331,7 +346,7 @@ export class Router {
       await this.sleep(this.o.submitConfirmMs)
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
       const raw = await this.waitForDecision(prompt)
-      const decision = parseDecision(raw, fallback, tasks, projects)
+      const decision = parseDecision(raw, fallback, tasks, projects, coldSessions)
       // TEMP(memory-debug)
       log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, MEMORY_DEBUG: true })
       return decision

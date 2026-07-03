@@ -222,12 +222,12 @@ function routerExecutorFactory() {
 
 /** Build the router's task snapshot from Unmute's live map (Unmute is the hub —
  *  the router never touches sessions). */
-function routableSnapshot(now: number): RoutableTask[] {
-  if (!manager) return []
-  // routableTasks() is newest-first; the most-recent one is the de-facto
-  // "on-screen" task (the overlay auto-expands the last change) — mark it so the
-  // router has that prior when the command is terse.
-  return manager.routableTasks().map((t, i) => ({
+/** How long a user interaction keeps a session's thread HOT (auto-routable).
+ *  Past this, a persistent session is focus-only — the consent policy. */
+const HOT_THREAD_MS = 10 * 60_000
+
+function snapshotOf(t: Task, now: number, surfaced: boolean): RoutableTask {
+  return {
     id: t.id,
     intent: t.intent,
     name: t.name ?? null,
@@ -238,10 +238,35 @@ function routableSnapshot(now: number): RoutableTask[] {
     project: t.cwd !== t.home ? basename(t.cwd) : null,
     category: t.category ?? null,
     ageSec: Math.max(0, Math.round((now - t.updatedAt) / 1000)),
-    surfaced: i === 0,
+    surfaced,
     awaiting: t.state === 'needs-user',
     question: t.state === 'needs-user' ? (t.question?.text ?? null) : null,
-  }))
+  }
+}
+
+/** THE CONSENT POLICY (safety, layer 1 of 3): partition the routable tasks.
+ *  targetable — the router may auto-continue into these: all one-offs, any task
+ *    blocked on a question (it ASKED for input), and sessions whose thread is
+ *    HOT (the user themselves spoke/typed into them within HOT_THREAD_MS —
+ *    including a just-graduated errand, hot by construction, so conversations
+ *    never go deaf mid-flow).
+ *  coldSessions — long-running sessions the user hasn't touched recently:
+ *    NEVER auto-targetable. Shown to the router as context only, reachable via
+ *    the declinable offer (alternate) or explicit focus — a tap is the consent. */
+function partitionRoutable(now: number): { targetable: RoutableTask[]; coldSessions: RoutableTask[] } {
+  if (!manager) return { targetable: [], coldSessions: [] }
+  const targetable: RoutableTask[] = []
+  const coldSessions: RoutableTask[] = []
+  // routableTasks() is newest-first; the most-recent one is the de-facto
+  // "on-screen" task (the overlay auto-expands the last change) — mark it so the
+  // router has that prior when the command is terse.
+  manager.routableTasks().forEach((t, i) => {
+    const snap = snapshotOf(t, now, i === 0)
+    const hot = (t.lastUserInputAt ?? 0) > now - HOT_THREAD_MS
+    if ((t.kind ?? 'oneoff') === 'session' && t.state !== 'needs-user' && !hot) coldSessions.push(snap)
+    else targetable.push(snap)
+  })
+  return { targetable, coldSessions }
 }
 
 // tmux backing for the live terminal (pop-out to a real terminal = SAME session).
@@ -825,23 +850,32 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         kind: t.kind ?? 'oneoff', category: t.category ?? null,
         ageSec: Math.max(0, Math.round((nowMs - t.updatedAt) / 1000)),
       }))
-      const decision = await router.route(raw, routableSnapshot(nowMs), projects, finished)
+      const { targetable, coldSessions } = partitionRoutable(nowMs)
+      const decision = await router.route(raw, targetable, projects, finished, coldSessions)
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       if (decision.action === 'continue' && decision.targetTaskId) {
         const tid = decision.targetTaskId
-        // Continuing a BLOCKED task means piping the utterance in as its answer;
-        // continuing a live task means a fresh follow-up turn.
-        if (awaitingIds.has(tid)) {
-          log.event('routed-as-answer', { taskId: tid, via: 'router' })
+        // CONSENT GUARD (layer 3 of 3 — parse validation should make this
+        // unreachable): never auto-inject into a cold persistent session.
+        const target = manager.get(tid)
+        const targetHot = (target?.lastUserInputAt ?? 0) > Date.now() - HOT_THREAD_MS
+        if (target && (target.kind ?? 'oneoff') === 'session' && target.state !== 'needs-user' && !targetHot) {
+          log.warn('consent guard: refused continue into cold session — dispatching new', { taskId: tid })
+        } else {
+          // Continuing a BLOCKED task means piping the utterance in as its answer;
+          // continuing a live task means a fresh follow-up turn.
+          if (awaitingIds.has(tid)) {
+            log.event('routed-as-answer', { taskId: tid, via: 'router' })
+            typeStagedInto(tid, staged)
+            manager.answer(tid, decision.intent || raw)
+            return tid
+          }
           typeStagedInto(tid, staged)
-          manager.answer(tid, decision.intent || raw)
-          return tid
-        }
-        typeStagedInto(tid, staged)
-        if (manager.followUp(tid, decision.intent)) {
-          log.event('routed-as-continuation', { taskId: tid, via: 'router' })
-          return tid
+          if (manager.followUp(tid, decision.intent)) {
+            log.event('routed-as-continuation', { taskId: tid, via: 'router' })
+            return tid
+          }
         }
       }
       // The user's raw override (pill/Remote screen) forces RAW regardless of

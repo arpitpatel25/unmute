@@ -298,3 +298,32 @@ test('failsafe NEVER continues into a RUNNING task — a wrong new task is cheap
   const parked: RoutableTask[] = [{ id: 'p1', intent: 'check emails', state: 'done', ageSec: 60 }]
   assert.equal(failsafeDecision(parked, 'reply to the second one').action, 'continue')
 })
+
+// ─── Consent policy: cold working sessions are focus-only ─────────────────────
+
+test('cold sessions render as non-targetable context; continue into one is REJECTED; alternate to one is allowed', () => {
+  const cold: RoutableTask[] = [{
+    id: 'sess1', intent: 'devise growth strategy', name: 'Growth strategy',
+    state: 'processing', kind: 'session', ageSec: 7200,
+  }]
+  const p = buildRoutingPrompt('rephrase this tweet', [], '/d/decision.json', [], [], cold)
+  assert.ok(p.includes('may NOT'), 'prompt marks cold sessions non-targetable')
+  assert.ok(p.includes('Growth strategy'), 'cold session still visible as context')
+  assert.ok(p.includes('one-tap offer'), 'offer path explained')
+
+  // Layer 2 enforcement: model disobeys and targets the cold session → rejected → NEW.
+  const d1 = parseDecision('{"action":"continue","targetTaskId":"sess1","intent":"rephrase tweet"}', 'r', [], [], cold)
+  assert.equal(d1.action, 'new', 'continue into a cold session is rejected at parse')
+  assert.equal(d1.targetTaskId, undefined)
+
+  // alternate → cold session is the CONSENT path (one-tap offer) — allowed.
+  const d2 = parseDecision('{"action":"new","intent":"rephrase tweet","alternate":"sess1"}', 'r', [], [], cold)
+  assert.equal(d2.action, 'new')
+  assert.equal(d2.alternate, 'sess1')
+
+  // targetable tasks keep working exactly as before.
+  const hot: RoutableTask[] = [{ id: 'hot1', intent: 'draft doc', state: 'processing', kind: 'session', ageSec: 30 }]
+  const d3 = parseDecision('{"action":"continue","targetTaskId":"hot1","intent":"add a section"}', 'r', hot, [], cold)
+  assert.equal(d3.action, 'continue')
+  assert.equal(d3.targetTaskId, 'hot1')
+})

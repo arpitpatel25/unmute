@@ -734,3 +734,33 @@ test('setKind pin cancels an ALREADY-ARMED warm timer; unpin re-arms the park', 
   assert.equal(fake.alive, false, 'unpin re-armed normal lifecycle')
   tm.killAll()
 })
+
+// ─── Consent clock: lastUserInputAt moves ONLY on user-initiated input ────────
+
+test('lastUserInputAt: set at dispatch, advanced by followUp/answer/typed input — never by status heartbeats', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  let t = 1_000_000
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000, now: () => t })
+  const id = await tm.dispatch('long doc task', { kind: 'session' })
+  assert.equal(tm.get(id)!.lastUserInputAt, 1_000_000, 'dispatch stamps the consent clock')
+
+  // Status writes (the agent working) advance updatedAt but NOT the consent clock.
+  t = 1_600_000
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'checkpoint' } })
+  await done
+  assert.equal(tm.get(id)!.lastUserInputAt, 1_000_000, 'agent activity is not consent')
+  assert.ok(tm.get(id)!.updatedAt >= 1_600_000, 'updatedAt did move')
+
+  // User follow-up advances it.
+  t = 1_700_000
+  assert.equal(tm.followUp(id, 'add a pricing section'), true)
+  assert.equal(tm.get(id)!.lastUserInputAt, 1_700_000, 'followUp is consent')
+
+  // Typing into the terminal advances it.
+  t = 1_800_000
+  tm.sendInput(id, 'ls\r')
+  assert.equal(tm.get(id)!.lastUserInputAt, 1_800_000, 'typed input is consent')
+  tm.killAll()
+})
