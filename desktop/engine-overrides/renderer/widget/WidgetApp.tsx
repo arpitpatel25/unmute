@@ -600,16 +600,23 @@ export default function WidgetApp() {
 
     api.onRecordingStart(async (mode, sessionId) => {
       clearAutoHide()
-      playClickSound('start')
+      // Resolve the capture device for THIS recording: the iPhone mic when
+      // the user opted in and the phone is around, otherwise the system
+      // default. The recorder itself retries on the default device if the
+      // resolved one vanished in the meantime — a missing phone can never
+      // error a dictation.
+      const resolvedDeviceId = mic.resolveDeviceId()
+      // HONEST START-CLICK: the click is the user's "mic is live, speak now"
+      // cue. On the Mac mic that's true immediately (~100ms), so click now —
+      // unchanged behavior. The Continuity phone mic takes 300ms-1s to open;
+      // clicking early is what ate opening words (and fed Whisper clipped
+      // heads it hallucinated over). Phone path: click when the mic is OPEN.
+      if (!resolvedDeviceId) playClickSound('start')
       setEngineNotice(null)
       setState(mode === 'dictation' ? 'dictation-active' : 'instruction-active')
       try {
-        // Resolve the capture device for THIS recording: the iPhone mic when
-        // the user opted in and the phone is around, otherwise the system
-        // default. The recorder itself retries on the default device if the
-        // resolved one vanished in the meantime — a missing phone can never
-        // error a dictation.
-        await startRecording(mic.resolveDeviceId(), mode, sessionId)
+        await startRecording(resolvedDeviceId, mode, sessionId)
+        if (resolvedDeviceId) playClickSound('start') // phone mic is live NOW
         // Labels are permission-gated: before the first capture the device
         // list may carry empty labels (iPhone undetectable). Now that a
         // capture is live, re-enumerate so the glyph chip reflects reality.

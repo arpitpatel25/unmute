@@ -80,6 +80,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   // still tearing down, and the MediaRecorder emitted a malformed/undecodable
   // webm — every STT engine rejected it and dictation fell back to offline.
   const teardownRef = useRef<Promise<void> | null>(null)
+  // Was THIS recording captured from a requested (iPhone Continuity) device?
+  // Drives the source-gated behaviors below (stop grace). Never true for the
+  // default Mac-mic path — the no-regression guarantee is structural.
+  const phoneSourceRef = useRef<boolean>(false)
 
   // ─── VAD Chunking Refs ───
   const chunkIndexRef = useRef<number>(0)
@@ -380,6 +384,12 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // Detach any existing onstop handler to prevent double-send
     recorder.onstop = null
 
+    // Same tail grace as stopRecording — a flushed phone recording deserves
+    // its in-flight syllables too.
+    if (phoneSourceRef.current) {
+      await new Promise((r) => setTimeout(r, 300))
+    }
+
     // Stop the recorder — this triggers a final ondataavailable then onstop
     // We wait for onstop so the final chunk is added to chunksRef.current
     await new Promise<void>((resolve) => {
@@ -540,14 +550,27 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // system default. The design guarantee is a SILENT fallback to the Mac
     // mic: a missing phone must never surface an error or kill a dictation.
     let stream: MediaStream
+    phoneSourceRef.current = false
+    const tAcquire = Date.now()
     try {
       stream = await navigator.mediaDevices.getUserMedia(constraints)
+      phoneSourceRef.current = !!deviceId // requested device delivered
     } catch (err) {
       if (!deviceId) throw err
       console.log('[audio] Requested device unavailable, falling back to system default mic:', err)
       stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } })
     }
+    // Head-gap calibration: how long the mic took to actually open. The
+    // Continuity path is the interesting number — words spoken before this
+    // resolved never existed. (Mac mic: ~50-150ms; phone: measured in field.)
+    console.log(`[audio:mic] acquired in ${Date.now() - tAcquire}ms, source=${phoneSourceRef.current ? 'iphone' : 'default'}`)
     streamRef.current = stream
+    // Tripwire for the corrupt-webm class: a capture track dying MID-RECORDING
+    // (phone disconnected/walked away) is the suspect for undecodable output.
+    // Log it loudly so field failures carry their cause.
+    stream.getAudioTracks()[0]?.addEventListener('ended', () => {
+      console.warn('[audio:mic] capture track ENDED mid-recording (device vanished) — this dictation may be damaged')
+    })
 
     // Set up audio context for waveform analysis
     const audioContext = new AudioContext()
@@ -678,6 +701,14 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     if (vadDelayTimerRef.current) {
       clearTimeout(vadDelayTimerRef.current)
       vadDelayTimerRef.current = null
+    }
+
+    // TAIL GRACE (iPhone only): the phone's audio rides a buffered wireless
+    // pipeline with 100-300ms of in-flight latency. Stopping at key-lift
+    // guillotines the final syllables still in transit. Keep recording for a
+    // beat so they land; the Mac-mic path (near-zero latency) is untouched.
+    if (phoneSourceRef.current) {
+      await new Promise((r) => setTimeout(r, 300))
     }
 
     return new Promise<void>((resolve) => {
