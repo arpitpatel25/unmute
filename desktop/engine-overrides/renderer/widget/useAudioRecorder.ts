@@ -103,6 +103,25 @@ interface CaptureTelemetry {
   chunks: number
   chunkBytes: number
 }
+// A valid webm/matroska file MUST begin with the EBML magic. Any assembly of
+// recorder chunks passes through this guard: leading chunks that are not the
+// header (stray tails from a rotated recorder, torn buffers) are dropped so a
+// malformed head can never reach STT again — the failure mode becomes 'lost a
+// stray fragment' instead of 'entire dictation errored'.
+const EBML_MAGIC = [0x1a, 0x45, 0xdf, 0xa3]
+async function trimToWebmHeader(chunks: Blob[]): Promise<Blob[]> {
+  for (let i = 0; i < chunks.length; i++) {
+    try {
+      const head = new Uint8Array(await chunks[i].slice(0, 4).arrayBuffer())
+      if (EBML_MAGIC.every((b, j) => head[j] === b)) {
+        if (i > 0) console.warn(`[audio] dropped ${i} leading headerless chunk(s) — stream re-anchored to its webm header`)
+        return i === 0 ? chunks : chunks.slice(i)
+      }
+    } catch { /* unreadable chunk — keep scanning */ }
+  }
+  return chunks // no header found anywhere — send as-is rather than send nothing
+}
+
 function tlog(event: string, data: Record<string, unknown>): void {
   try { console.log(`[audio:telemetry] ${event} ${JSON.stringify(data)}`) } catch { /* never break capture */ }
 }
@@ -257,7 +276,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       return
     }
 
-    const blob = new Blob(macroBlobs, { type: 'audio/webm' })
+    const blob = new Blob(await trimToWebmHeader(macroBlobs), { type: 'audio/webm' })
     const buffer = await blob.arrayBuffer()
 
     console.log(`[audio:vad] ${reason === 'silence' ? 'Silence detected' : 'Hard cap'}, cutting chunk ${chunkIdx} at ${elapsed}ms (${buffer.byteLength} bytes)`)
@@ -513,7 +532,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       macroBlobsRef.current = []
 
       if (macroBlobs.length > 0) {
-        const blob = new Blob(macroBlobs, { type: 'audio/webm' })
+        const blob = new Blob(await trimToWebmHeader(macroBlobs), { type: 'audio/webm' })
         const buffer = await blob.arrayBuffer()
         const totalChunks = chunkIndexRef.current + 1
         console.log(`[audio] Flushed FINAL chunk ${chunkIndexRef.current}/${totalChunks}, size: ${buffer.byteLength}, duration: ${duration}ms`)
@@ -548,7 +567,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     }
 
     // Assemble and send
-    const blob = new Blob(chunks, { type: 'audio/webm' })
+    const blob = new Blob(await trimToWebmHeader(chunks), { type: 'audio/webm' })
     const buffer = await blob.arrayBuffer()
     console.log('[audio] Flushed audio, mode:', mode, 'size:', buffer.byteLength, 'duration:', duration)
     emitCaptureSummary('flush', buffer.byteLength, duration)
@@ -1023,7 +1042,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           const totalChunks = chunkIndexRef.current + (macroBlobs.length > 0 ? 1 : 0)
 
           if (macroBlobs.length > 0) {
-            const blob = new Blob(macroBlobs, { type: 'audio/webm' })
+            const blob = new Blob(await trimToWebmHeader(macroBlobs), { type: 'audio/webm' })
             const buffer = await blob.arrayBuffer()
             console.log(`[audio] Sending FINAL chunk ${chunkIndexRef.current}/${totalChunks}, size: ${buffer.byteLength}, duration: ${duration}ms`)
             window.electronAPI.sendAudioFinalChunk(buffer, chunkIndexRef.current, totalChunks, duration, mode, frozenSessionIdRef.current)
@@ -1043,7 +1062,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         }
 
         // Non-chunked path — send full audio as single buffer (original behavior)
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
+        const blob = new Blob(await trimToWebmHeader(chunksRef.current), { type: 'audio/webm' })
         const buffer = await blob.arrayBuffer()
         console.log('[audio] Sending audio to main process, mode:', mode, 'size:', buffer.byteLength, 'duration:', duration)
         emitCaptureSummary('stop', buffer.byteLength, duration)

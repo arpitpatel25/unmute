@@ -46,14 +46,24 @@ let preAdopted = false
 function spinPreRollSegment(): void {
   if (preAdopted || !stream || state !== 'connected') return
   try { if (preRecorder && preRecorder.state !== 'inactive') preRecorder.stop() } catch { /* replacing anyway */ }
-  preChunks = []
+  // THE contamination fix (EBML-header bug): MediaRecorder.stop() delivers its
+  // final chunk ASYNCHRONOUSLY — after this function has already swapped the
+  // buffer. With a shared module-level array, the old segment's headerless
+  // tail chunk landed IN FRONT of the new segment's header chunk, and any
+  // dictation adopting that buffer began with garbage → 'EBML header parsing
+  // failed'. Each segment now writes to its OWN closure-local array: a stale
+  // recorder's late chunk lands in its own dead array, unreachable by design.
+  const segChunks: Blob[] = []
   try {
-    preRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
-    preRecorder.ondataavailable = (e) => { if (e.data.size > 0) preChunks.push(e.data) }
-    preRecorder.start(250)
+    const rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+    rec.ondataavailable = (e) => { if (e.data.size > 0) segChunks.push(e.data) }
+    rec.start(250)
+    preRecorder = rec
+    preChunks = segChunks // the module pointer follows the LIVE segment only
   } catch (err) {
     console.warn('[audio:warm] pre-roll segment failed:', err instanceof Error ? err.message : err)
     preRecorder = null
+    preChunks = []
   }
 }
 
