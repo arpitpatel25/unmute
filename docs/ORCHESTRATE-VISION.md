@@ -131,15 +131,21 @@ tomorrow. We own attention, not execution.
   (serialized merges).
 
 ### Known gaps / not started
-- **Voice coverage of new affordances**: pin/shelve/note are mouse-only; no
-  "pin the changelog skill" / "shelve this" voice verbs yet.
+- ~~Voice coverage of pin/shelve/note~~ — RESOLVED BY PRINCIPLE (2026-07-04):
+  "frequent things are voice"; curation gestures are infrequent — mouse is fine.
 - **History surface**: faded/pruned tasks live in the overlay list, but the
   full "History" browse the vision references is thin.
-- **On-call/paging integration**: the day-in-the-life implies external pulls
-  (a page arriving AS a card). Nothing exists; needs design (webhook →
-  task? MCP?).
-- **Skills `runs_confirmed`**: ranking reads it, but nothing *writes* it yet —
-  the librarian/graduation pipeline should stamp confirmed runs.
+- **On-call/paging integration**: DELIBERATELY DEFERRED (decided 2026-07-04).
+  An auto-created card is a new workflow, not a feature — voice-initiated is
+  THE workflow. If ever revisited: external event → a DEAD card (a pull that
+  runs nothing) → only the user's voice turns it into work. Never automatic.
+- **Skills trust ledger**: the deterministic half SHIPPED (2026-07-04) — a
+  sidecar ledger (~/.unmute/remote/skill-stats.json) credits Skill invocations
+  parsed from task transcripts at done/ready, idempotently, for ALL skills
+  including the user's own (whose files we never write). The rail ranks on
+  frontmatter runs_confirmed + ledger runs. The JUDGED half (runs_confirmed —
+  librarian grading) stays behind the calibration write gate until its two
+  gates + live smoke pass.
 - **Ready-state field validation**: shipped and unit-tested, but the contract
   guidance ("ready vs done") hasn't been observed across many real sessions;
   inflation risk is handled by the decay valve but watch it.

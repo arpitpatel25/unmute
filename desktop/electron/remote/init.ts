@@ -37,6 +37,8 @@ import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismi
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask } from './router'
 import { knownProjects, projectSlug } from './projects'
+import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
+import { locateTranscript } from './trace-reducer'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
 
@@ -1222,11 +1224,34 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     reconcileDock(activeTaskCount())
     speakHeadline(t, 'needs-user') // §6.4 doorbell: terse, serialized, toggleable
   })
+  // ── Skill-usage ledger (deterministic trust fuel): when a task reaches a
+  // successful turn-over (done or ready), credit any Skill invocations in its
+  // transcript to the sidecar ledger. Idempotent (delta-cursored), serialized,
+  // per-task cooldown so a chatty session can't spam transcript reads. The
+  // JUDGED stat (runs_confirmed) stays with the librarian behind its gate.
+  const usageCreditAt = new Map<string, number>()
+  const creditSkillUsage = (t: Task) => {
+    const last = usageCreditAt.get(t.id) ?? 0
+    if (Date.now() - last < 60_000) return
+    usageCreditAt.set(t.id, Date.now())
+    setTimeout(() => {
+      void (async () => {
+        // Exact path first (sessionId is pinned at dispatch); locate as fallback.
+        const exact = join(homedir(), '.claude', 'projects', projectSlug(t.cwd), `${t.sessionId}.jsonl`)
+        const transcriptPath = existsSync(exact) ? exact : await locateTranscript(t.cwd)
+        if (!transcriptPath) return
+        await recordSkillUsage({ taskId: t.id, transcriptPath, statsPath: defaultStatsPath() })
+      })().catch((e) => log.warn('skill-usage credit failed', { taskId: t.id, error: (e as Error).message }))
+    }, 3000) // let Claude flush the transcript tail
+  }
+  manager.on('updated', (t: Task) => { if (t.state === 'ready') creditSkillUsage(t) })
+
   manager.on('done', (t: Task) => {
     broadcast('remote:task-done', t)
     maybePresent(t)
     reconcileDock(activeTaskCount())
     notify('Task done', t.result?.summary ? `${t.intent} — ${t.result.summary}` : t.intent)
+    creditSkillUsage(t)
   })
   manager.on('failed', (t: Task) => {
     broadcast('remote:task-failed', t)
@@ -1381,12 +1406,25 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     } catch { /* no ~/.claude/skills — fine */ }
     const seen = new Set<string>()
     const pinned = new Set(settings.get('pinnedSkills') ?? [])
+    // Merge the usage ledger: frontmatter runs_confirmed (librarian-judged, for
+    // Unmute-owned skills) + sidecar runs (deterministic invocation credit, for
+    // ALL skills incl. the user's own — whose files we never write). lastUsed
+    // takes the freshest of the two.
+    const ledger = await readSkillStats(defaultStatsPath())
     // Earned-trust ranking: pinned first (the user's override), then proven use
-    // (runs_confirmed), then recency. A junk skill touched yesterday no longer
-    // outranks the workhorse used forty times last month.
+    // (confirmed + used runs), then recency. A junk skill touched yesterday no
+    // longer outranks the workhorse used forty times last month.
     return out
       .filter((s) => s.name && !seen.has(s.name) && (seen.add(s.name), true))
-      .map((s) => ({ ...s, pinned: pinned.has(s.name) }))
+      .map((s) => {
+        const u = ledger.skills[s.name]
+        return {
+          ...s,
+          runs: s.runs + (u?.runs ?? 0),
+          lastUsed: u?.lastUsed && u.lastUsed > (s.lastUsed || '') ? u.lastUsed : s.lastUsed,
+          pinned: pinned.has(s.name),
+        }
+      })
       .sort((a, b) =>
         Number(b.pinned) - Number(a.pinned) ||
         b.runs - a.runs ||
