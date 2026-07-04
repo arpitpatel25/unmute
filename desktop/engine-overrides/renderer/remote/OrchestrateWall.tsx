@@ -839,11 +839,13 @@ export default function OrchestrateWall() {
                         }}
                         onMouseLeave={() => setHoveredSkill((h) => (h?.name === s.name ? null : h))}
                       >
+                        {/* pin: hollow star always visible (dim) so the affordance
+                            is discoverable; bright on the hovered row; gold = pinned. */}
                         <button
                           onClick={() => togglePinSkill(s.name, !s.pinned)}
                           title={s.pinned ? 'Unpin' : 'Pin to top'}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 11, lineHeight: 1, flex: 'none', color: s.pinned ? '#d29922' : hoveredSkill?.name === s.name ? C.faintText : 'transparent' }}
-                        >★</button>
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 12, lineHeight: 1, flex: 'none', color: s.pinned ? '#d29922' : hoveredSkill?.name === s.name ? C.nameText : C.faintText }}
+                        >{s.pinned ? '★' : '☆'}</button>
                         <span style={{ fontSize: 11.5, color: hoveredSkill?.name === s.name ? C.nameText : C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{s.name}</span>
                         <span style={{ fontSize: 10, color: C.faintText, flex: 'none' }}>{(s.runs ?? 0) > 0 ? `${s.runs}×` : s.lastUsed ? s.lastUsed.slice(5, 10) : ''}</span>
                       </div>
