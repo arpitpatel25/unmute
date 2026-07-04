@@ -294,8 +294,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           const sorted = [...frames].sort((a, b) => a - b)
           const floor = sorted[Math.floor(sorted.length * 0.2)]   // the "gaps"
           const speech = sorted[Math.floor(sorted.length * 0.9)]  // the voice
-          // Calibration visibility (post noise-suppression, 8-bit analyser).
-          console.log(`[audio:noise] eval floor=${floor.toFixed(4)} speech=${speech.toFixed(4)} ratio=${(speech / Math.max(floor, 1e-6)).toFixed(1)} flagged=${noisyFlaggedRef.current}`)
           if (!noisyFlaggedRef.current) {
             // Raise: global cooldown applies to the FIRST fire of a recording
             // only — a re-raise after mid-recording noise-return is fresh signal.
