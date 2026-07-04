@@ -24,7 +24,7 @@ type API = {
   remoteOnOutput?: (cb: (d: { taskId: string; chunk: string }) => void) => () => void
   remoteTerminalInput?: (taskId: string, data: string) => void
   remoteTerminalResize?: (taskId: string, cols: number, rows: number) => void
-  remoteTerminalRefresh?: (taskId: string) => void
+  remoteCaptureScreen?: (taskId: string) => Promise<string | null>
   remoteOpenInTerminal?: (taskId: string) => Promise<boolean>
   remoteTmuxAvailable?: () => Promise<boolean>
 }
@@ -144,27 +144,34 @@ export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: {
       if (replay) {
         void api().remoteGetOutput?.(taskId).then((buf) => { if (!disposed && buf && term) term.write(buf) })
       } else {
-        // Live no-replay path: sync() above resized the PTY; after the geometry
-        // settles, ask tmux for a FULL clean redraw (refresh-client). This
-        // replaces the old rows±1 "nudge" — three SIGWINCHes in <100ms raced the
-        // TUI's repaint pipeline and left mispainted residue (fused spinner
-        // fragments, scattered stale rows) that dirty-region repaints never
-        // cleared. One refresh = deterministic full paint, zero geometry games.
+        // Live path: paint tmux's CANONICAL CURRENT SCREEN. tmux is the
+        // continuous observer — it has watched every byte since spawn — so we
+        // stop RECONSTRUCTING the screen (history replay at wrong widths,
+        // repaint-begging, nudge timing games: every prior garble came from
+        // those) and simply ask the thing that knows. Order matters: sync()
+        // above resized the PTY; wait ~250ms for tmux to reflow to the new
+        // geometry so the snapshot matches this grid, then paint it and let
+        // live chunks continue on top.
         setTimeout(() => {
           if (disposed || !term) return
-          term.clear()
-          api().remoteTerminalRefresh?.(taskId)
-        }, 350)
-        // BACKSTOP: a nominally-alive session can still be unable to repaint —
-        // e.g. a watch/consume one-off mid-graceful-detach (/exit sent, alive flag
-        // not yet flipped). If NOTHING arrives shortly after the refresh, fall
-        // back to the buffered record: an imperfect replay beats a black void.
+          void api().remoteCaptureScreen?.(taskId).then((snap) => {
+            if (disposed || !term) return
+            if (snap && snap.trim()) {
+              term.reset() // clean slate at home position — the snapshot IS the screen
+              term.write(snap)
+              sawOutput = true
+            }
+          })
+        }, 250)
+        // BACKSTOP: no tmux, or capture returned nothing (e.g. a session
+        // mid-graceful-detach). If nothing has painted shortly after, fall back
+        // to the buffered record: an imperfect replay beats a black void.
         setTimeout(() => {
           if (disposed || sawOutput || !term) return
           void api().remoteGetOutput?.(taskId).then((buf) => {
             if (!disposed && !sawOutput && buf && term) term.write(buf)
           })
-        }, 1000)
+        }, 1100)
       }
       off = api().remoteOnOutput?.((d) => {
         if (!disposed && d.taskId === taskId && term) { sawOutput = true; term.write(d.chunk) }

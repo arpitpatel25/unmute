@@ -1209,9 +1209,10 @@ export class TaskManager extends EventEmitter {
     this.executors.get(id)?.resize(cols, rows)
   }
 
-  /** Force a clean full redraw of a session's terminal (cures resize residue). */
-  refreshTerminal(id: string): void {
-    this.executors.get(id)?.refreshDisplay?.()
+  /** The session's CURRENT screen straight from tmux (canonical, colors kept).
+   *  null ⇒ no tmux / no live executor — caller falls back to buffered replay. */
+  async captureScreen(id: string): Promise<string | null> {
+    return (await this.executors.get(id)?.captureScreen?.()) ?? null
   }
 
   /** Is the task's PTY still alive (running or parked-warm)? The live terminal

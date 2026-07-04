@@ -246,9 +246,9 @@ export const remotePreloadExtensions = {
   /** Tell the PTY the on-screen terminal size so the TUI reflows. */
   remoteTerminalResize: (taskId: string, cols: number, rows: number): void =>
     ipcRenderer.send('remote:terminal-resize', taskId, cols, rows),
-  /** Full clean redraw (tmux refresh-client) — cures resize-race residue. */
-  remoteTerminalRefresh: (taskId: string): void =>
-    ipcRenderer.send('remote:terminal-refresh', taskId),
+  /** The session's CURRENT screen from tmux (canonical picture, colors kept). */
+  remoteCaptureScreen: (taskId: string): Promise<string | null> =>
+    ipcRenderer.invoke('remote:terminal-screen', taskId),
   /** Is tmux available? (gates the "open in terminal" pop-out button). */
   remoteTmuxAvailable: (): Promise<boolean> => ipcRenderer.invoke('remote:tmux-available'),
   /** Pop this task's live session out to a real terminal app — SAME session. */

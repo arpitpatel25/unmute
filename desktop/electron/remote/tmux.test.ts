@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   sessionNameFor, shellQuote, buildCommand, tmuxNewSessionArgs,
-  tmuxAttachArgs, tmuxKillSessionArgs, tmuxRefreshClientArgs, resolveTmuxBin, TMUX_SOCKET,
+  tmuxAttachArgs, tmuxKillSessionArgs, tmuxCapturePaneArgs, resolveTmuxBin, TMUX_SOCKET,
 } from './tmux.ts'
 
 test('sessionNameFor is deterministic per task', () => {
@@ -42,7 +42,7 @@ test('resolveTmuxBin returns first existing candidate, else null', () => {
   assert.equal(resolveTmuxBin(() => false), null)
 })
 
-test('tmuxRefreshClientArgs targets the session on our private socket', () => {
-  const args = tmuxRefreshClientArgs('unmute-abc')
-  assert.deepEqual(args, ['-L', 'unmute-remote', 'refresh-client', '-t', 'unmute-abc'])
+test('tmuxCapturePaneArgs dumps the current screen with colors + recent history', () => {
+  const args = tmuxCapturePaneArgs('unmute-abc')
+  assert.deepEqual(args, ['-L', 'unmute-remote', 'capture-pane', '-t', 'unmute-abc', '-ep', '-S', '-1000'])
 })
