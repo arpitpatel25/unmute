@@ -122,7 +122,13 @@ export async function paywallFetch(
 
   // Connection-reuse heuristic: if header-time is <120ms it's almost
   // certainly a reused connection (TLS handshake alone is 100-300ms).
+  // STREAMING requests are exempt: their headers only return after the whole
+  // upload closes (seconds by design), so the timing heuristic always
+  // mislabeled them FRESH-HANDSHAKE — a phantom that once sent us chasing a
+  // nonexistent 300ms optimization. Label them for what they are.
+  const isStreaming = path.includes('stt-stream')
   const reuseHint =
+    isStreaming ? 'STREAMING (duration-bound, reuse unknowable from timing)' :
     tHeaders - t0 < 120 ? 'REUSED' :
     tHeaders - t0 < 250 ? 'maybe-reused' :
     'FRESH-HANDSHAKE'

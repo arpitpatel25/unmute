@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import { getWarmStream, warmIsHot, disconnectWarmMic } from './micWarm'
+import { getWarmStream, warmIsHot, disconnectWarmMic, adoptPreRoll, resumePreRoll } from './micWarm'
 
 type RecordingMode = 'dictation' | 'instruction'
 
@@ -11,6 +11,9 @@ interface UseAudioRecorderReturn {
    *  collapsed speech-to-noise ratio). Purely a signal for the pill's gentle
    *  "lean in" hint — detection never touches the audio path. */
   noisyEnvironment: boolean
+  /** True when the recording's loudest moment is still faint — coach "bring
+   *  the mic closer" while there's time to fix it. */
+  tooQuiet: boolean
   startRecording: (deviceId?: string, mode?: RecordingMode, sessionId?: string) => Promise<void>
   stopRecording: () => Promise<void>
 }
@@ -67,6 +70,19 @@ let lastNoisyHintAt = 0 // module-level: survives pill remounts within the sessi
 const PHONE_ZOMBIE_COOLDOWN_MS = 60_000
 let phoneZombieUntil = 0
 
+// ── Too-quiet detection (the flip side of the noisy hint) ─────────────────
+// Field data: the one garbled transcript of an otherwise-clean session was
+// the one capture ~4× quieter than the rest (rmsMax 0.065 vs 0.13-0.65).
+// Whisper got a whisper. Coach the fix in the moment: after enough evidence,
+// if the LOUDEST the recording ever got is still faint, say so. Retracts if
+// the level recovers (they leaned in). Same anti-nag pattern as the noisy
+// hint: once per recording + a global cooldown.
+const QUIET_MIN_FRAMES = 30            // ≥3s of evidence
+const QUIET_MAX_RMS = 0.07             // never louder than this = too faint (good captures peak ≥0.13)
+const QUIET_RECOVER_RMS = 0.11         // clearly audible again → retract
+const QUIET_HINT_COOLDOWN_MS = 10 * 60_000
+let lastQuietHintAt = 0
+
 // ── Capture telemetry (observation only — zero behavior impact) ──────────
 // One [audio:telemetry] line per event, greppable, JSON payloads. The goal:
 // when a dictation is bad, the log alone should say WHY — what device, what
@@ -96,6 +112,8 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null)
   const [maxDurationSeconds, setMaxDurationSeconds] = useState(300)
   const [noisyEnvironment, setNoisyEnvironment] = useState(false)
+  const [tooQuiet, setTooQuiet] = useState(false)
+  const quietFlaggedRef = useRef<boolean>(false)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -181,6 +199,8 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       // connected it; only the user (or a dead link) disconnects it.
       if (streamRef.current !== getWarmStream()) {
         streamRef.current.getTracks().forEach((t) => t.stop())
+      } else {
+        resumePreRoll() // the ring re-arms for the next key-down
       }
       streamRef.current = null
     }
@@ -370,6 +390,23 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           const sorted = [...frames].sort((a, b) => a - b)
           const floor = sorted[Math.floor(sorted.length * 0.2)]   // the "gaps"
           const speech = sorted[Math.floor(sorted.length * 0.9)]  // the voice
+          // Too-quiet: judged on the recording's loudest moment so far.
+          {
+            const tel = telemetryRef.current
+            const maxSoFar = tel ? tel.rmsMax : 0
+            if (!quietFlaggedRef.current && frames.length >= QUIET_MIN_FRAMES
+                && heardSpeechRef.current === true && maxSoFar > 0 && maxSoFar < QUIET_MAX_RMS
+                && Date.now() - lastQuietHintAt > QUIET_HINT_COOLDOWN_MS) {
+              quietFlaggedRef.current = true
+              lastQuietHintAt = Date.now()
+              console.log(`[audio:quiet] too-quiet detected (rmsMax=${maxSoFar.toFixed(4)})`)
+              setTooQuiet(true)
+            } else if (quietFlaggedRef.current && maxSoFar >= QUIET_RECOVER_RMS) {
+              quietFlaggedRef.current = false
+              console.log('[audio:quiet] level recovered — hint retracted')
+              setTooQuiet(false)
+            }
+          }
           if (!noisyFlaggedRef.current) {
             // Raise: global cooldown applies to the FIRST fire of a recording
             // only — a re-raise after mid-recording noise-return is fresh signal.
@@ -567,6 +604,8 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     noisyFlaggedRef.current = false
     noisyEverFlaggedRef.current = false
     noisyQuietEvalsRef.current = 0
+    quietFlaggedRef.current = false
+    setTooQuiet(false)
     setNoisyEnvironment(false)
 
     // Reset chunking state
@@ -748,6 +787,12 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // to shrink uploads but Groq's Whisper endpoint rejected the resulting
     // low-bitrate opus stream with HTTP 400. Reverted to the browser default
     // until we find a safe lower bound.
+    // PRE-ROLL: on the warm path, adopt the live ring segment — its buffered
+    // chunks are the ~0-1.2s BEFORE key-down (the syllable people start early),
+    // and the same running recorder continues as the dictation recorder (one
+    // valid webm stream, no seams).
+    const adopted = usedWarm ? adoptPreRoll() : null
+
     const onRecorderData = (e: BlobEvent) => {
       if (e.data.size > 0) {
         const tel = telemetryRef.current
@@ -767,9 +812,14 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         }).catch(() => { /* best-effort */ })
       }
     }
-    let mediaRecorder = new MediaRecorder(stream, {
-      mimeType: 'audio/webm;codecs=opus',
-    })
+    let mediaRecorder: MediaRecorder
+    if (adopted) {
+      mediaRecorder = adopted.recorder // already running with pre-roll in flight
+      if (telemetryRef.current) telemetryRef.current.marks.preRollChunks = adopted.chunks.length
+      console.log(`[audio:mic] adopted pre-roll segment (${adopted.chunks.length} buffered chunks ≈ ${adopted.chunks.length * 250}ms before key-down)`)
+    } else {
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+    }
     mediaRecorderRef.current = mediaRecorder
     mediaRecorder.ondataavailable = onRecorderData
 
@@ -834,7 +884,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       }
     }
 
-    mediaRecorder.start(250) // Collect data every 250ms
+    if (!adopted) mediaRecorder.start(250) // adopted recorder is ALREADY running
     if (telemetryRef.current) telemetryRef.current.marks.recorderStart = Date.now() - telemetryRef.current.t0
     startTimeRef.current = Date.now()
     chunkStartTimeRef.current = Date.now()
@@ -847,6 +897,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       flowType: frozenModeRef.current === 'instruction' ? 'instruction' : 'dictation',
       chunkIndex: 0,
     })
+    // Deliver the adopted pre-roll through the SAME accounting as live chunks
+    // (recording buffer + macro chunks + the streaming POST), now that the
+    // stream is open. Order preserved: these are the earliest chunks.
+    if (adopted) for (const c of adopted.chunks) onRecorderData({ data: c } as BlobEvent)
 
     // Always run the RMS monitor for the whole recording so heardSpeech is
     // tracked even for short, non-chunked dictations. Chunk-SPLITTING stays
@@ -1005,5 +1059,5 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     })
   }, [cleanupStream])
 
-  return { isRecording, analyserNode, maxDurationSeconds, noisyEnvironment, startRecording, stopRecording }
+  return { isRecording, analyserNode, maxDurationSeconds, noisyEnvironment, tooQuiet, startRecording, stopRecording }
 }

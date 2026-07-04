@@ -27,6 +27,69 @@
 
 export type WarmState = 'off' | 'connecting' | 'connected'
 
+// ── Pre-roll ring (the last word-loss gap) ────────────────────────────────
+// People start the first syllable a beat BEFORE the key lands. With the pipe
+// permanently warm we can afford a rolling pre-roll: a segment recorder runs
+// continuously and is RESTARTED every PREROLL_CYCLE_MS, so at any moment we
+// hold at most ~1.2s of recent audio (each restart discards the previous
+// segment — the privacy promise stays: nothing older than the ring exists,
+// nothing is transcribed or leaves the machine until a dictation adopts it).
+// At key-down the recorder ADOPTS the live segment — its buffered chunks are
+// the pre-roll, and the same recorder keeps running as THE dictation
+// recorder, so the whole file is one valid webm stream.
+const PREROLL_CYCLE_MS = 1200
+let preRecorder: MediaRecorder | null = null
+let preChunks: Blob[] = []
+let preCycle: ReturnType<typeof setInterval> | null = null
+let preAdopted = false
+
+function spinPreRollSegment(): void {
+  if (preAdopted || !stream || state !== 'connected') return
+  try { if (preRecorder && preRecorder.state !== 'inactive') preRecorder.stop() } catch { /* replacing anyway */ }
+  preChunks = []
+  try {
+    preRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+    preRecorder.ondataavailable = (e) => { if (e.data.size > 0) preChunks.push(e.data) }
+    preRecorder.start(250)
+  } catch (err) {
+    console.warn('[audio:warm] pre-roll segment failed:', err instanceof Error ? err.message : err)
+    preRecorder = null
+  }
+}
+
+function startPreRoll(): void {
+  preAdopted = false
+  spinPreRollSegment()
+  if (preCycle) clearInterval(preCycle)
+  preCycle = setInterval(spinPreRollSegment, PREROLL_CYCLE_MS)
+  ;(preCycle as { unref?: () => void }).unref?.()
+}
+
+function stopPreRoll(): void {
+  if (preCycle) { clearInterval(preCycle); preCycle = null }
+  try { if (preRecorder && preRecorder.state !== 'inactive') preRecorder.stop() } catch { /* gone */ }
+  preRecorder = null
+  preChunks = []
+}
+
+/** Key-down: hand the LIVE pre-roll segment to the dictation. The returned
+ *  recorder is already running (chunks = the pre-roll so far); the caller
+ *  owns it from here. Null when unavailable (caller records normally). */
+export function adoptPreRoll(): { recorder: MediaRecorder; chunks: Blob[] } | null {
+  if (state !== 'connected' || !preRecorder || preRecorder.state === 'inactive') return null
+  preAdopted = true
+  if (preCycle) { clearInterval(preCycle); preCycle = null }
+  const out = { recorder: preRecorder, chunks: preChunks }
+  preRecorder = null
+  preChunks = []
+  return out
+}
+
+/** Recording ended: resume the pre-roll ring for the next key-down. */
+export function resumePreRoll(): void {
+  if (state === 'connected') startPreRoll()
+}
+
 let stream: MediaStream | null = null
 let ctx: AudioContext | null = null
 let monitor: ReturnType<typeof setInterval> | null = null
@@ -106,6 +169,7 @@ export async function connectWarmMic(deviceId: string): Promise<boolean> {
       disconnectWarmMic('track-ended')
     })
     setState('connected')
+    startPreRoll()
     console.log(`[audio:warm] iPhone mic CONNECTED (warm-up ${Date.now() - t0}ms) — pipe held until the user disconnects`)
     return true
   } catch (err) {
@@ -117,6 +181,7 @@ export async function connectWarmMic(deviceId: string): Promise<boolean> {
 
 export function disconnectWarmMic(reason: string): void {
   connectSeq++ // invalidate any in-flight connect
+  stopPreRoll()
   if (monitor) { clearInterval(monitor); monitor = null }
   if (stream) { stream.getTracks().forEach((t) => { try { t.stop() } catch { /* gone */ } }); stream = null }
   if (ctx) { void ctx.close().catch(() => { /* already closed */ }); ctx = null }

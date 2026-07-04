@@ -465,6 +465,52 @@ function PhoneGlyph() {
   )
 }
 
+// Live capture-coaching chip. Same visual family as the pill and the badges:
+// dark glass, hairline border, full radius. The accent dot + icon carry the
+// state; the copy is two-tier (bold condition, dim remedy) so it reads in one
+// glance without shouting. Fades/slides in beside the pill; never a toast,
+// never a resize.
+function HintChip({ accent, label, detail, icon }: { accent: string; label: string; detail: string; icon: 'waves' | 'mic' }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        height: 32,
+        padding: '0 14px 0 11px',
+        background: 'rgba(14, 14, 16, 0.96)',
+        border: '1px solid rgba(255, 255, 255, 0.13)',
+        borderRadius: 9999,
+        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.4)',
+        backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
+        whiteSpace: 'nowrap',
+        animation: 'hint-chip-in 260ms cubic-bezier(0.2, 0.9, 0.3, 1)',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+      }}
+    >
+      <span aria-hidden style={{ display: 'flex', alignItems: 'center', color: accent }}>
+        {icon === 'waves' ? (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+            <path d="M3 12h2M8 7v10M13 4v16M18 8v8M22 11v2" />
+          </svg>
+        ) : (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="3" width="6" height="11" rx="3" />
+            <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+          </svg>
+        )}
+      </span>
+      <span style={{ fontSize: 12, lineHeight: 1 }}>
+        <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.94)' }}>{label}</span>
+        <span style={{ fontWeight: 400, color: 'rgba(255,255,255,0.55)' }}> — {detail}</span>
+      </span>
+      <style>{`@keyframes hint-chip-in { from { opacity: 0; transform: translateX(8px) scale(0.97) } to { opacity: 1; transform: none } }`}</style>
+    </div>
+  )
+}
+
 // The source glyph chip. Same family as the model badge / RAW toggle: dark
 // fill, whitish border, no shadow. Laptop = MacBook mic, phone = iPhone mic
 // (orange, like other "non-default state" accents). A tap toggles — and in
@@ -518,7 +564,7 @@ export default function WidgetApp() {
   // (types text)? Drives the Remote badge next to the pill. Set on every
   // recording:start from its kind, so it's always fresh for this capture.
   const [isRemote, setIsRemote] = useState(false)
-  const { analyserNode, maxDurationSeconds, noisyEnvironment, startRecording, stopRecording } = useAudioRecorder()
+  const { analyserNode, maxDurationSeconds, noisyEnvironment, tooQuiet, startRecording, stopRecording } = useAudioRecorder()
   const mic = useMicSource()
 
   const autoHideRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -771,32 +817,15 @@ export default function WidgetApp() {
         {/* the screenshot ledger shows for BOTH capture kinds — dictation pastes
             the images into the target app after the text; Remote attaches them
             to the task. Self-hides at zero. */}
-        {/* noisy-spot hint: a signal, not a fix — the user compensates (lean
-            in, speak up). Lives IN the pill row like the staged chip: the HUD
-            window never resizes for it (a resize is what clipped + distorted
-            it). White card, deliberately NOT the dark pill family. */}
-        {noisyEnvironment && (state === 'dictation-active' || state === 'instruction-active') && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              background: 'rgba(255, 255, 255, 0.96)',
-              border: '1px solid rgba(0, 0, 0, 0.08)',
-              borderRadius: 8,
-              padding: '3px 10px',
-              fontSize: 10.5,
-              fontWeight: 500,
-              color: '#3a3a3f',
-              whiteSpace: 'nowrap',
-              boxShadow: '0 2px 10px rgba(0, 0, 0, 0.18)',
-              animation: 'noisy-hint-in 300ms ease-out',
-            }}
-          >
-            <span aria-hidden style={{ fontSize: 11 }}>🌊</span>
-            <span>noisy spot — lean in &amp; speak up</span>
-            <style>{`@keyframes noisy-hint-in { from { opacity: 0; transform: translateX(6px) } to { opacity: 1; transform: none } }`}</style>
-          </div>
+        {/* Live capture coaching — a signal, not a fix. One chip at a time
+            (noise wins: it's the condition the user can't hear themselves).
+            Pill-family styling: dark glass, hairline border, SVG icon with a
+            state accent — reads as part of the instrument, not a toast. */}
+        {(state === 'dictation-active' || state === 'instruction-active') && noisyEnvironment && (
+          <HintChip accent="#fbbf24" label="Noisy spot" detail="lean in & speak up" icon="waves" />
+        )}
+        {(state === 'dictation-active' || state === 'instruction-active') && !noisyEnvironment && tooQuiet && (
+          <HintChip accent="#38bdf8" label="Too quiet" detail="bring the mic closer" icon="mic" />
         )}
         {pillShowing && <StagedImagesChip />}
         {/* mic-source glyph: exists ONLY while an iPhone mic is actually
