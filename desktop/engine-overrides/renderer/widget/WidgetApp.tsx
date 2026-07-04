@@ -568,6 +568,16 @@ export default function WidgetApp() {
     window.electronAPI.undoCancel()
   }, [])
 
+  // The HUD window is 72px tall by default — anything rendered BELOW the pill
+  // is clipped out of existence (the invisible-hint bug). Grow it while the
+  // noisy hint is up; restore when it goes (unless the awareness card needs room).
+  useEffect(() => {
+    const active = state === 'dictation-active' || state === 'instruction-active'
+    const api = window.electronAPI as unknown as { paywallSetHUDHeight?: (h: number) => Promise<boolean> }
+    if (noisyEnvironment && active) void api.paywallSetHUDHeight?.(112)
+    else if (offlineReason === null) void api.paywallSetHUDHeight?.(72)
+  }, [noisyEnvironment, state, offlineReason])
+
   const handleAwarenessDismiss = useCallback(() => {
     sessionDismissed = true
     setDismissedTick((n) => n + 1)
@@ -621,22 +631,24 @@ export default function WidgetApp() {
       {noisyEnvironment && (state === 'dictation-active' || state === 'instruction-active') && (
         <div
           style={{
-            marginTop: 8,
+            marginTop: 7,
             display: 'flex',
             alignItems: 'center',
-            gap: 6,
-            background: 'rgba(20, 20, 24, 0.92)',
-            border: '1px solid rgba(255, 255, 255, 0.14)',
-            borderRadius: 9999,
-            padding: '4px 12px',
-            fontSize: 11.5,
-            color: 'rgba(255, 255, 255, 0.85)',
+            gap: 5,
+            background: 'rgba(255, 255, 255, 0.96)',
+            border: '1px solid rgba(0, 0, 0, 0.08)',
+            borderRadius: 8,
+            padding: '3px 10px',
+            fontSize: 10.5,
+            fontWeight: 500,
+            color: '#3a3a3f',
             whiteSpace: 'nowrap',
+            boxShadow: '0 2px 10px rgba(0, 0, 0, 0.18)',
             animation: 'noisy-hint-in 300ms ease-out',
           }}
         >
-          <span aria-hidden>🌊</span>
-          <span>noisy spot — lean in &amp; speak up, I&rsquo;m listening</span>
+          <span aria-hidden style={{ fontSize: 11 }}>🌊</span>
+          <span>noisy spot — lean in &amp; speak up</span>
           <style>{`@keyframes noisy-hint-in { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }`}</style>
         </div>
       )}

@@ -35,8 +35,14 @@ const DEFAULT_VAD_POLL_INTERVAL_MS = 100
 const NOISY_MIN_FRAMES = 35            // ≥3.5s of evidence before judging
 const NOISY_EVAL_EVERY_N_FRAMES = 10   // percentile math once per second
 const NOISY_WINDOW_FRAMES = 200        // judge the last ~20s, not ancient history
-const NOISY_FLOOR_RMS = 0.02           // gaps louder than speech-presence = the room is loud
-const NOISY_MAX_RATIO = 5              // speech barely above the floor = SNR collapsed
+// CALIBRATED against real captures (2026-07-04, post-noise-suppression, 8-bit
+// analyser): music at home ⇒ floor 0.013-0.014, speech 0.11-0.12, ratio 8-9.
+// The original guesses (0.02 / <5) missed it on BOTH axes — Chromium's noise
+// suppressor scrubs the gaps harder than expected, and a close mic keeps the
+// ratio high even in real noise. Floor is the primary signal; the ratio cap
+// is only a safety so a hot mic in a silent room can't be flagged.
+const NOISY_FLOOR_RMS = 0.012          // gaps clearly above a quiet room's near-zero floor
+const NOISY_MAX_RATIO = 12             // safety: voice hugely above floor = mic is fine
 const NOISY_HINT_COOLDOWN_MS = 10 * 60_000 // same café, three dictations ≠ three nags
 let lastNoisyHintAt = 0 // module-level: survives pill remounts within the session
 
@@ -273,6 +279,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           const sorted = [...frames].sort((a, b) => a - b)
           const floor = sorted[Math.floor(sorted.length * 0.2)]   // the "gaps"
           const speech = sorted[Math.floor(sorted.length * 0.9)]  // the voice
+          // Calibration visibility: one line/second while recording. Real-world
+          // values (post noise-suppression, 8-bit analyser) are the ONLY way to
+          // set honest thresholds — tune NOISY_* against these.
+          console.log(`[audio:noise] eval floor=${floor.toFixed(4)} speech=${speech.toFixed(4)} ratio=${(speech / Math.max(floor, 1e-6)).toFixed(1)} frames=${frames.length}`)
           if (floor > NOISY_FLOOR_RMS && speech / Math.max(floor, 1e-6) < NOISY_MAX_RATIO) {
             noisyFlaggedRef.current = true
             lastNoisyHintAt = Date.now()
