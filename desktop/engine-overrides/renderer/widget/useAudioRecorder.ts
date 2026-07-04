@@ -66,6 +66,30 @@ let lastNoisyHintAt = 0 // module-level: survives pill remounts within the sessi
 const PHONE_ZOMBIE_COOLDOWN_MS = 60_000
 let phoneZombieUntil = 0
 
+// ── Capture telemetry (observation only — zero behavior impact) ──────────
+// One [audio:telemetry] line per event, greppable, JSON payloads. The goal:
+// when a dictation is bad, the log alone should say WHY — what device, what
+// processing, what the audio physically looked like, and when every stage
+// happened. Timings are ms since the capture REQUEST (key-down).
+interface CaptureTelemetry {
+  t0: number
+  source: string
+  marks: Record<string, number>
+  // audio-quality accumulators (fed by the existing 100ms VAD tick)
+  frames: number
+  zeroFrames: number       // all-exact-zero frames (dead pipe signature)
+  clippedSamples: number   // |v| > 0.99 (overload/plosive slam)
+  peak: number
+  rmsSum: number
+  rmsMax: number
+  trackEvents: string[]    // mute/unmute/ended with timestamps
+  chunks: number
+  chunkBytes: number
+}
+function tlog(event: string, data: Record<string, unknown>): void {
+  try { console.log(`[audio:telemetry] ${event} ${JSON.stringify(data)}`) } catch { /* never break capture */ }
+}
+
 export function useAudioRecorder(): UseAudioRecorderReturn {
   const [isRecording, setIsRecording] = useState(false)
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null)
@@ -102,6 +126,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   // from a much longer hold, eaten by a 3ms miss). On the Mac path the two
   // clocks are ~identical, so behavior there is unchanged.
   const requestTimeRef = useRef<number>(0)
+  const telemetryRef = useRef<CaptureTelemetry | null>(null)
 
   // ─── VAD Chunking Refs ───
   const chunkIndexRef = useRef<number>(0)
@@ -299,6 +324,30 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       }
       const rms = Math.sqrt(sumSquares / bufferLength)
 
+      // Telemetry accumulation (same tick, float precision, ~3ms of audio):
+      // physical audio quality — peaks, clipping, dead frames — so a bad
+      // transcription can be traced to WHAT THE MIC DELIVERED.
+      {
+        const tel = telemetryRef.current
+        if (tel) {
+          const fbuf = new Float32Array(analyser.fftSize)
+          analyser.getFloatTimeDomainData(fbuf)
+          let allZero = true
+          for (let i = 0; i < fbuf.length; i++) {
+            const v = fbuf[i]
+            if (v !== 0) allZero = false
+            const a = Math.abs(v)
+            if (a > tel.peak) tel.peak = a
+            if (a > 0.99) tel.clippedSamples++
+          }
+          tel.frames++
+          if (allZero) tel.zeroFrames++
+          tel.rmsSum += rms
+          if (rms > tel.rmsMax) tel.rmsMax = rms
+          if (!tel.marks.firstSound && !allZero) tel.marks.firstSound = Date.now() - tel.t0
+        }
+      }
+
       // Track speech across the whole recording (independent of chunk VAD activation)
       if (rms >= silenceThresholdRef.current) heardSpeechRef.current = true
 
@@ -460,9 +509,33 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     const blob = new Blob(chunks, { type: 'audio/webm' })
     const buffer = await blob.arrayBuffer()
     console.log('[audio] Flushed audio, mode:', mode, 'size:', buffer.byteLength, 'duration:', duration)
+    emitCaptureSummary('flush', buffer.byteLength, duration)
     window.electronAPI.sendAudioReady(buffer, duration, mode, frozenSessionIdRef.current)
     return true
   }, [cleanupStream])
+
+  /** One line that judges the whole capture: device, timings, physical audio
+   *  quality, delivery size. THE line to read when a dictation came out wrong. */
+  const emitCaptureSummary = useCallback((via: string, bytes: number, durationMs: number) => {
+    const tel = telemetryRef.current
+    if (!tel) return
+    tlog('capture-summary', {
+      via,
+      source: tel.source,
+      marks: tel.marks,                                 // acquired/pipeLive/recorderStart/firstChunk/firstSound…
+      durationMs,
+      bytes,
+      kbps: durationMs > 0 ? Math.round((bytes * 8) / durationMs) : 0,
+      frames: tel.frames,
+      zeroFramePct: tel.frames ? Math.round((tel.zeroFrames / tel.frames) * 100) : 0, // dead-pipe % of the recording
+      rmsAvg: tel.frames ? +(tel.rmsSum / tel.frames).toFixed(4) : 0,
+      rmsMax: +tel.rmsMax.toFixed(4),
+      peak: +tel.peak.toFixed(3),
+      clippedSamples: tel.clippedSamples,               // >0 = overload (too close / AGC slam)
+      trackEvents: tel.trackEvents,                     // link health during THIS capture
+      chunks: tel.chunks,
+    })
+  }, [])
 
   const startRecording = useCallback(async (deviceId?: string, mode?: RecordingMode, sessionId?: string) => {
     // If there's an active recorder, flush it first (sends its audio with correct
@@ -474,6 +547,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     }
 
     requestTimeRef.current = Date.now()
+    telemetryRef.current = {
+      t0: Date.now(), source: 'pending', marks: {}, frames: 0, zeroFrames: 0,
+      clippedSamples: 0, peak: 0, rmsSum: 0, rmsMax: 0, trackEvents: [], chunks: 0, chunkBytes: 0,
+    }
     // Reset state for new recording
     frozenModeRef.current = mode || 'dictation'
     frozenSessionIdRef.current = sessionId
@@ -594,6 +671,32 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // resolved never existed. (Mac mic: ~50-150ms; phone: measured in field.)
     console.log(`[audio:mic] acquired in ${Date.now() - tAcquire}ms, source=${phoneSourceRef.current ? 'iphone' : 'default'}`)
     streamRef.current = stream
+    {
+      const tel = telemetryRef.current
+      const track = stream.getAudioTracks()[0]
+      if (tel && track) {
+        tel.source = phoneSourceRef.current ? 'iphone' : 'default'
+        tel.marks.acquired = Date.now() - tel.t0
+        // THE ground truth the guessing ends on: what the track is actually
+        // running at (sampleRate honors/ignores our 16k request) and which
+        // processing Chromium REALLY applied (the double-DSP question).
+        tlog('track-settings', {
+          source: tel.source,
+          label: track.label,
+          readyState: track.readyState,
+          muted: track.muted,
+          settings: track.getSettings(),
+          capabilities: typeof track.getCapabilities === 'function' ? track.getCapabilities() : 'n/a',
+        })
+        for (const ev of ['mute', 'unmute', 'ended'] as const) {
+          track.addEventListener(ev, () => {
+            const at = Date.now() - tel.t0
+            tel.trackEvents.push(`${ev}@${at}ms`)
+            tlog('track-event', { source: tel.source, event: ev, atMs: at, readyState: track.readyState })
+          })
+        }
+      }
+    }
     // Tripwire for the corrupt-webm class: a capture track dying MID-RECORDING
     // (phone disconnected/walked away) is the suspect for undecodable output.
     // Log it loudly so field failures carry their cause.
@@ -603,6 +706,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
     // Set up audio context for waveform analysis (rebuilt on zombie failover)
     let audioContext = new AudioContext()
+    tlog('audio-context', { sampleRate: audioContext.sampleRate })
     audioContextRef.current = audioContext
     let analyser = audioContext.createAnalyser()
     analyser.fftSize = 128
@@ -616,6 +720,12 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // until we find a safe lower bound.
     const onRecorderData = (e: BlobEvent) => {
       if (e.data.size > 0) {
+        const tel = telemetryRef.current
+        if (tel) {
+          if (!tel.marks.firstChunk) tel.marks.firstChunk = Date.now() - tel.t0
+          tel.chunks++
+          tel.chunkBytes += e.data.size
+        }
         chunksRef.current.push(e.data)
         // If chunked mode, also push to current macro chunk buffer
         if (chunkedModeEnabledRef.current) {
@@ -662,7 +772,9 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       }
       if (live) {
         console.log(`[audio:mic] phone pipe LIVE after ${Date.now() - tGate}ms`)
+        if (telemetryRef.current) telemetryRef.current.marks.pipeLive = Date.now() - telemetryRef.current.t0
       } else {
+        if (telemetryRef.current) telemetryRef.current.marks.zombieVerdict = Date.now() - telemetryRef.current.t0
         // ZOMBIE VERDICT: acquirable device, zero samples in 3s. The link is
         // dead (macOS kept the corpse enumerated). Recording it would capture
         // silence and eat the user's words — THE thing that must never
@@ -693,6 +805,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     }
 
     mediaRecorder.start(250) // Collect data every 250ms
+    if (telemetryRef.current) telemetryRef.current.marks.recorderStart = Date.now() - telemetryRef.current.t0
     startTimeRef.current = Date.now()
     chunkStartTimeRef.current = Date.now()
     setIsRecording(true)
@@ -849,6 +962,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
         const buffer = await blob.arrayBuffer()
         console.log('[audio] Sending audio to main process, mode:', mode, 'size:', buffer.byteLength, 'duration:', duration)
+        emitCaptureSummary('stop', buffer.byteLength, duration)
         window.electronAPI.sendAudioReady(buffer, duration, mode, frozenSessionIdRef.current)
 
         // Close stream AFTER full audio is delivered (no-op if no stream was open).
