@@ -27,7 +27,7 @@ export interface EnginePeekStatus {
   reason: OnDeviceReason | null
 }
 
-const settings = new Store<{ engineMode: EngineMode }>({ name: 'unmute-paywall-settings' })
+const settings = new Store<{ engineMode: EngineMode; iphoneMicEnabled?: boolean }>({ name: 'unmute-paywall-settings' })
 
 // The OSS engine provides these via its sessionManager. We accept them
 // as opaque interfaces so we don't entangle with the engine internals.
@@ -178,6 +178,19 @@ export function initPaywall(appHandle: App, oss: OSSAdapter): ProviderRouter {
     ;(w as unknown as { setIgnoreMouseEvents: (ignore: boolean, options?: { forward?: boolean }) => void })
       .setIgnoreMouseEvents(!on, { forward: true })
   })
+  // iPhone-microphone feature gate: OFF by default — the mic-source chip and
+  // the whole Continuity path stay invisible until the user enables it in
+  // Settings. Broadcast on change so the widget applies it live.
+  ipcMain.handle('settings:get-iphone-mic', () => settings.get('iphoneMicEnabled', false))
+  ipcMain.handle('settings:set-iphone-mic', (_e, on: boolean) => {
+    settings.set('iphoneMicEnabled', !!on)
+    const { BrowserWindow } = require('electron') as typeof import('electron')
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('settings:iphone-mic-changed', !!on)
+    }
+    return true
+  })
+
   ipcMain.handle('hud:set-height', (_e, height: number) => {
     const w = getWidgetWindow()
     if (!w) return false

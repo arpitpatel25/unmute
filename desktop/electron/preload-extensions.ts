@@ -204,6 +204,12 @@ export const paywallPreloadExtensions = {
   // height changes. Clamped in main to [72, 220].
   paywallSetHUDHeight: (height: number): Promise<boolean> =>
     ipcRenderer.invoke('hud:set-height', height),
+  /** iPhone-mic feature gate (Settings): chip + Continuity path hidden until enabled. */
+  getIphoneMicEnabled: (): Promise<boolean> => ipcRenderer.invoke('settings:get-iphone-mic'),
+  setIphoneMicEnabled: (on: boolean): Promise<boolean> => ipcRenderer.invoke('settings:set-iphone-mic', on),
+  onIphoneMicChanged: (cb: (on: boolean) => void): void => {
+    ipcRenderer.on('settings:iphone-mic-changed', (_e, on: boolean) => cb(on))
+  },
   // HUD click-through toggle (renderer hit-test flips it while over the pill).
   hudSetInteractive: (on: boolean): void =>
     ipcRenderer.send('hud:set-interactive', on),

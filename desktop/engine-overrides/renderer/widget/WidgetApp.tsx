@@ -435,16 +435,39 @@ function useMicSource() {
   // user's explicit choice, not initiating anything.
   const [warm, setWarm] = useState<WarmState>(warmState())
   useEffect(() => onWarmState(setWarm), [])
+
+  // Feature gate (Settings → "iPhone microphone", OFF by default): until the
+  // user enables it, the chip never renders, no warm connection is ever made,
+  // and capture always resolves to the Mac mic — the feature is invisible.
+  const [featureEnabled, setFeatureEnabled] = useState(false)
+  const featureEnabledRef = useRef(false)
+  featureEnabledRef.current = featureEnabled
   useEffect(() => {
+    const api = window.electronAPI as unknown as {
+      getIphoneMicEnabled?: () => Promise<boolean>
+      onIphoneMicChanged?: (cb: (on: boolean) => void) => void
+    }
+    api.getIphoneMicEnabled?.().then((on) => setFeatureEnabled(!!on)).catch(() => {})
+    api.onIphoneMicChanged?.((on) => setFeatureEnabled(!!on))
+  }, [])
+
+  useEffect(() => {
+    if (!featureEnabled) {
+      if (warmState() !== 'off') disconnectWarmMic('feature-disabled')
+      return
+    }
     const phone = findIphoneMic(devices)
     if (preference === 'iphone' && phone && warmState() === 'off') {
       void connectWarmMic(phone.deviceId)
     } else if (preference === 'mac' && warmState() !== 'off') {
       disconnectWarmMic('user-selected-mac')
     }
-  }, [preference, devices])
+  }, [preference, devices, featureEnabled])
 
-  return { preference, devices, warm, toggle, resolveDeviceId, refreshDevices }
+  return { preference, devices, warm, featureEnabled, toggle, resolveDeviceId: useCallback(
+    () => (featureEnabledRef.current ? resolveDeviceId() : undefined),
+    [resolveDeviceId]
+  ), refreshDevices }
 }
 
 function LaptopGlyph() {
@@ -832,7 +855,7 @@ export default function WidgetApp() {
             around — no phone, no chip, no greyed-out icon begging attention.
             Laptop vs phone tells the truth about what's listening; a tap
             flips the (sticky) choice for the next dictation. */}
-        {pillShowing && findIphoneMic(mic.devices) !== null && (
+        {pillShowing && mic.featureEnabled && findIphoneMic(mic.devices) !== null && (
           <MicSourceChip
             source={effectiveSource(mic.preference, mic.devices)}
             warm={mic.warm}

@@ -37,6 +37,7 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [outputMode, setOutputMode] = useState<'paste' | 'clipboard'>('paste')
   const [launchAtLogin, setLaunchAtLogin] = useState(false)
   const [soundFeedback, setSoundFeedback] = useState(true)
+  const [iphoneMic, setIphoneMic] = useState(false)
   const [widgetPosition, setWidgetPosition] = useState<'center' | 'right'>('center')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
@@ -57,6 +58,8 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
     })
     window.electronAPI.getSoundFeedback().then((v: boolean) => {
       setSoundFeedback(v)
+    ;(window.electronAPI as unknown as { getIphoneMicEnabled?: () => Promise<boolean> })
+      .getIphoneMicEnabled?.().then((on) => setIphoneMic(!!on)).catch(() => {})
     })
     window.electronAPI.paywallGetOutputMode?.()
       .then((v: 'paste' | 'clipboard') => {
@@ -261,6 +264,12 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
         </SettingRow>
         <SettingRow label="Sound feedback" description="Play sounds on start / stop">
           <Toggle checked={soundFeedback} onChange={handleSoundFeedbackChange} />
+        </SettingRow>
+        <SettingRow label="iPhone microphone" description="Use your iPhone as the dictation mic (via Apple Continuity — no install). Adds a mic-source switch next to the recording pill.">
+          <Toggle checked={iphoneMic} onChange={(on: boolean) => {
+            setIphoneMic(on)
+            void (window.electronAPI as unknown as { setIphoneMicEnabled?: (v: boolean) => Promise<boolean> }).setIphoneMicEnabled?.(on)
+          }} />
         </SettingRow>
         <SettingRow label="Launch at login" description="Start unmute automatically when you log in to your Mac">
           <Toggle checked={launchAtLogin} onChange={handleLaunchAtLoginChange} />
