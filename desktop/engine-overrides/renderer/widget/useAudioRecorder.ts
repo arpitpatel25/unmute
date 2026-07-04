@@ -32,9 +32,18 @@ const DEFAULT_VAD_POLL_INTERVAL_MS = 100
 // floor itself climbs past the speech-presence threshold AND the ratio
 // collapses. Requiring BOTH keeps a soft-spoken user in a silent room (low
 // floor) and a loud clear voice over a fan (high ratio) from being flagged.
-const NOISY_MIN_FRAMES = 35            // ≥3.5s of evidence before judging
-const NOISY_EVAL_EVERY_N_FRAMES = 10   // percentile math once per second
-const NOISY_WINDOW_FRAMES = 200        // judge the last ~20s, not ancient history
+const NOISY_MIN_FRAMES = 20            // ≥2s of evidence before judging
+const NOISY_EVAL_EVERY_N_FRAMES = 5    // percentile math twice a second
+// Short window = responsive: field test showed a 20s window lagged ~5s behind
+// noise onset (new noise must displace old quiet history before p20 moves).
+// 6s of history reacts in ~1.5-2.5s while still smoothing single-word spikes.
+const NOISY_WINDOW_FRAMES = 60
+// Retract hysteresis: the hint is a LIVE signal — when the noise stops, it
+// should go. Clear when the floor sits below 70% of the trigger level for
+// NOISY_CLEAR_EVALS consecutive evaluations (~2s), far enough below the
+// trigger that boundary noise can't flicker the chip.
+const NOISY_CLEAR_FLOOR_RMS = 0.0084
+const NOISY_CLEAR_EVALS = 4
 // CALIBRATED against real captures (2026-07-04, post-noise-suppression, 8-bit
 // analyser): music at home ⇒ floor 0.013-0.014, speech 0.11-0.12, ratio 8-9.
 // The original guesses (0.02 / <5) missed it on BOTH axes — Chromium's noise
@@ -91,7 +100,9 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   // ─── Noisy-environment refs (per recording) ───
   const rmsFramesRef = useRef<number[]>([])
   const noisyFrameCountRef = useRef<number>(0)
-  const noisyFlaggedRef = useRef<boolean>(false)
+  const noisyFlaggedRef = useRef<boolean>(false)      // chip currently up
+  const noisyEverFlaggedRef = useRef<boolean>(false)  // fired at least once THIS recording (re-flag skips the global cooldown)
+  const noisyQuietEvalsRef = useRef<number>(0)        // consecutive quiet evals while flagged
 
   // ─── Server-config-driven chunking params (loaded at recording start) ───
   const chunkMinMsRef = useRef<number>(DEFAULT_CHUNK_MIN_MS)
@@ -269,29 +280,47 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       // Track speech across the whole recording (independent of chunk VAD activation)
       if (rms >= silenceThresholdRef.current) heardSpeechRef.current = true
 
-      // Noisy-environment watch: collect the frame, judge once a second after
-      // enough evidence. Fires AT MOST once per recording + a global cooldown.
-      if (!noisyFlaggedRef.current) {
+      // Noisy-environment watch: a LIVE signal. Collect every frame; judge twice
+      // a second. The chip RAISES when the floor climbs + ratio collapses, and
+      // RETRACTS (hysteresis, ~2s sustained quiet) when the noise stops.
+      {
         const frames = rmsFramesRef.current
         frames.push(rms)
         if (frames.length > NOISY_WINDOW_FRAMES) frames.shift()
         // Cadence off a monotonic counter — frames.length pins at the window
         // cap, where `length % N` became always-true (the every-100ms log spam).
         noisyFrameCountRef.current++
-        if (frames.length >= NOISY_MIN_FRAMES && noisyFrameCountRef.current % NOISY_EVAL_EVERY_N_FRAMES === 0
-            && Date.now() - lastNoisyHintAt > NOISY_HINT_COOLDOWN_MS) {
+        if (frames.length >= NOISY_MIN_FRAMES && noisyFrameCountRef.current % NOISY_EVAL_EVERY_N_FRAMES === 0) {
           const sorted = [...frames].sort((a, b) => a - b)
           const floor = sorted[Math.floor(sorted.length * 0.2)]   // the "gaps"
           const speech = sorted[Math.floor(sorted.length * 0.9)]  // the voice
-          // Calibration visibility: one line/second while recording. Real-world
-          // values (post noise-suppression, 8-bit analyser) are the ONLY way to
-          // set honest thresholds — tune NOISY_* against these.
-          console.log(`[audio:noise] eval floor=${floor.toFixed(4)} speech=${speech.toFixed(4)} ratio=${(speech / Math.max(floor, 1e-6)).toFixed(1)} frames=${frames.length}`)
-          if (floor > NOISY_FLOOR_RMS && speech / Math.max(floor, 1e-6) < NOISY_MAX_RATIO) {
-            noisyFlaggedRef.current = true
-            lastNoisyHintAt = Date.now()
-            console.log(`[audio:noise] noisy environment detected (floor=${floor.toFixed(4)}, speech=${speech.toFixed(4)})`)
-            setNoisyEnvironment(true)
+          // Calibration visibility (post noise-suppression, 8-bit analyser).
+          console.log(`[audio:noise] eval floor=${floor.toFixed(4)} speech=${speech.toFixed(4)} ratio=${(speech / Math.max(floor, 1e-6)).toFixed(1)} flagged=${noisyFlaggedRef.current}`)
+          if (!noisyFlaggedRef.current) {
+            // Raise: global cooldown applies to the FIRST fire of a recording
+            // only — a re-raise after mid-recording noise-return is fresh signal.
+            const cooldownOk = noisyEverFlaggedRef.current || Date.now() - lastNoisyHintAt > NOISY_HINT_COOLDOWN_MS
+            if (cooldownOk && floor > NOISY_FLOOR_RMS && speech / Math.max(floor, 1e-6) < NOISY_MAX_RATIO) {
+              noisyFlaggedRef.current = true
+              noisyEverFlaggedRef.current = true
+              noisyQuietEvalsRef.current = 0
+              lastNoisyHintAt = Date.now()
+              console.log(`[audio:noise] noisy environment detected (floor=${floor.toFixed(4)}, speech=${speech.toFixed(4)})`)
+              setNoisyEnvironment(true)
+            }
+          } else {
+            // Retract: sustained quiet well below the trigger level.
+            if (floor < NOISY_CLEAR_FLOOR_RMS) {
+              noisyQuietEvalsRef.current++
+              if (noisyQuietEvalsRef.current >= NOISY_CLEAR_EVALS) {
+                noisyFlaggedRef.current = false
+                noisyQuietEvalsRef.current = 0
+                console.log('[audio:noise] environment quiet again — hint retracted')
+                setNoisyEnvironment(false)
+              }
+            } else {
+              noisyQuietEvalsRef.current = 0
+            }
           }
         }
       }
@@ -424,6 +453,8 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     rmsFramesRef.current = []
     noisyFrameCountRef.current = 0
     noisyFlaggedRef.current = false
+    noisyEverFlaggedRef.current = false
+    noisyQuietEvalsRef.current = 0
     setNoisyEnvironment(false)
 
     // Reset chunking state
