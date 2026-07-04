@@ -569,6 +569,12 @@ function sigOf(buf: Buffer): string {
 // (APFS clone, ~instant) → the pill chip counts up live with a REAL file.
 const CLIP_PROBE_FILE = () => join(STAGING_DIR, '.clip-probe.png')
 let clipProbeBusy = false
+/** Has THIS capture window completed its baseline probe? The baseline learns
+ *  whatever image was already in the clipboard BEFORE the trigger, so it never
+ *  attaches. Until it has verifiably completed, every probe runs learn-only —
+ *  a skipped baseline (previous probe still in flight) or a failed osascript
+ *  must NEVER let a pre-dictation image slip through as "new". */
+let clipBaselined = false
 /** Did any clipboard image get STAGED during the current capture? Drives the
  *  consume-then-clear at key-lift (we only clear what we delivered). */
 let clipStagedThisCapture = false
@@ -577,6 +583,10 @@ function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, s
   clipProbeBusy = true
   try { mkdirSync(STAGING_DIR, { recursive: true }) } catch { /* ignore */ }
   const probe = CLIP_PROBE_FILE()
+  // Fresh slate: a leftover probe file from an earlier capture must not read as
+  // "the clipboard's current image" when the child's PNGf coercion errors out
+  // (empty clipboard) and leaves the file untouched.
+  try { (require('node:fs') as typeof import('node:fs')).rmSync(probe, { force: true }) } catch { /* ignore */ }
   const script = [
     'try',
     'set png to the clipboard as «class PNGf»',
@@ -589,19 +599,21 @@ function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, s
   ].flatMap((l) => ['-e', l])
   execFile('osascript', script, { timeout: 5000 }, (err) => {
     clipProbeBusy = false
-    if (err) { onDone?.(false, false); return }
+    if (err) { onDone?.(false, false); return } // osascript itself failed — clipboard state UNKNOWN, stay unbaselined
     try {
       const { statSync, openSync, readSync, closeSync, copyFileSync, rmSync } = require('node:fs') as typeof import('node:fs')
-      const st = statSync(probe)
-      if (!st.size) { onDone?.(false, false); return }
+      let st: import('node:fs').Stats
+      try { st = statSync(probe) } catch { clipBaselined = true; onDone?.(false, false); return } // no file = no image on the clipboard — baseline trivially done
+      if (!st.size) { clipBaselined = true; onDone?.(false, false); return }
       const head = Buffer.alloc(Math.min(4096, st.size))
       const fd = openSync(probe, 'r')
       readSync(fd, head, 0, head.length, 0)
       closeSync(fd)
       const md5 = require('node:crypto').createHash('md5').update(head).digest('hex') as string
       const sig = `${st.size}:${md5}`
-      if (knownClipSigs.has(sig)) { onDone?.(true, false); return }
+      if (knownClipSigs.has(sig)) { clipBaselined = true; onDone?.(true, false); return }
       knownClipSigs.add(sig)
+      clipBaselined = true
       if (markOnly) { onDone?.(true, false); return } // baseline: pre-dictation image learned, never attached
       const dest = join(STAGING_DIR, `capture-${Date.now()}-clipboard.png`)
       copyFileSync(probe, dest)
@@ -622,7 +634,9 @@ function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, s
  *  clear what we delivered: a pre-dictation image we never staged is left alone. */
 function secureAndClearClipboard(): void {
   if (settings.get('screenshotCapture') === false) return
-  probeClipboardViaChild(false, (sawImage, stagedNew) => {
+  // If the baseline never completed this capture, this probe is LEARN-ONLY: an
+  // image of unknown provenance (could predate the trigger) must not attach.
+  probeClipboardViaChild(!clipBaselined, (sawImage, stagedNew) => {
     if (sawImage && (stagedNew || clipStagedThisCapture)) {
       try {
         const { clipboard } = require('electron') as typeof import('electron')
@@ -715,10 +729,13 @@ function startCaptureWatch(): void {
   // file sweeps start from startedAt. Zero main-thread image work while
   // recording — the osascript child does all pasteboard reads (the ONLY reader;
   // a second reader with a different PNG encoder is what duplicated pastes).
+  clipBaselined = false
   probeClipboardViaChild(true)
   captureWatchTimer = setInterval(() => {
     stageRecentScreenshotFiles(startedAt)
-    probeClipboardViaChild()
+    // Staging unlocks only once a baseline has COMPLETED for this window; until
+    // then each tick retries the baseline (learn-only) instead.
+    probeClipboardViaChild(!clipBaselined)
   }, 900)
   ;(captureWatchTimer as { unref?: () => void }).unref?.()
 }
