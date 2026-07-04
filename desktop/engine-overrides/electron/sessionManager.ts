@@ -1034,11 +1034,18 @@ class SessionManager {
     console.log('[session] 🔒 isProcessing = TRUE')
 
     // Guard: no audio received (rapid double-press or too-short recording)
-    // Audio IPC from the renderer may still be in-flight — poll until it arrives (up to 200ms)
+    // Audio IPC from the renderer may still be in-flight — poll until it
+    // arrives. Window sized to cover the iPhone tail grace: a Continuity-mic
+    // recording deliberately keeps capturing ~300ms past key-lift (in-flight
+    // wireless audio), THEN assembles + sends — 200ms guillotined every phone
+    // dictation as "too-short" and dropped its audio as stale (observed live).
+    // 800ms covers grace + encoder flush + blob assembly with margin; the
+    // too-short feedback for a genuinely audio-less press arrives 0.6s later,
+    // a fair trade against eating whole dictations.
     if (!session.dictationAudio && !session.instructionAudio) {
-      console.log('[session] No audio yet — polling for IPC (up to 200ms)...')
+      console.log('[session] No audio yet — polling for IPC (up to 800ms)...')
       const t0 = Date.now()
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 80; i++) {
         await new Promise(resolve => setTimeout(resolve, 10))
         if (session.dictationAudio || session.instructionAudio) break
       }
