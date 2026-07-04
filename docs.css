@@ -44,7 +44,7 @@ body {
 .top .logo img { height: 30px; width: auto; display: block; }
 .top nav { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 16px; font-size: 13px; }
 .top nav a { color: var(--ink-60); }
-.top nav a:hover { color: var(--ink); }
+.top nav a:hover { background: var(--ink); color: var(--paper); }
 
 /* the always-present download CTA in the nav */
 .top nav .nav-cta {
