@@ -20,7 +20,12 @@ export interface RemoteTask {
   /** Rolling "where you left off" (2-3 sentences from the session itself,
    *  refreshed every turn) — re-entry warm-up, never authoritative. */
   threadContext?: string | null
-  state: 'processing' | 'needs-user' | 'stuck' | 'done' | 'failed'
+  /** Shelved: kept-but-out-of-the-way — hidden from the wall grid, purge-exempt,
+   *  findable in the rail's Shelf. */
+  shelved?: boolean
+  /** The user's card note (ticket link, context) — annotation only. */
+  note?: string | null
+  state: 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
   category?: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
   step?: string | null
   createdAt: number
@@ -54,7 +59,7 @@ function api(): RemoteAPIShape {
   return (window as unknown as { electronAPI?: RemoteAPIShape }).electronAPI ?? {}
 }
 
-const TERMINAL = new Set(['done', 'failed'])
+const TERMINAL = new Set(['done', 'failed', 'ready']) // ready = parked, ball with user — not "running" 
 
 export function useRemoteTasks() {
   const [tasks, setTasks] = useState<RemoteTask[]>([])

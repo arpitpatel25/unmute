@@ -384,3 +384,14 @@ test('recall: contextTaskId rides on NEW when it names a known task (cold includ
   const d2 = parseDecision('{"action":"new","intent":"x","contextTaskId":"ghost"}', 'r', [], [], cold)
   assert.equal(d2.contextTaskId, undefined)
 })
+
+test('ready one-offs are RESUMABLE resume targets (the most natural continue)', () => {
+  const finished: RoutableTask[] = [
+    { id: 'parked-ready', intent: 'load the CS2 video', name: 'CS2 video', state: 'ready', ageSec: 120 },
+  ]
+  const p = buildRoutingPrompt('now summarize what the video says', [], '/d/decision.json', [], finished)
+  assert.ok(p.includes('[parked-ready]') && p.includes('RESUMABLE'), 'ready one-off offered as a resume target')
+  const d = parseDecision('{"action":"resume","targetTaskId":"parked-ready","intent":"summarize the video"}', 'r', [], [], [], finished)
+  assert.equal(d.action, 'resume')
+  assert.equal(d.targetTaskId, 'parked-ready')
+})

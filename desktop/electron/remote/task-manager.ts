@@ -120,6 +120,13 @@ export interface Task {
    *  clock: a session is auto-routable only while this is recent ("hot thread");
    *  cold sessions are focus-only. */
   lastUserInputAt?: number
+  /** Shelved (Orchestrate): deliberately preserved AND out of the way — hidden
+   *  from the wall grid, exempt from auto-purge, findable in the rail's Shelf.
+   *  The answer to "I want to keep this but stop seeing it". */
+  shelved?: boolean
+  /** User's free-form note pinned to the card (ticket link, context, a reminder
+   *  to future-you). Pure annotation — never fed to the agent. */
+  note?: string
 }
 
 export interface TaskManagerOpts {
@@ -183,7 +190,14 @@ export interface TaskManagerOpts {
 
 type TaskEvent = 'created' | 'updated' | 'needs-user' | 'stuck' | 'done' | 'failed' | 'removed'
 
-const TERMINAL: UiTaskState[] = ['done', 'failed']
+/** Turn-over states: the session is parked, polling stopped, ball not with the
+ *  agent. 'ready' = ball explicitly WITH THE USER (a checkpoint awaiting their
+ *  direction) — parked like done, but queued as "your move" in the UI. */
+const TERMINAL: UiTaskState[] = ['done', 'failed', 'ready']
+/** Fully settled — kill() has nothing to mark, the librarian has been handed
+ *  off, nothing awaits anyone. NOT 'ready' (killing a ready task must mark it
+ *  stopped, or a dead task would sit in the your-move queue forever). */
+const SETTLED: UiTaskState[] = ['done', 'failed']
 
 /** Strip the TUI's ANSI/OSC/control noise from a raw PTY buffer and keep a
  *  readable tail — enough for the librarian to see what the doer actually did
@@ -207,6 +221,10 @@ export class TaskManager extends EventEmitter {
   private warmTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Background auto-purge sweep (null until startMaintenance()).
   private purgeTimer: ReturnType<typeof setInterval> | null = null
+  // Per-task chain serializing meta.json read-modify-writes. Two concurrent
+  // merges (e.g. setShelved + setNote in one tick) would otherwise race the
+  // read and the last write would silently drop the other's field.
+  private metaChains = new Map<string, Promise<void>>()
   // Per-task ring buffer of recent PTY output for render-on-demand (PRD §13.4#8).
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
@@ -616,6 +634,19 @@ export class TaskManager extends EventEmitter {
           this.parkWarm(id)
         }
         break
+      case 'ready':
+        // Ball-with-user checkpoint: a step finished, the session sits warm
+        // awaiting the user's direction. Queued as "your move" (lowest pull
+        // priority) in the UI; NO doorbell (calm by design), NO librarian yet
+        // (the thread isn't over — curation happens at the final done).
+        tlog.ui('task-row.ready', { summary: task.result?.summary })
+        this.emit('updated', task)
+        if (task.category === 'consume' || task.category === 'watch') {
+          this.detachAndKill(id)
+        } else {
+          this.parkWarm(id)
+        }
+        break
       case 'failed': {
         // PRD §13.4 #4: surface WHY.
         tlog.ui('task-row.failed', { reason: task.error?.reason ?? '(no reason reported)' })
@@ -704,7 +735,7 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     tlog.ui('task-row.killed', {})
     const task = this.tasks.get(id)
-    if (task && !TERMINAL.includes(task.state)) {
+    if (task && !SETTLED.includes(task.state)) {
       task.state = 'failed'
       task.error = { reason: 'Stopped by you' }
       task.updatedAt = this.clock()
@@ -759,13 +790,13 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }> }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       const statusPath = join(dir, 'status.json')
       const status = await readStatus(statusPath)
       const now = this.clock()
-      const terminal = status?.state === 'done' || status?.state === 'failed'
+      const terminal = status?.state === 'done' || status?.state === 'failed' || status?.state === 'ready'
       const task: Task = {
         id,
         intent: meta.intent,
@@ -795,6 +826,8 @@ export class TaskManager extends EventEmitter {
         surface: meta.surface,
         mode: meta.mode ?? 'managed',
         injectedRecipes: meta.injectedRecipes ?? [],
+        shelved: meta.shelved || undefined,
+        note: meta.note || undefined,
       }
       this.tasks.set(id, task)
       this.emit('created', task)
@@ -832,12 +865,26 @@ export class TaskManager extends EventEmitter {
    * via remove(); NEVER touches ~/.claude. Public so it can be unit-tested.
    */
   async purgeStale(): Promise<void> {
+    // Decay valve (ready-inflation defense): a ready ONE-OFF the user has
+    // ignored for an hour was not actually awaiting their move — settle it to
+    // done so it fades instead of haunting the queue all day. Ready SESSIONS
+    // never decay: a thread's open loop is real until the user closes it.
+    const readyCutoff = this.clock() - 60 * 60_000
+    for (const t of this.tasks.values()) {
+      if (t.state === 'ready' && (t.kind ?? 'oneoff') !== 'session' && t.updatedAt < readyCutoff) {
+        t.state = 'done'
+        t.updatedAt = this.clock()
+        this.emit('updated', t)
+        log.child({ taskId: t.id }).event('ready-decayed-to-done', {})
+      }
+    }
     const cutoff = this.clock() - this.opts.purgeAgeMs
     // 1. IN-MEMORY tasks that have aged out — remove() kills the live session too.
     //    PERSISTENT SESSIONS ARE EXEMPT: a multi-day working session is untouched
     //    "by updatedAt" for days by design — auto-purging it would delete the
     //    user's living workspace. Sessions die only by explicit kill/remove.
-    const stale = [...this.tasks.values()].filter((t) => t.updatedAt < cutoff && t.kind !== 'session')
+    //    SHELVED tasks are exempt too — shelving IS the "keep this" gesture.
+    const stale = [...this.tasks.values()].filter((t) => t.updatedAt < cutoff && t.kind !== 'session' && !t.shelved)
     if (stale.length) {
       log.event('purge-sweep', { count: stale.length })
       for (const t of stale) await this.remove(t.id)
@@ -889,7 +936,7 @@ export class TaskManager extends EventEmitter {
     const ids = [...this.executors.keys()]
     for (const id of ids) {
       const task = this.tasks.get(id)
-      if (task && !TERMINAL.includes(task.state)) {
+      if (task && !SETTLED.includes(task.state)) {
         task.state = 'failed'
         task.error = { reason: 'Stopped (kill all)' }
         task.updatedAt = this.clock()
@@ -907,6 +954,19 @@ export class TaskManager extends EventEmitter {
    * into the kept-alive PTY and resumes. Returns false if the session is gone
    * (caller should dispatch a fresh task instead).
    */
+  /** Fold a patch into the task's meta.json (best-effort durability). Serialized
+   *  per task so concurrent merges can't clobber each other's fields. */
+  private mergeMeta(task: Task, patch: Record<string, unknown>, op: string): void {
+    const metaPath = join(task.home, 'meta.json')
+    const prev = this.metaChains.get(task.id) ?? Promise.resolve()
+    const next = prev
+      .then(() => fs.readFile(metaPath, 'utf8'))
+      .then((raw) => fs.writeFile(metaPath, JSON.stringify({ ...JSON.parse(raw), ...patch })))
+      .catch((e) => log.child({ taskId: task.id }).warn(`${op}: meta persist failed`, { error: (e as Error).message }))
+    this.metaChains.set(task.id, next)
+    void next.finally(() => { if (this.metaChains.get(task.id) === next) this.metaChains.delete(task.id) })
+  }
+
   /** Set the session's short display name (generated async after dispatch). Emits
    *  'updated' so the UI swaps the truncated-intent fallback for the real name,
    *  and persists it into meta.json so the name survives an app restart. */
@@ -917,12 +977,8 @@ export class TaskManager extends EventEmitter {
     task.name = n
     task.updatedAt = this.clock()
     this.emit('updated', task)
-    // Durability (best-effort): fold the name into the receipt. Read-modify-write
-    // is safe here — meta.json is written once at dispatch and only we touch it.
-    const metaPath = join(task.home, 'meta.json')
-    void fs.readFile(metaPath, 'utf8')
-      .then((raw) => fs.writeFile(metaPath, JSON.stringify({ ...JSON.parse(raw), name: n })))
-      .catch((e) => log.child({ taskId: id }).warn('setName: meta persist failed', { error: (e as Error).message }))
+    // Durability (best-effort): fold the name into the receipt.
+    this.mergeMeta(task, { name: n }, 'setName')
   }
 
   /** Change a task's species. Promotion (oneoff → session) CANCELS any armed
@@ -944,10 +1000,32 @@ export class TaskManager extends EventEmitter {
     }
     this.emit('updated', task)
     log.child({ taskId: id }).event('kind-changed', { kind })
-    const metaPath = join(task.home, 'meta.json')
-    void fs.readFile(metaPath, 'utf8')
-      .then((raw) => fs.writeFile(metaPath, JSON.stringify({ ...JSON.parse(raw), kind })))
-      .catch((e) => log.child({ taskId: id }).warn('setKind: meta persist failed', { error: (e as Error).message }))
+    this.mergeMeta(task, { kind }, 'setKind')
+  }
+
+  /** Shelve/unshelve (Orchestrate): preserved-but-out-of-the-way. Persists to
+   *  meta.json so the shelf survives restarts; emits 'updated' for the wall. */
+  setShelved(id: string, on: boolean): void {
+    const task = this.tasks.get(id)
+    if (!task || !!task.shelved === on) return
+    task.shelved = on
+    task.updatedAt = this.clock()
+    this.emit('updated', task)
+    log.child({ taskId: id }).event(on ? 'shelved' : 'unshelved', {})
+    this.mergeMeta(task, { shelved: on }, 'setShelved')
+  }
+
+  /** Set/clear the user's card note (annotation only — the agent never sees it).
+   *  Persists to meta.json; empty string clears. */
+  setNote(id: string, note: string): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    const n = (note || '').trim().slice(0, 500)
+    if ((task.note ?? '') === n) return
+    task.note = n || undefined
+    task.updatedAt = this.clock()
+    this.emit('updated', task)
+    this.mergeMeta(task, { note: n }, 'setNote')
   }
 
   followUp(id: string, text: string): boolean {
@@ -1050,7 +1128,9 @@ export class TaskManager extends EventEmitter {
       //  2. FINISHED ('done') → leave it warm and silent for the user's next
       //     prompt — exactly the prior behavior (no regression to this path).
       const status = await readStatus(task.statusPath)
-      const unfinished = status?.state !== 'done'
+      // 'ready' = ball with the USER — resume warm+silent awaiting their words,
+      // never nudge it to "continue" (there is nothing to continue without them).
+      const unfinished = status?.state !== 'done' && status?.state !== 'ready'
       if (unfinished) {
         const nudge = buildResumeNudge(task.intent, task.statusPath)
         ex.writeStdin(nudge)

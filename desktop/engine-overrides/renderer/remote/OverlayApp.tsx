@@ -44,6 +44,7 @@ const POP_CSS = `
 const TAG: Record<RemoteTask['state'], { label: string; text: string; dot: string }> = {
   processing: { label: 'working', text: 'text-sky-300/90', dot: '#38bdf8' },
   'needs-user': { label: 'needs you', text: 'text-amber-300/90', dot: '#fbbf24' },
+  ready: { label: 'ready for you', text: 'text-cyan-300/90', dot: '#22d3ee' },
   stuck: { label: 'stuck', text: 'text-amber-300/90', dot: '#fbbf24' },
   done: { label: 'done', text: 'text-emerald-300/90', dot: '#34d399' },
   failed: { label: 'failed', text: 'text-rose-300/90', dot: '#fb7185' },

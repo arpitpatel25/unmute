@@ -24,7 +24,7 @@ const log = createLogger('status-file')
 
 // ─── Schema types (mirror the schema doc 1:1) ──────────────────────
 
-export type TaskState = 'processing' | 'needs-user' | 'done' | 'failed' // PRD §5.3
+export type TaskState = 'processing' | 'needs-user' | 'ready' | 'done' | 'failed' // PRD §5.3 + ready (ball-with-user checkpoint)
 
 // The executor self-classifies the task so Unmute can drive presentation +
 // lifecycle (DECIDED). The executor knows best — it's the one doing the work.
@@ -100,7 +100,7 @@ export async function scaffoldStatusFile(filePath: string): Promise<void> {
 // ─── Tolerant read (PRD #2) ─────────────────────────────────────────
 
 function isValidState(s: unknown): s is TaskState {
-  return s === 'processing' || s === 'needs-user' || s === 'done' || s === 'failed'
+  return s === 'processing' || s === 'needs-user' || s === 'ready' || s === 'done' || s === 'failed'
 }
 
 /**

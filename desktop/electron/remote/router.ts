@@ -119,7 +119,7 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
   )
   const projectLines = projects.map((p) => `  ${p.name} → ${p.path}`)
   const finishedLines = finished.map((t) =>
-    t.state === 'done'
+    (t.state === 'done' || t.state === 'ready')
       ? `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — finished · ${fmtAge(t.ageSec)} · RESUMABLE`
       : `  ${t.name ? `"${t.name}" — ` : ''}"${t.intent}" — ${t.state} · ${fmtAge(t.ageSec)} (context only)`,
   )
@@ -153,7 +153,9 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `Match on the shared subject/entity and on recency; when the command is terse,`,
     `the ON SCREEN task is the most likely target. A brand-new session would NOT`,
     `know the missing context — so if the command only makes sense given an open`,
-    `task, route it there.`,
+    `task, route it there. A task in state "ready" finished a step and is WAITING`,
+    `for the user's next direction — it is the most natural continue target for a`,
+    `command that advances its thread.`,
     ``,
     `Choose NEW when the command opens a DIFFERENT subject from every open task, or`,
     `when no open task plausibly relates to it. A command can be self-contained and`,
@@ -261,7 +263,7 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   // Resume targets: ONLY 'done' entries from the capped recently-finished pool
   // (a failed task resumes via its own nudge path, not here; cold sessions and
   // live tasks can never be 'resumed').
-  const resumeIds = new Set(finished.filter((t) => t.state === 'done').map((t) => t.id))
+  const resumeIds = new Set(finished.filter((t) => t.state === 'done' || t.state === 'ready').map((t) => t.id))
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
   let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string; contextTaskId?: string }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }

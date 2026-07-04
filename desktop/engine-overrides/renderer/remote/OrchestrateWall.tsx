@@ -41,14 +41,17 @@ const C = {
 const STATUS = {
   processing: { label: 'working', color: '#3fb950', rank: 99 }, // never queues
   'needs-user': { label: 'needs you', color: '#d29922', rank: 1 },
+  ready: { label: 'ready', color: '#39c5cf', rank: 2 }, // ball with YOU — calm pull, never a bell
   stuck: { label: 'stuck', color: '#f85149', rank: 0 },
   failed: { label: 'errored', color: '#f85149', rank: 0 },
-  done: { label: 'done', color: '#6e7681', rank: 2 },
+  done: { label: 'done', color: '#6e7681', rank: 99 }, // information, never a pull
 } as const
 
 type WallState = RemoteTask['state']
 const statusOf = (s: WallState) => STATUS[s] ?? STATUS.processing
 const needsYou = (s: WallState) => s === 'needs-user' || s === 'stuck' || s === 'failed'
+/** "Your move" — everything the queue/crank walks: loud states + calm ready. */
+const yourMove = (s: WallState) => needsYou(s) || s === 'ready'
 
 // ─── Present-tense visibility (the calm-wall rule): pixels are for NOW. ───
 // A finished one-off earns wall space only briefly — done fades after 15m,
@@ -59,8 +62,9 @@ const needsYou = (s: WallState) => s === 'needs-user' || s === 'stuck' || s === 
 const DONE_FADE_MS = 15 * 60_000
 const ATTN_FADE_MS = 60 * 60_000
 function visibleOnWall(t: RemoteTask, now: number, clearedAt: number): boolean {
+  if (t.shelved) return false // shelved = kept, deliberately out of sight (rail Shelf)
   if (t.kind === 'session') return true
-  if (t.state === 'processing' || t.state === 'needs-user') return true
+  if (t.state === 'processing' || t.state === 'needs-user' || t.state === 'ready') return true
   if (t.updatedAt <= clearedAt) return false // user swept finished ones away
   const age = now - t.updatedAt
   return t.state === 'done' ? age < DONE_FADE_MS : age < ATTN_FADE_MS
@@ -147,6 +151,9 @@ function Card({ t, now, queuePos, promoted = false, onClick }: { t: RemoteTask; 
         {nameOf(t)}
       </div>
       <div style={{ fontSize: 11.5, color: C.midText, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activityLine(t)}</div>
+      {t.note && (
+        <div style={{ fontSize: 10.5, color: C.dimText, fontStyle: 'italic', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>✎ {t.note}</div>
+      )}
       <div style={{ display: 'flex', gap: 10, fontSize: 10.5, color: C.dimText }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {dirLabel(t) || (t.kind === 'session' ? 'session' : 'one-off')}
@@ -208,6 +215,17 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
     if (!v || v === nameOf(t)) return
     const api = (window as unknown as { electronAPI?: { remoteRenameTask?: (id: string, name: string) => Promise<boolean> } }).electronAPI
     void api?.remoteRenameTask?.(t.id, v)
+  }, [t])
+
+  // Inline note edit — same pattern as rename (Enter/blur saves, Esc drops);
+  // unlike rename, EMPTY is meaningful (clears the note).
+  const [editingNote, setEditingNote] = useState(false)
+  const saveNote = useCallback((value: string) => {
+    setEditingNote(false)
+    const v = value.trim()
+    if (v === (t.note ?? '')) return
+    const api = (window as unknown as { electronAPI?: { remoteSetNote?: (id: string, note: string) => Promise<boolean> } }).electronAPI
+    void api?.remoteSetNote?.(t.id, v)
   }, [t])
 
   // Multimodal (images): ⌘V an image or drop a file anywhere on the stage.
@@ -277,6 +295,15 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
         ) : (
           <Key label="resume" onClick={() => onResume(t.id)} />
         )}
+        {/* shelve (parked states only): keep it, stop seeing it. Unshelve is
+            always offered on a shelved task so the shelf is never one-way. */}
+        {(t.shelved || t.state === 'done' || t.state === 'ready' || t.state === 'failed') && (
+          <Key label={t.shelved ? 'unshelve' : 'shelve'} onClick={() => {
+            const api = (window as unknown as { electronAPI?: { remoteSetShelved?: (id: string, on: boolean) => Promise<boolean> } }).electronAPI
+            void api?.remoteSetShelved?.(t.id, !t.shelved)
+            if (!t.shelved) onClose() // shelving = "out of my sight" — leave the stage too
+          }} />
+        )}
         <Key label="remove" danger onClick={() => { if (window.confirm('Remove this task entirely? Its session and scratch files are erased.')) { onRemove(t.id); onClose() } }} />
         <Key label="next" onClick={onNext} />
         <Key label={full ? 'split' : 'full'} onClick={onToggleFull} />
@@ -292,6 +319,27 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
           <span style={{ fontSize: 12.5, color: C.midText, lineHeight: 1.5 }}>{t.threadContext}</span>
         </div>
       )}
+
+      {/* note — the user's own annotation (ticket link, context for future-you).
+          Click to edit in place; empty clears. Never sent to the agent. */}
+      <div style={{ padding: '7px 14px', borderBottom: `1px solid ${C.border}`, flex: 'none', display: 'flex', alignItems: 'baseline', gap: 9 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase', flex: 'none' }}>note</span>
+        {editingNote ? (
+          <input autoFocus defaultValue={t.note ?? ''}
+            placeholder="ticket link, context, a reminder for future-you…"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') saveNote((e.target as HTMLInputElement).value)
+              if (e.key === 'Escape') { e.stopPropagation(); setEditingNote(false) }
+            }}
+            onBlur={(e) => saveNote(e.target.value)}
+            style={{ fontFamily: C.mono, fontSize: 12, color: C.midText, background: C.surfaceHi, border: `1px solid ${C.borderHi}`, borderRadius: 5, padding: '2px 8px', outline: 'none', flex: 1 }} />
+        ) : (
+          <span onClick={() => setEditingNote(true)} title="click to edit"
+            style={{ fontSize: 12, color: t.note ? C.midText : C.faintText, fontStyle: t.note ? 'normal' : 'italic', cursor: 'text', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+            {t.note || 'add a note…'}
+          </span>
+        )}
+      </div>
 
       {/* pending line, lifted VERBATIM (extraction, not generation §6.5) */}
       {needsYou(t.state) && (
@@ -422,14 +470,17 @@ export default function OrchestrateWall() {
 
   // Glance vocabulary (rails): skills + projects from disk, so the words you can
   // SAY are always in front of you. Loaded on mount, refreshed every 5 min.
-  const [skills, setSkills] = useState<Array<{ name: string; lastUsed: string; description: string }>>([])
+  const [skills, setSkills] = useState<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean }>>([])
+  // Signal over noise: the rail shows only the trusted top (pinned + most-used);
+  // the long tail hides behind one expander so 30 skills never bury the 5 that matter.
+  const [skillsExpanded, setSkillsExpanded] = useState(false)
   // Anchor coords captured at hover time — the card renders at WINDOW level
   // (position: fixed) because the rail is overflow:auto and clips anything
   // placed outside it (the bug: tooltips positioned left of the rail never showed).
   const [hoveredSkill, setHoveredSkill] = useState<{ name: string; top: number; rightPx: number } | null>(null)
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   useEffect(() => {
-    const api = (window as unknown as { electronAPI?: { remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string }>>; remoteListProjects?: () => Promise<Array<{ name: string; path: string }>> } }).electronAPI
+    const api = (window as unknown as { electronAPI?: { remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean }>>; remoteListProjects?: () => Promise<Array<{ name: string; path: string }>> } }).electronAPI
     const load = () => {
       void api?.remoteListSkills?.().then((s) => setSkills(s ?? [])).catch(() => {})
       void api?.remoteListProjects?.().then((p) => setProjects(p ?? [])).catch(() => {})
@@ -437,6 +488,10 @@ export default function OrchestrateWall() {
     load()
     const i = setInterval(load, 5 * 60_000)
     return () => clearInterval(i)
+  }, [])
+  const togglePinSkill = useCallback((name: string, on: boolean) => {
+    const api = (window as unknown as { electronAPI?: { remotePinSkill?: (n: string, on: boolean) => Promise<boolean>; remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean }>> } }).electronAPI
+    void api?.remotePinSkill?.(name, on).then(() => api?.remoteListSkills?.().then((s) => setSkills(s ?? [])))
   }, [])
   const spawnInProject = useCallback((p: { name: string; path: string }) => {
     // A click must never silently spawn a whole session (learned the hard way —
@@ -551,7 +606,7 @@ export default function OrchestrateWall() {
   // never banners "STEP IN" — attention is pulled exclusively by needs-you states.
   // Faded tasks don't queue either: a 12h-old failed errand must not hold Q1.
   const queue = useMemo(
-    () => visible.filter((t) => needsYou(t.state))
+    () => visible.filter((t) => yourMove(t.state))
       .sort((a, b) => statusOf(a.state).rank - statusOf(b.state).rank || b.updatedAt - a.updatedAt),
     [visible],
   )
@@ -572,6 +627,8 @@ export default function OrchestrateWall() {
   const oneoffs = useMemo(() => visible.filter((t) => t.kind !== 'session'), [visible])
   const gridTasks = sessions.length ? sessions : visible
   const railOneoffs = sessions.length ? oneoffs : []
+  // The Shelf: shelved tasks come from the FULL list (visibleOnWall hides them).
+  const shelf = useMemo(() => tasks.filter((t) => t.shelved), [tasks])
   const hiddenFinished = tasks.length - visible.length
 
   const focus = useCallback((id: string | null) => {
@@ -602,13 +659,24 @@ export default function OrchestrateWall() {
   const voiceTarget = winFocused ? focused : null
 
   // The crank (§6.4): YOU advance to the next queued item; the system never does.
+  // Empty queue = the BEST news the system can deliver — say so instead of a
+  // silent dead button (a no-op is indistinguishable from a broken control).
+  const [allClear, setAllClear] = useState(false)
+  const allClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const crank = useCallback(() => {
     const q = queue
-    if (q.length === 0) return
+    if (q.length === 0) {
+      focus(null)
+      setAllClear(true)
+      if (allClearTimer.current) clearTimeout(allClearTimer.current)
+      allClearTimer.current = setTimeout(() => setAllClear(false), 2800)
+      return
+    }
     const idx = focusedId ? q.findIndex((t) => t.id === focusedId) : -1
     const nextTask = q[(idx + 1) % q.length]
     if (nextTask) focus(nextTask.id)
   }, [queue, focusedId, focus])
+  useEffect(() => () => { if (allClearTimer.current) clearTimeout(allClearTimer.current) }, [])
 
   // keyboard: esc reverses (full→split→wall); Tab cranks; F toggles full; 1-9 answer.
   //
@@ -659,7 +727,7 @@ export default function OrchestrateWall() {
       }}
     >
       {/* tap banner — highest-priority queued item, always at the top (§8) */}
-      {top && !full && (
+      {top && needsYou(top.state) && !full && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', borderBottom: `1px solid ${C.border}`, background: C.surface, flex: 'none' }}>
           <Dot state={top.state} />
           <span style={{ fontSize: 12.5, color: C.nameText, fontWeight: 600, flex: 'none' }}>{nameOf(top)}</span>
@@ -757,8 +825,10 @@ export default function OrchestrateWall() {
                   <RailSection title="Skills">
                     {/* glance vocabulary — say a skill's name to use it. Hover →
                         a card with the FULL name + the skill's own description,
-                        so 'should I invoke this?' is answerable at a glance. */}
-                    {skills.map((s) => (
+                        so 'should I invoke this?' is answerable at a glance.
+                        Ranked pinned → proven use → recency (main side); collapsed
+                        to the trusted top 6 with the tail behind "N more". */}
+                    {(skillsExpanded ? skills : skills.slice(0, 6)).map((s) => (
                       <div
                         key={s.name}
                         className="ow-row"
@@ -769,8 +839,41 @@ export default function OrchestrateWall() {
                         }}
                         onMouseLeave={() => setHoveredSkill((h) => (h?.name === s.name ? null : h))}
                       >
+                        <button
+                          onClick={() => togglePinSkill(s.name, !s.pinned)}
+                          title={s.pinned ? 'Unpin' : 'Pin to top'}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 11, lineHeight: 1, flex: 'none', color: s.pinned ? '#d29922' : hoveredSkill?.name === s.name ? C.faintText : 'transparent' }}
+                        >★</button>
                         <span style={{ fontSize: 11.5, color: hoveredSkill?.name === s.name ? C.nameText : C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{s.name}</span>
-                        <span style={{ fontSize: 10, color: C.faintText, flex: 'none' }}>{s.lastUsed ? s.lastUsed.slice(5, 10) : ''}</span>
+                        <span style={{ fontSize: 10, color: C.faintText, flex: 'none' }}>{(s.runs ?? 0) > 0 ? `${s.runs}×` : s.lastUsed ? s.lastUsed.slice(5, 10) : ''}</span>
+                      </div>
+                    ))}
+                    {skills.length > 6 && (
+                      <button onClick={() => setSkillsExpanded((v) => !v)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', textAlign: 'left', fontFamily: C.mono, fontSize: 10.5, color: C.faintText }}>
+                        {skillsExpanded ? '· show less' : `· ${skills.length - 6} more…`}
+                      </button>
+                    )}
+                  </RailSection>
+                )}
+                {shelf.length > 0 && (
+                  <RailSection title={`Shelf · ${shelf.length}`}>
+                    {/* kept-but-out-of-the-way — findable, never on the wall.
+                        Click a row to open it on the stage; ⌃ puts it back. */}
+                    {shelf.map((t) => (
+                      <div key={t.id} className="ow-row" style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 6px', margin: '0 -6px' }}>
+                        <button onClick={() => focus(t.id)} title={t.note || t.intent}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left', fontFamily: C.mono, fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                          {nameOf(t)}
+                        </button>
+                        <button
+                          onClick={() => {
+                            const api = (window as unknown as { electronAPI?: { remoteSetShelved?: (id: string, on: boolean) => Promise<boolean> } }).electronAPI
+                            void api?.remoteSetShelved?.(t.id, false)
+                          }}
+                          title="Unshelve — back onto the wall"
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: C.mono, fontSize: 10.5, color: C.faintText, flex: 'none' }}
+                        >⌃</button>
                       </div>
                     ))}
                   </RailSection>
@@ -780,6 +883,13 @@ export default function OrchestrateWall() {
           </div>
         )}
       </div>
+
+      {/* all-clear beat — the crank's honest end state */}
+      {allClear && (
+        <div style={{ position: 'absolute', top: 52, left: '50%', transform: 'translateX(-50%)', zIndex: 50, fontFamily: C.mono, fontSize: 12.5, color: '#3fb950', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9999, padding: '7px 16px', pointerEvents: 'none' }}>
+          ✓ all clear — nothing needs you
+        </div>
+      )}
 
       {/* staging tray chip — the images waiting for your next utterance */}
       {stagedCount > 0 && (

@@ -16,6 +16,7 @@ import { Markdown } from './Markdown'
 const STATE_LABEL: Record<RemoteTask['state'], string> = {
   processing: 'Working…',
   'needs-user': 'Needs you',
+  ready: 'Ready for you',
   stuck: 'Possibly stuck',
   done: 'Done',
   failed: 'Failed',
@@ -23,6 +24,7 @@ const STATE_LABEL: Record<RemoteTask['state'], string> = {
 const STATE_COLOR: Record<RemoteTask['state'], string> = {
   processing: '#2563eb',
   'needs-user': '#b45309',
+  ready: '#0e7490',
   stuck: '#b45309',
   done: '#16a34a',
   failed: '#dc2626',

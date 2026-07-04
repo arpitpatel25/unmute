@@ -109,6 +109,9 @@ interface RemoteSettings {
   // auto-attach (dictation → pasted after the text; Remote → attached to the
   // task). OFF reverts to plain behavior — Unmute never touches screenshots.
   screenshotCapture: boolean
+  // Skills the user pinned to the top of the cockpit rail (manual override of
+  // the earned-trust ranking).
+  pinnedSkills: string[]
 }
 
 const settings = new Store<RemoteSettings>({
@@ -132,6 +135,7 @@ const settings = new Store<RemoteSettings>({
     forceRawMode: false,
     voiceHeadlines: true,
     screenshotCapture: true,
+    pinnedSkills: [],
   },
 })
 
@@ -407,6 +411,8 @@ function serializeTask(t: Task) {
     cwd: t.cwd,
     kind: t.kind ?? 'oneoff',
     threadContext: t.threadContext ?? null,
+    shelved: t.shelved ?? false,
+    note: t.note ?? null,
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,
@@ -804,6 +810,8 @@ function speakAbout(taskId: string | undefined): void {
       speakLine(`${name} is working. ${t.step ? t.step : t.threadContext ?? ''}`)
     } else if (t.state === 'failed' || t.state === 'stuck') {
       speakLine(`${name} ${t.state === 'stuck' ? 'is stuck' : 'errored'}. ${t.error?.reason ?? ''}`)
+    } else if (t.state === 'ready') {
+      speakLine(`${name} is ready for your next step. ${t.result?.summary ?? t.threadContext ?? ''}`)
     } else {
       speakLine(`${name} is done. ${t.result?.summary ?? t.threadContext ?? ''}`)
     }
@@ -1308,14 +1316,20 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const { readdirSync, statSync, readFileSync } = await import('node:fs')
     // The tooltip's substance: the skill's own frontmatter description (first
     // ~4KB read, single-line 'description:' field — the format both stores use).
-    const descriptionOf = (mdPath: string): string => {
+    const metaOf = (mdPath: string): { description: string; runs: number; lastUsed: string } => {
       try {
         const head = readFileSync(mdPath, 'utf8').slice(0, 4096)
-        const m = /^description:\s*(.+)$/m.exec(head)
-        return (m?.[1] ?? '').trim().slice(0, 600)
-      } catch { return '' }
+        const d = /^description:\s*(.+)$/m.exec(head)
+        const r = /^runs_confirmed:\s*(\d+)/m.exec(head)
+        const u = /^last_used:\s*(\S+)/m.exec(head)
+        return {
+          description: (d?.[1] ?? '').trim().slice(0, 600),
+          runs: r ? Number(r[1]) : 0,
+          lastUsed: (u?.[1] ?? '').slice(0, 10),
+        }
+      } catch { return { description: '', runs: 0, lastUsed: '' } }
     }
-    const out: Array<{ name: string; lastUsed: string; description: string }> = []
+    const out: Array<{ name: string; lastUsed: string; description: string; runs: number; pinned: boolean }> = []
     const walk = (dir: string, depth: number) => {
       if (depth > 3) return
       let entries: string[]
@@ -1327,7 +1341,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           const st = statSync(full)
           if (st.isDirectory()) { walk(full, depth + 1); continue }
           if (!entry.endsWith('.md')) continue
-          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: new Date(st.mtimeMs).toISOString().slice(0, 10), description: descriptionOf(full) })
+          const meta = metaOf(full)
+          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: meta.lastUsed || new Date(st.mtimeMs).toISOString().slice(0, 10), description: meta.description, runs: meta.runs, pinned: false })
         } catch { /* skip unreadable */ }
       }
     }
@@ -1342,16 +1357,31 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         try {
           const full = join(claudeDir, entry)
           const st = statSync(full)
-          const description = st.isDirectory() ? descriptionOf(join(full, 'SKILL.md')) : descriptionOf(full)
-          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: new Date(st.mtimeMs).toISOString().slice(0, 10), description })
+          const meta = st.isDirectory() ? metaOf(join(full, 'SKILL.md')) : metaOf(full)
+          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: meta.lastUsed || new Date(st.mtimeMs).toISOString().slice(0, 10), description: meta.description, runs: meta.runs, pinned: false })
         } catch { /* skip */ }
       }
     } catch { /* no ~/.claude/skills — fine */ }
     const seen = new Set<string>()
+    const pinned = new Set(settings.get('pinnedSkills') ?? [])
+    // Earned-trust ranking: pinned first (the user's override), then proven use
+    // (runs_confirmed), then recency. A junk skill touched yesterday no longer
+    // outranks the workhorse used forty times last month.
     return out
       .filter((s) => s.name && !seen.has(s.name) && (seen.add(s.name), true))
-      .sort((a, b) => (b.lastUsed || '').localeCompare(a.lastUsed || ''))
+      .map((s) => ({ ...s, pinned: pinned.has(s.name) }))
+      .sort((a, b) =>
+        Number(b.pinned) - Number(a.pinned) ||
+        b.runs - a.runs ||
+        (b.lastUsed || '').localeCompare(a.lastUsed || ''))
       .slice(0, 30)
+  })
+  // Pin/unpin a skill (the manual override of earned-trust ranking).
+  ipcMain.handle('remote:pin-skill', async (_e, name: string, on: boolean) => {
+    const cur = new Set(settings.get('pinnedSkills') ?? [])
+    if (on) cur.add(name); else cur.delete(name)
+    settings.set('pinnedSkills', [...cur])
+    return true
   })
   ipcMain.handle('remote:list-projects', async () => {
     const projects = await knownProjects(8).catch(() => [])
@@ -1371,6 +1401,19 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:rename-task', async (_e, id: string, name: string) => {
     if (!manager || !name?.trim()) return false
     manager.setName(id, name.trim().slice(0, 48))
+    return true
+  })
+  // Shelve/unshelve — preserved-but-out-of-the-way (hidden from the wall grid,
+  // purge-exempt, findable in the rail's Shelf).
+  ipcMain.handle('remote:set-shelved', async (_e, id: string, on: boolean) => {
+    if (!manager) return false
+    manager.setShelved(id, !!on)
+    return true
+  })
+  // Card note — the user's annotation (ticket link, context); never fed to the agent.
+  ipcMain.handle('remote:set-note', async (_e, id: string, note: string) => {
+    if (!manager) return false
+    manager.setNote(id, typeof note === 'string' ? note : '')
     return true
   })
   // Staging tray: stage an image with no target (rides with the next utterance).

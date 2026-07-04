@@ -8,7 +8,7 @@ import { ipcRenderer } from 'electron'
 export interface RemoteTaskSnapshot {
   id: string
   intent: string
-  state: 'processing' | 'needs-user' | 'stuck' | 'done' | 'failed'
+  state: 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
   category: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
   /** Latest short progress label ("Editing X · 12/18 tests"), if any. */
   step: string | null
@@ -71,8 +71,17 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:attach-image', taskId, data, ext),
   /** Glance vocabulary: ALL skills (both memory tiers + ~/.claude/skills,
    *  recency-ranked) + known projects. */
-  remoteListSkills: (): Promise<Array<{ name: string; lastUsed: string; description: string }>> =>
+  remoteListSkills: (): Promise<Array<{ name: string; lastUsed: string; description: string; runs: number; pinned: boolean }>> =>
     ipcRenderer.invoke('remote:list-skills'),
+  /** Pin/unpin a skill to the top of the cockpit rail. */
+  remotePinSkill: (name: string, on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:pin-skill', name, on),
+  /** Shelve/unshelve a task — kept but out of the way (hidden from the wall grid). */
+  remoteSetShelved: (taskId: string, on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-shelved', taskId, on),
+  /** Set/clear the user's note on a task card (empty string clears). */
+  remoteSetNote: (taskId: string, note: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-note', taskId, note),
   remoteListProjects: (): Promise<Array<{ name: string; path: string }>> =>
     ipcRenderer.invoke('remote:list-projects'),
   /** Rename a task (names are voice addresses — fixable by the user). */
