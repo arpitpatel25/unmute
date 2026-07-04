@@ -1,8 +1,12 @@
-import { clipboard, app } from 'electron'
+import { clipboard, app, nativeImage } from 'electron'
 import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import path from 'path'
 import { keyListener } from './keyListener'
+// Static import (a lazy require of this path can't resolve inside the bundled
+// main — proven live: 'Cannot find module' swallowed by the fail-open catch).
+// No cycle: remote/init never imports clipboard.ts.
+import { consumeStagedForDictation } from './paywall/remote/init'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -338,8 +342,37 @@ export function getOutputMode(): 'paste' | 'clipboard' {
   return outputMode
 }
 
+/** Ask a SEPARATE process whether the system pasteboard serves a PNG of the
+ *  expected byte size (`clipboard info` is a tiny metadata listing — no image
+ *  data crosses). Resolves true on confirmation, false on timeout (caller
+ *  pastes anyway — bounded, never hangs). */
+function verifyPasteboardServesPNG(expectedBytes: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  return new Promise((resolve) => {
+    const attempt = () => {
+      execFile('osascript', ['-e', 'clipboard info'], { timeout: 2000 }, (err, stdout) => {
+        if (!err && stdout) {
+          // e.g. "«class PNGf», 2189440, TIFF picture, 9640988"
+          const m = /«class PNGf», (\d+)/.exec(stdout)
+          if (m && Number(m[1]) === expectedBytes) { resolve(true); return }
+        }
+        if (Date.now() >= deadline) { resolve(false); return }
+        setTimeout(attempt, 60)
+      })
+    }
+    attempt()
+  })
+}
+
 export async function injectOutput(text: string): Promise<void> {
   const tStart = Date.now()
+  // Consume the screenshot ledger BEFORE the text write below overwrites the
+  // clipboard — a ⌃-screenshot taken mid-dictation still lives there right now,
+  // and consume's sweep is what captures it. (Delivery happens after the text.)
+  let stagedImages: string[] = []
+  try { stagedImages = consumeStagedForDictation() } catch (err) {
+    console.warn('[clipboard] staged consume failed:', err instanceof Error ? err.message : err)
+  }
   const padded = padOutput(text)
   clipboard.writeText(padded)
   console.log(`[clipboard] writeText (${padded.length} chars) in ${Date.now() - tStart}ms`)
@@ -350,8 +383,12 @@ export async function injectOutput(text: string): Promise<void> {
   }
 
   // Brief wait so the pasteboard write is observable to the target app before
-  // we post Cmd+V — defeats a cross-process pasteboard-sync race that can
-  // otherwise cause the paste to pick up stale clipboard content.
+  // we post Cmd+V. TEXT MUST BE INSTANT — no verification here. The old race
+  // (Cmd+V pasting a stale IMAGE) is eliminated upstream: any consumed
+  // screenshot is CLEARED from the clipboard at key-lift, seconds before this
+  // runs, so the text-write only ever races an empty, long-settled pasteboard —
+  // the ancient fast path that never failed. (Own-process readText cannot
+  // verify cross-process propagation; polling it was proven useless.)
   await sleep(8)
 
   try {
@@ -360,6 +397,40 @@ export async function injectOutput(text: string): Promise<void> {
   } catch (err) {
     console.error(`[clipboard] Auto-paste FAILED after ${Date.now() - tStart}ms:`, err instanceof Error ? err.message : err)
     console.log('[clipboard] Text is in clipboard, user can Cmd+V manually')
+  }
+
+  // ── Staged screenshots (ADDITIVE, fail-open): images captured during/just
+  // before this dictation ride into the SAME app, pasted right after the text —
+  // identical mechanism (clipboard + Cmd+V), one image per paste. The staging
+  // ledger (pill 🖼 chip) already gave the user visibility + pruning. Lazy
+  // require avoids an import cycle; ANY failure leaves dictation exactly as it
+  // was — text already delivered above.
+  try {
+    const staged = stagedImages
+    if (staged.length) {
+      for (const p of staged) {
+        const img = nativeImage.createFromPath(p)
+        if (img.isEmpty()) continue
+        const expectedBytes = img.toPNG().length
+        clipboard.writeImage(img)
+        // CROSS-PROCESS verified handoff (image latency is allowed): ask a child
+        // process (osascript `clipboard info`) whether the SYSTEM pasteboard
+        // actually serves our PNG — own-process reads reflect our own write
+        // instantly and prove nothing. Paste only once another process sees the
+        // exact payload (byte size match); bounded fallback keeps it un-hangable.
+        await verifyPasteboardServesPNG(expectedBytes, 900)
+        await simulateKeyCombo('v', 'command')
+        await sleep(180) // let the target app ingest before the next image
+      }
+      // Leave the TEXT on the clipboard, not the last image — otherwise the
+      // pasted image lingers and the next dictation's probe re-discovers it
+      // (the repeat-paste bug). Also matches pre-feature behavior: after a
+      // dictation, your clipboard holds what you dictated.
+      clipboard.writeText(padded)
+      console.log(`[clipboard] pasted ${staged.length} staged screenshot(s) after dictation`)
+    }
+  } catch (err) {
+    console.warn('[clipboard] staged-screenshot paste skipped:', err instanceof Error ? err.message : err)
   }
 }
 

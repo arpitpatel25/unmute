@@ -8,7 +8,7 @@ import { ipcRenderer } from 'electron'
 export interface RemoteTaskSnapshot {
   id: string
   intent: string
-  state: 'processing' | 'needs-user' | 'stuck' | 'done' | 'failed'
+  state: 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
   category: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
   /** Latest short progress label ("Editing X · 12/18 tests"), if any. */
   step: string | null
@@ -57,6 +57,51 @@ export const remotePreloadExtensions = {
   /** Dispatch a task by text (capture path types its own; this is for UI re-run/manual). */
   remoteDispatch: (intent: string): Promise<string | null> =>
     ipcRenderer.invoke('remote:dispatch', intent),
+  /** Orchestrate wall focus (§6.2). Tell the main process which session is focused
+   *  (or null) so a capture routes there deterministically. Additive. */
+  remoteSetOrchestrateFocus: (id: string | null): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-orchestrate-focus', id),
+  /** Open the Orchestrate cockpit window from the in-app Remote screen. */
+  remoteOpenOrchestrate: (): Promise<boolean> => ipcRenderer.invoke('remote:open-orchestrate'),
+  /** Current wall-owned terminal session (or null) — read once on mount. */
+  remoteGetOrchestrateOwner: (): Promise<string | null> => ipcRenderer.invoke('remote:get-orchestrate-owner'),
+  /** Attach an image to a session: bytes are saved under the task's dir and the
+   *  path is typed (unsubmitted) into the session's input — speak to send. */
+  remoteAttachImage: (taskId: string, data: ArrayBuffer, ext: string): Promise<string | null> =>
+    ipcRenderer.invoke('remote:attach-image', taskId, data, ext),
+  /** Glance vocabulary: ALL skills (both memory tiers + ~/.claude/skills,
+   *  recency-ranked) + known projects. */
+  remoteListSkills: (): Promise<Array<{ name: string; lastUsed: string; description: string; runs: number; pinned: boolean }>> =>
+    ipcRenderer.invoke('remote:list-skills'),
+  /** Pin/unpin a skill to the top of the cockpit rail. */
+  remotePinSkill: (name: string, on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:pin-skill', name, on),
+  /** Shelve/unshelve a task — kept but out of the way (hidden from the wall grid). */
+  remoteSetShelved: (taskId: string, on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-shelved', taskId, on),
+  /** Set/clear the user's note on a task card (empty string clears). */
+  remoteSetNote: (taskId: string, note: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-note', taskId, note),
+  remoteListProjects: (): Promise<Array<{ name: string; path: string }>> =>
+    ipcRenderer.invoke('remote:list-projects'),
+  /** Rename a task (names are voice addresses — fixable by the user). */
+  remoteRenameTask: (id: string, name: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:rename-task', id, name),
+  /** Staging tray: stage an image with NO target — it rides with the next
+   *  utterance to wherever that lands (new task / continuation / answer). */
+  remoteStageImage: (data: ArrayBuffer, ext: string): Promise<string | null> =>
+    ipcRenderer.invoke('remote:stage-image', data, ext),
+  remoteGetStaged: (): Promise<string[]> => ipcRenderer.invoke('remote:get-staged'),
+  remoteClearStaged: (): Promise<boolean> => ipcRenderer.invoke('remote:clear-staged'),
+  remoteUnstageImage: (path: string): Promise<boolean> => ipcRenderer.invoke('remote:unstage-image', path),
+  /** Small data-URL thumbnails of the staged images (for the pill dropdown). */
+  remoteGetStagedPreviews: (): Promise<Array<{ path: string; dataUrl: string }>> =>
+    ipcRenderer.invoke('remote:staged-previews'),
+  remoteOnStagedChanged: (cb: (d: { count: number; paths: string[] }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { count: number; paths: string[] }) => cb(d)
+    ipcRenderer.on('remote:staged-changed', handler)
+    return () => ipcRenderer.removeListener('remote:staged-changed', handler)
+  },
   /** All tasks, newest first (PRD §13.3 panel + §13.5 history). */
   remoteList: (): Promise<RemoteTaskSnapshot[]> => ipcRenderer.invoke('remote:list'),
   /** Answer a needs-user question — piped into the session stdin (PRD §7). */
@@ -150,6 +195,38 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('remote:overlay-focus', handler)
     return () => ipcRenderer.removeListener('remote:overlay-focus', handler)
   },
+  /** Which session the wall currently OWNS the terminal for (or null). The overlay
+   *  collapses its terminal to a glance for that session so the two never conflict. */
+  remoteOnOrchestrateOwner: (cb: (d: { taskId: string | null }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { taskId: string | null }) => cb(d)
+    ipcRenderer.on('remote:orchestrate-owner', handler)
+    return () => ipcRenderer.removeListener('remote:orchestrate-owner', handler)
+  },
+  /** Voice lifecycle for the wall's listening surface: listening → transcribing →
+   *  routing → idle (taskId = where it landed). Observed, never driven. */
+  remoteOnCapturePhase: (cb: (d: { phase: 'listening' | 'transcribing' | 'routing' | 'idle'; taskId: string | null }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { phase: 'listening' | 'transcribing' | 'routing' | 'idle'; taskId: string | null }) => cb(d)
+    ipcRenderer.on('remote:capture-phase', handler)
+    return () => ipcRenderer.removeListener('remote:capture-phase', handler)
+  },
+  /** Declinable route offer: the router chose NEW but nearly chose altTaskId.
+   *  One-tap redirect; ignoring it costs nothing (it expires in the UI). */
+  remoteOnRouteOffer: (cb: (d: { newTaskId: string; altTaskId: string; altName: string }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { newTaskId: string; altTaskId: string; altName: string }) => cb(d)
+    ipcRenderer.on('remote:route-offer', handler)
+    return () => ipcRenderer.removeListener('remote:route-offer', handler)
+  },
+  /** Accept the pending offer: erases the mis-spawn, reroutes the utterance. */
+  remoteAcceptRouteOffer: (newTaskId: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:accept-route-offer', newTaskId),
+  /** Pin/unpin a task's species: 'session' = persistent (no idle-kill/purge). */
+  remoteSetKind: (id: string, kind: 'oneoff' | 'session'): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-kind', id, kind),
+  /** Voice-as-doorbell (§6.4): spoken headlines for needs-you states. */
+  remoteGetVoiceHeadlines: (): Promise<boolean> => ipcRenderer.invoke('remote:get-voice-headlines'),
+  remoteSetVoiceHeadlines: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-voice-headlines', on),
+  /** Screenshot auto-capture during dictation/Remote (off = never touch screenshots). */
+  remoteSetScreenshotCapture: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-screenshot-capture', on),
 
   // ── Onboarding / guided one-time setup (PRD §12) ──
   /** The setup checklist: auto-detected (MCP/Chrome profile) + user-confirmed steps. */
@@ -181,6 +258,9 @@ export const remotePreloadExtensions = {
   /** Tell the PTY the on-screen terminal size so the TUI reflows. */
   remoteTerminalResize: (taskId: string, cols: number, rows: number): void =>
     ipcRenderer.send('remote:terminal-resize', taskId, cols, rows),
+  /** The session's CURRENT screen from tmux (canonical picture, colors kept). */
+  remoteCaptureScreen: (taskId: string): Promise<string | null> =>
+    ipcRenderer.invoke('remote:terminal-screen', taskId),
   /** Is tmux available? (gates the "open in terminal" pop-out button). */
   remoteTmuxAvailable: (): Promise<boolean> => ipcRenderer.invoke('remote:tmux-available'),
   /** Pop this task's live session out to a real terminal app — SAME session. */

@@ -519,3 +519,468 @@ test('managed failed hands off ONLY when an injected recipe is present', { timeo
   await new Promise((r) => setTimeout(r, 50))
   assert.equal(submits.length, 1) // unchanged — recipe-less failure is not handed off
 })
+
+// ─── Durable session model (Orchestrate): kind 'oneoff' | 'session' ───────────
+
+test('dispatch persists kind in meta.json; defaults to oneoff with home === cwd', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const oneoff = await tm.dispatch('open my mail')
+  const session = await tm.dispatch('work on the gating feature', { kind: 'session' })
+  assert.equal(tm.get(oneoff)!.kind, 'oneoff')
+  assert.equal(tm.get(oneoff)!.home, tm.get(oneoff)!.cwd, 'scratch oneoff: home === cwd')
+  assert.equal(tm.get(session)!.kind, 'session')
+  const meta = JSON.parse(await fs.readFile(path.join(tm.get(session)!.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.kind, 'session', 'kind persisted in the receipt')
+  tm.killAll()
+})
+
+test('persistent session parks warm with NO idle timer (never reaped); oneoff still idle-kills', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fakes: ReturnType<typeof makeFakeExecutor>[] = []
+  const tm = new TaskManager({
+    executorFactory: () => { const f = makeFakeExecutor(); fakes.push(f); return f },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 120,
+  })
+  const sid = await tm.dispatch('long-lived repo session', { kind: 'session' })
+  const oid = await tm.dispatch('quick errand')
+  const doneS = once(tm, 'done')
+  await claudeWrites(tm.get(sid)!.statusPath, { state: 'done', result: { summary: 'checkpoint' } })
+  await doneS
+  const doneO = once(tm, 'done')
+  await claudeWrites(tm.get(oid)!.statusPath, { state: 'done', result: { summary: 'errand done' } })
+  await doneO
+  await new Promise((r) => setTimeout(r, 250)) // past the 120ms warm window
+  assert.equal(fakes[0].alive, true, 'persistent session survives past the warm window')
+  assert.equal(fakes[1].alive, false, 'oneoff idle-killed after the warm window (unchanged)')
+  tm.killAll()
+})
+
+test('purgeStale never touches persistent sessions — in memory or as on-disk receipts', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0,
+    pollMs: 9999, purgeAgeMs: 60_000, userKey: 'local',
+  })
+  // In-memory: an aged-out session vs an aged-out oneoff.
+  const sid = await tm.dispatch('multi-day refactor', { kind: 'session' })
+  const oid = await tm.dispatch('stale errand')
+  tm.get(sid)!.updatedAt = Date.now() - 120_000
+  tm.get(oid)!.updatedAt = Date.now() - 120_000
+  // On-disk orphan receipts from a "past run" (not in memory), both aged out.
+  const root = path.join(baseDir, 'local')
+  for (const [tid, kind] of [[randomUUID(), 'session'], [randomUUID(), 'oneoff']] as const) {
+    const dir = path.join(root, tid)
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'past-run task', kind, createdAt: Date.now() - 120_000 }))
+    const old = new Date(Date.now() - 120_000)
+    utimesSync(dir, old, old)
+  }
+  await tm.purgeStale()
+  assert.ok(tm.get(sid), 'in-memory persistent session survives the sweep')
+  assert.equal(tm.get(oid), undefined, 'in-memory stale oneoff purged (unchanged)')
+  const left = await fs.readdir(root)
+  const metas = await Promise.all(left.map(async (d) => {
+    try { return JSON.parse(await fs.readFile(path.join(root, d, 'meta.json'), 'utf8')) } catch { return null }
+  }))
+  assert.ok(metas.some((m) => m?.kind === 'session' && m.intent === 'past-run task'), 'on-disk session receipt survives')
+  assert.ok(!metas.some((m) => m?.kind === 'oneoff' && m.intent === 'past-run task'), 'on-disk oneoff orphan purged')
+  tm.killAll()
+})
+
+test('rehydrate restores kind, name, and a project cwd from the receipt', async () => {
+  const baseDir = await tmpBase()
+  const id = randomUUID()
+  const dir = path.join(baseDir, 'local', id)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({
+    id, intent: 'work on unmute gating', name: 'Gating feature work', kind: 'session',
+    cwd: '/Users/someone/tools/unmute', createdAt: Date.now(),
+  }))
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm.rehydrate()
+  const task = tm.get(id)!
+  assert.equal(task.kind, 'session')
+  assert.equal(task.name, 'Gating feature work')
+  assert.equal(task.cwd, '/Users/someone/tools/unmute', 'resume will respawn in the real project dir')
+  assert.equal(task.home, dir, 'home stays the Unmute-owned receipt dir')
+})
+
+test('setName persists the generated name into meta.json (survives restart)', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('can you check the twitter strategy folder for me')
+  tm.setName(id, 'Twitter strategy summary')
+  await new Promise((r) => setTimeout(r, 50)) // persistence is async best-effort
+  const meta = JSON.parse(await fs.readFile(path.join(tm.get(id)!.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.name, 'Twitter strategy summary')
+  tm.killAll()
+})
+
+// ─── Project-bound spawn (Orchestrate): the agent runs IN the user's dir ──────
+
+test('project-bound dispatch: spawns in the project dir, pollutes NOTHING there, contract rides inline', async () => {
+  const baseDir = await tmpBase()
+  const project = await fs.mkdtemp(path.join(os.tmpdir(), 'user-project-'))
+  let spawned: SpawnOpts | null = null
+  const fake = makeFakeExecutor({ onSpawn: (o) => { spawned = o } })
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('work on the gating feature', { kind: 'session', cwd: project })
+  const task = tm.get(id)!
+
+  // Runs THERE; bookkeeping stays HOME.
+  assert.equal(spawned!.cwd, project, 'agent spawns in the real project dir')
+  assert.equal(task.cwd, project)
+  assert.notEqual(task.home, project)
+  assert.ok(task.statusPath.startsWith(task.home), 'status file lives in our dir, not the repo')
+
+  // The user's directory is READ-ONLY territory: no CLAUDE.md, no .claude, no hooks.
+  const written = await fs.readdir(project)
+  assert.deepEqual(written, [], 'nothing written into the user project dir')
+
+  // The contract can't auto-load from a CLAUDE.md we never wrote → inline payload.
+  assert.ok(fake.writes[0].includes('Unmute operating contract'), 'contract inline in the payload')
+  assert.ok(fake.writes[0].includes(task.statusPath), 'status path in the payload')
+
+  // Receipt carries the project cwd so resume() respawns there after a restart.
+  const meta = JSON.parse(await fs.readFile(path.join(task.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.cwd, project)
+  assert.equal(meta.kind, 'session')
+
+  tm.killAll()
+  await fs.rm(project, { recursive: true, force: true })
+})
+
+test('project-bound dispatch falls back to scratch when the dir is unusable', async () => {
+  const baseDir = await tmpBase()
+  let spawned: SpawnOpts | null = null
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor({ onSpawn: (o) => { spawned = o } }),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  const id = await tm.dispatch('a task', { cwd: '/definitely/not/a/real/dir' })
+  const task = tm.get(id)!
+  assert.equal(task.cwd, task.home, 'fell back to the scratch spawn')
+  assert.equal(spawned!.cwd, task.home)
+  // Scratch spawn = full machinery: CLAUDE.md installed as usual.
+  assert.ok((await fs.readFile(path.join(task.home, 'CLAUDE.md'), 'utf8')).includes('Unmute'))
+  tm.killAll()
+})
+
+// ─── Multimodal attachments: the voice-era screenshot paste ───────────────────
+
+test('attachFile saves under home/attachments and TYPES the path unsubmitted (no Enter)', async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('look at this design')
+  const beforeRaw = fake.raw.length
+  const saved = await tm.attachFile(id, new Uint8Array([137, 80, 78, 71]), 'png')
+  assert.ok(saved, 'returns the saved path')
+  assert.ok(saved!.startsWith(path.join(tm.get(id)!.home, 'attachments')), 'stored in OUR dir, never the project')
+  assert.ok((await fs.stat(saved!)).isFile())
+  // Typed into the input box via raw keystrokes, space-padded, and NOT submitted.
+  const typed = fake.raw.slice(beforeRaw).join('')
+  assert.ok(typed.includes(` ${saved} `), 'path typed with separating spaces')
+  assert.ok(!typed.includes('\r'), 'no Enter — submission belongs to the next utterance')
+  // Dead session → null, no throw.
+  tm.kill(id)
+  assert.equal(await tm.attachFile(id, new Uint8Array([1]), 'png'), null)
+})
+
+// ─── Graduation + pin (§5): errands that become threads become sessions ───────
+
+test('2nd follow-up graduates a oneoff to a session (and cancels its warm-kill)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 120 })
+  const id = await tm.dispatch('check the twitter folder')
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'found it' } })
+  await done
+  assert.equal(tm.followUp(id, 'now summarize the README'), true)
+  assert.equal(tm.get(id)!.kind, 'oneoff', 'one follow-up is a correction, not a thread')
+  // Finish the follow-up turn, then follow up AGAIN → thread → graduate.
+  const done2 = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'summarized' } })
+  await done2
+  assert.equal(tm.followUp(id, 'and the fastlane folder too'), true)
+  assert.equal(tm.get(id)!.kind, 'session', 'second follow-up proves a thread')
+  // Graduated ⇒ persistent: survives well past the 120ms warm window once parked.
+  const done3 = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'all done' } })
+  await done3
+  await new Promise((r) => setTimeout(r, 250))
+  assert.equal(fake.alive, true, 'graduated session is never idle-killed')
+  // Persisted for restarts.
+  const meta = JSON.parse(await fs.readFile(path.join(tm.get(id)!.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.kind, 'session')
+  tm.killAll()
+})
+
+test('setKind pin cancels an ALREADY-ARMED warm timer; unpin re-arms the park', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 150 })
+  const id = await tm.dispatch('quick errand')
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'ok' } })
+  await done // parked warm — 150ms timer armed
+  tm.setKind(id, 'session') // pin BEFORE the timer fires
+  await new Promise((r) => setTimeout(r, 300))
+  assert.equal(fake.alive, true, 'pin defused the armed warm-kill')
+  tm.setKind(id, 'oneoff') // unpin → re-parks → timer re-armed
+  await new Promise((r) => setTimeout(r, 300))
+  assert.equal(fake.alive, false, 'unpin re-armed normal lifecycle')
+  tm.killAll()
+})
+
+// ─── Consent clock: lastUserInputAt moves ONLY on user-initiated input ────────
+
+test('lastUserInputAt: set at dispatch, advanced by followUp/answer/typed input — never by status heartbeats', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  let t = 1_000_000
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000, now: () => t })
+  const id = await tm.dispatch('long doc task', { kind: 'session' })
+  assert.equal(tm.get(id)!.lastUserInputAt, 1_000_000, 'dispatch stamps the consent clock')
+
+  // Status writes (the agent working) advance updatedAt but NOT the consent clock.
+  t = 1_600_000
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'checkpoint' } })
+  await done
+  assert.equal(tm.get(id)!.lastUserInputAt, 1_000_000, 'agent activity is not consent')
+  assert.ok(tm.get(id)!.updatedAt >= 1_600_000, 'updatedAt did move')
+
+  // User follow-up advances it.
+  t = 1_700_000
+  assert.equal(tm.followUp(id, 'add a pricing section'), true)
+  assert.equal(tm.get(id)!.lastUserInputAt, 1_700_000, 'followUp is consent')
+
+  // Typing into the terminal advances it.
+  t = 1_800_000
+  tm.sendInput(id, 'ls\r')
+  assert.equal(tm.get(id)!.lastUserInputAt, 1_800_000, 'typed input is consent')
+  tm.killAll()
+})
+
+// ─── Typed turns: a manual prompt in the terminal re-arms the lifecycle ───────
+
+test('typing a prompt into a DONE session flips it to processing and REVIVES polling', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
+  const id = await tm.dispatch('draft the tweet thread', { kind: 'session' })
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'drafted' } })
+  await done // parked warm — polling STOPPED
+
+  // The user types a real prompt into the live terminal, char by char + Enter.
+  for (const ch of 'where are the other tweets?') tm.sendInput(id, ch)
+  tm.sendInput(id, '\r')
+  assert.equal(tm.get(id)!.state, 'processing', 'typed turn leaves done')
+
+  // The proof polling is back: the agent's next status write is actually READ.
+  const done2 = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'full thread posted' } })
+  await done2
+  assert.equal(tm.get(id)!.result?.summary, 'full thread posted')
+  tm.killAll()
+})
+
+test('typed-turn detection ignores noise: bare Enters, arrows, /commands, backspaced-away text', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
+  const id = await tm.dispatch('quick check')
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'ok' } })
+  await done
+
+  tm.sendInput(id, '\r')                       // bare Enter
+  tm.sendInput(id, '\x1b[A\x1b[B\r')           // arrow keys + Enter
+  tm.sendInput(id, '/clear\r')                 // TUI command
+  tm.sendInput(id, 'abc\x7f\x7f\x7f\r')        // typed then fully backspaced
+  assert.equal(tm.get(id)!.state, 'done', 'none of the noise re-arms the task')
+
+  tm.sendInput(id, 'ok fix the title\r')       // a real prompt
+  assert.equal(tm.get(id)!.state, 'processing')
+  tm.killAll()
+})
+
+test('recentlyFinished: one-offs only, window- and count-capped (the resume pool)', async () => {
+  const baseDir = await tmpBase()
+  let t = 2_000_000
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 0, now: () => t })
+  const oneoff = await tm.dispatch('play a video')
+  const session = await tm.dispatch('long repo work', { kind: 'session' })
+  for (const [id, task] of [[oneoff, 'oneoff'], [session, 'session']] as const) {
+    const done = once(tm, 'done')
+    await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: `${task} done` } })
+    await done
+  }
+  tm.kill(session) // kill the session's PTY so !alive holds for it too
+  const pool = tm.recentlyFinished()
+  assert.deepEqual(pool.map((x) => x.id), [oneoff], 'sessions never enter the resume pool')
+  // window cap: age the oneoff past 15 minutes → pool empties
+  t += 16 * 60_000
+  assert.equal(tm.recentlyFinished().length, 0, 'stale finishes leave the pool')
+  tm.killAll()
+})
+
+test('thread_context from a status write lands on the task (bounded)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25 })
+  const id = await tm.dispatch('long doc work', { kind: 'session' })
+  const done = once(tm, 'done')
+  await claudeWrites(tm.get(id)!.statusPath, {
+    state: 'done', result: { summary: 'checkpoint' },
+    thread_context: 'Drafted sections 1-2; pricing table pending; next: review tone.',
+  })
+  await done
+  assert.equal(tm.get(id)!.threadContext, 'Drafted sections 1-2; pricing table pending; next: review tone.')
+  tm.killAll()
+})
+
+// ─── The ready state: step complete, ball with the user (whose-move-is-it) ────
+
+async function waitForState(tm: TaskManager, id: string, state: string, timeoutMs = 3000): Promise<void> {
+  const t0 = Date.now()
+  while (tm.get(id)?.state !== state) {
+    if (Date.now() - t0 > timeoutMs) throw new Error(`timed out waiting for ${state} (got ${tm.get(id)?.state})`)
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
+
+test('ready parks the session WARM: state ready, executor alive, not counted active', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
+  const id = await tm.dispatch('load the video and tell me about it')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'ready', result: { summary: 'Video loaded — ready for what you want next' } })
+  await waitForState(tm, id, 'ready')
+  assert.equal(fake.alive, true, 'the session stays warm — ready is a checkpoint, not an ending')
+  assert.equal(tm.activeCount(), 0, 'ready is turn-over: not "running"')
+  assert.equal(tm.get(id)!.result?.summary, 'Video loaded — ready for what you want next')
+  tm.kill(id)
+})
+
+test('kill on a ready task settles it as failed (ready is NOT settled)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
+  const id = await tm.dispatch('x')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'ready' })
+  await waitForState(tm, id, 'ready')
+  tm.kill(id)
+  // A killed ready task was awaiting the user — ending it there is an interruption,
+  // not a completion: it must read failed (resumable), never silently "done".
+  assert.equal(tm.get(id)!.state, 'failed')
+})
+
+test('decay valve: an ignored ready ONE-OFF settles to done after 60min; a ready SESSION never decays', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 600_000 })
+  const oneoff = await tm.dispatch('one-off errand')
+  const sess = await tm.dispatch('working session')
+  tm.setKind(sess, 'session')
+  for (const id of [oneoff, sess]) {
+    await claudeWrites(tm.get(id)!.statusPath, { state: 'ready' })
+    await waitForState(tm, id, 'ready')
+  }
+  // Backdate both past the 60-minute valve, then run the sweep.
+  tm.get(oneoff)!.updatedAt = Date.now() - 61 * 60_000
+  tm.get(sess)!.updatedAt = Date.now() - 61 * 60_000
+  await tm.purgeStale()
+  assert.equal(tm.get(oneoff)!.state, 'done', 'ignored ready one-off decays to done')
+  assert.equal(tm.get(sess)!.state, 'ready', 'a session\'s open loop is real until the user closes it')
+  tm.kill(oneoff); tm.kill(sess)
+})
+
+test('resume of a ready task is SILENT — warm re-entry, no continue nudge', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const tid = randomUUID()
+  const dir = path.join(baseDir, 'local', tid)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'load the video', createdAt: Date.now() }))
+  await claudeWrites(path.join(dir, 'status.json'), { state: 'ready', result: { summary: 'loaded' } })
+  await tm.rehydrate()
+  assert.equal(tm.get(tid)!.state, 'ready', 'rehydrate preserves ready — it was a deliberate parked state')
+  const ok = await tm.resume(tid)
+  assert.equal(ok, true)
+  // Ready = the ball is with the USER. Nudging "continue" would snatch it back.
+  assert.ok(!fake.writes.some((w) => /resumed|continue now/i.test(w)), 'no nudge into a ready task')
+  assert.equal(tm.get(tid)!.state, 'ready')
+  tm.kill(tid)
+})
+
+test('shelve/note persist to meta.json and survive rehydrate; shelved is purge-exempt', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('research task worth keeping')
+  const task = tm.get(id)!
+  await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'kept' } })
+  tm.setShelved(id, true)
+  tm.setNote(id, 'JIRA-123 — revisit after the launch')
+  await new Promise((r) => setTimeout(r, 150)) // let the async meta writes land
+  const meta = JSON.parse(await fs.readFile(path.join(task.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.shelved, true)
+  assert.equal(meta.note, 'JIRA-123 — revisit after the launch')
+  // Purge exemption: backdate far past the 24h cutoff — the shelf keeps it.
+  task.updatedAt = Date.now() - 48 * 60 * 60_000
+  await tm.purgeStale()
+  assert.ok(tm.get(id), 'shelved task survives the purge sweep')
+  // Survives restart: a fresh manager rehydrates shelved + note from meta.
+  tm.kill(id)
+  const tm2 = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm2.rehydrate()
+  assert.equal(tm2.get(id)!.shelved, true)
+  assert.equal(tm2.get(id)!.note, 'JIRA-123 — revisit after the launch')
+})
+
+// ─── Fear #1 killed: speaking at a BUSY session queues safely and visibly ─────
+
+test('followUp on a mid-turn task: queued label + events, delivered when idle, label retired', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  let releaseIdle: (() => void) | null = null
+  let blockIdle = false // armed after dispatch, so dispatch's own isReady passes
+  const fake = makeFakeExecutor()
+  // Make isReady controllable: the session is "mid-turn" until the test releases it.
+  fake.isReady = () => (blockIdle ? new Promise<void>((r) => { releaseIdle = r }) : Promise.resolve())
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('long grind') // state: processing (mid-turn)
+  assert.equal(tm.get(id)!.state, 'processing')
+  blockIdle = true // from here, the session reads as mid-turn
+
+  const queued = once(tm, 'follow-up-queued')
+  const delivered = once(tm, 'follow-up-delivered')
+  const before = fake.writes.length
+  assert.equal(tm.followUp(id, 'also check the auth logs'), true)
+  const [qTask] = await queued
+  assert.match(qTask.step ?? '', /queued/, 'the card shows the thought is HELD, not lost')
+  assert.equal(fake.writes.length, before, 'nothing written while the REPL is busy — the running turn is never derailed')
+
+  releaseIdle!() // the session goes idle → the queued instruction lands
+  const [dTask] = await delivered
+  assert.equal(dTask.step, undefined, 'queued label retired on delivery')
+  assert.ok(fake.writes.some((w) => w.includes('also check the auth logs')), 'the instruction was delivered')
+  tm.kill(id)
+})
+
+test('followUp on an IDLE (parked done) task: no queued event — it delivers straight away', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
+  const id = await tm.dispatch('quick errand')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'ok' } })
+  await waitForState(tm, id, 'done')
+  let queuedFired = false
+  tm.on('follow-up-queued', () => { queuedFired = true })
+  assert.equal(tm.followUp(id, 'one more thing'), true)
+  await new Promise((r) => setTimeout(r, 100))
+  assert.equal(queuedFired, false, 'idle session = immediate delivery, no queue theater')
+  assert.ok(fake.writes.some((w) => w.includes('one more thing')))
+  tm.kill(id)
+})

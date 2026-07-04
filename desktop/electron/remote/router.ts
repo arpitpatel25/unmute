@@ -32,7 +32,16 @@ const log = createLogger('router')
 export interface RoutableTask {
   id: string
   intent: string
+  /** short display name (what the user calls it) — a strong match signal. */
+  name?: string | null
   state: string
+  /** 'session' = persistent working session (multi-day, often project-bound) —
+   *  the likelier target of "keep going / now do X" follow-ups. 'oneoff' =
+   *  quick fire-and-forget errand. */
+  kind?: 'oneoff' | 'session'
+  /** project directory name for project-bound sessions ("unmute-cloud") — what
+   *  people SAY when addressing them. */
+  project?: string | null
   category?: string | null
   ageSec: number
   /** the task currently expanded/surfaced in the overlay — a strong prior. */
@@ -44,8 +53,19 @@ export interface RoutableTask {
   question?: string | null
 }
 
+/** A known project a NEW session can be bound to (curated by projects.ts). */
+export interface RoutableProject {
+  name: string
+  path: string
+}
+
 export interface RouteDecision {
-  action: 'new' | 'continue'
+  /** 'resume' = revive a recently-finished one-off (session dead, window-capped)
+   *  and deliver this utterance inside it — the thread continues on its card.
+   *  'speak' = the user asked to HEAR something (a blocked task's question, a
+   *  task's state, overall status) — Unmute speaks it aloud; NOTHING is spawned
+   *  or injected. Read-only by construction. */
+  action: 'new' | 'continue' | 'resume' | 'speak'
   targetTaskId?: string
   /** cleaned intent (router folds in transcript cleanup). */
   intent: string
@@ -55,16 +75,53 @@ export interface RouteDecision {
   /** managed = short dictated task; raw = open-ended session where injected
    *  memory hints would pollute long reasoning. Default: managed. */
   mode?: 'managed' | 'raw'
+  /** Species for a NEW task: 'session' (persistent working session — never
+   *  idle-killed/purged) vs 'oneoff' (today's errand). Omitted → oneoff. */
+  kind?: 'oneoff' | 'session'
+  /** Project directory to bind a NEW session to — ONLY ever one of the known
+   *  project paths offered in the prompt (validated at parse; anything else is
+   *  dropped). The task then runs IN that directory. */
+  dir?: string
+  /** For action 'new' only: the open task the router NEARLY chose instead (a
+   *  plausible continue-target that lost). Powers the declinable offer — "started
+   *  new — or send to X?" — never a silent reroute. Validated against the
+   *  snapshot ids at parse. */
+  alternate?: string
+  /** For action 'new': a 2-4 word display name for the task ("Twitter strategy
+   *  summary"). Minted in the SAME routing turn — the warm session is the one
+   *  intelligence we already have, so naming costs zero extra calls. */
+  name?: string
+  /** For action 'new': RECALL pointer — the command asks about what another/past
+   *  task did or found ("what did the pricing session conclude?"). The new task
+   *  gets that task's status + transcript paths appended so it reads the actual
+   *  record instead of guessing (§6.6: own the pointer, not the plumbing). */
+  contextTaskId?: string
 }
 
 // ─── Pure helpers (unit-tested) ───────────────────────────────────
 
+/** Humanize an age for the prompt — "260000s ago" is noise for a 3-day session. */
+export function fmtAge(ageSec: number): string {
+  if (ageSec < 90) return `${ageSec}s ago`
+  if (ageSec < 90 * 60) return `${Math.round(ageSec / 60)}m ago`
+  if (ageSec < 36 * 3600) return `${Math.round(ageSec / 3600)}h ago`
+  return `${Math.round(ageSec / 86400)}d ago`
+}
+
 /** The instruction we type into the warm REPL each call. Self-contained: the
  *  router relies on THIS snapshot, not on accumulated memory (keeps it thin). */
-export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string): string {
+export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = []): string {
   const lines = tasks.map((t) =>
-    `  [${t.id}] "${t.intent}" — ${t.state}${t.category ? ` · ${t.category}` : ''} · ${t.ageSec}s ago${t.surfaced ? ' · ON SCREEN' : ''}` +
+    `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — ${t.state}` +
+    `${t.kind === 'session' ? ' · PERSISTENT SESSION' : ''}${t.project ? ` · project: ${t.project}` : ''}` +
+    `${t.category ? ` · ${t.category}` : ''} · ${fmtAge(t.ageSec)}${t.surfaced ? ' · ON SCREEN' : ''}` +
     (t.awaiting ? ` · ⏳ BLOCKED — awaiting your answer to: "${t.question || ''}"` : ''),
+  )
+  const projectLines = projects.map((p) => `  ${p.name} → ${p.path}`)
+  const finishedLines = finished.map((t) =>
+    (t.state === 'done' || t.state === 'ready')
+      ? `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — finished · ${fmtAge(t.ageSec)} · RESUMABLE`
+      : `  ${t.name ? `"${t.name}" — ` : ''}"${t.intent}" — ${t.state} · ${fmtAge(t.ageSec)} (context only)`,
   )
   return [
     `[Unmute router] You route a spoken command to where it belongs. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else — no tools, no browser, no research.`,
@@ -96,7 +153,9 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `Match on the shared subject/entity and on recency; when the command is terse,`,
     `the ON SCREEN task is the most likely target. A brand-new session would NOT`,
     `know the missing context — so if the command only makes sense given an open`,
-    `task, route it there.`,
+    `task, route it there. A task in state "ready" finished a step and is WAITING`,
+    `for the user's next direction — it is the most natural continue target for a`,
+    `command that advances its thread.`,
     ``,
     `Choose NEW when the command opens a DIFFERENT subject from every open task, or`,
     `when no open task plausibly relates to it. A command can be self-contained and`,
@@ -110,23 +169,82 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `when nothing clearly matches, NEW is correct. Equally, don't pick NEW out of`,
     `caution when there is a real dependency or a clear same-thread continuation.`,
     ``,
+    `Weigh the task metadata: a task named like what the user SAID (its "name" or`,
+    `project) is a strong continue-target. A PERSISTENT SESSION is a long-lived`,
+    `working thread — the natural home of "keep going", "now do X there", and any`,
+    `command about ITS project; prefer it over an old one-off errand on the same`,
+    `topic. Recency matters most among one-offs (people rarely return to an errand`,
+    `from hours ago) and least for persistent sessions (returning after hours or`,
+    `days is normal for them).`,
+    ...(projectLines.length ? [
+      ``,
+      `Known project directories (name → path). If the command asks to work in/on one`,
+      `of THESE — start a session there, fix/build something in that repo — and no`,
+      `open task already covers it, choose NEW with "dir" set to that EXACT path`,
+      `(copy it verbatim; never invent or modify a path, never use one not listed):`,
+      ...projectLines,
+    ] : []),
+    ...(coldSessions.length ? [
+      ``,
+      `The user's WORKING SESSIONS, currently untouched by them — you may NOT`,
+      `route into these (never emit their ids as targetTaskId; the user speaks to`,
+      `them by opening them). If the command clearly belongs to one of these`,
+      `sessions, choose NEW and set "alternate" to that session's id — the user`,
+      `gets a one-tap offer to redirect (their tap is the consent):`,
+      ...coldSessions.map((t) =>
+        `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}"${t.project ? ` · project: ${t.project}` : ''} · ${fmtAge(t.ageSec)}`),
+    ] : []),
+    ...(finishedLines.length ? [
+      ``,
+      `Recently FINISHED tasks (their sessions closed, but the thread is still`,
+      `fresh). If the command is a FOLLOW-UP to one marked RESUMABLE — it builds`,
+      `on, corrects, or asks more about what that task just did — choose action`,
+      `"resume" with its id: Unmute revives that exact session with its full`,
+      `prior context and delivers this command inside it. For '(context only)'`,
+      `entries, or when the command merely references a finished task without`,
+      `truly following it up, choose NEW with a fully SELF-CONTAINED intent that`,
+      `carries whatever the finished task establishes:`,
+      ...finishedLines,
+    ] : []),
+    ``,
     `Also clean the command into one natural line (fix transcription slips, keep the`,
     `exact meaning).`,
     ``,
-    `Write exactly: {"action":"new"|"continue","targetTaskId":"<id when continue>","intent":"<cleaned one-line command>","surface":"<app/tool or omit>","mode":"managed"|"raw"}`,
+    `META-COMMANDS (action "speak"): if the command asks to HEAR or KNOW something`,
+    `about the tasks themselves — "read me the question", "what does it need",`,
+    `"what's the status", "what's going on" — do NOT start any task: choose action`,
+    `"speak" with targetTaskId of the task being asked about (the blocked one when`,
+    `they say "the question"; omit targetTaskId for an overall status). Unmute`,
+    `speaks the answer aloud.`,
+    ``,
+    `RECALL (contextTaskId): if the command asks what ANOTHER listed task did,`,
+    `found, or concluded — "what did the pricing session conclude?", "summarize`,
+    `what the runbook one found" — choose NEW, write the question as the intent,`,
+    `and set "contextTaskId" to that task's id: the new task receives that task's`,
+    `actual record (status + transcript) to read before answering.`,
+    ``,
+    `Write exactly: {"action":"new"|"continue"|"resume"|"speak","targetTaskId":"<id when continue/resume/speak>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>","contextTaskId":"<task id whose record a NEW task should read, or omit>"}`,
+    `name (for action "new"): a 2-4 word title capturing the essence, for a session list in a UI — plain words, no quotes/punctuation (e.g. "Unmute pricing check", "WhatsApp message", "Gating feature work").`,
+    `alternate (only with action "new", optional): if exactly one open task was a PLAUSIBLE alternative you seriously weighed before choosing NEW, give its id — the user gets a one-tap "or send it there?" offer. Omit it when nothing came close (most of the time).`,
     `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
     `mode: use "raw" for "open me a session to work in" / open-ended coding where injected memory hints would pollute long reasoning; use "managed" for short, surface-operating dictated tasks. If ambiguous, choose "raw".`,
+    `kind (only for action "new"): "session" for a working session the user will keep coming back to — coding, a project (anything with "dir"), open-ended "work on X" — it stays alive until they end it. "oneoff" for a quick errand they fire and forget (open/check/find something). If ambiguous, "oneoff".`,
   ].join('\n')
 }
 
 /** The default decision when the router gives us nothing usable (timeout, bad
- *  parse, unknown id). A follow-up is far likelier than a coincidental brand-new
- *  request when exactly ONE recent task is open — so continue it rather than
- *  start blind and lose its context (the cold-timeout bug). Anything ambiguous
- *  (0 or 2+ tasks, or a stale lone task) stays NEW. */
+ *  parse, unknown id). A follow-up is likelier than a coincidental brand-new
+ *  request when exactly ONE recent task is open — BUT the failsafe must NEVER
+ *  guess its way INTO A RUNNING TASK: injecting into a session that is mid-work
+ *  derails it (proven live: a router timeout sent "rephrase a tweet" into a
+ *  running growth-strategy session and hijacked it). A running task's heartbeat
+ *  also keeps it perpetually "recent", so the age gate is meaningless for it.
+ *  Continue only when the lone task is WAITING (needs-user — the utterance is
+ *  plausibly the answer) or parked after finishing (a follow-up window). A
+ *  wrong NEW task is visible and cheap; a wrong injection is destructive. */
 export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSec = 180): RouteDecision {
   const clean = (intent || '').trim()
-  if (tasks.length === 1 && tasks[0].ageSec <= maxAgeSec) {
+  if (tasks.length === 1 && tasks[0].ageSec <= maxAgeSec && tasks[0].state !== 'processing') {
     return { action: 'continue', targetTaskId: tasks[0].id, intent: clean, mode: 'managed' }
   }
   return { action: 'new', intent: clean, mode: 'managed' }
@@ -135,10 +253,19 @@ export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSe
 /** Parse the decision file. EXPLICIT router decisions (new, or continue→known id)
  *  are honored. Everything else — null/malformed/unknown-action/unknown-id —
  *  routes through failsafeDecision (continue-latest-if-single). */
-export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[]): RouteDecision {
+export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = [], coldSessions: RoutableTask[] = [], finished: RoutableTask[] = []): RouteDecision {
+  // CONSENT ENFORCEMENT (layer 2): continue-targets are ONLY the targetable
+  // tasks; a cold session id in targetTaskId is rejected here no matter what
+  // the model wrote (falls through to a safe NEW). Cold ids ARE valid for
+  // `alternate` — the declinable one-tap offer is the consent path.
   const validIds = new Set(tasks.map((t) => t.id))
+  const alternateIds = new Set([...tasks, ...coldSessions].map((t) => t.id))
+  // Resume targets: ONLY 'done' entries from the capped recently-finished pool
+  // (a failed task resumes via its own nudge path, not here; cold sessions and
+  // live tasks can never be 'resumed').
+  const resumeIds = new Set(finished.filter((t) => t.state === 'done' || t.state === 'ready').map((t) => t.id))
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
-  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string }
+  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string; contextTaskId?: string }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
   const intent = (obj.intent && obj.intent.trim()) || fallbackIntent
   const mode = obj.mode === 'raw' ? 'raw' : 'managed'
@@ -149,7 +276,35 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   if (obj.action === 'continue' && obj.targetTaskId && validIds.has(obj.targetTaskId)) {
     return { action: 'continue', targetTaskId: obj.targetTaskId, intent, mode, surface }
   }
-  if (obj.action === 'new') return { action: 'new', intent, mode, surface }
+  if (obj.action === 'resume' && obj.targetTaskId && resumeIds.has(obj.targetTaskId)) {
+    return { action: 'resume', targetTaskId: obj.targetTaskId, intent, mode, surface }
+  }
+  // speak: read-only by construction — any KNOWN id is fine (cold sessions too:
+  // hearing about a session is not injecting into it); unknown id → overall.
+  if (obj.action === 'speak') {
+    const anyKnown = new Set([...tasks, ...coldSessions, ...finished].map((t) => t.id))
+    const target = obj.targetTaskId && anyKnown.has(obj.targetTaskId) ? obj.targetTaskId : undefined
+    return { action: 'speak', targetTaskId: target, intent }
+  }
+  if (obj.action === 'new') {
+    // dir is honored ONLY when it's one of the paths we offered — an invented
+    // or modified path must never become a spawn cwd (dispatch would fall back
+    // to scratch anyway, but the guard belongs at the trust boundary).
+    const dir = obj.dir && projects.some((p) => p.path === obj.dir) ? obj.dir : undefined
+    // A project-bound task is inherently a working session, whatever the model
+    // labeled it — dir implies kind.
+    const kind = obj.kind === 'session' || dir ? 'session' as const : 'oneoff' as const
+    // alternate must name a task we actually offered (targetable OR cold) — else dropped.
+    const alternate = obj.alternate && alternateIds.has(obj.alternate) ? obj.alternate : undefined
+    // recall pointer: any KNOWN task's record may be read (read-only) — else dropped.
+    const anyKnown = new Set([...tasks, ...coldSessions, ...finished].map((t) => t.id))
+    const contextTaskId = obj.contextTaskId && anyKnown.has(obj.contextTaskId) ? obj.contextTaskId : undefined
+    // display name: trimmed, de-quoted, bounded — junk becomes undefined (the UI
+    // falls back to a truncated intent, never breaks).
+    const rawName = (obj.name ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
+    const name = rawName && rawName.length <= 48 ? rawName : undefined
+    return { action: 'new', intent, mode, surface, kind, dir, alternate, name, contextTaskId }
+  }
   return failsafeDecision(tasks, intent)
 }
 
@@ -204,8 +359,8 @@ export class Router {
 
   /** Classify one utterance against the current task snapshot. Single-flighted;
    *  always resolves (fail-safe to a new task). */
-  route(utterance: string, tasks: RoutableTask[]): Promise<RouteDecision> {
-    const run = this.chain.then(() => this.routeOnce(utterance, tasks))
+  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = []): Promise<RouteDecision> {
+    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects, finished, coldSessions))
     // After the decision resolves to the caller, keep the chain alive with
     // housekeeping (/clear + maybe-recycle) — off the hot path, but serialized
     // so it can never overlap the next route.
@@ -222,13 +377,13 @@ export class Router {
     return run
   }
 
-  private async routeOnce(utterance: string, tasks: RoutableTask[]): Promise<RouteDecision> {
+  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = []): Promise<RouteDecision> {
     const fallback = (utterance || '').trim()
     try {
       await this.ensureSession()
       await fs.mkdir(this.dir, { recursive: true })
       await fs.rm(this.decisionPath, { force: true }).catch(() => {})
-      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath)
+      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished, coldSessions)
       this.ex!.writeStdin(prompt)
       // The multi-line prompt is captured by Claude's TUI as a paste that lands
       // one Enter short of submitting — so it sits as "[Pasted text]" and the
@@ -236,10 +391,10 @@ export class Router {
       // explicit confirm Enter to actually submit it. (Proven on the task lane.)
       await this.sleep(this.o.submitConfirmMs)
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
-      const raw = await this.waitForDecision()
-      const decision = parseDecision(raw, fallback, tasks)
+      const raw = await this.waitForDecision(prompt)
+      const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished)
       // TEMP(memory-debug)
-      log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, MEMORY_DEBUG: true })
+      log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, MEMORY_DEBUG: true })
       return decision
     } catch (e) {
       log.warn('route failed — using failsafe', { error: (e as Error).message })
@@ -309,10 +464,11 @@ export class Router {
   /** Test hook: await any trailing housekeeping queued on the chain. */
   settleHousekeeping(): Promise<void> { return this.chain.then(() => undefined, () => undefined) }
 
-  private async waitForDecision(): Promise<string | null> {
+  private async waitForDecision(prompt?: string): Promise<string | null> {
     const start = this.clock()
     const deadline = start + this.o.decisionTimeoutMs
     let lastBeat = 0
+    let reinjected = false
     while (this.clock() < deadline) {
       try {
         const raw = await fs.readFile(this.decisionPath, 'utf8')
@@ -321,9 +477,23 @@ export class Router {
           return raw
         }
       } catch { /* not written yet */ }
+      const elapsed = this.clock() - start
+      // SELF-HEAL (same disease the task lane cures with verifyDispatch): the
+      // multi-line prompt occasionally lands unsubmitted in the REPL's input box
+      // — the session then sits idle forever and the timeout fires (proven live:
+      // a 60s stall sent the failsafe into a running session). If no decision
+      // after 15s, clear the input line (Ctrl-U, NEVER Esc) and re-inject once.
+      if (!reinjected && prompt && elapsed >= 15_000 && this.ex?.alive) {
+        reinjected = true
+        log.warn('router slow — clearing input and re-injecting prompt once', { elapsedMs: elapsed })
+        this.ex.write('\x15')
+        await this.sleep(200)
+        this.ex.writeStdin(prompt)
+        await this.sleep(this.o.submitConfirmMs)
+        if (this.ex?.alive) this.ex.write('\r')
+      }
       // DIAGNOSTIC heartbeat: prove we are still polling and show elapsed, so a
       // slow-but-eventual write is distinguishable from a never-write.
-      const elapsed = this.clock() - start
       if (elapsed - lastBeat >= 5000) { lastBeat = elapsed; log.event('router-waiting', { elapsedMs: elapsed, decisionPath: this.decisionPath }) }
       await this.sleep(this.o.pollMs)
     }

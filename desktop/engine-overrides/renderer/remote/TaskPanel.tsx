@@ -47,6 +47,19 @@ export function TaskPanel() {
         Hold the Remote key and speak a command — it runs on your machine via Claude Code.
       </div>
 
+      {/* Primary CTA: open the cockpit — conduct many sessions at once (⌘⇧O also toggles it). */}
+      <button
+        className="w-full text-left rounded-lg bg-ink text-white p-3 mb-3 hover:bg-ink/90 flex items-center gap-3"
+        onClick={() => { void (window as unknown as { electronAPI?: { remoteOpenOrchestrate?: () => Promise<boolean> } }).electronAPI?.remoteOpenOrchestrate?.() }}
+      >
+        <span className="text-base leading-none">▦</span>
+        <span className="flex-1">
+          <span className="block text-[13px] font-semibold">Open Orchestrate</span>
+          <span className="block text-[11px] text-white/60">Conduct all your sessions in one cockpit</span>
+        </span>
+        <span className="text-[11px] text-white/40 font-mono">⌘⇧O</span>
+      </button>
+
       {/* Page nav: the two explainer/setup surfaces, as proper outlined buttons. */}
       <div className="flex items-center gap-2 mb-3">
         <button

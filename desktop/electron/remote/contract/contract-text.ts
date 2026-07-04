@@ -32,16 +32,26 @@ include the others when relevant):
 \`\`\`json
 {
   "schema_version": 1,
-  "state": "processing | needs-user | done | failed",
+  "state": "processing | needs-user | ready | done | failed",
   "updated_at": "<ISO-8601 timestamp>",
   "step": "<short label of what you're doing right now>",
   "category": "info | navigate | watch | consume | act",
   "result":  { "summary": "<one line>", "detail": "<full answer for info tasks>", "artifacts": [ { "type": "path|url", "value": "..." } ] },
   "error":   { "reason": "<one line why it failed>", "detail": "<optional>" },
   "question":{ "text": "<your question>", "kind": "free_text|choice|confirm", "choices": ["..."], "irreversible": false },
-  "recipe_suggestion": { "present": true, "scratch_path": "<recipe scratch path>" }
+  "recipe_suggestion": { "present": true, "scratch_path": "<recipe scratch path>" },
+  "thread_context": "<2-3 plain sentences: where this thread stands — what's decided, what's in progress, what's next. Update it on EVERY status write so a human returning cold can re-enter in one glance. Write it for the USER, not for yourself.>"
 }
 \`\`\`
+
+**\`ready\` vs \`done\` — whose move is it?** Use \`ready\` when you completed
+what was asked but the user's larger goal plausibly continues — you would
+NATURALLY await further direction (e.g. "understood the video, ready for your
+edit instructions"; "draft written, awaiting review"). Unmute queues \`ready\`
+tasks as "your move" for the user. Use \`done\` only when the work is truly
+complete and no further direction is expected. Do NOT inflate \`ready\` — if you
+would not genuinely sit waiting for the user's next step, it is \`done\`. With
+\`ready\`, put WHAT you are ready for in \`result.summary\`.
 
 ## 2. Write the file ATOMICALLY (required)
 
@@ -56,7 +66,7 @@ Unmute will NOT ask you for status; you must push it:
 - **After each meaningful step:** update \`step\` + \`updated_at\` (this is what
   tells Unmute you're alive — if the file goes untouched too long, Unmute will
   flag the task as possibly stuck).
-- **As your final action:** write the terminal state (\`done\` or \`failed\`). The
+- **As your final action:** write the turn's end state (\`ready\`, \`done\` or \`failed\`). The
   completion marker is the last thing you write.
 
 ## 4. State meanings

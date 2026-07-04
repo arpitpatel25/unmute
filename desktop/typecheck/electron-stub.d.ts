@@ -5,6 +5,7 @@ declare module 'electron' {
   export interface WebContents {
     send(channel: string, ...args: unknown[]): void
     on(event: string, cb: (...a: unknown[]) => void): void
+    getURL(): string
   }
   export interface Rectangle { x: number; y: number; width: number; height: number }
   export class BrowserWindow {
@@ -17,8 +18,10 @@ declare module 'electron' {
     setVisibleOnAllWorkspaces(flag: boolean, opts?: { visibleOnFullScreen?: boolean; skipTransformProcessType?: boolean }): void
     setFullScreenable(flag: boolean): void
     setBounds(b: Rectangle): void
+    show(): void
     showInactive(): void
     hide(): void
+    focus(): void
     loadURL(url: string): Promise<void>
     loadFile(path: string, opts?: { hash?: string }): Promise<void>
     on(event: string, cb: (...a: unknown[]) => void): void
@@ -47,6 +50,21 @@ declare module 'electron' {
   export const shell: {
     openExternal(url: string, options?: { activate?: boolean }): Promise<void>
     openPath(path: string): Promise<string>
+  }
+  export interface NativeImage {
+    isEmpty(): boolean
+    toPNG(): Buffer
+    resize(opts: { width?: number; height?: number }): NativeImage
+    toDataURL(): string
+  }
+  export const nativeImage: {
+    createFromPath(path: string): NativeImage
+  }
+  export const clipboard: {
+    readImage(): NativeImage
+    writeText(text: string): void
+    availableFormats(): string[]
+    clear(): void
   }
   export interface App { on(event: string, cb: (...a: unknown[]) => void): void }
   export const app: App

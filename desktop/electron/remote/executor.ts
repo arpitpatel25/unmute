@@ -38,6 +38,9 @@ export interface AgentExecutor {
   resize(cols: number, rows: number): void
   /** Subscribe to the raw output stream (for render-on-demand + optional silence hint). */
   onData(cb: (chunk: string) => void): void
+  /** OPTIONAL: the session's CURRENT screen as rendered by tmux (the
+   *  continuous observer) — colors included. null ⇒ no tmux; caller falls back. */
+  captureScreen?(): Promise<string | null>
   /** Kill the session immediately (PRD §10.4 instant kill switch). */
   kill(): void
   /** True while the PTY process is alive. */

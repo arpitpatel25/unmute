@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   sessionNameFor, shellQuote, buildCommand, tmuxNewSessionArgs,
-  tmuxAttachArgs, tmuxKillSessionArgs, resolveTmuxBin, TMUX_SOCKET,
+  tmuxAttachArgs, tmuxKillSessionArgs, tmuxCapturePaneArgs, resolveTmuxBin, TMUX_SOCKET,
 } from './tmux.ts'
 
 test('sessionNameFor is deterministic per task', () => {
@@ -40,4 +40,9 @@ test('resolveTmuxBin returns first existing candidate, else null', () => {
   const exists = (p: string) => p === '/usr/local/bin/tmux'
   assert.equal(resolveTmuxBin(exists), '/usr/local/bin/tmux')
   assert.equal(resolveTmuxBin(() => false), null)
+})
+
+test('tmuxCapturePaneArgs dumps the current screen with colors + recent history', () => {
+  const args = tmuxCapturePaneArgs('unmute-abc')
+  assert.deepEqual(args, ['-L', 'unmute-remote', 'capture-pane', '-t', 'unmute-abc', '-ep', '-S', '-1000'])
 })

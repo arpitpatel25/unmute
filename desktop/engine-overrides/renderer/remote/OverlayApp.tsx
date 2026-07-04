@@ -23,6 +23,11 @@ type API = {
   remoteOnOverlayMode?: (cb: (d: OverlayModeInfo) => void) => () => void
   remoteOnOverlayFocus?: (cb: (d: { taskId: string }) => void) => () => void
   remoteOpenArtifact?: (type: 'url' | 'path', value: string) => Promise<boolean>
+  remoteOnOrchestrateOwner?: (cb: (d: { taskId: string | null }) => void) => () => void
+  remoteGetOrchestrateOwner?: () => Promise<string | null>
+  remoteAttachImage?: (taskId: string, data: ArrayBuffer, ext: string) => Promise<string | null>
+  remoteOnRouteOffer?: (cb: (d: { newTaskId: string; altTaskId: string; altName: string }) => void) => () => void
+  remoteAcceptRouteOffer?: (newTaskId: string) => Promise<boolean>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -39,6 +44,7 @@ const POP_CSS = `
 const TAG: Record<RemoteTask['state'], { label: string; text: string; dot: string }> = {
   processing: { label: 'working', text: 'text-sky-300/90', dot: '#38bdf8' },
   'needs-user': { label: 'needs you', text: 'text-amber-300/90', dot: '#fbbf24' },
+  ready: { label: 'ready for you', text: 'text-cyan-300/90', dot: '#22d3ee' },
   stuck: { label: 'stuck', text: 'text-amber-300/90', dot: '#fbbf24' },
   done: { label: 'done', text: 'text-emerald-300/90', dot: '#34d399' },
   failed: { label: 'failed', text: 'text-rose-300/90', dot: '#fb7185' },
@@ -81,15 +87,59 @@ function Expanded({
   const [showTerminal, setShowTerminal] = useState(false)
   const active = task.state === 'processing' || task.state === 'needs-user' || task.state === 'stuck'
 
+  // Single-owner terminal: when the wall is focused on THIS session it owns the PTY
+  // size, so the overlay must NOT also render a terminal (two LiveTerminals would
+  // fight over the width). Collapse to a glance whenever the wall owns us.
+  const [wallOwned, setWallOwned] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void api().remoteGetOrchestrateOwner?.().then((id) => { if (alive) setWallOwned(id === task.id) })
+    const off = api().remoteOnOrchestrateOwner?.((d) => setWallOwned(d.taskId === task.id))
+    return () => { alive = false; off?.() }
+  }, [task.id])
+  useEffect(() => { if (wallOwned) setShowTerminal(false) }, [wallOwned])
+
   const openArtifact = (type: 'url' | 'path', value: string) => {
     const fn = api().remoteOpenArtifact
     if (fn) void fn(type, value)
     else void navigator.clipboard?.writeText(value)
   }
 
+  // Multimodal: drop a screenshot on the expanded card (or ⌘V while it's open) —
+  // saved under the task's dir, path typed UNSUBMITTED into the session; the next
+  // utterance/keystrokes send it. Mirrors the wall stage's contract.
+  const [attachNote, setAttachNote] = useState<string | null>(null)
+  const attach = async (blob: Blob) => {
+    const fn = api().remoteAttachImage
+    if (!fn) return
+    const ext = (blob.type.split('/')[1] || 'png').split('+')[0]
+    const path = await fn(task.id, await blob.arrayBuffer(), ext)
+    setAttachNote(path ? 'image attached — speak to send' : 'could not attach — session not running')
+    setTimeout(() => setAttachNote(null), 4000)
+  }
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const item = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'))
+      const file = item?.getAsFile()
+      if (file) { e.preventDefault(); void attach(file) }
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id])
+
   return (
-    <div className="px-2.5 pb-2.5 pt-1">
+    <div
+      className="px-2.5 pb-2.5 pt-1"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault()
+        const img = Array.from(e.dataTransfer?.files ?? []).find((f) => f.type.startsWith('image/'))
+        if (img) void attach(img)
+      }}
+    >
       <div className="text-[10px] text-white/30 mb-1.5">{duration(task)}</div>
+      {attachNote && <div className="text-[11px] text-white/60 mb-1.5">🖼 {attachNote}</div>}
 
       {/* done → summary + artifacts */}
       {task.state === 'done' && task.result && (
@@ -186,9 +236,13 @@ function Expanded({
             onClick={() => onResume(task.id)}
           >resume</button>
         )}
-        <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
-          {showTerminal ? 'hide terminal' : 'terminal'}
-        </button>
+        {wallOwned ? (
+          <span className="text-white/30" title="This session's terminal is open in the Orchestrate cockpit">in cockpit ↗</span>
+        ) : (
+          <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
+            {showTerminal ? 'hide terminal' : 'terminal'}
+          </button>
+        )}
         <button
           className="text-rose-300/60 hover:text-rose-300 ml-auto"
           title="Kill the session and erase this task"
@@ -198,7 +252,7 @@ function Expanded({
         </button>
       </div>
 
-      {showTerminal && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
+      {showTerminal && !wallOwned && <LiveTerminal taskId={task.id} onClose={() => setShowTerminal(false)} />}
     </div>
   )
 }
@@ -303,6 +357,19 @@ export function OverlayApp() {
   const [mode, setMode] = useState<'docked' | 'expanded'>('expanded')
   const [dockedEnabled, setDockedEnabled] = useState(true)
 
+  // Declinable route offer (ambient surface — the wall may not be open):
+  // "started new — send to X instead?". One tap redirects; expires in 8s.
+  const [offer, setOffer] = useState<{ newTaskId: string; altTaskId: string; altName: string } | null>(null)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const off = api().remoteOnRouteOffer?.((d) => {
+      setOffer(d)
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => setOffer(null), 8000)
+    })
+    return () => { off?.(); if (timer) clearTimeout(timer) }
+  }, [])
+
   useEffect(() => {
     const off = api().remoteOnOverlayFocus?.((d) => { setExpandedId(d.taskId); refresh() })
     // Fetch the current presentation on mount (avoids a mode-event race), then
@@ -392,6 +459,21 @@ export function OverlayApp() {
             <button className="text-[13px] leading-none text-white/25 hover:text-white/70" onClick={dismiss} title="Dismiss (Esc)">✕</button>
           </div>
         </div>
+
+        {/* Declinable route offer strip — one tap redirects, ignoring costs nothing. */}
+        {offer && (
+          <button
+            className="mx-2 mb-1 rounded-lg border border-white/15 bg-white/[0.06] px-3 py-2 text-left text-[11.5px] text-white/85 hover:bg-white/[0.12]"
+            onClick={() => {
+              const o = offer
+              setOffer(null)
+              void api().remoteAcceptRouteOffer?.(o.newTaskId).then((ok) => { if (ok) setExpandedId(o.altTaskId) })
+            }}
+          >
+            <span className="text-white/45">started new — </span>
+            send to “{offer.altName.length > 38 ? `${offer.altName.slice(0, 38)}…` : offer.altName}” instead?
+          </button>
+        )}
 
         <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
           {tasks.length === 0 ? (

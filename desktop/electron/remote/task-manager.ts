@@ -32,7 +32,7 @@ import {
   type TaskState,
 } from './status-file'
 import { buildDispatch, buildResumeNudge } from './dispatch-prompt'
-import { installContract } from './contract/installer'
+import { installContract, readContractText } from './contract/installer'
 import { installHooks, hookActivityMs } from './hooks'
 import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
 import { detectSurface } from './surface'
@@ -50,14 +50,33 @@ export type UiTaskState = TaskState | 'stuck'
 export interface Task {
   id: string
   intent: string
+  /** Short display name for the session (2-5 words), generated async just after
+   *  dispatch. The UI shows this instead of the full intent; undefined until it
+   *  lands (UI falls back to a truncated intent). */
+  name?: string
   /** Claude Code session id pinned for this task (minted at dispatch, passed as
    *  `--session-id`). A stable handle to THE session this task drives — used for
    *  resume, reading Claude's session store, and future orchestration. */
   sessionId: string
+  /** Species (Orchestrate). 'oneoff' = today's fire-and-forget errand: scratch
+   *  cwd, warm-window idle-kill, 24h purge. 'session' = a persistent working
+   *  session (often multi-day, often project-bound): NEVER idle-killed, NEVER
+   *  auto-purged — it lives until the user explicitly kills/removes it, and
+   *  survives app restarts as interrupted-but-resumable (`--continue` restores
+   *  full context). Default 'oneoff' (status quo). */
+  kind?: 'oneoff' | 'session'
   state: UiTaskState
   createdAt: number
   updatedAt: number
+  /** Where the agent RUNS. For oneoffs this is the scratch dir (=== home). For
+   *  project-bound sessions this is the user's real project directory — which
+   *  Unmute must treat as READ-ONLY territory (no meta/status/contract files). */
   cwd: string
+  /** The Unmute-OWNED dir for this task (~/.unmute/remote/<u>/<id>): meta.json,
+   *  status.json, recipe.json, attachments. Always ours to create/delete; cwd may
+   *  equal it (scratch oneoff) or point elsewhere (project session). Deletion
+   *  paths MUST use home, never cwd. */
+  home: string
   statusPath: string
   recipeScratchPath: string
   /** mtime (ms) of the last status write we APPLIED — purely the read cursor for
@@ -91,6 +110,23 @@ export interface Task {
   /** What memory Unmute injected at dispatch (graduated skills matched + nursery
    *  leads). Recorded so the librarian can grade the trace against it. */
   injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>
+  /** Follow-up turns the user has sent this task (graduation signal: a one-off
+   *  that keeps receiving follow-ups is a working session in denial). */
+  followUps?: number
+  /** Rolling "where you left off" (from status thread_context) — re-entry warm-up. */
+  threadContext?: string
+  /** When the USER last put something into this task (dispatch/follow-up/answer/
+   *  typed input) — NEVER advanced by status heartbeats. This is the consent
+   *  clock: a session is auto-routable only while this is recent ("hot thread");
+   *  cold sessions are focus-only. */
+  lastUserInputAt?: number
+  /** Shelved (Orchestrate): deliberately preserved AND out of the way — hidden
+   *  from the wall grid, exempt from auto-purge, findable in the rail's Shelf.
+   *  The answer to "I want to keep this but stop seeing it". */
+  shelved?: boolean
+  /** User's free-form note pinned to the card (ticket link, context, a reminder
+   *  to future-you). Pure annotation — never fed to the agent. */
+  note?: string
 }
 
 export interface TaskManagerOpts {
@@ -154,7 +190,14 @@ export interface TaskManagerOpts {
 
 type TaskEvent = 'created' | 'updated' | 'needs-user' | 'stuck' | 'done' | 'failed' | 'removed'
 
-const TERMINAL: UiTaskState[] = ['done', 'failed']
+/** Turn-over states: the session is parked, polling stopped, ball not with the
+ *  agent. 'ready' = ball explicitly WITH THE USER (a checkpoint awaiting their
+ *  direction) — parked like done, but queued as "your move" in the UI. */
+const TERMINAL: UiTaskState[] = ['done', 'failed', 'ready']
+/** Fully settled — kill() has nothing to mark, the librarian has been handed
+ *  off, nothing awaits anyone. NOT 'ready' (killing a ready task must mark it
+ *  stopped, or a dead task would sit in the your-move queue forever). */
+const SETTLED: UiTaskState[] = ['done', 'failed']
 
 /** Strip the TUI's ANSI/OSC/control noise from a raw PTY buffer and keep a
  *  readable tail — enough for the librarian to see what the doer actually did
@@ -178,6 +221,10 @@ export class TaskManager extends EventEmitter {
   private warmTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Background auto-purge sweep (null until startMaintenance()).
   private purgeTimer: ReturnType<typeof setInterval> | null = null
+  // Per-task chain serializing meta.json read-modify-writes. Two concurrent
+  // merges (e.g. setShelved + setNote in one tick) would otherwise race the
+  // read and the last write would silently drop the other's field.
+  private metaChains = new Map<string, Promise<void>>()
   // Per-task ring buffer of recent PTY output for render-on-demand (PRD §13.4#8).
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
@@ -234,7 +281,7 @@ export class TaskManager extends EventEmitter {
    * Dispatch a new task. Returns the taskId immediately; execution + polling
    * proceed asynchronously (PRD §4.4 — dispatch and forget).
    */
-  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw' } = {}): Promise<string> {
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string } = {}): Promise<string> {
     const id = randomUUID()
     // Mint the Claude session id up front so we own a stable handle to the
     // session this task will spawn (passed as --session-id below).
@@ -246,11 +293,31 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     const surface = opts.surface ?? detectSurface(intent)
     const mode = opts.mode ?? 'managed'
+    const kind = opts.kind ?? 'oneoff'
+
+    // Project-bound spawn (Orchestrate): when a real directory is supplied, the
+    // agent RUNS there — its git, its CLAUDE.md, its tooling all just work. The
+    // user's directory is READ-ONLY territory for Unmute: every Unmute file
+    // (meta/status/recipe/contract/hooks/skills) stays in `home` (our scratch
+    // dir), and the contract travels INLINE in the dispatch payload instead of
+    // being written as a CLAUDE.md. Validated + fail-safe: an unusable dir falls
+    // back to the scratch spawn rather than failing the dispatch.
+    let runCwd = dir
+    if (opts.cwd) {
+      try {
+        const st = await fs.stat(opts.cwd)
+        if (st.isDirectory()) runCwd = opts.cwd
+        else tlog.warn('dispatch: cwd is not a directory — falling back to scratch', { cwd: opts.cwd })
+      } catch {
+        tlog.warn('dispatch: cwd does not exist — falling back to scratch', { cwd: opts.cwd })
+      }
+    }
+    const external = runCwd !== dir
 
     const task: Task = {
-      id, intent, sessionId, state: 'processing', createdAt: now, updatedAt: now,
-      cwd: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
-      surface, mode, injectedRecipes: [],
+      id, intent, sessionId, kind, state: 'processing', createdAt: now, updatedAt: now,
+      cwd: runCwd, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
+      surface, mode, injectedRecipes: [], lastUserInputAt: now,
     }
     this.tasks.set(id, task)
     tlog.event('task-created', { intent, cwd: dir })
@@ -263,12 +330,20 @@ export class TaskManager extends EventEmitter {
       // Seed the heartbeat clock from the scaffold's real mtime so staleness is
       // measured from "task start", not the logical createdAt.
       task.lastMtimeMs = task.lastHeartbeatMs = (await statusMtimeMs(statusPath)) ?? now
-      await installContract(dir) // CLAUDE.md auto-load (#3)
-      // Deterministic lifecycle hooks: heartbeat on real progress + enforce a
-      // status write before the turn ends. Best-effort — a failure here must not
-      // block dispatch (without hooks the task runs on the status-file path, i.e.
-      // today's behaviour). See hooks.ts.
-      await installHooks(dir).catch((e) => tlog.warn('installHooks failed — running without hooks', { error: (e as Error).message }))
+      // Contract + hooks are CWD-COUPLED (CLAUDE.md auto-load; .claude/settings.json
+      // hooks) — installed only for the scratch spawn, where the cwd is ours. For a
+      // project-bound session, writing either into the user's repo would pollute it
+      // (and .claude/settings.json could CLOBBER the project's own); the contract
+      // travels inline in the payload instead, and lifecycle falls back to the
+      // status-file path (the documented pre-hooks behaviour — fail-open).
+      if (!external) {
+        await installContract(dir) // CLAUDE.md auto-load (#3)
+        // Deterministic lifecycle hooks: heartbeat on real progress + enforce a
+        // status write before the turn ends. Best-effort — a failure here must not
+        // block dispatch (without hooks the task runs on the status-file path, i.e.
+        // today's behaviour). See hooks.ts.
+        await installHooks(dir).catch((e) => tlog.warn('installHooks failed — running without hooks', { error: (e as Error).message }))
+      }
 
       // ── Memory injection (managed mode only). Raw mode SKIPS all three Unmute
       //    memory injections (skills copy, profile, nursery leads) — protocol +
@@ -308,7 +383,7 @@ export class TaskManager extends EventEmitter {
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes }))
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}) }))
       // TEMP(memory-debug): remove after calibration
       tlog.event('dispatch-memory', { MEMORY_DEBUG: true, surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
 
@@ -324,7 +399,7 @@ export class TaskManager extends EventEmitter {
         this.emit('output', { taskId: id, chunk })
       })
 
-      await ex.spawn({ cwd: dir, env: process.env, taskId: id, sessionId })
+      await ex.spawn({ cwd: runCwd, env: process.env, taskId: id, sessionId })
       await ex.isReady()
 
       // Drive past Claude Code's folder-trust prompt (and any boot prompts) using
@@ -350,9 +425,12 @@ export class TaskManager extends EventEmitter {
       }
       tlog.event('folder-trust-accepted', {})
 
+      // Project-bound spawn: the contract can't auto-load from a CLAUDE.md we
+      // never wrote, so it rides inline in the payload (same obligations).
+      const contractText = external ? await readContractText() : undefined
       const payload = mode === 'managed'
-        ? buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes: nurseryForDispatch, staleNotes })
-        : buildDispatch({ intent, statusPath, recipeScratchPath })
+        ? buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes: nurseryForDispatch, staleNotes, contractText })
+        : buildDispatch({ intent, statusPath, recipeScratchPath, contractText })
       const dispatchedAt = Date.now()
       ex.writeStdin(payload)
       tlog.event('task-dispatched', {})
@@ -378,7 +456,11 @@ export class TaskManager extends EventEmitter {
       // clear the input line with Ctrl-U (NEVER Esc — Esc = "No, exit" on a
       // dialog and QUITS Claude) and re-inject. Background, fire-and-forget —
       // adds ZERO latency to the happy path.
-      void this.verifyDispatch(id, ex, payload, dir, dispatchedAt)
+      // SKIPPED for project-bound spawns: no hooks there means no submit signal —
+      // the verifier would read "never submitted" forever and re-inject a payload
+      // that DID land, double-dispatching the session. Fail-open instead.
+      if (!external) void this.verifyDispatch(id, ex, payload, dir, dispatchedAt)
+      else tlog.event('dispatch-verify-skipped', { reason: 'external-cwd-no-hooks', cwd: runCwd })
     } catch (e) {
       tlog.error('dispatch failed before polling', { error: (e as Error).message })
       this.transition(id, 'failed', { error: { reason: 'Could not start the task', detail: (e as Error).message } })
@@ -426,6 +508,12 @@ export class TaskManager extends EventEmitter {
   /** Poll the status file + run the staleness backstop until terminal. */
   private startPolling(id: string): void {
     const tlog = log.child({ taskId: id })
+    // Idempotent: a follow-up into a still-processing task calls this while a
+    // poll interval already runs — overwriting the map entry without clearing
+    // the old interval leaked it forever (found by the queued-follow-up test:
+    // the orphaned timer kept the process alive).
+    const prev = this.timers.get(id)
+    if (prev) clearInterval(prev)
     const timer = setInterval(() => {
       void this.poll(id).catch((e) => tlog.error('poll error', { error: (e as Error).message }))
     }, this.opts.pollMs)
@@ -513,6 +601,7 @@ export class TaskManager extends EventEmitter {
     if (payload?.error) task.error = payload.error
     if (payload?.question) task.question = payload.question
     if (payload?.recipe_suggestion) task.recipeSuggestion = payload.recipe_suggestion
+    if (payload?.thread_context) task.threadContext = String(payload.thread_context).slice(0, 600)
 
     if (prev !== next) {
       tlog.event('state-transition', { from: prev, to: next, step: payload?.step })
@@ -545,6 +634,19 @@ export class TaskManager extends EventEmitter {
         // navigate session holds NO glow, it just stays alive briefly (shorter
         // window, see navigateWarmMs) so a correction ("no, the other one")
         // continues the same session with full context instead of respawning.
+        if (task.category === 'consume' || task.category === 'watch') {
+          this.detachAndKill(id)
+        } else {
+          this.parkWarm(id)
+        }
+        break
+      case 'ready':
+        // Ball-with-user checkpoint: a step finished, the session sits warm
+        // awaiting the user's direction. Queued as "your move" (lowest pull
+        // priority) in the UI; NO doorbell (calm by design), NO librarian yet
+        // (the thread isn't over — curation happens at the final done).
+        tlog.ui('task-row.ready', { summary: task.result?.summary })
+        this.emit('updated', task)
         if (task.category === 'consume' || task.category === 'watch') {
           this.detachAndKill(id)
         } else {
@@ -614,6 +716,8 @@ export class TaskManager extends EventEmitter {
       tlog.warn('answer dropped — no live session', {})
       return
     }
+    const answered = this.tasks.get(id)
+    if (answered) answered.lastUserInputAt = this.clock() // consent clock
     tlog.ui('task-row.answer-submitted', { answer: userAnswer }) // user spoke/typed an answer
     ex.writeStdin(userAnswer)
     // Same submit-confirm as dispatch/followUp — the input occasionally lands one
@@ -637,7 +741,7 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     tlog.ui('task-row.killed', {})
     const task = this.tasks.get(id)
-    if (task && !TERMINAL.includes(task.state)) {
+    if (task && !SETTLED.includes(task.state)) {
       task.state = 'failed'
       task.error = { reason: 'Stopped by you' }
       task.updatedAt = this.clock()
@@ -662,7 +766,10 @@ export class TaskManager extends EventEmitter {
     this.tasks.delete(id)
     this.outputBuffers.delete(id)
     if (task) {
-      try { await fs.rm(task.cwd, { recursive: true, force: true }) } catch (e) {
+      // Delete HOME (our scratch/receipt dir), NEVER cwd: for a project-bound
+      // session cwd is the user's real project directory — rm'ing it would
+      // destroy their repo. home === cwd for scratch oneoffs (same behavior).
+      try { await fs.rm(task.home, { recursive: true, force: true }) } catch (e) {
         tlog.warn('remove: scratch dir delete failed', { error: (e as Error).message })
       }
     }
@@ -689,26 +796,31 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }> }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       const statusPath = join(dir, 'status.json')
       const status = await readStatus(statusPath)
       const now = this.clock()
-      const terminal = status?.state === 'done' || status?.state === 'failed'
+      const terminal = status?.state === 'done' || status?.state === 'failed' || status?.state === 'ready'
       const task: Task = {
         id,
         intent: meta.intent,
+        name: meta.name,
         // Pre-sessionId receipts won't carry one; fall back to the task id so the
         // field is always present (older tasks simply aren't session-pinned).
         sessionId: meta.sessionId ?? id,
+        kind: meta.kind ?? 'oneoff',
         // A non-terminal task whose session died with the app is, to the user,
         // interrupted — surface it as failed (still resumable) rather than a
         // forever-spinning 'processing'.
         state: terminal ? status!.state : 'failed',
         createdAt: meta.createdAt ?? now,
         updatedAt: (await statusMtimeMs(statusPath)) ?? meta.createdAt ?? now,
-        cwd: dir,
+        // Project-bound sessions ran in the user's real dir (meta.cwd); resume
+        // must respawn THERE (`--continue` is cwd-scoped). home is always ours.
+        cwd: meta.cwd ?? dir,
+        home: dir,
         statusPath,
         recipeScratchPath: join(dir, 'recipe.json'),
         lastMtimeMs: now,
@@ -720,6 +832,8 @@ export class TaskManager extends EventEmitter {
         surface: meta.surface,
         mode: meta.mode ?? 'managed',
         injectedRecipes: meta.injectedRecipes ?? [],
+        shelved: meta.shelved || undefined,
+        note: meta.note || undefined,
       }
       this.tasks.set(id, task)
       this.emit('created', task)
@@ -757,9 +871,26 @@ export class TaskManager extends EventEmitter {
    * via remove(); NEVER touches ~/.claude. Public so it can be unit-tested.
    */
   async purgeStale(): Promise<void> {
+    // Decay valve (ready-inflation defense): a ready ONE-OFF the user has
+    // ignored for an hour was not actually awaiting their move — settle it to
+    // done so it fades instead of haunting the queue all day. Ready SESSIONS
+    // never decay: a thread's open loop is real until the user closes it.
+    const readyCutoff = this.clock() - 60 * 60_000
+    for (const t of this.tasks.values()) {
+      if (t.state === 'ready' && (t.kind ?? 'oneoff') !== 'session' && t.updatedAt < readyCutoff) {
+        t.state = 'done'
+        t.updatedAt = this.clock()
+        this.emit('updated', t)
+        log.child({ taskId: t.id }).event('ready-decayed-to-done', {})
+      }
+    }
     const cutoff = this.clock() - this.opts.purgeAgeMs
     // 1. IN-MEMORY tasks that have aged out — remove() kills the live session too.
-    const stale = [...this.tasks.values()].filter((t) => t.updatedAt < cutoff)
+    //    PERSISTENT SESSIONS ARE EXEMPT: a multi-day working session is untouched
+    //    "by updatedAt" for days by design — auto-purging it would delete the
+    //    user's living workspace. Sessions die only by explicit kill/remove.
+    //    SHELVED tasks are exempt too — shelving IS the "keep this" gesture.
+    const stale = [...this.tasks.values()].filter((t) => t.updatedAt < cutoff && t.kind !== 'session' && !t.shelved)
     if (stale.length) {
       log.event('purge-sweep', { count: stale.length })
       for (const t of stale) await this.remove(t.id)
@@ -788,6 +919,13 @@ export class TaskManager extends EventEmitter {
         mtimeMs = st.mtimeMs // dir mtime advances on every status (atomic rename) ≈ last activity
       } catch { continue }
       if (mtimeMs >= cutoff) continue // recent orphan (e.g. a just-crashed run) — keep
+      // Persistent-session receipts are NEVER orphan-purged (same exemption as
+      // pass 1): if one isn't in memory (e.g. this sweep ran before rehydrate),
+      // deleting it would erase a multi-day session behind the user's back.
+      try {
+        const meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) as { kind?: string }
+        if (meta.kind === 'session') continue
+      } catch { /* junk/pre-receipt dir — purgeable as before */ }
       try { this.opts.reapSession?.(id) } catch { /* best-effort */ }
       try { await fs.rm(dir, { recursive: true, force: true }) } catch { /* ignore */ }
       removed++
@@ -804,7 +942,7 @@ export class TaskManager extends EventEmitter {
     const ids = [...this.executors.keys()]
     for (const id of ids) {
       const task = this.tasks.get(id)
-      if (task && !TERMINAL.includes(task.state)) {
+      if (task && !SETTLED.includes(task.state)) {
         task.state = 'failed'
         task.error = { reason: 'Stopped (kill all)' }
         task.updatedAt = this.clock()
@@ -822,6 +960,80 @@ export class TaskManager extends EventEmitter {
    * into the kept-alive PTY and resumes. Returns false if the session is gone
    * (caller should dispatch a fresh task instead).
    */
+  /** Fold a patch into the task's meta.json (best-effort durability). Serialized
+   *  per task so concurrent merges can't clobber each other's fields. */
+  private mergeMeta(task: Task, patch: Record<string, unknown>, op: string): void {
+    const metaPath = join(task.home, 'meta.json')
+    const prev = this.metaChains.get(task.id) ?? Promise.resolve()
+    const next = prev
+      .then(() => fs.readFile(metaPath, 'utf8'))
+      .then((raw) => fs.writeFile(metaPath, JSON.stringify({ ...JSON.parse(raw), ...patch })))
+      .catch((e) => log.child({ taskId: task.id }).warn(`${op}: meta persist failed`, { error: (e as Error).message }))
+    this.metaChains.set(task.id, next)
+    void next.finally(() => { if (this.metaChains.get(task.id) === next) this.metaChains.delete(task.id) })
+  }
+
+  /** Set the session's short display name (generated async after dispatch). Emits
+   *  'updated' so the UI swaps the truncated-intent fallback for the real name,
+   *  and persists it into meta.json so the name survives an app restart. */
+  setName(id: string, name: string): void {
+    const task = this.tasks.get(id)
+    const n = (name || '').trim()
+    if (!task || !n || task.name === n) return
+    task.name = n
+    task.updatedAt = this.clock()
+    this.emit('updated', task)
+    // Durability (best-effort): fold the name into the receipt.
+    this.mergeMeta(task, { name: n }, 'setName')
+  }
+
+  /** Change a task's species. Promotion (oneoff → session) CANCELS any armed
+   *  warm-kill timer — the whole point is that the session now outlives idle
+   *  windows. Demotion re-arms lifecycle on the next park. Persists to meta so
+   *  the species survives restarts; emits 'updated' for the UIs. */
+  setKind(id: string, kind: 'oneoff' | 'session'): void {
+    const task = this.tasks.get(id)
+    if (!task || task.kind === kind) return
+    task.kind = kind
+    task.updatedAt = this.clock()
+    if (kind === 'session') {
+      const wt = this.warmTimers.get(id)
+      if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
+    } else if (this.executors.get(id)?.alive && TERMINAL.includes(task.state)) {
+      // Demoted while parked-without-timer → re-enter the normal oneoff park
+      // (arms the warm window) so it can't linger forever as an unpinned oneoff.
+      this.parkWarm(id)
+    }
+    this.emit('updated', task)
+    log.child({ taskId: id }).event('kind-changed', { kind })
+    this.mergeMeta(task, { kind }, 'setKind')
+  }
+
+  /** Shelve/unshelve (Orchestrate): preserved-but-out-of-the-way. Persists to
+   *  meta.json so the shelf survives restarts; emits 'updated' for the wall. */
+  setShelved(id: string, on: boolean): void {
+    const task = this.tasks.get(id)
+    if (!task || !!task.shelved === on) return
+    task.shelved = on
+    task.updatedAt = this.clock()
+    this.emit('updated', task)
+    log.child({ taskId: id }).event(on ? 'shelved' : 'unshelved', {})
+    this.mergeMeta(task, { shelved: on }, 'setShelved')
+  }
+
+  /** Set/clear the user's card note (annotation only — the agent never sees it).
+   *  Persists to meta.json; empty string clears. */
+  setNote(id: string, note: string): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    const n = (note || '').trim().slice(0, 500)
+    if ((task.note ?? '') === n) return
+    task.note = n || undefined
+    task.updatedAt = this.clock()
+    this.emit('updated', task)
+    this.mergeMeta(task, { note: n }, 'setNote')
+  }
+
   followUp(id: string, text: string): boolean {
     const tlog = log.child({ taskId: id })
     const ex = this.executors.get(id)
@@ -829,6 +1041,19 @@ export class TaskManager extends EventEmitter {
     if (!ex?.alive || !task) {
       tlog.warn('followUp: session no longer warm — caller should dispatch new', {})
       return false
+    }
+    // Mid-turn? Then the write below will QUEUE until the REPL is idle. Making
+    // that visible (step label + event) is what teaches the user they can speak
+    // at a busy session without fear — the thought is held, never lost, and
+    // never derails the running turn.
+    const wasBusy = task.state === 'processing'
+    task.lastUserInputAt = this.clock() // user spoke to this thread — consent clock
+    // Graduation (§5): the 2nd follow-up proves this is a THREAD, not an errand —
+    // promote to a persistent session (one follow-up is a common quick correction).
+    task.followUps = (task.followUps ?? 0) + 1
+    if (task.kind !== 'session' && task.followUps >= 2) {
+      tlog.event('graduated-to-session', { followUps: task.followUps })
+      this.setKind(id, 'session')
     }
     // Cancel the idle-kill so the session can't be reaped while we wait below
     // for it to go idle.
@@ -839,6 +1064,11 @@ export class TaskManager extends EventEmitter {
     // though the actual write is deferred until the REPL is idle (below).
     task.state = 'processing'
     task.updatedAt = this.clock()
+    if (wasBusy) {
+      task.step = 'follow-up queued — delivering when the session is idle'
+      this.emit('follow-up-queued', task)
+      tlog.event('follow-up-queued', {})
+    }
     this.emit('updated', task)
 
     // A follow-up is a FRESH dispatch into the SAME session — the only thing
@@ -862,6 +1092,13 @@ export class TaskManager extends EventEmitter {
       await ex.isReady()
       if (!ex.alive) { tlog.warn('followUp: session died before it went idle — instruction NOT delivered', {}); return }
       ex.writeStdin(payload)
+      if (wasBusy) {
+        // Delivered — retire the queued label (the session's own status writes
+        // own `step` from here).
+        task.step = undefined
+        this.emit('follow-up-delivered', task)
+        this.emit('updated', task)
+      }
       // Start the heartbeat/stuck clock only NOW — when the instruction actually
       // lands — so a long idle-wait above can't trip the stale-stuck detector.
       task.lastMtimeMs = task.lastHeartbeatMs = this.clock() // reset so the old 'done' file isn't read as stale
@@ -914,7 +1151,9 @@ export class TaskManager extends EventEmitter {
       //  2. FINISHED ('done') → leave it warm and silent for the user's next
       //     prompt — exactly the prior behavior (no regression to this path).
       const status = await readStatus(task.statusPath)
-      const unfinished = status?.state !== 'done'
+      // 'ready' = ball with the USER — resume warm+silent awaiting their words,
+      // never nudge it to "continue" (there is nothing to continue without them).
+      const unfinished = status?.state !== 'done' && status?.state !== 'ready'
       if (unfinished) {
         const nudge = buildResumeNudge(task.intent, task.statusPath)
         ex.writeStdin(nudge)
@@ -967,22 +1206,116 @@ export class TaskManager extends EventEmitter {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
+  /** Recently FINISHED one-off tasks whose sessions are gone (dead PTY), newest
+   *  first. The router's short-term memory AND resume-routing pool: a follow-up
+   *  within the window can RESURRECT a 'done' task (`--continue` restores its
+   *  full context — the thread literally continues on the same card); anything
+   *  else is context for a self-contained NEW intent. Tightly capped — nobody
+   *  follows up on an errand from an hour ago expecting the same conversation,
+   *  and a stale resume is worse than a fresh task. Persistent sessions are
+   *  EXCLUDED (they die only via restarts; rehydration owns that path, and the
+   *  consent policy owns their routing). */
+  recentlyFinished(maxAgeMs = 15 * 60_000, limit = 5): Task[] {
+    const cutoff = this.clock() - maxAgeMs
+    return [...this.tasks.values()]
+      .filter((t) =>
+        TERMINAL.includes(t.state) &&
+        (t.kind ?? 'oneoff') !== 'session' &&
+        this.executors.get(t.id)?.alive !== true &&
+        t.updatedAt >= cutoff)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit)
+  }
+
+  /** Attach an image (or any file) to a session — the voice-era equivalent of
+   *  dragging a screenshot into the terminal. Saves the bytes under the task's
+   *  OWN dir (home/attachments — never the user's project), then TYPES the path
+   *  into the session's input box WITHOUT submitting: the user can keep speaking
+   *  and their next utterance submits together with the image as one message
+   *  (exactly the drag-a-file-into-a-terminal contract). Claude Code reads the
+   *  image from the path. Returns the saved path, or null if the session is gone.
+   */
+  async attachFile(id: string, data: Uint8Array, ext: string): Promise<string | null> {
+    const tlog = log.child({ taskId: id })
+    const task = this.tasks.get(id)
+    const ex = this.executors.get(id)
+    if (!task || !ex?.alive) {
+      tlog.warn('attachFile: no live session to attach to', {})
+      return null
+    }
+    const safeExt = (ext || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
+    const dir = join(task.home, 'attachments')
+    await fs.mkdir(dir, { recursive: true })
+    const file = join(dir, `attachment-${this.clock()}.${safeExt}`)
+    await fs.writeFile(file, data)
+    // Space-padded so the path never fuses with text already in the input box;
+    // NO carriage return — submission belongs to the user's next utterance/keys.
+    this.sendInput(id, ` ${file} `)
+    tlog.event('file-attached', { file, bytes: data.byteLength })
+    return file
+  }
+
   /** Forward RAW keystrokes from the live terminal into the session's PTY
    *  (PRD §4.3 typeable terminal). No carriage return is appended — xterm sends
    *  the exact bytes (including Enter as \r) the user typed. No-op if dead. */
   sendInput(id: string, data: string): void {
     const ex = this.executors.get(id)
     if (!ex?.alive) return
+    const t = this.tasks.get(id)
+    if (t) t.lastUserInputAt = this.clock() // typing into the terminal = consent
     // A user typing into a parked-warm session means they want to keep working;
     // cancel the idle-kill so their hands-on session isn't reaped under them.
     const wt = this.warmTimers.get(id)
     if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
+    this.trackTypedTurn(id, data)
     ex.write(data)
+  }
+
+  /** Typed-turn detection: a MANUAL prompt submitted into a finished session's
+   *  terminal is a real new turn — the card must leave 'done' and the status
+   *  polling must wake back up (it stopped at parkWarm, so even the agent's own
+   *  status writes were going unread — the stale-DONE bug). Deliberately fussy
+   *  about what counts as a prompt: escape sequences (arrows etc.) are stripped,
+   *  control chars don't count, bare Enters don't count, and `/commands`
+   *  (TUI actions like /clear) don't count — only ≥3 printable chars submitted
+   *  with Enter re-arm the lifecycle. Non-terminal tasks are untouched (their
+   *  polling is already live). */
+  private typedBuffers = new Map<string, string>()
+  private trackTypedTurn(id: string, data: string): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    let buf = this.typedBuffers.get(id) ?? ''
+    for (const chunk of data.split(/(\r)/)) {
+      if (chunk === '\r') {
+        const line = buf.replace(/\x1b\[[0-9;?]*[A-Za-z~]/g, '').replace(/[^\x20-\x7E]/g, '').trim()
+        buf = ''
+        if (line.length >= 3 && !line.startsWith('/') && TERMINAL.includes(task.state)) {
+          const tlog = log.child({ taskId: id })
+          tlog.event('typed-turn-detected', { chars: line.length })
+          task.error = undefined // a fresh manual turn clears the stale failure reason
+          this.transition(id, 'processing', {})
+          this.startPolling(id) // safe: terminal tasks have no live poller
+        }
+      } else {
+        for (const ch of chunk) {
+          if (ch === '\x7f' || ch === '\b') buf = buf.slice(0, -1) // backspace erases for real
+          else buf += ch
+        }
+        buf = buf.slice(-2000) // bounded — we only need "was it non-trivial"
+      }
+    }
+    this.typedBuffers.set(id, buf)
   }
 
   /** Resize a session's PTY to match the on-screen terminal (TUI reflow). */
   resize(id: string, cols: number, rows: number): void {
     this.executors.get(id)?.resize(cols, rows)
+  }
+
+  /** The session's CURRENT screen straight from tmux (canonical, colors kept).
+   *  null ⇒ no tmux / no live executor — caller falls back to buffered replay. */
+  async captureScreen(id: string): Promise<string | null> {
+    return (await this.executors.get(id)?.captureScreen?.()) ?? null
   }
 
   /** Is the task's PTY still alive (running or parked-warm)? The live terminal
@@ -1010,9 +1343,17 @@ export class TaskManager extends EventEmitter {
   private parkWarm(id: string): void {
     this.stopPolling(id)
     const ex = this.executors.get(id)
+    const tlog = log.child({ taskId: id })
+    // Persistent sessions park warm with NO idle timer: a working session must
+    // never be reaped under the user between interactions — hours can pass
+    // between "done" and the next spoken follow-up. Lives until explicit kill.
+    if (this.tasks.get(id)?.kind === 'session') {
+      if (!ex?.alive) { this.hardKill(id); return }
+      tlog.event('parked-warm', { warmMs: null, persistent: true })
+      return
+    }
     const warmMs = this.warmMsFor(id)
     if (!ex?.alive || warmMs <= 0) { this.hardKill(id); return }
-    const tlog = log.child({ taskId: id })
     const t = setTimeout(() => {
       tlog.event('warm-idle-timeout', { warmMs })
       this.hardKill(id)
@@ -1027,6 +1368,7 @@ export class TaskManager extends EventEmitter {
     this.stopPolling(id)
     const wt = this.warmTimers.get(id)
     if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
+    this.typedBuffers.delete(id)
     const ex = this.executors.get(id)
     if (ex?.alive) ex.kill() // the REPL won't exit on its own
     this.executors.delete(id)

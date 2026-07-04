@@ -216,3 +216,182 @@ test('parseDecision: continue decision also carries mode and surface', () => {
   assert.equal(d.surface, 'gmail')
   assert.equal(d.mode, 'managed')
 })
+
+// ─── Orchestrate enrichment: species/name/project in the snapshot; kind/dir out ──
+
+test('buildRoutingPrompt carries name, species, project, humanized age, and the known-projects list', () => {
+  const tasks: RoutableTask[] = [{
+    id: 's1', intent: 'work on the gating feature', name: 'Gating feature work',
+    state: 'processing', kind: 'session', project: 'unmute-cloud', ageSec: 200_000,
+  }]
+  const p = buildRoutingPrompt('keep going on gating', tasks, '/d/decision.json',
+    [{ name: 'unmute-cloud', path: '/Users/u/tools/unmute/unmute-cloud' }])
+  assert.ok(p.includes('"Gating feature work"'), 'name in the task line')
+  assert.ok(p.includes('PERSISTENT SESSION'), 'species called out')
+  assert.ok(p.includes('project: unmute-cloud'), 'project label in the task line')
+  assert.ok(p.includes('2d ago'), 'age humanized, not 200000s')
+  assert.ok(p.includes('unmute-cloud → /Users/u/tools/unmute/unmute-cloud'), 'known projects offered')
+  assert.ok(p.includes('"kind"'), 'JSON shape includes kind')
+  // Without projects, the section disappears entirely.
+  const bare = buildRoutingPrompt('x', tasks, '/d/decision.json')
+  assert.ok(!bare.includes('Known project directories'))
+})
+
+test('parseDecision: kind/dir honored on new; dir only from the offered list; dir implies session', () => {
+  const projects = [{ name: 'app', path: '/Users/u/tools/app' }]
+  const d1 = parseDecision('{"action":"new","intent":"work on app","kind":"session","dir":"/Users/u/tools/app"}', 'r', [], projects)
+  assert.equal(d1.kind, 'session')
+  assert.equal(d1.dir, '/Users/u/tools/app')
+  // An invented path never becomes a spawn cwd.
+  const d2 = parseDecision('{"action":"new","intent":"x","dir":"/etc"}', 'r', [], projects)
+  assert.equal(d2.dir, undefined)
+  // dir from the list implies kind session even if the model said oneoff.
+  const d3 = parseDecision('{"action":"new","intent":"x","kind":"oneoff","dir":"/Users/u/tools/app"}', 'r', [], projects)
+  assert.equal(d3.kind, 'session')
+  // No dir + no kind → oneoff (status quo).
+  const d4 = parseDecision('{"action":"new","intent":"open mail"}', 'r', [], projects)
+  assert.equal(d4.kind, 'oneoff')
+  assert.equal(d4.dir, undefined)
+})
+
+test('parseDecision: alternate honored on new only when it names an offered task', () => {
+  const tasks: RoutableTask[] = [{ id: 't1', intent: 'check emails', state: 'processing', ageSec: 30 }]
+  const d1 = parseDecision('{"action":"new","intent":"draft a tweet","alternate":"t1"}', 'r', tasks)
+  assert.equal(d1.alternate, 't1')
+  const d2 = parseDecision('{"action":"new","intent":"x","alternate":"ghost"}', 'r', tasks)
+  assert.equal(d2.alternate, undefined)
+  // Never on continue.
+  const d3 = parseDecision('{"action":"continue","targetTaskId":"t1","intent":"x","alternate":"t1"}', 'r', tasks)
+  assert.equal(d3.alternate, undefined)
+})
+
+test('parseDecision: router-minted name honored on new; junk names dropped', () => {
+  const d1 = parseDecision('{"action":"new","intent":"check pricing","name":"Unmute pricing check"}', 'r', [])
+  assert.equal(d1.name, 'Unmute pricing check')
+  const d2 = parseDecision('{"action":"new","intent":"x","name":"  \\"Quoted.\\" "}', 'r', [])
+  assert.equal(d2.name, 'Quoted')
+  const long = 'x'.repeat(60)
+  const d3 = parseDecision(`{"action":"new","intent":"x","name":"${long}"}`, 'r', [])
+  assert.equal(d3.name, undefined)
+})
+
+test('buildRoutingPrompt: recently-finished section — reference resolution + no CONTINUE into the dead', () => {
+  const finished: RoutableTask[] = [{ id: 'dead1', intent: 'Play Wolf by Selena Gomez on YouTube', name: 'Selena Gomez song', state: 'done', ageSec: 150 }]
+  const p = buildRoutingPrompt('change the song to Charlie Puth', [], '/d/decision.json', [], finished)
+  assert.ok(p.includes('Recently FINISHED'), 'section present')
+  assert.ok(p.includes('Selena Gomez song'), 'finished task named for reference resolution')
+  assert.ok(p.includes('SELF-CONTAINED'), 'instructs carrying context into a new intent when not resuming')
+  // The design evolved: done one-offs ARE offered — but only via action "resume"
+  // (revive + deliver), never as continue targets (their sessions are dead).
+  const d = parseDecision('{"action":"continue","targetTaskId":"dead1","intent":"x"}', 'x', [], [], [], finished)
+  assert.equal(d.action, 'new', 'continue into the dead still falls back safely')
+})
+
+test('failsafe NEVER continues into a RUNNING task — a wrong new task is cheap, a wrong injection is destructive', () => {
+  const running: RoutableTask[] = [{ id: 'r1', intent: 'devise growth strategy', state: 'processing', ageSec: 20 }]
+  const d = failsafeDecision(running, 'rephrase this tweet and copy it')
+  assert.equal(d.action, 'new', 'running lone task → new, never inject')
+  // …but a lone task WAITING on the user is still the likely target (an answer).
+  const waiting: RoutableTask[] = [{ id: 'w1', intent: 'draft email', state: 'needs-user', ageSec: 20 }]
+  assert.equal(failsafeDecision(waiting, 'send it to Bob').action, 'continue')
+  // and a parked finished task keeps its follow-up window.
+  const parked: RoutableTask[] = [{ id: 'p1', intent: 'check emails', state: 'done', ageSec: 60 }]
+  assert.equal(failsafeDecision(parked, 'reply to the second one').action, 'continue')
+})
+
+// ─── Consent policy: cold working sessions are focus-only ─────────────────────
+
+test('cold sessions render as non-targetable context; continue into one is REJECTED; alternate to one is allowed', () => {
+  const cold: RoutableTask[] = [{
+    id: 'sess1', intent: 'devise growth strategy', name: 'Growth strategy',
+    state: 'processing', kind: 'session', ageSec: 7200,
+  }]
+  const p = buildRoutingPrompt('rephrase this tweet', [], '/d/decision.json', [], [], cold)
+  assert.ok(p.includes('may NOT'), 'prompt marks cold sessions non-targetable')
+  assert.ok(p.includes('Growth strategy'), 'cold session still visible as context')
+  assert.ok(p.includes('one-tap offer'), 'offer path explained')
+
+  // Layer 2 enforcement: model disobeys and targets the cold session → rejected → NEW.
+  const d1 = parseDecision('{"action":"continue","targetTaskId":"sess1","intent":"rephrase tweet"}', 'r', [], [], cold)
+  assert.equal(d1.action, 'new', 'continue into a cold session is rejected at parse')
+  assert.equal(d1.targetTaskId, undefined)
+
+  // alternate → cold session is the CONSENT path (one-tap offer) — allowed.
+  const d2 = parseDecision('{"action":"new","intent":"rephrase tweet","alternate":"sess1"}', 'r', [], [], cold)
+  assert.equal(d2.action, 'new')
+  assert.equal(d2.alternate, 'sess1')
+
+  // targetable tasks keep working exactly as before.
+  const hot: RoutableTask[] = [{ id: 'hot1', intent: 'draft doc', state: 'processing', kind: 'session', ageSec: 30 }]
+  const d3 = parseDecision('{"action":"continue","targetTaskId":"hot1","intent":"add a section"}', 'r', hot, [], cold)
+  assert.equal(d3.action, 'continue')
+  assert.equal(d3.targetTaskId, 'hot1')
+})
+
+// ─── Resume-routing: recently-finished one-offs are revivable threads ─────────
+
+test('resume tier: done one-offs render RESUMABLE with ids; failed are context-only; parse enforces it', () => {
+  const finished: RoutableTask[] = [
+    { id: 'dead-done', intent: 'Play the Amrit video', name: 'Amrit video', state: 'done', ageSec: 120 },
+    { id: 'dead-fail', intent: 'Open some page', state: 'failed', ageSec: 200 },
+  ]
+  const p = buildRoutingPrompt('summarize the video you just played', [], '/d/decision.json', [], finished)
+  assert.ok(p.includes('[dead-done]') && p.includes('RESUMABLE'), 'done one-off is offered as a resume target')
+  assert.ok(!p.includes('[dead-fail]'), 'failed task gets no id — context only')
+  assert.ok(p.includes('"resume"'), 'JSON shape includes the resume action')
+
+  // resume → done id: accepted, thread revives.
+  const d1 = parseDecision('{"action":"resume","targetTaskId":"dead-done","intent":"summarize the video"}', 'r', [], [], [], finished)
+  assert.equal(d1.action, 'resume')
+  assert.equal(d1.targetTaskId, 'dead-done')
+
+  // resume → failed id: rejected → safe new.
+  const d2 = parseDecision('{"action":"resume","targetTaskId":"dead-fail","intent":"x"}', 'r', [], [], [], finished)
+  assert.equal(d2.action, 'new')
+
+  // resume → a cold SESSION id: rejected (consent policy holds even here).
+  const cold: RoutableTask[] = [{ id: 'sess1', intent: 'growth strategy', state: 'processing', kind: 'session', ageSec: 7200 }]
+  const d3 = parseDecision('{"action":"resume","targetTaskId":"sess1","intent":"x"}', 'r', [], [], cold, finished)
+  assert.equal(d3.action, 'new')
+})
+
+// ─── speak verb + recall pointer ──────────────────────────────────────────────
+
+test('speak: meta-commands are read-only — any known id targetable, unknown → overall, never spawns', () => {
+  const tasks: RoutableTask[] = [{ id: 'q1', intent: 'draft email', state: 'needs-user', ageSec: 10 }]
+  const cold: RoutableTask[] = [{ id: 'sess1', intent: 'growth work', state: 'processing', kind: 'session', ageSec: 9000 }]
+  const p = buildRoutingPrompt('read me the question', tasks, '/d/decision.json', [], [], cold)
+  assert.ok(p.includes('META-COMMANDS'), 'speak instructions present')
+  const d1 = parseDecision('{"action":"speak","targetTaskId":"q1","intent":"read the question"}', 'r', tasks, [], cold)
+  assert.equal(d1.action, 'speak')
+  assert.equal(d1.targetTaskId, 'q1')
+  // cold sessions are speakable (hearing ≠ injecting)
+  const d2 = parseDecision('{"action":"speak","targetTaskId":"sess1","intent":"status"}', 'r', tasks, [], cold)
+  assert.equal(d2.targetTaskId, 'sess1')
+  // unknown id degrades to overall status, still speak
+  const d3 = parseDecision('{"action":"speak","targetTaskId":"ghost","intent":"status"}', 'r', tasks, [], cold)
+  assert.equal(d3.action, 'speak')
+  assert.equal(d3.targetTaskId, undefined)
+})
+
+test('recall: contextTaskId rides on NEW when it names a known task (cold included); junk dropped', () => {
+  const cold: RoutableTask[] = [{ id: 'sess1', intent: 'pricing work', name: 'Pricing session', state: 'processing', kind: 'session', ageSec: 9000 }]
+  const p = buildRoutingPrompt('what did the pricing session conclude?', [], '/d/decision.json', [], [], cold)
+  assert.ok(p.includes('RECALL'), 'recall instructions present')
+  const d1 = parseDecision('{"action":"new","intent":"what did pricing conclude","contextTaskId":"sess1"}', 'r', [], [], cold)
+  assert.equal(d1.action, 'new')
+  assert.equal(d1.contextTaskId, 'sess1')
+  const d2 = parseDecision('{"action":"new","intent":"x","contextTaskId":"ghost"}', 'r', [], [], cold)
+  assert.equal(d2.contextTaskId, undefined)
+})
+
+test('ready one-offs are RESUMABLE resume targets (the most natural continue)', () => {
+  const finished: RoutableTask[] = [
+    { id: 'parked-ready', intent: 'load the CS2 video', name: 'CS2 video', state: 'ready', ageSec: 120 },
+  ]
+  const p = buildRoutingPrompt('now summarize what the video says', [], '/d/decision.json', [], finished)
+  assert.ok(p.includes('[parked-ready]') && p.includes('RESUMABLE'), 'ready one-off offered as a resume target')
+  const d = parseDecision('{"action":"resume","targetTaskId":"parked-ready","intent":"summarize the video"}', 'r', [], [], [], finished)
+  assert.equal(d.action, 'resume')
+  assert.equal(d.targetTaskId, 'parked-ready')
+})

@@ -83,6 +83,15 @@ export function tmuxKillSessionArgs(session: string): string[] {
   return ['-L', TMUX_SOCKET, 'kill-session', '-t', session]
 }
 
+/** Dump the session's CURRENT screen (+ recent history), colors included. tmux
+ *  is the continuous observer — it has watched every byte since spawn — so this
+ *  is the canonical picture of the terminal RIGHT NOW, no reconstruction, no
+ *  repaint games. -e keeps escape sequences (colors), -p prints to stdout,
+ *  -S -1000 includes up to 1000 lines of scrollback above the visible screen. */
+export function tmuxCapturePaneArgs(session: string): string[] {
+  return ['-L', TMUX_SOCKET, 'capture-pane', '-t', session, '-ep', '-S', '-1000']
+}
+
 /** Resolve the tmux binary across common install locations (Homebrew, MacPorts,
  *  system). Returns null if not installed — caller falls back to a direct spawn. */
 export function resolveTmuxBin(

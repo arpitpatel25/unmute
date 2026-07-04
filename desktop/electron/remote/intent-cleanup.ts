@@ -66,3 +66,31 @@ export async function cleanIntent(rawTranscript: string, complete: CompleteFn): 
     return { intent: raw, cleaned: false }
   }
 }
+
+const NAME_PROMPT = [
+  'You name a task with a SHORT title for a session list in a UI.',
+  'Reply with ONLY a 2-5 word title in plain text — no quotes, no punctuation, no trailing period.',
+  'Capture the essence, e.g. "Twitter strategy folder summary", "Open Dodo women\'s page", "Fresh Claude session".',
+].join(' ')
+
+/**
+ * Generate a short display name (2-5 words) for a task from its intent. Best-effort:
+ * returns '' on any failure/oversize so the caller keeps its truncated-intent fallback.
+ * Runs ASYNC after dispatch — never on the capture/dispatch hot path.
+ */
+export async function nameIntent(intent: string, complete: CompleteFn): Promise<string> {
+  const raw = (intent || '').trim()
+  if (!raw) return ''
+  try {
+    const out = (await complete([
+      { role: 'system', content: NAME_PROMPT },
+      { role: 'user', content: raw },
+    ]))?.trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
+    if (!out || out.length > 48) return ''
+    log.event('name-generated', { intent: raw, name: out })
+    return out
+  } catch (e) {
+    log.warn('name generation failed', { error: (e as Error).message })
+    return ''
+  }
+}

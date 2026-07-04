@@ -20,7 +20,7 @@
 
 import { ipcMain, BrowserWindow, Notification, shell, app } from 'electron'
 import Store from 'electron-store'
-import { join, dirname } from 'node:path'
+import { join, dirname, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { execFile } from 'node:child_process'
@@ -28,13 +28,17 @@ import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, type AgentKind } from './codex-executor'
-import { cleanIntent, type CompleteFn } from './intent-cleanup'
+import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
+import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask } from './router'
+import { knownProjects, projectSlug } from './projects'
+import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
+import { locateTranscript } from './trace-reducer'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
 
@@ -99,6 +103,17 @@ interface RemoteSettings {
   // default. The pill widget can override this per-session; this is the saved
   // default the Remote screen controls.
   forceRawMode: boolean
+  // §6.4 voice-as-doorbell: speak one terse headline when a task becomes
+  // actionable (needs-you/stuck/errored). ON by default; the product stays fully
+  // usable dead silent with this off — one toggle away (cockpit 🔔 chip).
+  voiceHeadlines: boolean
+  // Screenshot capture during dictation/Remote: screenshots taken WHILE speaking
+  // auto-attach (dictation → pasted after the text; Remote → attached to the
+  // task). OFF reverts to plain behavior — Unmute never touches screenshots.
+  screenshotCapture: boolean
+  // Skills the user pinned to the top of the cockpit rail (manual override of
+  // the earned-trust ranking).
+  pinnedSkills: string[]
 }
 
 const settings = new Store<RemoteSettings>({
@@ -120,6 +135,9 @@ const settings = new Store<RemoteSettings>({
     overlayDocked: true,
     librarianWriteEnabled: false,
     forceRawMode: false,
+    voiceHeadlines: true,
+    screenshotCapture: true,
+    pinnedSkills: [],
   },
 })
 
@@ -210,21 +228,51 @@ function routerExecutorFactory() {
 
 /** Build the router's task snapshot from Unmute's live map (Unmute is the hub —
  *  the router never touches sessions). */
-function routableSnapshot(now: number): RoutableTask[] {
-  if (!manager) return []
+/** How long a user interaction keeps a session's thread HOT (auto-routable).
+ *  Past this, a persistent session is focus-only — the consent policy. */
+const HOT_THREAD_MS = 10 * 60_000
+
+function snapshotOf(t: Task, now: number, surfaced: boolean): RoutableTask {
+  return {
+    id: t.id,
+    intent: t.intent,
+    name: t.name ?? null,
+    state: t.state,
+    kind: t.kind ?? 'oneoff',
+    // What the user SAYS to address a project session ("the unmute one") — only
+    // meaningful when the task runs outside our scratch dir.
+    project: t.cwd !== t.home ? basename(t.cwd) : null,
+    category: t.category ?? null,
+    ageSec: Math.max(0, Math.round((now - t.updatedAt) / 1000)),
+    surfaced,
+    awaiting: t.state === 'needs-user',
+    question: t.state === 'needs-user' ? (t.question?.text ?? null) : null,
+  }
+}
+
+/** THE CONSENT POLICY (safety, layer 1 of 3): partition the routable tasks.
+ *  targetable — the router may auto-continue into these: all one-offs, any task
+ *    blocked on a question (it ASKED for input), and sessions whose thread is
+ *    HOT (the user themselves spoke/typed into them within HOT_THREAD_MS —
+ *    including a just-graduated errand, hot by construction, so conversations
+ *    never go deaf mid-flow).
+ *  coldSessions — long-running sessions the user hasn't touched recently:
+ *    NEVER auto-targetable. Shown to the router as context only, reachable via
+ *    the declinable offer (alternate) or explicit focus — a tap is the consent. */
+function partitionRoutable(now: number): { targetable: RoutableTask[]; coldSessions: RoutableTask[] } {
+  if (!manager) return { targetable: [], coldSessions: [] }
+  const targetable: RoutableTask[] = []
+  const coldSessions: RoutableTask[] = []
   // routableTasks() is newest-first; the most-recent one is the de-facto
   // "on-screen" task (the overlay auto-expands the last change) — mark it so the
   // router has that prior when the command is terse.
-  return manager.routableTasks().map((t, i) => ({
-    id: t.id,
-    intent: t.intent,
-    state: t.state,
-    category: t.category ?? null,
-    ageSec: Math.max(0, Math.round((now - t.updatedAt) / 1000)),
-    surfaced: i === 0,
-    awaiting: t.state === 'needs-user',
-    question: t.state === 'needs-user' ? (t.question?.text ?? null) : null,
-  }))
+  manager.routableTasks().forEach((t, i) => {
+    const snap = snapshotOf(t, now, i === 0)
+    const hot = (t.lastUserInputAt ?? 0) > now - HOT_THREAD_MS
+    if ((t.kind ?? 'oneoff') === 'session' && t.state !== 'needs-user' && !hot) coldSessions.push(snap)
+    else targetable.push(snap)
+  })
+  return { targetable, coldSessions }
 }
 
 // tmux backing for the live terminal (pop-out to a real terminal = SAME session).
@@ -361,6 +409,12 @@ function serializeTask(t: Task) {
   return {
     id: t.id,
     intent: t.intent,
+    name: t.name ?? null,
+    cwd: t.cwd,
+    kind: t.kind ?? 'oneoff',
+    threadContext: t.threadContext ?? null,
+    shelved: t.shelved ?? false,
+    note: t.note ?? null,
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,
@@ -437,48 +491,555 @@ export function registerIntentCleanupLLM(fn: CompleteFn): void {
  * (PRD §5.1). Cleans the intent (or passes through) then dispatches a task.
  * Returns the taskId.
  */
+// Orchestrate focus (§6.2 — "focus IS the address"). The wall's currently-focused
+// session id, or null. Set via remote:set-orchestrate-focus. When set, a capture
+// routes to it DETERMINISTICALLY (see the short-circuit below) — the offer-never-move
+// spine: the user can SEE where their voice lands before they speak.
+let orchestrateFocusId: string | null = null
+
+/** The voice lifecycle, observed (never driven) for the wall's listening surface:
+ *  listening (key held) → transcribing (key up, STT running) → routing (deciding
+ *  where it lands) → idle (landed; taskId says where). PURELY ADDITIVE — a
+ *  broadcast beside the existing capture calls, zero touch of the capture path. */
+type CapturePhase = 'listening' | 'transcribing' | 'routing' | 'idle'
+function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): void {
+  captureBusy = phase !== 'idle' // the doorbell stays silent while the user speaks
+  // The screenshot ledger follows the capture window (remote captures only —
+  // this broadcast never fires for plain dictation). The clipboard sweep runs at
+  // 'transcribing' (key just lifted, recording stopped) so a mid-hold
+  // ⌃-screenshot rides with THIS utterance, before routing delivers it.
+  if (phase === 'listening') startCaptureWatch()
+  else if (phase === 'transcribing') secureAndClearClipboard() // key just lifted — secure, then clear if consumed
+  else if (phase === 'idle') stopCaptureWatch()
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
+  }
+}
+
+/** The one pending "or send it there?" route offer (only the LATEST matters —
+ *  a new utterance supersedes any stale offer). Accepting kills the seconds-old
+ *  mis-spawn and reroutes the SAME intent into the alternate; ignoring it costs
+ *  nothing and it simply expires in the UI. */
+let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; at: number } | null = null
+
+// ── Staging tray (multimodal, capture-first): images pasted/dropped with NO
+// target stage here, then ride with the NEXT utterance to wherever it lands —
+// new task (paths join the intent), continuation/answer (paths typed into the
+// target right before the payload, submitting as ONE message). The tray is to
+// images what the router is to words: an address-free buffer resolved at
+// speak-time. Files live under ~/.unmute/remote/staging (tiny, swept with age).
+const STAGING_DIR = join(homedir(), '.unmute', 'remote', 'staging')
+let stagedAttachments: string[] = []
+/** Clipboard screenshots NOTICED during recording but not yet readable (reading
+ *  the image mid-recording corrupts audio; the FORMAT list is free metadata).
+ *  Purely a counter for the pill — the real read happens at key-lift. */
+let pendingClipboardCount = 0
+function broadcastStaged(): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length + pendingClipboardCount, paths: stagedAttachments, pending: pendingClipboardCount })
+  }
+}
+
+// ── Utterance-scoped screenshot capture (the pill ledger). The dictation window
+// is the CONSENT signal: screenshots taken while addressing Unmute — or in the
+// short gap since the last utterance — belong to what's being said. Everything
+// staged is VISIBLE on the pill (🖼 n, prunable with ✕) before it sends; nothing
+// rides invisibly. Only ever active for REMOTE captures, never plain dictation.
+const CAPTURE_MAX_AUTO = 12
+let captureWatchTimer: ReturnType<typeof setInterval> | null = null
+let captureWatchGen = 0 // generation guard: a stale safety-stop must not kill a newer watch
+let screenshotDirCache: string | null = null
+/** Signatures (size + head-hash) of every clipboard image we've seen — staged
+ *  OR marked known at a capture boundary. One image never attaches twice, and
+ *  a stale pre-existing clipboard image never auto-attaches. */
+const knownClipSigs = new Set<string>()
+
+/** Cheap, consistent signature: byte length + md5 of the first 4KB. Never
+ *  hashes a whole multi-MB PNG. */
+function sigOf(buf: Buffer): string {
+  const head = buf.subarray(0, 4096)
+  const md5 = require('node:crypto').createHash('md5').update(head).digest('hex') as string
+  return `${buf.length}:${md5}`
+}
+
+
+// ── The multi-screenshot enabler: rescue each ⌃-clipboard screenshot the moment
+// it lands — BEFORE the next one overwrites it — without main ever touching the
+// image while recording. An osascript CHILD PROCESS dumps the pasteboard PNG to
+// a probe file (all decode/write cost lives in the child); main only stats the
+// result and reads 4KB for the signature. New signature → copy into staging
+// (APFS clone, ~instant) → the pill chip counts up live with a REAL file.
+const CLIP_PROBE_FILE = () => join(STAGING_DIR, '.clip-probe.png')
+let clipProbeBusy = false
+/** Has THIS capture window completed its baseline probe? The baseline learns
+ *  whatever image was already in the clipboard BEFORE the trigger, so it never
+ *  attaches. Until it has verifiably completed, every probe runs learn-only —
+ *  a skipped baseline (previous probe still in flight) or a failed osascript
+ *  must NEVER let a pre-dictation image slip through as "new". */
+let clipBaselined = false
+/** Did any clipboard image get STAGED during the current capture? Drives the
+ *  consume-then-clear at key-lift (we only clear what we delivered). */
+let clipStagedThisCapture = false
+function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, stagedNew: boolean) => void): void {
+  if (clipProbeBusy || (!markOnly && stagedAttachments.length >= CAPTURE_MAX_AUTO)) { onDone?.(false, false); return }
+  clipProbeBusy = true
+  try { mkdirSync(STAGING_DIR, { recursive: true }) } catch { /* ignore */ }
+  const probe = CLIP_PROBE_FILE()
+  // Fresh slate: a leftover probe file from an earlier capture must not read as
+  // "the clipboard's current image" when the child's PNGf coercion errors out
+  // (empty clipboard) and leaves the file untouched.
+  try { (require('node:fs') as typeof import('node:fs')).rmSync(probe, { force: true }) } catch { /* ignore */ }
+  const script = [
+    'try',
+    'set png to the clipboard as «class PNGf»',
+    `set f to open for access POSIX file "${probe}" with write permission`,
+    'set eof f to 0',
+    'write png to f',
+    'close access f',
+    'on error',
+    'end try',
+  ].flatMap((l) => ['-e', l])
+  execFile('osascript', script, { timeout: 5000 }, (err) => {
+    clipProbeBusy = false
+    if (err) { onDone?.(false, false); return } // osascript itself failed — clipboard state UNKNOWN, stay unbaselined
+    try {
+      const { statSync, openSync, readSync, closeSync, copyFileSync, rmSync } = require('node:fs') as typeof import('node:fs')
+      let st: import('node:fs').Stats
+      try { st = statSync(probe) } catch { clipBaselined = true; onDone?.(false, false); return } // no file = no image on the clipboard — baseline trivially done
+      if (!st.size) { clipBaselined = true; onDone?.(false, false); return }
+      const head = Buffer.alloc(Math.min(4096, st.size))
+      const fd = openSync(probe, 'r')
+      readSync(fd, head, 0, head.length, 0)
+      closeSync(fd)
+      const md5 = require('node:crypto').createHash('md5').update(head).digest('hex') as string
+      const sig = `${st.size}:${md5}`
+      if (knownClipSigs.has(sig)) { clipBaselined = true; onDone?.(true, false); return }
+      knownClipSigs.add(sig)
+      clipBaselined = true
+      if (markOnly) { onDone?.(true, false); return } // baseline: pre-dictation image learned, never attached
+      const dest = join(STAGING_DIR, `capture-${Date.now()}-clipboard.png`)
+      copyFileSync(probe, dest)
+      try { rmSync(probe, { force: true }) } catch { /* next probe overwrites anyway */ }
+      stagedAttachments.push(dest)
+      clipStagedThisCapture = true
+      broadcastStaged()
+      log.event('capture-staged', { file: dest, via: 'clipboard-probe' })
+      onDone?.(true, true)
+    } catch { onDone?.(false, false) /* probe unreadable — skip */ }
+  })
+}
+
+/** Key-lift: secure any last clipboard screenshot, then — if this capture
+ *  consumed clipboard images — CLEAR the clipboard. Transcription (1-3s) gives
+ *  the clear ages to propagate, so the TEXT paste later races against an empty,
+ *  long-settled pasteboard = the ancient fast path that never failed. We only
+ *  clear what we delivered: a pre-dictation image we never staged is left alone. */
+function secureAndClearClipboard(): void {
+  if (settings.get('screenshotCapture') === false) return
+  // If the baseline never completed this capture, this probe is LEARN-ONLY: an
+  // image of unknown provenance (could predate the trigger) must not attach.
+  probeClipboardViaChild(!clipBaselined, (sawImage, stagedNew) => {
+    if (sawImage && (stagedNew || clipStagedThisCapture)) {
+      try {
+        const { clipboard } = require('electron') as typeof import('electron')
+        clipboard.clear()
+        log.event('clipboard-cleared-after-consume', {})
+      } catch { /* best-effort */ }
+    }
+  })
+}
+
+function screenshotDir(): string {
+  if (screenshotDirCache) return screenshotDirCache
+  screenshotDirCache = join(homedir(), 'Desktop') // macOS default
+  try {
+    execFile('defaults', ['read', 'com.apple.screencapture', 'location'], { timeout: 2000 }, (err, stdout) => {
+      const loc = (stdout || '').trim()
+      if (!err && loc) screenshotDirCache = loc.replace(/^~/, homedir())
+    })
+  } catch { /* keep Desktop */ }
+  return screenshotDirCache
+}
+
+function stageBuffer(buf: Buffer, tag: string): void {
+  if (stagedAttachments.length >= CAPTURE_MAX_AUTO) return
+  try {
+    mkdirSync(STAGING_DIR, { recursive: true })
+    const file = join(STAGING_DIR, `capture-${Date.now()}-${tag}.png`)
+    writeFileSync(file, buf)
+    stagedAttachments.push(file)
+    broadcastStaged()
+    log.event('capture-staged', { file, via: tag })
+  } catch (e) { log.warn('stageBuffer failed', { error: (e as Error).message }) }
+}
+
+/** Stage screenshot FILES newer than `sinceMs`. Scans the system screenshot
+ *  location PLUS common user arrangements (a Screenshots subfolder on the
+ *  Desktop / in the location). Inside a dedicated Screenshots folder any image
+ *  counts; elsewhere only Screenshot-named files (never random Desktop pngs). */
+function stageRecentScreenshotFiles(sinceMs: number): void {
+  const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+  const base = screenshotDir()
+  const dirs = [
+    { dir: base, anyImage: false },
+    { dir: join(base, 'Screenshots'), anyImage: true },
+    { dir: join(homedir(), 'Desktop', 'Screenshots'), anyImage: true },
+  ]
+  for (const { dir, anyImage } of dirs) {
+    let entries: string[]
+    try { entries = readdirSync(dir) } catch { continue }
+    let matched = 0
+    for (const entry of entries) {
+      if (stagedAttachments.length >= CAPTURE_MAX_AUTO) break
+      if (!/\.(png|jpe?g)$/i.test(entry)) continue
+      if (!anyImage && !/^screen ?shot/i.test(entry)) continue
+      const full = join(dir, entry)
+      try {
+        const st = statSync(full)
+        if (st.mtimeMs > sinceMs && !stagedAttachments.includes(full)) {
+          matched++
+          stagedAttachments.push(full) // reference in place — never copy/move user files
+          broadcastStaged()
+          log.event('capture-staged', { file: full, via: 'file' })
+        }
+      } catch { /* skip */ }
+    }
+    if (matched) log.event('capture-sweep', { dir, matched, sinceMs })
+  }
+}
+
+/** A capture began (remote OR dictation): sweep the pre-hold window, then watch live.
+ *
+ *  PERFORMANCE IS SACRED HERE: this runs WHILE audio is being recorded. Reading
+ *  the clipboard image means decoding + PNG-encoding a potentially huge Retina
+ *  screenshot on the main process — doing that on an interval stalled the
+ *  recording pipeline and corrupted the audio (ffmpeg: "Invalid data"). So the
+ *  clipboard is read exactly TWICE per capture — once at start (pre-hold sweep),
+ *  once at stop — never on a timer. Only the cheap file-dir scan polls live
+ *  (readdir + stat, microseconds), so ⌘⇧3/⌘⇧4 file captures still count up in
+ *  real time; a ⌃-clipboard capture taken mid-hold appears when the key lifts. */
+function startCaptureWatch(): void {
+  if (settings.get('screenshotCapture') === false) return // feature off — never touch screenshots
+  captureWatchGen++
+  if (captureWatchTimer) clearInterval(captureWatchTimer)
+  const startedAt = Date.now()
+  pendingClipboardCount = 0
+  clipStagedThisCapture = false
+  log.event('capture-watch-start', { dir: screenshotDir() })
+  // DURING-DICTATION ONLY (the whole idea): what existed before key-down never
+  // attaches. Baseline probe LEARNS the pre-existing clipboard image (markOnly);
+  // file sweeps start from startedAt. Zero main-thread image work while
+  // recording — the osascript child does all pasteboard reads (the ONLY reader;
+  // a second reader with a different PNG encoder is what duplicated pastes).
+  clipBaselined = false
+  probeClipboardViaChild(true)
+  captureWatchTimer = setInterval(() => {
+    stageRecentScreenshotFiles(startedAt)
+    // Staging unlocks only once a baseline has COMPLETED for this window; until
+    // then each tick retries the baseline (learn-only) instead.
+    probeClipboardViaChild(!clipBaselined)
+  }, 900)
+  ;(captureWatchTimer as { unref?: () => void }).unref?.()
+}
+
+
+function stopCaptureWatch(): void {
+  if (captureWatchTimer) { clearInterval(captureWatchTimer); captureWatchTimer = null }
+  pendingClipboardCount = 0
+  broadcastStaged()
+}
+
+/** Dictation delivery seam (clipboard.ts calls this after pasting the text):
+ *  hand over everything staged and close the watch window. The ledger's contract
+ *  holds across BOTH capture kinds — what the pill showed is what got delivered. */
+export function consumeStagedForDictation(): string[] {
+  stopCaptureWatch()
+  return takeStaged()
+}
+/** Consume the tray (one landing takes everything). */
+function takeStaged(): string[] {
+  if (!stagedAttachments.length) return []
+  const taken = stagedAttachments
+  stagedAttachments = []
+  broadcastStaged()
+  return taken
+}
+/** Type staged paths into a live session's input (unsubmitted — the payload that
+ *  follows submits them together). Best-effort. */
+function typeStagedInto(taskId: string, staged: string[]): void {
+  if (!staged.length || !manager) return
+  manager.sendInput(taskId, ` ${staged.join(' ')} `)
+  log.event('staged-delivered', { taskId, count: staged.length, via: 'typed' })
+}
+/** Fold staged paths into a NEW task's intent (Claude Code reads images by path). */
+function intentWithStaged(intent: string, staged: string[]): string {
+  if (!staged.length) return intent
+  log.event('staged-delivered', { count: staged.length, via: 'intent' })
+  return `${intent}\n[The user attached ${staged.length} image${staged.length === 1 ? '' : 's'} — view: ${staged.join(' ')}]`
+}
+
+// ── Voice-as-doorbell (§6.4): one terse spoken headline when a task becomes
+// actionable — names the task, states the state, nothing else. Spoken ONLY for
+// attention-required states (needs-you / stuck / errored); "done" pops silently.
+// Serialized (one line at a time), deduped per task+state, NEVER spoken while a
+// capture is live (talking over the user's own dictation is the cardinal sin of
+// audio), and one toggle away (settings.voiceHeadlines; default ON). macOS `say`
+// — zero dependencies, fully offline, no own intelligence.
+let captureBusy = false
+const spokenState = new Map<string, string>()
+let sayChain: Promise<void> = Promise.resolve()
+function speakHeadline(t: Task, state: 'needs-user' | 'stuck' | 'failed'): void {
+  if (settings.get('voiceHeadlines') === false) return
+  // Dedupe on state + question text: the same blocked question never re-rings,
+  // but a NEW question on the same task rings again (it IS newly actionable).
+  const ringKey = `${state}:${t.question?.text ?? ''}`
+  if (spokenState.get(t.id) === ringKey) return
+  spokenState.set(t.id, ringKey)
+  const label = state === 'needs-user' ? 'needs you' : state === 'stuck' ? 'is stuck' : 'failed'
+  const name = (t.name || t.intent || 'a task').slice(0, 60)
+  speakLine(`${name} ${label}`)
+}
+
+/** Speak one line aloud (serialized; silent while the user is mid-capture).
+ *  Shared by the doorbell and the 'speak' router verb. */
+function speakLine(text: string): void {
+  const line = text.trim().slice(0, 500)
+  if (!line) return
+  sayChain = sayChain.then(() => new Promise<void>((resolve) => {
+    if (captureBusy) { resolve(); return } // the user is speaking — stay silent
+    try { execFile('say', [line], () => resolve()) } catch { resolve() }
+  })).catch(() => {})
+}
+
+/** Compose + speak the answer to a 'speak' meta-command — DETERMINISTIC string
+ *  building from the task map, zero LLM in the speech path. The router only
+ *  picked the target; the data (question/state/context) is already here. */
+function speakAbout(taskId: string | undefined): void {
+  if (!manager) return
+  if (taskId) {
+    const t = manager.get(taskId)
+    if (!t) { speakLine('That task is gone.'); return }
+    const name = (t.name || t.intent || 'the task').slice(0, 60)
+    if (t.question?.text) {
+      let line = `${name} asks: ${t.question.text.slice(0, 280)}`
+      const choices = t.question.choices ?? []
+      if (choices.length) line += '. ' + choices.map((c, i) => `Option ${i + 1}: ${c}`).join('. ')
+      speakLine(line)
+    } else if (t.state === 'processing') {
+      speakLine(`${name} is working. ${t.step ? t.step : t.threadContext ?? ''}`)
+    } else if (t.state === 'failed' || t.state === 'stuck') {
+      speakLine(`${name} ${t.state === 'stuck' ? 'is stuck' : 'errored'}. ${t.error?.reason ?? ''}`)
+    } else if (t.state === 'ready') {
+      speakLine(`${name} is ready for your next step. ${t.result?.summary ?? t.threadContext ?? ''}`)
+    } else {
+      speakLine(`${name} is done. ${t.result?.summary ?? t.threadContext ?? ''}`)
+    }
+    return
+  }
+  // Overall status — one glanceable sentence.
+  const all = manager.list()
+  const needs = all.filter((t) => t.state === 'needs-user' || t.state === 'failed' || t.state === 'stuck')
+  const working = all.filter((t) => t.state === 'processing')
+  if (!needs.length && !working.length) { speakLine('All clear. Nothing running.'); return }
+  const parts: string[] = []
+  if (needs.length) {
+    const first = needs[0]
+    parts.push(`${needs.length} need${needs.length === 1 ? 's' : ''} you — ${(first.name || first.intent).slice(0, 50)}${first.question?.text ? `, asking: ${first.question.text.slice(0, 120)}` : ''}`)
+  }
+  if (working.length) parts.push(`${working.length} working`)
+  speakLine(parts.join('. '))
+}
+
+// ── The acknowledgment beat (the addiction dashboard's first number): every
+// voice dispatch ends in ONE terse spoken confirmation — "On it", "Passed to
+// X", "Queued for X" — or an honest "That didn't land." NEVER silence: a
+// spoken utterance that vanishes without a trace is the single worst event in
+// the product (it poisons the press-and-forget reflex itself). The inner
+// routing sets the beat per branch; '' means deliberately silent (speak verb
+// answers for itself; a focused stage is already being watched). Spoken via
+// speakLine ⇒ serialized + gated by the same doorbell toggle.
+let pendingBeat: string | null = null
+
 export async function dispatchFromCapture(rawTranscript: string): Promise<string | null> {
+  // Observe the routing phase for the wall's listening surface — the dispatch
+  // logic itself (the inner function) is untouched. `finally` guarantees the
+  // surface always returns to idle, whatever path the dispatch takes.
+  broadcastCapturePhase('routing')
+  pendingBeat = null
+  let landed: string | null = null
+  try {
+    landed = await dispatchFromCaptureInner(rawTranscript)
+    return landed
+  } finally {
+    broadcastCapturePhase('idle', landed)
+    // Speak AFTER the phase returns to idle (captureBusy released) so the beat
+    // can't be dropped by the talking-over-the-user guard.
+    const beat = pendingBeat !== null ? pendingBeat : landed ? 'On it.' : 'That didn\u2019t land.'
+    if (beat) speakLine(beat)
+    pendingBeat = null
+  }
+}
+
+async function dispatchFromCaptureInner(rawTranscript: string): Promise<string | null> {
   if (!manager) {
     log.error('dispatchFromCapture before initRemote')
     return null
   }
   const raw = (rawTranscript || '').trim()
   if (!raw) { log.warn('empty transcript — not dispatching', {}); return null }
+  // The staging tray rides with THIS utterance to wherever it lands.
+  const staged = takeStaged()
+
+  // 0. ORCHESTRATE FOCUS short-circuit (§6.2). If the wall is focused on a session,
+  //    the utterance goes THERE — deterministically, bypassing the router. This is
+  //    PURELY ADDITIVE: with nothing focused (orchestrateFocusId === null) the block
+  //    is skipped and routing below is exactly as before. We reuse the SAME paths
+  //    the router uses (answer a blocked task / followUp to continue) — no new send.
+  if (orchestrateFocusId && manager.list().some((t) => t.id === orchestrateFocusId)) {
+    const fid = orchestrateFocusId
+    // Hygiene: the deterministic path skips the router, so it must not skip
+    // CLEANUP — an STT misfire ("Happy Rates!") would land verbatim otherwise.
+    // Best-effort: without a wired completeFn the raw transcript passes through
+    // (status quo); delivery stays deterministic either way.
+    const text = completeFn ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
+    const awaiting = manager.tasksAwaitingUser().some((t) => t.id === fid)
+    if (awaiting) {
+      typeStagedInto(fid, staged) // images + answer submit as one message
+      manager.answer(fid, text)
+      log.event('routed-to-focus', { taskId: fid, kind: 'answer' })
+      pendingBeat = '' // the stage is on screen — the beat would be noise
+      return fid
+    }
+    typeStagedInto(fid, staged)
+    if (manager.followUp(fid, text)) {
+      log.event('routed-to-focus', { taskId: fid, kind: 'continue' })
+      pendingBeat = ''
+      return fid
+    }
+    // Focused task couldn't take it (terminal/gone) → fall through to normal routing.
+  }
 
   // 1. ALL routing goes through the warm router — including answering a task that
-  //    is blocked on a question. There is no deterministic short-circuit: the
-  //    router sees blocked tasks (flagged "awaiting" with their question) in its
-  //    snapshot and decides intelligently whether this utterance answers one,
-  //    continues another, or starts something new. The router is resident/warm,
-  //    so routing everything through it is still instant.
-  const routable = manager.routableTasks()
-  if (routable.length && router) {
+  //    is blocked on a question, and including the ZERO-open-tasks case: the
+  //    router also decides the new task's species (oneoff vs persistent session)
+  //    and its project binding ("work on the unmute repo" → that exact dir), so
+  //    even a cold first utterance needs its judgement. It folds transcript
+  //    cleanup into the same turn, and it's resident/warm — still instant.
+  if (router) {
     const awaitingIds = new Set(manager.tasksAwaitingUser().map((t) => t.id))
     try {
       const tRoute = Date.now()
-      const decision = await router.route(raw, routableSnapshot(Date.now()))
+      // The user's real project universe (curated + recency-ranked, read-only
+      // from ~/.claude.json) — what lets the router bind a session to a repo.
+      const projects = await knownProjects().catch(() => [])
+      // Short-term memory: recently finished tasks (sessions gone) so "change
+      // the song" still resolves — as a self-contained NEW intent, never a
+      // resurrection.
+      const nowMs = Date.now()
+      const finished = manager.recentlyFinished().map((t) => ({
+        id: t.id, intent: t.intent, name: t.name ?? null, state: t.state,
+        kind: t.kind ?? 'oneoff', category: t.category ?? null,
+        ageSec: Math.max(0, Math.round((nowMs - t.updatedAt) / 1000)),
+      }))
+      const { targetable, coldSessions } = partitionRoutable(nowMs)
+      const decision = await router.route(raw, targetable, projects, finished, coldSessions)
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       if (decision.action === 'continue' && decision.targetTaskId) {
         const tid = decision.targetTaskId
-        // Continuing a BLOCKED task means piping the utterance in as its answer;
-        // continuing a live task means a fresh follow-up turn.
-        if (awaitingIds.has(tid)) {
-          log.event('routed-as-answer', { taskId: tid, via: 'router' })
-          manager.answer(tid, decision.intent || raw)
-          return tid
+        // CONSENT GUARD (layer 3 of 3 — parse validation should make this
+        // unreachable): never auto-inject into a cold persistent session.
+        const target = manager.get(tid)
+        const targetHot = (target?.lastUserInputAt ?? 0) > Date.now() - HOT_THREAD_MS
+        if (target && (target.kind ?? 'oneoff') === 'session' && target.state !== 'needs-user' && !targetHot) {
+          log.warn('consent guard: refused continue into cold session — dispatching new', { taskId: tid })
+        } else {
+          // Continuing a BLOCKED task means piping the utterance in as its answer;
+          // continuing a live task means a fresh follow-up turn.
+          const targetName = (target?.name || target?.intent || 'it').slice(0, 50)
+          if (awaitingIds.has(tid)) {
+            log.event('routed-as-answer', { taskId: tid, via: 'router' })
+            typeStagedInto(tid, staged)
+            manager.answer(tid, decision.intent || raw)
+            pendingBeat = `Passed to ${targetName}.`
+            return tid
+          }
+          const targetBusy = target?.state === 'processing' // mid-turn — the follow-up will queue
+          typeStagedInto(tid, staged)
+          if (manager.followUp(tid, decision.intent)) {
+            log.event('routed-as-continuation', { taskId: tid, via: 'router' })
+            pendingBeat = targetBusy
+              ? `Queued for ${targetName} — it\u2019s mid-task, I\u2019ll pass it on when it\u2019s free.`
+              : `Passed to ${targetName}.`
+            return tid
+          }
         }
-        if (manager.followUp(tid, decision.intent)) {
-          log.event('routed-as-continuation', { taskId: tid, via: 'router' })
-          return tid
+      }
+      // SPEAK (meta-command): the user asked to HEAR something — read-only,
+      // nothing spawned, nothing injected. Speech is composed deterministically
+      // from the task map; the router only chose the target.
+      if (decision.action === 'speak') {
+        log.event('routed-as-speak', { taskId: decision.targetTaskId ?? null })
+        speakAbout(decision.targetTaskId)
+        pendingBeat = '' // the spoken answer IS the acknowledgment
+        return null
+      }
+      // RESUME-ROUTING: the utterance follows up a recently-finished one-off
+      // (≤15min, capped). Revive that exact session (`--continue` restores its
+      // full context), then deliver — the thread literally continues on its own
+      // card. Failure falls through to a safe new task; the utterance is never
+      // lost.
+      if (decision.action === 'resume' && decision.targetTaskId) {
+        const tid = decision.targetTaskId
+        log.event('routed-as-resume', { taskId: tid, via: 'router' })
+        try {
+          if (await manager.resume(tid)) {
+            typeStagedInto(tid, staged) // images + words submit as one message
+            if (manager.followUp(tid, decision.intent || raw)) {
+              pendingBeat = `Continuing ${(manager.get(tid)?.name || 'it').slice(0, 50)}.`
+              return tid
+            }
+          }
+          log.warn('resume-routing failed — falling through to new task', { taskId: tid })
+        } catch (e) {
+          log.warn('resume-routing threw — falling through to new task', { taskId: tid, error: (e as Error).message })
         }
       }
       // The user's raw override (pill/Remote screen) forces RAW regardless of
       // the router's pick — a clean Claude Code session with no Unmute injection.
       const forcedRaw = injectionDisabled()
       const mode = forcedRaw ? 'raw' as const : decision.mode
-      log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: mode ?? null, forcedRaw })
-      return manager.dispatch(decision.intent || raw, { surface: decision.surface, mode })
+      log.event('routed-as-new', { via: 'router', surface: decision.surface ?? null, mode: mode ?? null, forcedRaw, kind: decision.kind ?? null, dir: decision.dir ?? null })
+      // RECALL pointer (§6.6): the command asks about another task's work — hand
+      // the new task that task's ACTUAL record (status + Claude transcript) so it
+      // reads ground truth instead of guessing. Read-only; works for any known
+      // task including cold sessions (hearing about one is not injecting into it).
+      let intentText = decision.intent || raw
+      if (decision.contextTaskId) {
+        const ctx = manager.get(decision.contextTaskId)
+        if (ctx) {
+          const transcript = join(homedir(), '.claude', 'projects', projectSlug(ctx.cwd), `${ctx.sessionId}.jsonl`)
+          intentText += `\n[This refers to a previous task: "${(ctx.name || ctx.intent).slice(0, 80)}". Read its record before answering — status: ${ctx.statusPath}${existsSync(transcript) ? ` — full transcript: ${transcript}` : ''}. Answer from what it actually did, not from assumption.]`
+          log.event('recall-pointer-attached', { contextTaskId: decision.contextTaskId, transcript: existsSync(transcript) })
+        }
+      }
+      const newId = await manager.dispatch(intentWithStaged(intentText, staged), { surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir })
+      // The router minted the display name in the same turn — instant, no extra
+      // call. (The completeFn-based nameIntent below stays as the non-router path.)
+      if (decision.name) manager.setName(newId, decision.name)
+      pendingBeat = decision.name ? `On it \u2014 ${decision.name}.` : 'On it.'
+      // Declinable offer (§6.2 — never a silent reroute, never a blocking prompt):
+      // the router chose NEW but seriously weighed one open task. Surface a
+      // one-tap "or send it there?"; ignoring it costs nothing.
+      if (decision.alternate && manager.get(decision.alternate)) {
+        pendingRouteOffer = { newTaskId: newId, altTaskId: decision.alternate, intent: decision.intent || raw, at: Date.now() }
+        const altName = manager.get(decision.alternate)!.name ?? manager.get(decision.alternate)!.intent
+        for (const w of BrowserWindow.getAllWindows()) {
+          if (!w.isDestroyed()) w.webContents.send('remote:route-offer', { newTaskId: newId, altTaskId: decision.alternate, altName })
+        }
+        log.event('route-offer-surfaced', { newTaskId: newId, altTaskId: decision.alternate })
+      }
+      return newId
     } catch (e) {
       log.warn('router error — dispatching new', { error: (e as Error).message })
       return manager.dispatch(raw, { mode: injectionDisabled() ? 'raw' : undefined })
@@ -489,7 +1050,7 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
   //    executor tolerates raw); use the managed LLM only if it's wired.
   const cleaned = completeFn ? (await cleanIntent(raw, completeFn)).intent : raw
   if (!cleaned) { log.warn('empty intent after cleanup — not dispatching', {}); return null }
-  return manager.dispatch(cleaned, { mode: injectionDisabled() ? 'raw' : undefined })
+  return manager.dispatch(intentWithStaged(cleaned, staged), { mode: injectionDisabled() ? 'raw' : undefined })
 }
 
 /** Read the current Remote trigger key (derived from the dictation key, §2.4.4). */
@@ -516,6 +1077,21 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const runId = String(Date.now())
   const logFile = configureRemoteLogging({ dir: logDir, runId })
   log.event('init-remote', { logFile, permissionMode: settings.get('permissionMode') })
+
+  // Staging hygiene: clipboard screenshots are WRITTEN to the staging dir (file
+  // screenshots are only referenced, never copied) and can't be deleted at send
+  // time — a Remote session may read the path minutes later. Age-sweep instead:
+  // anything older than 48h goes, once per launch. Keeps the disk honest.
+  try {
+    const { readdirSync, statSync, rmSync } = require('node:fs') as typeof import('node:fs')
+    const cutoff = Date.now() - 48 * 3600_000
+    let swept = 0
+    for (const entry of readdirSync(STAGING_DIR)) {
+      const full = join(STAGING_DIR, entry)
+      try { if (statSync(full).mtimeMs < cutoff) { rmSync(full, { force: true }); swept++ } } catch { /* skip */ }
+    }
+    if (swept) log.event('staging-swept', { swept })
+  } catch { /* staging dir doesn't exist yet — fine */ }
 
   // Resolve tmux once: if present, sessions run inside it so the live terminal
   // can be popped out to a real terminal app (same session). Write the minimal
@@ -609,15 +1185,38 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       void router?.warm() // ensure the classifier is ready before the utterance lands (re-warms if it died)
       pauseOverlayEscape() // capture owns Escape (cancel) while recording
       deps.sessionManager.startRemoteCapture()
+      broadcastCapturePhase('listening') // ADDITIVE observer — the capture itself is untouched
     } else if (e.type === 'remote-stop') {
       log.event('remote-key', { phase: 'stop' })
       resumeOverlayEscape() // give Escape back to a still-visible overlay
       void deps.sessionManager.stopRemoteCapture()
+      broadcastCapturePhase('transcribing')
+    } else if (e.type === 'session-start') {
+      // DICTATION captures get the screenshot ledger too (the pill 🖼 chip):
+      // capture-while-dictating pastes the images into the target app right
+      // after the text (see clipboard.ts injectOutput). Watch-only — the
+      // dictation flow itself is untouched.
+      startCaptureWatch()
+    } else if (e.type === 'session-stop') {
+      // Key lifted → recording ended → secure a last-second ⌃-shot, then clear
+      // the clipboard if this capture consumed images — so the text paste later
+      // never races a slow image payload. Transcription absorbs the latency.
+      secureAndClearClipboard()
+      // Safety stop for a cancelled/failed dictation (generation-guarded:
+      // never kills a NEWER capture's watch).
+      const gen = captureWatchGen
+      setTimeout(() => { if (captureWatchGen === gen) stopCaptureWatch() }, 20_000)
     }
   })
 
   // Pre-warm the floating overlay window (hidden) so the first present is instant.
   createOverlayWindow()
+  // Orchestrate cockpit (NEW surface, handoff §3 #3): register the ⌘⇧O toggle.
+  registerOrchestrateShortcut()
+  // DEV-only convenience during build-out: auto-open the cockpit so it's
+  // discoverable without hunting for the shortcut. (ELECTRON_RENDERER_URL is set
+  // only in `electron-vite dev`.) Remove once a real entry point exists.
+  if (process.env.ELECTRON_RENDERER_URL) openOrchestrateWindow()
   // Apply the docked-mode preference (default ON).
   setDockedMode(settings.get('overlayDocked') !== false)
   // One-time: move users still on the OLD opus default to the new sonnet default
@@ -634,30 +1233,68 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Fan task lifecycle out to renderers (PRD §13). Terminal/attention states
   // also AUTO-PRESENT the overlay (the canonical surface; OS notifications off).
   // A new task clears any prior ✕ dismissal and re-shows the dock (docked mode).
-  manager.on('created', (t: Task) => { broadcast('remote:task-created', t); onNewTask(activeTaskCount()) })
+  manager.on('created', (t: Task) => {
+    broadcast('remote:task-created', t)
+    onNewTask(activeTaskCount())
+    // Async: derive a short session name (non-blocking — the capture/dispatch path
+    // already returned; this just swaps the truncated-intent fallback in the UI).
+    // The router usually mints the name in its own turn (instant); this managed-LLM
+    // path is the fallback and must never OVERWRITE a name that already landed.
+    if (completeFn) {
+      void nameIntent(t.intent, completeFn)
+        .then((n) => { if (n && !manager?.get(t.id)?.name) manager?.setName(t.id, n) })
+        .catch(() => {})
+    }
+  })
   manager.on('updated', (t: Task) => { broadcast('remote:task-updated', t); reconcileDock(activeTaskCount()) })
   manager.on('needs-user', (t: Task) => {
     broadcast('remote:task-needs-user', t)
     maybePresent(t)
     reconcileDock(activeTaskCount())
+    speakHeadline(t, 'needs-user') // §6.4 doorbell: terse, serialized, toggleable
   })
+  // ── Skill-usage ledger (deterministic trust fuel): when a task reaches a
+  // successful turn-over (done or ready), credit any Skill invocations in its
+  // transcript to the sidecar ledger. Idempotent (delta-cursored), serialized,
+  // per-task cooldown so a chatty session can't spam transcript reads. The
+  // JUDGED stat (runs_confirmed) stays with the librarian behind its gate.
+  const usageCreditAt = new Map<string, number>()
+  const creditSkillUsage = (t: Task) => {
+    const last = usageCreditAt.get(t.id) ?? 0
+    if (Date.now() - last < 60_000) return
+    usageCreditAt.set(t.id, Date.now())
+    setTimeout(() => {
+      void (async () => {
+        // Exact path first (sessionId is pinned at dispatch); locate as fallback.
+        const exact = join(homedir(), '.claude', 'projects', projectSlug(t.cwd), `${t.sessionId}.jsonl`)
+        const transcriptPath = existsSync(exact) ? exact : await locateTranscript(t.cwd)
+        if (!transcriptPath) return
+        await recordSkillUsage({ taskId: t.id, transcriptPath, statsPath: defaultStatsPath() })
+      })().catch((e) => log.warn('skill-usage credit failed', { taskId: t.id, error: (e as Error).message }))
+    }, 3000) // let Claude flush the transcript tail
+  }
+  manager.on('updated', (t: Task) => { if (t.state === 'ready') creditSkillUsage(t) })
+
   manager.on('done', (t: Task) => {
     broadcast('remote:task-done', t)
     maybePresent(t)
     reconcileDock(activeTaskCount())
     notify('Task done', t.result?.summary ? `${t.intent} — ${t.result.summary}` : t.intent)
+    creditSkillUsage(t)
   })
   manager.on('failed', (t: Task) => {
     broadcast('remote:task-failed', t)
     maybePresent(t)
     reconcileDock(activeTaskCount())
     notify('Task failed', t.mcpGap ? t.mcpGap.message : (t.error?.reason ?? t.intent))
+    speakHeadline(t, 'failed')
   })
   manager.on('stuck', (t: Task) => {
     broadcast('remote:task-stuck', t)
     maybePresent(t)
     reconcileDock(activeTaskCount())
     notify('Task may be stuck', t.intent)
+    speakHeadline(t, 'stuck')
   })
   // Task erased (Kill/Delete) → tell renderers to drop the row + update the dock.
   manager.on('removed', (t: Task) => {
@@ -682,6 +1319,239 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
 
   // ── IPC: actions the renderer (or a future menu) can trigger ──
   ipcMain.handle('remote:dispatch', async (_e, intent: string) => dispatchFromCapture(intent))
+  // The wall reports its focused session here; null clears it. Focus = the voice
+  // address (§6.2). Additive: clearing it restores pure router behaviour.
+  ipcMain.handle('remote:set-orchestrate-focus', async (_e, id: string | null) => {
+    orchestrateFocusId = id || null
+    log.event('orchestrate-focus-set', { taskId: orchestrateFocusId })
+    // Announce the new terminal owner to every renderer. The overlay defers to a
+    // glance for the wall-owned session, so exactly one surface renders a terminal
+    // for a session at a time — no two LiveTerminals fighting over the PTY width.
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('remote:orchestrate-owner', { taskId: orchestrateFocusId })
+    }
+    return true
+  })
+  // Open the cockpit from the in-app Remote screen (the user-facing entry point;
+  // ⌘⇧O stays as the power-user toggle).
+  ipcMain.handle('remote:open-orchestrate', async () => { openOrchestrateWindow(); return true })
+  // Current terminal owner — lets a freshly-mounted overlay card learn it owns
+  // nothing (or that the wall already owns its session) without waiting for an event.
+  ipcMain.handle('remote:get-orchestrate-owner', async () => orchestrateFocusId)
+  // Voice-as-doorbell toggle (§6.4) — read + set from the cockpit's 🔔 chip.
+  ipcMain.handle('remote:get-voice-headlines', async () => settings.get('voiceHeadlines') !== false)
+  ipcMain.handle('remote:set-voice-headlines', async (_e, on: boolean) => { settings.set('voiceHeadlines', !!on); return true })
+  ipcMain.handle('remote:set-screenshot-capture', async (_e, on: boolean) => {
+    settings.set('screenshotCapture', !!on)
+    if (!on) stopCaptureWatch() // kill a live watcher immediately on disable
+    log.event('screenshot-capture-set', { on: !!on })
+    return true
+  })
+  // Pin/unpin a task's species from the UI (manual graduation §5): 'session'
+  // exempts it from idle-kill + purge; 'oneoff' re-arms normal lifecycle.
+  ipcMain.handle('remote:set-kind', async (_e, id: string, kind: 'oneoff' | 'session') => {
+    if (!manager || (kind !== 'oneoff' && kind !== 'session')) return false
+    manager.setKind(id, kind)
+    return true
+  })
+  // Accept the pending route offer: erase the seconds-old mis-spawn and deliver
+  // the SAME intent to the alternate task instead (answer if blocked, else
+  // follow-up — the router's own delivery paths). Validated against main's own
+  // pendingRouteOffer state, so a stale/forged accept is a no-op.
+  ipcMain.handle('remote:accept-route-offer', async (_e, newTaskId: string) => {
+    const offer = pendingRouteOffer
+    if (!manager || !offer || offer.newTaskId !== newTaskId) return false
+    pendingRouteOffer = null
+    const alt = manager.get(offer.altTaskId)
+    if (!alt) return false
+    log.event('route-offer-accepted', { newTaskId, altTaskId: offer.altTaskId })
+    await manager.remove(newTaskId) // the mis-spawn: seconds old, nothing of value
+    if (manager.tasksAwaitingUser().some((t) => t.id === offer.altTaskId)) {
+      manager.answer(offer.altTaskId, offer.intent)
+    } else if (!manager.followUp(offer.altTaskId, offer.intent)) {
+      // Alternate no longer warm — resume it, then the user can re-speak. Honest
+      // fallback; never silently lose the utterance (it stays visible in the log).
+      void manager.resume(offer.altTaskId)
+    }
+    return true
+  })
+  // Glance vocabulary (the rails): skills + projects, read straight from disk —
+  // zero tokens. Skills have no surface anywhere in Claude Code's own UX; giving
+  // them a face is what makes people actually say them.
+  ipcMain.handle('remote:list-skills', async () => {
+    // ALL skills — the rail is the full vocabulary; an unlisted skill is a skill
+    // nobody says. The recipe-store reader only walks surface SUBFOLDERS, which
+    // hid the older root-level skill files — so scan recursively ourselves:
+    // ~/.unmute/remote/{skills,recipes}/**/*.md + ~/.claude/skills entries.
+    // Name = filename (they ARE the names); recency = file mtime. Zero tokens.
+    const { readdirSync, statSync, readFileSync } = await import('node:fs')
+    // The tooltip's substance: the skill's own frontmatter description (first
+    // ~4KB read, single-line 'description:' field — the format both stores use).
+    const metaOf = (mdPath: string): { description: string; runs: number; lastUsed: string } => {
+      try {
+        const head = readFileSync(mdPath, 'utf8').slice(0, 4096)
+        const d = /^description:\s*(.+)$/m.exec(head)
+        const r = /^runs_confirmed:\s*(\d+)/m.exec(head)
+        const u = /^last_used:\s*(\S+)/m.exec(head)
+        return {
+          description: (d?.[1] ?? '').trim().slice(0, 600),
+          runs: r ? Number(r[1]) : 0,
+          lastUsed: (u?.[1] ?? '').slice(0, 10),
+        }
+      } catch { return { description: '', runs: 0, lastUsed: '' } }
+    }
+    const out: Array<{ name: string; lastUsed: string; description: string; runs: number; pinned: boolean }> = []
+    const walk = (dir: string, depth: number) => {
+      if (depth > 3) return
+      let entries: string[]
+      try { entries = readdirSync(dir) } catch { return }
+      for (const entry of entries) {
+        if (entry.startsWith('.')) continue
+        const full = join(dir, entry)
+        try {
+          const st = statSync(full)
+          if (st.isDirectory()) { walk(full, depth + 1); continue }
+          if (!entry.endsWith('.md')) continue
+          const meta = metaOf(full)
+          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: meta.lastUsed || new Date(st.mtimeMs).toISOString().slice(0, 10), description: meta.description, runs: meta.runs, pinned: false })
+        } catch { /* skip unreadable */ }
+      }
+    }
+    walk(join(homedir(), '.unmute', 'remote', 'skills'), 0)
+    walk(join(homedir(), '.unmute', 'remote', 'recipes'), 0)
+    // ~/.claude/skills: loose .md files AND skill folders (dir name = skill name,
+    // description in <dir>/SKILL.md).
+    const claudeDir = join(homedir(), '.claude', 'skills')
+    try {
+      for (const entry of readdirSync(claudeDir)) {
+        if (entry.startsWith('.')) continue
+        try {
+          const full = join(claudeDir, entry)
+          const st = statSync(full)
+          const meta = st.isDirectory() ? metaOf(join(full, 'SKILL.md')) : metaOf(full)
+          out.push({ name: entry.replace(/\.md$/, ''), lastUsed: meta.lastUsed || new Date(st.mtimeMs).toISOString().slice(0, 10), description: meta.description, runs: meta.runs, pinned: false })
+        } catch { /* skip */ }
+      }
+    } catch { /* no ~/.claude/skills — fine */ }
+    const seen = new Set<string>()
+    const pinned = new Set(settings.get('pinnedSkills') ?? [])
+    // Merge the usage ledger: frontmatter runs_confirmed (librarian-judged, for
+    // Unmute-owned skills) + sidecar runs (deterministic invocation credit, for
+    // ALL skills incl. the user's own — whose files we never write). lastUsed
+    // takes the freshest of the two.
+    const ledger = await readSkillStats(defaultStatsPath())
+    // Earned-trust ranking: pinned first (the user's override), then proven use
+    // (confirmed + used runs), then recency. A junk skill touched yesterday no
+    // longer outranks the workhorse used forty times last month.
+    return out
+      .filter((s) => s.name && !seen.has(s.name) && (seen.add(s.name), true))
+      .map((s) => {
+        const u = ledger.skills[s.name]
+        return {
+          ...s,
+          runs: s.runs + (u?.runs ?? 0),
+          lastUsed: u?.lastUsed && u.lastUsed > (s.lastUsed || '') ? u.lastUsed : s.lastUsed,
+          pinned: pinned.has(s.name),
+        }
+      })
+      .sort((a, b) =>
+        Number(b.pinned) - Number(a.pinned) ||
+        b.runs - a.runs ||
+        (b.lastUsed || '').localeCompare(a.lastUsed || ''))
+      .slice(0, 30)
+  })
+  // Pin/unpin a skill (the manual override of earned-trust ranking).
+  ipcMain.handle('remote:pin-skill', async (_e, name: string, on: boolean) => {
+    const cur = new Set(settings.get('pinnedSkills') ?? [])
+    if (on) cur.add(name); else cur.delete(name)
+    settings.set('pinnedSkills', [...cur])
+    return true
+  })
+  ipcMain.handle('remote:list-projects', async () => {
+    const projects = await knownProjects(8).catch(() => [])
+    const home = homedir()
+    const kept = projects.filter((p) => p.path !== home) // ran-claude-in-~ is not a project
+    // Duplicate basenames (backend/calorify_ai vs frontend/calorify_ai) are
+    // indistinguishable — disambiguate with the parent dir.
+    const counts = new Map<string, number>()
+    for (const p of kept) counts.set(p.name, (counts.get(p.name) ?? 0) + 1)
+    return kept.slice(0, 6).map((p) => ({
+      name: (counts.get(p.name) ?? 0) > 1 ? `${basename(dirname(p.path))}/${p.name}` : p.name,
+      path: p.path,
+    }))
+  })
+  // Rename a task — names are VOICE ADDRESSES, so users must be able to fix a
+  // bad auto-name. Persists via setName (survives restarts).
+  ipcMain.handle('remote:rename-task', async (_e, id: string, name: string) => {
+    if (!manager || !name?.trim()) return false
+    manager.setName(id, name.trim().slice(0, 48))
+    return true
+  })
+  // Shelve/unshelve — preserved-but-out-of-the-way (hidden from the wall grid,
+  // purge-exempt, findable in the rail's Shelf).
+  ipcMain.handle('remote:set-shelved', async (_e, id: string, on: boolean) => {
+    if (!manager) return false
+    manager.setShelved(id, !!on)
+    return true
+  })
+  // Card note — the user's annotation (ticket link, context); never fed to the agent.
+  ipcMain.handle('remote:set-note', async (_e, id: string, note: string) => {
+    if (!manager) return false
+    manager.setNote(id, typeof note === 'string' ? note : '')
+    return true
+  })
+  // Staging tray: stage an image with no target (rides with the next utterance).
+  ipcMain.handle('remote:stage-image', async (_e, data: ArrayBuffer, ext: string) => {
+    try {
+      mkdirSync(STAGING_DIR, { recursive: true })
+      const safeExt = (ext || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
+      const file = join(STAGING_DIR, `staged-${Date.now()}-${stagedAttachments.length}.${safeExt}`)
+      writeFileSync(file, Buffer.from(data))
+      stagedAttachments.push(file)
+      broadcastStaged()
+      log.event('image-staged', { file, count: stagedAttachments.length })
+      return file
+    } catch (e) {
+      log.warn('stage-image failed', { error: (e as Error).message })
+      return null
+    }
+  })
+  ipcMain.handle('remote:get-staged', async () => stagedAttachments)
+  // Thumbnails for the pill ledger's dropdown — you can't judge "should I remove
+  // this?" from a number. Small data-URLs (CSP-proof; file:// is blocked in the
+  // renderer), freshly derived per call.
+  ipcMain.handle('remote:staged-previews', async () => {
+    // While a capture is live, decoding images for thumbnails is the SAME class
+    // of main-thread work that corrupted recordings — placeholder rows instead;
+    // real previews the moment the capture ends.
+    if (captureWatchTimer) return stagedAttachments.map((path) => ({ path, dataUrl: '' }))
+    const { nativeImage } = require('electron') as typeof import('electron')
+    return stagedAttachments.map((path) => {
+      try {
+        const img = nativeImage.createFromPath(path)
+        if (img.isEmpty()) return { path, dataUrl: '' }
+        return { path, dataUrl: img.resize({ height: 80 }).toDataURL() }
+      } catch { return { path, dataUrl: '' } }
+    })
+  })
+  ipcMain.handle('remote:clear-staged', async () => { stagedAttachments = []; broadcastStaged(); return true })
+  // Prune one staged image (the pill strip's ✕) — reversibility before send.
+  ipcMain.handle('remote:unstage-image', async (_e, path: string) => {
+    const before = stagedAttachments.length
+    stagedAttachments = stagedAttachments.filter((p) => p !== path)
+    if (stagedAttachments.length !== before) broadcastStaged()
+    return true
+  })
+  // Attach an image to a session (voice-era screenshot paste/drag). Bytes arrive
+  // as an ArrayBuffer from the renderer; saved under the task's own dir and the
+  // path is TYPED (unsubmitted) into the session — see TaskManager.attachFile.
+  ipcMain.handle('remote:attach-image', async (_e, taskId: string, data: ArrayBuffer, ext: string) => {
+    if (!manager) return null
+    try { return await manager.attachFile(taskId, new Uint8Array(data), ext) } catch (e) {
+      log.warn('attach-image failed', { taskId, error: (e as Error).message })
+      return null
+    }
+  })
   ipcMain.handle('remote:list', async () => (manager?.list() ?? []).map(serializeTask))
   ipcMain.handle('remote:answer', async (_e, id: string, answer: string) => {
     manager?.answer(id, answer)
@@ -728,6 +1598,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Typeable live terminal (PRD §4.3): raw keystrokes + viewport resize → PTY.
   ipcMain.on('remote:terminal-input', (_e, id: string, data: string) => manager?.sendInput(id, data))
   ipcMain.on('remote:terminal-resize', (_e, id: string, cols: number, rows: number) => manager?.resize(id, cols, rows))
+  ipcMain.handle('remote:terminal-screen', async (_e, id: string) => (manager ? manager.captureScreen(id) : null))
   // Pop the live terminal out to a real terminal app — SAME tmux session.
   ipcMain.handle('remote:tmux-available', async () => tmuxBin !== null)
   ipcMain.handle('remote:open-in-terminal', async (_e, id: string) => openInTerminal(id))
@@ -826,6 +1697,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     osNotifications: settings.get('osNotifications') === true,
     librarianWriteEnabled: settings.get('librarianWriteEnabled') === true,
     forceRawMode: settings.get('forceRawMode') === true,
+    screenshotCapture: settings.get('screenshotCapture') !== false,
     logFile: getRemoteLogFilePath(),
   }))
   // ── Onboarding / guided one-time setup (PRD §12) ──
