@@ -84,6 +84,13 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   // Drives the source-gated behaviors below (stop grace). Never true for the
   // default Mac-mic path — the no-regression guarantee is structural.
   const phoneSourceRef = useRef<boolean>(false)
+  // When capture was REQUESTED (key-down → startRecording entry). The phone
+  // path's pipe gate delays the RECORDER clock (startTimeRef) by up to 3s, so
+  // too-short decisions must use this clock — the user's actual hold — or a
+  // gated quick utterance gets unfairly discarded (observed: 497ms recorded
+  // from a much longer hold, eaten by a 3ms miss). On the Mac path the two
+  // clocks are ~identical, so behavior there is unchanged.
+  const requestTimeRef = useRef<number>(0)
 
   // ─── VAD Chunking Refs ───
   const chunkIndexRef = useRef<number>(0)
@@ -428,8 +435,11 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // Clean up stream/context
     cleanupStream()
 
-    // Discard if too short, empty, or silent (no speech) — no STT call
-    if (duration < MIN_DURATION_MS || chunks.length === 0 || !heardSpeechRef.current) {
+    // Discard if too short, empty, or silent (no speech) — no STT call.
+    // Too-short judges the HELD time (request→now): the gate must not make a
+    // real utterance look sub-threshold.
+    const heldMs = Date.now() - requestTimeRef.current
+    if (Math.max(duration, heldMs) < MIN_DURATION_MS || chunks.length === 0 || !heardSpeechRef.current) {
       console.log('[audio] Discarding (short/empty/silent). Duration:', duration, 'heardSpeech:', heardSpeechRef.current)
       window.electronAPI.sendAudioDiscarded(frozenModeRef.current, frozenSessionIdRef.current)
       return false
@@ -452,6 +462,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       await flushRecorder()
     }
 
+    requestTimeRef.current = Date.now()
     // Reset state for new recording
     frozenModeRef.current = mode || 'dictation'
     frozenSessionIdRef.current = sessionId
@@ -582,30 +593,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     analyserRef.current = analyser
     setAnalyserNode(analyser)
 
-    // ── PIPE-LIVENESS GATE (iPhone only) ──────────────────────────────────
-    // getUserMedia resolves in ~170ms on the Continuity mic, but the WIRELESS
-    // PIPELINE behind it starts delivering samples 0.5-2s later (cold link).
-    // Recording that dead air produced files with 1-2s of leading silence +
-    // a clipped first word — the double trigger for Whisper's documented
-    // silence-hallucination (invented opening sentences). So: do not START
-    // the recorder until samples actually flow. A dead pipe yields EXACT
-    // digital zeros; any live mic — even in a silent room — has a nonzero
-    // noise floor. The recorder then starts on flowing audio: no leading
-    // silence in the file, and the start-click (played after this resolves)
-    // finally tells the truth. Capped so a pathological stream can never
-    // block a dictation. Mac path: skipped entirely (pipe is live at open).
-    if (phoneSourceRef.current) {
-      const probe = new Float32Array(analyser.fftSize)
-      const tGate = Date.now()
-      let live = false
-      while (Date.now() - tGate < 3000) {
-        analyser.getFloatTimeDomainData(probe)
-        if (probe.some((v) => v !== 0)) { live = true; break }
-        await new Promise((r) => setTimeout(r, 25))
-      }
-      console.log(`[audio:mic] phone pipe ${live ? 'LIVE' : 'not confirmed (3s cap hit — starting anyway)'} after ${Date.now() - tGate}ms`)
-    }
-
     // Set up MediaRecorder. We tried lowering audioBitsPerSecond to 32_000
     // to shrink uploads but Groq's Whisper endpoint rejected the resulting
     // low-bitrate opus stream with HTTP 400. Reverted to the browser default
@@ -627,6 +614,36 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           window.electronAPI?.paywallStreamChunk?.(buf)
         }).catch(() => { /* best-effort */ })
       }
+    }
+
+    // ── PIPE-LIVENESS GATE (iPhone only) ──────────────────────────────────
+    // getUserMedia resolves in ~170ms on the Continuity mic, but the WIRELESS
+    // PIPELINE behind it starts delivering samples 0.5-2s later (cold link).
+    // Recording that dead air produced files with 1-2s of leading silence +
+    // a clipped first word — the double trigger for Whisper's documented
+    // silence-hallucination (invented opening sentences). So: do not START
+    // the recorder until samples actually flow. A dead pipe yields EXACT
+    // digital zeros; any live mic — even in a silent room — has a nonzero
+    // noise floor. The recorder then starts on flowing audio: no leading
+    // silence in the file, and the start-click (played after this resolves)
+    // finally tells the truth. Capped so a pathological stream can never
+    // block a dictation. Mac path: skipped entirely (pipe is live at open).
+    if (phoneSourceRef.current) {
+      const probe = new Float32Array(analyser.fftSize)
+      const tGate = Date.now()
+      let live = false
+      // 10ms cadence: the analyser window is ~3ms of audio, so detection
+      // reacts within ~10ms of the first real sample. Combined with the
+      // recorder being CREATED before this gate (below runs start() only),
+      // the worst-case clip on a zero-gated stream that opens on the user's
+      // own voice is a few tens of ms of the first phoneme — inaudible to
+      // STT — instead of the first word.
+      while (Date.now() - tGate < 3000) {
+        analyser.getFloatTimeDomainData(probe)
+        if (probe.some((v) => v !== 0)) { live = true; break }
+        await new Promise((r) => setTimeout(r, 10))
+      }
+      console.log(`[audio:mic] phone pipe ${live ? 'LIVE' : 'not confirmed (3s cap hit — starting anyway)'} after ${Date.now() - tGate}ms`)
     }
 
     mediaRecorder.start(250) // Collect data every 250ms
@@ -739,9 +756,12 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       recorder.onstop = async () => {
         setIsRecording(false)
 
-        // Discard if too short, or silent with no chunks emitted (no speech) — no STT call
+        // Discard if too short, or silent with no chunks emitted (no speech) — no STT call.
+        // Judged on HELD time (see requestTimeRef) so the phone gate can't
+        // shrink a real utterance below the threshold.
         const wasChunked = chunkedModeEnabledRef.current && chunkIndexRef.current > 0
-        if (duration < MIN_DURATION_MS || (!heardSpeechRef.current && !wasChunked)) {
+        const heldMs = Date.now() - requestTimeRef.current
+        if (Math.max(duration, heldMs) < MIN_DURATION_MS || (!heardSpeechRef.current && !wasChunked)) {
           console.log('[audio] Discarding (short/silent). Duration:', duration, 'heardSpeech:', heardSpeechRef.current)
           window.electronAPI.sendAudioDiscarded(mode, frozenSessionIdRef.current)
           // Close stream too — there's no audio coming.

@@ -1043,9 +1043,15 @@ class SessionManager {
     // too-short feedback for a genuinely audio-less press arrives 0.6s later,
     // a fair trade against eating whole dictations.
     if (!session.dictationAudio && !session.instructionAudio) {
-      console.log('[session] No audio yet — polling for IPC (up to 800ms)...')
+      // Window must cover the phone path's WORST case: pipe gate (≤3000ms) +
+      // tail grace (300ms) + encoder flush + assembly. A quick key-tap on a
+      // cold link otherwise ends the session before its audio can exist, and
+      // the late audio gets dropped as stale (observed live). Mac audio still
+      // lands in <100ms — the loop exits on arrival, so the widened cap costs
+      // the fast path nothing.
+      console.log('[session] No audio yet — polling for IPC (up to 4000ms)...')
       const t0 = Date.now()
-      for (let i = 0; i < 80; i++) {
+      for (let i = 0; i < 400; i++) {
         await new Promise(resolve => setTimeout(resolve, 10))
         if (session.dictationAudio || session.instructionAudio) break
       }
