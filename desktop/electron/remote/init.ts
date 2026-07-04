@@ -1283,7 +1283,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         .catch(() => {})
     }
   })
-  manager.on('updated', (t: Task) => { broadcast('remote:task-updated', t); reconcileDock(activeTaskCount()) })
+  manager.on('updated', (t: Task) => {
+    broadcast('remote:task-updated', t)
+    reconcileDock(activeTaskCount())
+    // Self-healed back to work (stuck→processing via hook activity): reset the
+    // doorbell dedupe so a LATER re-stuck rings again — it's newly actionable.
+    if (t.state === 'processing') spokenState.delete(t.id)
+  })
   manager.on('needs-user', (t: Task) => {
     broadcast('remote:task-needs-user', t)
     maybePresent(t)

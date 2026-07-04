@@ -46,6 +46,9 @@ function api(): API {
 export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: { taskId: string; onClose: () => void; fill?: boolean; replay?: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const popRef = useRef<HTMLButtonElement | null>(null)
+  // Cleanup for the re-anchor listener (registered inside open(), which runs
+  // lazily once the host has dimensions — so the effect can't capture it directly).
+  const offReanchorRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     const host = hostRef.current
@@ -152,17 +155,31 @@ export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: {
         // above resized the PTY; wait ~250ms for tmux to reflow to the new
         // geometry so the snapshot matches this grid, then paint it and let
         // live chunks continue on top.
-        setTimeout(() => {
-          if (disposed || !term) return
-          void api().remoteCaptureScreen?.(taskId).then((snap) => {
+        const paintSnapshot = (delayMs: number) => {
+          setTimeout(() => {
             if (disposed || !term) return
-            if (snap && snap.trim()) {
-              term.reset() // clean slate at home position — the snapshot IS the screen
-              term.write(snap)
-              sawOutput = true
-            }
-          })
-        }, 250)
+            void api().remoteCaptureScreen?.(taskId).then((snap) => {
+              if (disposed || !term) return
+              if (snap && snap.trim()) {
+                term.reset() // clean slate at home position — the snapshot IS the screen
+                term.write(snap)
+                sawOutput = true
+              }
+            })
+          }, delayMs)
+        }
+        paintSnapshot(250)
+        // RE-ANCHOR seam: interactions that redraw Claude's input box heavily
+        // (image paste/attach) can land incremental repaints displaced from
+        // where the snapshot left the viewport (the mangled-box bug: two
+        // interpretation layers disagreeing about the bottom row). The stage
+        // fires this event after such interactions; we re-ask tmux — the one
+        // party that always knows the true screen — and repaint clean.
+        const onReanchor = (e: Event) => {
+          if ((e as CustomEvent<{ taskId?: string }>).detail?.taskId === taskId) paintSnapshot(350)
+        }
+        window.addEventListener('unmute:terminal-reanchor', onReanchor)
+        offReanchorRef.current = () => window.removeEventListener('unmute:terminal-reanchor', onReanchor)
         // BACKSTOP: no tmux, or capture returned nothing (e.g. a session
         // mid-graceful-detach). If nothing has painted shortly after, fall back
         // to the buffered record: an imperfect replay beats a black void.
@@ -190,6 +207,7 @@ export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: {
       disposed = true
       ro.disconnect()
       off?.()
+      offReanchorRef.current?.()
       term?.dispose()
     }
   }, [taskId])

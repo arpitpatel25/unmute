@@ -984,3 +984,31 @@ test('followUp on an IDLE (parked done) task: no queued event — it delivers st
   assert.ok(fake.writes.some((w) => w.includes('one more thing')))
   tm.kill(id)
 })
+
+// ─── Self-healing stuck: the label retracts when real work resumes ────────────
+
+test('stuck heals to processing when hook activity resumes (the API-retry recovery)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 30, staleMs: 200,
+  })
+  const id = await tm.dispatch('work that hits an API retry loop')
+  // Silence past staleMs → stuck fires (the retry loop is hook-silent).
+  const [stuckTask] = await once(tm, 'stuck')
+  assert.equal(stuckTask.state, 'stuck')
+  // The retries work out — real tool execution resumes (PostToolUse marker).
+  const activity = path.join(tm.get(id)!.cwd, '.unmute-activity')
+  await fs.writeFile(activity, '')
+  // The label must heal itself: stuck → processing, no human intervention.
+  const t0 = Date.now()
+  while (tm.get(id)!.state === 'stuck') {
+    if (Date.now() - t0 > 3000) throw new Error('stuck never healed after activity resumed')
+    await new Promise((r) => setTimeout(r, 25))
+  }
+  assert.equal(tm.get(id)!.state, 'processing', 'resumed work retracts the stuck verdict')
+  // And it can go stuck AGAIN if silence returns (heal is not a one-way pass).
+  const [reStuck] = await once(tm, 'stuck')
+  assert.equal(reStuck.state, 'stuck', 're-silence re-trips the backstop')
+  tm.kill(id)
+})

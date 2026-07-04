@@ -242,6 +242,10 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
   const attach = useCallback(async (blob: Blob) => {
     const path = await attachImageBlob(t.id, blob)
     showNote(path ? 'image attached — speak or type to send it' : 'could not attach — session not running')
+    // The attach typed a path into Claude's input box — a heavy incremental
+    // redraw that can land displaced (two-layer seam). Re-anchor from tmux
+    // once the box has settled.
+    if (path) setTimeout(() => window.dispatchEvent(new CustomEvent('unmute:terminal-reanchor', { detail: { taskId: t.id } })), 600)
   }, [t.id, showNote])
 
   useEffect(() => {

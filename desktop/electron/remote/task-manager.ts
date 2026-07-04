@@ -558,6 +558,16 @@ export class TaskManager extends EventEmitter {
     const hookMs = await hookActivityMs(task.cwd)
     if (hookMs !== null && hookMs > task.lastHeartbeatMs) {
       task.lastHeartbeatMs = hookMs
+      // SELF-HEALING STUCK (the API-retry lesson): stuck is a verdict about
+      // SILENCE, and this hook event is proof the silence ended — real tool
+      // execution resumed (e.g. the API retries worked out). The label must
+      // heal itself; a card that says STUCK over a visibly-working terminal
+      // is a lie the user has to clean up by hand. Status writes already
+      // healed via transition(); this closes the other half.
+      if (task.state === 'stuck') {
+        tlog.event('stuck-recovered', { via: 'hook-activity' })
+        this.transition(id, 'processing')
+      }
       return
     }
 
