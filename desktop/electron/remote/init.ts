@@ -510,7 +510,10 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
   // ⌃-screenshot rides with THIS utterance, before routing delivers it.
   if (phase === 'listening') startCaptureWatch()
   else if (phase === 'transcribing') secureAndClearClipboard() // key just lifted — secure, then clear if consumed
-  else if (phase === 'idle') stopCaptureWatch()
+  // idle = the remote capture RESOLVED. Delivery already emptied the tray via
+  // takeStaged(); anything auto still here means no delivery (empty transcript,
+  // router error) — forfeit it.
+  else if (phase === 'idle') stopCaptureWatch({ purgeAuto: true })
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
   }
@@ -529,14 +532,21 @@ let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; a
 // images what the router is to words: an address-free buffer resolved at
 // speak-time. Files live under ~/.unmute/remote/staging (tiny, swept with age).
 const STAGING_DIR = join(homedir(), '.unmute', 'remote', 'staging')
-let stagedAttachments: string[] = []
+// Two consent models share this tray, and the tag is what keeps them honest:
+// `auto` = ambient screenshot captured during a dictation window — its LIFE IS
+// THE WINDOW (start → delivery); it must never outlive a capture that ended
+// without delivering. `explicit` = the user deliberately pasted/dropped an
+// image with no target — that one rides to the next utterance by design
+// (visible in the chip, manually removable).
+interface StagedEntry { path: string; auto: boolean }
+let stagedAttachments: StagedEntry[] = []
 /** Clipboard screenshots NOTICED during recording but not yet readable (reading
  *  the image mid-recording corrupts audio; the FORMAT list is free metadata).
  *  Purely a counter for the pill — the real read happens at key-lift. */
 let pendingClipboardCount = 0
 function broadcastStaged(): void {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length + pendingClipboardCount, paths: stagedAttachments, pending: pendingClipboardCount })
+    if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length + pendingClipboardCount, paths: stagedAttachments.map((s) => s.path), pending: pendingClipboardCount })
   }
 }
 
@@ -620,7 +630,7 @@ function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, s
       const dest = join(STAGING_DIR, `capture-${Date.now()}-clipboard.png`)
       copyFileSync(probe, dest)
       try { rmSync(probe, { force: true }) } catch { /* next probe overwrites anyway */ }
-      stagedAttachments.push(dest)
+      stagedAttachments.push({ path: dest, auto: true })
       clipStagedThisCapture = true
       broadcastStaged()
       log.event('capture-staged', { file: dest, via: 'clipboard-probe' })
@@ -667,7 +677,7 @@ function stageBuffer(buf: Buffer, tag: string): void {
     mkdirSync(STAGING_DIR, { recursive: true })
     const file = join(STAGING_DIR, `capture-${Date.now()}-${tag}.png`)
     writeFileSync(file, buf)
-    stagedAttachments.push(file)
+    stagedAttachments.push({ path: file, auto: true })
     broadcastStaged()
     log.event('capture-staged', { file, via: tag })
   } catch (e) { log.warn('stageBuffer failed', { error: (e as Error).message }) }
@@ -696,9 +706,9 @@ function stageRecentScreenshotFiles(sinceMs: number): void {
       const full = join(dir, entry)
       try {
         const st = statSync(full)
-        if (st.mtimeMs > sinceMs && !stagedAttachments.includes(full)) {
+        if (st.mtimeMs > sinceMs && !stagedAttachments.some((s) => s.path === full)) {
           matched++
-          stagedAttachments.push(full) // reference in place — never copy/move user files
+          stagedAttachments.push({ path: full, auto: true }) // reference in place — never copy/move user files
           broadcastStaged()
           log.event('capture-staged', { file: full, via: 'file' })
         }
@@ -725,6 +735,10 @@ function startCaptureWatch(): void {
   const startedAt = Date.now()
   pendingClipboardCount = 0
   clipStagedThisCapture = false
+  // CLEAR-FIRST (the lifecycle rule's backstop): any auto-captured screenshot
+  // still in the tray belongs to a PREVIOUS window that ended without
+  // delivering — it must never ride this one.
+  purgeAutoStaged('new-capture-window')
   log.event('capture-watch-start', { dir: screenshotDir() })
   // DURING-DICTATION ONLY (the whole idea): what existed before key-down never
   // attaches. Baseline probe LEARNS the pre-existing clipboard image (markOnly);
@@ -743,9 +757,32 @@ function startCaptureWatch(): void {
 }
 
 
-function stopCaptureWatch(): void {
+/** Kill every AUTO-captured screenshot in the tray (files we copied into our
+ *  own staging dir are deleted; referenced user files are only de-listed).
+ *  THE lifecycle rule: an ambient screenshot lives from capture-start to
+ *  delivery — a window that ends without delivering forfeits its captures.
+ *  Explicit paste/drop stages are deliberate and survive (tray design). */
+function purgeAutoStaged(reason: string): void {
+  const auto = stagedAttachments.filter((s) => s.auto)
+  if (!auto.length) return
+  stagedAttachments = stagedAttachments.filter((s) => !s.auto)
+  for (const { path } of auto) {
+    // Only ever delete OUR copies — a swept Desktop screenshot is the user's file.
+    if (path.startsWith(STAGING_DIR)) {
+      try { (require('node:fs') as typeof import('node:fs')).rmSync(path, { force: true }) } catch { /* best-effort */ }
+    }
+  }
+  log.event('auto-staged-purged', { count: auto.length, reason })
+  broadcastStaged()
+}
+
+function stopCaptureWatch(opts: { purgeAuto?: boolean } = {}): void {
   if (captureWatchTimer) { clearInterval(captureWatchTimer); captureWatchTimer = null }
   pendingClipboardCount = 0
+  // A window closing WITHOUT delivery forfeits its auto-captures (discard,
+  // cancel, empty transcript, the 20s safety stop). The delivery path calls
+  // with purgeAuto:false because takeStaged() is about to take everything.
+  if (opts.purgeAuto) purgeAutoStaged('watch-closed-undelivered')
   broadcastStaged()
 }
 
@@ -753,13 +790,13 @@ function stopCaptureWatch(): void {
  *  hand over everything staged and close the watch window. The ledger's contract
  *  holds across BOTH capture kinds — what the pill showed is what got delivered. */
 export function consumeStagedForDictation(): string[] {
-  stopCaptureWatch()
+  stopCaptureWatch({ purgeAuto: false }) // delivery: takeStaged() takes it all
   return takeStaged()
 }
 /** Consume the tray (one landing takes everything). */
 function takeStaged(): string[] {
   if (!stagedAttachments.length) return []
-  const taken = stagedAttachments
+  const taken = stagedAttachments.map((s) => s.path)
   stagedAttachments = []
   broadcastStaged()
   return taken
@@ -1205,7 +1242,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // Safety stop for a cancelled/failed dictation (generation-guarded:
       // never kills a NEWER capture's watch).
       const gen = captureWatchGen
-      setTimeout(() => { if (captureWatchGen === gen) stopCaptureWatch() }, 20_000)
+      setTimeout(() => { if (captureWatchGen === gen) stopCaptureWatch({ purgeAuto: true }) }, 20_000)
     }
   })
 
@@ -1507,7 +1544,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       const safeExt = (ext || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
       const file = join(STAGING_DIR, `staged-${Date.now()}-${stagedAttachments.length}.${safeExt}`)
       writeFileSync(file, Buffer.from(data))
-      stagedAttachments.push(file)
+      stagedAttachments.push({ path: file, auto: false }) // explicit — rides to the next utterance
       broadcastStaged()
       log.event('image-staged', { file, count: stagedAttachments.length })
       return file
@@ -1516,7 +1553,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       return null
     }
   })
-  ipcMain.handle('remote:get-staged', async () => stagedAttachments)
+  ipcMain.handle('remote:get-staged', async () => stagedAttachments.map((s) => s.path))
   // Thumbnails for the pill ledger's dropdown — you can't judge "should I remove
   // this?" from a number. Small data-URLs (CSP-proof; file:// is blocked in the
   // renderer), freshly derived per call.
@@ -1524,9 +1561,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // While a capture is live, decoding images for thumbnails is the SAME class
     // of main-thread work that corrupted recordings — placeholder rows instead;
     // real previews the moment the capture ends.
-    if (captureWatchTimer) return stagedAttachments.map((path) => ({ path, dataUrl: '' }))
+    if (captureWatchTimer) return stagedAttachments.map(({ path }) => ({ path, dataUrl: '' }))
     const { nativeImage } = require('electron') as typeof import('electron')
-    return stagedAttachments.map((path) => {
+    return stagedAttachments.map(({ path }) => {
       try {
         const img = nativeImage.createFromPath(path)
         if (img.isEmpty()) return { path, dataUrl: '' }
@@ -1538,7 +1575,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Prune one staged image (the pill strip's ✕) — reversibility before send.
   ipcMain.handle('remote:unstage-image', async (_e, path: string) => {
     const before = stagedAttachments.length
-    stagedAttachments = stagedAttachments.filter((p) => p !== path)
+    stagedAttachments = stagedAttachments.filter((s) => s.path !== path)
     if (stagedAttachments.length !== before) broadcastStaged()
     return true
   })
