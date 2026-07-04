@@ -534,7 +534,19 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       await new Promise((r) => setTimeout(r, 40))
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia(constraints)
+    // Acquire the mic. When a specific device was requested (the iPhone
+    // Continuity mic path) and it vanished between resolution and capture —
+    // phone walked away, user hit Disconnect on it — retry ONCE with the
+    // system default. The design guarantee is a SILENT fallback to the Mac
+    // mic: a missing phone must never surface an error or kill a dictation.
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (err) {
+      if (!deviceId) throw err
+      console.log('[audio] Requested device unavailable, falling back to system default mic:', err)
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } })
+    }
     streamRef.current = stream
 
     // Set up audio context for waveform analysis

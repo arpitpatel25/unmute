@@ -10,6 +10,13 @@ import Widget from './Widget'
 import { useAudioRecorder } from './useAudioRecorder'
 import type { WidgetState } from '../shared/types'
 import OfflineAwarenessCard, { type OfflineReason } from './OfflineAwarenessCard'
+import {
+  findIphoneMic,
+  resolveCaptureDeviceId,
+  effectiveSource,
+  type MicSource,
+  type AudioInputDeviceInfo,
+} from './micSource'
 
 // ─── Sound Feedback (Web Audio API) ───
 let soundEnabled = true
@@ -357,6 +364,122 @@ function RawToggle() {
   )
 }
 
+// ── Mic source: iPhone tap-to-switch ─────────────────────────────────────
+// The iPhone (Continuity Camera mic — zero-install, a normal macOS input
+// device) as an opt-in capture source. Design rules (settled, do not drift):
+// MacBook mic is ALWAYS the default; we NEVER prompt/nudge/surface the
+// feature — the glyph chip below is the entire UI, and it only exists while
+// a phone mic is actually around. One tap flips the source; the choice is
+// sticky (localStorage, survives restarts) and applies from the NEXT
+// dictation — sources are never swapped mid-recording. Phone absent →
+// silent resolution to the Mac mic; phone back → the user's last explicit
+// choice is honored again.
+const MIC_SOURCE_KEY = 'unmute.micSourcePreference'
+
+function loadMicPreference(): MicSource {
+  try {
+    return localStorage.getItem(MIC_SOURCE_KEY) === 'iphone' ? 'iphone' : 'mac'
+  } catch {
+    return 'mac'
+  }
+}
+
+function useMicSource() {
+  const [preference, setPreference] = useState<MicSource>(loadMicPreference)
+  const [devices, setDevices] = useState<AudioInputDeviceInfo[]>([])
+  // Refs so the once-registered recording:start listener resolves against
+  // CURRENT state, not the state captured when the listener mounted.
+  const preferenceRef = useRef(preference)
+  const devicesRef = useRef(devices)
+  preferenceRef.current = preference
+  devicesRef.current = devices
+
+  const refreshDevices = useCallback(() => {
+    navigator.mediaDevices
+      ?.enumerateDevices?.()
+      .then((list) =>
+        setDevices(
+          list.map((d) => ({ kind: d.kind, label: d.label, deviceId: d.deviceId }))
+        )
+      )
+      .catch(() => { /* device list is best-effort — absence just means Mac mic */ })
+  }, [])
+
+  useEffect(() => {
+    refreshDevices()
+    navigator.mediaDevices?.addEventListener?.('devicechange', refreshDevices)
+    return () =>
+      navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices)
+  }, [refreshDevices])
+
+  const toggle = useCallback(() => {
+    setPreference((prev) => {
+      const next: MicSource = prev === 'iphone' ? 'mac' : 'iphone'
+      try { localStorage.setItem(MIC_SOURCE_KEY, next) } catch { /* still applies this session */ }
+      return next
+    })
+  }, [])
+
+  // Per-recording resolution — called at capture start by the hotkey path.
+  const resolveDeviceId = useCallback(
+    () => resolveCaptureDeviceId(preferenceRef.current, devicesRef.current),
+    []
+  )
+
+  return { preference, devices, toggle, resolveDeviceId, refreshDevices }
+}
+
+function LaptopGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="4" y="5" width="16" height="11" rx="1.5" />
+      <path d="M2 19h20" />
+    </svg>
+  )
+}
+
+function PhoneGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="7" y="2.5" width="10" height="19" rx="2.5" />
+      <path d="M11 18.5h2" />
+    </svg>
+  )
+}
+
+// The source glyph chip. Same family as the model badge / RAW toggle: dark
+// fill, whitish border, no shadow. Laptop = MacBook mic, phone = iPhone mic
+// (orange, like other "non-default state" accents). A tap toggles; the glyph
+// reflects the preference, which a fresh tap applies from the next dictation.
+function MicSourceChip({ source, onTap }: { source: MicSource; onTap: () => void }) {
+  return (
+    <div style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center' }}>
+      <button
+        onClick={onTap}
+        title={source === 'iphone'
+          ? 'Capturing from your iPhone microphone. Tap to use the MacBook mic.'
+          : 'Capturing from the MacBook microphone. Tap to use your iPhone mic.'}
+        style={{
+          height: 44,
+          width: 44,
+          borderRadius: 9999,
+          background: '#0E0E10',
+          border: '1px solid rgba(255, 255, 255, 0.55)',
+          boxShadow: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          color: source === 'iphone' ? CLAUDE_ORANGE : 'rgba(255,255,255,0.85)',
+          transition: 'color 140ms ease',
+        }}
+      >
+        {source === 'iphone' ? <PhoneGlyph /> : <LaptopGlyph />}
+      </button>
+    </div>
+  )
+}
+
 export default function WidgetApp() {
   const [state, setState] = useState<WidgetState>('hidden')
   const [outputPreview, setOutputPreview] = useState('')
@@ -371,6 +494,7 @@ export default function WidgetApp() {
   // recording:start from its kind, so it's always fresh for this capture.
   const [isRemote, setIsRemote] = useState(false)
   const { analyserNode, maxDurationSeconds, noisyEnvironment, startRecording, stopRecording } = useAudioRecorder()
+  const mic = useMicSource()
 
   const autoHideRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -480,7 +604,16 @@ export default function WidgetApp() {
       setEngineNotice(null)
       setState(mode === 'dictation' ? 'dictation-active' : 'instruction-active')
       try {
-        await startRecording(undefined, mode, sessionId)
+        // Resolve the capture device for THIS recording: the iPhone mic when
+        // the user opted in and the phone is around, otherwise the system
+        // default. The recorder itself retries on the default device if the
+        // resolved one vanished in the meantime — a missing phone can never
+        // error a dictation.
+        await startRecording(mic.resolveDeviceId(), mode, sessionId)
+        // Labels are permission-gated: before the first capture the device
+        // list may carry empty labels (iPhone undetectable). Now that a
+        // capture is live, re-enumerate so the glyph chip reflects reality.
+        mic.refreshDevices()
       } catch {
         setErrorMessage('Mic error. Check settings.')
         setState('error')
@@ -550,7 +683,7 @@ export default function WidgetApp() {
       api.removeAllListeners('session:too-short')
       api.removeAllListeners('session:engine-notice')
     }
-  }, [startRecording, stopRecording, clearAutoHide, scheduleAutoHide])
+  }, [startRecording, stopRecording, clearAutoHide, scheduleAutoHide, mic.resolveDeviceId, mic.refreshDevices])
 
   const handleCancel = useCallback(async () => {
     await stopRecording()
@@ -627,6 +760,16 @@ export default function WidgetApp() {
           </div>
         )}
         {pillShowing && <StagedImagesChip />}
+        {/* mic-source glyph: exists ONLY while an iPhone mic is actually
+            around — no phone, no chip, no greyed-out icon begging attention.
+            Laptop vs phone tells the truth about what's listening; a tap
+            flips the (sticky) choice for the next dictation. */}
+        {pillShowing && findIphoneMic(mic.devices) !== null && (
+          <MicSourceChip
+            source={effectiveSource(mic.preference, mic.devices)}
+            onTap={mic.toggle}
+          />
+        )}
         <Widget
           state={state}
           analyserNode={analyserNode}
