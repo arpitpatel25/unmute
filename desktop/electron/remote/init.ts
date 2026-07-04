@@ -1384,6 +1384,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Voice-as-doorbell toggle (§6.4) — read + set from the cockpit's 🔔 chip.
   ipcMain.handle('remote:get-voice-headlines', async () => settings.get('voiceHeadlines') !== false)
   ipcMain.handle('remote:set-voice-headlines', async (_e, on: boolean) => { settings.set('voiceHeadlines', !!on); return true })
+  ipcMain.handle('remote:get-screenshot-capture', async () => settings.get('screenshotCapture') !== false)
   ipcMain.handle('remote:set-screenshot-capture', async (_e, on: boolean) => {
     settings.set('screenshotCapture', !!on)
     if (!on) stopCaptureWatch() // kill a live watcher immediately on disable

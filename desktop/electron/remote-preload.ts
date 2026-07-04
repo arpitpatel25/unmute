@@ -226,6 +226,7 @@ export const remotePreloadExtensions = {
   remoteGetVoiceHeadlines: (): Promise<boolean> => ipcRenderer.invoke('remote:get-voice-headlines'),
   remoteSetVoiceHeadlines: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-voice-headlines', on),
   /** Screenshot auto-capture during dictation/Remote (off = never touch screenshots). */
+  remoteGetScreenshotCapture: (): Promise<boolean> => ipcRenderer.invoke('remote:get-screenshot-capture'),
   remoteSetScreenshotCapture: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-screenshot-capture', on),
 
   // ── Onboarding / guided one-time setup (PRD §12) ──

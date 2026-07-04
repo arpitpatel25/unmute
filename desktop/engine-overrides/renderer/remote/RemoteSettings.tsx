@@ -171,22 +171,6 @@ export function RemoteSettings() {
         />
       </label>
 
-      {/* Screenshot capture — screenshots taken WHILE dictating/speaking a task
-          auto-attach (dictation: pasted after the text; Remote: attached to the
-          task). Off = Unmute never touches screenshots (plain behavior). */}
-      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
-        <span>Screenshot capture <span className="text-ink/40">(screenshots taken while speaking attach automatically — pill shows the count; off = Unmute never touches screenshots)</span></span>
-        <input
-          type="checkbox"
-          checked={s.screenshotCapture}
-          onChange={(e) => {
-            const on = e.target.checked
-            update({ screenshotCapture: on })
-            void api().remoteSetScreenshotCapture?.(on)
-          }}
-        />
-      </label>
-
       {/* Raw mode — run Claude Code clean, with NO Unmute memory injection. The
           pill widget can flip this per-session; this is the saved default. */}
       <label className="flex items-center justify-between py-1.5 border-t border-black/5">

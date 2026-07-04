@@ -38,6 +38,7 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [launchAtLogin, setLaunchAtLogin] = useState(false)
   const [soundFeedback, setSoundFeedback] = useState(true)
   const [iphoneMic, setIphoneMic] = useState(false)
+  const [screenshotCapture, setScreenshotCapture] = useState(true)
   const [widgetPosition, setWidgetPosition] = useState<'center' | 'right'>('center')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
@@ -60,6 +61,8 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
       setSoundFeedback(v)
     ;(window.electronAPI as unknown as { getIphoneMicEnabled?: () => Promise<boolean> })
       .getIphoneMicEnabled?.().then((on) => setIphoneMic(!!on)).catch(() => {})
+    ;(window.electronAPI as unknown as { remoteGetScreenshotCapture?: () => Promise<boolean> })
+      .remoteGetScreenshotCapture?.().then((on) => setScreenshotCapture(!!on)).catch(() => {})
     })
     window.electronAPI.paywallGetOutputMode?.()
       .then((v: 'paste' | 'clipboard') => {
@@ -264,6 +267,12 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
         </SettingRow>
         <SettingRow label="Sound feedback" description="Play sounds on start / stop">
           <Toggle checked={soundFeedback} onChange={handleSoundFeedbackChange} />
+        </SettingRow>
+        <SettingRow label="Screenshot capture" description="Screenshots you take WHILE dictating attach automatically — pasted right after your text (or attached to the task in Remote). The pill shows a count of what will attach; nothing captured before or after a dictation is ever touched. Off: Unmute never looks at screenshots.">
+          <Toggle checked={screenshotCapture} onChange={(on: boolean) => {
+            setScreenshotCapture(on)
+            void (window.electronAPI as unknown as { remoteSetScreenshotCapture?: (v: boolean) => Promise<boolean> }).remoteSetScreenshotCapture?.(on)
+          }} />
         </SettingRow>
         <SettingRow label="iPhone microphone" description="Use your iPhone as the dictation mic (via Apple Continuity — no install). Adds a mic-source switch next to the recording pill.">
           <Toggle checked={iphoneMic} onChange={(on: boolean) => {
