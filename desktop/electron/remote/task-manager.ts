@@ -508,6 +508,12 @@ export class TaskManager extends EventEmitter {
   /** Poll the status file + run the staleness backstop until terminal. */
   private startPolling(id: string): void {
     const tlog = log.child({ taskId: id })
+    // Idempotent: a follow-up into a still-processing task calls this while a
+    // poll interval already runs — overwriting the map entry without clearing
+    // the old interval leaked it forever (found by the queued-follow-up test:
+    // the orphaned timer kept the process alive).
+    const prev = this.timers.get(id)
+    if (prev) clearInterval(prev)
     const timer = setInterval(() => {
       void this.poll(id).catch((e) => tlog.error('poll error', { error: (e as Error).message }))
     }, this.opts.pollMs)
@@ -1036,6 +1042,11 @@ export class TaskManager extends EventEmitter {
       tlog.warn('followUp: session no longer warm — caller should dispatch new', {})
       return false
     }
+    // Mid-turn? Then the write below will QUEUE until the REPL is idle. Making
+    // that visible (step label + event) is what teaches the user they can speak
+    // at a busy session without fear — the thought is held, never lost, and
+    // never derails the running turn.
+    const wasBusy = task.state === 'processing'
     task.lastUserInputAt = this.clock() // user spoke to this thread — consent clock
     // Graduation (§5): the 2nd follow-up proves this is a THREAD, not an errand —
     // promote to a persistent session (one follow-up is a common quick correction).
@@ -1053,6 +1064,11 @@ export class TaskManager extends EventEmitter {
     // though the actual write is deferred until the REPL is idle (below).
     task.state = 'processing'
     task.updatedAt = this.clock()
+    if (wasBusy) {
+      task.step = 'follow-up queued — delivering when the session is idle'
+      this.emit('follow-up-queued', task)
+      tlog.event('follow-up-queued', {})
+    }
     this.emit('updated', task)
 
     // A follow-up is a FRESH dispatch into the SAME session — the only thing
@@ -1076,6 +1092,13 @@ export class TaskManager extends EventEmitter {
       await ex.isReady()
       if (!ex.alive) { tlog.warn('followUp: session died before it went idle — instruction NOT delivered', {}); return }
       ex.writeStdin(payload)
+      if (wasBusy) {
+        // Delivered — retire the queued label (the session's own status writes
+        // own `step` from here).
+        task.step = undefined
+        this.emit('follow-up-delivered', task)
+        this.emit('updated', task)
+      }
       // Start the heartbeat/stuck clock only NOW — when the instruction actually
       // lands — so a long idle-wait above can't trip the stale-stuck detector.
       task.lastMtimeMs = task.lastHeartbeatMs = this.clock() // reset so the old 'done' file isn't read as stale

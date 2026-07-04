@@ -850,17 +850,33 @@ function speakAbout(taskId: string | undefined): void {
   speakLine(parts.join('. '))
 }
 
+// ── The acknowledgment beat (the addiction dashboard's first number): every
+// voice dispatch ends in ONE terse spoken confirmation — "On it", "Passed to
+// X", "Queued for X" — or an honest "That didn't land." NEVER silence: a
+// spoken utterance that vanishes without a trace is the single worst event in
+// the product (it poisons the press-and-forget reflex itself). The inner
+// routing sets the beat per branch; '' means deliberately silent (speak verb
+// answers for itself; a focused stage is already being watched). Spoken via
+// speakLine ⇒ serialized + gated by the same doorbell toggle.
+let pendingBeat: string | null = null
+
 export async function dispatchFromCapture(rawTranscript: string): Promise<string | null> {
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
   // surface always returns to idle, whatever path the dispatch takes.
   broadcastCapturePhase('routing')
+  pendingBeat = null
   let landed: string | null = null
   try {
     landed = await dispatchFromCaptureInner(rawTranscript)
     return landed
   } finally {
     broadcastCapturePhase('idle', landed)
+    // Speak AFTER the phase returns to idle (captureBusy released) so the beat
+    // can't be dropped by the talking-over-the-user guard.
+    const beat = pendingBeat !== null ? pendingBeat : landed ? 'On it.' : 'That didn\u2019t land.'
+    if (beat) speakLine(beat)
+    pendingBeat = null
   }
 }
 
@@ -891,11 +907,13 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       typeStagedInto(fid, staged) // images + answer submit as one message
       manager.answer(fid, text)
       log.event('routed-to-focus', { taskId: fid, kind: 'answer' })
+      pendingBeat = '' // the stage is on screen — the beat would be noise
       return fid
     }
     typeStagedInto(fid, staged)
     if (manager.followUp(fid, text)) {
       log.event('routed-to-focus', { taskId: fid, kind: 'continue' })
+      pendingBeat = ''
       return fid
     }
     // Focused task couldn't take it (terminal/gone) → fall through to normal routing.
@@ -938,15 +956,21 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         } else {
           // Continuing a BLOCKED task means piping the utterance in as its answer;
           // continuing a live task means a fresh follow-up turn.
+          const targetName = (target?.name || target?.intent || 'it').slice(0, 50)
           if (awaitingIds.has(tid)) {
             log.event('routed-as-answer', { taskId: tid, via: 'router' })
             typeStagedInto(tid, staged)
             manager.answer(tid, decision.intent || raw)
+            pendingBeat = `Passed to ${targetName}.`
             return tid
           }
+          const targetBusy = target?.state === 'processing' // mid-turn — the follow-up will queue
           typeStagedInto(tid, staged)
           if (manager.followUp(tid, decision.intent)) {
             log.event('routed-as-continuation', { taskId: tid, via: 'router' })
+            pendingBeat = targetBusy
+              ? `Queued for ${targetName} — it\u2019s mid-task, I\u2019ll pass it on when it\u2019s free.`
+              : `Passed to ${targetName}.`
             return tid
           }
         }
@@ -957,6 +981,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       if (decision.action === 'speak') {
         log.event('routed-as-speak', { taskId: decision.targetTaskId ?? null })
         speakAbout(decision.targetTaskId)
+        pendingBeat = '' // the spoken answer IS the acknowledgment
         return null
       }
       // RESUME-ROUTING: the utterance follows up a recently-finished one-off
@@ -970,7 +995,10 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         try {
           if (await manager.resume(tid)) {
             typeStagedInto(tid, staged) // images + words submit as one message
-            if (manager.followUp(tid, decision.intent || raw)) return tid
+            if (manager.followUp(tid, decision.intent || raw)) {
+              pendingBeat = `Continuing ${(manager.get(tid)?.name || 'it').slice(0, 50)}.`
+              return tid
+            }
           }
           log.warn('resume-routing failed — falling through to new task', { taskId: tid })
         } catch (e) {
@@ -999,6 +1027,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
       if (decision.name) manager.setName(newId, decision.name)
+      pendingBeat = decision.name ? `On it \u2014 ${decision.name}.` : 'On it.'
       // Declinable offer (§6.2 — never a silent reroute, never a blocking prompt):
       // the router chose NEW but seriously weighed one open task. Surface a
       // one-tap "or send it there?"; ignoring it costs nothing.

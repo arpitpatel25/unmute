@@ -939,3 +939,48 @@ test('shelve/note persist to meta.json and survive rehydrate; shelved is purge-e
   assert.equal(tm2.get(id)!.shelved, true)
   assert.equal(tm2.get(id)!.note, 'JIRA-123 — revisit after the launch')
 })
+
+// ─── Fear #1 killed: speaking at a BUSY session queues safely and visibly ─────
+
+test('followUp on a mid-turn task: queued label + events, delivered when idle, label retired', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  let releaseIdle: (() => void) | null = null
+  let blockIdle = false // armed after dispatch, so dispatch's own isReady passes
+  const fake = makeFakeExecutor()
+  // Make isReady controllable: the session is "mid-turn" until the test releases it.
+  fake.isReady = () => (blockIdle ? new Promise<void>((r) => { releaseIdle = r }) : Promise.resolve())
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('long grind') // state: processing (mid-turn)
+  assert.equal(tm.get(id)!.state, 'processing')
+  blockIdle = true // from here, the session reads as mid-turn
+
+  const queued = once(tm, 'follow-up-queued')
+  const delivered = once(tm, 'follow-up-delivered')
+  const before = fake.writes.length
+  assert.equal(tm.followUp(id, 'also check the auth logs'), true)
+  const [qTask] = await queued
+  assert.match(qTask.step ?? '', /queued/, 'the card shows the thought is HELD, not lost')
+  assert.equal(fake.writes.length, before, 'nothing written while the REPL is busy — the running turn is never derailed')
+
+  releaseIdle!() // the session goes idle → the queued instruction lands
+  const [dTask] = await delivered
+  assert.equal(dTask.step, undefined, 'queued label retired on delivery')
+  assert.ok(fake.writes.some((w) => w.includes('also check the auth logs')), 'the instruction was delivered')
+  tm.kill(id)
+})
+
+test('followUp on an IDLE (parked done) task: no queued event — it delivers straight away', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
+  const id = await tm.dispatch('quick errand')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'ok' } })
+  await waitForState(tm, id, 'done')
+  let queuedFired = false
+  tm.on('follow-up-queued', () => { queuedFired = true })
+  assert.equal(tm.followUp(id, 'one more thing'), true)
+  await new Promise((r) => setTimeout(r, 100))
+  assert.equal(queuedFired, false, 'idle session = immediate delivery, no queue theater')
+  assert.ok(fake.writes.some((w) => w.includes('one more thing')))
+  tm.kill(id)
+})
