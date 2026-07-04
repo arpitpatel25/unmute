@@ -568,16 +568,6 @@ export default function WidgetApp() {
     window.electronAPI.undoCancel()
   }, [])
 
-  // The HUD window is 72px tall by default — anything rendered BELOW the pill
-  // is clipped out of existence (the invisible-hint bug). Grow it while the
-  // noisy hint is up; restore when it goes (unless the awareness card needs room).
-  useEffect(() => {
-    const active = state === 'dictation-active' || state === 'instruction-active'
-    const api = window.electronAPI as unknown as { paywallSetHUDHeight?: (h: number) => Promise<boolean> }
-    if (noisyEnvironment && active) void api.paywallSetHUDHeight?.(112)
-    else if (offlineReason === null) void api.paywallSetHUDHeight?.(72)
-  }, [noisyEnvironment, state, offlineReason])
-
   const handleAwarenessDismiss = useCallback(() => {
     sessionDismissed = true
     setDismissedTick((n) => n + 1)
@@ -609,6 +599,33 @@ export default function WidgetApp() {
         {/* the screenshot ledger shows for BOTH capture kinds — dictation pastes
             the images into the target app after the text; Remote attaches them
             to the task. Self-hides at zero. */}
+        {/* noisy-spot hint: a signal, not a fix — the user compensates (lean
+            in, speak up). Lives IN the pill row like the staged chip: the HUD
+            window never resizes for it (a resize is what clipped + distorted
+            it). White card, deliberately NOT the dark pill family. */}
+        {noisyEnvironment && (state === 'dictation-active' || state === 'instruction-active') && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              background: 'rgba(255, 255, 255, 0.96)',
+              border: '1px solid rgba(0, 0, 0, 0.08)',
+              borderRadius: 8,
+              padding: '3px 10px',
+              fontSize: 10.5,
+              fontWeight: 500,
+              color: '#3a3a3f',
+              whiteSpace: 'nowrap',
+              boxShadow: '0 2px 10px rgba(0, 0, 0, 0.18)',
+              animation: 'noisy-hint-in 300ms ease-out',
+            }}
+          >
+            <span aria-hidden style={{ fontSize: 11 }}>🌊</span>
+            <span>noisy spot — lean in &amp; speak up</span>
+            <style>{`@keyframes noisy-hint-in { from { opacity: 0; transform: translateX(6px) } to { opacity: 1; transform: none } }`}</style>
+          </div>
+        )}
         {pillShowing && <StagedImagesChip />}
         <Widget
           state={state}
@@ -624,34 +641,6 @@ export default function WidgetApp() {
           onUndo={handleUndo}
         />
       </div>
-      {/* noisy-spot hint: a signal, not a fix — the user compensates (lean in,
-          speak up) and knows why accuracy might dip. Shown only while STILL
-          recording (compensating is possible), at most once per recording with
-          a long cooldown (the detector self-limits). */}
-      {noisyEnvironment && (state === 'dictation-active' || state === 'instruction-active') && (
-        <div
-          style={{
-            marginTop: 7,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            background: 'rgba(255, 255, 255, 0.96)',
-            border: '1px solid rgba(0, 0, 0, 0.08)',
-            borderRadius: 8,
-            padding: '3px 10px',
-            fontSize: 10.5,
-            fontWeight: 500,
-            color: '#3a3a3f',
-            whiteSpace: 'nowrap',
-            boxShadow: '0 2px 10px rgba(0, 0, 0, 0.18)',
-            animation: 'noisy-hint-in 300ms ease-out',
-          }}
-        >
-          <span aria-hidden style={{ fontSize: 11 }}>🌊</span>
-          <span>noisy spot — lean in &amp; speak up</span>
-          <style>{`@keyframes noisy-hint-in { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }`}</style>
-        </div>
-      )}
       {showAwareness && (
         <OfflineAwarenessCard
           reason={offlineReason}

@@ -90,6 +90,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
   // ─── Noisy-environment refs (per recording) ───
   const rmsFramesRef = useRef<number[]>([])
+  const noisyFrameCountRef = useRef<number>(0)
   const noisyFlaggedRef = useRef<boolean>(false)
 
   // ─── Server-config-driven chunking params (loaded at recording start) ───
@@ -274,7 +275,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         const frames = rmsFramesRef.current
         frames.push(rms)
         if (frames.length > NOISY_WINDOW_FRAMES) frames.shift()
-        if (frames.length >= NOISY_MIN_FRAMES && frames.length % NOISY_EVAL_EVERY_N_FRAMES === 0
+        // Cadence off a monotonic counter — frames.length pins at the window
+        // cap, where `length % N` became always-true (the every-100ms log spam).
+        noisyFrameCountRef.current++
+        if (frames.length >= NOISY_MIN_FRAMES && noisyFrameCountRef.current % NOISY_EVAL_EVERY_N_FRAMES === 0
             && Date.now() - lastNoisyHintAt > NOISY_HINT_COOLDOWN_MS) {
           const sorted = [...frames].sort((a, b) => a - b)
           const floor = sorted[Math.floor(sorted.length * 0.2)]   // the "gaps"
@@ -418,6 +422,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     heardSpeechRef.current = false
     chunksRef.current = []
     rmsFramesRef.current = []
+    noisyFrameCountRef.current = 0
     noisyFlaggedRef.current = false
     setNoisyEnvironment(false)
 
