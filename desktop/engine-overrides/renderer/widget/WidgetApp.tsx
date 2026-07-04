@@ -17,6 +17,7 @@ import {
   type MicSource,
   type AudioInputDeviceInfo,
 } from './micSource'
+import { connectWarmMic, disconnectWarmMic, onWarmState, warmState, type WarmState } from './micWarm'
 
 // ─── Sound Feedback (Web Audio API) ───
 let soundEnabled = true
@@ -426,7 +427,24 @@ function useMicSource() {
     []
   )
 
-  return { preference, devices, toggle, resolveDeviceId, refreshDevices }
+  // ── Session-mode keep-warm lifecycle ────────────────────────────────────
+  // The glyph is a CONNECT/DISCONNECT switch now: iPhone selected + phone
+  // present → hold the pipe open (one-time "connecting" beat, then every
+  // dictation is instant); Mac selected → let it go. Auto-reconnect when the
+  // phone returns while iPhone is still the preference — restoring the
+  // user's explicit choice, not initiating anything.
+  const [warm, setWarm] = useState<WarmState>(warmState())
+  useEffect(() => onWarmState(setWarm), [])
+  useEffect(() => {
+    const phone = findIphoneMic(devices)
+    if (preference === 'iphone' && phone && warmState() === 'off') {
+      void connectWarmMic(phone.deviceId)
+    } else if (preference === 'mac' && warmState() !== 'off') {
+      disconnectWarmMic('user-selected-mac')
+    }
+  }, [preference, devices])
+
+  return { preference, devices, warm, toggle, resolveDeviceId, refreshDevices }
 }
 
 function LaptopGlyph() {
@@ -449,16 +467,15 @@ function PhoneGlyph() {
 
 // The source glyph chip. Same family as the model badge / RAW toggle: dark
 // fill, whitish border, no shadow. Laptop = MacBook mic, phone = iPhone mic
-// (orange, like other "non-default state" accents). A tap toggles; the glyph
-// reflects the preference, which a fresh tap applies from the next dictation.
-function MicSourceChip({ source, onTap }: { source: MicSource; onTap: () => void }) {
+// (orange, like other "non-default state" accents). A tap toggles — and in
+// session mode the toggle IS connect/disconnect: while the warm pipe is
+// establishing, the phone glyph pulses ("connecting…"); steady orange means
+// connected — every dictation from here is instant.
+function MicSourceChip({ source, warm, onTap }: { source: MicSource; warm: WarmState; onTap: () => void }) {
   return (
     <div style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center' }}>
       <button
         onClick={onTap}
-        title={source === 'iphone'
-          ? 'Capturing from your iPhone microphone. Tap to use the MacBook mic.'
-          : 'Capturing from the MacBook microphone. Tap to use your iPhone mic.'}
         style={{
           height: 44,
           width: 44,
@@ -472,9 +489,17 @@ function MicSourceChip({ source, onTap }: { source: MicSource; onTap: () => void
           cursor: 'pointer',
           color: source === 'iphone' ? CLAUDE_ORANGE : 'rgba(255,255,255,0.85)',
           transition: 'color 140ms ease',
+          animation: warm === 'connecting' ? 'mic-connecting 900ms ease-in-out infinite' : 'none',
         }}
+        title={
+          warm === 'connecting' ? 'Connecting your iPhone microphone…'
+            : warm === 'connected' ? 'iPhone mic connected — dictations are instant. Tap to disconnect.'
+              : source === 'iphone' ? 'Capturing from your iPhone microphone. Tap to use the MacBook mic.'
+                : 'Capturing from the MacBook microphone. Tap to connect your iPhone mic.'
+        }
       >
         {source === 'iphone' ? <PhoneGlyph /> : <LaptopGlyph />}
+        <style>{`@keyframes mic-connecting { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }`}</style>
       </button>
     </div>
   )
@@ -781,6 +806,7 @@ export default function WidgetApp() {
         {pillShowing && findIphoneMic(mic.devices) !== null && (
           <MicSourceChip
             source={effectiveSource(mic.preference, mic.devices)}
+            warm={mic.warm}
             onTap={mic.toggle}
           />
         )}

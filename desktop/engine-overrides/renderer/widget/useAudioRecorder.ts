@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
+import { getWarmStream, warmIsHot, disconnectWarmMic } from './micWarm'
 
 type RecordingMode = 'dictation' | 'instruction'
 
@@ -176,7 +177,11 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     isEmittingChunkRef.current = false
 
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop())
+      // The warm session stream outlives recordings by design — the user
+      // connected it; only the user (or a dead link) disconnects it.
+      if (streamRef.current !== getWarmStream()) {
+        streamRef.current.getTracks().forEach((t) => t.stop())
+      }
       streamRef.current = null
     }
     if (audioContextRef.current) {
@@ -655,16 +660,41 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // phone walked away, user hit Disconnect on it — retry ONCE with the
     // system default. The design guarantee is a SILENT fallback to the Mac
     // mic: a missing phone must never surface an error or kill a dictation.
-    let stream: MediaStream
+    let stream: MediaStream | null = null
+    let usedWarm = false
     phoneSourceRef.current = false
     const tAcquire = Date.now()
-    try {
-      stream = await navigator.mediaDevices.getUserMedia(constraints)
-      phoneSourceRef.current = !!requestedDeviceId // requested device delivered
-    } catch (err) {
-      if (!requestedDeviceId) throw err
-      console.log('[audio] Requested device unavailable, falling back to system default mic:', err)
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } })
+    // SESSION-MODE KEEP-WARM: if the user connected their iPhone (glyph =
+    // connect, pipe held open, samples flowing-and-discarded), key-down just
+    // flips discard→keep — hand the ALREADY WARM stream to the recorder.
+    // Zero warm-up, first word intact. A warm-but-silent pipe (link died
+    // under us) is a zombie: disconnect it, cooldown, capture on the Mac.
+    if (requestedDeviceId) {
+      const warm = getWarmStream()
+      if (warm) {
+        if (warmIsHot()) {
+          stream = warm
+          usedWarm = true
+          phoneSourceRef.current = true
+          console.log('[audio:mic] using WARM iPhone stream — no acquisition, no gate')
+        } else {
+          console.warn('[audio:mic] warm iPhone stream is STALE at key-down — zombie, failing over to the Mac mic')
+          disconnectWarmMic('stale-at-keydown')
+          phoneZombieUntil = Date.now() + PHONE_ZOMBIE_COOLDOWN_MS
+          try { window.dispatchEvent(new CustomEvent('unmute:phone-mic-zombie')) } catch { /* best-effort */ }
+          requestedDeviceId = undefined
+        }
+      }
+    }
+    if (!stream) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints)
+        phoneSourceRef.current = !!requestedDeviceId // requested device delivered
+      } catch (err) {
+        if (!requestedDeviceId) throw err
+        console.log('[audio] Requested device unavailable, falling back to system default mic:', err)
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } })
+      }
     }
     // Head-gap calibration: how long the mic took to actually open. The
     // Continuity path is the interesting number — words spoken before this
@@ -755,7 +785,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // silence in the file, and the start-click (played after this resolves)
     // finally tells the truth. Capped so a pathological stream can never
     // block a dictation. Mac path: skipped entirely (pipe is live at open).
-    if (phoneSourceRef.current) {
+    if (phoneSourceRef.current && !usedWarm) {
       const probe = new Float32Array(analyser.fftSize)
       const tGate = Date.now()
       let live = false
