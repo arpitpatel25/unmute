@@ -55,6 +55,17 @@ const NOISY_MAX_RATIO = 12             // safety: voice hugely above floor = mic
 const NOISY_HINT_COOLDOWN_MS = 10 * 60_000 // same café, three dictations ≠ three nags
 let lastNoisyHintAt = 0 // module-level: survives pill remounts within the session
 
+// ── Zombie-phone cooldown ─────────────────────────────────────────────────
+// When the Continuity link dies, macOS can keep the iPhone ENUMERATED and
+// ACQUIRABLE while its wireless backend is gone — a zombie: getUserMedia
+// succeeds, zero samples ever flow (observed live: 4 consecutive dictations
+// recorded silence). After one confirmed zombie (gate cap-hit), skip the
+// phone for a cooldown so the next dictations don't re-pay the 3s toll on a
+// corpse. The device list refresh (event below) usually clears the zombie
+// from enumeration well within this window.
+const PHONE_ZOMBIE_COOLDOWN_MS = 60_000
+let phoneZombieUntil = 0
+
 export function useAudioRecorder(): UseAudioRecorderReturn {
   const [isRecording, setIsRecording] = useState(false)
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null)
@@ -539,9 +550,16 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
     console.log('[audio] Starting NEW recording, mode:', frozenModeRef.current)
 
+    // Zombie cooldown: a phone that just proved dead is not asked again.
+    let requestedDeviceId = deviceId
+    if (requestedDeviceId && Date.now() < phoneZombieUntil) {
+      console.log('[audio:mic] phone in zombie cooldown — capturing on the Mac mic')
+      requestedDeviceId = undefined
+    }
+
     const constraints: MediaStreamConstraints = {
-      audio: deviceId
-        ? { deviceId: { exact: deviceId }, sampleRate: 16000 }
+      audio: requestedDeviceId
+        ? { deviceId: { exact: requestedDeviceId }, sampleRate: 16000 }
         : { sampleRate: 16000 }
     }
 
@@ -565,9 +583,9 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     const tAcquire = Date.now()
     try {
       stream = await navigator.mediaDevices.getUserMedia(constraints)
-      phoneSourceRef.current = !!deviceId // requested device delivered
+      phoneSourceRef.current = !!requestedDeviceId // requested device delivered
     } catch (err) {
-      if (!deviceId) throw err
+      if (!requestedDeviceId) throw err
       console.log('[audio] Requested device unavailable, falling back to system default mic:', err)
       stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } })
     }
@@ -583,13 +601,12 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       console.warn('[audio:mic] capture track ENDED mid-recording (device vanished) — this dictation may be damaged')
     })
 
-    // Set up audio context for waveform analysis
-    const audioContext = new AudioContext()
+    // Set up audio context for waveform analysis (rebuilt on zombie failover)
+    let audioContext = new AudioContext()
     audioContextRef.current = audioContext
-    const source = audioContext.createMediaStreamSource(stream)
-    const analyser = audioContext.createAnalyser()
+    let analyser = audioContext.createAnalyser()
     analyser.fftSize = 128
-    source.connect(analyser)
+    audioContext.createMediaStreamSource(stream).connect(analyser)
     analyserRef.current = analyser
     setAnalyserNode(analyser)
 
@@ -597,12 +614,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // to shrink uploads but Groq's Whisper endpoint rejected the resulting
     // low-bitrate opus stream with HTTP 400. Reverted to the browser default
     // until we find a safe lower bound.
-    const mediaRecorder = new MediaRecorder(stream, {
-      mimeType: 'audio/webm;codecs=opus',
-    })
-    mediaRecorderRef.current = mediaRecorder
-
-    mediaRecorder.ondataavailable = (e) => {
+    const onRecorderData = (e: BlobEvent) => {
       if (e.data.size > 0) {
         chunksRef.current.push(e.data)
         // If chunked mode, also push to current macro chunk buffer
@@ -615,6 +627,11 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         }).catch(() => { /* best-effort */ })
       }
     }
+    let mediaRecorder = new MediaRecorder(stream, {
+      mimeType: 'audio/webm;codecs=opus',
+    })
+    mediaRecorderRef.current = mediaRecorder
+    mediaRecorder.ondataavailable = onRecorderData
 
     // ── PIPE-LIVENESS GATE (iPhone only) ──────────────────────────────────
     // getUserMedia resolves in ~170ms on the Continuity mic, but the WIRELESS
@@ -643,7 +660,36 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         if (probe.some((v) => v !== 0)) { live = true; break }
         await new Promise((r) => setTimeout(r, 10))
       }
-      console.log(`[audio:mic] phone pipe ${live ? 'LIVE' : 'not confirmed (3s cap hit — starting anyway)'} after ${Date.now() - tGate}ms`)
+      if (live) {
+        console.log(`[audio:mic] phone pipe LIVE after ${Date.now() - tGate}ms`)
+      } else {
+        // ZOMBIE VERDICT: acquirable device, zero samples in 3s. The link is
+        // dead (macOS kept the corpse enumerated). Recording it would capture
+        // silence and eat the user's words — THE thing that must never
+        // happen. Fail over to the Mac mic RIGHT NOW: the recorder hasn't
+        // started, so the dictation continues seamlessly on the lesser mic.
+        console.warn(`[audio:mic] phone pipe DEAD after ${Date.now() - tGate}ms — zombie device, failing over to the Mac mic`)
+        phoneZombieUntil = Date.now() + PHONE_ZOMBIE_COOLDOWN_MS
+        try { window.dispatchEvent(new CustomEvent('unmute:phone-mic-zombie')) } catch { /* chip refresh is best-effort */ }
+        // Tear down the zombie wiring…
+        stream.getTracks().forEach((t) => t.stop())
+        try { await audioContext.close() } catch { /* already closing */ }
+        // …and rebuild everything on the system default.
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } })
+        streamRef.current = stream
+        phoneSourceRef.current = false // it's a Mac-mic recording now (no tail grace)
+        audioContext = new AudioContext()
+        audioContextRef.current = audioContext
+        analyser = audioContext.createAnalyser()
+        analyser.fftSize = 128
+        audioContext.createMediaStreamSource(stream).connect(analyser)
+        analyserRef.current = analyser
+        setAnalyserNode(analyser)
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+        mediaRecorderRef.current = mediaRecorder
+        mediaRecorder.ondataavailable = onRecorderData
+        console.log('[audio:mic] failover complete — capturing on the Mac mic')
+      }
     }
 
     mediaRecorder.start(250) // Collect data every 250ms

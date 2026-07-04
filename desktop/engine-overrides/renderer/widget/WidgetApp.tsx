@@ -598,6 +598,12 @@ export default function WidgetApp() {
     }
     remoteApi.remoteOnCaptureKind?.((kind) => setIsRemote(kind === 'remote'))
 
+    // Zombie phone detected by the recorder (acquirable device, dead pipe):
+    // re-enumerate so the chip stops advertising a corpse and flips back to
+    // the laptop glyph as soon as macOS drops the stale entry.
+    const onZombie = () => mic.refreshDevices()
+    window.addEventListener('unmute:phone-mic-zombie', onZombie)
+
     api.onRecordingStart(async (mode, sessionId) => {
       clearAutoHide()
       // Resolve the capture device for THIS recording: the iPhone mic when
@@ -680,6 +686,7 @@ export default function WidgetApp() {
     api.widgetReady()
 
     return () => {
+      window.removeEventListener('unmute:phone-mic-zombie', onZombie)
       api.removeAllListeners('recording:start')
       api.removeAllListeners('recording:stop')
       api.removeAllListeners('output:ready')
