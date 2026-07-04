@@ -370,7 +370,7 @@ export default function WidgetApp() {
   // (types text)? Drives the Remote badge next to the pill. Set on every
   // recording:start from its kind, so it's always fresh for this capture.
   const [isRemote, setIsRemote] = useState(false)
-  const { analyserNode, maxDurationSeconds, startRecording, stopRecording } = useAudioRecorder()
+  const { analyserNode, maxDurationSeconds, noisyEnvironment, startRecording, stopRecording } = useAudioRecorder()
 
   const autoHideRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -614,6 +614,32 @@ export default function WidgetApp() {
           onUndo={handleUndo}
         />
       </div>
+      {/* noisy-spot hint: a signal, not a fix — the user compensates (lean in,
+          speak up) and knows why accuracy might dip. Shown only while STILL
+          recording (compensating is possible), at most once per recording with
+          a long cooldown (the detector self-limits). */}
+      {noisyEnvironment && (state === 'dictation-active' || state === 'instruction-active') && (
+        <div
+          style={{
+            marginTop: 8,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            background: 'rgba(20, 20, 24, 0.92)',
+            border: '1px solid rgba(255, 255, 255, 0.14)',
+            borderRadius: 9999,
+            padding: '4px 12px',
+            fontSize: 11.5,
+            color: 'rgba(255, 255, 255, 0.85)',
+            whiteSpace: 'nowrap',
+            animation: 'noisy-hint-in 300ms ease-out',
+          }}
+        >
+          <span aria-hidden>🌊</span>
+          <span>noisy spot — lean in &amp; speak up, I&rsquo;m listening</span>
+          <style>{`@keyframes noisy-hint-in { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }`}</style>
+        </div>
+      )}
       {showAwareness && (
         <OfflineAwarenessCard
           reason={offlineReason}

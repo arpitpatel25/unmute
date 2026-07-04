@@ -6,6 +6,10 @@ interface UseAudioRecorderReturn {
   isRecording: boolean
   analyserNode: AnalyserNode | null
   maxDurationSeconds: number
+  /** True once THIS recording looks like a noisy environment (high noise floor,
+   *  collapsed speech-to-noise ratio). Purely a signal for the pill's gentle
+   *  "lean in" hint — detection never touches the audio path. */
+  noisyEnvironment: boolean
   startRecording: (deviceId?: string, mode?: RecordingMode, sessionId?: string) => Promise<void>
   stopRecording: () => Promise<void>
 }
@@ -21,10 +25,26 @@ const DEFAULT_SILENCE_DURATION_MS = 400
 const DEFAULT_HARD_CHUNK_CAP_MS = 45_000
 const DEFAULT_VAD_POLL_INTERVAL_MS = 100
 
+// ─── Noisy-environment detection (signal only, never a fix) ───
+// Rides on the RMS the VAD loop already computes — zero extra audio work.
+// Heuristic: in a quiet room the GAPS between words sit near digital silence
+// (p20 ≈ 0.002-0.005) and speech peaks 10-30× above them. In a noisy spot the
+// floor itself climbs past the speech-presence threshold AND the ratio
+// collapses. Requiring BOTH keeps a soft-spoken user in a silent room (low
+// floor) and a loud clear voice over a fan (high ratio) from being flagged.
+const NOISY_MIN_FRAMES = 35            // ≥3.5s of evidence before judging
+const NOISY_EVAL_EVERY_N_FRAMES = 10   // percentile math once per second
+const NOISY_WINDOW_FRAMES = 200        // judge the last ~20s, not ancient history
+const NOISY_FLOOR_RMS = 0.02           // gaps louder than speech-presence = the room is loud
+const NOISY_MAX_RATIO = 5              // speech barely above the floor = SNR collapsed
+const NOISY_HINT_COOLDOWN_MS = 10 * 60_000 // same café, three dictations ≠ three nags
+let lastNoisyHintAt = 0 // module-level: survives pill remounts within the session
+
 export function useAudioRecorder(): UseAudioRecorderReturn {
   const [isRecording, setIsRecording] = useState(false)
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null)
   const [maxDurationSeconds, setMaxDurationSeconds] = useState(300)
+  const [noisyEnvironment, setNoisyEnvironment] = useState(false)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -61,6 +81,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   // Whether any speech (RMS above the silence threshold) was heard this recording.
   // If false on stop, we skip STT entirely — no wasted API call.
   const heardSpeechRef = useRef<boolean>(false)
+
+  // ─── Noisy-environment refs (per recording) ───
+  const rmsFramesRef = useRef<number[]>([])
+  const noisyFlaggedRef = useRef<boolean>(false)
 
   // ─── Server-config-driven chunking params (loaded at recording start) ───
   const chunkMinMsRef = useRef<number>(DEFAULT_CHUNK_MIN_MS)
@@ -238,6 +262,26 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       // Track speech across the whole recording (independent of chunk VAD activation)
       if (rms >= silenceThresholdRef.current) heardSpeechRef.current = true
 
+      // Noisy-environment watch: collect the frame, judge once a second after
+      // enough evidence. Fires AT MOST once per recording + a global cooldown.
+      if (!noisyFlaggedRef.current) {
+        const frames = rmsFramesRef.current
+        frames.push(rms)
+        if (frames.length > NOISY_WINDOW_FRAMES) frames.shift()
+        if (frames.length >= NOISY_MIN_FRAMES && frames.length % NOISY_EVAL_EVERY_N_FRAMES === 0
+            && Date.now() - lastNoisyHintAt > NOISY_HINT_COOLDOWN_MS) {
+          const sorted = [...frames].sort((a, b) => a - b)
+          const floor = sorted[Math.floor(sorted.length * 0.2)]   // the "gaps"
+          const speech = sorted[Math.floor(sorted.length * 0.9)]  // the voice
+          if (floor > NOISY_FLOOR_RMS && speech / Math.max(floor, 1e-6) < NOISY_MAX_RATIO) {
+            noisyFlaggedRef.current = true
+            lastNoisyHintAt = Date.now()
+            console.log(`[audio:noise] noisy environment detected (floor=${floor.toFixed(4)}, speech=${speech.toFixed(4)})`)
+            setNoisyEnvironment(true)
+          }
+        }
+      }
+
       // Chunk-splitting logic only runs once VAD is activated (long recordings)
       if (!vadActivatedRef.current) return
 
@@ -363,6 +407,9 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     audioSentRef.current = false
     heardSpeechRef.current = false
     chunksRef.current = []
+    rmsFramesRef.current = []
+    noisyFlaggedRef.current = false
+    setNoisyEnvironment(false)
 
     // Reset chunking state
     chunkIndexRef.current = 0
@@ -637,5 +684,5 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     })
   }, [cleanupStream])
 
-  return { isRecording, analyserNode, maxDurationSeconds, startRecording, stopRecording }
+  return { isRecording, analyserNode, maxDurationSeconds, noisyEnvironment, startRecording, stopRecording }
 }
