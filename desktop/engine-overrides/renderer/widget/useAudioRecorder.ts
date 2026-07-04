@@ -582,6 +582,30 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     analyserRef.current = analyser
     setAnalyserNode(analyser)
 
+    // ── PIPE-LIVENESS GATE (iPhone only) ──────────────────────────────────
+    // getUserMedia resolves in ~170ms on the Continuity mic, but the WIRELESS
+    // PIPELINE behind it starts delivering samples 0.5-2s later (cold link).
+    // Recording that dead air produced files with 1-2s of leading silence +
+    // a clipped first word — the double trigger for Whisper's documented
+    // silence-hallucination (invented opening sentences). So: do not START
+    // the recorder until samples actually flow. A dead pipe yields EXACT
+    // digital zeros; any live mic — even in a silent room — has a nonzero
+    // noise floor. The recorder then starts on flowing audio: no leading
+    // silence in the file, and the start-click (played after this resolves)
+    // finally tells the truth. Capped so a pathological stream can never
+    // block a dictation. Mac path: skipped entirely (pipe is live at open).
+    if (phoneSourceRef.current) {
+      const probe = new Float32Array(analyser.fftSize)
+      const tGate = Date.now()
+      let live = false
+      while (Date.now() - tGate < 3000) {
+        analyser.getFloatTimeDomainData(probe)
+        if (probe.some((v) => v !== 0)) { live = true; break }
+        await new Promise((r) => setTimeout(r, 25))
+      }
+      console.log(`[audio:mic] phone pipe ${live ? 'LIVE' : 'not confirmed (3s cap hit — starting anyway)'} after ${Date.now() - tGate}ms`)
+    }
+
     // Set up MediaRecorder. We tried lowering audioBitsPerSecond to 32_000
     // to shrink uploads but Groq's Whisper endpoint rejected the resulting
     // low-bitrate opus stream with HTTP 400. Reverted to the browser default
