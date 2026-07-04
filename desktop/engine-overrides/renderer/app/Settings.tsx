@@ -91,8 +91,16 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   async function loadAudioDevices() {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices()
+      // MacBook-only by design: the iPhone/Continuity mic is selected via the
+      // pill chip (Settings → iPhone microphone), never from this list — a
+      // second selector showing the phone here misled users into thinking
+      // this dropdown routed capture. Built-in first; iPhone entries excluded.
       const audioInputs = devices
-        .filter((d) => d.kind === 'audioinput')
+        .filter((d) => d.kind === 'audioinput' && !/iphone|continuity/i.test(d.label))
+        .filter((d, _i, all) => {
+          const builtIn = all.filter((x) => /built-in|macbook/i.test(x.label))
+          return builtIn.length ? /built-in|macbook/i.test(d.label) : true
+        })
         .map((d) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${d.deviceId.slice(0, 8)}` }))
       setAudioDevices(audioInputs)
       if (audioInputs.length > 0 && !selectedDevice) {
