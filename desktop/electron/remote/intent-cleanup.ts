@@ -15,19 +15,14 @@
 // below errs light: fix disfluencies + obvious self-corrections, keep intent.
 
 import { createLogger } from './log'
+import { PROMPTS } from './config'
 
 const log = createLogger('intent-cleanup')
 
 /** Injected LLM completion (provided by the OSS adapter — managed or BYOK). */
 export type CompleteFn = (messages: Array<{ role: 'system' | 'user'; content: string }>) => Promise<string>
 
-const SYSTEM_PROMPT = [
-  'You clean up a voice transcript into a single clear command for a computer assistant.',
-  'Rules: remove filler ("uh", "um", "like"), resolve self-corrections (keep the final intent),',
-  'fix obvious speech-to-text errors, and output ONE concise imperative sentence.',
-  'Do NOT add steps, do NOT answer or perform the task, do NOT ask questions.',
-  'Output only the cleaned command, nothing else.',
-].join(' ')
+const SYSTEM_PROMPT = PROMPTS.intentCleanup
 
 export interface CleanupResult {
   intent: string
@@ -67,11 +62,7 @@ export async function cleanIntent(rawTranscript: string, complete: CompleteFn): 
   }
 }
 
-const NAME_PROMPT = [
-  'You name a task with a SHORT title for a session list in a UI.',
-  'Reply with ONLY a 2-5 word title in plain text — no quotes, no punctuation, no trailing period.',
-  'Capture the essence, e.g. "Twitter strategy folder summary", "Open Dodo women\'s page", "Fresh Claude session".',
-].join(' ')
+const NAME_PROMPT = PROMPTS.taskName
 
 /**
  * Generate a short display name (2-5 words) for a task from its intent. Best-effort:

@@ -29,6 +29,7 @@ import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, type AgentKind } from './codex-executor'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
+import { MODELS, isDoerModel } from './config'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
@@ -125,8 +126,9 @@ const settings = new Store<RemoteSettings>({
     sandboxRoots: [],
     // DECIDED: Sonnet is the default doer model — fast AND capable for agentic
     // remote tasks. Users switch to Haiku (faster) or Opus (most capable) from
-    // the Remote settings or the capture-widget model selector.
-    model: 'sonnet',
+    // the Remote settings or the capture-widget model selector. (See MODELS in
+    // ./config — the single source for every model choice.)
+    model: MODELS.doerDefault,
     modelUserSet: false,
     browserEnabled: true,
     setupConfirmations: {},
@@ -223,7 +225,7 @@ let router: Router | null = null
  *  ~1-2s, and we must NOT inherit the CLI default (the user can change it to
  *  Opus, which is heavy and slow for a one-line judgement). */
 function routerExecutorFactory() {
-  return new ClaudeCodeExecutor({ model: 'sonnet', extraArgs: ['--dangerously-skip-permissions'], chrome: false })
+  return new ClaudeCodeExecutor({ model: MODELS.router, extraArgs: ['--dangerously-skip-permissions'], chrome: false })
 }
 
 /** Build the router's task snapshot from Unmute's live map (Unmute is the hub —
@@ -449,7 +451,7 @@ function executorFactory(resume = false) {
   const agent = settings.get('agent')
   const sandboxRoots = settings.get('sandboxRoots') ?? []
   const sandboxed = sandboxRoots.length > 0
-  const model = settings.get('model') || 'sonnet'
+  const model = settings.get('model') || MODELS.doerDefault
   const browser = settings.get('browserEnabled') !== false
   log.event('executor-factory', { agent, permissionMode: mode, sandboxed, sandboxRoots, model, browser, resume })
   if (agent === 'codex') {
@@ -1158,7 +1160,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // PINNED to opus, independent of the user's doer-model selection: curation
     // is background (latency-insensitive) and benefits from strong reasoning, so
     // picking Haiku for speed on tasks shouldn't degrade long-term memory.
-    const model = 'opus'
+    const model = MODELS.librarian
     const tmux = tmuxBin ? { bin: tmuxBin, confPath: tmuxConfPath, cols: 120, rows: 40 } : undefined
     log.event('librarian-executor-factory', { model })
     return new ClaudeCodeExecutor({
@@ -1665,9 +1667,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // applies to the NEXT dispatched task (each task reads the setting at spawn).
   // Broadcast so both surfaces — Remote settings + the capture-widget badge —
   // stay in sync when either changes it.
-  ipcMain.handle('remote:get-model', async () => settings.get('model') || 'sonnet')
+  ipcMain.handle('remote:get-model', async () => settings.get('model') || MODELS.doerDefault)
   ipcMain.handle('remote:set-model', async (_e, m: string) => {
-    const model = (m === 'haiku' || m === 'sonnet' || m === 'opus') ? m : (settings.get('model') || 'sonnet')
+    const model = isDoerModel(m) ? m : (settings.get('model') || MODELS.doerDefault)
     settings.set('model', model)
     settings.set('modelUserSet', true) // explicit choice — never auto-migrate it
     for (const w of BrowserWindow.getAllWindows()) {
@@ -1734,7 +1736,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     remoteKey: getRemoteKey(),
     agent: settings.get('agent'),
     sandboxRoots: settings.get('sandboxRoots') ?? [],
-    model: settings.get('model') || 'sonnet',
+    model: settings.get('model') || MODELS.doerDefault,
     browserEnabled: settings.get('browserEnabled') !== false,
     overlayAutoPresent: settings.get('overlayAutoPresent') !== false,
     overlayDocked: settings.get('overlayDocked') !== false,
