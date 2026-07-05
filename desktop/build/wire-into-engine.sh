@@ -591,7 +591,11 @@ run_build() {
     fi
   fi
 
-  log "Build complete — output in $engine/release/"
+  # Remove the unpacked .app once the DMG/zip exist — Spotlight indexes stray
+  # .app bundles and users end up with three 'unmute's in search, risking
+  # launches of stale builds. The DMG/zip are the artifacts; the dir is scrap.
+  rm -rf "$engine/release/mac-arm64"
+  log "Build complete — output in $engine/release/ (unpacked .app cleaned)"
   ls -la "$engine/release/" | grep -E '\.dmg$' || true
 }
 
