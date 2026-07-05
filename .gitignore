@@ -9,3 +9,4 @@ desktop/work/
 .DS_Store
 *.log
 .wrangler/
+.claude/handoffs/
