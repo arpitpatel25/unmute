@@ -1012,3 +1012,32 @@ test('stuck heals to processing when hook activity resumes (the API-retry recove
   assert.equal(reStuck.state, 'stuck', 're-silence re-trips the backstop')
   tm.kill(id)
 })
+
+// ─── MCP provenance: spawnedBy persists and survives restarts ─────────────────
+
+test('dispatch with spawnedBy: task carries provenance, meta persists it, rehydrate restores it', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('an agent-created errand', { spawnedBy: 'parent-task-1' })
+  assert.equal(tm.get(id)!.spawnedBy, 'parent-task-1')
+  await new Promise((r) => setTimeout(r, 100))
+  tm.kill(id)
+  const tm2 = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm2.rehydrate()
+  assert.equal(tm2.get(id)!.spawnedBy, 'parent-task-1', 'provenance survives restart')
+})
+
+test('dispatch with forkFromSessionId: spawn omits the pinned session id and passes fork args', async () => {
+  const baseDir = await tmpBase()
+  let spawned: SpawnOpts | null = null
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor({ onSpawn: (o) => { spawned = o } }),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  const id = await tm.dispatch('continue the work', { forkFromSessionId: 'abc-123', extraEnv: { UNMUTE_MCP_TOKEN: 'tok' } })
+  assert.ok(spawned)
+  assert.equal(spawned!.forkFromSessionId, 'abc-123')
+  assert.equal(spawned!.sessionId, undefined, 'a fork cannot pin a session id — Claude mints its own')
+  assert.equal(spawned!.extraEnv?.UNMUTE_MCP_TOKEN, 'tok', 'intercom identity rides the spawn env')
+  tm.kill(id)
+})

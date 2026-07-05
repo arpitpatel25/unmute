@@ -21,6 +21,7 @@
 import { ipcMain, BrowserWindow, Notification, shell, app } from 'electron'
 import Store from 'electron-store'
 import { join, dirname, basename } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { execFile } from 'node:child_process'
@@ -39,6 +40,7 @@ import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrat
 import { Router, type RoutableTask } from './router'
 import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
+import { startMcpServer, MCP_PORT, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
 import { locateTranscript } from './trace-reducer'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
@@ -115,6 +117,10 @@ interface RemoteSettings {
   // Skills the user pinned to the top of the cockpit rail (manual override of
   // the earned-trust ranking).
   pinnedSkills: string[]
+  // The Unmute MCP (agent intercom): may sessions create peer tasks? ON by
+  // default — the guardrails (provenance, depth-1, rate caps) carry the
+  // safety; this is the master off-switch.
+  agentTasksEnabled: boolean
 }
 
 const settings = new Store<RemoteSettings>({
@@ -140,6 +146,7 @@ const settings = new Store<RemoteSettings>({
     voiceHeadlines: true,
     screenshotCapture: true,
     pinnedSkills: [],
+    agentTasksEnabled: true,
   },
 })
 
@@ -417,6 +424,7 @@ function serializeTask(t: Task) {
     threadContext: t.threadContext ?? null,
     shelved: t.shelved ?? false,
     note: t.note ?? null,
+    spawnedBy: t.spawnedBy ?? null,
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,
@@ -899,6 +907,107 @@ function speakAbout(taskId: string | undefined): void {
 // speakLine ⇒ serialized + gated by the same doorbell toggle.
 let pendingBeat: string | null = null
 
+// ── The Unmute MCP (the intercom) ─────────────────────────────────────────
+// Sessions may ADD work to the attention layer, never TOUCH it (see
+// mcp-server.ts). Identity = a per-task bearer token injected into every
+// Unmute-spawned session's environment; it maps back to the task, which is
+// what makes provenance, depth-1 and rate caps enforceable.
+const mcpTokens = new Map<string, string>() // token -> taskId
+const mcpSpawnLedger = new Map<string, { count: number; lastAt: number }>() // caller taskId -> rate state
+const MCP_MAX_SPAWNS_PER_TASK = 5
+const MCP_MIN_SPAWN_GAP_MS = 10_000
+
+/** Issue the per-task intercom identity (env for the spawned session). The
+ *  taskId isn't known until dispatch returns, so tokens are minted against a
+ *  unique placeholder and remapped to the real id right after. */
+function mintMcpEnvFor(placeholder: string): Record<string, string> {
+  const token = randomUUID()
+  mcpTokens.set(token, placeholder)
+  return { UNMUTE_MCP_TOKEN: token, UNMUTE_MCP_URL: `http://127.0.0.1:${MCP_PORT}${MCP_PATH}` }
+}
+function remapMcpToken(placeholder: string, taskId: string): void {
+  for (const [tok, tid] of mcpTokens) if (tid === placeholder) mcpTokens.set(tok, taskId)
+}
+
+/** Locate a Claude session transcript anywhere in ~/.claude/projects and make
+ *  sure a copy exists in the TARGET cwd's slug — a fork can only resume a
+ *  session the target directory can see. */
+async function stageForkSource(sessionIdToFork: string, targetCwd: string): Promise<boolean> {
+  const { promises: fsp } = await import('node:fs')
+  const projectsDir = join(homedir(), '.claude', 'projects')
+  const targetSlug = targetCwd.replace(/[/.]/g, '-')
+  const targetDir = join(projectsDir, targetSlug)
+  const targetFile = join(targetDir, `${sessionIdToFork}.jsonl`)
+  if (existsSync(targetFile)) return true
+  try {
+    for (const d of await fsp.readdir(projectsDir)) {
+      const candidate = join(projectsDir, d, `${sessionIdToFork}.jsonl`)
+      if (existsSync(candidate)) {
+        await fsp.mkdir(targetDir, { recursive: true })
+        await fsp.copyFile(candidate, targetFile)
+        log.event('mcp-fork-source-staged', { sessionId: sessionIdToFork, targetSlug })
+        return true
+      }
+    }
+  } catch (e) {
+    log.warn('mcp fork-source staging failed', { error: (e as Error).message })
+  }
+  return false
+}
+
+async function mcpCreateTask(callerTaskId: string, input: McpCreateTaskInput): Promise<{ task_id: string; name?: string; note?: string }> {
+  if (!manager) throw new Error('Unmute Remote is not initialized')
+  if (settings.get('agentTasksEnabled') === false) throw new Error('agent-created tasks are disabled in Unmute settings')
+  const caller = manager.get(callerTaskId)
+  if (!caller) throw new Error('calling task no longer exists')
+  // DEPTH-1: an agent-spawned task may not spawn (no colonies).
+  if (caller.spawnedBy) throw new Error('depth limit: agent-created tasks cannot themselves create tasks — ask the user to dispatch it')
+  // RATE: bounded fan-out per task.
+  const ledger = mcpSpawnLedger.get(callerTaskId) ?? { count: 0, lastAt: 0 }
+  if (ledger.count >= MCP_MAX_SPAWNS_PER_TASK) throw new Error(`rate limit: this task already created ${ledger.count} tasks (max ${MCP_MAX_SPAWNS_PER_TASK})`)
+  if (Date.now() - ledger.lastAt < MCP_MIN_SPAWN_GAP_MS) throw new Error('rate limit: wait a few seconds between task creations')
+  // Validate dir (same fail-safe semantics as voice dispatch: bad dir → scratch
+  // would be surprising for an explicit request, so reject instead).
+  if (input.dir && !existsSync(input.dir)) throw new Error(`dir does not exist: ${input.dir}`)
+  let note: string | undefined
+  let forkFrom = input.fork_from_session_id
+  if (forkFrom) {
+    const staged = await stageForkSource(forkFrom, input.dir ?? '')
+    if (!input.dir) { throw new Error('fork_from_session_id requires dir (the fork must resume inside a specific project directory)') }
+    if (!staged) { note = `fork source ${forkFrom} not found — started a fresh session instead`; forkFrom = undefined }
+  }
+
+  ledger.count++; ledger.lastAt = Date.now()
+  mcpSpawnLedger.set(callerTaskId, ledger)
+
+  // Identity env is injected by the dispatch wrapper (initRemote) — every
+  // Unmute-spawned session gets one, agent-spawned or not.
+  const newId = await manager.dispatch(input.intent, {
+    kind: input.kind ?? 'oneoff',
+    cwd: input.dir,
+    spawnedBy: callerTaskId,
+    forkFromSessionId: forkFrom,
+  })
+  if (input.name) manager.setName(newId, input.name.slice(0, 48))
+  if (forkFrom) setTimeout(() => { void manager?.adoptForkSessionId(newId, forkFrom!) }, 8000)
+  log.event('mcp-task-created', { by: callerTaskId, child: newId, kind: input.kind ?? 'oneoff', forked: !!forkFrom })
+  return { task_id: newId, name: input.name, note }
+}
+
+async function mcpTaskStatus(callerTaskId: string, taskId: string): Promise<Record<string, unknown>> {
+  if (!manager) throw new Error('Unmute Remote is not initialized')
+  const t = manager.get(taskId)
+  if (!t || t.spawnedBy !== callerTaskId) throw new Error('unknown task (you can only view tasks you created)')
+  return {
+    task_id: t.id,
+    name: t.name ?? null,
+    state: t.state,
+    summary: t.result?.summary ?? null,
+    error: t.error?.reason ?? null,
+    question: t.question?.text ?? null,
+  }
+}
+
 export async function dispatchFromCapture(rawTranscript: string): Promise<string | null> {
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
@@ -1182,6 +1291,40 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       try { execFile(tmuxBin, tmuxKillSessionArgs(sessionNameFor(id)), () => {}) } catch { /* best-effort */ }
     },
   })
+  // ── The Unmute MCP: identity injection + server + registration ──
+  // Every dispatched session gets a per-task intercom identity. Wrapping
+  // dispatch here (rather than teaching TaskManager about MCP) keeps the
+  // lifecycle layer MCP-free and catches every dispatch path — voice, UI,
+  // and agent-created alike.
+  {
+    const origDispatch = manager.dispatch.bind(manager)
+    manager.dispatch = (intent, opts = {}) => {
+      const placeholder = `pending-${randomUUID()}`
+      const env = mintMcpEnvFor(placeholder)
+      return origDispatch(intent, { ...opts, extraEnv: { ...env, ...(opts.extraEnv ?? {}) } })
+        .then((id) => { remapMcpToken(placeholder, id); return id })
+    }
+  }
+  void startMcpServer({
+    resolveCaller: (token) => {
+      if (!token) return null
+      const tid = mcpTokens.get(token)
+      return tid && !tid.startsWith('pending-') ? tid : null
+    },
+    createTask: mcpCreateTask,
+    taskStatus: mcpTaskStatus,
+  }).catch((e) => log.warn('mcp server not started', { error: (e as Error).message }))
+  // Register the server in the user's Claude Code config (idempotent). The
+  // header uses env expansion so each session presents ITS OWN token.
+  execFile('claude', ['mcp', 'get', 'unmute'], { timeout: 10_000 }, (err) => {
+    if (!err) return // already registered
+    const cfg = JSON.stringify({ type: 'http', url: `http://127.0.0.1:${MCP_PORT}${MCP_PATH}`, headers: { Authorization: 'Bearer ${UNMUTE_MCP_TOKEN}' } })
+    execFile('claude', ['mcp', 'add-json', 'unmute', cfg, '--scope', 'user'], { timeout: 15_000 }, (e2, _o, stderr2) => {
+      if (e2) log.warn('mcp registration failed', { error: String(stderr2 || e2.message) })
+      else log.event('mcp-registered-user-scope', {})
+    })
+  })
+
   // Recover the user's tasks after an app crash/restart: rebuild the rows from
   // the on-disk meta + status files (they were never lost — just invisible once
   // the in-memory list reset on relaunch). Then start maintenance so the sweep
@@ -1387,6 +1530,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:get-voice-headlines', async () => settings.get('voiceHeadlines') !== false)
   ipcMain.handle('remote:set-voice-headlines', async (_e, on: boolean) => { settings.set('voiceHeadlines', !!on); return true })
   ipcMain.handle('remote:get-screenshot-capture', async () => settings.get('screenshotCapture') !== false)
+  // The Unmute MCP master switch (agent-created tasks).
+  ipcMain.handle('remote:get-agent-tasks', async () => settings.get('agentTasksEnabled') !== false)
+  ipcMain.handle('remote:set-agent-tasks', async (_e, on: boolean) => { settings.set('agentTasksEnabled', !!on); return true })
   ipcMain.handle('remote:set-screenshot-capture', async (_e, on: boolean) => {
     settings.set('screenshotCapture', !!on)
     if (!on) stopCaptureWatch() // kill a live watcher immediately on disable

@@ -227,6 +227,9 @@ export const remotePreloadExtensions = {
   remoteSetVoiceHeadlines: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-voice-headlines', on),
   /** Screenshot auto-capture during dictation/Remote (off = never touch screenshots). */
   remoteGetScreenshotCapture: (): Promise<boolean> => ipcRenderer.invoke('remote:get-screenshot-capture'),
+  /** Unmute MCP: may sessions create peer tasks? */
+  remoteGetAgentTasks: (): Promise<boolean> => ipcRenderer.invoke('remote:get-agent-tasks'),
+  remoteSetAgentTasks: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-agent-tasks', on),
   remoteSetScreenshotCapture: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-screenshot-capture', on),
 
   // ── Onboarding / guided one-time setup (PRD §12) ──

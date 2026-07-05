@@ -25,6 +25,8 @@ export interface RemoteTask {
   shelved?: boolean
   /** The user's card note (ticket link, context) — annotation only. */
   note?: string | null
+  /** Provenance: task id that agent-spawned this one via the Unmute MCP. */
+  spawnedBy?: string | null
   state: 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
   category?: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
   step?: string | null

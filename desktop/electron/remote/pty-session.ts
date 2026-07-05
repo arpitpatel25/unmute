@@ -87,7 +87,7 @@ export class CliAgentExecutor implements AgentExecutor {
     const slog = log.child({ taskId: this.taskId, agent: this.cfg.label })
 
     // ── Billing guard: strip the configured env vars (PRD §3.2) ──
-    const env: NodeJS.ProcessEnv = { ...spawnOpts.env }
+    const env: NodeJS.ProcessEnv = { ...spawnOpts.env, ...(spawnOpts.extraEnv ?? {}) }
     let stripped = 0
     for (const k of this.cfg.stripEnvVars) {
       if (k in env) { delete env[k]; stripped++ }
@@ -102,9 +102,14 @@ export class CliAgentExecutor implements AgentExecutor {
     // Pin the Claude session id when the caller minted one (fresh spawns only;
     // resume omits it and relies on --continue). Folded into extraArgs so it flows
     // through BOTH the direct and tmux-wrapped launch paths identically.
-    const extraArgs = spawnOpts.sessionId
-      ? [...this.cfg.extraArgs, '--session-id', spawnOpts.sessionId]
-      : this.cfg.extraArgs
+    const extraArgs = spawnOpts.forkFromSessionId
+      // Fork spawn: inherit an existing conversation's context. Claude mints
+      // the fork's NEW session id itself (cannot be pinned) — the dispatcher
+      // discovers it post-boot from the project slug.
+      ? [...this.cfg.extraArgs, '--resume', spawnOpts.forkFromSessionId, '--fork-session']
+      : spawnOpts.sessionId
+        ? [...this.cfg.extraArgs, '--session-id', spawnOpts.sessionId]
+        : this.cfg.extraArgs
     let args = extraArgs
     if (this.cfg.tmux) {
       const session = sessionNameFor(this.taskId)

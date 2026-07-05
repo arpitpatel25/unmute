@@ -143,6 +143,8 @@ function Card({ t, now, queuePos, promoted = false, onClick }: { t: RemoteTask; 
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: st.color, textTransform: 'uppercase' }}>{st.label}</span>
         {/* graduation narration — the system explains the promotion it just made */}
         {promoted && <span style={{ fontSize: 10, color: C.midText, border: `1px solid ${C.borderHi}`, borderRadius: 4, padding: '1px 6px' }}>↑ now a session</span>}
+        {/* provenance — agent-created tasks are always visibly labeled */}
+        {t.spawnedBy && <span title={`Created by another task (${t.spawnedBy.slice(0, 8)}) via the Unmute MCP`} style={{ fontSize: 10, color: '#d2a8ff', border: '1px solid rgba(210,168,255,0.35)', borderRadius: 4, padding: '1px 6px' }}>↳ agent</span>}
         {queuePos != null && (
           <span style={{ marginLeft: 'auto', fontSize: 10, color: C.dimText, border: `1px solid ${C.border}`, borderRadius: 4, padding: '1px 5px' }}>Q{queuePos}</span>
         )}

@@ -19,6 +19,7 @@ interface Settings {
   osNotifications: boolean
   forceRawMode: boolean
   screenshotCapture: boolean
+  agentTasksEnabled?: boolean
   logFile: string | null
 }
 type API = {
@@ -167,6 +168,22 @@ export function RemoteSettings() {
             const on = e.target.checked
             update({ osNotifications: on })
             void api().remoteSetOsNotifications?.(on)
+          }}
+        />
+      </label>
+
+      {/* Agent-created tasks — the Unmute MCP master switch. Sessions may ADD
+          tasks to the wall (with provenance + depth/rate guardrails), never
+          touch existing work. Off = the intercom rejects all creations. */}
+      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
+        <span>Agent-created tasks <span className="text-ink/40">(let a running task spawn new tasks onto the wall — always labeled, rate-limited, never able to touch existing work)</span></span>
+        <input
+          type="checkbox"
+          checked={s.agentTasksEnabled ?? true}
+          onChange={(e) => {
+            const on = e.target.checked
+            update({ agentTasksEnabled: on })
+            void (api() as { remoteSetAgentTasks?: (v: boolean) => Promise<boolean> }).remoteSetAgentTasks?.(on)
           }}
         />
       </label>

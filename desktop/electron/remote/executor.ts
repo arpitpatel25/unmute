@@ -13,6 +13,13 @@ export interface SpawnOpts {
   cwd: string
   /** Base environment. The executor MUST strip ANTHROPIC_API_KEY (PRD §3.2). */
   env: NodeJS.ProcessEnv
+  /** Extra env vars layered on top (after sanitization) — e.g. the per-task
+   *  UNMUTE_MCP_TOKEN that gives the session its Unmute-intercom identity. */
+  extraEnv?: Record<string, string>
+  /** Spawn as a FORK of this Claude session (--resume <id> --fork-session)
+   *  instead of a fresh --session-id. The new session inherits that
+   *  conversation's context; Claude mints the fork's own new session id. */
+  forkFromSessionId?: string
   /** Correlation id for logging. */
   taskId: string
   /** Claude Code session id to PIN for this spawn (passed as `--session-id`).

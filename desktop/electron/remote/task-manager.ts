@@ -127,6 +127,10 @@ export interface Task {
   /** User's free-form note pinned to the card (ticket link, context, a reminder
    *  to future-you). Pure annotation — never fed to the agent. */
   note?: string
+  /** Provenance: the task id that spawned this one via the Unmute MCP (agent-
+   *  created). Drives the card's "agent-spawned" chip and the depth-1 rule
+   *  (a spawned task may not spawn). Undefined = human-created. */
+  spawnedBy?: string
 }
 
 export interface TaskManagerOpts {
@@ -281,7 +285,7 @@ export class TaskManager extends EventEmitter {
    * Dispatch a new task. Returns the taskId immediately; execution + polling
    * proceed asynchronously (PRD §4.4 — dispatch and forget).
    */
-  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string } = {}): Promise<string> {
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string } = {}): Promise<string> {
     const id = randomUUID()
     // Mint the Claude session id up front so we own a stable handle to the
     // session this task will spawn (passed as --session-id below).
@@ -318,6 +322,7 @@ export class TaskManager extends EventEmitter {
       id, intent, sessionId, kind, state: 'processing', createdAt: now, updatedAt: now,
       cwd: runCwd, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
       surface, mode, injectedRecipes: [], lastUserInputAt: now,
+      spawnedBy: opts.spawnedBy,
     }
     this.tasks.set(id, task)
     tlog.event('task-created', { intent, cwd: dir })
@@ -383,7 +388,7 @@ export class TaskManager extends EventEmitter {
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}) }))
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}) }))
       // TEMP(memory-debug): remove after calibration
       tlog.event('dispatch-memory', { MEMORY_DEBUG: true, surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
 
@@ -399,7 +404,13 @@ export class TaskManager extends EventEmitter {
         this.emit('output', { taskId: id, chunk })
       })
 
-      await ex.spawn({ cwd: runCwd, env: process.env, taskId: id, sessionId })
+      await ex.spawn({
+        cwd: runCwd, env: process.env, taskId: id,
+        // A fork cannot pin a session id — Claude mints the fork's own.
+        sessionId: opts.forkFromSessionId ? undefined : sessionId,
+        extraEnv: opts.extraEnv,
+        forkFromSessionId: opts.forkFromSessionId,
+      })
       await ex.isReady()
 
       // Drive past Claude Code's folder-trust prompt (and any boot prompts) using
@@ -806,7 +817,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       const statusPath = join(dir, 'status.json')
@@ -844,6 +855,7 @@ export class TaskManager extends EventEmitter {
         injectedRecipes: meta.injectedRecipes ?? [],
         shelved: meta.shelved || undefined,
         note: meta.note || undefined,
+        spawnedBy: meta.spawnedBy || undefined,
       }
       this.tasks.set(id, task)
       this.emit('created', task)
@@ -981,6 +993,35 @@ export class TaskManager extends EventEmitter {
       .catch((e) => log.child({ taskId: task.id }).warn(`${op}: meta persist failed`, { error: (e as Error).message }))
     this.metaChains.set(task.id, next)
     void next.finally(() => { if (this.metaChains.get(task.id) === next) this.metaChains.delete(task.id) })
+  }
+
+  /** For a FORKED spawn: discover the fork's real session id (Claude mints it;
+   *  we can't pin it). The newest .jsonl in the cwd's project slug that isn't
+   *  the fork SOURCE is the child. Best-effort; keeps the placeholder if not
+   *  found (recall pointers then point at the parent's transcript — degraded,
+   *  not broken). */
+  async adoptForkSessionId(id: string, forkFrom: string): Promise<void> {
+    const task = this.tasks.get(id)
+    if (!task) return
+    try {
+      const { homedir } = await import('node:os')
+      const slug = task.cwd.replace(/[/.]/g, '-')
+      const dir = join(homedir(), '.claude', 'projects', slug)
+      const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.jsonl') && !f.startsWith(forkFrom))
+      const withM = await Promise.all(files.map(async (f) => {
+        try { return { f, m: (await fs.stat(join(dir, f))).mtimeMs } } catch { return { f, m: -1 } }
+      }))
+      withM.sort((a, b) => b.m - a.m)
+      const newest = withM[0]
+      if (newest && newest.m > 0) {
+        const sid = newest.f.replace(/\.jsonl$/, '')
+        if (sid !== task.sessionId) {
+          task.sessionId = sid
+          this.mergeMeta(task, { sessionId: sid }, 'adoptForkSessionId')
+          log.child({ taskId: id }).event('fork-session-id-adopted', { sessionId: sid })
+        }
+      }
+    } catch { /* best-effort */ }
   }
 
   /** Set the session's short display name (generated async after dispatch). Emits
