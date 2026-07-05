@@ -38,6 +38,12 @@ let warmBusy = false
 let pendingDisconnectReason: string | null = null
 const listeners = new Set<(s: WarmState) => void>()
 
+/** Status narration: plain-text one-liners the widget shows the user. Text,
+ *  not pulses — chip colors are ambience, words are communication. */
+function announce(text: string | null, source?: 'iphone' | 'mac'): void {
+  try { window.dispatchEvent(new CustomEvent('unmute:mic-status', { detail: { text, source } })) } catch { /* UI's problem */ }
+}
+
 function setState(next: WarmState): void {
   if (state === next) return
   state = next
@@ -83,6 +89,7 @@ export async function connectWarmMic(deviceId: string): Promise<boolean> {
   if (state === 'connected' || state === 'connecting') return state === 'connected'
   const seq = ++connectSeq
   setState('connecting')
+  announce('Connecting iPhone mic…')
   console.log('[audio:warm] connecting iPhone mic (session mode)…')
   try {
     // Chromium's processing chain OFF for the phone: iOS already cleaned this
@@ -111,6 +118,7 @@ export async function connectWarmMic(deviceId: string): Promise<boolean> {
     }
     if (lastSampleAt === 0 || Date.now() - lastSampleAt > 1500) {
       console.warn('[audio:warm] iPhone mic never delivered samples — zombie at connect')
+      announce('iPhone mic unavailable — using MacBook', 'mac')
       disconnectWarmMic('zombie-at-connect')
       return false
     }
@@ -119,9 +127,11 @@ export async function connectWarmMic(deviceId: string): Promise<boolean> {
     ;(monitor as { unref?: () => void }).unref?.()
     s.getAudioTracks()[0]?.addEventListener('ended', () => {
       console.warn('[audio:warm] iPhone mic track ended (link died / phone left)')
+      announce('iPhone mic lost — switching to MacBook', 'mac')
       disconnectWarmMic('track-ended')
     })
     setState('connected')
+    announce('iPhone mic connected — dictations will use it', 'iphone')
     console.log(`[audio:warm] iPhone mic CONNECTED (warm-up ${Date.now() - t0}ms) — pipe held until the user disconnects`)
     return true
   } catch (err) {
@@ -139,6 +149,7 @@ export function disconnectWarmMic(reason: string): void {
   // zombie disconnects still act immediately (the tracks are dead anyway).
   if (warmBusy && reason === 'user-selected-mac') {
     pendingDisconnectReason = reason
+    announce('Switching to MacBook after this dictation')
     console.log('[audio:warm] disconnect deferred — a recording is using the stream; applies when it ends')
     return
   }

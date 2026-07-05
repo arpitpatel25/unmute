@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import { getWarmStream, warmIsHot, disconnectWarmMic, setWarmBusy } from './micWarm'
+import { getWarmStream, warmIsHot, disconnectWarmMic, setWarmBusy, warmState } from './micWarm'
 
 type RecordingMode = 'dictation' | 'instruction'
 
@@ -120,6 +120,11 @@ async function trimToWebmHeader(chunks: Blob[]): Promise<Blob[]> {
     } catch { /* unreadable chunk — keep scanning */ }
   }
   return chunks // no header found anywhere — send as-is rather than send nothing
+}
+
+/** Per-capture source truth + optional user-facing text (see micWarm.announce). */
+function announceSource(source: 'iphone' | 'mac', text?: string): void {
+  try { window.dispatchEvent(new CustomEvent('unmute:mic-status', { detail: { text: text ?? null, source } })) } catch { /* UI's problem */ }
 }
 
 function tlog(event: string, data: Record<string, unknown>): void {
@@ -711,10 +716,21 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
     console.log('[audio] Starting NEW recording, mode:', frozenModeRef.current)
 
-    // Zombie cooldown: a phone that just proved dead is not asked again.
+    // Source resolution ORDER (the stale-cooldown lesson: a verifiably-flowing
+    // pipe was benched for 60s while dictations went to the far-away Mac):
+    //   1. warm stream HOT  → use it. Proof of life beats any cooldown.
+    //   2. warm CONNECTING  → Mac for THIS dictation. Never gamble on a pipe
+    //      that isn't flowing yet; the next dictation lands on the phone.
+    //   3. zombie cooldown  → Mac (blind cold retries of a corpse stay benched).
+    //   4. cold acquire + pipe gate (pre-session dictations).
     let requestedDeviceId = deviceId
-    if (requestedDeviceId && Date.now() < phoneZombieUntil) {
+    if (requestedDeviceId && !warmIsHot() && warmState() === 'connecting') {
+      console.log('[audio:mic] warm session still connecting — this dictation captures on the Mac mic')
+      announceSource('mac', 'iPhone still connecting — this dictation uses the MacBook mic')
+      requestedDeviceId = undefined
+    } else if (requestedDeviceId && !warmIsHot() && Date.now() < phoneZombieUntil) {
       console.log('[audio:mic] phone in zombie cooldown — capturing on the Mac mic')
+      announceSource('mac')
       requestedDeviceId = undefined
     }
 
@@ -761,9 +777,11 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           usedWarm = true
           phoneSourceRef.current = true
           setWarmBusy(true) // a user-toggle disconnect defers until this recording ends
+          announceSource('iphone')
           console.log('[audio:mic] using WARM iPhone stream — no acquisition, no gate')
         } else {
           console.warn('[audio:mic] warm iPhone stream is STALE at key-down — zombie, failing over to the Mac mic')
+          announceSource('mac', 'iPhone mic lost — switched to MacBook')
           disconnectWarmMic('stale-at-keydown')
           phoneZombieUntil = Date.now() + PHONE_ZOMBIE_COOLDOWN_MS
           try { window.dispatchEvent(new CustomEvent('unmute:phone-mic-zombie')) } catch { /* best-effort */ }
@@ -785,6 +803,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // Continuity path is the interesting number — words spoken before this
     // resolved never existed. (Mac mic: ~50-150ms; phone: measured in field.)
     console.log(`[audio:mic] acquired in ${Date.now() - tAcquire}ms, source=${phoneSourceRef.current ? 'iphone' : 'default'}`)
+    announceSource(phoneSourceRef.current ? 'iphone' : 'mac')
     streamRef.current = stream
     {
       const tel = telemetryRef.current
@@ -897,6 +916,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         // happen. Fail over to the Mac mic RIGHT NOW: the recorder hasn't
         // started, so the dictation continues seamlessly on the lesser mic.
         console.warn(`[audio:mic] phone pipe DEAD after ${Date.now() - tGate}ms — zombie device, failing over to the Mac mic`)
+        announceSource('mac', 'iPhone mic lost — switched to MacBook')
         phoneZombieUntil = Date.now() + PHONE_ZOMBIE_COOLDOWN_MS
         try { window.dispatchEvent(new CustomEvent('unmute:phone-mic-zombie')) } catch { /* chip refresh is best-effort */ }
         // Tear down the zombie wiring…

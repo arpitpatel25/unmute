@@ -527,7 +527,7 @@ function HintChip({ accent, label, detail, icon }: { accent: string; label: stri
       </span>
       <span style={{ fontSize: 12, lineHeight: 1 }}>
         <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.94)' }}>{label}</span>
-        <span style={{ fontWeight: 400, color: 'rgba(255,255,255,0.55)' }}> — {detail}</span>
+        {detail && <span style={{ fontWeight: 400, color: 'rgba(255,255,255,0.55)' }}> — {detail}</span>}
       </span>
       <style>{`@keyframes hint-chip-in { from { opacity: 0; transform: translateX(8px) scale(0.97) } to { opacity: 1; transform: none } }`}</style>
     </div>
@@ -591,6 +591,31 @@ export default function WidgetApp() {
 
   const { analyserNode, maxDurationSeconds, noisyEnvironment, tooQuiet, startRecording, stopRecording } = useAudioRecorder()
   const mic = useMicSource()
+
+  // ── Mic-status narration (text, per the settled position: chip colors are
+  // ambience, WORDS are communication). One line per transition, shown in the
+  // HintChip family beside the pill, auto-dismissed. Also tracks the mic that
+  // ACTUALLY captured the current recording, so the glyph shows fact, not
+  // aspiration. ──
+  const [micStatus, setMicStatus] = useState<string | null>(null)
+  const [captureSource, setCaptureSource] = useState<'iphone' | 'mac' | null>(null)
+  const micStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    const onStatus = (e: Event) => {
+      const d = (e as CustomEvent<{ text: string | null; source?: 'iphone' | 'mac' }>).detail
+      if (d.source) setCaptureSource(d.source)
+      if (d.text) {
+        setMicStatus(d.text)
+        if (micStatusTimer.current) clearTimeout(micStatusTimer.current)
+        micStatusTimer.current = setTimeout(() => setMicStatus(null), 4000)
+      }
+    }
+    window.addEventListener('unmute:mic-status', onStatus)
+    return () => {
+      window.removeEventListener('unmute:mic-status', onStatus)
+      if (micStatusTimer.current) clearTimeout(micStatusTimer.current)
+    }
+  }, [])
 
   const autoHideRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -877,10 +902,13 @@ export default function WidgetApp() {
             (noise wins: it's the condition the user can't hear themselves).
             Pill-family styling: dark glass, hairline border, SVG icon with a
             state accent — reads as part of the instrument, not a toast. */}
-        {(state === 'dictation-active' || state === 'instruction-active') && noisyEnvironment && (
+        {micStatus && state !== 'hidden' && (
+          <HintChip accent="#f97316" label={micStatus.includes(' — ') ? micStatus.split(' — ')[0] : micStatus} detail={micStatus.includes(' — ') ? micStatus.split(' — ').slice(1).join(' — ') : ''} icon="mic" />
+        )}
+        {(state === 'dictation-active' || state === 'instruction-active') && !micStatus && noisyEnvironment && (
           <HintChip accent="#fbbf24" label="Noisy spot" detail="lean in & speak up" icon="waves" />
         )}
-        {(state === 'dictation-active' || state === 'instruction-active') && !noisyEnvironment && tooQuiet && (
+        {(state === 'dictation-active' || state === 'instruction-active') && !micStatus && !noisyEnvironment && tooQuiet && (
           <HintChip accent="#38bdf8" label="Too quiet" detail="bring the mic closer" icon="mic" />
         )}
         {pillShowing && <StagedImagesChip />}
@@ -890,7 +918,9 @@ export default function WidgetApp() {
             flips the (sticky) choice for the next dictation. */}
         {pillShowing && mic.featureEnabled && findIphoneMic(mic.devices) !== null && (
           <MicSourceChip
-            source={effectiveSource(mic.preference, mic.devices)}
+            source={(state === 'dictation-active' || state === 'instruction-active') && captureSource
+              ? captureSource
+              : effectiveSource(mic.preference, mic.devices)}
             warm={mic.warm}
             onTap={mic.toggle}
           />
