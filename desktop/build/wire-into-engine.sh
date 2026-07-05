@@ -432,6 +432,17 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
       fi
     fi
 
+    # HUD above NATIVE FULLSCREEN: the window already joins fullscreen Spaces
+    # (visibleOnFullScreen), but level 'floating' orders BELOW a native-
+    # fullscreen app's window — the pill showed over Chrome-style fullscreen
+    # yet vanished over a fullscreen terminal. 'screen-saver' is the level
+    # macOS HUD utilities use: above fullscreen windows, everywhere.
+    sed -i.bak "s/setAlwaysOnTop(true, 'floating')/setAlwaysOnTop(true, 'screen-saver')/g" "$wm"
+    rm -f "$wm.bak"
+    if grep -q "setAlwaysOnTop(true, 'floating')" "$wm"; then
+      log "WARN: HUD window-level patch did not fully apply — pill may hide over fullscreen apps"
+    fi
+
     # WIDEN the HUD: the pill row grew a family (model badge, RAW toggle,
     # staged-images chip, mic-source chip, hint/status text chips) and 520px
     # clips the row's ends — chips vanished at the invisible window edge.
