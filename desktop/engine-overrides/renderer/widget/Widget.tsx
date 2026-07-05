@@ -89,6 +89,13 @@ export default function Widget({
       prevStateRef.current = state
       return () => clearTimeout(timeout)
     }
+    // THE VANISHING-PILL RACE: a dictation started within the 200ms fade
+    // cancelled the timer above via the effect cleanup — and nothing else ever
+    // reset `exiting`. The pill then rendered EVERY subsequent state with the
+    // exit animation stuck at its end (opacity 0, `forwards`): invisible pill,
+    // healthy state machine, chip beside it looking normal. Any non-hiding
+    // transition means the exit is over or aborted — reset unconditionally.
+    setExiting(false)
     prevStateRef.current = state
   }, [state])
 

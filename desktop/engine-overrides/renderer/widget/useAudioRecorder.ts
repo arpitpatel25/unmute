@@ -178,6 +178,11 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const vadDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Track if we're in the middle of emitting a chunk (MediaRecorder stop/restart cycle)
   const isEmittingChunkRef = useRef<boolean>(false)
+  // Key-release arrived DURING a VAD chunk-cut (recorder mid-swap). Natural
+  // collision: the user releases the key BECAUSE they stopped speaking, and
+  // "stopped speaking" is the exact silence signal the VAD cuts on. emitChunk
+  // honors this flag by finalizing instead of restarting.
+  const stopDuringEmitRef = useRef<boolean>(false)
   // Whether any speech (RMS above the silence threshold) was heard this recording.
   // If false on stop, we skip STT entirely — no wasted API call.
   const heardSpeechRef = useRef<boolean>(false)
@@ -283,6 +288,22 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
     // Send chunk to main process
     window.electronAPI.sendAudioChunk(buffer, chunkIdx, mode, frozenSessionIdRef.current)
+
+    // Stop landed mid-cut (see stopDuringEmitRef): the chunk just sent IS the
+    // last audio. Deliver the final-chunk signal so the session completes and
+    // pastes — never restart the recorder into a session that has ended.
+    if (stopDuringEmitRef.current) {
+      stopDuringEmitRef.current = false
+      audioSentRef.current = true
+      window.electronAPI?.paywallStreamClose?.()
+      const total = chunkIdx + 1
+      const heldDuration = Date.now() - startTimeRef.current
+      window.electronAPI.sendAudioFinalChunk(new ArrayBuffer(0), total, total, heldDuration, mode, frozenSessionIdRef.current)
+      chunkIndexRef.current = total
+      isEmittingChunkRef.current = false
+      cleanupStream()
+      return
+    }
 
     // Paywall: close the current streaming POST (chunkIdx) and open a new one
     // for the next macro chunk (chunkIdx + 1). Before this fix the renderer
@@ -965,6 +986,17 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     if (!recorder || recorder.state === 'inactive') {
       // Already stopped (might have been flushed by startRecording).
       // Flush path already closed the stream; nothing to do here.
+      if (isEmittingChunkRef.current) {
+        // THE COLLISION (13 hits in one session log): the recorder is mid-swap
+        // inside emitChunk. Bailing here closed the session with NO audio
+        // delivery while the cut chunk was already transcribed upstream —
+        // "history has it, nothing pasted, said it didn't catch it". Flag the
+        // stop; emitChunk delivers the FINAL signal instead of restarting.
+        console.log('[audio] stop during VAD chunk-cut — emitChunk will finalize')
+        stopDuringEmitRef.current = true
+        setIsRecording(false)
+        return
+      }
       console.log('[audio] stopRecording called but recorder already inactive')
       window.electronAPI?.paywallStreamClose?.()
       cleanupStream()
