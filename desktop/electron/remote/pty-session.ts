@@ -116,7 +116,7 @@ export class CliAgentExecutor implements AgentExecutor {
       this.tmuxSession = session
       const command = buildCommand(this.cfg.bin, extraArgs)
       bin = this.cfg.tmux.bin
-      args = tmuxNewSessionArgs({ session, command, confPath: this.cfg.tmux.confPath, cols: this.cfg.tmux.cols, rows: this.cfg.tmux.rows })
+      args = tmuxNewSessionArgs({ session, command, confPath: this.cfg.tmux.confPath, cols: this.cfg.tmux.cols, rows: this.cfg.tmux.rows, env: spawnOpts.extraEnv })
       slog.event('tmux-wrap', { session, tmuxBin: this.cfg.tmux.bin, command })
     }
 

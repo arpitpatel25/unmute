@@ -52,6 +52,9 @@ export function buildCommand(bin: string, args: string[]): string {
 }
 
 export interface TmuxNewSessionOpts {
+  /** Extra env vars set INSIDE the tmux session (via -e) — the only way a
+   *  custom variable crosses the client→server boundary. */
+  env?: Record<string, string>
   session: string
   command: string
   confPath: string
@@ -61,6 +64,13 @@ export interface TmuxNewSessionOpts {
 
 /** Args for `tmux … new-session` that runs `command` in a fixed-size session. */
 export function tmuxNewSessionArgs(o: TmuxNewSessionOpts): string[] {
+  // Custom env vars (the per-task UNMUTE_MCP_TOKEN identity) must ride -e:
+  // tmux creates the process on its long-running SERVER, which does NOT
+  // inherit the client's environment (only the update-environment whitelist
+  // propagates). Without -e the token died at the tmux boundary — observed
+  // live: an Unmute-spawned task truthfully reported an empty env and was
+  // locked out of its own intercom.
+  const envFlags = Object.entries(o.env ?? {}).flatMap(([k, v]) => ['-e', `${k}=${v}`])
   return [
     '-L', TMUX_SOCKET,
     '-f', o.confPath,
@@ -69,6 +79,7 @@ export function tmuxNewSessionArgs(o: TmuxNewSessionOpts): string[] {
     '-s', o.session,
     '-x', String(o.cols ?? 120),
     '-y', String(o.rows ?? 40),
+    ...envFlags,
     o.command,            // single arg ⇒ tmux runs it via sh -c
   ]
 }

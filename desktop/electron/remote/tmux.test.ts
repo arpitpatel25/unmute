@@ -56,3 +56,11 @@ test('tmuxRefreshClientArgs targets a CLIENT (not a session — the historic sil
   const args = tmuxRefreshClientArgs('/dev/ttys011')
   assert.deepEqual(args, ['-L', 'unmute-remote', 'refresh-client', '-t', '/dev/ttys011'])
 })
+
+test('tmuxNewSessionArgs threads custom env through -e (the client→server boundary)', () => {
+  const args = tmuxNewSessionArgs({ session: 's1', command: 'claude', confPath: '/c.conf', env: { UNMUTE_MCP_TOKEN: 'tok-1', UNMUTE_MCP_URL: 'http://x' } })
+  const i = args.indexOf('-e')
+  assert.ok(i > -1, 'has -e flags')
+  assert.equal(args[i + 1], 'UNMUTE_MCP_TOKEN=tok-1')
+  assert.equal(args[args.length - 1], 'claude', 'command stays last')
+})
