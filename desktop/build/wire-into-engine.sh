@@ -414,6 +414,16 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
     if ! grep -q 'patched: was 140' "$wm"; then
       log "WARN: windowManager.ts HUD_HEIGHT patch did not apply"
     fi
+    # WIDEN the HUD: the pill row grew a family (model badge, RAW toggle,
+    # staged-images chip, mic-source chip, hint/status text chips) and 520px
+    # clips the row's ends — chips vanished at the invisible window edge.
+    # 900px fits the full ensemble; the window is click-through by default,
+    # so the extra invisible width blocks nothing.
+    sed -i.bak 's/^const HUD_WIDTH = 520$/const HUD_WIDTH = 900  \/\/ patched: was 520 — the chip row outgrew it/' "$wm"
+    rm -f "$wm.bak"
+    if ! grep -q 'patched: was 520' "$wm"; then
+      log "WARN: windowManager.ts HUD_WIDTH patch did not apply"
+    fi
     # Make the HUD click-through by DEFAULT so the empty area around the pill
     # never blocks clicks to the apps behind it. The renderer flips it interactive
     # (hud:set-interactive, wired in main-extensions) only while the cursor is

@@ -905,11 +905,14 @@ export default function WidgetApp() {
         {micStatus && state !== 'hidden' && (
           <HintChip accent="#f97316" label={micStatus.includes(' — ') ? micStatus.split(' — ')[0] : micStatus} detail={micStatus.includes(' — ') ? micStatus.split(' — ').slice(1).join(' — ') : ''} icon="mic" />
         )}
+        {/* Coaching copy is SOURCE-AWARE: "lean in" is Mac advice (move toward
+            the machine); a phone is already at the mouth — there, the only
+            useful remedy is volume. */}
         {(state === 'dictation-active' || state === 'instruction-active') && !micStatus && noisyEnvironment && (
-          <HintChip accent="#fbbf24" label="Noisy spot" detail="lean in & speak up" icon="waves" />
+          <HintChip accent="#fbbf24" label="Noisy spot" detail={captureSource === 'iphone' ? 'speak up' : 'lean in & speak up'} icon="waves" />
         )}
         {(state === 'dictation-active' || state === 'instruction-active') && !micStatus && !noisyEnvironment && tooQuiet && (
-          <HintChip accent="#38bdf8" label="Too quiet" detail="bring the mic closer" icon="mic" />
+          <HintChip accent="#38bdf8" label="Too quiet" detail={captureSource === 'iphone' ? 'speak up a little' : 'bring the mic closer'} icon="mic" />
         )}
         {pillShowing && <StagedImagesChip />}
         {/* mic-source glyph: exists ONLY while an iPhone mic is actually

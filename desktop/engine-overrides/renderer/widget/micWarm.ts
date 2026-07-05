@@ -38,6 +38,13 @@ let warmBusy = false
 let pendingDisconnectReason: string | null = null
 const listeners = new Set<(s: WarmState) => void>()
 
+/** Is a dictation capture currently running? Set by useAudioRecorder around
+ *  every recording (any source) — lets connect-completion say "NEXT dictation"
+ *  when the current one is staying on its original mic. */
+let captureRunning = false
+export function setCaptureInFlight(on: boolean): void { captureRunning = on }
+function captureInFlight(): boolean { return captureRunning }
+
 /** Status narration: plain-text one-liners the widget shows the user. Text,
  *  not pulses — chip colors are ambience, words are communication. */
 function announce(text: string | null, source?: 'iphone' | 'mac'): void {
@@ -131,7 +138,17 @@ export async function connectWarmMic(deviceId: string): Promise<boolean> {
       disconnectWarmMic('track-ended')
     })
     setState('connected')
-    announce('iPhone mic connected — dictations will use it', 'iphone')
+    // Mid-recording connect: the ACTIVE dictation stays on its original mic
+    // (sources are never swapped mid-recording) — say so, or the user talks
+    // into a phone that isn't recording yet (observed live, felt like lost
+    // audio). warmBusy is false here (this stream isn't recording), so the
+    // signal is whether ANY capture is in flight.
+    announce(
+      captureInFlight()
+        ? 'iPhone mic connected — used from your NEXT dictation'
+        : 'iPhone mic connected — dictations will use it',
+      undefined // do not override the glyph truth of a recording in progress
+    )
     console.log(`[audio:warm] iPhone mic CONNECTED (warm-up ${Date.now() - t0}ms) — pipe held until the user disconnects`)
     return true
   } catch (err) {

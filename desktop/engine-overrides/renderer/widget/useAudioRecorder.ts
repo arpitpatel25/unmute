@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import { getWarmStream, warmIsHot, disconnectWarmMic, setWarmBusy, warmState } from './micWarm'
+import { getWarmStream, warmIsHot, disconnectWarmMic, setWarmBusy, warmState, setCaptureInFlight } from './micWarm'
 
 type RecordingMode = 'dictation' | 'instruction'
 
@@ -207,6 +207,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const vadPollIntervalMsRef = useRef<number>(DEFAULT_VAD_POLL_INTERVAL_MS)
 
   const cleanupStream = useCallback(() => {
+    setCaptureInFlight(false)
     if (maxTimerRef.current) {
       clearTimeout(maxTimerRef.current)
       maxTimerRef.current = null
@@ -941,6 +942,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     }
 
     mediaRecorder.start(250)
+    setCaptureInFlight(true)
     if (telemetryRef.current) telemetryRef.current.marks.recorderStart = Date.now() - telemetryRef.current.t0
     startTimeRef.current = Date.now()
     chunkStartTimeRef.current = Date.now()
