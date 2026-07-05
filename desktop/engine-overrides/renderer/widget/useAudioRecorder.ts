@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import { getWarmStream, warmIsHot, disconnectWarmMic, adoptPreRoll, resumePreRoll } from './micWarm'
+import { getWarmStream, warmIsHot, disconnectWarmMic, setWarmBusy } from './micWarm'
 
 type RecordingMode = 'dictation' | 'instruction'
 
@@ -219,7 +219,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       if (streamRef.current !== getWarmStream()) {
         streamRef.current.getTracks().forEach((t) => t.stop())
       } else {
-        resumePreRoll() // the ring re-arms for the next key-down
+        setWarmBusy(false) // releases any deferred user-toggle disconnect
       }
       streamRef.current = null
     }
@@ -697,9 +697,14 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       requestedDeviceId = undefined
     }
 
+    // Phone path: Chromium's processing chain OFF. The iPhone already applied
+    // its own call-tuned DSP before transmitting; a second noise-suppression/
+    // AGC/echo-cancellation pass on pre-cleaned audio only smears speech
+    // (double-cleaning — confirmed pipeline asymmetry vs the Mac path, where
+    // Chromium is the ONLY cleaner and stays on).
     const constraints: MediaStreamConstraints = {
       audio: requestedDeviceId
-        ? { deviceId: { exact: requestedDeviceId }, sampleRate: 16000 }
+        ? { deviceId: { exact: requestedDeviceId }, sampleRate: 16000, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
         : { sampleRate: 16000 }
     }
 
@@ -734,6 +739,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           stream = warm
           usedWarm = true
           phoneSourceRef.current = true
+          setWarmBusy(true) // a user-toggle disconnect defers until this recording ends
           console.log('[audio:mic] using WARM iPhone stream — no acquisition, no gate')
         } else {
           console.warn('[audio:mic] warm iPhone stream is STALE at key-down — zombie, failing over to the Mac mic')
@@ -806,12 +812,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // to shrink uploads but Groq's Whisper endpoint rejected the resulting
     // low-bitrate opus stream with HTTP 400. Reverted to the browser default
     // until we find a safe lower bound.
-    // PRE-ROLL: on the warm path, adopt the live ring segment — its buffered
-    // chunks are the ~0-1.2s BEFORE key-down (the syllable people start early),
-    // and the same running recorder continues as the dictation recorder (one
-    // valid webm stream, no seams).
-    const adopted = usedWarm ? adoptPreRoll() : null
-
     const onRecorderData = (e: BlobEvent) => {
       if (e.data.size > 0) {
         const tel = telemetryRef.current
@@ -831,14 +831,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         }).catch(() => { /* best-effort */ })
       }
     }
-    let mediaRecorder: MediaRecorder
-    if (adopted) {
-      mediaRecorder = adopted.recorder // already running with pre-roll in flight
-      if (telemetryRef.current) telemetryRef.current.marks.preRollChunks = adopted.chunks.length
-      console.log(`[audio:mic] adopted pre-roll segment (${adopted.chunks.length} buffered chunks ≈ ${adopted.chunks.length * 250}ms before key-down)`)
-    } else {
-      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
-    }
+    // Capture begins AT KEY-DOWN, never before: the key-press is the consent
+    // signal (same contract as screenshots). Pre-roll was tried and removed —
+    // it polluted rapid-fire dictations with the previous utterance's tail.
+    const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
     mediaRecorderRef.current = mediaRecorder
     mediaRecorder.ondataavailable = onRecorderData
 
@@ -903,7 +899,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       }
     }
 
-    if (!adopted) mediaRecorder.start(250) // adopted recorder is ALREADY running
+    mediaRecorder.start(250)
     if (telemetryRef.current) telemetryRef.current.marks.recorderStart = Date.now() - telemetryRef.current.t0
     startTimeRef.current = Date.now()
     chunkStartTimeRef.current = Date.now()
@@ -916,10 +912,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       flowType: frozenModeRef.current === 'instruction' ? 'instruction' : 'dictation',
       chunkIndex: 0,
     })
-    // Deliver the adopted pre-roll through the SAME accounting as live chunks
-    // (recording buffer + macro chunks + the streaming POST), now that the
-    // stream is open. Order preserved: these are the earliest chunks.
-    if (adopted) for (const c of adopted.chunks) onRecorderData({ data: c } as BlobEvent)
 
     // Always run the RMS monitor for the whole recording so heardSpeech is
     // tracked even for short, non-chunked dictations. Chunk-SPLITTING stays

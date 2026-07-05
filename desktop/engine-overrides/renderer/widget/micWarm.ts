@@ -27,85 +27,15 @@
 
 export type WarmState = 'off' | 'connecting' | 'connected'
 
-// ── Pre-roll ring (the last word-loss gap) ────────────────────────────────
-// People start the first syllable a beat BEFORE the key lands. With the pipe
-// permanently warm we can afford a rolling pre-roll: a segment recorder runs
-// continuously and is RESTARTED every PREROLL_CYCLE_MS, so at any moment we
-// hold at most ~1.2s of recent audio (each restart discards the previous
-// segment — the privacy promise stays: nothing older than the ring exists,
-// nothing is transcribed or leaves the machine until a dictation adopts it).
-// At key-down the recorder ADOPTS the live segment — its buffered chunks are
-// the pre-roll, and the same recorder keeps running as THE dictation
-// recorder, so the whole file is one valid webm stream.
-const PREROLL_CYCLE_MS = 1200
-let preRecorder: MediaRecorder | null = null
-let preChunks: Blob[] = []
-let preCycle: ReturnType<typeof setInterval> | null = null
-let preAdopted = false
-
-function spinPreRollSegment(): void {
-  if (preAdopted || !stream || state !== 'connected') return
-  try { if (preRecorder && preRecorder.state !== 'inactive') preRecorder.stop() } catch { /* replacing anyway */ }
-  // THE contamination fix (EBML-header bug): MediaRecorder.stop() delivers its
-  // final chunk ASYNCHRONOUSLY — after this function has already swapped the
-  // buffer. With a shared module-level array, the old segment's headerless
-  // tail chunk landed IN FRONT of the new segment's header chunk, and any
-  // dictation adopting that buffer began with garbage → 'EBML header parsing
-  // failed'. Each segment now writes to its OWN closure-local array: a stale
-  // recorder's late chunk lands in its own dead array, unreachable by design.
-  const segChunks: Blob[] = []
-  try {
-    const rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
-    rec.ondataavailable = (e) => { if (e.data.size > 0) segChunks.push(e.data) }
-    rec.start(250)
-    preRecorder = rec
-    preChunks = segChunks // the module pointer follows the LIVE segment only
-  } catch (err) {
-    console.warn('[audio:warm] pre-roll segment failed:', err instanceof Error ? err.message : err)
-    preRecorder = null
-    preChunks = []
-  }
-}
-
-function startPreRoll(): void {
-  preAdopted = false
-  spinPreRollSegment()
-  if (preCycle) clearInterval(preCycle)
-  preCycle = setInterval(spinPreRollSegment, PREROLL_CYCLE_MS)
-  ;(preCycle as { unref?: () => void }).unref?.()
-}
-
-function stopPreRoll(): void {
-  if (preCycle) { clearInterval(preCycle); preCycle = null }
-  try { if (preRecorder && preRecorder.state !== 'inactive') preRecorder.stop() } catch { /* gone */ }
-  preRecorder = null
-  preChunks = []
-}
-
-/** Key-down: hand the LIVE pre-roll segment to the dictation. The returned
- *  recorder is already running (chunks = the pre-roll so far); the caller
- *  owns it from here. Null when unavailable (caller records normally). */
-export function adoptPreRoll(): { recorder: MediaRecorder; chunks: Blob[] } | null {
-  if (state !== 'connected' || !preRecorder || preRecorder.state === 'inactive') return null
-  preAdopted = true
-  if (preCycle) { clearInterval(preCycle); preCycle = null }
-  const out = { recorder: preRecorder, chunks: preChunks }
-  preRecorder = null
-  preChunks = []
-  return out
-}
-
-/** Recording ended: resume the pre-roll ring for the next key-down. */
-export function resumePreRoll(): void {
-  if (state === 'connected') startPreRoll()
-}
-
 let stream: MediaStream | null = null
 let ctx: AudioContext | null = null
 let monitor: ReturnType<typeof setInterval> | null = null
 let state: WarmState = 'off'
 let lastSampleAt = 0
 let connectSeq = 0 // guards a stale connect() resolving after a disconnect
+// Set while a dictation records FROM the warm stream (see useAudioRecorder).
+let warmBusy = false
+let pendingDisconnectReason: string | null = null
 const listeners = new Set<(s: WarmState) => void>()
 
 function setState(next: WarmState): void {
@@ -115,6 +45,17 @@ function setState(next: WarmState): void {
 }
 
 export function warmState(): WarmState { return state }
+
+/** The recorder marks the warm stream in-use for the duration of a recording;
+ *  a user-toggle disconnect arriving meanwhile is deferred to release time. */
+export function setWarmBusy(on: boolean): void {
+  warmBusy = on
+  if (!on && pendingDisconnectReason) {
+    const reason = pendingDisconnectReason
+    pendingDisconnectReason = null
+    disconnectWarmMic(reason)
+  }
+}
 
 export function onWarmState(cb: (s: WarmState) => void): () => void {
   listeners.add(cb)
@@ -144,8 +85,10 @@ export async function connectWarmMic(deviceId: string): Promise<boolean> {
   setState('connecting')
   console.log('[audio:warm] connecting iPhone mic (session mode)…')
   try {
+    // Chromium's processing chain OFF for the phone: iOS already cleaned this
+    // audio on-device; a second NS/AGC/EC pass only smears it (double-cleaning).
     const s = await navigator.mediaDevices.getUserMedia({
-      audio: { deviceId: { exact: deviceId }, sampleRate: 16000 },
+      audio: { deviceId: { exact: deviceId }, sampleRate: 16000, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     })
     if (seq !== connectSeq) { s.getTracks().forEach((t) => t.stop()); return false } // superseded
     stream = s
@@ -179,7 +122,6 @@ export async function connectWarmMic(deviceId: string): Promise<boolean> {
       disconnectWarmMic('track-ended')
     })
     setState('connected')
-    startPreRoll()
     console.log(`[audio:warm] iPhone mic CONNECTED (warm-up ${Date.now() - t0}ms) — pipe held until the user disconnects`)
     return true
   } catch (err) {
@@ -190,8 +132,17 @@ export async function connectWarmMic(deviceId: string): Promise<boolean> {
 }
 
 export function disconnectWarmMic(reason: string): void {
+  // USER-initiated disconnect while a recording is actively using this stream
+  // must NOT yank the tracks from under the recorder ("sources are never
+  // swapped mid-recording") — observed live: a mid-dictation chip tap killed
+  // the session. Defer it; the recorder's release executes it. Link-death and
+  // zombie disconnects still act immediately (the tracks are dead anyway).
+  if (warmBusy && reason === 'user-selected-mac') {
+    pendingDisconnectReason = reason
+    console.log('[audio:warm] disconnect deferred — a recording is using the stream; applies when it ends')
+    return
+  }
   connectSeq++ // invalidate any in-flight connect
-  stopPreRoll()
   if (monitor) { clearInterval(monitor); monitor = null }
   if (stream) { stream.getTracks().forEach((t) => { try { t.stop() } catch { /* gone */ } }); stream = null }
   if (ctx) { void ctx.close().catch(() => { /* already closed */ }); ctx = null }
