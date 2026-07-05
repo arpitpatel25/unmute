@@ -526,6 +526,23 @@ run_build() {
   log "Building unsigned bundles"
   npm run build
 
+  # ─── Bundled-library permissions, THE effective pass (auto-update fix) ───
+  # The engine's build re-copies the ggml dylibs FROM HOMEBREW (download-
+  # whisper.js copyFileSync, no chmod) — and brew keeps its files r--r--r--,
+  # recreating the bad modes AFTER any earlier normalization. Read-only files
+  # in the package make Squirrel/ShipIt's quarantine-strip fail with
+  # Permission-denied on user machines → every auto-update since 2026-06-30
+  # silently aborted and relaunched the old version. This pass runs AFTER the
+  # engine build (nothing rewrites the libs past this point) and BEFORE
+  # electron-builder packages them.
+  if [[ -d "$engine/resources" ]]; then
+    chmod -R u+w "$engine/resources"
+    if find "$engine/resources" -type f ! -perm -u+w | grep -q .; then
+      fatal "read-only files remain in resources/ — packaging would ship a broken auto-update"
+    fi
+    log "resources/ permissions normalized post-build (auto-update installability)"
+  fi
+
   if [[ "$NO_SIGN" == "--no-sign" ]]; then
     log "Skipping signing — local build only"
     # Override the production yml's identity + notarize on the CLI so dev
