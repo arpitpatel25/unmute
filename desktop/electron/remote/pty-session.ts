@@ -16,7 +16,7 @@
 
 import { createLogger } from './log'
 import type { AgentExecutor, SpawnOpts } from './executor'
-import { sessionNameFor, buildCommand, tmuxNewSessionArgs, tmuxKillSessionArgs, tmuxCapturePaneArgs } from './tmux'
+import { sessionNameFor, buildCommand, tmuxNewSessionArgs, tmuxKillSessionArgs, tmuxCapturePaneArgs, tmuxListClientsArgs, tmuxRefreshClientArgs } from './tmux'
 
 /** When set, the agent runs inside a tmux session (private socket) so it can be
  *  popped out to a real terminal as the SAME session. Session name is derived
@@ -206,6 +206,35 @@ export class CliAgentExecutor implements AgentExecutor {
           resolve(err ? null : String(stdout))
         })
       } catch { resolve(null) }
+    })
+  }
+
+  /** Ask tmux to repaint every client of this session. The repaint for OUR
+   *  client arrives through the live PTY stream (ordered with all other
+   *  output), making it the race-free way to resync a renderer that drifted —
+   *  the capture-pane snapshot is a side-channel and can never be fully
+   *  trusted as the screen; this can. Refreshing ALL clients (vs guessing
+   *  ours) is deliberate: repainting a popped-out Terminal too is harmless. */
+  refreshDisplay(): Promise<boolean> {
+    if (!this.tmuxSession || !this.cfg.tmux) return Promise.resolve(false)
+    const bin = this.cfg.tmux.bin
+    return new Promise((resolve) => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const cp = require('node:child_process') as typeof import('node:child_process')
+        cp.execFile(bin, tmuxListClientsArgs(this.tmuxSession!), { timeout: 2000 }, (err, stdout) => {
+          const clients = err ? [] : String(stdout).split('\n').map((c) => c.trim()).filter(Boolean)
+          if (!clients.length) { resolve(false); return }
+          let pending = clients.length
+          let ok = false
+          for (const client of clients) {
+            cp.execFile(bin, tmuxRefreshClientArgs(client), { timeout: 2000 }, (e2) => {
+              if (!e2) ok = true
+              if (--pending === 0) resolve(ok)
+            })
+          }
+        })
+      } catch { resolve(false) }
     })
   }
 

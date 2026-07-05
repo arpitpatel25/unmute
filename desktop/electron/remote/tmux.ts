@@ -92,6 +92,22 @@ export function tmuxCapturePaneArgs(session: string): string[] {
   return ['-L', TMUX_SOCKET, 'capture-pane', '-t', session, '-ep', '-S', '-1000']
 }
 
+/** List the CLIENT names attached to a session — refresh-client requires a
+ *  client, not a session. (The historic silent failure: -t <session> matches
+ *  no client, tmux errors, nothing repaints. That dead end is why the old
+ *  refresh machinery was abandoned; the missing piece was this lookup.) */
+export function tmuxListClientsArgs(session: string): string[] {
+  return ['-L', TMUX_SOCKET, 'list-clients', '-t', session, '-F', '#{client_name}']
+}
+
+/** Ask tmux to fully repaint one client. The redraw arrives IN-STREAM on that
+ *  client's PTY — same ordered byte flow as live output — so unlike a
+ *  capture-pane side-channel snapshot it can never race the stream. This is
+ *  the ttyd model: xterm is just a client; tmux's own redraw is the resync. */
+export function tmuxRefreshClientArgs(client: string): string[] {
+  return ['-L', TMUX_SOCKET, 'refresh-client', '-t', client]
+}
+
 /** Resolve the tmux binary across common install locations (Homebrew, MacPorts,
  *  system). Returns null if not installed — caller falls back to a direct spawn. */
 export function resolveTmuxBin(

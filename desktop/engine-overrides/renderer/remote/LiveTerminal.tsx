@@ -25,6 +25,7 @@ type API = {
   remoteTerminalInput?: (taskId: string, data: string) => void
   remoteTerminalResize?: (taskId: string, cols: number, rows: number) => void
   remoteCaptureScreen?: (taskId: string) => Promise<string | null>
+  remoteRefreshTerminal?: (taskId: string) => Promise<boolean>
   remoteOpenInTerminal?: (taskId: string) => Promise<boolean>
   remoteTmuxAvailable?: () => Promise<boolean>
 }
@@ -49,6 +50,7 @@ export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: {
   // Cleanup for the re-anchor listener (registered inside open(), which runs
   // lazily once the host has dimensions — so the effect can't capture it directly).
   const offReanchorRef = useRef<(() => void) | null>(null)
+  const offDriftGuardRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     const host = hostRef.current
@@ -100,7 +102,11 @@ export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: {
         if (fill) {
           const cols = dims?.cols ?? term.cols
           const rows = dims?.rows ?? term.rows
-          if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows)
+          if (term.cols !== cols || term.rows !== rows) {
+            term.resize(cols, rows)
+            // Post-resize authoritative repaint (in-stream, race-free).
+            setTimeout(() => { void api().remoteRefreshTerminal?.(taskId) }, 400)
+          }
           api().remoteTerminalResize?.(taskId, term.cols, term.rows)
           pinHostWidth()
           return
@@ -176,7 +182,10 @@ export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: {
         // fires this event after such interactions; we re-ask tmux — the one
         // party that always knows the true screen — and repaint clean.
         const onReanchor = (e: Event) => {
-          if ((e as CustomEvent<{ taskId?: string }>).detail?.taskId === taskId) paintSnapshot(350)
+          if ((e as CustomEvent<{ taskId?: string }>).detail?.taskId === taskId) {
+            // In-stream repaint: corrects the viewport without nuking scrollback.
+            setTimeout(() => { if (!disposed) void api().remoteRefreshTerminal?.(taskId) }, 350)
+          }
         }
         window.addEventListener('unmute:terminal-reanchor', onReanchor)
         offReanchorRef.current = () => window.removeEventListener('unmute:terminal-reanchor', onReanchor)
@@ -208,6 +217,7 @@ export function LiveTerminal({ taskId, onClose, fill = false, replay = true }: {
       ro.disconnect()
       off?.()
       offReanchorRef.current?.()
+      offDriftGuardRef.current?.()
       term?.dispose()
     }
   }, [taskId])

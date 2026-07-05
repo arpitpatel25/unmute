@@ -41,6 +41,9 @@ export interface AgentExecutor {
   /** OPTIONAL: the session's CURRENT screen as rendered by tmux (the
    *  continuous observer) — colors included. null ⇒ no tmux; caller falls back. */
   captureScreen?(): Promise<string | null>
+  /** Optional: force a full in-stream repaint of the live screen (tmux
+   *  refresh-client). The renderer's race-free resync primitive. */
+  refreshDisplay?(): Promise<boolean>
   /** Kill the session immediately (PRD §10.4 instant kill switch). */
   kill(): void
   /** True while the PTY process is alive. */

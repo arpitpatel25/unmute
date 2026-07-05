@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   sessionNameFor, shellQuote, buildCommand, tmuxNewSessionArgs,
-  tmuxAttachArgs, tmuxKillSessionArgs, tmuxCapturePaneArgs, resolveTmuxBin, TMUX_SOCKET,
+  tmuxAttachArgs, tmuxKillSessionArgs, tmuxCapturePaneArgs, tmuxListClientsArgs, tmuxRefreshClientArgs, resolveTmuxBin, TMUX_SOCKET,
 } from './tmux.ts'
 
 test('sessionNameFor is deterministic per task', () => {
@@ -45,4 +45,14 @@ test('resolveTmuxBin returns first existing candidate, else null', () => {
 test('tmuxCapturePaneArgs dumps the current screen with colors + recent history', () => {
   const args = tmuxCapturePaneArgs('unmute-abc')
   assert.deepEqual(args, ['-L', 'unmute-remote', 'capture-pane', '-t', 'unmute-abc', '-ep', '-S', '-1000'])
+})
+
+test('tmuxListClientsArgs targets the session and asks for client names only', () => {
+  const args = tmuxListClientsArgs('unmute-abc')
+  assert.deepEqual(args, ['-L', 'unmute-remote', 'list-clients', '-t', 'unmute-abc', '-F', '#{client_name}'])
+})
+
+test('tmuxRefreshClientArgs targets a CLIENT (not a session — the historic silent failure)', () => {
+  const args = tmuxRefreshClientArgs('/dev/ttys011')
+  assert.deepEqual(args, ['-L', 'unmute-remote', 'refresh-client', '-t', '/dev/ttys011'])
 })
