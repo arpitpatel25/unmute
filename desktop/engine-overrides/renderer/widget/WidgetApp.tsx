@@ -587,11 +587,37 @@ export default function WidgetApp() {
   // (types text)? Drives the Remote badge next to the pill. Set on every
   // recording:start from its kind, so it's always fresh for this capture.
   const [isRemote, setIsRemote] = useState(false)
+  const stateRef = useRef<WidgetState>('hidden')
+
   const { analyserNode, maxDurationSeconds, noisyEnvironment, tooQuiet, startRecording, stopRecording } = useAudioRecorder()
   const mic = useMicSource()
 
   const autoHideRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+
+  // ── UX-journey log ([widget:ux]) ─────────────────────────────────────────
+  // One line per state transition describing EXACTLY what the user sees at
+  // that moment: which elements are on screen and why. When 'the pill is
+  // gone' or 'it started by itself' happens again, this trail is the answer.
+  const prevUxRef = useRef<string>('')
+  useEffect(() => {
+    const pillVisible = state === 'dictation-active' || state === 'instruction-active' || state === 'processing'
+    const phonePresent = findIphoneMic(mic.devices) !== null
+    const chipVisible = pillVisible && mic.featureEnabled && phonePresent
+    const snapshot = JSON.stringify({
+      state,
+      sees: {
+        pill: pillVisible ? (state === 'processing' ? 'processing' : 'recording') : (state === 'hidden' ? 'nothing' : state),
+        micChip: chipVisible ? `${effectiveSource(mic.preference, mic.devices)} (${mic.warm})` : 'hidden',
+        remoteBadge: isRemote && pillVisible,
+      },
+      why: { featureEnabled: mic.featureEnabled, phonePresent, warm: mic.warm, isRemote },
+    })
+    if (snapshot !== prevUxRef.current) {
+      prevUxRef.current = snapshot
+      console.log(`[widget:ux] ${snapshot}`)
+    }
+  }, [state, mic.devices, mic.featureEnabled, mic.preference, mic.warm, isRemote])
 
   // The HUD window is click-through by default (so the empty area around the
   // pill never blocks the apps behind it). Hit-test the cursor on every move and
@@ -610,6 +636,8 @@ export default function WidgetApp() {
     window.addEventListener('mousemove', onMove)
     return () => window.removeEventListener('mousemove', onMove)
   }, [])
+
+  stateRef.current = state
 
   const clearAutoHide = useCallback(() => {
     if (autoHideRef.current) {
@@ -699,6 +727,7 @@ export default function WidgetApp() {
     window.addEventListener('unmute:phone-mic-zombie', onZombie)
 
     api.onRecordingStart(async (mode, sessionId) => {
+      console.log(`[widget:ux] EVENT recording:start mode=${mode} session=${sessionId ?? 'none'} (state was ${stateRef.current})`)
       clearAutoHide()
       // Resolve the capture device for THIS recording: the iPhone mic when
       // the user opted in and the phone is around, otherwise the system
@@ -729,12 +758,14 @@ export default function WidgetApp() {
     })
 
     api.onRecordingStop(async () => {
+      console.log(`[widget:ux] EVENT recording:stop (state was ${stateRef.current})`)
       setState('processing')
       setShowDiscardHint(false)
       await stopRecording()
     })
 
     api.onOutputReady(() => {
+      console.log(`[widget:ux] EVENT output:ready (state was ${stateRef.current})`)
       playClickSound('stop')
       setState('output')
       setShowDiscardHint(false)
@@ -760,6 +791,7 @@ export default function WidgetApp() {
     })
 
     api.onSessionCancelled(() => {
+      console.log(`[widget:ux] EVENT session:cancelled (state was ${stateRef.current})`)
       setState('cancelled')
       setShowDiscardHint(false)
     })
@@ -769,6 +801,7 @@ export default function WidgetApp() {
     })
 
     api.onSessionTooShort(() => {
+      console.log(`[widget:ux] EVENT session:too-short (state was ${stateRef.current})`)
       setState('too-short')
       setShowDiscardHint(false)
     })
