@@ -414,6 +414,24 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
     if ! grep -q 'patched: was 140' "$wm"; then
       log "WARN: windowManager.ts HUD_HEIGHT patch did not apply"
     fi
+    # ─── Bundled-library permissions (THE broken-auto-update fix) ───
+    # The 0.9.7 ggml dylibs entered resources/lib with r--r--r-- modes
+    # (2026-06-30). Squirrel/ShipIt must strip the quarantine xattr from every
+    # file of a downloaded update before swapping it in — a read-only file
+    # makes that a Permission-denied, ShipIt aborts the ENTIRE install and
+    # silently relaunches the old version. Every auto-update since has failed
+    # this way ('restart to update' → same version, prompt forever). Writable
+    # modes in the PACKAGE are what heal it — including for users stuck on old
+    # versions, since ShipIt checks the NEW package's files.
+    if [[ -d "$engine/resources/lib" ]]; then
+      chmod -R u+w "$engine/resources/lib"
+      if find "$engine/resources/lib" -type f ! -perm -u+w | grep -q .; then
+        log "WARN: read-only files remain in resources/lib — auto-update will fail"
+      else
+        log "resources/lib permissions normalized (auto-update installability)"
+      fi
+    fi
+
     # WIDEN the HUD: the pill row grew a family (model badge, RAW toggle,
     # staged-images chip, mic-source chip, hint/status text chips) and 520px
     # clips the row's ends — chips vanished at the invisible window edge.
