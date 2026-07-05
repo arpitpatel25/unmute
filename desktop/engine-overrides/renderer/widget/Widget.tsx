@@ -15,6 +15,45 @@ interface WidgetProps {
   onUndo: () => void
 }
 
+
+// ── Self-carried critical styles ──────────────────────────────────────────
+// The invisible-pill incident (2026-07-05): the HUD window occasionally lost
+// its external stylesheet (dev/HMR hiccup) — the class-styled pill rendered
+// as a transparent, zero-layout ghost while the inline-styled mic chip sat
+// beside it looking normal. The pill's CRITICAL styles now travel WITH the
+// component as a <style> element in its own subtree: identical rules, same
+// values, so normally they're a no-op duplicate — but if the stylesheet ever
+// vanishes, the pill still renders. (Cosmetic extras like the shimmer bar
+// stay external; losing polish is fine, losing the pill is not.)
+const PILL_CRITICAL_CSS = `
+@keyframes hud-enter { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes hud-exit { from { transform: translateY(0); opacity: 1; } to { transform: translateY(-12px); opacity: 0; } }
+.animate-hud-enter { animation: hud-enter 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.animate-hud-exit  { animation: hud-exit 0.18s ease-in forwards; }
+@keyframes dot-pulse-red { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255,255,255,0.4); } 50% { transform: scale(0.85); box-shadow: 0 0 0 4px rgba(255,255,255,0.0); } }
+@keyframes dot-pulse-white { 0%, 100% { transform: scale(1); } 50% { transform: scale(0.83); } }
+@keyframes dot-pulse-processing { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(56,182,255,0.5); } 50% { transform: scale(0.85); box-shadow: 0 0 0 5px rgba(56,182,255,0.0); } }
+.animate-dot-pulse-red   { animation: dot-pulse-red 1.5s ease-in-out infinite; }
+.animate-dot-pulse-white { animation: dot-pulse-white 1.5s ease-in-out infinite; }
+.animate-dot-pulse-processing { animation: dot-pulse-processing 1.5s ease-in-out infinite; }
+.unmute-pill { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; background: #0E0E10; border: 1px solid rgba(255,255,255,0.55); border-radius: 9999px; box-shadow: 0 12px 36px rgba(0,0,0,0.55), 0 1px 0 rgba(255,255,255,0.04) inset; max-width: 480px; }
+.unmute-pill-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.unmute-pill-dot--white { background: rgba(255,255,255,0.88); }
+.unmute-pill-dot--red { background: rgb(255,90,90); }
+.unmute-pill-dot--processing { background: rgb(56,182,255); }
+.unmute-pill-label { font-size: 13px; font-weight: 500; letter-spacing: 0.01em; white-space: nowrap; color: rgba(255,255,255,0.55); }
+.unmute-pill-timer { font-size: 12px; font-variant-numeric: tabular-nums; color: rgba(255,255,255,0.30); white-space: nowrap; transition: color 0.3s ease; }
+.unmute-pill-timer--warn { color: #FFAA33; }
+.unmute-pill-waveform { flex-shrink: 0; display: flex; align-items: center; }
+.unmute-pill-stop { width: 28px; height: 28px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.15s; background: rgba(255,255,255,0.08); }
+.unmute-pill-stop:hover { background: rgba(255,255,255,0.14); transform: scale(1.08); }
+.unmute-pill-stop-icon { width: 9px; height: 9px; border-radius: 2px; }
+.unmute-pill-stop-icon--white { background: rgba(255,255,255,0.85); }
+.unmute-pill-stop-icon--red { background: rgba(255,255,255,0.85); }
+.unmute-pill-processing { display: flex; align-items: center; gap: 8px; }
+`
+
+
 export default function Widget({
   state,
   maxDurationSeconds = 300,
@@ -82,6 +121,7 @@ export default function Widget({
 
   return (
     <div className={exiting ? 'animate-hud-exit' : 'animate-hud-enter'}>
+      <style>{PILL_CRITICAL_CSS}</style>
 
       {/* ══════ RECORDING (pill) ══════ */}
       {isRecording && (
