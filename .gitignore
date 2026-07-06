@@ -6,6 +6,7 @@ dist/
 desktop/work/
 .env
 .env.local
+.env.dev
 .DS_Store
 *.log
 .wrangler/
