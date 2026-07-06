@@ -261,14 +261,25 @@ function snapshotOf(t: Task, now: number, surfaced: boolean): RoutableTask {
 }
 
 /** THE CONSENT POLICY (safety, layer 1 of 3): partition the routable tasks.
- *  targetable — the router may auto-continue into these: all one-offs, any task
- *    blocked on a question (it ASKED for input), and sessions whose thread is
- *    HOT (the user themselves spoke/typed into them within getKnobs().hotThreadMs —
- *    including a just-graduated errand, hot by construction, so conversations
- *    never go deaf mid-flow).
- *  coldSessions — long-running sessions the user hasn't touched recently:
- *    NEVER auto-targetable. Shown to the router as context only, reachable via
- *    the declinable offer (alternate) or explicit focus — a tap is the consent. */
+ *  targetable — the router may auto-continue into these: ONE-OFFS ONLY (quick
+ *    errands where a follow-up is the natural next turn).
+ *  coldSessions — EVERY persistent session, in EVERY state (working, done, or
+ *    blocked on a question). A persistent session is NEVER router-targetable —
+ *    not when hot, not when it asked a question, not ever. The ONLY way voice
+ *    reaches a session is EXPLICIT FOCUS: you are inside its stage on the wall
+ *    (the focus short-circuit), which requires the wall to be focused AND that
+ *    session open — leaving the app (blur) or the cockpit grid clears focus. So:
+ *    from the cockpit, from another app, or from a task you then left, a session
+ *    can never be hijacked. Sessions are shown to the router as context only,
+ *    reachable via the declinable offer (alternate) — a tap is the consent.
+ *
+ *  WHY THE HARD RULE (was: a "hot" session — touched within hotThreadMs — stayed
+ *  targetable "so conversations never go deaf mid-flow"). That soft window was the
+ *  hole: a session created/touched in the last 10min was auto-targetable, so a
+ *  brand-new "create a new worktree" dictated from the cockpit got continued INTO
+ *  a running session (proven live, v1.3.22). Focus is now the sole address for a
+ *  session — the invariant the product was designed around ("focus IS the
+ *  address"), enforced in code rather than left to the router's judgement. */
 function partitionRoutable(now: number): { targetable: RoutableTask[]; coldSessions: RoutableTask[] } {
   if (!manager) return { targetable: [], coldSessions: [] }
   const targetable: RoutableTask[] = []
@@ -278,8 +289,8 @@ function partitionRoutable(now: number): { targetable: RoutableTask[]; coldSessi
   // router has that prior when the command is terse.
   manager.routableTasks().forEach((t, i) => {
     const snap = snapshotOf(t, now, i === 0)
-    const hot = (t.lastUserInputAt ?? 0) > now - getKnobs().hotThreadMs
-    if ((t.kind ?? 'oneoff') === 'session' && t.state !== 'needs-user' && !hot) coldSessions.push(snap)
+    // A persistent session is focus-only, unconditionally — never a router target.
+    if ((t.kind ?? 'oneoff') === 'session') coldSessions.push(snap)
     else targetable.push(snap)
   })
   return { targetable, coldSessions }
