@@ -244,10 +244,8 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
   const attach = useCallback(async (blob: Blob) => {
     const path = await attachImageBlob(t.id, blob)
     showNote(path ? 'image attached — speak or type to send it' : 'could not attach — session not running')
-    // The attach typed a path into Claude's input box — a heavy incremental
-    // redraw that can land displaced (two-layer seam). Re-anchor from tmux
-    // once the box has settled.
-    if (path) setTimeout(() => window.dispatchEvent(new CustomEvent('unmute:terminal-reanchor', { detail: { taskId: t.id } })), 600)
+    // No re-anchor needed: xterm renders the raw PTY stream directly, so Claude's
+    // own redraw of its input box arrives in-band and lands correctly on its own.
   }, [t.id, showNote])
 
   useEffect(() => {
@@ -370,7 +368,7 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
           panel with resume / re-run as the obvious next move. */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {t.alive ? (
-          <LiveTerminal taskId={t.id} onClose={onClose} fill replay={false} />
+          <LiveTerminal taskId={t.id} onClose={onClose} fill />
         ) : (
           <div style={{ height: '100%', overflow: 'auto', padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase' }}>

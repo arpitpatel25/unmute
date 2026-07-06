@@ -94,30 +94,12 @@ export function tmuxKillSessionArgs(session: string): string[] {
   return ['-L', TMUX_SOCKET, 'kill-session', '-t', session]
 }
 
-/** Dump the session's CURRENT screen (+ recent history), colors included. tmux
- *  is the continuous observer — it has watched every byte since spawn — so this
- *  is the canonical picture of the terminal RIGHT NOW, no reconstruction, no
- *  repaint games. -e keeps escape sequences (colors), -p prints to stdout,
- *  -S -1000 includes up to 1000 lines of scrollback above the visible screen. */
-export function tmuxCapturePaneArgs(session: string): string[] {
-  return ['-L', TMUX_SOCKET, 'capture-pane', '-t', session, '-ep', '-S', '-1000']
-}
-
-/** List the CLIENT names attached to a session — refresh-client requires a
- *  client, not a session. (The historic silent failure: -t <session> matches
- *  no client, tmux errors, nothing repaints. That dead end is why the old
- *  refresh machinery was abandoned; the missing piece was this lookup.) */
-export function tmuxListClientsArgs(session: string): string[] {
-  return ['-L', TMUX_SOCKET, 'list-clients', '-t', session, '-F', '#{client_name}']
-}
-
-/** Ask tmux to fully repaint one client. The redraw arrives IN-STREAM on that
- *  client's PTY — same ordered byte flow as live output — so unlike a
- *  capture-pane side-channel snapshot it can never race the stream. This is
- *  the ttyd model: xterm is just a client; tmux's own redraw is the resync. */
-export function tmuxRefreshClientArgs(client: string): string[] {
-  return ['-L', TMUX_SOCKET, 'refresh-client', '-t', client]
-}
+// NOTE (terminal rendering): we deliberately do NOT capture-pane to reconstruct
+// the screen. Our owned node-pty is a tmux client, so the pane's RAW output
+// stream (escape sequences intact) already reaches us via pty.onData — xterm
+// renders that directly and owns scrollback + reflow. capture-pane returns
+// flattened text that has lost the soft/hard wrap distinction, which corrupts
+// xterm on scroll and resize; that whole snapshot path was removed on purpose.
 
 /** Resolve the tmux binary across common install locations (Homebrew, MacPorts,
  *  system). Returns null if not installed — caller falls back to a direct spawn. */

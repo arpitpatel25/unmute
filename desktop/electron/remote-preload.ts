@@ -263,12 +263,9 @@ export const remotePreloadExtensions = {
   /** Typeable terminal (PRD §4.3): raw keystrokes from xterm → the task's PTY. */
   remoteTerminalInput: (taskId: string, data: string): void =>
     ipcRenderer.send('remote:terminal-input', taskId, data),
-  /** Tell the PTY the on-screen terminal size so the TUI reflows. */
+  /** Tell the PTY the on-screen terminal size so the TUI reflows (SIGWINCH). */
   remoteTerminalResize: (taskId: string, cols: number, rows: number): void =>
     ipcRenderer.send('remote:terminal-resize', taskId, cols, rows),
-  /** The session's CURRENT screen from tmux (canonical picture, colors kept). */
-  remoteCaptureScreen: (taskId: string): Promise<string | null> =>
-    ipcRenderer.invoke('remote:terminal-screen', taskId),
   /** Is tmux available? (gates the "open in terminal" pop-out button). */
   remoteTmuxAvailable: (): Promise<boolean> => ipcRenderer.invoke('remote:tmux-available'),
   /** Pop this task's live session out to a real terminal app — SAME session. */

@@ -1363,24 +1363,13 @@ export class TaskManager extends EventEmitter {
     this.typedBuffers.set(id, buf)
   }
 
-  /** Resize a session's PTY to match the on-screen terminal (TUI reflow). */
+  /** Resize a session's PTY to match the on-screen terminal (SIGWINCH → the TUI
+   *  repaints itself at the new width; xterm reflows its own buffer). */
   resize(id: string, cols: number, rows: number): void {
     this.executors.get(id)?.resize(cols, rows)
   }
 
-  /** The session's CURRENT screen straight from tmux (canonical, colors kept).
-   *  null ⇒ no tmux / no live executor — caller falls back to buffered replay. */
-  async captureScreen(id: string): Promise<string | null> {
-    return (await this.executors.get(id)?.captureScreen?.()) ?? null
-  }
-
-  /** Force a full in-stream repaint of the task's live screen (see executor). */
-  async refreshDisplay(id: string): Promise<boolean> {
-    return (await this.executors.get(id)?.refreshDisplay?.()) ?? false
-  }
-
-  /** Is the task's PTY still alive (running or parked-warm)? The live terminal
-   *  uses this to decide: repaint a live session clean vs. replay history. */
+  /** Is the task's PTY still alive (running or parked-warm)? */
   isAlive(id: string): boolean {
     return this.executors.get(id)?.alive === true
   }
