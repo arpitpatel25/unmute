@@ -31,6 +31,7 @@ import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, type AgentKind } from './codex-executor'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS, isDoerModel } from './config'
+import { initRuntimeConfig, getModels, getKnobs } from './runtime-config'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
@@ -40,7 +41,7 @@ import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrat
 import { Router, type RoutableTask } from './router'
 import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
-import { startMcpServer, MCP_PORT, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
+import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
 import { locateTranscript } from './trace-reducer'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
@@ -232,14 +233,14 @@ let router: Router | null = null
  *  ~1-2s, and we must NOT inherit the CLI default (the user can change it to
  *  Opus, which is heavy and slow for a one-line judgement). */
 function routerExecutorFactory() {
-  return new ClaudeCodeExecutor({ model: MODELS.router, extraArgs: ['--dangerously-skip-permissions'], chrome: false })
+  return new ClaudeCodeExecutor({ model: getModels().router, extraArgs: ['--dangerously-skip-permissions'], chrome: false })
 }
 
 /** Build the router's task snapshot from Unmute's live map (Unmute is the hub —
  *  the router never touches sessions). */
-/** How long a user interaction keeps a session's thread HOT (auto-routable).
- *  Past this, a persistent session is focus-only — the consent policy. */
-const HOT_THREAD_MS = 10 * 60_000
+// How long a user interaction keeps a session's thread HOT (auto-routable).
+// Past this, a persistent session is focus-only — the consent policy. Runtime-
+// configurable via getKnobs().hotThreadMs (read at use, so a live update applies).
 
 function snapshotOf(t: Task, now: number, surfaced: boolean): RoutableTask {
   return {
@@ -262,7 +263,7 @@ function snapshotOf(t: Task, now: number, surfaced: boolean): RoutableTask {
 /** THE CONSENT POLICY (safety, layer 1 of 3): partition the routable tasks.
  *  targetable — the router may auto-continue into these: all one-offs, any task
  *    blocked on a question (it ASKED for input), and sessions whose thread is
- *    HOT (the user themselves spoke/typed into them within HOT_THREAD_MS —
+ *    HOT (the user themselves spoke/typed into them within getKnobs().hotThreadMs —
  *    including a just-graduated errand, hot by construction, so conversations
  *    never go deaf mid-flow).
  *  coldSessions — long-running sessions the user hasn't touched recently:
@@ -277,7 +278,7 @@ function partitionRoutable(now: number): { targetable: RoutableTask[]; coldSessi
   // router has that prior when the command is terse.
   manager.routableTasks().forEach((t, i) => {
     const snap = snapshotOf(t, now, i === 0)
-    const hot = (t.lastUserInputAt ?? 0) > now - HOT_THREAD_MS
+    const hot = (t.lastUserInputAt ?? 0) > now - getKnobs().hotThreadMs
     if ((t.kind ?? 'oneoff') === 'session' && t.state !== 'needs-user' && !hot) coldSessions.push(snap)
     else targetable.push(snap)
   })
@@ -459,7 +460,7 @@ function executorFactory(resume = false) {
   const agent = settings.get('agent')
   const sandboxRoots = settings.get('sandboxRoots') ?? []
   const sandboxed = sandboxRoots.length > 0
-  const model = settings.get('model') || MODELS.doerDefault
+  const model = settings.get('model') || getModels().doerDefault
   const browser = settings.get('browserEnabled') !== false
   log.event('executor-factory', { agent, permissionMode: mode, sandboxed, sandboxRoots, model, browser, resume })
   if (agent === 'codex') {
@@ -565,7 +566,8 @@ function broadcastStaged(): void {
 // short gap since the last utterance — belong to what's being said. Everything
 // staged is VISIBLE on the pill (🖼 n, prunable with ✕) before it sends; nothing
 // rides invisibly. Only ever active for REMOTE captures, never plain dictation.
-const CAPTURE_MAX_AUTO = 12
+// Max screenshots auto-staged per remote capture — runtime-configurable via
+// getKnobs().captureMaxAuto (read at use so a live update applies).
 let captureWatchTimer: ReturnType<typeof setInterval> | null = null
 let captureWatchGen = 0 // generation guard: a stale safety-stop must not kill a newer watch
 let screenshotDirCache: string | null = null
@@ -601,7 +603,7 @@ let clipBaselined = false
  *  consume-then-clear at key-lift (we only clear what we delivered). */
 let clipStagedThisCapture = false
 function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, stagedNew: boolean) => void): void {
-  if (clipProbeBusy || (!markOnly && stagedAttachments.length >= CAPTURE_MAX_AUTO)) { onDone?.(false, false); return }
+  if (clipProbeBusy || (!markOnly && stagedAttachments.length >= getKnobs().captureMaxAuto)) { onDone?.(false, false); return }
   clipProbeBusy = true
   try { mkdirSync(STAGING_DIR, { recursive: true }) } catch { /* ignore */ }
   const probe = CLIP_PROBE_FILE()
@@ -682,7 +684,7 @@ function screenshotDir(): string {
 }
 
 function stageBuffer(buf: Buffer, tag: string): void {
-  if (stagedAttachments.length >= CAPTURE_MAX_AUTO) return
+  if (stagedAttachments.length >= getKnobs().captureMaxAuto) return
   try {
     mkdirSync(STAGING_DIR, { recursive: true })
     const file = join(STAGING_DIR, `capture-${Date.now()}-${tag}.png`)
@@ -710,7 +712,7 @@ function stageRecentScreenshotFiles(sinceMs: number): void {
     try { entries = readdirSync(dir) } catch { continue }
     let matched = 0
     for (const entry of entries) {
-      if (stagedAttachments.length >= CAPTURE_MAX_AUTO) break
+      if (stagedAttachments.length >= getKnobs().captureMaxAuto) break
       if (!/\.(png|jpe?g)$/i.test(entry)) continue
       if (!anyImage && !/^screen ?shot/i.test(entry)) continue
       const full = join(dir, entry)
@@ -914,8 +916,8 @@ let pendingBeat: string | null = null
 // what makes provenance, depth-1 and rate caps enforceable.
 const mcpTokens = new Map<string, string>() // token -> taskId
 const mcpSpawnLedger = new Map<string, { count: number; lastAt: number }>() // caller taskId -> rate state
-const MCP_MAX_SPAWNS_PER_TASK = 5
-const MCP_MIN_SPAWN_GAP_MS = 10_000
+// MCP spawn rate caps — runtime-configurable via getKnobs().mcpMaxSpawnsPerTask
+// / .mcpMinSpawnGapMs (read at enforcement so a live update applies).
 
 /** Issue the per-task intercom identity (env for the spawned session). The
  *  taskId isn't known until dispatch returns, so tokens are minted against a
@@ -923,7 +925,7 @@ const MCP_MIN_SPAWN_GAP_MS = 10_000
 function mintMcpEnvFor(placeholder: string): Record<string, string> {
   const token = randomUUID()
   mcpTokens.set(token, placeholder)
-  return { UNMUTE_MCP_TOKEN: token, UNMUTE_MCP_URL: `http://127.0.0.1:${MCP_PORT}${MCP_PATH}` }
+  return { UNMUTE_MCP_TOKEN: token, UNMUTE_MCP_URL: `http://127.0.0.1:${getKnobs().mcpPort}${MCP_PATH}` }
 }
 function remapMcpToken(placeholder: string, taskId: string): void {
   for (const [tok, tid] of mcpTokens) if (tid === placeholder) mcpTokens.set(tok, taskId)
@@ -964,8 +966,9 @@ async function mcpCreateTask(callerTaskId: string, input: McpCreateTaskInput): P
   if (caller.spawnedBy) throw new Error('depth limit: agent-created tasks cannot themselves create tasks — ask the user to dispatch it')
   // RATE: bounded fan-out per task.
   const ledger = mcpSpawnLedger.get(callerTaskId) ?? { count: 0, lastAt: 0 }
-  if (ledger.count >= MCP_MAX_SPAWNS_PER_TASK) throw new Error(`rate limit: this task already created ${ledger.count} tasks (max ${MCP_MAX_SPAWNS_PER_TASK})`)
-  if (Date.now() - ledger.lastAt < MCP_MIN_SPAWN_GAP_MS) throw new Error('rate limit: wait a few seconds between task creations')
+  const { mcpMaxSpawnsPerTask, mcpMinSpawnGapMs } = getKnobs()
+  if (ledger.count >= mcpMaxSpawnsPerTask) throw new Error(`rate limit: this task already created ${ledger.count} tasks (max ${mcpMaxSpawnsPerTask})`)
+  if (Date.now() - ledger.lastAt < mcpMinSpawnGapMs) throw new Error('rate limit: wait a few seconds between task creations')
   // Validate dir (same fail-safe semantics as voice dispatch: bad dir → scratch
   // would be surprising for an explicit request, so reject instead).
   if (input.dir && !existsSync(input.dir)) throw new Error(`dir does not exist: ${input.dir}`)
@@ -1098,7 +1101,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         // CONSENT GUARD (layer 3 of 3 — parse validation should make this
         // unreachable): never auto-inject into a cold persistent session.
         const target = manager.get(tid)
-        const targetHot = (target?.lastUserInputAt ?? 0) > Date.now() - HOT_THREAD_MS
+        const targetHot = (target?.lastUserInputAt ?? 0) > Date.now() - getKnobs().hotThreadMs
         if (target && (target.kind ?? 'oneoff') === 'session' && target.state !== 'needs-user' && !targetHot) {
           log.warn('consent guard: refused continue into cold session — dispatching new', { taskId: tid })
         } else {
@@ -1221,6 +1224,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // all. Must run before claudeMcpList() / any spawn below.
   fixPath()
 
+  // Runtime config: load the compiled floor ⊕ disk cache ⊕ optional local
+  // override synchronously (instant boot), then refresh from our hosted config
+  // in the BACKGROUND (non-blocking) + a slow 6h timer. Everything below reads
+  // effective values via getModels()/getKnobs()/getPrompts(). Must run before
+  // any of those reads (executor factories, snapshots, MCP caps, TaskManager).
+  initRuntimeConfig({ userDataDir: app.getPath('userData'), autoRefresh: true })
+
   const logDir = join(homedir(), '.unmute', 'remote', 'logs')
   const runId = String(Date.now())
   const logFile = configureRemoteLogging({ dir: logDir, runId })
@@ -1269,7 +1279,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // PINNED to opus, independent of the user's doer-model selection: curation
     // is background (latency-insensitive) and benefits from strong reasoning, so
     // picking Haiku for speed on tasks shouldn't degrade long-term memory.
-    const model = MODELS.librarian
+    const model = getModels().librarian
     const tmux = tmuxBin ? { bin: tmuxBin, confPath: tmuxConfPath, cols: 120, rows: 40 } : undefined
     log.event('librarian-executor-factory', { model })
     return new ClaudeCodeExecutor({
@@ -1283,6 +1293,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   manager = new TaskManager({
     executorFactory,
     librarian,
+    // Behavioral knobs from runtime config (Tier B) — read once at construction.
+    // A live update takes effect on the next relaunch (lifecycle timers are set
+    // at construction); the values still ratchet forward via the cache.
+    staleMs: getKnobs().taskStaleMs,
+    warmMs: getKnobs().taskWarmMs,
+    navigateWarmMs: getKnobs().taskNavigateWarmMs,
+    purgeAgeMs: getKnobs().taskPurgeAgeMs,
+    readyDecayMs: getKnobs().readyDecayMs,
     // Best-effort reaper for an orphan tmux session a past run left on our
     // private socket (app crashed before killAll). Per-session kill, never the
     // server (would hit live ones).
@@ -1313,12 +1331,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     },
     createTask: mcpCreateTask,
     taskStatus: mcpTaskStatus,
-  }).catch((e) => log.warn('mcp server not started', { error: (e as Error).message }))
+  }, getKnobs().mcpPort).catch((e) => log.warn('mcp server not started', { error: (e as Error).message }))
   // Register the server in the user's Claude Code config (idempotent). The
   // header uses env expansion so each session presents ITS OWN token.
   execFile('claude', ['mcp', 'get', 'unmute'], { timeout: 10_000 }, (err) => {
     if (!err) return // already registered
-    const cfg = JSON.stringify({ type: 'http', url: `http://127.0.0.1:${MCP_PORT}${MCP_PATH}`, headers: { Authorization: 'Bearer ${UNMUTE_MCP_TOKEN}' } })
+    const cfg = JSON.stringify({ type: 'http', url: `http://127.0.0.1:${getKnobs().mcpPort}${MCP_PATH}`, headers: { Authorization: 'Bearer ${UNMUTE_MCP_TOKEN}' } })
     execFile('claude', ['mcp', 'add-json', 'unmute', cfg, '--scope', 'user'], { timeout: 15_000 }, (e2, _o, stderr2) => {
       if (e2) log.warn('mcp registration failed', { error: String(stderr2 || e2.message) })
       else log.event('mcp-registered-user-scope', {})
@@ -1352,7 +1370,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ;(gardenTimer as { unref?: () => void }).unref?.()
   // The warm routing classifier (lazy — spawns on the first routed utterance,
   // idle-kills itself; tool-less, no glow). Star topology: Unmute is the hub.
-  router = new Router({ executorFactory: routerExecutorFactory })
+  router = new Router({
+    executorFactory: routerExecutorFactory,
+    decisionTimeoutMs: getKnobs().routerDecisionTimeoutMs,
+    maxSessionMs: getKnobs().routerMaxSessionMs,
+  })
   // Resident from startup — bring the classifier up now so the FIRST follow-up
   // utterance hits a warm session, never a cold spawn + timeout. Fire-and-forget.
   void router.warm()
@@ -1815,9 +1837,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // applies to the NEXT dispatched task (each task reads the setting at spawn).
   // Broadcast so both surfaces — Remote settings + the capture-widget badge —
   // stay in sync when either changes it.
-  ipcMain.handle('remote:get-model', async () => settings.get('model') || MODELS.doerDefault)
+  ipcMain.handle('remote:get-model', async () => settings.get('model') || getModels().doerDefault)
   ipcMain.handle('remote:set-model', async (_e, m: string) => {
-    const model = isDoerModel(m) ? m : (settings.get('model') || MODELS.doerDefault)
+    const model = isDoerModel(m) ? m : (settings.get('model') || getModels().doerDefault)
     settings.set('model', model)
     settings.set('modelUserSet', true) // explicit choice — never auto-migrate it
     for (const w of BrowserWindow.getAllWindows()) {
@@ -1884,7 +1906,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     remoteKey: getRemoteKey(),
     agent: settings.get('agent'),
     sandboxRoots: settings.get('sandboxRoots') ?? [],
-    model: settings.get('model') || MODELS.doerDefault,
+    model: settings.get('model') || getModels().doerDefault,
     browserEnabled: settings.get('browserEnabled') !== false,
     overlayAutoPresent: settings.get('overlayAutoPresent') !== false,
     overlayDocked: settings.get('overlayDocked') !== false,

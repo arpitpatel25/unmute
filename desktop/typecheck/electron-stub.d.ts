@@ -66,7 +66,10 @@ declare module 'electron' {
     availableFormats(): string[]
     clear(): void
   }
-  export interface App { on(event: string, cb: (...a: unknown[]) => void): void }
+  export interface App {
+    on(event: string, cb: (...a: unknown[]) => void): void
+    getPath(name: string): string
+  }
   export const app: App
   export class Notification {
     constructor(opts: { title: string; body: string })

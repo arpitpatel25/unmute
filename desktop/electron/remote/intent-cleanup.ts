@@ -15,14 +15,16 @@
 // below errs light: fix disfluencies + obvious self-corrections, keep intent.
 
 import { createLogger } from './log'
-import { PROMPTS } from './config'
+import { getPrompts } from './runtime-config'
 
 const log = createLogger('intent-cleanup')
 
 /** Injected LLM completion (provided by the OSS adapter — managed or BYOK). */
 export type CompleteFn = (messages: Array<{ role: 'system' | 'user'; content: string }>) => Promise<string>
 
-const SYSTEM_PROMPT = PROMPTS.intentCleanup
+// Read the effective prompt at CALL time (getPrompts()), not module-load, so a
+// runtime-config update (remote push / local override) takes effect without a
+// relaunch. Falls back to the compiled default when no override is present.
 
 export interface CleanupResult {
   intent: string
@@ -42,7 +44,7 @@ export async function cleanIntent(rawTranscript: string, complete: CompleteFn): 
   }
   try {
     const out = (await complete([
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: getPrompts().intentCleanup },
       { role: 'user', content: raw },
     ]))?.trim()
     if (!out) {
@@ -62,8 +64,6 @@ export async function cleanIntent(rawTranscript: string, complete: CompleteFn): 
   }
 }
 
-const NAME_PROMPT = PROMPTS.taskName
-
 /**
  * Generate a short display name (2-5 words) for a task from its intent. Best-effort:
  * returns '' on any failure/oversize so the caller keeps its truncated-intent fallback.
@@ -74,7 +74,7 @@ export async function nameIntent(intent: string, complete: CompleteFn): Promise<
   if (!raw) return ''
   try {
     const out = (await complete([
-      { role: 'system', content: NAME_PROMPT },
+      { role: 'system', content: getPrompts().taskName },
       { role: 'user', content: raw },
     ]))?.trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
     if (!out || out.length > 48) return ''

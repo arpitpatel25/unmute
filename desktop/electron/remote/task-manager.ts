@@ -184,6 +184,10 @@ export interface TaskManagerOpts {
   purgeAgeMs?: number
   /** How often the maintenance sweep runs. Default 1h. */
   purgeSweepMs?: number
+  /** A ready ONE-OFF the user has ignored for this long decays to done so it
+   *  fades instead of haunting the queue (ready-inflation valve). Ready SESSIONS
+   *  never decay. Default 1h. */
+  readyDecayMs?: number
   /** Best-effort reaper for an ORPHAN tmux session left by a past run (the app
    *  crashed/quit without killing it). Wired from init.ts (which owns the tmux
    *  bin + private socket). Omitted in tests. */
@@ -252,6 +256,7 @@ export class TaskManager extends EventEmitter {
       detachGraceMs: opts.detachGraceMs ?? 1500,
       purgeAgeMs: opts.purgeAgeMs ?? 24 * 60 * 60_000, // 24h — "gone by end of day"
       purgeSweepMs: opts.purgeSweepMs ?? 60 * 60_000,  // hourly
+      readyDecayMs: opts.readyDecayMs ?? 60 * 60_000,  // 1h ready-inflation valve
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
       reapSession: opts.reapSession,
@@ -897,7 +902,7 @@ export class TaskManager extends EventEmitter {
     // ignored for an hour was not actually awaiting their move — settle it to
     // done so it fades instead of haunting the queue all day. Ready SESSIONS
     // never decay: a thread's open loop is real until the user closes it.
-    const readyCutoff = this.clock() - 60 * 60_000
+    const readyCutoff = this.clock() - this.opts.readyDecayMs
     for (const t of this.tasks.values()) {
       if (t.state === 'ready' && (t.kind ?? 'oneoff') !== 'session' && t.updatedAt < readyCutoff) {
         t.state = 'done'

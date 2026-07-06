@@ -4,6 +4,7 @@
 //   POST /v1/stt   — Speech-to-text via Groq Whisper Turbo
 //   POST /v1/llm   — Chat completion via Groq Llama-4-Scout
 //   GET  /v1/me    — Lightweight balance + plan info (for desktop polling)
+//   GET  /v1/remote-config — PUBLIC (no auth): desktop Remote runtime config
 //
 // Hot-path design (optimized vs BoloAI's pipeline):
 //   1. JWT verify — local, cached JWK (~5ms)
@@ -39,6 +40,7 @@ import {
   rawGroqCostUsd,
 } from '../../shared/groq'
 import { rpc } from '../../shared/supabase'
+import { remoteConfigResponse } from '../../shared/remoteConfig'
 import type {
   PipelineEnv,
   PipelineErrorResponse,
@@ -115,6 +117,15 @@ export default {
     }
 
     const url = new URL(req.url)
+
+    // ─── Public: runtime config (NO auth) ───────────────────────
+    // Served to EVERY desktop app — including offline-first / not-signed-in —
+    // so it must sit BEFORE the JWT gate. Read-only, non-sensitive: model
+    // aliases, prompt overrides, behavioral knobs. The desktop client folds it
+    // over its compiled defaults (and validates every value).
+    if (req.method === 'GET' && url.pathname === '/v1/remote-config') {
+      return remoteConfigResponse(CORS_HEADERS)
+    }
 
     // ─── Auth: extract + verify JWT ─────────────────────────────
     const token = extractBearer(req)

@@ -1,0 +1,321 @@
+// Unmute Remote — runtime config (remote-hosted, self-updating, fail-safe).
+//
+// WHY this exists
+// ---------------
+// config.ts holds the COMPILED FLOOR: the model aliases, the two static
+// prompts, and (via the knob defaults below) the behavioral tuning numbers,
+// all baked into the bundle. Changing any of them used to require shipping a
+// new app build. This module lifts that ceiling: the same values can be
+// overridden at RUNTIME from a small JSON we host, so we can retune models,
+// prompts (incl. the whole operating contract), and behavioral knobs across
+// the fleet WITHOUT a build.
+//
+// THE MODEL (settled with the user)
+// ---------------------------------
+// Three layers, each only ever OVERRIDES the one beneath — never breaks it:
+//
+//     compiled floor (config.ts, version 0)         ← ships in the build
+//       ← disk cache (last-fetched remote)           ← ratchets forward
+//         ← live remote fetch (non-blocking)         ← what we push
+//           ← optional local override file            ← dev / power-user escape
+//
+// Boot is INSTANT: getModels()/getPrompts()/getKnobs() read an in-memory object
+// that is populated synchronously from (floor ⊕ cache ⊕ local-override) before
+// initRuntimeConfig() returns. The network fetch happens in the BACKGROUND and,
+// if a newer version arrives, is written to the cache and folded into the live
+// object. So there is never a per-request network wait — only eventual
+// propagation across users, which is fine for config like this.
+//
+// FAIL-SAFE: a missing file, dead server, malformed JSON, or an invalid value
+// each simply falls through to the layer beneath — ultimately the compiled
+// floor. Config can only ever make the app DIFFERENT, never BROKEN. Every
+// override is validated per-key (models via isDoerModel, prompts non-empty,
+// knobs finite + within bounds); anything invalid is logged and dropped.
+//
+// This module is pure/injectable (fs dir + fetch + clock are all parameters),
+// so it is unit-tested without Electron — see runtime-config.test.ts.
+
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { MODELS, PROMPTS, isDoerModel, type DoerModel } from './config'
+import { CONTRACT_TEXT } from './contract/contract-text'
+import { createLogger } from './log'
+
+const log = createLogger('runtime-config')
+
+// ─── The overridable surface (Tier A: models + prompts, Tier B: knobs) ───────
+
+export interface ConfigModels {
+  doerDefault: DoerModel
+  router: DoerModel
+  librarian: DoerModel
+}
+
+/** Static, self-contained prompts — safe to override as whole strings. The
+ *  dynamically-assembled templates (buildRoutingPrompt/buildLibrarianPrompt/
+ *  buildDispatch) interpolate live state and stay in code by design. */
+export interface ConfigPrompts {
+  intentCleanup: string
+  taskName: string
+  /** The entire executor operating contract auto-loaded into every task. */
+  contract: string
+}
+
+export interface ConfigKnobs {
+  /** Consent: how long a user interaction keeps a session auto-routable. */
+  hotThreadMs: number
+  /** Max screenshots auto-staged per remote capture. */
+  captureMaxAuto: number
+  /** MCP intercom: max tasks one task may spawn. */
+  mcpMaxSpawnsPerTask: number
+  /** MCP intercom: min gap between task creations. */
+  mcpMinSpawnGapMs: number
+  /** Local MCP server port. */
+  mcpPort: number
+  /** Heartbeat-silence window before a task is flagged possibly-stuck. */
+  taskStaleMs: number
+  /** Idle keep-alive for a parked session before hard-kill. */
+  taskWarmMs: number
+  /** Shorter warm window for navigate-category tasks. */
+  taskNavigateWarmMs: number
+  /** Hard-erase any task untouched this long ("gone by end of day"). */
+  taskPurgeAgeMs: number
+  /** A ready ONE-OFF ignored this long decays to done (ready-inflation valve). */
+  readyDecayMs: number
+  /** Router: max wait for a routing decision. */
+  routerDecisionTimeoutMs: number
+  /** Router: max lifetime of a router session before recycle. */
+  routerMaxSessionMs: number
+}
+
+export interface RuntimeConfigData {
+  version: number
+  models: ConfigModels
+  prompts: ConfigPrompts
+  knobs: ConfigKnobs
+}
+
+// ─── Knob spec: default + accepted bounds (out-of-bounds ⇒ dropped) ──────────
+
+interface KnobSpec { def: number; min: number; max: number }
+const DAY = 24 * 60 * 60_000
+const KNOB_SPEC: Record<keyof ConfigKnobs, KnobSpec> = {
+  hotThreadMs:             { def: 10 * 60_000,   min: 1_000,  max: DAY },
+  captureMaxAuto:          { def: 12,            min: 1,      max: 1_000 },
+  mcpMaxSpawnsPerTask:     { def: 5,             min: 1,      max: 1_000 },
+  mcpMinSpawnGapMs:        { def: 10_000,        min: 0,      max: DAY },
+  mcpPort:                 { def: 42117,         min: 1_024,  max: 65_535 },
+  taskStaleMs:             { def: 4 * 60_000,    min: 1_000,  max: DAY },
+  taskWarmMs:              { def: 15 * 60_000,   min: 1_000,  max: 7 * DAY },
+  taskNavigateWarmMs:      { def: 8 * 60_000,    min: 1_000,  max: 7 * DAY },
+  taskPurgeAgeMs:          { def: 24 * 60 * 60_000, min: 60_000, max: 30 * DAY },
+  readyDecayMs:            { def: 60 * 60_000,   min: 60_000, max: 7 * DAY },
+  routerDecisionTimeoutMs: { def: 60_000,        min: 1_000,  max: 10 * 60_000 },
+  routerMaxSessionMs:      { def: 2 * 60 * 60_000, min: 60_000, max: DAY },
+}
+
+function knobDefaults(): ConfigKnobs {
+  const out = {} as ConfigKnobs
+  for (const k of Object.keys(KNOB_SPEC) as Array<keyof ConfigKnobs>) out[k] = KNOB_SPEC[k].def
+  return out
+}
+
+/** The compiled floor — the bundled source-of-truth, version 0. Deep-cloned on
+ *  read so a mutation of the live config can never scribble on the floor. */
+export function compiledDefaults(): RuntimeConfigData {
+  return {
+    version: 0,
+    models: { doerDefault: MODELS.doerDefault, router: MODELS.router, librarian: MODELS.librarian },
+    prompts: { intentCleanup: PROMPTS.intentCleanup, taskName: PROMPTS.taskName, contract: CONTRACT_TEXT },
+    knobs: knobDefaults(),
+  }
+}
+
+// ─── Validation + merge (each override only ever refines the base) ───────────
+
+const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0
+
+/** Fold a partial override over a base, dropping (and logging) any invalid key.
+ *  Never throws — a bad layer degrades to the base, never to a crash. */
+export function mergeConfig(base: RuntimeConfigData, override: unknown, source: string): RuntimeConfigData {
+  const out: RuntimeConfigData = {
+    version: base.version,
+    models: { ...base.models },
+    prompts: { ...base.prompts },
+    knobs: { ...base.knobs },
+  }
+  if (!override || typeof override !== 'object') return out
+  const o = override as Record<string, unknown>
+
+  if (typeof o.version === 'number' && Number.isFinite(o.version)) out.version = o.version
+
+  const m = o.models as Record<string, unknown> | undefined
+  if (m && typeof m === 'object') {
+    for (const k of ['doerDefault', 'router', 'librarian'] as const) {
+      if (k in m) {
+        if (isDoerModel(m[k])) out.models[k] = m[k] as DoerModel
+        else log.warn('dropped invalid model override', { source, key: k, value: m[k] })
+      }
+    }
+  }
+
+  const p = o.prompts as Record<string, unknown> | undefined
+  if (p && typeof p === 'object') {
+    for (const k of ['intentCleanup', 'taskName', 'contract'] as const) {
+      if (k in p) {
+        if (isNonEmptyString(p[k])) out.prompts[k] = p[k] as string
+        else log.warn('dropped invalid prompt override', { source, key: k })
+      }
+    }
+  }
+
+  const kn = o.knobs as Record<string, unknown> | undefined
+  if (kn && typeof kn === 'object') {
+    for (const k of Object.keys(KNOB_SPEC) as Array<keyof ConfigKnobs>) {
+      if (k in kn) {
+        const v = kn[k]
+        const spec = KNOB_SPEC[k]
+        if (typeof v === 'number' && Number.isFinite(v) && v >= spec.min && v <= spec.max) out.knobs[k] = v
+        else log.warn('dropped out-of-bounds knob override', { source, key: k, value: v, min: spec.min, max: spec.max })
+      }
+    }
+  }
+
+  return out
+}
+
+// ─── Live state ──────────────────────────────────────────────────────────────
+
+// The hosted config lives on the pipeline worker (same origin as /v1/stt|llm|me),
+// but on a PUBLIC route — fetched with no auth so offline-first / not-signed-in
+// apps still get it. Served from backend/cloudflare/shared/remoteConfig.ts.
+const REMOTE_URL = 'https://unmute-pipeline.zodpatel.workers.dev/v1/remote-config'
+const CACHE_FILE = 'unmute-remote-config.cache.json'   // written by the fetcher (last-known-good)
+const OVERRIDE_FILE = 'unmute-remote-config.json'      // optional, user-hand-edited
+const REFRESH_INTERVAL_MS = 6 * 60 * 60_000            // slow background refresh
+
+interface RuntimeConfigOpts {
+  /** Directory for the cache + optional override file (app.getPath('userData')). */
+  userDataDir: string
+  /** Remote config URL. Defaults to the hosted endpoint; '' disables fetching. */
+  remoteUrl?: string
+  /** Injected fetch (tests). Defaults to global fetch. */
+  fetchImpl?: typeof fetch
+  /** Injected clock (tests). */
+  now?: () => number
+  /** Start the background refresh timer. Off in tests. */
+  autoRefresh?: boolean
+}
+
+let opts: Required<RuntimeConfigOpts> | null = null
+let live: RuntimeConfigData = compiledDefaults()
+let cache: RuntimeConfigData | null = null      // last accepted remote layer
+let localOverride: unknown = null               // parsed override file (raw)
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+
+function cachePath(): string { return join(opts!.userDataDir, CACHE_FILE) }
+function overridePath(): string { return join(opts!.userDataDir, OVERRIDE_FILE) }
+
+/** Recompute the live object: floor ⊕ cache ⊕ local-override. */
+function recompute(): void {
+  let next = compiledDefaults()
+  if (cache) next = mergeConfig(next, cache, 'cache')
+  if (localOverride) next = mergeConfig(next, localOverride, 'local-override')
+  live = next
+}
+
+function readJsonFile(path: string): unknown {
+  try {
+    if (!existsSync(path)) return null
+    return JSON.parse(readFileSync(path, 'utf8'))
+  } catch (e) {
+    log.warn('unreadable config file — ignoring', { path, error: (e as Error).message })
+    return null
+  }
+}
+
+/**
+ * Load cache + local override synchronously and populate the live object, then
+ * (if autoRefresh) kick off a NON-BLOCKING remote fetch + slow refresh timer.
+ * Safe to call once at startup. Idempotent-ish: re-calling re-inits.
+ */
+export function initRuntimeConfig(o: RuntimeConfigOpts): void {
+  opts = {
+    userDataDir: o.userDataDir,
+    remoteUrl: o.remoteUrl ?? REMOTE_URL,
+    fetchImpl: o.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a)),
+    now: o.now ?? Date.now,
+    autoRefresh: o.autoRefresh ?? false,
+  }
+  // Layer 2: last-known-good remote, persisted to disk.
+  const cached = readJsonFile(cachePath())
+  cache = cached ? mergeConfig(compiledDefaults(), cached, 'cache') : null
+  // Layer 4: optional hand-edited override.
+  localOverride = readJsonFile(overridePath())
+  recompute()
+  log.event('runtime-config-init', { version: live.version, hasCache: !!cache, hasOverride: !!localOverride })
+
+  if (opts.autoRefresh && opts.remoteUrl) {
+    void refreshRemoteConfig()
+    refreshTimer = setInterval(() => { void refreshRemoteConfig() }, REFRESH_INTERVAL_MS)
+    ;(refreshTimer as { unref?: () => void }).unref?.()
+  }
+}
+
+/**
+ * Fetch the remote config once. Accepts it ONLY if it parses, validates, and
+ * carries a version STRICTLY NEWER than the current cache (monotonic ratchet).
+ * On accept: writes the cache file and folds it into the live object. Any
+ * failure is swallowed — the live object is untouched. Returns the outcome.
+ */
+export async function refreshRemoteConfig(): Promise<'updated' | 'unchanged' | 'unavailable'> {
+  if (!opts || !opts.remoteUrl) return 'unavailable'
+  const currentVersion = cache?.version ?? 0
+  try {
+    const res = await opts.fetchImpl(opts.remoteUrl, { headers: { accept: 'application/json' } })
+    if (!res.ok) { log.warn('remote config fetch non-ok', { status: res.status }); return 'unavailable' }
+    const raw = await res.json()
+    const incomingVersion = (raw && typeof raw === 'object' && typeof (raw as { version?: unknown }).version === 'number')
+      ? (raw as { version: number }).version : NaN
+    if (!Number.isFinite(incomingVersion)) { log.warn('remote config missing numeric version — ignored'); return 'unavailable' }
+    if (incomingVersion <= currentVersion) { log.event('runtime-config-unchanged', { version: currentVersion }); return 'unchanged' }
+    // Accept: validate into a cache layer, persist raw, fold in.
+    cache = mergeConfig(compiledDefaults(), raw, 'remote')
+    persistCache(raw)
+    recompute()
+    log.event('runtime-config-updated', { from: currentVersion, to: live.version })
+    return 'updated'
+  } catch (e) {
+    log.warn('remote config fetch failed — keeping current', { error: (e as Error).message })
+    return 'unavailable'
+  }
+}
+
+function persistCache(raw: unknown): void {
+  try {
+    const p = cachePath()
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, JSON.stringify(raw), 'utf8')
+  } catch (e) {
+    log.warn('could not persist config cache', { error: (e as Error).message })
+  }
+}
+
+/** Stop the background refresh timer (teardown / tests). */
+export function stopRuntimeConfig(): void {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+}
+
+/** TEST ONLY: reset module state to the compiled floor. */
+export function __resetRuntimeConfigForTest(): void {
+  stopRuntimeConfig()
+  opts = null; cache = null; localOverride = null; live = compiledDefaults()
+}
+
+// ─── Synchronous accessors (the hot path — never touch the network) ──────────
+
+export function getModels(): ConfigModels { return live.models }
+export function getPrompts(): ConfigPrompts { return live.prompts }
+export function getKnobs(): ConfigKnobs { return live.knobs }
+/** The full effective config — for IPC/debug surfaces. */
+export function getEffectiveConfig(): RuntimeConfigData { return live }
