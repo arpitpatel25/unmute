@@ -505,7 +505,9 @@ function HintChip({ accent, label, detail, icon }: { accent: string; label: stri
         background: 'rgba(14, 14, 16, 0.96)',
         border: '1px solid rgba(255, 255, 255, 0.13)',
         borderRadius: 9999,
-        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.4)',
+        // No drop shadow — like every other chip in the row. Unmute occupies
+        // only the widget; a shadow here bled outside it (glass blur stays put).
+        boxShadow: 'none',
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',
         whiteSpace: 'nowrap',
