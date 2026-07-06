@@ -36,7 +36,12 @@ const PILL_CRITICAL_CSS = `
 .animate-dot-pulse-red   { animation: dot-pulse-red 1.5s ease-in-out infinite; }
 .animate-dot-pulse-white { animation: dot-pulse-white 1.5s ease-in-out infinite; }
 .animate-dot-pulse-processing { animation: dot-pulse-processing 1.5s ease-in-out infinite; }
-.unmute-pill { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; background: #0E0E10; border: 1px solid rgba(255,255,255,0.55); border-radius: 9999px; box-shadow: 0 12px 36px rgba(0,0,0,0.55), 0 1px 0 rgba(255,255,255,0.04) inset; max-width: 480px; }
+/* NO drop shadow: Unmute must occupy ONLY the widget itself — a soft 36px
+   shadow pooled behind the whole pill row and read as a bounding box around the
+   panel. The external styles.css already sets box-shadow:none (line ~1244); this
+   self-carried duplicate lagged behind and, injected later in the DOM, WON the
+   cascade — so the stale shadow was what actually rendered. Kept in sync now. */
+.unmute-pill { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; background: #0E0E10; border: 1px solid rgba(255,255,255,0.55); border-radius: 9999px; box-shadow: none; max-width: 480px; }
 .unmute-pill-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .unmute-pill-dot--white { background: rgba(255,255,255,0.88); }
 .unmute-pill-dot--red { background: rgb(255,90,90); }

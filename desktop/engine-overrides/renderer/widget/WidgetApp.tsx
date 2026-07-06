@@ -64,105 +64,150 @@ let sessionDismissed = false
 // (Haiku · Sonnet · Opus) so they can switch ON THE FLY while speaking — the
 // choice applies to THIS task on submit (and persists as the default).
 const CLAUDE_ORANGE = '#D97757'
-const MODELS = ['haiku', 'sonnet', 'opus'] as const
-type ModelId = (typeof MODELS)[number]
-const isModelId = (m: unknown): m is ModelId => m === 'haiku' || m === 'sonnet' || m === 'opus'
+
+// One selectable doer model — mirrors ModelChoice in remote/config.ts. The
+// catalog is CONFIG-DRIVEN on the main side (getModelCatalog): new models arrive
+// via runtime config with NO app build, so the widget must never hardcode the
+// set. It reads the SAME catalog the Remote settings panel does — one source of
+// truth for "which models exist", in Settings and here in the live switcher.
+interface ModelChoice { id: string; label: string; description?: string }
+// Fallback only if the catalog IPC is unavailable (older main) — classic tiers.
+const FALLBACK_CATALOG: ModelChoice[] = [
+  { id: 'haiku', label: 'Haiku', description: 'Fastest — best for simple, quick tasks.' },
+  { id: 'sonnet', label: 'Sonnet', description: 'Balanced speed and capability. Great default.' },
+  { id: 'opus', label: 'Opus', description: 'Most capable — best for hard, multi-step tasks.' },
+]
 
 function remoteModelApi() {
   return window.electronAPI as unknown as {
     remoteGetModel?: () => Promise<string>
     remoteSetModel?: (m: string) => Promise<string>
     remoteOnModelChanged?: (cb: (model: string) => void) => () => void
+    remoteGetModelCatalog?: () => Promise<ModelChoice[]>
+    paywallSetHUDHeight?: (height: number) => Promise<boolean>
   }
 }
 
 function RemoteBadge() {
-  const [model, setModel] = useState<ModelId>('sonnet')
+  const [catalog, setCatalog] = useState<ModelChoice[]>(FALLBACK_CATALOG)
+  // The saved doer-model id — ANY catalog id, not limited to haiku/sonnet/opus.
+  const [model, setModel] = useState<string>('sonnet')
   const [expanded, setExpanded] = useState(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const api = remoteModelApi()
-    void api.remoteGetModel?.().then((m) => { if (isModelId(m)) setModel(m) })
-    const off = api.remoteOnModelChanged?.((m) => { if (isModelId(m)) setModel(m) })
+    // Reflect whatever the saved model IS — never silently downgrade an id we
+    // don't recognise. (The old guard forced any non-{haiku,sonnet,opus} value
+    // to 'sonnet', so a pinned / opusplan / default pick showed the WRONG badge
+    // while the task actually ran on the real model.)
+    void api.remoteGetModel?.().then((m) => { if (typeof m === 'string' && m) setModel(m) })
+    void api.remoteGetModelCatalog?.().then((c) => { if (c && c.length) setCatalog(c) })
+    const off = api.remoteOnModelChanged?.((m) => { if (typeof m === 'string' && m) setModel(m) })
     return () => off?.()
   }, [])
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
+
+  // The selector opens DOWNWARD (a dropdown below the pill row) so it scales to
+  // ANY number of catalog models — a horizontal reveal can't. Same seam the
+  // staged-images dropdown uses: grow the HUD window while open so the list
+  // isn't clipped, restore the 72px default on close/unmount.
+  useEffect(() => {
+    const api = remoteModelApi()
+    if (expanded) void api.paywallSetHUDHeight?.(Math.min(320, 64 + catalog.length * 38 + 12))
+    else void api.paywallSetHUDHeight?.(72)
+    return () => { void remoteModelApi().paywallSetHUDHeight?.(72) }
+  }, [expanded, catalog.length])
 
   const open = () => {
     if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null }
     setExpanded(true)
   }
-  // Small grace before collapsing — the chip widening shifts the layout, which
-  // can drop the cursor out of the box and cause expand/collapse flicker.
+  // Small grace before collapsing so crossing the gap into the dropdown doesn't
+  // flicker it shut.
   const scheduleClose = () => { closeTimer.current = setTimeout(() => setExpanded(false), 150) }
 
-  const pick = (m: ModelId) => {
+  const pick = (m: string) => {
     setModel(m) // optimistic — reflects instantly; the next task reads the setting
     void remoteModelApi().remoteSetModel?.(m)
     setExpanded(false)
   }
 
+  const active = catalog.find((c) => c.id === model)
+  // If the saved id isn't in the catalog, still show its raw id rather than
+  // masquerading as another model — the anti-downgrade rule, applied to display.
+  const activeLabel = active?.label ?? model
+
   return (
     <div
-      style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center' }}
+      style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center', position: 'relative' }}
       onMouseEnter={open}
       onMouseLeave={scheduleClose}
     >
+      {/* Collapsed: a single pill showing the active model. Same family as the
+          RAW toggle / mic chip — dark fill, whitish border, NO shadow. */}
       <div
         style={{
           height: 44,
           borderRadius: 9999,
           background: '#0E0E10',
-          // Match the pill exactly: whitish border, dark fill, and — like the
-          // pill — NO drop shadow. (The pill's shadow was removed in styles.css;
-          // the fill + border alone make the chip read as the same family.)
           border: '1px solid rgba(255, 255, 255, 0.55)',
           boxShadow: 'none',
           display: 'flex',
           alignItems: 'center',
-          padding: '0 6px',
-          gap: 2,
+          padding: '0 14px',
+          gap: 7,
+          cursor: 'pointer',
+          fontSize: 12.5,
+          fontWeight: 600,
+          whiteSpace: 'nowrap',
+          color: CLAUDE_ORANGE,
         }}
       >
-        {/* All three are ALWAYS rendered. The active one is always visible; the
-            other two collapse to zero width/opacity when not hovered and animate
-            their max-width on reveal — so the chip (and the pill it pushes) GLIDE
-            instead of hard-swapping the content. */}
-        {MODELS.map((m) => {
-          const active = m === model
-          const shown = expanded || active
-          return (
-            <button
-              key={m}
-              onClick={() => pick(m)}
-              tabIndex={shown ? 0 : -1}
-              style={{
-                height: 32,
-                maxWidth: shown ? 88 : 0,
-                opacity: shown ? 1 : 0,
-                padding: shown ? '0 10px' : '0',
-                overflow: 'hidden',
-                whiteSpace: 'nowrap',
-                borderRadius: 9999,
-                border: 'none',
-                cursor: 'pointer',
-                fontSize: 12.5,
-                fontWeight: 600,
-                textTransform: 'capitalize',
-                background: active && expanded ? 'rgba(217,119,87,0.18)' : 'transparent',
-                color: active ? CLAUDE_ORANGE : 'rgba(255,255,255,0.5)',
-                transition:
-                  'max-width 220ms cubic-bezier(0.16,1,0.3,1), opacity 200ms ease, padding 220ms cubic-bezier(0.16,1,0.3,1), color 140ms ease, background 140ms ease',
-              }}
-              onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = 'rgba(255,255,255,0.9)' }}
-              onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = 'rgba(255,255,255,0.5)' }}
-            >
-              {m}
-            </button>
-          )
-        })}
+        <span>{activeLabel}</span>
+        {/* chevron — rotates when the dropdown is open */}
+        <svg
+          width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden
+          style={{ opacity: 0.7, transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 160ms ease' }}
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
       </div>
+
+      {/* Vertical dropdown: one row per catalog model, top → bottom. */}
+      {expanded && (
+        <div
+          style={{
+            position: 'absolute', top: 48, left: 0, minWidth: 172, maxHeight: 300, overflowY: 'auto',
+            background: '#0E0E10', border: '1px solid rgba(255,255,255,0.35)',
+            borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10,
+          }}
+        >
+          {catalog.map((c) => {
+            const isActive = c.id === model
+            return (
+              <button
+                key={c.id}
+                onClick={() => pick(c.id)}
+                title={c.description ?? ''}
+                style={{
+                  textAlign: 'left', width: '100%', height: 34, padding: '0 10px',
+                  borderRadius: 8, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+                  fontSize: 12.5, fontWeight: 600,
+                  background: isActive ? 'rgba(217,119,87,0.18)' : 'transparent',
+                  color: isActive ? CLAUDE_ORANGE : 'rgba(255,255,255,0.7)',
+                  transition: 'color 120ms ease, background 120ms ease',
+                }}
+                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
+                onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent' }}
+              >
+                {c.label}
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -505,7 +550,9 @@ function HintChip({ accent, label, detail, icon }: { accent: string; label: stri
         background: 'rgba(14, 14, 16, 0.96)',
         border: '1px solid rgba(255, 255, 255, 0.13)',
         borderRadius: 9999,
-        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.4)',
+        // No drop shadow — like every other chip in the row. Unmute occupies
+        // only the widget; a shadow here bled outside it (glass blur stays put).
+        boxShadow: 'none',
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',
         whiteSpace: 'nowrap',
