@@ -30,8 +30,8 @@ import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, type AgentKind } from './codex-executor'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
-import { MODELS, isDoerModel } from './config'
-import { initRuntimeConfig, getModels, getKnobs } from './runtime-config'
+import { MODELS } from './config'
+import { initRuntimeConfig, getModels, getKnobs, getModelCatalog, isSelectableModel } from './runtime-config'
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
@@ -1838,8 +1838,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Broadcast so both surfaces — Remote settings + the capture-widget badge —
   // stay in sync when either changes it.
   ipcMain.handle('remote:get-model', async () => settings.get('model') || getModels().doerDefault)
+  // The effective, config-driven selectable catalog (renderer renders THIS,
+  // not a hardcoded list) — so new models arrive via config without a rebuild.
+  ipcMain.handle('remote:get-model-catalog', async () => getModelCatalog())
   ipcMain.handle('remote:set-model', async (_e, m: string) => {
-    const model = isDoerModel(m) ? m : (settings.get('model') || getModels().doerDefault)
+    const model = isSelectableModel(m) ? m : (settings.get('model') || getModels().doerDefault)
     settings.set('model', model)
     settings.set('modelUserSet', true) // explicit choice — never auto-migrate it
     for (const w of BrowserWindow.getAllWindows()) {

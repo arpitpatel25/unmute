@@ -3,12 +3,12 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { MODELS, PROMPTS } from './config.ts'
+import { MODELS, PROMPTS, MODEL_CATALOG } from './config.ts'
 import { CONTRACT_TEXT } from './contract/contract-text.ts'
 import {
   compiledDefaults, mergeConfig,
   initRuntimeConfig, refreshRemoteConfig, stopRuntimeConfig, __resetRuntimeConfigForTest,
-  getModels, getPrompts, getKnobs, getEffectiveConfig,
+  getModels, getPrompts, getKnobs, getEffectiveConfig, getModelCatalog, isSelectableModel,
   type RuntimeConfigData,
 } from './runtime-config.ts'
 
@@ -29,7 +29,10 @@ afterEach(() => { __resetRuntimeConfigForTest() })
 test('compiled floor mirrors config.ts + contract exactly', () => {
   const d = compiledDefaults()
   assert.equal(d.version, 0)
-  assert.deepEqual(d.models, { doerDefault: MODELS.doerDefault, router: MODELS.router, librarian: MODELS.librarian })
+  assert.equal(d.models.doerDefault, MODELS.doerDefault)
+  assert.equal(d.models.router, MODELS.router)
+  assert.equal(d.models.librarian, MODELS.librarian)
+  assert.deepEqual(d.models.available, MODEL_CATALOG) // floor catalog = the compiled catalog
   assert.equal(d.prompts.intentCleanup, PROMPTS.intentCleanup)
   assert.equal(d.prompts.taskName, PROMPTS.taskName)
   assert.equal(d.prompts.contract, CONTRACT_TEXT)
@@ -78,6 +81,67 @@ test('mergeConfig drops an invalid model, keeping the base value', () => {
   const merged = mergeConfig(compiledDefaults(), { models: { doerDefault: 'gpt-4', router: 'haiku' } }, 'test')
   assert.equal(merged.models.doerDefault, MODELS.doerDefault) // invalid dropped
   assert.equal(merged.models.router, 'haiku')                 // valid applied
+})
+
+// ─── model catalog (config-driven selectable set) ───────────────────────────
+
+test('config catalog REPLACES the selectable set and unlocks new picks', () => {
+  const merged = mergeConfig(compiledDefaults(), {
+    models: {
+      available: [
+        { id: 'sonnet', label: 'Sonnet' },
+        { id: 'claude-opus-4-8', label: 'Opus 4.8 (pinned)', description: 'exact version' },
+      ],
+      doerDefault: 'claude-opus-4-8', // a pinned id — valid ONLY because the catalog above added it
+    },
+  }, 'test')
+  assert.deepEqual(merged.models.available.map((c) => c.id), ['sonnet', 'claude-opus-4-8'])
+  assert.equal(merged.models.doerDefault, 'claude-opus-4-8')
+})
+
+test('a pick not present in the effective catalog is dropped', () => {
+  // 'opus' is a compiled-catalog alias, but the override narrows the catalog to
+  // exclude it, so picking 'opus' must fall back to the base default.
+  const merged = mergeConfig(compiledDefaults(), {
+    models: { available: [{ id: 'haiku', label: 'Haiku' }], doerDefault: 'opus' },
+  }, 'test')
+  assert.deepEqual(merged.models.available.map((c) => c.id), ['haiku'])
+  assert.equal(merged.models.doerDefault, MODELS.doerDefault) // 'opus' not in catalog → dropped
+})
+
+test('malformed catalog entries are sanitized; a fully-invalid catalog keeps the base', () => {
+  const merged = mergeConfig(compiledDefaults(), {
+    models: { available: [
+      { id: 'sonnet', label: 'Sonnet' },
+      { id: '', label: 'no id' },
+      { label: 'missing id' },
+      { id: 'dupe', label: 'A' }, { id: 'dupe', label: 'B' }, // de-dup by id
+      'garbage',
+    ] },
+  }, 'test')
+  assert.deepEqual(merged.models.available.map((c) => c.id), ['sonnet', 'dupe'])
+
+  const kept = mergeConfig(compiledDefaults(), { models: { available: [] } }, 'test')
+  assert.deepEqual(kept.models.available, compiledDefaults().models.available) // empty → base kept
+})
+
+test('getModelCatalog + isSelectableModel reflect the effective catalog after a fetch', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'unmute-rc-cat-'))
+  initRuntimeConfig({
+    userDataDir: dir, remoteUrl: 'https://x/config.json', autoRefresh: false,
+    fetchImpl: fetchReturning({ version: 4, models: { available: [
+      { id: 'sonnet', label: 'Sonnet' }, { id: 'claude-opus-4-8', label: 'Opus 4.8' },
+    ] } }),
+  })
+  // before refresh: compiled catalog
+  assert.deepEqual(getModelCatalog().map((c) => c.id), MODEL_CATALOG.map((c) => c.id))
+  assert.equal(isSelectableModel('opus'), true)
+  assert.equal(await refreshRemoteConfig(), 'updated')
+  // after: the config catalog
+  assert.deepEqual(getModelCatalog().map((c) => c.id), ['sonnet', 'claude-opus-4-8'])
+  assert.equal(isSelectableModel('claude-opus-4-8'), true)
+  assert.equal(isSelectableModel('opus'), false) // no longer in the effective catalog
+  rmSync(dir, { recursive: true, force: true })
 })
 
 test('mergeConfig drops empty/non-string prompt overrides', () => {

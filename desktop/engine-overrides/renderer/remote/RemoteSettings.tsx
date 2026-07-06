@@ -22,6 +22,13 @@ interface Settings {
   agentTasksEnabled?: boolean
   logFile: string | null
 }
+interface ModelChoice { id: string; label: string; description?: string }
+// Fallback if the catalog IPC is unavailable (older main) — the classic tiers.
+const FALLBACK_CATALOG: ModelChoice[] = [
+  { id: 'haiku', label: 'Haiku', description: 'Fastest — best for simple, quick tasks.' },
+  { id: 'sonnet', label: 'Sonnet', description: 'Balanced speed and capability. Great default.' },
+  { id: 'opus', label: 'Opus', description: 'Most capable — best for hard, multi-step tasks.' },
+]
 type API = {
   remoteGetSettings?: () => Promise<Settings>
   remoteSetPermissionMode?: (m: 'prompt' | 'auto-approve') => Promise<boolean>
@@ -29,6 +36,7 @@ type API = {
   remoteSetSandboxRoots?: (r: string[]) => Promise<boolean>
   remoteSetBrowserEnabled?: (enabled: boolean) => Promise<boolean>
   remoteSetModel?: (m: string) => Promise<string>
+  remoteGetModelCatalog?: () => Promise<ModelChoice[]>
   remoteOnModelChanged?: (cb: (model: string) => void) => () => void
   remoteSetOverlayAutoPresent?: (on: boolean) => Promise<boolean>
   remoteSetOverlayDocked?: (on: boolean) => Promise<boolean>
@@ -56,11 +64,14 @@ export function RemoteSettings() {
   const [usage, setUsage] = useState<MemoryUsage | null>(null)
   const [cleaning, setCleaning] = useState(false)
   const [cleanupNote, setCleanupNote] = useState<string | null>(null)
+  const [catalog, setCatalog] = useState<ModelChoice[]>(FALLBACK_CATALOG)
 
   const refreshUsage = () => void api().remoteGetMemoryUsage?.().then((u) => u && setUsage(u))
 
   useEffect(() => {
     void api().remoteGetSettings?.().then((v) => v && setS(v))
+    // Config-driven model catalog (falls back to the classic tiers if absent).
+    void api().remoteGetModelCatalog?.().then((c) => { if (c && c.length) setCatalog(c) })
     refreshUsage()
     // Stay in sync when the model is changed from the capture-widget badge.
     const off = api().remoteOnModelChanged?.((model) => setS((prev) => (prev ? { ...prev, model } : prev)))
@@ -92,27 +103,23 @@ export function RemoteSettings() {
       {/* Doer model — Remote tasks run on this. Applies to the next task. */}
       <div className="py-1.5 border-t border-black/5">
         <div className="mb-1.5">Model <span className="text-ink/40">(Remote tasks — applies to the next one)</span></div>
-        <div className="flex gap-1.5">
-          {(['haiku', 'sonnet', 'opus'] as const).map((m) => (
+        <div className="flex flex-wrap gap-1.5">
+          {catalog.map((m) => (
             <button
-              key={m}
-              onClick={() => { update({ model: m }); void api().remoteSetModel?.(m) }}
-              className={`flex-1 px-2 py-1.5 rounded-lg text-[12px] font-semibold capitalize border transition-colors ${
-                s.model === m
+              key={m.id}
+              onClick={() => { update({ model: m.id }); void api().remoteSetModel?.(m.id) }}
+              className={`px-2.5 py-1.5 rounded-lg text-[12px] font-semibold border transition-colors ${
+                s.model === m.id
                   ? 'bg-[#D97757] text-white border-[#D97757]'
                   : 'bg-white text-ink/70 border-border hover:bg-cream-mid'
               }`}
             >
-              {m}
+              {m.label}
             </button>
           ))}
         </div>
         <div className="mt-1 text-[10.5px] text-ink/40">
-          {s.model === 'haiku'
-            ? 'Fastest — best for simple, quick tasks.'
-            : s.model === 'opus'
-              ? 'Most capable — best for complex, multi-step tasks.'
-              : 'Balanced — fast and capable. Recommended default.'}
+          {catalog.find((m) => m.id === s.model)?.description ?? s.model}
         </div>
       </div>
 

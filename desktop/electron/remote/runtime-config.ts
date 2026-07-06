@@ -37,7 +37,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { MODELS, PROMPTS, isDoerModel, type DoerModel } from './config'
+import { MODELS, PROMPTS, MODEL_CATALOG, type DoerModel, type ModelChoice } from './config'
 import { CONTRACT_TEXT } from './contract/contract-text'
 import { createLogger } from './log'
 
@@ -49,6 +49,9 @@ export interface ConfigModels {
   doerDefault: DoerModel
   router: DoerModel
   librarian: DoerModel
+  /** The selectable model catalog (config-driven). The doer selector renders
+   *  this; picks (doerDefault/router/librarian) must be one of these ids. */
+  available: ModelChoice[]
 }
 
 /** Static, self-contained prompts — safe to override as whole strings. The
@@ -125,7 +128,10 @@ function knobDefaults(): ConfigKnobs {
 export function compiledDefaults(): RuntimeConfigData {
   return {
     version: 0,
-    models: { doerDefault: MODELS.doerDefault, router: MODELS.router, librarian: MODELS.librarian },
+    models: {
+      doerDefault: MODELS.doerDefault, router: MODELS.router, librarian: MODELS.librarian,
+      available: MODEL_CATALOG.map((c) => ({ ...c })), // clone so the live config can't scribble the floor
+    },
     prompts: { intentCleanup: PROMPTS.intentCleanup, taskName: PROMPTS.taskName, contract: CONTRACT_TEXT },
     knobs: knobDefaults(),
   }
@@ -134,6 +140,22 @@ export function compiledDefaults(): RuntimeConfigData {
 // ─── Validation + merge (each override only ever refines the base) ───────────
 
 const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0
+
+/** Validate a config-provided model catalog: keep only entries with a non-empty
+ *  string id + label, de-duplicated by id. Anything malformed is skipped. */
+function sanitizeCatalog(v: unknown): ModelChoice[] {
+  if (!Array.isArray(v)) return []
+  const out: ModelChoice[] = []
+  const seen = new Set<string>()
+  for (const e of v) {
+    if (!e || typeof e !== 'object') continue
+    const { id, label, description } = e as Record<string, unknown>
+    if (!isNonEmptyString(id) || !isNonEmptyString(label) || seen.has(id)) continue
+    seen.add(id)
+    out.push({ id, label, description: isNonEmptyString(description) ? description : undefined })
+  }
+  return out
+}
 
 /** Fold a partial override over a base, dropping (and logging) any invalid key.
  *  Never throws — a bad layer degrades to the base, never to a crash. */
@@ -151,10 +173,20 @@ export function mergeConfig(base: RuntimeConfigData, override: unknown, source: 
 
   const m = o.models as Record<string, unknown> | undefined
   if (m && typeof m === 'object') {
+    // 1. Catalog: a valid non-empty array REPLACES the selectable set (config
+    //    defines the full catalog — that's how new models arrive without a
+    //    build). Invalid/empty → keep the base catalog.
+    if ('available' in m) {
+      const sanitized = sanitizeCatalog(m.available)
+      if (sanitized.length) out.models.available = sanitized
+      else log.warn('dropped invalid model catalog override', { source })
+    }
+    // 2. Picks: accept a model only if it's in the EFFECTIVE catalog just set.
+    const allowed = new Set(out.models.available.map((c) => c.id))
     for (const k of ['doerDefault', 'router', 'librarian'] as const) {
       if (k in m) {
-        if (isDoerModel(m[k])) out.models[k] = m[k] as DoerModel
-        else log.warn('dropped invalid model override', { source, key: k, value: m[k] })
+        if (typeof m[k] === 'string' && allowed.has(m[k] as string)) out.models[k] = m[k] as string
+        else log.warn('dropped model override not in catalog', { source, key: k, value: m[k] })
       }
     }
   }
@@ -315,6 +347,12 @@ export function __resetRuntimeConfigForTest(): void {
 // ─── Synchronous accessors (the hot path — never touch the network) ──────────
 
 export function getModels(): ConfigModels { return live.models }
+/** The effective (config-extended) selectable model catalog — for the selector. */
+export function getModelCatalog(): ModelChoice[] { return live.models.available }
+/** True if `id` is a model a user may currently select (in the effective catalog). */
+export function isSelectableModel(id: unknown): id is string {
+  return typeof id === 'string' && live.models.available.some((c) => c.id === id)
+}
 export function getPrompts(): ConfigPrompts { return live.prompts }
 export function getKnobs(): ConfigKnobs { return live.knobs }
 /** The full effective config — for IPC/debug surfaces. */

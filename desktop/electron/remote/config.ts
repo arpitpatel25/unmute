@@ -33,14 +33,41 @@
 
 // ─── Models (Claude Code CLI aliases, passed to executors as `--model`) ──────
 
-/** The doer models a user may select (capture-widget selector + Remote
- *  settings). Order is fast → capable. */
-export const DOER_MODELS = ['haiku', 'sonnet', 'opus'] as const
-export type DoerModel = (typeof DOER_MODELS)[number]
+/** One selectable model: the `--model` value + how it reads in the UI. */
+export interface ModelChoice {
+  /** The value passed to Claude Code as `--model` (alias or full name). */
+  id: string
+  /** Short UI label. */
+  label: string
+  /** One-line helper shown under the selector. */
+  description?: string
+}
 
-/** Narrowing guard for an untrusted model string (e.g. from IPC/settings). */
+/** The DEFAULT model catalog — the Claude Code `/model` aliases, which
+ *  auto-track the latest underlying version (so 'opus' is always the newest
+ *  Opus). This is the COMPILED FLOOR: the runtime config can replace/extend it
+ *  (e.g. add pinned full-name versions like 'claude-opus-4-8') WITHOUT an app
+ *  build — see runtime-config.ts (models.available). Order is fast → capable. */
+export const MODEL_CATALOG: ModelChoice[] = [
+  { id: 'default',  label: 'Default',   description: 'Your Claude Code default — recommended.' },
+  { id: 'haiku',    label: 'Haiku',     description: 'Fastest — best for simple, quick tasks.' },
+  { id: 'sonnet',   label: 'Sonnet',    description: 'Balanced speed and capability. Great default.' },
+  { id: 'opus',     label: 'Opus',      description: 'Most capable — best for hard, multi-step tasks.' },
+  { id: 'opusplan', label: 'Opus Plan', description: 'Plans with Opus, executes with Sonnet.' },
+]
+
+/** The compiled default set of selectable model ids (catalog ids). Kept for
+ *  backward-compat; the EFFECTIVE selectable set is runtime/config-driven
+ *  (getModelCatalog() in runtime-config.ts). */
+export const DOER_MODELS: string[] = MODEL_CATALOG.map((m) => m.id)
+/** A selectable model id. Relaxed to `string`: the set is now runtime-driven,
+ *  so it can no longer be a fixed compile-time union. */
+export type DoerModel = string
+
+/** Narrowing guard against the COMPILED catalog (the floor). For the EFFECTIVE
+ *  (config-extended) catalog use isSelectableModel() in runtime-config.ts. */
 export function isDoerModel(m: unknown): m is DoerModel {
-  return typeof m === 'string' && (DOER_MODELS as readonly string[]).includes(m)
+  return typeof m === 'string' && DOER_MODELS.includes(m)
 }
 
 export const MODELS = {

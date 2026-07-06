@@ -29,8 +29,14 @@
 export interface RemoteConfigPayload {
   /** Monotonic version. The client accepts only a STRICTLY newer version. */
   version: number
-  /** Partial model-alias overrides ('haiku' | 'sonnet' | 'opus'). */
-  models?: { doerDefault?: string; router?: string; librarian?: string }
+  /** Model overrides. `available` REPLACES the selectable catalog (this is how
+   *  new models roll out without an app build); the picks must be catalog ids. */
+  models?: {
+    doerDefault?: string
+    router?: string
+    librarian?: string
+    available?: Array<{ id: string; label: string; description?: string }>
+  }
   /** Partial prompt overrides (whole strings). */
   prompts?: { intentCleanup?: string; taskName?: string; contract?: string }
   /** Partial behavioral-knob overrides (numbers; see runtime-config.ts bounds). */
@@ -51,7 +57,23 @@ export interface RemoteConfigPayload {
  *   knobs: { hotThreadMs: 900000, mcpMaxSpawnsPerTask: 8 },
  */
 export const REMOTE_CONFIG: RemoteConfigPayload = {
-  version: 1,
+  version: 2,
+  // The selectable model catalog, delivered via config (extends the compiled
+  // aliases with the latest PINNED versions for power users). Aliases auto-track
+  // the newest model; pinned ids lock an exact version. Add/remove freely here
+  // and redeploy — no app build. (The desktop app validates every id.)
+  models: {
+    available: [
+      { id: 'default',  label: 'Default',   description: 'Your Claude Code default — recommended.' },
+      { id: 'haiku',    label: 'Haiku',     description: 'Fastest — best for simple, quick tasks.' },
+      { id: 'sonnet',   label: 'Sonnet',    description: 'Balanced speed and capability. Great default.' },
+      { id: 'opus',     label: 'Opus',      description: 'Most capable — best for hard, multi-step tasks.' },
+      { id: 'opusplan', label: 'Opus Plan', description: 'Plans with Opus, executes with Sonnet.' },
+      { id: 'claude-opus-4-8',            label: 'Opus 4.8',  description: 'Pinned — latest Opus.' },
+      { id: 'claude-sonnet-5',            label: 'Sonnet 5',  description: 'Pinned — latest Sonnet.' },
+      { id: 'claude-haiku-4-5-20251001',  label: 'Haiku 4.5', description: 'Pinned — latest Haiku.' },
+    ],
+  },
 }
 
 /** Build the HTTP response for GET /v1/remote-config. Public, cacheable. */

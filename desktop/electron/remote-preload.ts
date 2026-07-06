@@ -144,6 +144,10 @@ export const remotePreloadExtensions = {
   // ── Doer model selector (Remote only) ──
   /** Current doer model ('haiku' | 'sonnet' | 'opus'). */
   remoteGetModel: (): Promise<string> => ipcRenderer.invoke('remote:get-model'),
+  /** The effective, config-driven selectable model catalog (id + label +
+   *  description) — the settings selector renders THIS, so new models can arrive
+   *  via runtime config without an app rebuild. */
+  remoteGetModelCatalog: (): Promise<Array<{ id: string; label: string; description?: string }>> => ipcRenderer.invoke('remote:get-model-catalog'),
   /** Set the doer model; applies to the next dispatched task. Returns the
    *  validated value actually stored. */
   remoteSetModel: (m: string): Promise<string> => ipcRenderer.invoke('remote:set-model', m),
