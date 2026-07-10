@@ -219,4 +219,5 @@ days-not-months of cost, and doubles as the tuning rig for the decision engine.
 | `05-boundary-two-separate-systems.md` | Decision: skills agent is separate from routines/librarian; why separation is load-bearing |
 | `06-impact-on-existing-routine-workflow.md` | Code-grounded: routine engine unchanged; the three additive integration seams |
 | `07-invocation-and-awareness.md` | Invocation & awareness — the runtime half of the discovery problem; why invocation-assist is a lower-risk, faster-value wedge than creation |
-| `08-intent-driven-surfacing.md` | Speak-the-task → surface matching skills; repo as a free prior; the surface must never become a chooser; (a)+(b) are one intent→skill retrieval primitive |
+| `08-intent-driven-surfacing.md` | Speak-the-task → surface matching skills; repo as a free prior; (a)+(b) are one intent→skill retrieval primitive |
+| `09-visibility-not-auto-execution.md` | Correction to `08`: surface for visibility, the USER selects; never auto-execute a skill (that's the routine posture). Palette (good) vs mandatory gate (bad) |
