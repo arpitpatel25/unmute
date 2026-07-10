@@ -101,6 +101,28 @@ export function LiveTerminal({ taskId, onClose, fill = false }: { taskId: string
       lastCols = term.cols
       lastRows = term.rows
 
+      // Shift+Enter → soft newline (no submit). xterm emits the SAME byte (\r)
+      // for Enter and Shift+Enter, so the TUI can't tell them apart and submits
+      // on both. Intercept ONLY the exact Shift+Enter keydown and inject ESC+CR
+      // ('\x1b\r') — the sequence Claude Code and `/terminal-setup` treat as an
+      // in-place newline (identical to what Option/Alt+Enter sends). Everything
+      // else falls through untouched: plain Enter still sends \r and submits;
+      // other keys, paste, and IME composition are handled by xterm as before.
+      // Returning false suppresses xterm's own \r for THIS one event, so there is
+      // exactly one write to stdin (no double-send).
+      term.attachCustomKeyEventHandler((e) => {
+        if (
+          e.type === 'keydown' &&
+          e.key === 'Enter' &&
+          e.shiftKey &&
+          !e.ctrlKey && !e.metaKey && !e.altKey &&
+          !e.isComposing
+        ) {
+          api().remoteTerminalInput?.(taskId, '\x1b\r')
+          return false
+        }
+        return true
+      })
       // Keystrokes → the task's stdin (typeable terminal, PRD §4.3).
       term.onData((data) => api().remoteTerminalInput?.(taskId, data))
 
