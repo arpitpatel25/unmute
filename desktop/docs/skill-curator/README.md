@@ -218,3 +218,4 @@ days-not-months of cost, and doubles as the tuning rig for the decision engine.
 | `04-effort-thesis-and-the-decision-engine.md` | The effort-removal reframe + the decision engine as the real product; moat = harness |
 | `05-boundary-two-separate-systems.md` | Decision: skills agent is separate from routines/librarian; why separation is load-bearing |
 | `06-impact-on-existing-routine-workflow.md` | Code-grounded: routine engine unchanged; the three additive integration seams |
+| `07-invocation-and-awareness.md` | Invocation & awareness — the runtime half of the discovery problem; why invocation-assist is a lower-risk, faster-value wedge than creation |
