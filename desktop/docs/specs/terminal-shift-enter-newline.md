@@ -1,9 +1,16 @@
 # Spec: Shift+Enter should insert a newline in the orchestrator terminal
 
-> **Status: SPEC ONLY — not implemented.** This documents the root cause and the
-> fix options for a known terminal behavior. No code is changed by this doc.
-> **Hard requirement: zero regression.** See §5 for the guardrails any
-> implementation MUST satisfy.
+> **Status: IMPLEMENTED** (commit `8d7f01d`, spec Option A). Shift+Enter now
+> injects `\x1b\r` via an xterm `attachCustomKeyEventHandler` in
+> `LiveTerminal.tsx`. The §5 zero-regression guardrails were honored and the
+> injected sequence (§6) is confirmed against Anthropic's terminal-config docs;
+> typecheck passes. The one remaining check is a live keypress test in the
+> running orchestrator (press Shift+Enter → newline, plain Enter → submit) — a
+> ~10-second manual confirmation that can't be run headlessly.
+>
+> This document retains the full root-cause and options analysis for the record.
+> **Hard requirement was zero regression** — see §5 for the guardrails the
+> implementation satisfies.
 
 ## 1. Problem
 
