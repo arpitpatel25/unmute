@@ -91,7 +91,10 @@ export function Billing() {
   // renders an inline confirm panel; only "Confirm upgrade" runs upgrade().
   const [confirmingUpgrade, setConfirmingUpgrade] = useState(false)
 
-  // Refresh subscription status on mount, and again when a checkout lands.
+  // Refresh subscription status on mount, again when a checkout lands, and
+  // again once the auth token has propagated to main (auth.sessionEpoch) — the
+  // mount fetch on cold start races ahead of the token and reads a false
+  // "inactive" until the epoch bumps.
   useEffect(() => {
     refresh()
     window.electronAPI.paywallOnPaymentCallback?.(() => {
@@ -103,7 +106,8 @@ export function Billing() {
       if (url) refresh()
     })
     return () => window.electronAPI.removeAllListeners?.('paywall:payment-callback')
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.sessionEpoch])
 
   async function refresh() {
     const s = await window.electronAPI.paywallGetSubscription?.()

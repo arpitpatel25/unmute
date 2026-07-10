@@ -56,14 +56,20 @@ export function EnginePillars() {
     window.electronAPI.getWhisperModelStatus().then(setWhisperModelReady).catch(() => {})
     window.electronAPI.onWhisperDownloadProgress?.((p: number) => setWhisperProgress(p))
 
-    window.electronAPI.paywallGetSubscription?.().then((s) => {
-      if (s) setSubActive(!!s.active)
-    }).catch(() => {})
-
     return () => {
       window.electronAPI.removeAllListeners?.('whisper:download-progress')
     }
   }, [])
+
+  // Subscription status — fetched on mount AND re-fetched once the auth token
+  // has propagated to the main process (auth.sessionEpoch). Without the epoch
+  // dep, a cold-start mount fetch races ahead of the token and reads a false
+  // "inactive" (Free) that only self-corrects on a tab switch / refresh.
+  useEffect(() => {
+    window.electronAPI.paywallGetSubscription?.().then((s) => {
+      if (s) setSubActive(!!s.active)
+    }).catch(() => {})
+  }, [auth.sessionEpoch])
 
   // ─── Derived: pillar readiness (drives Active + Auto) ────────
   const ready: Record<PillarId, boolean> = {

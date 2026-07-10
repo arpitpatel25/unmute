@@ -43,6 +43,14 @@ interface AuthContextValue {
   errorMessage: string | null
   /** True when the SignInScreen modal should be visible. */
   showSignIn: boolean
+  /**
+   * Increments each time the access token is propagated to the main process
+   * (cold-start restore, sign-in, or refresh). Subscription-status fetchers
+   * depend on this so they RE-FETCH once the token is actually live in main —
+   * their first mount fetch races ahead of the token and would otherwise read
+   * a false "Free/Inactive" until a manual refresh. Starts at 0.
+   */
+  sessionEpoch: number
 
   /** Open the SignInScreen modal. No-op if user is already signed in. */
   openSignIn(): void
@@ -94,6 +102,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authState, setAuthState] = useState<AuthState>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [showSignIn, setShowSignIn] = useState(false)
+  // Bumped after each successful push of a token-bearing session to main —
+  // see AuthContextValue.sessionEpoch.
+  const [sessionEpoch, setSessionEpoch] = useState(0)
 
   const waitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -116,7 +127,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         refreshToken: session?.refresh_token ?? null,
         expiresAt: session?.expires_at ?? null,
         user: u ? { id: u.id, email: u.email ?? null } : null,
-      }).catch(() => { /* best-effort */ })
+      })
+        .then(() => {
+          // The access token is now live in main. Signal subscription-status
+          // fetchers to re-fetch — on cold start this is the moment that clears
+          // the "signed-in but shows Free" flash (they fetched on mount, before
+          // the token propagated). Only bump when there's actually a token so a
+          // signed-out push doesn't trigger a pointless re-fetch.
+          if (session?.access_token) setSessionEpoch((e) => e + 1)
+        })
+        .catch(() => { /* best-effort */ })
     }
 
     supa.auth.getSession().then(({ data }) => {
@@ -338,6 +358,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authState,
     errorMessage,
     showSignIn,
+    sessionEpoch,
     openSignIn,
     closeSignIn,
     cancelSignIn,

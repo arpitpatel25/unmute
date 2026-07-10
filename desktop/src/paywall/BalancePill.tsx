@@ -3,6 +3,7 @@
 // Clicking it opens the customer portal to manage the subscription.
 
 import { useEffect, useState } from 'react'
+import { useAuth } from './AuthContext'
 
 interface SubState {
   active: boolean
@@ -10,14 +11,18 @@ interface SubState {
 }
 
 export function BalancePill() {
+  const auth = useAuth()
   const [state, setState] = useState<SubState | null>(null)
   const [showMenu, setShowMenu] = useState(false)
 
+  // Re-fetch when the auth token propagates to main (auth.sessionEpoch), not
+  // just on mount — the cold-start mount fetch races ahead of the token and
+  // returns a false "Inactive" (Free) that only self-corrects on a refresh.
   useEffect(() => {
     window.electronAPI.paywallGetSubscription?.().then((s) => {
       if (s) setState(s)
     })
-  }, [])
+  }, [auth.sessionEpoch])
 
   if (!state) return null
 
