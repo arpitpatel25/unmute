@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from 'react'
 import { useAuth } from './AuthContext'
+import { readCachedSubscription, writeCachedSubscription } from './subscription-cache'
 
 interface SubState {
   active: boolean
@@ -12,15 +13,21 @@ interface SubState {
 
 export function BalancePill() {
   const auth = useAuth()
-  const [state, setState] = useState<SubState | null>(null)
+  // Seed from the synchronous cache so a returning Pro user's pill paints the
+  // correct plan on the very first frame — no "Inactive" flash before the fetch.
+  const [state, setState] = useState<SubState | null>(() => readCachedSubscription())
   const [showMenu, setShowMenu] = useState(false)
 
   // Re-fetch when the auth token propagates to main (auth.sessionEpoch), not
-  // just on mount — the cold-start mount fetch races ahead of the token and
-  // returns a false "Inactive" (Free) that only self-corrects on a refresh.
+  // just on mount. A null result means the token isn't live in main yet —
+  // ignore it and keep the cached plan rather than downgrading to "Inactive".
+  // A non-null result is authoritative: apply it and refresh the cache.
   useEffect(() => {
     window.electronAPI.paywallGetSubscription?.().then((s) => {
-      if (s) setState(s)
+      if (s) {
+        setState(s)
+        writeCachedSubscription(s)
+      }
     })
   }, [auth.sessionEpoch])
 

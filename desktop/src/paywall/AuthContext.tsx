@@ -32,6 +32,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { getSupabase } from './supabase-client'
+import { writeCachedSubscription } from './subscription-cache'
 
 export type AuthState = 'idle' | 'opening' | 'waiting' | 'exchanging' | 'error'
 export interface AuthUser { id: string; email: string | null }
@@ -98,7 +99,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Seed from the synchronous cache so the first paint is already signed-in.
   const [user, setUserState] = useState<AuthUser | null>(() => readCachedUser())
   // Every user change also updates the cache (covers sign-out → cache cleared).
-  const setUser = useCallback((u: AuthUser | null) => { setUserState(u); writeCachedUser(u) }, [])
+  // On sign-out we also drop the optimistic subscription cache so a returning
+  // signed-out user never sees a stale "Pro" pill seeded from the last session.
+  const setUser = useCallback((u: AuthUser | null) => {
+    setUserState(u)
+    writeCachedUser(u)
+    if (!u) writeCachedSubscription(null)
+  }, [])
   const [authState, setAuthState] = useState<AuthState>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [showSignIn, setShowSignIn] = useState(false)

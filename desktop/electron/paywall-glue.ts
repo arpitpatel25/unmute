@@ -335,7 +335,13 @@ function registerSessionBridge() {
   // the subscription-status pill.
   ipcMain.handle('paywall:get-subscription', async () => {
     const token = currentSession.accessToken
-    if (!token) return { active: false, plan: null }
+    // No token yet ≠ "inactive". On cold start the renderer's session token
+    // hasn't propagated to main yet (it arrives via paywall:set-session after
+    // supabase getSession resolves). Returning a definitive { active:false }
+    // here is exactly what made signed-in Pro users flash "Inactive" until a
+    // refresh. Return null = "unknown, ask again once the token is live" — the
+    // renderer keeps its cached/last-known plan instead of showing Free.
+    if (!token) return null
     const { fetchSubscription } = await import('./managed-client')
     return (await fetchSubscription(token)) ?? { active: false, plan: null }
   })

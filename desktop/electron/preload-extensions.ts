@@ -71,10 +71,12 @@ export const paywallPreloadExtensions = {
 
   // Subscription/entitlement status — drives the subscription-status pill and
   // Billing's post-checkout "is it active yet?" poll.
+  // Resolves to null when the main process has no access token yet (cold-start
+  // race) — callers must treat null as "unknown, keep last-known", NOT inactive.
   paywallGetSubscription: (): Promise<{
     active: boolean
     plan: 'dictation' | 'unmute' | null
-  }> => ipcRenderer.invoke('paywall:get-subscription'),
+  } | null> => ipcRenderer.invoke('paywall:get-subscription'),
 
   // Recent wallet ledger rows for the in-app history pane.
   paywallGetLedger: (): Promise<Array<{

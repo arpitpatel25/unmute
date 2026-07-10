@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from './AuthContext'
 import { Billing } from './Billing'
+import { readCachedSubscription, writeCachedSubscription } from './subscription-cache'
 
 type EngineMode = 'auto' | 'managed' | 'local'
 type PillarId = 'managed' | 'local'
@@ -37,8 +38,10 @@ export function EnginePillars() {
   // Engine mode (persisted) — 'auto' or one of the three pillars
   const [mode, setMode] = useState<EngineMode>('auto')
 
-  // Managed: subscription status, surfaced live
-  const [subActive, setSubActive] = useState<boolean>(false)
+  // Managed: subscription status, surfaced live. Seeded from the synchronous
+  // cache so a returning Pro user's managed pillar reads "ready" on the first
+  // frame instead of flashing "needs subscription".
+  const [subActive, setSubActive] = useState<boolean>(() => readCachedSubscription()?.active ?? false)
   const [managedVerifying, setManagedVerifying] = useState(false)
   const [managedVerifyResult, setManagedVerifyResult] = useState<VerifyState>(null)
 
@@ -64,10 +67,14 @@ export function EnginePillars() {
   // Subscription status — fetched on mount AND re-fetched once the auth token
   // has propagated to the main process (auth.sessionEpoch). Without the epoch
   // dep, a cold-start mount fetch races ahead of the token and reads a false
-  // "inactive" (Free) that only self-corrects on a tab switch / refresh.
+  // "inactive" (Free) that only self-corrects on a tab switch / refresh. A null
+  // result = token not live yet → keep the cached value; non-null is authoritative.
   useEffect(() => {
     window.electronAPI.paywallGetSubscription?.().then((s) => {
-      if (s) setSubActive(!!s.active)
+      if (s) {
+        setSubActive(!!s.active)
+        writeCachedSubscription(s)
+      }
     }).catch(() => {})
   }, [auth.sessionEpoch])
 
@@ -125,6 +132,7 @@ export function EnginePillars() {
       const ms = Math.round(performance.now() - t0)
       if (s) {
         setSubActive(!!s.active)
+        writeCachedSubscription(s)
         setManagedVerifyResult({ ok: true, text: `Works — ${ms}ms` })
       } else {
         setManagedVerifyResult({ ok: false, text: 'No response from server' })

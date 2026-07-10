@@ -27,6 +27,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from './AuthContext'
+import { readCachedSubscription, writeCachedSubscription } from './subscription-cache'
 
 const POLL_INTERVAL_MS = 3000
 const POLL_DEADLINE_MS = 5 * 60 * 1000
@@ -82,7 +83,9 @@ const dollars = (cents: number) =>
 export function Billing() {
   const auth = useAuth()
   const [billingInterval, setBillingInterval] = useState<Interval>('month')
-  const [sub, setSub] = useState<SubState>({ active: false, plan: null })
+  // Seeded from the synchronous cache so a returning subscriber sees their real
+  // plan on the first frame instead of the "Inactive" sales grid flashing first.
+  const [sub, setSub] = useState<SubState>(() => readCachedSubscription() ?? { active: false, plan: null })
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const [portalNote, setPortalNote] = useState<string | null>(null)
   const [upgrading, setUpgrading] = useState(false)
@@ -111,7 +114,12 @@ export function Billing() {
 
   async function refresh() {
     const s = await window.electronAPI.paywallGetSubscription?.()
-    if (s) setSub({ active: !!s.active, plan: s.plan })
+    // null = token not live in main yet → keep last-known; don't flash Inactive.
+    if (s) {
+      const next = { active: !!s.active, plan: s.plan }
+      setSub(next)
+      writeCachedSubscription(next)
+    }
   }
 
   async function subscribe(plan: Plan) {
@@ -210,7 +218,9 @@ export function Billing() {
     const tick = async () => {
       const s = await window.electronAPI.paywallGetSubscription?.()
       if (s?.active) {
-        setSub({ active: true, plan: s.plan })
+        const next = { active: true, plan: s.plan }
+        setSub(next)
+        writeCachedSubscription(next)
         setPhase({ kind: 'success', plan: phase.plan })
         return
       }
