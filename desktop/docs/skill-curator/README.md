@@ -221,3 +221,4 @@ days-not-months of cost, and doubles as the tuning rig for the decision engine.
 | `07-invocation-and-awareness.md` | Invocation & awareness — the runtime half of the discovery problem; why invocation-assist is a lower-risk, faster-value wedge than creation |
 | `08-intent-driven-surfacing.md` | Speak-the-task → surface matching skills; repo as a free prior; (a)+(b) are one intent→skill retrieval primitive |
 | `09-visibility-not-auto-execution.md` | Correction to `08`: surface for visibility, the USER selects; never auto-execute a skill (that's the routine posture). Palette (good) vs mandatory gate (bad) |
+| `10-how-invocation-actually-works.md` | Facts: skills are auto-selected by the agent AND manually invocable (per-skill configurable); the actor distinction that reconciles `09` (agent auto-selecting ≠ Unmute auto-firing) |
