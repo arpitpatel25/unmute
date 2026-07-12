@@ -222,3 +222,4 @@ days-not-months of cost, and doubles as the tuning rig for the decision engine.
 | `08-intent-driven-surfacing.md` | Speak-the-task → surface matching skills; repo as a free prior; (a)+(b) are one intent→skill retrieval primitive |
 | `09-visibility-not-auto-execution.md` | Correction to `08`: surface for visibility, the USER selects; never auto-execute a skill (that's the routine posture). Palette (good) vs mandatory gate (bad) |
 | `10-how-invocation-actually-works.md` | Facts: skills are auto-selected by the agent AND manually invocable (per-skill configurable); the actor distinction that reconciles `09` (agent auto-selecting ≠ Unmute auto-firing) |
+| `11-everything-is-a-coding-agent-hypothesis.md` | The foundational bet stress-tested: the engine claim is strong, "everything via a coding-agent form" overreaches on form/task-type/market-structure — and that gap is Unmute's wedge |
