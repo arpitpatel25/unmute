@@ -42,6 +42,9 @@ import { Router, type RoutableTask } from './router'
 import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
+import { startAxServer, type AxServer } from './ax/server'
+import { applyAxRegistration } from './ax/register'
+import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
@@ -122,6 +125,11 @@ interface RemoteSettings {
   // default — the guardrails (provenance, depth-1, rate caps) carry the
   // safety; this is the master off-switch.
   agentTasksEnabled: boolean
+  // Computer Use (ax-mcp): lets Claude Code drive desktop apps in the background
+  // via the Accessibility API. OFF by default (opt-in — grants real control).
+  // Once enabled, allowAll (default) puts the WHOLE computer in scope; the
+  // allowlist is an optional restriction. See ./ax/policy.
+  computerUse: AxPolicy
 }
 
 const settings = new Store<RemoteSettings>({
@@ -148,8 +156,22 @@ const settings = new Store<RemoteSettings>({
     screenshotCapture: true,
     pinnedSkills: [],
     agentTasksEnabled: true,
+    computerUse: { enabled: false, screenshotEnabled: true, allowAll: true, allowed: [] },
   },
 })
+
+// Computer Use (ax-mcp) server handle + a lightweight activity broadcaster the
+// menu-bar / overlay can subscribe to (shows what's being driven — the live
+// "kill switch" affordance: the user sees an app is under control and can flip
+// Computer Use off, which every subsequent tool call reads immediately).
+let axServer: AxServer | null = null
+function broadcastAxActivity(ev: { app?: string; tool: string; ok: boolean }): void {
+  try {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('remote:ax-activity', { ...ev, at: Date.now() })
+    }
+  } catch { /* best-effort telemetry */ }
+}
 
 // Per-SESSION override of forceRawMode, set from the pill widget. null = no
 // override (use the persistent setting); true/false = force on/off for this app
@@ -1354,6 +1376,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     })
   })
 
+  // ── Computer Use (ax-mcp): background macOS app control ──
+  // The HTTP MCP server always runs (cheap, bound to 127.0.0.1); the POLICY is
+  // what gates it — every tool call reads the live policy and refuses when the
+  // master toggle is off. Claude registration + CLAUDE.md steer are applied to
+  // match the current enabled state, and re-applied whenever the toggle flips.
+  void startAxServer({
+    getPolicy: () => normalizePolicy(settings.get('computerUse')),
+    onActivity: (ev) => broadcastAxActivity(ev),
+  }).then((s) => { axServer = s }).catch((e) => log.warn('ax server not started', { error: (e as Error).message }))
+  void applyAxRegistration(normalizePolicy(settings.get('computerUse')).enabled)
+
   // Recover the user's tasks after an app crash/restart: rebuild the rows from
   // the on-disk meta + status files (they were never lost — just invisible once
   // the in-memory list reset on relaunch). Then start maintenance so the sweep
@@ -1572,6 +1605,35 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('screenshot-capture-set', { on: !!on })
     return true
   })
+  // ── Computer Use (ax-mcp) settings IPC ──
+  ipcMain.handle('remote:get-computer-use', async () => normalizePolicy(settings.get('computerUse')))
+  ipcMain.handle('remote:set-computer-use', async (_e, patch: Partial<AxPolicy>) => {
+    const prev = normalizePolicy(settings.get('computerUse'))
+    const next = normalizePolicy({ ...prev, ...patch })
+    settings.set('computerUse', next)
+    // The server reads policy live, so enforcement is already in effect. Only
+    // the Claude registration + steer need side effects, and only when the
+    // master toggle actually changed.
+    if (next.enabled !== prev.enabled) {
+      void applyAxRegistration(next.enabled)
+      log.event('computer-use-toggled', { enabled: next.enabled })
+    }
+    return next
+  })
+  // Is this process trusted for Accessibility? (Onboarding: tells the user
+  // whether they still need to grant permission to Unmute.)
+  ipcMain.handle('remote:ax-trusted', async () => {
+    try { const { getAxBridge } = await import('./ax/ax-bridge'); return await getAxBridge().trusted() }
+    catch { return false }
+  })
+  // Live list of running apps for the allowlist picker.
+  ipcMain.handle('remote:ax-list-apps', async () => {
+    try {
+      const { getAxBridge } = await import('./ax/ax-bridge')
+      return await getAxBridge().call('listApps', [])
+    } catch (e) { log.warn('ax-list-apps failed', { error: (e as Error).message }); return [] }
+  })
+
   // Pin/unpin a task's species from the UI (manual graduation §5): 'session'
   // exempts it from idle-kill + purge; 'oneoff' re-arms normal lifecycle.
   ipcMain.handle('remote:set-kind', async (_e, id: string, kind: 'oneoff' | 'session') => {

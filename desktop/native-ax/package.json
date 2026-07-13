@@ -1,0 +1,19 @@
+{
+  "name": "unmute-native-ax",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Background macOS app control via AXUIElement, loaded in-process from the main Electron process so it inherits the signed .app bundle's TCC Accessibility grant (same lesson as unmute-native-paste: child binaries get their own TCC identity and silently fail).",
+  "main": "index.js",
+  "scripts": {
+    "install": "node-gyp rebuild --release",
+    "rebuild": "node-gyp rebuild --release",
+    "smoke": "node smoke.js"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.1.1"
+  },
+  "gypfile": true,
+  "engines": {
+    "node": ">=18"
+  }
+}

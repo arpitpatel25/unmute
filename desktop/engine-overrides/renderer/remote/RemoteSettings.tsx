@@ -6,6 +6,7 @@
 // (PRD §12.1) — MCP setup is done in the user's own Claude Code.
 
 import { useEffect, useState } from 'react'
+import { ComputerUseSettings } from './ComputerUseSettings'
 
 interface Settings {
   permissionMode: 'prompt' | 'auto-approve'
@@ -223,6 +224,11 @@ export function RemoteSettings() {
           }}
         />
       </label>
+
+      {/* Computer Use — background macOS app control via the Accessibility API.
+          Self-contained (owns its own IPC). Sits alongside the Browser lane:
+          browser drives Chrome, this drives every other desktop app. */}
+      <ComputerUseSettings />
 
       {/* Executor agent (§11) */}
       <label className="flex items-center justify-between py-1.5 border-t border-black/5">

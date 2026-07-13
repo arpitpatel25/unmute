@@ -104,6 +104,20 @@ wire_paywall() {
     log "WARN: $ROOT/native-fn-listener not found — Fn detection will fall back to child binary"
   fi
 
+  # Copy the native-ax addon (Computer Use / ax-mcp). Same in-process pattern
+  # as native-paste: AXUIElement control loaded into the main process so the
+  # signed .app's Accessibility grant covers every AX call (a child binary
+  # would get its own TCC identity and silently fail). Exclude the local dev
+  # build/ + node_modules so electron-builder rebuilds it clean for the ABI.
+  if [[ -d "$ROOT/native-ax" ]]; then
+    log "Copying native-ax addon"
+    mkdir -p "$engine/native-ax"
+    rsync -a --exclude 'build' --exclude 'node_modules' "$ROOT/native-ax/" "$engine/native-ax/" 2>/dev/null \
+      || cp -R "$ROOT/native-ax/." "$engine/native-ax/"
+  else
+    log "WARN: $ROOT/native-ax not found — Computer Use (ax-mcp) will be unavailable"
+  fi
+
   # Patch engine package.json:
   #   * Add @supabase/supabase-js for the paywall layer
   #   * Pin electron-store to ^8 (CJS). v11+ is ESM-only and crashes our
@@ -123,6 +137,9 @@ wire_paywall() {
     }
     if (fs.existsSync('$engine/native-fn-listener/package.json')) {
       pkg.dependencies['unmute-native-fn-listener'] = 'file:./native-fn-listener'
+    }
+    if (fs.existsSync('$engine/native-ax/package.json')) {
+      pkg.dependencies['unmute-native-ax'] = 'file:./native-ax'
     }
     // Unmute Remote: node-pty is the PTY backend for the owned interactive
     // claude session (PRD §4.1). It's a native module — electron-builder's

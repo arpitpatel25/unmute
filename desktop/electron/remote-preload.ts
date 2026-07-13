@@ -53,6 +53,26 @@ export interface RemoteSetupStatus {
 }
 
 export const remotePreloadExtensions = {
+  // ── Computer Use (ax-mcp) ──
+  /** Read the current Computer Use policy (enabled / allowAll / allowed / screenshots). */
+  remoteGetComputerUse: (): Promise<{ enabled: boolean; screenshotEnabled: boolean; allowAll: boolean; allowed: string[] }> =>
+    ipcRenderer.invoke('remote:get-computer-use'),
+  /** Patch the policy; returns the normalized result. Toggling `enabled` also
+   *  registers/unregisters the MCP server with Claude Code. */
+  remoteSetComputerUse: (patch: Record<string, unknown>): Promise<{ enabled: boolean; screenshotEnabled: boolean; allowAll: boolean; allowed: string[] }> =>
+    ipcRenderer.invoke('remote:set-computer-use', patch),
+  /** Is Unmute trusted for Accessibility? (onboarding hint) */
+  remoteAxTrusted: (): Promise<boolean> => ipcRenderer.invoke('remote:ax-trusted'),
+  /** Running apps for the allowlist picker. */
+  remoteAxListApps: (): Promise<Array<{ name: string; bundleId: string; pid: number; windowsHere: number; windowsAnywhere: number }>> =>
+    ipcRenderer.invoke('remote:ax-list-apps'),
+  /** Subscribe to live "an app is being driven" activity (menu-bar/overlay indicator). */
+  remoteOnAxActivity: (cb: (d: { app?: string; tool: string; ok: boolean; at: number }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { app?: string; tool: string; ok: boolean; at: number }) => cb(d)
+    ipcRenderer.on('remote:ax-activity', handler)
+    return () => ipcRenderer.removeListener('remote:ax-activity', handler)
+  },
+
   // ── Actions ──
   /** Dispatch a task by text (capture path types its own; this is for UI re-run/manual). */
   remoteDispatch: (intent: string): Promise<string | null> =>

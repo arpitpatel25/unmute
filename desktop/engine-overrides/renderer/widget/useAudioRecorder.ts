@@ -875,7 +875,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // Capture begins AT KEY-DOWN, never before: the key-press is the consent
     // signal (same contract as screenshots). Pre-roll was tried and removed —
     // it polluted rapid-fire dictations with the previous utterance's tail.
-    const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+    let mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
     mediaRecorderRef.current = mediaRecorder
     mediaRecorder.ondataavailable = onRecorderData
 
