@@ -55,6 +55,8 @@ const NOISY_CLEAR_EVALS = 4
 // suppressor scrubs the gaps harder than expected, and a close mic keeps the
 // ratio high even in real noise. Floor is the primary signal; the ratio cap
 // is only a safety so a hot mic in a silent room can't be flagged.
+// 2026-07-15: capture DSP is now OFF — raw floors run higher, so the noisy
+// hint may fire more readily. Signal-only; re-calibrate constants if it nags.
 const NOISY_FLOOR_RMS = 0.012          // gaps clearly above a quiet room's near-zero floor
 const NOISY_MAX_RATIO = 12             // safety: voice hugely above floor = mic is fine
 const NOISY_HINT_COOLDOWN_MS = 10 * 60_000 // same café, three dictations ≠ three nags
@@ -746,15 +748,17 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       requestedDeviceId = undefined
     }
 
-    // Phone path: Chromium's processing chain OFF. The iPhone already applied
-    // its own call-tuned DSP before transmitting; a second noise-suppression/
-    // AGC/echo-cancellation pass on pre-cleaned audio only smears speech
-    // (double-cleaning — confirmed pipeline asymmetry vs the Mac path, where
-    // Chromium is the ONLY cleaner and stays on).
+    // BOTH paths: Chromium's processing chain OFF. Phone: iOS already applied
+    // its own call-tuned DSP (double-cleaning smears speech). Mac (2026-07-15):
+    // Whisper is trained on raw real-world audio; Chromium's suppressor was
+    // observed scrubbing speech gaps "harder than expected" and its AGC slams
+    // plosives. Decision: send the model what the mic heard. If loud-room
+    // accuracy regresses in the field, THIS is the first flag to re-flip.
+    const RAW_CAPTURE = { sampleRate: 16000, echoCancellation: false, noiseSuppression: false, autoGainControl: false } as const
     const constraints: MediaStreamConstraints = {
       audio: requestedDeviceId
-        ? { deviceId: { exact: requestedDeviceId }, sampleRate: 16000, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-        : { sampleRate: 16000 }
+        ? { deviceId: { exact: requestedDeviceId }, ...RAW_CAPTURE }
+        : { ...RAW_CAPTURE }
     }
 
     // Wait for the PREVIOUS recording's AudioContext to finish closing before we
@@ -808,7 +812,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       } catch (err) {
         if (!requestedDeviceId) throw err
         console.log('[audio] Requested device unavailable, falling back to system default mic:', err)
-        stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } })
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { ...RAW_CAPTURE } })
       }
     }
     // Head-gap calibration: how long the mic took to actually open. The
@@ -935,7 +939,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         stream.getTracks().forEach((t) => t.stop())
         try { await audioContext.close() } catch { /* already closing */ }
         // …and rebuild everything on the system default.
-        stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } })
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { ...RAW_CAPTURE } })
         streamRef.current = stream
         phoneSourceRef.current = false // it's a Mac-mic recording now (no tail grace)
         audioContext = new AudioContext()
