@@ -106,6 +106,7 @@ export async function tryManagedSTT(
   durationSeconds: number,
   flowType: 'dictation' | 'transform' | 'quote' | 'context' | 'instruction' = 'dictation',
   signal?: AbortSignal,
+  prompt?: string,
 ): Promise<ManagedSTTResult | null> {
   if (!shouldTryManaged()) return null
 
@@ -126,6 +127,7 @@ export async function tryManagedSTT(
     const lang = getSTTLanguageForRequest()
     if (lang) form.append('language', lang)
     form.append('flow_type', flowType)
+    if (prompt) form.append('prompt', prompt)
     const tFormEnd = Date.now()
 
     // DIAG (offline-fallback hunt): is the audio we're uploading a VALID webm?

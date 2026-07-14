@@ -60,6 +60,15 @@ interface StreamSession {
 const sessions: Map<number, StreamSession> = new Map()
 let activeChunkIndex: number | null = null
 
+// Optional prompt provider (registered by sessionManager): returns the
+// previous chunk's transcript tail for Whisper decoder context. Called at
+// open time — best-effort: '' means "no prompt", which is the pre-feature
+// behavior. NEVER awaited, NEVER blocks the stream open.
+let promptProvider: ((chunkIndex: number) => string) | null = null
+export function setStreamPromptProvider(fn: (chunkIndex: number) => string): void {
+  promptProvider = fn
+}
+
 /**
  * Open a streaming POST for a specific chunk. Returns false if the user
  * isn't eligible for managed mode or has no token; caller should fall
@@ -89,6 +98,10 @@ export function openStream(opts: { flowType: string; chunkIndex?: number; estima
   }
   const lang = getSTTLanguageForRequest()
   if (lang) paramsInit.language = lang
+  try {
+    const prompt = promptProvider?.(chunkIndex) || ''
+    if (prompt) paramsInit.prompt = prompt
+  } catch { /* prompt is a bonus, never a blocker */ }
   const params = new URLSearchParams(paramsInit)
 
   const abortController = new AbortController()

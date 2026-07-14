@@ -20,9 +20,10 @@ import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 // Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
 import { dispatchFromCapture } from './paywall/remote/init'
 import { getPaywallEngineMode, formatOutputForUser } from './paywall/paywall-glue'
-import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait } from './paywall/paywall-stream'
+import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait, setStreamPromptProvider } from './paywall/paywall-stream'
 import { setLastEngine, registerCaptureQualitySink, registerDraftAcceptHandler } from './paywall/main-extensions'
 import { SttArbiter } from './sttArbiter'
+import { promptTail } from './promptTail'
 // OSS prompt assembly — we reuse it client-side so the worker's /v1/llm
 // endpoint stays a thin pass-through to Groq instead of duplicating prompt
 // logic on the server (which would diverge from OSS over time).
@@ -235,6 +236,7 @@ class SessionManager {
       console.log('[session] draft-offer ACCEPTED by user')
       this.arbiter?.acceptDraft()
     })
+    setStreamPromptProvider((chunkIndex) => this.getPromptTailForChunk(chunkIndex))
   }
 
   /** Whether a session is currently being processed (API calls in flight) */
@@ -334,6 +336,16 @@ class SessionManager {
           return null
         })
     }
+  }
+
+  /** Decoder-context for chunk idx: the transcript tail of the nearest
+   *  completed lower-index chunk. '' = none ready = send no prompt. */
+  private getPromptTailForChunk(idx: number): string {
+    for (let j = idx - 1; j >= 0; j--) {
+      const t = this.chunkTracker.get(j)?.transcript
+      if (t) return promptTail(t)
+    }
+    return ''
   }
 
   /**
@@ -499,7 +511,8 @@ class SessionManager {
     }
     try {
       const durationGuess = Math.max(1, Math.round(audio.length / 4000))
-      const managed = await tryManagedSTT(audio, durationGuess, flowType)
+      const prompt = flowType === 'dictation' ? this.getPromptTailForChunk(chunkIndex) : ''
+      const managed = await tryManagedSTT(audio, durationGuess, flowType, undefined, prompt || undefined)
       if (managed?.text != null) return { text: managed.text }
     } catch (e) {
       console.warn(`[session] tryManagedSTT (${flowType}) failed: ${e instanceof Error ? e.message : e}`)
