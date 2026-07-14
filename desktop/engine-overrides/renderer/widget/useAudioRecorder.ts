@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { getWarmStream, warmIsHot, disconnectWarmMic, setWarmBusy, warmState, setCaptureInFlight } from './micWarm'
+import { effectiveSilenceThreshold, decideCut } from './vadPolicy'
 
 type RecordingMode = 'dictation' | 'instruction'
 
@@ -194,6 +195,9 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
   // ─── Noisy-environment refs (per recording) ───
   const rmsFramesRef = useRef<number[]>([])
+  // Latest p20 of the rolling rms window — THIS recording's noise floor.
+  // Feeds the adaptive silence threshold (vadPolicy) so café pauses cut.
+  const noiseFloorRef = useRef<number | null>(null)
   const noisyFrameCountRef = useRef<number>(0)
   const noisyFlaggedRef = useRef<boolean>(false)      // chip currently up
   const noisyEverFlaggedRef = useRef<boolean>(false)  // fired at least once THIS recording (re-flag skips the global cooldown)
@@ -253,7 +257,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
    * Emit a macro chunk: stop MediaRecorder → assemble valid WebM blob → send via IPC → restart.
    * The gap falls on a detected silence period, so no audible audio loss.
    */
-  const emitChunk = useCallback(async (reason: 'silence' | 'hard-cap'): Promise<void> => {
+  const emitChunk = useCallback(async (reason: 'silence' | 'soft-cap' | 'hard-cap'): Promise<void> => {
     const recorder = mediaRecorderRef.current
     const stream = streamRef.current
     if (!recorder || recorder.state === 'inactive' || !stream) return
@@ -290,7 +294,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     const blob = new Blob(await trimToWebmHeader(macroBlobs), { type: 'audio/webm' })
     const buffer = await blob.arrayBuffer()
 
-    console.log(`[audio:vad] ${reason === 'silence' ? 'Silence detected' : 'Hard cap'}, cutting chunk ${chunkIdx} at ${elapsed}ms (${buffer.byteLength} bytes)`)
+    console.log(`[audio:vad] cut reason=${reason}, chunk ${chunkIdx} at ${elapsed}ms (${buffer.byteLength} bytes)`)
 
     // Send chunk to main process
     window.electronAPI.sendAudioChunk(buffer, chunkIdx, mode, frozenSessionIdRef.current)
@@ -435,6 +439,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         if (frames.length >= NOISY_MIN_FRAMES && noisyFrameCountRef.current % NOISY_EVAL_EVERY_N_FRAMES === 0) {
           const sorted = [...frames].sort((a, b) => a - b)
           const floor = sorted[Math.floor(sorted.length * 0.2)]   // the "gaps"
+          noiseFloorRef.current = floor
           const speech = sorted[Math.floor(sorted.length * 0.9)]  // the voice
           // Too-quiet: judged on the recording's loudest moment so far.
           {
@@ -487,26 +492,31 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
       const chunkElapsed = Date.now() - chunkStartTimeRef.current
 
-      // Check hard cap first
-      if (chunkElapsed >= hardChunkCapMsRef.current) {
-        console.log(`[audio:vad] Hard cap at ${chunkElapsed}ms, force-cutting chunk ${chunkIndexRef.current}`)
-        emitChunk('hard-cap')
-        return
+      // Adaptive threshold: "silence" is judged relative to THIS recording's
+      // measured noise floor, so noisy rooms still get natural cuts instead
+      // of running into the hard cap mid-word.
+      const threshold = effectiveSilenceThreshold(silenceThresholdRef.current, noiseFloorRef.current)
+
+      // Maintain the silence run-length the policy consumes.
+      if (rms < threshold) {
+        if (silenceStartRef.current === null) silenceStartRef.current = Date.now()
+      } else {
+        silenceStartRef.current = null
       }
 
-      // Only look for silence after minimum chunk duration
-      if (chunkElapsed < chunkMinMsRef.current) return
-
-      if (rms < silenceThresholdRef.current) {
-        if (silenceStartRef.current === null) {
-          silenceStartRef.current = Date.now()
-        } else if (Date.now() - silenceStartRef.current >= silenceDurationMsRef.current) {
-          // Sustained silence — cut chunk
-          emitChunk('silence')
-        }
-      } else {
-        // Audio detected — reset silence timer
-        silenceStartRef.current = null
+      const decision = decideCut({
+        rms,
+        chunkElapsedMs: chunkElapsed,
+        silenceSinceMs: silenceStartRef.current === null ? null : Date.now() - silenceStartRef.current,
+        minChunkMs: chunkMinMsRef.current,
+        silenceDurationMs: silenceDurationMsRef.current,
+        hardCapMs: hardChunkCapMsRef.current,
+        softCapWindowMs: 5_000,
+        threshold,
+      })
+      if (decision !== 'none') {
+        console.log(`[audio:vad] cut=${decision} at ${chunkElapsed}ms (rms=${rms.toFixed(4)}, threshold=${threshold.toFixed(4)}, floor=${(noiseFloorRef.current ?? 0).toFixed(4)})`)
+        emitChunk(decision)
       }
     }, vadPollIntervalMsRef.current)
   }, [emitChunk])
@@ -646,6 +656,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     heardSpeechRef.current = false
     chunksRef.current = []
     rmsFramesRef.current = []
+    noiseFloorRef.current = null
     noisyFrameCountRef.current = 0
     noisyFlaggedRef.current = false
     noisyEverFlaggedRef.current = false
