@@ -160,10 +160,11 @@ export async function tryManagedSTT(
           currentToken = fresh
           // FormData can't be re-used after consumption; rebuild it
           const retryForm = new FormData()
-          retryForm.append('file', new Blob([opts.audio], { type: 'audio/webm' }), 'audio.webm')
-          retryForm.append('duration_seconds', String(opts.durationSeconds))
-          if (opts.language) retryForm.append('language', opts.language)
-          if (opts.flowType) retryForm.append('flow_type', opts.flowType)
+          retryForm.append('file', new Blob([audio], { type: 'audio/webm' }), 'audio.webm')
+          retryForm.append('duration_seconds', String(durationSeconds))
+          if (lang) retryForm.append('language', lang)
+          retryForm.append('flow_type', flowType)
+          if (prompt) retryForm.append('prompt', prompt)
           res = await fetch(`${__PIPELINE_URL__}/v1/stt`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${currentToken}` },
