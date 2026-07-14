@@ -352,6 +352,9 @@ class SessionManager {
   /** Quiet-capture paste gate: true = suppress the paste, tell the user we
    *  didn't catch it, keep the transcript in history (nothing is lost). */
   private quietMiss(session: SessionState, output: string): boolean {
+    // Remote commands are dispatched, not pasted — a wrong-but-present
+    // command the user can see beats a silently dropped one.
+    if (session.kind === 'remote') return false
     const q = this.captureQuality
     if (!q || q.sessionId !== session.sessionId) return false
     if (!isSuspectQuietCapture(q.rmsMax, output)) return false
@@ -1977,6 +1980,7 @@ class SessionManager {
         if (session.errorMessage === 'quiet-miss') {
           // quietMiss() already told the widget via 'session:quiet-miss' —
           // don't clobber that UI with an output:ready for empty text.
+          this.scheduleAutoHide(1800)
         } else if (session.errorMessage === 'formatting-fallback') {
           sendToWidget('output:fallback', output, session.sessionId, this.formattingNotice())
           this.scheduleAutoHide(4000)
