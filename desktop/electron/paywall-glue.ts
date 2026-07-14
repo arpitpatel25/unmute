@@ -27,6 +27,9 @@ interface PaywallSettings {
   // or copied to the clipboard. User-requested feature; sub-microsecond
   // cost so no perf budget needed.
   lowercaseOutput?: boolean
+  // Post-STT cleanup pass (fillers/stutters removed via a fast LLM call,
+  // 900ms budget, fails open to the raw transcript). Default ON.
+  dictationCleanup?: boolean
 }
 const settings = new Store<PaywallSettings>({ name: 'unmute-paywall-settings' })
 
@@ -88,6 +91,11 @@ export function getPaywallAccessToken(): string | null {
 }
 export function getPaywallEngineMode(): EngineMode {
   return settings.get('engineMode', 'auto')
+}
+/** Post-STT cleanup pass toggle — default ON. Consulted by sessionManager's
+ *  maybeCleanupDictation before making the LLM polish call. */
+export function getDictationCleanupEnabled(): boolean {
+  return (settings.get('dictationCleanup') as boolean | undefined) ?? true
 }
 export function getPaywallUser(): { id: string; email: string | null } | null {
   return currentSession.user
@@ -269,6 +277,13 @@ function registerSessionBridge() {
   })
   ipcMain.handle('paywall:set-lowercase-output', (_e, enabled: boolean) => {
     settings.set('lowercaseOutput', !!enabled)
+    return true
+  })
+
+  // ─── Post-STT cleanup pass (fillers/stutters) ───────────────
+  ipcMain.handle('paywall:get-dictation-cleanup', () => getDictationCleanupEnabled())
+  ipcMain.handle('paywall:set-dictation-cleanup', (_e, v: boolean) => {
+    settings.set('dictationCleanup', !!v)
     return true
   })
 

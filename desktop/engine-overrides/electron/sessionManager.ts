@@ -19,7 +19,8 @@ import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
 import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 // Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
 import { dispatchFromCapture } from './paywall/remote/init'
-import { getPaywallEngineMode, formatOutputForUser } from './paywall/paywall-glue'
+import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
+import { buildCleanupMessages, acceptCleanupResult, shouldAttemptCleanup, CLEANUP_TIMEOUT_MS } from './cleanupPass'
 import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait, setStreamPromptProvider } from './paywall/paywall-stream'
 import { setLastEngine, registerCaptureQualitySink, registerDraftAcceptHandler } from './paywall/main-extensions'
 import { SttArbiter } from './sttArbiter'
@@ -362,6 +363,32 @@ class SessionManager {
     logTelemetry('quiet-miss', { sessionId: session.sessionId, rmsMax: q.rmsMax, chars: output.length })
     sendToWidget('session:quiet-miss')
     return true
+  }
+
+  /** Fast LLM polish for raw dictation: fillers/stutters out, meaning intact.
+   *  Hard CLEANUP_TIMEOUT_MS budget; every failure path returns the raw text. */
+  private async maybeCleanupDictation(raw: string, signal?: AbortSignal): Promise<string> {
+    try {
+      if (!raw || !shouldAttemptCleanup(raw)) return raw
+      if (!getDictationCleanupEnabled()) return raw
+      const t0 = Date.now()
+      const attempt = tryManagedLLM(buildCleanupMessages(raw), { temperature: 0 }, signal)
+        .then((r) => r?.text ?? null)
+        .catch(() => null)
+      const timeout = new Promise<null>((r) => setTimeout(() => r(null), CLEANUP_TIMEOUT_MS))
+      const cleaned = await Promise.race([attempt, timeout])
+      const result = acceptCleanupResult(raw, cleaned)
+      logTelemetry('cleanup-pass', {
+        ms: Date.now() - t0,
+        applied: result !== raw,
+        rawChars: raw.length,
+        outChars: result.length,
+      })
+      if (result !== raw) console.log(`[session] ✨ cleanup pass applied in ${Date.now() - t0}ms (${raw.length}→${result.length} chars)`)
+      return result
+    } catch {
+      return raw
+    }
   }
 
   /**
@@ -1401,6 +1428,7 @@ class SessionManager {
               return
             }
 
+            output = await this.maybeCleanupDictation(output, controller.signal)
             output = formatOutputForUser(output)
 
             if (this.quietMiss(session, output)) {
@@ -1779,6 +1807,9 @@ class SessionManager {
               session.errorMessage = 'quiet-miss'
               output = ''
             }
+            // Remote commands are dispatched verbatim — never run the LLM
+            // polish pass on them.
+            if (output && session.kind !== 'remote') output = await this.maybeCleanupDictation(output, controller.signal)
             break
 
           case 'context': {

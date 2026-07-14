@@ -268,6 +268,13 @@ export const paywallPreloadExtensions = {
     ipcRenderer.invoke('paywall:get-lowercase-output'),
   paywallSetLowercaseOutput: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('paywall:set-lowercase-output', enabled),
+
+  // Post-STT cleanup pass (fillers/stutters). Default ON; hard 900ms budget,
+  // fails open to the raw transcript.
+  paywallGetDictationCleanup: (): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:get-dictation-cleanup'),
+  paywallSetDictationCleanup: (v: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:set-dictation-cleanup', v),
 }
 
 export type PaywallAPI = typeof paywallPreloadExtensions

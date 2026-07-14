@@ -44,6 +44,7 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
   const [instructionEnabled, setInstructionEnabled] = useState<boolean>(true)
   const [lowercaseOutput, setLowercaseOutput] = useState<boolean>(false)
+  const [dictationCleanup, setDictationCleanup] = useState<boolean>(true)
   const [appVersion, setAppVersion] = useState<string | null>(null)
 
   useEffect(() => {
@@ -75,6 +76,8 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
     window.electronAPI.paywallGetLowercaseOutput?.()
       .then((v: boolean) => setLowercaseOutput(!!v))
       .catch(() => {})
+    ;(window.electronAPI as unknown as { paywallGetDictationCleanup?: () => Promise<boolean> })
+      .paywallGetDictationCleanup?.().then((v) => setDictationCleanup(!!v)).catch(() => {})
     window.electronAPI.getDictationKey().then((v: string) => {
       if (v === 'fn' || v === 'right-option') setDictationKey(v)
     })
@@ -125,6 +128,12 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   function handleLowercaseOutputChange(value: boolean) {
     setLowercaseOutput(value)
     window.electronAPI.paywallSetLowercaseOutput?.(value)?.catch(() => {})
+  }
+
+  function handleDictationCleanupChange(value: boolean) {
+    setDictationCleanup(value)
+    void (window.electronAPI as unknown as { paywallSetDictationCleanup?: (v: boolean) => Promise<boolean> })
+      .paywallSetDictationCleanup?.(value)?.catch(() => {})
   }
 
   function handleOutputModeChange(value: string) {
@@ -293,6 +302,9 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
         </SettingRow>
         <SettingRow label="Lowercase output" description="Force everything pasted to be lowercase">
           <Toggle checked={lowercaseOutput} onChange={handleLowercaseOutputChange} />
+        </SettingRow>
+        <SettingRow label="Dictation cleanup" description="Remove filler words and stutters before pasting (adds <1s only when needed)">
+          <Toggle checked={dictationCleanup} onChange={handleDictationCleanupChange} />
         </SettingRow>
       </div>
 
