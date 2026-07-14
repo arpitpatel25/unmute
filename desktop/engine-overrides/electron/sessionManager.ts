@@ -430,17 +430,14 @@ class SessionManager {
   private static readonly SPECULATIVE_LOCAL_START_MS = 1500
   private static readonly LOCAL_COMMIT_MS = 4000
 
-  /**
-   * Race a cloud STT call against a speculative on-device whisper.cpp
-   * transcription. Cloud wins if it returns before LOCAL_COMMIT_MS,
-   * local wins otherwise.
-   *
-   * Returns null only if BOTH paths failed (or local model isn't
-   * installed AND cloud failed). The caller falls through to the
-   * existing OSS engine logic (which itself may end up at local
-   * whisper, just without speculation).
-   */
-  private async raceCloudVsLocalSTT(
+  // ────────────────────────────────────────────────────────────────
+  // INSTRUCTION-ONLY legacy race. Dictation STT routing moved to
+  // SttArbiter (sttArbiter.ts) on 2026-07-15: the 4s hard local-commit
+  // below produced mixed-engine transcripts and silent quality drops —
+  // never reintroduce it on the dictation path. Instructions are short,
+  // post-key-up commands where the 4s commit remains acceptable.
+  // ────────────────────────────────────────────────────────────────
+  private async raceCloudVsLocalForInstruction(
     cloudPromise: Promise<{ text: string } | null>,
     audio: Buffer,
     label: string,
@@ -1069,12 +1066,13 @@ class SessionManager {
     const useDualWhisper = effectiveSTT === 'dual-whisper'
 
     try {
-      // ─── Managed-cloud + speculative-local race ─────────────────
+      // ─── Managed-cloud + on-device arbiter (dictation) ──────────
       // Cloud STT (stream → upload fallback inside runManagedSTT) is
-      // raced against on-device whisper.cpp via raceCloudVsLocalSTT.
-      // Cloud wins fast (~600ms healthy); local kicks in if cloud
-      // takes >1.5s and wins past 4s commit threshold. Either way the
-      // chunk transcript is recorded with the engine that produced it.
+      // arbitrated against on-device whisper.cpp via SttArbiter
+      // (sttArbiter.ts) — this replaced the old legacy 4s hard-commit
+      // race, which is now confined to instruction audio only (see
+      // raceCloudVsLocalForInstruction). Either way the chunk
+      // transcript is recorded with the engine that produced it.
       const mode = getPaywallEngineMode()
       const arbiter = this.arbiter
       if (arbiter && (mode === 'managed' || mode === 'auto')) {
@@ -1351,7 +1349,7 @@ class SessionManager {
         }
         if (session.instructionAudio && !session.instructionTranscript) {
           const cloudPromise = this.runManagedSTT(session.instructionAudio, 0, 'instruction')
-          const raced = await this.raceCloudVsLocalSTT(cloudPromise, session.instructionAudio, 'instruction')
+          const raced = await this.raceCloudVsLocalForInstruction(cloudPromise, session.instructionAudio, 'instruction')
           if (raced) {
             session.instructionTranscript = raced.text
             if (raced.source === 'local') this.notifyEngineFallback('cloud slow — used on-device whisper')
