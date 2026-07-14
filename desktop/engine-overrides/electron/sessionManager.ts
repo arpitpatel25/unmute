@@ -171,6 +171,14 @@ class SessionManager {
   // session in startSession; disposed on every teardown path.
   private arbiter: SttArbiter | null = null
 
+  // Per-session snapshot of the final committed chunk transcripts, taken at
+  // the moment they're stitched/assigned in processSession — BEFORE
+  // resetChunkState() clears chunkTracker/totalChunksExpected. The arbiter's
+  // onLateCloud handler (which can fire up to 30s after the paste, i.e. after
+  // reset and possibly during the NEXT session) stitches the better take from
+  // this snapshot, never from the live (cleared or foreign-session) tracker.
+  private lastChunkSnapshot: { sessionId: string; total: number; texts: Map<number, string> } | null = null
+
   // Tracks whether an instruction recording was started in this session.
   // Used by processSession() to know it should wait for instruction audio IPC
   // before determining flow type and processing.
@@ -265,11 +273,33 @@ class SessionManager {
         logTelemetry('late-cloud', { sessionId: sessionIdAtBirth ?? null, chunkIndex, chars: text.length })
         if (!sessionIdAtBirth) return
         try {
-          const total = this.totalChunksExpected ?? 1
+          // Source committed texts from data that provably belongs to THIS
+          // arbiter's session. The live chunkTracker/totalChunksExpected are
+          // shared instance fields: resetChunkState() clears them when
+          // processSession finishes, and the NEXT session repopulates them —
+          // stitching from them here (up to 30s after the paste) would
+          // produce a truncated or cross-session-contaminated better take.
+          let total: number
+          let committedFor: (i: number) => string | null | undefined
+          if (this.lastChunkSnapshot?.sessionId === sessionIdAtBirth) {
+            // Normal case: processSession finished and snapshotted the final
+            // transcripts for this session before reset.
+            const snap = this.lastChunkSnapshot
+            total = snap.total
+            committedFor = (i) => snap.texts.get(i)
+          } else if (this.currentSession?.sessionId === sessionIdAtBirth) {
+            // Late cloud arriving while this session is still live — the
+            // tracker hasn't been reset yet, so it's still ours.
+            total = this.totalChunksExpected ?? 1
+            committedFor = (i) => this.chunkTracker.get(i)?.transcript
+          } else {
+            console.log(`[session] ⏭️ late-cloud better-take skipped — no committed data for session ${sessionIdAtBirth} (never stitch from foreign chunk state)`)
+            return
+          }
           const parts: string[] = []
           for (let i = 0; i < total; i++) {
             const late = lateCloudTexts.get(i)
-            const committed = this.chunkTracker.get(i)?.transcript
+            const committed = committedFor(i)
             const best = late ?? committed
             if (best) parts.push(best)
           }
@@ -1250,6 +1280,13 @@ class SessionManager {
             const resolved = await arbiter.submitChunk(0, cloudPromise, this.localSttFactory(session.dictationAudio, 'dictation'))
             if (resolved) {
               session.dictationTranscript = resolved.text
+              // Snapshot for late-cloud better-take stitching (single-buffer
+              // sessions are chunk 0 of 1 from the arbiter's perspective).
+              this.lastChunkSnapshot = {
+                sessionId: session.sessionId,
+                total: 1,
+                texts: new Map([[0, resolved.text]]),
+              }
               setLastEngine(resolved.source)
               logTelemetry('dictation-resolved', { engine: resolved.source, bytes: session.dictationAudio.byteLength })
               console.log(`[session] ✓ Dictation STT via ${resolved.source} (arbiter)`)
@@ -1591,6 +1628,21 @@ class SessionManager {
         // ordered join produces clean continuous text. No markers, no LLM merge.
         session.dictationTranscript = stitchChunks(orderedTranscripts)
         console.log(`[session] 🧩 Stitched ${orderedTranscripts.length} chunk(s) in code (no LLM)`)
+
+        // Snapshot the final per-chunk transcripts for late-cloud better-take
+        // stitching (onLateCloud can fire after resetChunkState clears the
+        // live tracker — see lastChunkSnapshot field docs).
+        {
+          const texts = new Map<number, string>()
+          for (const [idx, chunk] of this.chunkTracker) {
+            if (chunk.transcript != null) texts.set(idx, chunk.transcript)
+          }
+          this.lastChunkSnapshot = {
+            sessionId: session.sessionId,
+            total: this.totalChunksExpected ?? this.chunkTracker.size,
+            texts,
+          }
+        }
 
         console.log('[session] Dictation transcript (chunked):', JSON.stringify(session.dictationTranscript))
 
