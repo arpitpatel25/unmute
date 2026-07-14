@@ -167,6 +167,11 @@ export const paywallPreloadExtensions = {
     ipcRenderer.on('session:draft-resolved', (_e, how: string) => cb(how))
   },
 
+  // Quiet-capture gate: faint audio + tiny transcript — suppressed the paste.
+  paywallOnQuietMiss: (cb: () => void) => {
+    ipcRenderer.on('session:quiet-miss', () => cb())
+  },
+
   // Surfacing the SignInScreen (sent from main when something — e.g. a future
   // menu item, or a 401 → sign-in flow — wants to prompt the user).
   paywallOnShowSignIn: (cb: () => void) => {

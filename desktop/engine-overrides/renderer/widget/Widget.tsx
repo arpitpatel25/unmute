@@ -11,6 +11,7 @@ interface WidgetProps {
   showDiscardHint?: boolean
   engineNotice?: string | null
   draftOffer?: boolean
+  mutedText?: string | null
   onAcceptDraft?: () => void
   onCancel: () => void
   onStop: () => void
@@ -72,6 +73,7 @@ export default function Widget({
   showDiscardHint = false,
   engineNotice = null,
   draftOffer = false,
+  mutedText = null,
   onAcceptDraft,
   onStop,
   onUndo
@@ -248,7 +250,7 @@ export default function Widget({
       {/* ══════ NOTHING CAPTURED — too short or silent (no API call made) ══════ */}
       {state === 'too-short' && (
         <div className="unmute-pill unmute-pill--muted animate-fade-up-in">
-          <span className="unmute-pill-muted-text">Didn't catch that</span>
+          <span className="unmute-pill-muted-text">{mutedText || "Didn't catch that"}</span>
         </div>
       )}
 

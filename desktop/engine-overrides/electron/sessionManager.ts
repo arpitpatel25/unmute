@@ -24,6 +24,7 @@ import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAnd
 import { setLastEngine, registerCaptureQualitySink, registerDraftAcceptHandler } from './paywall/main-extensions'
 import { SttArbiter } from './sttArbiter'
 import { promptTail } from './promptTail'
+import { isSuspectQuietCapture } from './quietGuard'
 // OSS prompt assembly — we reuse it client-side so the worker's /v1/llm
 // endpoint stays a thin pass-through to Groq instead of duplicating prompt
 // logic on the server (which would diverge from OSS over time).
@@ -346,6 +347,18 @@ class SessionManager {
       if (t) return promptTail(t)
     }
     return ''
+  }
+
+  /** Quiet-capture paste gate: true = suppress the paste, tell the user we
+   *  didn't catch it, keep the transcript in history (nothing is lost). */
+  private quietMiss(session: SessionState, output: string): boolean {
+    const q = this.captureQuality
+    if (!q || q.sessionId !== session.sessionId) return false
+    if (!isSuspectQuietCapture(q.rmsMax, output)) return false
+    console.log(`[session] 🔇 quiet-capture gate: rmsMax=${q.rmsMax}, transcript=${JSON.stringify(output)} — not pasting`)
+    logTelemetry('quiet-miss', { sessionId: session.sessionId, rmsMax: q.rmsMax, chars: output.length })
+    sendToWidget('session:quiet-miss')
+    return true
   }
 
   /**
@@ -1386,6 +1399,22 @@ class SessionManager {
             }
 
             output = formatOutputForUser(output)
+
+            if (this.quietMiss(session, output)) {
+              session.output = null
+              session.status = 'done'
+              session.errorMessage = 'quiet-miss'
+              this.scheduleAutoHide(1800)
+              clearTimeout(apiTimeout)
+              this.abortController = null
+              this.isProcessing = false
+              this.resetChunkState()
+              try { this.onSessionComplete?.(session) } catch { /* ignore */ }
+              this.currentSession = null
+              this.onSessionEnded?.()
+              return
+            }
+
             session.output = output
             session.status = 'done'
             console.log('[session] ✅ FINAL OUTPUT (raw transcript):', JSON.stringify(output))
@@ -1743,6 +1772,10 @@ class SessionManager {
             // (via a Control instruction → transform/instruction flows).
             console.log('[session] Dictation flow — raw transcript (no LLM)')
             output = cleanTranscript(session.dictationTranscript || '')
+            if (this.quietMiss(session, output)) {
+              session.errorMessage = 'quiet-miss'
+              output = ''
+            }
             break
 
           case 'context': {
@@ -1929,23 +1962,28 @@ class SessionManager {
         console.log(`[session] ⏱ Transform: ${transformMs}ms | Transcribe: ${transcribeMs}ms | Pipeline: ${Date.now() - pipelineStart}ms`)
         console.log('[session] ✅ FINAL OUTPUT:', JSON.stringify(output))
 
-        if (this.outputMode === 'paste') {
-          console.log('[session] Injecting output via paste...')
-          await injectOutput(output)
+        if (output) {
+          if (this.outputMode === 'paste') {
+            console.log('[session] Injecting output via paste...')
+            await injectOutput(output)
+          } else {
+            console.log('[session] Copying output to clipboard...')
+            copyToClipboard(output)
+          }
         } else {
-          console.log('[session] Copying output to clipboard...')
-          copyToClipboard(output)
+          console.log('[session] Empty output — skipping injection')
         }
 
-        if (session.errorMessage === 'formatting-fallback') {
+        if (session.errorMessage === 'quiet-miss') {
+          // quietMiss() already told the widget via 'session:quiet-miss' —
+          // don't clobber that UI with an output:ready for empty text.
+        } else if (session.errorMessage === 'formatting-fallback') {
           sendToWidget('output:fallback', output, session.sessionId, this.formattingNotice())
+          this.scheduleAutoHide(4000)
         } else {
           sendToWidget('output:ready', output, session.sessionId)
+          this.scheduleAutoHide(2500)
         }
-
-        // Auto-hide HUD after showing output (cancellable if new session starts)
-        // Give more time for fallback warning so user can read it
-        this.scheduleAutoHide(session.errorMessage === 'formatting-fallback' ? 4000 : 2500)
       }
 
     } catch (err) {
