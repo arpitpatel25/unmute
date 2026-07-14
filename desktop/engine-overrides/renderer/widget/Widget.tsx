@@ -10,6 +10,8 @@ interface WidgetProps {
   errorMessage?: string
   showDiscardHint?: boolean
   engineNotice?: string | null
+  draftOffer?: boolean
+  onAcceptDraft?: () => void
   onCancel: () => void
   onStop: () => void
   onUndo: () => void
@@ -56,6 +58,8 @@ const PILL_CRITICAL_CSS = `
 .unmute-pill-stop-icon--white { background: rgba(255,255,255,0.85); }
 .unmute-pill-stop-icon--red { background: rgba(255,255,255,0.85); }
 .unmute-pill-processing { display: flex; align-items: center; gap: 8px; }
+.unmute-pill-draft-btn { border: 1px solid rgba(255,255,255,0.35); background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.85); font-size: 12px; border-radius: 9999px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+.unmute-pill-draft-btn:hover { background: rgba(255,255,255,0.16); }
 `
 
 
@@ -67,6 +71,8 @@ export default function Widget({
   errorMessage,
   showDiscardHint = false,
   engineNotice = null,
+  draftOffer = false,
+  onAcceptDraft,
   onStop,
   onUndo
 }: WidgetProps) {
@@ -172,13 +178,19 @@ export default function Widget({
       {state === 'processing' && (
         <div className="unmute-pill">
           <div className="unmute-pill-dot unmute-pill-dot--processing animate-dot-pulse-processing" />
-          <span className="unmute-pill-label">{engineNotice ? 'On-device' : 'Processing'}</span>
+          <span className="unmute-pill-label">
+            {draftOffer ? 'Taking longer…' : engineNotice ? 'On-device' : 'Processing'}
+          </span>
           <div className="unmute-pill-dots unmute-pill-dots--processing">
             <span className="animate-dot-bounce" />
             <span className="animate-dot-bounce" />
             <span className="animate-dot-bounce" />
           </div>
-          {engineNotice ? (
+          {draftOffer ? (
+            <button className="unmute-pill-draft-btn animate-fade-up-in" onClick={onAcceptDraft}>
+              Use quick draft
+            </button>
+          ) : engineNotice ? (
             <span className="unmute-pill-helper animate-fade-up-in">offline model</span>
           ) : showDiscardHint && (
             <span className="unmute-pill-helper animate-fade-up-in">Esc to discard</span>
