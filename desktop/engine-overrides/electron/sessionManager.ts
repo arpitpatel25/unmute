@@ -4,6 +4,9 @@ import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
 import { captureSelectedText, injectOutput, copyToClipboard } from './clipboard'
 import { saveAudioFile, saveAudioChunk } from './audio'
+import { initTelemetry, logTelemetry } from './dictationTelemetry'
+import { app } from 'electron'
+import path from 'path'
 import { getWidgetWindow, showHUD, hideHUD, cancelPendingHide } from './windowManager'
 import { setTrayRecording, setTrayIdle } from './tray'
 import { broadcastError } from './errorLogger'
@@ -175,6 +178,8 @@ class SessionManager {
   // Auto-hide timer — tracks the delayed hideHUD() call so it can be cancelled
   // when a new session starts (prevents old timer from killing new session's HUD)
   private autoHideTimer: ReturnType<typeof setTimeout> | null = null
+
+  private telemetryReady = false
 
   // ─── Chunked transcription state ───
   private chunkTracker: Map<number, {
@@ -555,6 +560,10 @@ class SessionManager {
 
   startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation'): void {
     console.log('[session] startSession called, mode:', mode, '| kind:', kind, '| isProcessing:', this.isProcessing, '| currentSession:', this.currentSession?.sessionId || 'null')
+    if (!this.telemetryReady) {
+      this.telemetryReady = true
+      try { initTelemetry(path.join(app.getPath('userData'), 'telemetry')) } catch { /* best-effort */ }
+    }
     if (this.isProcessing) {
       console.log('[session] ⛔ BLOCKED — Fn pressed during processing — showing discard hint')
       sendToWidget('processing:show-discard-hint')
