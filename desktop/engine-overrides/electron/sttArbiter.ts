@@ -68,6 +68,7 @@ export class SttArbiter {
   private events: ArbiterEvents
   private t: ArbiterTimeouts
   private ended = false
+  private disposed = false
   /** Index at which the one-way cloud→local switch happened; null = no switch. */
   private switchIndex: number | null = null
   private offerFired = false
@@ -108,44 +109,58 @@ export class SttArbiter {
     }
     this.chunks.set(idx, entry)
 
+    // A chunk submitted after dispose can never resolve — settle it now.
+    if (this.disposed) {
+      entry.committed = true
+      entry.committedResult = null
+      entry.resolve(null)
+      return promise
+    }
+
     // Cloud watcher — does double duty:
     //  1. Before commit: feeds the ordered-advance loop with fresh data.
     //  2. After a LOCAL commit: reports a late cloud result within the window.
     void cloud.then((text) => {
+      if (this.disposed) return
       entry.cloudSettled = true
       entry.cloudText = text
       this.onCloudSettled(entry)
     }).catch(() => {
+      if (this.disposed) return
       entry.cloudSettled = true
       entry.cloudText = null
       this.onCloudSettled(entry)
     })
 
-    // Speculation: warm the local draft if cloud is slow. Never commits here
-    // directly — the advance loop decides when (and if) a draft is used.
-    if (startLocal) {
+    if (this.ended) {
+      // Late chunk (submitted after key-up): the session timers may have
+      // already fired and self-disarmed with nothing pending. A late chunk
+      // must NEVER be able to hang, so (a) start its local draft NOW, and
+      // (b) re-arm fresh offer/deadline coverage if none is armed.
+      this.startLocalFor(entry)
+      if (this.switchIndex === null) {
+        if (!this.offerFired && this.offerTimer === null) this.armOfferTimer()
+        if (this.deadlineTimer === null) this.armDeadlineTimer()
+      }
+    } else if (startLocal) {
+      // Speculation: warm the local draft if cloud is slow. Never commits
+      // here directly — the advance loop decides when a draft is used.
       entry.speculateTimer = setTimeout(() => {
         entry.speculateTimer = null
         this.startLocalFor(entry)
       }, this.t.speculateAfterMs)
     }
+    this.tryAdvance()
     return promise
   }
 
   recordingEnded(): void {
-    if (this.ended) return
+    if (this.ended || this.disposed) return
     this.ended = true
-    this.offerTimer = setTimeout(() => {
-      this.offerTimer = null
-      if (!this.offerFired && this.hasPending()) {
-        this.offerFired = true
-        this.events.onDraftOffer?.()
-      }
-    }, this.t.offerAfterMs)
-    this.deadlineTimer = setTimeout(() => {
-      this.deadlineTimer = null
-      if (this.hasPending()) this.switchToLocal('deadline')
-    }, this.t.hardDeadlineMs)
+    if (this.switchIndex === null) {
+      if (!this.offerFired) this.armOfferTimer()
+      this.armDeadlineTimer()
+    }
     // Ensure every pending chunk has a warming draft NOW — key-up starts the clock.
     for (const c of this.chunks.values()) {
       if (!c.committed && c.startLocal) {
@@ -157,15 +172,40 @@ export class SttArbiter {
   }
 
   acceptDraft(): void {
+    if (!this.ended || this.disposed) return
     if (this.hasPending()) this.switchToLocal('accepted')
   }
 
   dispose(): void {
-    if (this.offerTimer) clearTimeout(this.offerTimer)
-    if (this.deadlineTimer) clearTimeout(this.deadlineTimer)
+    if (this.disposed) return
+    this.disposed = true
+    this.clearSessionTimers()
     for (const c of this.chunks.values()) {
-      if (c.speculateTimer) clearTimeout(c.speculateTimer)
+      if (c.speculateTimer) { clearTimeout(c.speculateTimer); c.speculateTimer = null }
+      // Nobody may hang on a disposed arbiter: settle every pending chunk.
+      if (!c.committed) {
+        c.committed = true
+        c.committedResult = null
+        c.resolve(null)
+      }
     }
+  }
+
+  private armOfferTimer(): void {
+    this.offerTimer = setTimeout(() => {
+      this.offerTimer = null
+      if (!this.disposed && !this.offerFired && this.hasPending()) {
+        this.offerFired = true
+        this.events.onDraftOffer?.()
+      }
+    }, this.t.offerAfterMs)
+  }
+
+  private armDeadlineTimer(): void {
+    this.deadlineTimer = setTimeout(() => {
+      this.deadlineTimer = null
+      if (!this.disposed && this.hasPending()) this.switchToLocal('deadline')
+    }, this.t.hardDeadlineMs)
   }
 
   private hasPending(): boolean {
@@ -177,10 +217,12 @@ export class SttArbiter {
     if (entry.localStarted || entry.committed || !entry.startLocal) return
     entry.localStarted = true
     entry.startLocal().then((text) => {
+      if (this.disposed) return
       entry.localSettled = true
       entry.localText = text
       this.tryAdvance()
     }).catch(() => {
+      if (this.disposed) return
       entry.localSettled = true
       entry.localText = null
       this.tryAdvance()
@@ -204,7 +246,7 @@ export class SttArbiter {
   }
 
   private finalize(entry: ChunkEntry, result: ChunkResolution | null): void {
-    if (entry.committed) return
+    if (entry.committed || this.disposed) return
     entry.committed = true
     entry.committedResult = result
     entry.commitAt = Date.now()
@@ -217,6 +259,7 @@ export class SttArbiter {
    * (whatever data it's missing will re-trigger this loop when it lands).
    */
   private tryAdvance(): void {
+    if (this.disposed) return
     for (;;) {
       const head = this.lowestPending()
       if (!head) break
@@ -247,15 +290,11 @@ export class SttArbiter {
         this.finalize(head, { text: head.cloudText, source: 'cloud' })
         continue
       }
-      // Cloud settled with nothing usable — nothing left to wait on except
-      // whatever local draft is warming.
-      if (!head.startLocal) {
-        this.finalize(head, null)
-        continue
-      }
-      this.startLocalFor(head)
-      if (!head.localSettled) break
-      this.finalize(head, head.localText != null ? { text: head.localText, source: 'local' } : null)
+      // Cloud FAILED (settled null / rejected) — never bypass the switch
+      // machinery: this chunk going local means ALL later chunks must too,
+      // even mid-recording (shape integrity beats waiting for key-up).
+      this.beginSwitch(head.idx, 'deadline')
+      // Loop re-examines head under the switched branch above.
     }
     this.maybeAllCloudResolved()
   }
@@ -269,7 +308,7 @@ export class SttArbiter {
   }
 
   private maybeAllCloudResolved(): void {
-    if (!this.ended || this.resolvedNotified) return
+    if (!this.ended || this.resolvedNotified || this.disposed) return
     if (this.hasPending()) return
     if (this.switchIndex === null) {
       this.resolvedNotified = true
@@ -284,15 +323,21 @@ export class SttArbiter {
   }
 
   private switchToLocal(how: 'accepted' | 'deadline'): void {
-    if (this.switchIndex !== null) return // one-way: already switched
+    if (this.switchIndex !== null || this.disposed) return // one-way
     const head = this.lowestPending()
     if (!head) return
-    this.switchIndex = head.idx
+    this.beginSwitch(head.idx, how)
+    this.tryAdvance()
+  }
+
+  /** Flip the one-way switch at `idx`: fire the notification, disarm timers. */
+  private beginSwitch(idx: number, how: 'accepted' | 'deadline'): void {
+    if (this.switchIndex !== null || this.disposed) return
+    this.switchIndex = idx
     if (!this.resolvedNotified) {
       this.resolvedNotified = true
       this.events.onDraftResolved?.(how)
     }
     this.clearSessionTimers()
-    this.tryAdvance()
   }
 }

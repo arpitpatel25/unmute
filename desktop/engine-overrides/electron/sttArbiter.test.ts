@@ -139,4 +139,66 @@ describe('SttArbiter', () => {
     assert.deepEqual(late, [[0, 'better take']])
     a.dispose()
   })
+
+  test('cloud failure mid-recording triggers the one-way switch — no local→cloud sandwich', async () => {
+    const a = new SttArbiter({}, FAST)
+    const cloud1 = deferred<string | null>()
+    const p0 = a.submitChunk(0, Promise.resolve(null), () => Promise.resolve('local0')) // cloud fails
+    const p1 = a.submitChunk(1, cloud1.promise, () => Promise.resolve('local1'))
+    await tick()
+    cloud1.resolve('cloud1') // arrives AFTER the failure-triggered switch — must be ignored
+    const [r0, r1] = await Promise.all([p0, p1])
+    assert.deepEqual(r0, { text: 'local0', source: 'local' })
+    assert.deepEqual(r1, { text: 'local1', source: 'local' })
+    assert.equal(a.engineSummary, 'local')
+    a.dispose()
+  })
+
+  test('chunk submitted after the deadline already fired still gets deadline coverage — never hangs', async () => {
+    const a = new SttArbiter({}, FAST)
+    const cloud0 = deferred<string | null>()
+    const p0 = a.submitChunk(0, cloud0.promise, () => Promise.resolve('local0'))
+    cloud0.resolve('cloud0')
+    assert.deepEqual(await p0, { text: 'cloud0', source: 'cloud' })
+    a.recordingEnded()
+    await wait(120) // past hardDeadlineMs — session timers fired/self-disarmed with nothing pending
+    const neverCloud = new Promise<string | null>(() => {})
+    const p1 = a.submitChunk(1, neverCloud, () => Promise.resolve('local1'))
+    const r1 = await p1 // must resolve via a freshly-armed deadline, not hang
+    assert.deepEqual(r1, { text: 'local1', source: 'local' })
+    assert.equal(a.engineSummary, 'mixed')
+    a.dispose()
+  })
+
+  test('dispose settles uncommitted chunks with null and suppresses all later events', async () => {
+    const events: string[] = []
+    const late: Array<[number, string]> = []
+    const a = new SttArbiter({
+      onDraftOffer: () => events.push('offer'),
+      onDraftResolved: (h) => events.push(h),
+      onLateCloud: (i, t) => late.push([i, t]),
+    }, FAST)
+    const cloud = deferred<string | null>()
+    const p = a.submitChunk(0, cloud.promise, () => Promise.resolve('draft'))
+    a.recordingEnded()
+    a.dispose()
+    assert.equal(await p, null) // settled immediately, no hang
+    cloud.resolve('too late')
+    await wait(120) // past offer + deadline — nothing may fire post-dispose
+    assert.deepEqual(events, [])
+    assert.deepEqual(late, [])
+  })
+
+  test('acceptDraft before recordingEnded is a no-op', async () => {
+    const resolved: string[] = []
+    const a = new SttArbiter({ onDraftResolved: (h) => resolved.push(h) }, FAST)
+    const cloud = deferred<string | null>()
+    const p = a.submitChunk(0, cloud.promise, () => Promise.resolve('draft'))
+    a.acceptDraft() // mid-recording: ignored
+    await wait(20)
+    assert.deepEqual(resolved, [])
+    cloud.resolve('cloud text')
+    assert.deepEqual(await p, { text: 'cloud text', source: 'cloud' })
+    a.dispose()
+  })
 })
