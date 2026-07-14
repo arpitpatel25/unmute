@@ -157,6 +157,16 @@ export const paywallPreloadExtensions = {
   paywallCaptureQuality: (sessionId: string | undefined, q: Record<string, unknown>): void =>
     ipcRenderer.send('paywall:capture-quality', sessionId, q),
 
+  // Draft-offer lifecycle (slow-cloud UX). Offer = local quick draft is ready
+  // and cloud is still pending; accept pastes the draft immediately.
+  paywallAcceptDraft: (): void => ipcRenderer.send('paywall:accept-draft'),
+  paywallOnDraftOffer: (cb: () => void) => {
+    ipcRenderer.on('session:draft-offer', () => cb())
+  },
+  paywallOnDraftResolved: (cb: (how: string) => void) => {
+    ipcRenderer.on('session:draft-resolved', (_e, how: string) => cb(how))
+  },
+
   // Surfacing the SignInScreen (sent from main when something — e.g. a future
   // menu item, or a 401 → sign-in flow — wants to prompt the user).
   paywallOnShowSignIn: (cb: () => void) => {

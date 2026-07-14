@@ -21,7 +21,8 @@ import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 import { dispatchFromCapture } from './paywall/remote/init'
 import { getPaywallEngineMode, formatOutputForUser } from './paywall/paywall-glue'
 import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait } from './paywall/paywall-stream'
-import { setLastEngine, registerCaptureQualitySink } from './paywall/main-extensions'
+import { setLastEngine, registerCaptureQualitySink, registerDraftAcceptHandler } from './paywall/main-extensions'
+import { SttArbiter } from './sttArbiter'
 // OSS prompt assembly — we reuse it client-side so the worker's /v1/llm
 // endpoint stays a thin pass-through to Groq instead of duplicating prompt
 // logic on the server (which would diverge from OSS over time).
@@ -166,6 +167,10 @@ class SessionManager {
   // (so the notice fires once, not per chunk).
   private fallbackNotified = false
 
+  // Session-scoped STT engine arbiter (see sttArbiter.ts). Recreated per
+  // session in startSession; disposed on every teardown path.
+  private arbiter: SttArbiter | null = null
+
   // Tracks whether an instruction recording was started in this session.
   // Used by processSession() to know it should wait for instruction audio IPC
   // before determining flow type and processing.
@@ -218,6 +223,10 @@ class SessionManager {
       const rmsMax = typeof q.rmsMax === 'number' ? q.rmsMax : 0
       this.captureQuality = { sessionId, rmsMax }
     })
+    registerDraftAcceptHandler(() => {
+      console.log('[session] draft-offer ACCEPTED by user')
+      this.arbiter?.acceptDraft()
+    })
   }
 
   /** Whether a session is currently being processed (API calls in flight) */
@@ -231,6 +240,70 @@ class SessionManager {
     this.fallbackNotified = true
     console.log('[session] 🟡 Using on-device model —', reason)
     sendToWidget('session:engine-notice', reason)
+  }
+
+  private newArbiter(): SttArbiter {
+    this.arbiter?.dispose()
+    const sessionIdAtBirth = this.currentSession?.sessionId
+    const lateCloudTexts = new Map<number, string>()
+    const arbiter = new SttArbiter({
+      onDraftOffer: () => {
+        console.log('[session] 🟡 draft offer armed — cloud slow, local draft ready')
+        logTelemetry('draft-offer', { sessionId: sessionIdAtBirth ?? null })
+        sendToWidget('session:draft-offer')
+      },
+      onDraftResolved: (how) => {
+        console.log(`[session] draft resolved: ${how}`)
+        logTelemetry('draft-resolved', { sessionId: sessionIdAtBirth ?? null, how })
+        sendToWidget('session:draft-resolved', how)
+        if (how !== 'cloud') this.notifyEngineFallback('cloud slow — used on-device model')
+      },
+      onLateCloud: (chunkIndex, text) => {
+        // Collect late cloud transcripts; once we have text for every chunk
+        // that pasted local, store the stitched better take for this session.
+        lateCloudTexts.set(chunkIndex, text)
+        logTelemetry('late-cloud', { sessionId: sessionIdAtBirth ?? null, chunkIndex, chars: text.length })
+        if (!sessionIdAtBirth) return
+        try {
+          const total = this.totalChunksExpected ?? 1
+          const parts: string[] = []
+          for (let i = 0; i < total; i++) {
+            const late = lateCloudTexts.get(i)
+            const committed = this.chunkTracker.get(i)?.transcript
+            const best = late ?? committed
+            if (best) parts.push(best)
+          }
+          const better = stitchChunks(parts)
+          if (better) {
+            const { updateBetterTranscript } = require('./db') as typeof import('./db')
+            updateBetterTranscript(sessionIdAtBirth, better)
+            console.log(`[session] 💾 better take stored (${better.length} chars)`)
+          }
+        } catch (e) {
+          console.warn('[session] better-take store failed:', e instanceof Error ? e.message : e)
+        }
+      },
+    })
+    this.arbiter = arbiter
+    return arbiter
+  }
+
+  /** Local speculative transcription factory for the arbiter (null when the
+   *  on-device model isn't installed/ready). */
+  private localSttFactory(buffer: Buffer, label: string): (() => Promise<string | null>) | null {
+    if (!parakeetManager.isModelReady() || !parakeetManager.isBinaryReady()) return null
+    return () => {
+      const t0 = Date.now()
+      return parakeetManager.transcribe(buffer)
+        .then((text) => {
+          console.log(`[session:arbiter] ${label}: local draft ready in ${Date.now() - t0}ms (${text.length} chars)`)
+          return text
+        })
+        .catch((e) => {
+          console.warn(`[session:arbiter] ${label}: local draft failed — ${e instanceof Error ? e.message : e}`)
+          return null
+        })
+    }
   }
 
   /**
@@ -618,6 +691,14 @@ class SessionManager {
       console.log('[session] Reusing existing session:', this.currentSession.sessionId, '| kind:', this.currentSession.kind)
     }
 
+    // Fresh arbiter per session — captures the (now-established) sessionId
+    // for late-cloud better-take storage. Disposing the previous arbiter
+    // here is safe: this line is only reached past the isProcessing guard
+    // above, i.e. a session is actually starting, not a blocked/rejected
+    // attempt that would otherwise kill an in-flight arbiter's late-cloud
+    // capture for the session still being processed.
+    this.newArbiter()
+
     // Show HUD FIRST — before clipboard capture, which runs osascript Cmd+C
     // and can briefly interfere with macOS window focus/ordering
     showHUD()
@@ -842,6 +923,7 @@ class SessionManager {
       console.warn(`[session] ⏭️ Dropping stale final chunk ${chunkIndex} for ended session ${sessionId} (current: ${this.currentSession?.sessionId || 'none'})`)
       return
     }
+    this.arbiter?.recordingEnded()
     const session = this.currentSession
     if (!session) {
       console.warn('[session] receiveAudioFinalChunk called but no current session!')
@@ -907,19 +989,19 @@ class SessionManager {
       // Cloud wins fast (~600ms healthy); local kicks in if cloud
       // takes >1.5s and wins past 4s commit threshold. Either way the
       // chunk transcript is recorded with the engine that produced it.
-      const cloudPromise = this.runManagedSTT(buffer, chunkIndex, 'dictation')
-      const raced = await this.raceCloudVsLocalSTT(cloudPromise, buffer, `chunk ${chunkIndex}`)
-      if (raced) {
-        const chunk = this.chunkTracker.get(chunkIndex)
-        if (chunk) { chunk.transcript = raced.text; chunk.completedAt = Date.now() }
-        if (raced.source === 'local') {
-          // Surface to the whole-session output handler so the widget can
-          // hint "via on-device — cloud was slow" once at the end.
-          this.notifyEngineFallback('cloud slow — used on-device whisper')
+      const mode = getPaywallEngineMode()
+      const arbiter = this.arbiter
+      if (arbiter && (mode === 'managed' || mode === 'auto')) {
+        const cloudPromise = this.runManagedSTT(buffer, chunkIndex, 'dictation').then((r) => r?.text ?? null)
+        const resolved = await arbiter.submitChunk(chunkIndex, cloudPromise, this.localSttFactory(buffer, `chunk ${chunkIndex}`))
+        if (resolved) {
+          const chunk = this.chunkTracker.get(chunkIndex)
+          if (chunk) { chunk.transcript = resolved.text; chunk.completedAt = Date.now() }
+          setLastEngine(resolved.source)
+          logTelemetry('chunk-resolved', { chunkIndex, engine: resolved.source, ms: Date.now() - t0, bytes: buffer.byteLength })
+          console.log(`[session] ✅ Chunk ${chunkIndex} via ${resolved.source} (arbiter) in ${Date.now() - t0}ms`)
+          return resolved.text
         }
-        setLastEngine(raced.source)
-        console.log(`[session] ✅ Chunk ${chunkIndex} via ${raced.source === 'cloud' ? 'managed cloud' : 'local whisper (cloud was slow)'} in ${Date.now() - t0}ms`)
-        return raced.text
       }
       // Race returned null = both cloud and local failed. Kill any
       // dangling Fn-down stream so it doesn't linger.
@@ -990,6 +1072,9 @@ class SessionManager {
     this.chunkTracker.clear()
     this.totalChunksExpected = null
     this.isChunkedSession = false
+    // NOTE: do NOT dispose the arbiter here — late-cloud better-take capture
+    // outlives the paste by up to 30s. It's disposed when the NEXT session
+    // creates a fresh one (newArbiter) or the app quits.
   }
 
   receiveAudio(buffer: Buffer, duration: number, mode: 'dictation' | 'instruction', sessionId?: string): void {
@@ -999,6 +1084,7 @@ class SessionManager {
       console.warn(`[session] ⏭️ Dropping stale audio for ended session ${sessionId} (current: ${this.currentSession?.sessionId || 'none'}, cancelled: ${this.cancelledSession?.sessionId || 'none'})`)
       return
     }
+    this.arbiter?.recordingEnded()
     // Audio may arrive after cancel (since IPC is async) — check cancelledSession too
     const session = this.currentSession || this.cancelledSession
     if (!session) {
@@ -1052,6 +1138,7 @@ class SessionManager {
     }
     this.isProcessing = true
     this.fallbackNotified = false
+    this.arbiter?.recordingEnded() // idempotent — covers instruction-only sessions
     console.log('[session] 🔒 isProcessing = TRUE')
 
     // Guard: no audio received (rapid double-press or too-short recording)
@@ -1156,13 +1243,17 @@ class SessionManager {
       // ═══════════════════════════════════════════════════════════════
       if (!this.isChunkedSession) {
         if (session.dictationAudio && !session.dictationTranscript) {
-          const cloudPromise = this.runManagedSTT(session.dictationAudio, 0, session.flowType)
-          const raced = await this.raceCloudVsLocalSTT(cloudPromise, session.dictationAudio, 'dictation')
-          if (raced) {
-            session.dictationTranscript = raced.text
-            if (raced.source === 'local') this.notifyEngineFallback('cloud slow — used on-device whisper')
-            setLastEngine(raced.source)
-            console.log(`[session] ✓ Dictation STT via ${raced.source === 'cloud' ? 'managed cloud' : 'local whisper (cloud was slow)'}`)
+          const mode = getPaywallEngineMode()
+          const arbiter = this.arbiter
+          if (arbiter && (mode === 'managed' || mode === 'auto')) {
+            const cloudPromise = this.runManagedSTT(session.dictationAudio, 0, session.flowType).then((r) => r?.text ?? null)
+            const resolved = await arbiter.submitChunk(0, cloudPromise, this.localSttFactory(session.dictationAudio, 'dictation'))
+            if (resolved) {
+              session.dictationTranscript = resolved.text
+              setLastEngine(resolved.source)
+              logTelemetry('dictation-resolved', { engine: resolved.source, bytes: session.dictationAudio.byteLength })
+              console.log(`[session] ✓ Dictation STT via ${resolved.source} (arbiter)`)
+            }
           }
         }
         if (session.instructionAudio && !session.instructionTranscript) {

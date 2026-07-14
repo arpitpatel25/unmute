@@ -72,6 +72,15 @@ export function deliverCaptureQuality(sessionId: string | undefined, q: Record<s
   try { captureQualitySink?.(sessionId, q) } catch { /* never break IPC */ }
 }
 
+// ── Draft-accept handoff (widget tap → glue → sessionManager) ──────────
+let draftAcceptHandler: (() => void) | null = null
+export function registerDraftAcceptHandler(fn: () => void): void {
+  draftAcceptHandler = fn
+}
+export function invokeDraftAccept(): void {
+  try { draftAcceptHandler?.() } catch { /* never break IPC */ }
+}
+
 /** Why is the user on the on-device model right now? */
 function localReason(state: ProviderState, mode: EngineMode): OnDeviceReason {
   if (mode === 'local') return 'chose_on_device'

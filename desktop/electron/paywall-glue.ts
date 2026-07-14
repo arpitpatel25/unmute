@@ -9,7 +9,7 @@ import { registerAuthIPC, setPendingDeepLink } from './auth-ipc'
 import { startBalancePolling } from './balance-ipc'
 import Store from 'electron-store'
 import { paywallFetch, verifyKeepAlive, startPoolStatsSampling } from './paywall-net'
-import { deliverCaptureQuality } from './main-extensions'
+import { deliverCaptureQuality, invokeDraftAccept } from './main-extensions'
 
 type EngineMode = 'auto' | 'managed' | 'local'
 interface PaywallSettings {
@@ -498,6 +498,10 @@ export function initPaywallGlue(): void {
       const { logTelemetry } = require('../dictationTelemetry') as { logTelemetry: (event: string, data: Record<string, unknown>) => void } // eslint-disable-line @typescript-eslint/no-var-requires
       logTelemetry('capture-quality', { sessionId: sessionId ?? null, ...q })
     } catch { /* telemetry is best-effort */ }
+  })
+
+  ipcMain.on('paywall:accept-draft', () => {
+    invokeDraftAccept()
   })
 
   // Balance polling — token comes from the renderer-pushed session
