@@ -9,6 +9,7 @@ import { registerAuthIPC, setPendingDeepLink } from './auth-ipc'
 import { startBalancePolling } from './balance-ipc'
 import Store from 'electron-store'
 import { paywallFetch, verifyKeepAlive, startPoolStatsSampling } from './paywall-net'
+import { deliverCaptureQuality } from './main-extensions'
 
 type EngineMode = 'auto' | 'managed' | 'local'
 interface PaywallSettings {
@@ -484,6 +485,19 @@ export function initPaywallGlue(): void {
   ipcMain.on('paywall:stream-abort', async () => {
     const { closeImmediate } = await import('./paywall-stream')
     closeImmediate('renderer-abort')
+  })
+
+  ipcMain.on('paywall:capture-quality', (_e, sessionId: string | undefined, q: Record<string, unknown>) => {
+    deliverCaptureQuality(sessionId, q)
+    try {
+      // Same fact, durable: the physical capture quality of this dictation.
+      // Glue is copied into engine/electron/paywall/ at build time, while
+      // dictationTelemetry lands at engine/electron/ — hence the relative
+      // path below. Lazy require (not a static import) because that path
+      // doesn't exist in this standalone repo's typecheck.
+      const { logTelemetry } = require('../dictationTelemetry') as { logTelemetry: (event: string, data: Record<string, unknown>) => void } // eslint-disable-line @typescript-eslint/no-var-requires
+      logTelemetry('capture-quality', { sessionId: sessionId ?? null, ...q })
+    } catch { /* telemetry is best-effort */ }
   })
 
   // Balance polling — token comes from the renderer-pushed session

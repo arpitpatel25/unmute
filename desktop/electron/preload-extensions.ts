@@ -152,6 +152,11 @@ export const paywallPreloadExtensions = {
   paywallStreamClose: () => ipcRenderer.send('paywall:stream-close'),
   paywallStreamAbort: () => ipcRenderer.send('paywall:stream-abort'),
 
+  // Capture quality report (rmsMax etc.) sent once per recording at stop.
+  // Feeds the quiet-capture gate + persisted telemetry in the main process.
+  paywallCaptureQuality: (sessionId: string | undefined, q: Record<string, unknown>): void =>
+    ipcRenderer.send('paywall:capture-quality', sessionId, q),
+
   // Surfacing the SignInScreen (sent from main when something — e.g. a future
   // menu item, or a 401 → sign-in flow — wants to prompt the user).
   paywallOnShowSignIn: (cb: () => void) => {

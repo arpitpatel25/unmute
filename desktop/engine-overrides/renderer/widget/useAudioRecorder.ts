@@ -635,6 +635,25 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       trackEvents: tel.trackEvents,                     // link health during THIS capture
       chunks: tel.chunks,
     })
+
+    // Forward the same physical-quality facts to the main process: they gate
+    // the quiet-capture paste decision and land in persisted telemetry.
+    try {
+      const api = window.electronAPI as unknown as {
+        paywallCaptureQuality?: (sessionId: string | undefined, q: Record<string, unknown>) => void
+      }
+      api.paywallCaptureQuality?.(frozenSessionIdRef.current, {
+        rmsMax: +tel.rmsMax.toFixed(4),
+        rmsAvg: tel.frames ? +(tel.rmsSum / tel.frames).toFixed(4) : 0,
+        peak: +tel.peak.toFixed(3),
+        zeroFramePct: tel.frames ? Math.round((tel.zeroFrames / tel.frames) * 100) : 0,
+        frames: tel.frames,
+        source: tel.source,
+        via,
+        durationMs,
+        bytes,
+      })
+    } catch { /* never break capture */ }
   }, [])
 
   const startRecording = useCallback(async (deviceId?: string, mode?: RecordingMode, sessionId?: string) => {
@@ -1106,12 +1125,14 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
             const blob = new Blob(await trimToWebmHeader(macroBlobs), { type: 'audio/webm' })
             const buffer = await blob.arrayBuffer()
             console.log(`[audio] Sending FINAL chunk ${chunkIndexRef.current}/${totalChunks}, size: ${buffer.byteLength}, duration: ${duration}ms`)
+            emitCaptureSummary('final-chunk', buffer.byteLength, duration)
             window.electronAPI.sendAudioFinalChunk(buffer, chunkIndexRef.current, totalChunks, duration, mode, frozenSessionIdRef.current)
           } else {
             // No remaining data — all audio was already sent in previous chunks
             console.log(`[audio] No remaining data — all ${chunkIndexRef.current} chunks already sent`)
             // Still send final signal so sessionManager knows total count
             const emptyBuffer = new ArrayBuffer(0)
+            emitCaptureSummary('final-chunk', emptyBuffer.byteLength, duration)
             window.electronAPI.sendAudioFinalChunk(emptyBuffer, chunkIndexRef.current, chunkIndexRef.current, duration, mode, frozenSessionIdRef.current)
           }
 

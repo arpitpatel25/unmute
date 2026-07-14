@@ -21,7 +21,7 @@ import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 import { dispatchFromCapture } from './paywall/remote/init'
 import { getPaywallEngineMode, formatOutputForUser } from './paywall/paywall-glue'
 import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait } from './paywall/paywall-stream'
-import { setLastEngine } from './paywall/main-extensions'
+import { setLastEngine, registerCaptureQualitySink } from './paywall/main-extensions'
 // OSS prompt assembly — we reuse it client-side so the worker's /v1/llm
 // endpoint stays a thin pass-through to Groq instead of duplicating prompt
 // logic on the server (which would diverge from OSS over time).
@@ -208,6 +208,17 @@ class SessionManager {
   // Called when a session-start is rejected (e.g. during processing)
   // Used to reset keyboard toggle state without unregistering Escape
   public onSessionRejected: (() => void) | null = null
+
+  // Physical capture quality of the current recording (rmsMax etc.), reported
+  // once by the renderer at stop. Drives the quiet-capture paste gate.
+  private captureQuality: { sessionId: string | undefined; rmsMax: number } | null = null
+
+  constructor() {
+    registerCaptureQualitySink((sessionId, q) => {
+      const rmsMax = typeof q.rmsMax === 'number' ? q.rmsMax : 0
+      this.captureQuality = { sessionId, rmsMax }
+    })
+  }
 
   /** Whether a session is currently being processed (API calls in flight) */
   get processing(): boolean {
@@ -564,6 +575,7 @@ class SessionManager {
       this.telemetryReady = true
       try { initTelemetry(path.join(app.getPath('userData'), 'telemetry')) } catch { /* best-effort */ }
     }
+    this.captureQuality = null
     if (this.isProcessing) {
       console.log('[session] ⛔ BLOCKED — Fn pressed during processing — showing discard hint')
       sendToWidget('processing:show-discard-hint')
