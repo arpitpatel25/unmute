@@ -10,6 +10,10 @@ import { startBalancePolling } from './balance-ipc'
 import Store from 'electron-store'
 import { paywallFetch, verifyKeepAlive, startPoolStatsSampling } from './paywall-net'
 import { deliverCaptureQuality, invokeDraftAccept } from './main-extensions'
+// STATIC import — lazy/missing imports die silently in the bundled main
+// (this exact line was missing on 2026-07-15 and capture-quality telemetry
+// silently vanished; the handler's try/catch ate the ReferenceError).
+import { logTelemetry } from '../dictationTelemetry'
 
 type EngineMode = 'auto' | 'managed' | 'local'
 interface PaywallSettings {

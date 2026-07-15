@@ -20,10 +20,12 @@
 // lives in sessionManager (tryManagedLLM) with a hard timeout.
 
 export const CLEANUP_TIMEOUT_MS = 900
-// 2026-07-15 field decision: Scout (preview status, weak instruction
-// following — it summarized a dictation) → gpt-oss-120b, production-tier,
-// near-identical cost, strongest instruction-following on Groq.
-export const CLEANUP_MODEL = 'openai/gpt-oss-120b'
+// Model history (field-tested): Scout summarized a dictation (2026-07-15)
+// → tried gpt-oss-120b → timed out on 4/5 real calls (900ms budget, wasted
+// latency, zero value) → back to Scout (user decision 2026-07-16): its real
+// latency (~300-450ms) fits the budget, and the deletion-only guard now
+// makes its summarizing tendency harmless (raw pastes instead).
+export const CLEANUP_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
 const MIN_RAW_CHARS = 40
 /** Cleaned text must keep at least this fraction of the raw WORDS.
  *  Heavy stutter legitimately removes ~25-35%; summarization removes more. */
