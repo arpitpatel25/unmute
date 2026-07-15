@@ -81,8 +81,11 @@ let phoneZombieUntil = 0
 // the level recovers (they leaned in). Same anti-nag pattern as the noisy
 // hint: once per recording + a global cooldown.
 const QUIET_MIN_FRAMES = 30            // ≥3s of evidence
-const QUIET_MAX_RMS = 0.07             // never louder than this = too faint (good captures peak ≥0.13)
-const QUIET_RECOVER_RMS = 0.11         // clearly audible again → retract
+// RECALIBRATED 2026-07-15: raw (AGC-off) normal speech peaks at rmsMax
+// 0.018-0.044 — the AGC-era 0.07/0.11 bars flagged every capture. Raw bars
+// sit below the quietest observed normal capture.
+const QUIET_MAX_RMS = 0.008            // never louder than this = too faint (raw normal captures peak ≥0.018)
+const QUIET_RECOVER_RMS = 0.014        // clearly audible again → retract
 const QUIET_HINT_COOLDOWN_MS = 10 * 60_000
 let lastQuietHintAt = 0
 

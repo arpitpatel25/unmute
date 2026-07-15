@@ -1103,7 +1103,7 @@ class SessionManager {
           const chunk = this.chunkTracker.get(chunkIndex)
           if (chunk) { chunk.transcript = resolved.text; chunk.completedAt = Date.now() }
           setLastEngine(resolved.source)
-          logTelemetry('chunk-resolved', { chunkIndex, engine: resolved.source, ms: Date.now() - t0, bytes: buffer.byteLength })
+          logTelemetry('chunk-resolved', { chunkIndex, engine: resolved.source, ms: Date.now() - t0, bytes: buffer.byteLength, chars: resolved.text.length })
           console.log(`[session] ✅ Chunk ${chunkIndex} via ${resolved.source} (arbiter) in ${Date.now() - t0}ms`)
           return resolved.text
         }
@@ -1152,6 +1152,7 @@ class SessionManager {
       }
 
       const sttLabel = useDualWhisper ? 'dual-whisper' : useSarvam ? 'sarvam' : useCartesia ? 'cartesia' : useFasterWhisper ? 'faster-whisper' : useLocalWhisper ? 'local' : 'cloud'
+      logTelemetry('chunk-resolved-fallback', { chunkIndex, provider: sttLabel, ms: elapsed, bytes: buffer.byteLength, chars: transcript.length })
       const preview = transcript.length > 80 ? transcript.substring(0, 80) + '...' : transcript
       console.log(`[session] ✅ Chunk ${chunkIndex} transcribed in ${elapsed}ms (${sttLabel}): "${preview}"`)
       if (useDualWhisper) {
@@ -1432,6 +1433,7 @@ class SessionManager {
 
             if (!output || output === '[BLANK_AUDIO]') {
               console.log('[session] Pipeline STT-only: empty/blank transcript, skipping output')
+              logTelemetry('session-empty', { sessionId: session.sessionId, path: 'pipeline-stt-only' })
               session.status = 'done'
               session.output = null
               this.scheduleAutoHide(1500)
@@ -1804,6 +1806,7 @@ class SessionManager {
 
       if (isJunkTranscript(dictationText) && isJunkTranscript(instructionText)) {
         console.log('[session] ⚠️ Empty/junk transcript detected, skipping output. Dictation:', JSON.stringify(dictationText), 'Instruction:', JSON.stringify(instructionText))
+        logTelemetry('session-empty', { sessionId: session.sessionId, path: 'sequential', dictationChars: dictationText.length, instructionChars: instructionText.length })
         session.status = 'done'
         session.output = null
         this.scheduleAutoHide(1500)
@@ -2046,6 +2049,7 @@ class SessionManager {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Processing failed'
       console.error('[session] ❌ ERROR:', errorMessage)
+      logTelemetry('session-error', { sessionId: session?.sessionId ?? null, error: errorMessage })
       if (err instanceof Error && err.stack) {
         console.error('[session] Stack:', err.stack)
       }

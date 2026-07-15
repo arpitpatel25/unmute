@@ -24,6 +24,11 @@
 import { getPaywallAccessToken, getPaywallEngineMode, getSTTLanguageForRequest, refreshAccessToken } from './paywall-glue'
 import { updateBalanceFromResponse } from './balance-ipc'
 import { paywallFetch } from './paywall-net'
+// STATIC import (bundled-main rule: lazy require() dies silently in the
+// packaged build — cost us the stream-timing telemetry on 2026-07-15).
+// Path resolves in the wired engine: this file lands in engine/electron/
+// paywall/, dictationTelemetry at engine/electron/.
+import { logTelemetry } from '../dictationTelemetry'
 
 /** Item 5 (fair-use): one-time soft toast when a successful streamed STT carries
  *  the `x-unmute-fair-use: notify` header. Best-effort & non-blocking — must
@@ -334,7 +339,6 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
     // Durable copy of the timing story (DEV field-test + future debugging):
     // the same numbers as the console block above, one JSONL line per chunk.
     try {
-      const { logTelemetry } = require('../dictationTelemetry') as typeof import('../dictationTelemetry')
       logTelemetry('stream-timing', {
         chunkIndex, ok: true, totalElapsedMs: totalElapsed, awaitMs: awaitTime,
         workerTotalMs: workerTotal, drainMs, groqTtfbMs, groqBodyMs,
@@ -358,7 +362,6 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
       `[paywall-stream] chunk ${chunkIndex} ${isTimeout ? 'TIMEOUT' : 'response error'}: ${(e as Error).message}`,
     )
     try {
-      const { logTelemetry } = require('../dictationTelemetry') as typeof import('../dictationTelemetry')
       logTelemetry('stream-timing', { chunkIndex, ok: false, timeout: isTimeout, error: (e as Error).message, uploadBytes: session.tBytesWritten })
     } catch { /* telemetry is best-effort */ }
     sessions.delete(chunkIndex)

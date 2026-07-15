@@ -510,7 +510,6 @@ export function initPaywallGlue(): void {
       // dictationTelemetry lands at engine/electron/ — hence the relative
       // path below. Lazy require (not a static import) because that path
       // doesn't exist in this standalone repo's typecheck.
-      const { logTelemetry } = require('../dictationTelemetry') as { logTelemetry: (event: string, data: Record<string, unknown>) => void } // eslint-disable-line @typescript-eslint/no-var-requires
       logTelemetry('capture-quality', { sessionId: sessionId ?? null, ...q })
     } catch { /* telemetry is best-effort */ }
   })
