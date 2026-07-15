@@ -210,6 +210,11 @@ async function handleSTT(
   const language = (form.get('language') as string) || 'en'
   const flowType = (form.get('flow_type') as string) || 'dictation'
 
+  // Optional decoder-context prompt (Whisper biasing: previous chunk's tail
+  // or caller-supplied vocabulary). Style/spelling guidance only — Groq caps
+  // at 224 tokens; we cap chars defensively.
+  const prompt = ((form.get('prompt') as string) || '').slice(0, 800)
+
   // ─── Subscription gate (KV — fast) ────────────────────────────
   const ent = await getEntitlement(env, userId)
   const tBalanceChecked = Date.now()
@@ -228,6 +233,7 @@ async function handleSTT(
   groqForm.append('response_format', 'json')
   groqForm.append('temperature', '0')
   groqForm.append('language', language)
+  if (prompt) groqForm.append('prompt', prompt)
 
   const tGroqStart = Date.now()
   const groqRes = await fetch(GROQ_STT_URL, {
@@ -334,6 +340,7 @@ async function handleSTTStream(
   const duration = parseFloat(url.searchParams.get('duration_seconds') || '0') || 0
   const language = url.searchParams.get('language') || 'en'
   const flowType = url.searchParams.get('flow_type') || 'dictation'
+  const prompt = (url.searchParams.get('prompt') || '').slice(0, 800)
 
   // ─── Subscription gate (KV — fast) — done while body buffers at edge ──
   const ent = await getEntitlement(env, userId)
@@ -387,6 +394,7 @@ async function handleSTTStream(
   groqForm.append('response_format', 'json')
   groqForm.append('temperature', '0')
   groqForm.append('language', language)
+  if (prompt) groqForm.append('prompt', prompt)
 
   const tGroqStart = Date.now()
   const groqRes = await fetch(GROQ_STT_URL, {

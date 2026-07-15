@@ -106,6 +106,7 @@ export async function tryManagedSTT(
   durationSeconds: number,
   flowType: 'dictation' | 'transform' | 'quote' | 'context' | 'instruction' = 'dictation',
   signal?: AbortSignal,
+  prompt?: string,
 ): Promise<ManagedSTTResult | null> {
   if (!shouldTryManaged()) return null
 
@@ -126,6 +127,7 @@ export async function tryManagedSTT(
     const lang = getSTTLanguageForRequest()
     if (lang) form.append('language', lang)
     form.append('flow_type', flowType)
+    if (prompt) form.append('prompt', prompt)
     const tFormEnd = Date.now()
 
     // DIAG (offline-fallback hunt): is the audio we're uploading a VALID webm?
@@ -158,10 +160,11 @@ export async function tryManagedSTT(
           currentToken = fresh
           // FormData can't be re-used after consumption; rebuild it
           const retryForm = new FormData()
-          retryForm.append('file', new Blob([opts.audio], { type: 'audio/webm' }), 'audio.webm')
-          retryForm.append('duration_seconds', String(opts.durationSeconds))
-          if (opts.language) retryForm.append('language', opts.language)
-          if (opts.flowType) retryForm.append('flow_type', opts.flowType)
+          retryForm.append('file', new Blob([audio], { type: 'audio/webm' }), 'audio.webm')
+          retryForm.append('duration_seconds', String(durationSeconds))
+          if (lang) retryForm.append('language', lang)
+          retryForm.append('flow_type', flowType)
+          if (prompt) retryForm.append('prompt', prompt)
           res = await fetch(`${__PIPELINE_URL__}/v1/stt`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${currentToken}` },
@@ -258,7 +261,7 @@ export async function tryManagedSTT(
  */
 export async function tryManagedLLM(
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-  options: { temperature?: number; maxTokens?: number } = {},
+  options: { temperature?: number; maxTokens?: number; model?: string } = {},
   signal?: AbortSignal,
 ): Promise<ManagedLLMResult | null> {
   if (!shouldTryManaged()) return null
@@ -278,6 +281,9 @@ export async function tryManagedLLM(
         messages,
         temperature: options.temperature,
         max_tokens: options.maxTokens,
+        // Per-call model override — worker honors body.model || LLM_MODEL.
+        // Used by the dictation cleanup pass (gpt-oss-120b, 2026-07-15).
+        model: options.model,
       }),
       signal,
     })

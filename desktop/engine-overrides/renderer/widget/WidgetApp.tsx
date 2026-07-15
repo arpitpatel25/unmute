@@ -628,6 +628,8 @@ export default function WidgetApp() {
   const [errorMessage, setErrorMessage] = useState('')
   const [showDiscardHint, setShowDiscardHint] = useState(false)
   const [engineNotice, setEngineNotice] = useState<string | null>(null)
+  const [draftOffer, setDraftOffer] = useState(false)
+  const [mutedText, setMutedText] = useState<string | null>(null)
   const [offlineReason, setOfflineReason] = useState<OfflineReason | null>(null)
   const [dismissedTick, setDismissedTick] = useState(0)
   // Is the CURRENT capture a Remote one (dispatches a task) vs a dictation
@@ -814,6 +816,8 @@ export default function WidgetApp() {
       // heads it hallucinated over). Phone path: click when the mic is OPEN.
       if (!resolvedDeviceId) playClickSound('start')
       setEngineNotice(null)
+      setDraftOffer(false)
+      setMutedText(null)
       setState(mode === 'dictation' ? 'dictation-active' : 'instruction-active')
       try {
         await startRecording(resolvedDeviceId, mode, sessionId)
@@ -882,6 +886,26 @@ export default function WidgetApp() {
       setEngineNotice(reason)
     })
 
+    // Draft-offer lifecycle: cloud STT is slow but a local quick draft is
+    // ready. The pill grows a one-tap "use quick draft" affordance; it
+    // retracts when either side resolves the session.
+    const draftApi = api as unknown as {
+      paywallOnDraftOffer?: (cb: () => void) => void
+      paywallOnDraftResolved?: (cb: (how: string) => void) => void
+    }
+    draftApi.paywallOnDraftOffer?.(() => setDraftOffer(true))
+    draftApi.paywallOnDraftResolved?.(() => setDraftOffer(false))
+
+    // Quiet-capture gate: faint audio + tiny transcript — the paste was
+    // suppressed rather than injecting Whisper fiction. Reuse the
+    // 'too-short' pill with a more specific message.
+    const quietApi = api as unknown as { paywallOnQuietMiss?: (cb: () => void) => void }
+    quietApi.paywallOnQuietMiss?.(() => {
+      setMutedText('Mic was too quiet — didn\'t catch that')
+      setState('too-short')
+      scheduleAutoHide(2500)
+    })
+
     api.widgetReady()
 
     return () => {
@@ -895,6 +919,9 @@ export default function WidgetApp() {
       api.removeAllListeners('processing:show-discard-hint')
       api.removeAllListeners('session:too-short')
       api.removeAllListeners('session:engine-notice')
+      api.removeAllListeners('session:draft-offer')
+      api.removeAllListeners('session:draft-resolved')
+      api.removeAllListeners('session:quiet-miss')
     }
   }, [startRecording, stopRecording, clearAutoHide, scheduleAutoHide, mic.resolveDeviceId, mic.refreshDevices])
 
@@ -912,6 +939,12 @@ export default function WidgetApp() {
   const handleUndo = useCallback(() => {
     setState('processing')
     window.electronAPI.undoCancel()
+  }, [])
+
+  const handleAcceptDraft = useCallback(() => {
+    setDraftOffer(false)
+    const api = window.electronAPI as unknown as { paywallAcceptDraft?: () => void }
+    api.paywallAcceptDraft?.()
   }, [])
 
   const handleAwarenessDismiss = useCallback(() => {
@@ -984,6 +1017,9 @@ export default function WidgetApp() {
           errorMessage={errorMessage}
           showDiscardHint={showDiscardHint}
           engineNotice={engineNotice}
+          draftOffer={draftOffer}
+          mutedText={mutedText}
+          onAcceptDraft={handleAcceptDraft}
           onCancel={handleCancel}
           onStop={handleStop}
           onUndo={handleUndo}

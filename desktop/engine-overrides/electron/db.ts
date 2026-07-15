@@ -67,6 +67,13 @@ export function initDB(): void {
     db.exec('ALTER TABLE sessions ADD COLUMN engine TEXT')
   } catch { /* already there */ }
 
+  // better-take storage: when a dictation pasted a local draft and the cloud
+  // transcript arrived late (≤30s), we keep the cloud text here. Not shown
+  // in History yet — deliberately storage-only (2026-07-15 plan).
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN better_transcript TEXT')
+  } catch { /* already there */ }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS usage_daily (
       date TEXT NOT NULL,
@@ -214,6 +221,14 @@ export function updateSessionResult(sessionId: string, updates: {
     updates.flowType || null,
     sessionId
   )
+}
+
+export function updateBetterTranscript(sessionId: string, text: string): void {
+  try {
+    db.prepare('UPDATE sessions SET better_transcript = ? WHERE id = ?').run(text, sessionId)
+  } catch (e) {
+    console.warn('[db] updateBetterTranscript failed:', e instanceof Error ? e.message : e)
+  }
 }
 
 export function deleteSession(id: string): void {

@@ -9,6 +9,11 @@ import { registerAuthIPC, setPendingDeepLink } from './auth-ipc'
 import { startBalancePolling } from './balance-ipc'
 import Store from 'electron-store'
 import { paywallFetch, verifyKeepAlive, startPoolStatsSampling } from './paywall-net'
+import { deliverCaptureQuality, invokeDraftAccept } from './main-extensions'
+// STATIC import — lazy/missing imports die silently in the bundled main
+// (this exact line was missing on 2026-07-15 and capture-quality telemetry
+// silently vanished; the handler's try/catch ate the ReferenceError).
+import { logTelemetry } from '../dictationTelemetry'
 
 type EngineMode = 'auto' | 'managed' | 'local'
 interface PaywallSettings {
@@ -26,6 +31,9 @@ interface PaywallSettings {
   // or copied to the clipboard. User-requested feature; sub-microsecond
   // cost so no perf budget needed.
   lowercaseOutput?: boolean
+  // Post-STT cleanup pass (fillers/stutters removed via a fast LLM call,
+  // 900ms budget, fails open to the raw transcript). Default ON.
+  dictationCleanup?: boolean
 }
 const settings = new Store<PaywallSettings>({ name: 'unmute-paywall-settings' })
 
@@ -87,6 +95,11 @@ export function getPaywallAccessToken(): string | null {
 }
 export function getPaywallEngineMode(): EngineMode {
   return settings.get('engineMode', 'auto')
+}
+/** Post-STT cleanup pass toggle — default ON. Consulted by sessionManager's
+ *  maybeCleanupDictation before making the LLM polish call. */
+export function getDictationCleanupEnabled(): boolean {
+  return (settings.get('dictationCleanup') as boolean | undefined) ?? true
 }
 export function getPaywallUser(): { id: string; email: string | null } | null {
   return currentSession.user
@@ -268,6 +281,13 @@ function registerSessionBridge() {
   })
   ipcMain.handle('paywall:set-lowercase-output', (_e, enabled: boolean) => {
     settings.set('lowercaseOutput', !!enabled)
+    return true
+  })
+
+  // ─── Post-STT cleanup pass (fillers/stutters) ───────────────
+  ipcMain.handle('paywall:get-dictation-cleanup', () => getDictationCleanupEnabled())
+  ipcMain.handle('paywall:set-dictation-cleanup', (_e, v: boolean) => {
+    settings.set('dictationCleanup', !!v)
     return true
   })
 
@@ -484,6 +504,22 @@ export function initPaywallGlue(): void {
   ipcMain.on('paywall:stream-abort', async () => {
     const { closeImmediate } = await import('./paywall-stream')
     closeImmediate('renderer-abort')
+  })
+
+  ipcMain.on('paywall:capture-quality', (_e, sessionId: string | undefined, q: Record<string, unknown>) => {
+    deliverCaptureQuality(sessionId, q)
+    try {
+      // Same fact, durable: the physical capture quality of this dictation.
+      // Glue is copied into engine/electron/paywall/ at build time, while
+      // dictationTelemetry lands at engine/electron/ — hence the relative
+      // path below. Lazy require (not a static import) because that path
+      // doesn't exist in this standalone repo's typecheck.
+      logTelemetry('capture-quality', { sessionId: sessionId ?? null, ...q })
+    } catch { /* telemetry is best-effort */ }
+  })
+
+  ipcMain.on('paywall:accept-draft', () => {
+    invokeDraftAccept()
   })
 
   // Balance polling — token comes from the renderer-pushed session

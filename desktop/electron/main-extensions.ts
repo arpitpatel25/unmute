@@ -61,6 +61,26 @@ export function popLastEngine(): EngineTag | null {
   return v
 }
 
+// ── Capture-quality handoff (renderer → glue → sessionManager) ──────────
+// paywall-glue owns the ipcMain.on; sessionManager registers a sink here to
+// avoid a glue→sessionManager import cycle.
+let captureQualitySink: ((sessionId: string | undefined, q: Record<string, unknown>) => void) | null = null
+export function registerCaptureQualitySink(fn: (sessionId: string | undefined, q: Record<string, unknown>) => void): void {
+  captureQualitySink = fn
+}
+export function deliverCaptureQuality(sessionId: string | undefined, q: Record<string, unknown>): void {
+  try { captureQualitySink?.(sessionId, q) } catch { /* never break IPC */ }
+}
+
+// ── Draft-accept handoff (widget tap → glue → sessionManager) ──────────
+let draftAcceptHandler: (() => void) | null = null
+export function registerDraftAcceptHandler(fn: () => void): void {
+  draftAcceptHandler = fn
+}
+export function invokeDraftAccept(): void {
+  try { draftAcceptHandler?.() } catch { /* never break IPC */ }
+}
+
 /** Why is the user on the on-device model right now? */
 function localReason(state: ProviderState, mode: EngineMode): OnDeviceReason {
   if (mode === 'local') return 'chose_on_device'

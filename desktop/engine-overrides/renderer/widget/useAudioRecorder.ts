@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { getWarmStream, warmIsHot, disconnectWarmMic, setWarmBusy, warmState, setCaptureInFlight } from './micWarm'
+import { effectiveSilenceThreshold, decideCut } from './vadPolicy'
 
 type RecordingMode = 'dictation' | 'instruction'
 
@@ -54,6 +55,8 @@ const NOISY_CLEAR_EVALS = 4
 // suppressor scrubs the gaps harder than expected, and a close mic keeps the
 // ratio high even in real noise. Floor is the primary signal; the ratio cap
 // is only a safety so a hot mic in a silent room can't be flagged.
+// 2026-07-15: capture DSP is now OFF — raw floors run higher, so the noisy
+// hint may fire more readily. Signal-only; re-calibrate constants if it nags.
 const NOISY_FLOOR_RMS = 0.012          // gaps clearly above a quiet room's near-zero floor
 const NOISY_MAX_RATIO = 12             // safety: voice hugely above floor = mic is fine
 const NOISY_HINT_COOLDOWN_MS = 10 * 60_000 // same café, three dictations ≠ three nags
@@ -78,8 +81,11 @@ let phoneZombieUntil = 0
 // the level recovers (they leaned in). Same anti-nag pattern as the noisy
 // hint: once per recording + a global cooldown.
 const QUIET_MIN_FRAMES = 30            // ≥3s of evidence
-const QUIET_MAX_RMS = 0.07             // never louder than this = too faint (good captures peak ≥0.13)
-const QUIET_RECOVER_RMS = 0.11         // clearly audible again → retract
+// RECALIBRATED 2026-07-15: raw (AGC-off) normal speech peaks at rmsMax
+// 0.018-0.044 — the AGC-era 0.07/0.11 bars flagged every capture. Raw bars
+// sit below the quietest observed normal capture.
+const QUIET_MAX_RMS = 0.008            // never louder than this = too faint (raw normal captures peak ≥0.018)
+const QUIET_RECOVER_RMS = 0.014        // clearly audible again → retract
 const QUIET_HINT_COOLDOWN_MS = 10 * 60_000
 let lastQuietHintAt = 0
 
@@ -194,6 +200,9 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
   // ─── Noisy-environment refs (per recording) ───
   const rmsFramesRef = useRef<number[]>([])
+  // Latest p20 of the rolling rms window — THIS recording's noise floor.
+  // Feeds the adaptive silence threshold (vadPolicy) so café pauses cut.
+  const noiseFloorRef = useRef<number | null>(null)
   const noisyFrameCountRef = useRef<number>(0)
   const noisyFlaggedRef = useRef<boolean>(false)      // chip currently up
   const noisyEverFlaggedRef = useRef<boolean>(false)  // fired at least once THIS recording (re-flag skips the global cooldown)
@@ -253,7 +262,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
    * Emit a macro chunk: stop MediaRecorder → assemble valid WebM blob → send via IPC → restart.
    * The gap falls on a detected silence period, so no audible audio loss.
    */
-  const emitChunk = useCallback(async (reason: 'silence' | 'hard-cap'): Promise<void> => {
+  const emitChunk = useCallback(async (reason: 'silence' | 'soft-cap' | 'hard-cap'): Promise<void> => {
     const recorder = mediaRecorderRef.current
     const stream = streamRef.current
     if (!recorder || recorder.state === 'inactive' || !stream) return
@@ -290,7 +299,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     const blob = new Blob(await trimToWebmHeader(macroBlobs), { type: 'audio/webm' })
     const buffer = await blob.arrayBuffer()
 
-    console.log(`[audio:vad] ${reason === 'silence' ? 'Silence detected' : 'Hard cap'}, cutting chunk ${chunkIdx} at ${elapsed}ms (${buffer.byteLength} bytes)`)
+    console.log(`[audio:vad] cut reason=${reason}, chunk ${chunkIdx} at ${elapsed}ms (${buffer.byteLength} bytes)`)
 
     // Send chunk to main process
     window.electronAPI.sendAudioChunk(buffer, chunkIdx, mode, frozenSessionIdRef.current)
@@ -435,6 +444,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         if (frames.length >= NOISY_MIN_FRAMES && noisyFrameCountRef.current % NOISY_EVAL_EVERY_N_FRAMES === 0) {
           const sorted = [...frames].sort((a, b) => a - b)
           const floor = sorted[Math.floor(sorted.length * 0.2)]   // the "gaps"
+          noiseFloorRef.current = floor
           const speech = sorted[Math.floor(sorted.length * 0.9)]  // the voice
           // Too-quiet: judged on the recording's loudest moment so far.
           {
@@ -487,26 +497,31 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
       const chunkElapsed = Date.now() - chunkStartTimeRef.current
 
-      // Check hard cap first
-      if (chunkElapsed >= hardChunkCapMsRef.current) {
-        console.log(`[audio:vad] Hard cap at ${chunkElapsed}ms, force-cutting chunk ${chunkIndexRef.current}`)
-        emitChunk('hard-cap')
-        return
+      // Adaptive threshold: "silence" is judged relative to THIS recording's
+      // measured noise floor, so noisy rooms still get natural cuts instead
+      // of running into the hard cap mid-word.
+      const threshold = effectiveSilenceThreshold(silenceThresholdRef.current, noiseFloorRef.current)
+
+      // Maintain the silence run-length the policy consumes.
+      if (rms < threshold) {
+        if (silenceStartRef.current === null) silenceStartRef.current = Date.now()
+      } else {
+        silenceStartRef.current = null
       }
 
-      // Only look for silence after minimum chunk duration
-      if (chunkElapsed < chunkMinMsRef.current) return
-
-      if (rms < silenceThresholdRef.current) {
-        if (silenceStartRef.current === null) {
-          silenceStartRef.current = Date.now()
-        } else if (Date.now() - silenceStartRef.current >= silenceDurationMsRef.current) {
-          // Sustained silence — cut chunk
-          emitChunk('silence')
-        }
-      } else {
-        // Audio detected — reset silence timer
-        silenceStartRef.current = null
+      const decision = decideCut({
+        rms,
+        chunkElapsedMs: chunkElapsed,
+        silenceSinceMs: silenceStartRef.current === null ? null : Date.now() - silenceStartRef.current,
+        minChunkMs: chunkMinMsRef.current,
+        silenceDurationMs: silenceDurationMsRef.current,
+        hardCapMs: hardChunkCapMsRef.current,
+        softCapWindowMs: 5_000,
+        threshold,
+      })
+      if (decision !== 'none') {
+        console.log(`[audio:vad] cut=${decision} at ${chunkElapsed}ms (rms=${rms.toFixed(4)}, threshold=${threshold.toFixed(4)}, floor=${(noiseFloorRef.current ?? 0).toFixed(4)})`)
+        emitChunk(decision)
       }
     }, vadPollIntervalMsRef.current)
   }, [emitChunk])
@@ -623,6 +638,28 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       trackEvents: tel.trackEvents,                     // link health during THIS capture
       chunks: tel.chunks,
     })
+
+    // Forward the same physical-quality facts to the main process: they gate
+    // the quiet-capture paste decision and land in persisted telemetry.
+    try {
+      const api = window.electronAPI as unknown as {
+        paywallCaptureQuality?: (sessionId: string | undefined, q: Record<string, unknown>) => void
+      }
+      api.paywallCaptureQuality?.(frozenSessionIdRef.current, {
+        // Environment verdict for THIS recording — routes the correction
+        // pass in main (noisy → LLM correction, quiet → raw fast path).
+        noisy: noisyEverFlaggedRef.current,
+        rmsMax: +tel.rmsMax.toFixed(4),
+        rmsAvg: tel.frames ? +(tel.rmsSum / tel.frames).toFixed(4) : 0,
+        peak: +tel.peak.toFixed(3),
+        zeroFramePct: tel.frames ? Math.round((tel.zeroFrames / tel.frames) * 100) : 0,
+        frames: tel.frames,
+        source: tel.source,
+        via,
+        durationMs,
+        bytes,
+      })
+    } catch { /* never break capture */ }
   }, [])
 
   const startRecording = useCallback(async (deviceId?: string, mode?: RecordingMode, sessionId?: string) => {
@@ -646,6 +683,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     heardSpeechRef.current = false
     chunksRef.current = []
     rmsFramesRef.current = []
+    noiseFloorRef.current = null
     noisyFrameCountRef.current = 0
     noisyFlaggedRef.current = false
     noisyEverFlaggedRef.current = false
@@ -735,15 +773,17 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       requestedDeviceId = undefined
     }
 
-    // Phone path: Chromium's processing chain OFF. The iPhone already applied
-    // its own call-tuned DSP before transmitting; a second noise-suppression/
-    // AGC/echo-cancellation pass on pre-cleaned audio only smears speech
-    // (double-cleaning — confirmed pipeline asymmetry vs the Mac path, where
-    // Chromium is the ONLY cleaner and stays on).
+    // BOTH paths: Chromium's processing chain OFF. Phone: iOS already applied
+    // its own call-tuned DSP (double-cleaning smears speech). Mac (2026-07-15):
+    // Whisper is trained on raw real-world audio; Chromium's suppressor was
+    // observed scrubbing speech gaps "harder than expected" and its AGC slams
+    // plosives. Decision: send the model what the mic heard. If loud-room
+    // accuracy regresses in the field, THIS is the first flag to re-flip.
+    const RAW_CAPTURE = { sampleRate: 16000, echoCancellation: false, noiseSuppression: false, autoGainControl: false } as const
     const constraints: MediaStreamConstraints = {
       audio: requestedDeviceId
-        ? { deviceId: { exact: requestedDeviceId }, sampleRate: 16000, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-        : { sampleRate: 16000 }
+        ? { deviceId: { exact: requestedDeviceId }, ...RAW_CAPTURE }
+        : { ...RAW_CAPTURE }
     }
 
     // Wait for the PREVIOUS recording's AudioContext to finish closing before we
@@ -797,7 +837,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       } catch (err) {
         if (!requestedDeviceId) throw err
         console.log('[audio] Requested device unavailable, falling back to system default mic:', err)
-        stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } })
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { ...RAW_CAPTURE } })
       }
     }
     // Head-gap calibration: how long the mic took to actually open. The
@@ -924,7 +964,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         stream.getTracks().forEach((t) => t.stop())
         try { await audioContext.close() } catch { /* already closing */ }
         // …and rebuild everything on the system default.
-        stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } })
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { ...RAW_CAPTURE } })
         streamRef.current = stream
         phoneSourceRef.current = false // it's a Mac-mic recording now (no tail grace)
         audioContext = new AudioContext()
@@ -1091,12 +1131,14 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
             const blob = new Blob(await trimToWebmHeader(macroBlobs), { type: 'audio/webm' })
             const buffer = await blob.arrayBuffer()
             console.log(`[audio] Sending FINAL chunk ${chunkIndexRef.current}/${totalChunks}, size: ${buffer.byteLength}, duration: ${duration}ms`)
+            emitCaptureSummary('final-chunk', buffer.byteLength, duration)
             window.electronAPI.sendAudioFinalChunk(buffer, chunkIndexRef.current, totalChunks, duration, mode, frozenSessionIdRef.current)
           } else {
             // No remaining data — all audio was already sent in previous chunks
             console.log(`[audio] No remaining data — all ${chunkIndexRef.current} chunks already sent`)
             // Still send final signal so sessionManager knows total count
             const emptyBuffer = new ArrayBuffer(0)
+            emitCaptureSummary('final-chunk', emptyBuffer.byteLength, duration)
             window.electronAPI.sendAudioFinalChunk(emptyBuffer, chunkIndexRef.current, chunkIndexRef.current, duration, mode, frozenSessionIdRef.current)
           }
 

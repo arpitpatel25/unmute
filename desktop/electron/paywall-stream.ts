@@ -24,6 +24,11 @@
 import { getPaywallAccessToken, getPaywallEngineMode, getSTTLanguageForRequest, refreshAccessToken } from './paywall-glue'
 import { updateBalanceFromResponse } from './balance-ipc'
 import { paywallFetch } from './paywall-net'
+// STATIC import (bundled-main rule: lazy require() dies silently in the
+// packaged build — cost us the stream-timing telemetry on 2026-07-15).
+// Path resolves in the wired engine: this file lands in engine/electron/
+// paywall/, dictationTelemetry at engine/electron/.
+import { logTelemetry } from '../dictationTelemetry'
 
 /** Item 5 (fair-use): one-time soft toast when a successful streamed STT carries
  *  the `x-unmute-fair-use: notify` header. Best-effort & non-blocking — must
@@ -60,6 +65,15 @@ interface StreamSession {
 const sessions: Map<number, StreamSession> = new Map()
 let activeChunkIndex: number | null = null
 
+// Optional prompt provider (registered by sessionManager): returns the
+// previous chunk's transcript tail for Whisper decoder context. Called at
+// open time — best-effort: '' means "no prompt", which is the pre-feature
+// behavior. NEVER awaited, NEVER blocks the stream open.
+let promptProvider: ((chunkIndex: number) => string) | null = null
+export function setStreamPromptProvider(fn: (chunkIndex: number) => string): void {
+  promptProvider = fn
+}
+
 /**
  * Open a streaming POST for a specific chunk. Returns false if the user
  * isn't eligible for managed mode or has no token; caller should fall
@@ -89,6 +103,10 @@ export function openStream(opts: { flowType: string; chunkIndex?: number; estima
   }
   const lang = getSTTLanguageForRequest()
   if (lang) paramsInit.language = lang
+  try {
+    const prompt = promptProvider?.(chunkIndex) || ''
+    if (prompt) paramsInit.prompt = prompt
+  } catch { /* prompt is a bonus, never a blocker */ }
   const params = new URLSearchParams(paramsInit)
 
   const abortController = new AbortController()
@@ -318,6 +336,15 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
     )
 
     sessions.delete(chunkIndex)
+    // Durable copy of the timing story (DEV field-test + future debugging):
+    // the same numbers as the console block above, one JSONL line per chunk.
+    try {
+      logTelemetry('stream-timing', {
+        chunkIndex, ok: true, totalElapsedMs: totalElapsed, awaitMs: awaitTime,
+        workerTotalMs: workerTotal, drainMs, groqTtfbMs, groqBodyMs,
+        uploadBytes: session.tBytesWritten, stalls: stallSamples.length, stallMs: totalStallMs,
+      })
+    } catch { /* telemetry is best-effort */ }
     return {
       text: body.data!.text,
       costCents: body.cost_cents ?? 0,
@@ -334,6 +361,9 @@ export async function closeAndAwait(chunkIndex: number, timeoutMs = 15_000): Pro
     console.warn(
       `[paywall-stream] chunk ${chunkIndex} ${isTimeout ? 'TIMEOUT' : 'response error'}: ${(e as Error).message}`,
     )
+    try {
+      logTelemetry('stream-timing', { chunkIndex, ok: false, timeout: isTimeout, error: (e as Error).message, uploadBytes: session.tBytesWritten })
+    } catch { /* telemetry is best-effort */ }
     sessions.delete(chunkIndex)
     return null
   }

@@ -152,6 +152,26 @@ export const paywallPreloadExtensions = {
   paywallStreamClose: () => ipcRenderer.send('paywall:stream-close'),
   paywallStreamAbort: () => ipcRenderer.send('paywall:stream-abort'),
 
+  // Capture quality report (rmsMax etc.) sent once per recording at stop.
+  // Feeds the quiet-capture gate + persisted telemetry in the main process.
+  paywallCaptureQuality: (sessionId: string | undefined, q: Record<string, unknown>): void =>
+    ipcRenderer.send('paywall:capture-quality', sessionId, q),
+
+  // Draft-offer lifecycle (slow-cloud UX). Offer = local quick draft is ready
+  // and cloud is still pending; accept pastes the draft immediately.
+  paywallAcceptDraft: (): void => ipcRenderer.send('paywall:accept-draft'),
+  paywallOnDraftOffer: (cb: () => void) => {
+    ipcRenderer.on('session:draft-offer', () => cb())
+  },
+  paywallOnDraftResolved: (cb: (how: string) => void) => {
+    ipcRenderer.on('session:draft-resolved', (_e, how: string) => cb(how))
+  },
+
+  // Quiet-capture gate: faint audio + tiny transcript — suppressed the paste.
+  paywallOnQuietMiss: (cb: () => void) => {
+    ipcRenderer.on('session:quiet-miss', () => cb())
+  },
+
   // Surfacing the SignInScreen (sent from main when something — e.g. a future
   // menu item, or a 401 → sign-in flow — wants to prompt the user).
   paywallOnShowSignIn: (cb: () => void) => {
@@ -248,6 +268,13 @@ export const paywallPreloadExtensions = {
     ipcRenderer.invoke('paywall:get-lowercase-output'),
   paywallSetLowercaseOutput: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('paywall:set-lowercase-output', enabled),
+
+  // Post-STT cleanup pass (fillers/stutters). Default ON; hard 900ms budget,
+  // fails open to the raw transcript.
+  paywallGetDictationCleanup: (): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:get-dictation-cleanup'),
+  paywallSetDictationCleanup: (v: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:set-dictation-cleanup', v),
 }
 
 export type PaywallAPI = typeof paywallPreloadExtensions
