@@ -40,3 +40,23 @@ describe('acceptCleanupResult', () => {
     assert.equal(acceptCleanupResult(raw, raw + ' ' + raw), raw)
   })
 })
+
+describe('structural verbatim guard (2026-07-15 field incident)', () => {
+  const raw = 'Got it. So yeah, MCP needs a running server and do you think it\'s slow? It\'s tad bit slow? Not tad bit, it could be significantly slow, correct? Be concise with the response.'
+  test('rejects the real summarization that ate questions and the trailing instruction', () => {
+    const summarized = 'MCP needs a running server. It\'s tad bit slow, not tad bit, it could be significantly slow.'
+    assert.equal(acceptCleanupResult(raw, summarized), raw)
+  })
+  test('accepts a true deletion-only cleanup within the word budget', () => {
+    const cleaned = 'Got it. MCP needs a running server and do you think it\'s slow? It\'s tad bit slow? Not tad bit, it could be significantly slow, correct? Be concise with the response.'
+    assert.equal(acceptCleanupResult(raw, cleaned), cleaned)
+  })
+  test('rejects rewording even at similar length', () => {
+    const reworded = raw.replace('needs a running server', 'requires an active server')
+    assert.equal(acceptCleanupResult(raw, reworded), raw)
+  })
+  test('punctuation/case changes alone are accepted (words unchanged)', () => {
+    const repunct = raw.replace('slow?', 'slow.').replace('So yeah,', 'so yeah —')
+    assert.equal(acceptCleanupResult(raw, repunct), repunct)
+  })
+})
