@@ -4,7 +4,7 @@ import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
 import { captureSelectedText, injectOutput, copyToClipboard } from './clipboard'
 import { saveAudioFile, saveAudioChunk } from './audio'
-import { initTelemetry, logTelemetry } from './dictationTelemetry'
+import { initTelemetry, logTelemetry, DEV_BUILD, installMainConsoleTee, attachRendererConsoleTee } from './dictationTelemetry'
 import { app } from 'electron'
 import path from 'path'
 import { getWidgetWindow, showHUD, hideHUD, cancelPendingHide } from './windowManager'
@@ -729,7 +729,25 @@ class SessionManager {
     console.log('[session] startSession called, mode:', mode, '| kind:', kind, '| isProcessing:', this.isProcessing, '| currentSession:', this.currentSession?.sessionId || 'null')
     if (!this.telemetryReady) {
       this.telemetryReady = true
-      try { initTelemetry(path.join(app.getPath('userData'), 'telemetry')) } catch { /* best-effort */ }
+      try {
+        initTelemetry(path.join(app.getPath('userData'), 'telemetry'))
+        if (DEV_BUILD) {
+          installMainConsoleTee()
+          const version = (() => { try { return app.getVersion() } catch { return '?' } })()
+          console.log('╔══════════════════════════════════════════════════════════════╗')
+          console.log(`║  🧪 UNMUTE DEV BUILD v${version} — dictation-accuracy field test  `)
+          console.log('║  Verbose logging ON: console-*.log + dictation-*.jsonl in     ')
+          console.log(`║  ${path.join(app.getPath('userData'), 'telemetry')}`)
+          console.log('╚══════════════════════════════════════════════════════════════╝')
+          logTelemetry('dev-banner', { version, branch: 'arpit/dictation-accuracy' })
+        }
+      } catch { /* best-effort */ }
+    }
+    // DEV_BUILD: capture the widget renderer's console ([audio:*], [widget:ux])
+    // into the same log file — attach lazily each session until the window
+    // exists (idempotent per webContents).
+    if (DEV_BUILD) {
+      try { attachRendererConsoleTee(getWidgetWindow()?.webContents) } catch { /* best-effort */ }
     }
     this.captureQuality = null
     if (this.isProcessing) {
@@ -770,6 +788,7 @@ class SessionManager {
         kind, // stamped at birth; default 'dictation' (default-safe → paste)
       }
       console.log('[session] New session created:', sessionId, '| kind:', kind)
+      logTelemetry('session-start', { sessionId, mode, kind, engineMode: (() => { try { return getPaywallEngineMode() } catch { return '?' } })() })
     } else {
       console.log('[session] Reusing existing session:', this.currentSession.sessionId, '| kind:', this.currentSession.kind)
     }
@@ -989,6 +1008,7 @@ class SessionManager {
     this.chunkTracker.set(chunkIndex, chunkState)
 
     console.log(`[session] 📦 Chunk ${chunkIndex} received (${buffer.byteLength} bytes, mode: ${mode}) — starting parallel transcription`)
+    logTelemetry('chunk-received', { sessionId: session.sessionId, chunkIndex, bytes: buffer.byteLength, mode })
 
     // Persist chunk to disk so a mid-session cancel doesn't lose the audio
     try {
@@ -1028,6 +1048,7 @@ class SessionManager {
     this.chunkTracker.set(chunkIndex, chunkState)
 
     console.log(`[session] 📦 Final chunk ${chunkIndex}/${totalChunks} received (${buffer.byteLength} bytes, duration: ${duration}ms, mode: ${mode})`)
+    logTelemetry('final-chunk-received', { sessionId: session.sessionId, chunkIndex, totalChunks, bytes: buffer.byteLength, durationMs: duration, mode })
 
     // Skip transcription for tiny final chunks (< 10KB) — almost certainly trailing silence
     // that causes Whisper to hallucinate phrases like "Thank you." or "Thanks for watching."
@@ -1469,6 +1490,7 @@ class SessionManager {
             this.resetChunkState()
             const totalEnd = Date.now()
             console.log(`[session] ⏱ PIPELINE STT-ONLY END-TO-END: ${totalEnd - pipelineStart}ms`)
+            logTelemetry('output-pasted', { sessionId: session.sessionId, path: 'pipeline-stt-only', engine: this.arbiter?.engineSummary ?? 'n/a', outputChars: output.length, totalMs: totalEnd - pipelineStart })
             console.log('[session] 🔓 isProcessing = FALSE (pipeline STT-only done)')
             try { this.onSessionComplete?.(session) } catch { /* ignore */ }
             this.currentSession = null
@@ -1561,6 +1583,7 @@ class SessionManager {
           }
           const tInjectEnd = Date.now()
           console.log(`[session] ⏱ Output injection (clipboard + paste): ${tInjectEnd - tInjectStart}ms`)
+          logTelemetry('output-pasted', { sessionId: session.sessionId, path: 'pipeline-llm', flow: session.flowType, engine: this.arbiter?.engineSummary ?? 'n/a', outputChars: output.length, totalMs: tInjectEnd - pipelineStart })
 
           // Show widget feedback
           if (session.errorMessage === 'formatting-fallback') {
@@ -2005,6 +2028,7 @@ class SessionManager {
         } else {
           console.log('[session] Empty output — skipping injection')
         }
+        logTelemetry('output-pasted', { sessionId: session.sessionId, path: 'sequential', flow: session.flowType, engine: this.arbiter?.engineSummary ?? 'n/a', chunked: this.isChunkedSession, outputChars: output.length, totalMs: Date.now() - pipelineStart, quietMiss: session.errorMessage === 'quiet-miss' })
 
         if (session.errorMessage === 'quiet-miss') {
           // quietMiss() already told the widget via 'session:quiet-miss' —

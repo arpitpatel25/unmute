@@ -10,8 +10,15 @@
 import fs from 'fs'
 import path from 'path'
 
+// ─── DEV BUILD FLAG ────────────────────────────────────────────────────
+// TEMPORARY: flip to false before merging to main. While true, the app
+// tees EVERY console line (main process + widget renderer) into dated
+// console-*.log files next to the telemetry JSONL, and logs a loud DEV
+// banner at each session start — for the 2026-07-15 all-day field test.
+export const DEV_BUILD = true
+
 const KEEP_DAYS = 7
-const FILE_RE = /^dictation-(\d{4})-(\d{2})-(\d{2})\.jsonl$/
+const FILE_RE = /^(?:dictation|console)-(\d{4})-(\d{2})-(\d{2})\.(?:jsonl|log)$/
 
 export function telemetryFileName(dayMs: number): string {
   const d = new Date(dayMs)
@@ -60,4 +67,68 @@ export function logTelemetry(event: string, data: Record<string, unknown>): void
   const now = Date.now()
   const line = telemetryLine(event, data, now)
   fs.appendFile(path.join(telemetryDir, telemetryFileName(now)), line + '\n', () => { /* best-effort */ })
+}
+
+// ─── DEV-BUILD console tee ─────────────────────────────────────────────
+// Captures the ENTIRE console story of a session to disk: the main
+// process's [session]/[paywall-stream] narration AND the widget
+// renderer's [audio:*]/[widget:ux] lines (via the console-message event),
+// which otherwise vanish with the window. Best-effort appends; a logging
+// failure must never touch the dictation path.
+
+function consoleFileName(dayMs: number): string {
+  return telemetryFileName(dayMs).replace('dictation-', 'console-').replace('.jsonl', '.log')
+}
+
+function appendConsole(tag: string, text: string): void {
+  if (!telemetryDir) return
+  const now = Date.now()
+  const stamp = new Date(now).toISOString()
+  fs.appendFile(
+    path.join(telemetryDir, consoleFileName(now)),
+    `${stamp} ${tag} ${text}\n`,
+    () => { /* best-effort */ },
+  )
+}
+
+let mainTeeInstalled = false
+
+/** DEV_BUILD only: patch main-process console.{log,warn,error} to also
+ *  append to console-YYYY-MM-DD.log. Idempotent. */
+export function installMainConsoleTee(): void {
+  if (!DEV_BUILD || mainTeeInstalled) return
+  mainTeeInstalled = true
+  for (const level of ['log', 'warn', 'error'] as const) {
+    const original = console[level].bind(console)
+    console[level] = (...args: unknown[]) => {
+      original(...args)
+      try {
+        const text = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')
+        appendConsole(`[main:${level}]`, text)
+      } catch { /* never break logging */ }
+    }
+  }
+}
+
+const rendererTeed = new WeakSet<object>()
+
+/** DEV_BUILD only: tee a renderer webContents' console into the same file.
+ *  Handles both the legacy (level, message, line, source) signature and the
+ *  Electron ≥30 event-object shape. Safe to call repeatedly per window. */
+export function attachRendererConsoleTee(webContents: unknown): void {
+  if (!DEV_BUILD || !webContents || typeof webContents !== 'object') return
+  if (rendererTeed.has(webContents)) return
+  const wc = webContents as { on?: (ev: string, cb: (...a: unknown[]) => void) => void }
+  if (typeof wc.on !== 'function') return
+  rendererTeed.add(webContents)
+  try {
+    wc.on('console-message', (first: unknown, ...rest: unknown[]) => {
+      try {
+        const evt = first as { message?: unknown; level?: unknown }
+        const message = typeof evt?.message === 'string' ? evt.message : String(rest[1] ?? '')
+        const level = typeof evt?.level === 'string' || typeof evt?.level === 'number' ? String(evt.level) : String(rest[0] ?? 'log')
+        appendConsole(`[renderer:${level}]`, message)
+      } catch { /* never break logging */ }
+    })
+  } catch { /* best-effort */ }
 }
