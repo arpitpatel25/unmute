@@ -11,11 +11,11 @@ import fs from 'fs'
 import path from 'path'
 
 // ─── DEV BUILD FLAG ────────────────────────────────────────────────────
-// TEMPORARY: flip to false before merging to main. While true, the app
-// tees EVERY console line (main process + widget renderer) into dated
-// console-*.log files next to the telemetry JSONL, and logs a loud DEV
-// banner at each session start — for the 2026-07-15 all-day field test.
-export const DEV_BUILD = true
+// PRODUCTION: false. When true (dev field builds only), the app tees EVERY
+// console line (main + widget renderer) into dated console-*.log files and
+// includes full transcript texts in telemetry events — never ship true:
+// production machines must not persist what users say.
+export const DEV_BUILD = false
 
 const KEEP_DAYS = 7
 const FILE_RE = /^(?:dictation|console)-(\d{4})-(\d{2})-(\d{2})\.(?:jsonl|log)$/
