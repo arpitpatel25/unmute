@@ -46,6 +46,32 @@ const SYSTEM_PROMPT = [
   'Return ONLY the cleaned text — no quotes, no commentary.',
 ].join(' ')
 
+// ─── Noisy-environment CORRECTION prompt (2026-07-16) ─────────────────
+// Runs ONLY when the capture was flagged noisy. Unlike cleanup, correction
+// may REPLACE misheard words — every proposed edit is then individually
+// accepted/rejected by correctionGate (phonetic similarity, locked
+// numbers/negations, no insertions). The prompt aims the model; the gate
+// enforces the contract.
+export const CORRECTION_TIMEOUT_MS = 1500
+
+const CORRECTION_PROMPT = [
+  'You fix speech-to-text transcription errors. The text below was dictated',
+  'in a NOISY environment, so some words were misheard as similar-sounding',
+  'wrong words. Using the context of the whole transcript, replace ONLY',
+  'words that were plausibly misheard — every replacement must sound like',
+  'what it replaces. You may also remove filler words (uh, um) and stutter',
+  'repeats. NEVER add new information, never rephrase passages that already',
+  'make sense, never summarize, never change numbers or negations.',
+  'Return ONLY the corrected text — no quotes, no commentary.',
+].join(' ')
+
+export function buildCorrectionMessages(raw: string): Array<{ role: 'system' | 'user'; content: string }> {
+  return [
+    { role: 'system', content: CORRECTION_PROMPT },
+    { role: 'user', content: raw },
+  ]
+}
+
 export function shouldAttemptCleanup(raw: string): boolean {
   return raw.trim().length >= MIN_RAW_CHARS
 }

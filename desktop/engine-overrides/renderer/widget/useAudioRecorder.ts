@@ -646,6 +646,9 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         paywallCaptureQuality?: (sessionId: string | undefined, q: Record<string, unknown>) => void
       }
       api.paywallCaptureQuality?.(frozenSessionIdRef.current, {
+        // Environment verdict for THIS recording — routes the correction
+        // pass in main (noisy → LLM correction, quiet → raw fast path).
+        noisy: noisyEverFlaggedRef.current,
         rmsMax: +tel.rmsMax.toFixed(4),
         rmsAvg: tel.frames ? +(tel.rmsSum / tel.frames).toFixed(4) : 0,
         peak: +tel.peak.toFixed(3),

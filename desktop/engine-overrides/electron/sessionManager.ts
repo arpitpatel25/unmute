@@ -20,7 +20,8 @@ import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 // Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
 import { dispatchFromCapture } from './paywall/remote/init'
 import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
-import { buildCleanupMessages, evaluateCleanup, shouldAttemptCleanup, CLEANUP_TIMEOUT_MS, CLEANUP_MODEL } from './cleanupPass'
+import { buildCorrectionMessages, shouldAttemptCleanup, CORRECTION_TIMEOUT_MS, CLEANUP_MODEL } from './cleanupPass'
+import { applyGatedCorrection } from './correctionGate'
 import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait, setStreamPromptProvider } from './paywall/paywall-stream'
 import { setLastEngine, registerCaptureQualitySink, registerDraftAcceptHandler } from './paywall/main-extensions'
 import { SttArbiter } from './sttArbiter'
@@ -227,12 +228,12 @@ class SessionManager {
 
   // Physical capture quality of the current recording (rmsMax etc.), reported
   // once by the renderer at stop. Drives the quiet-capture paste gate.
-  private captureQuality: { sessionId: string | undefined; rmsMax: number } | null = null
+  private captureQuality: { sessionId: string | undefined; rmsMax: number; noisy: boolean } | null = null
 
   constructor() {
     registerCaptureQualitySink((sessionId, q) => {
       const rmsMax = typeof q.rmsMax === 'number' ? q.rmsMax : 0
-      this.captureQuality = { sessionId, rmsMax }
+      this.captureQuality = { sessionId, rmsMax, noisy: q.noisy === true }
     })
     registerDraftAcceptHandler(() => {
       console.log('[session] draft-offer ACCEPTED by user')
@@ -365,36 +366,50 @@ class SessionManager {
     return true
   }
 
-  /** Fast LLM polish for raw dictation: fillers/stutters out, meaning intact.
-   *  Hard CLEANUP_TIMEOUT_MS budget; every failure path returns the raw text. */
+  /** NOISE-ROUTED polish (2026-07-16 design, user-signed):
+   *    quiet capture  -> raw fast path, NO LLM, zero added latency
+   *    noisy capture  -> correction pass: the LLM proposes fixes for
+   *                      misheard words; correctionGate accepts/rejects
+   *                      each edit (phonetic similarity, locked numbers/
+   *                      negations, no insertions). Latency is spent only
+   *                      where the transcript is actually at risk.
+   *  Every failure path returns the raw text. */
   private async maybeCleanupDictation(raw: string, signal?: AbortSignal): Promise<string> {
     try {
       if (!raw || !shouldAttemptCleanup(raw)) return raw
       if (!getDictationCleanupEnabled()) return raw
+      const q = this.captureQuality
+      const noisy = q?.sessionId === this.currentSession?.sessionId && q?.noisy === true
+      if (!noisy) {
+        // Quiet room: the transcript is trustworthy and latency is sacred.
+        logTelemetry('polish-skipped', { reason: 'quiet-environment', rawChars: raw.length })
+        return raw
+      }
       const t0 = Date.now()
-      const attempt = tryManagedLLM(buildCleanupMessages(raw), { temperature: 0, model: CLEANUP_MODEL }, signal)
+      const attempt = tryManagedLLM(buildCorrectionMessages(raw), { temperature: 0, model: CLEANUP_MODEL }, signal)
         .then((r) => r?.text ?? null)
         .catch(() => null)
-      const timeout = new Promise<null>((r) => setTimeout(() => r(null), CLEANUP_TIMEOUT_MS))
-      const cleaned = await Promise.race([attempt, timeout])
-      const timedOut = cleaned === null
-      const verdict = evaluateCleanup(raw, cleaned)
-      // Full audit trail: what the model was given, what it returned, and
-      // what the guard decided. Raw texts logged in DEV builds only.
-      logTelemetry('cleanup-pass', {
+      const timeout = new Promise<null>((r) => setTimeout(() => r(null), CORRECTION_TIMEOUT_MS))
+      const proposed = await Promise.race([attempt, timeout])
+      const timedOut = proposed === null
+      const gated = applyGatedCorrection(raw, proposed)
+      // Full audit trail: input, the model's proposal, and the gate's
+      // per-edit verdict. Raw texts logged in DEV builds only.
+      logTelemetry('correction-pass', {
         model: CLEANUP_MODEL,
         ms: Date.now() - t0,
         timedOut,
-        applied: verdict.accepted && verdict.text !== raw,
-        rejectReason: verdict.reason || undefined,
+        acceptedEdits: gated.acceptedEdits,
+        rejectedEdits: gated.rejectedEdits,
+        applied: gated.text !== raw,
         rawChars: raw.length,
-        llmChars: cleaned?.length ?? 0,
-        outChars: verdict.text.length,
-        ...(DEV_BUILD ? { rawText: raw, llmText: cleaned ?? null } : {}),
+        llmChars: proposed?.length ?? 0,
+        outChars: gated.text.length,
+        ...(DEV_BUILD ? { rawText: raw, llmText: proposed ?? null, gatedText: gated.text } : {}),
       })
-      if (verdict.text !== raw) console.log(`[session] ✨ cleanup pass applied in ${Date.now() - t0}ms (${raw.length}→${verdict.text.length} chars, ${CLEANUP_MODEL})`)
-      else if (verdict.reason) console.log(`[session] cleanup rejected by guard: ${verdict.reason} (raw pasted)`)
-      return verdict.text
+      if (gated.text !== raw) console.log(`[session] 🔧 noise-correction applied in ${Date.now() - t0}ms: ${gated.acceptedEdits} edit(s) accepted, ${gated.rejectedEdits} rejected`)
+      else if (gated.rejectedEdits > 0) console.log(`[session] noise-correction: all ${gated.rejectedEdits} proposed edit(s) rejected by gate (raw pasted)`)
+      return gated.text
     } catch {
       return raw
     }
