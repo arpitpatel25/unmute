@@ -20,7 +20,7 @@ import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 // Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
 import { dispatchFromCapture } from './paywall/remote/init'
 import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
-import { buildCleanupMessages, acceptCleanupResult, shouldAttemptCleanup, CLEANUP_TIMEOUT_MS } from './cleanupPass'
+import { buildCleanupMessages, evaluateCleanup, shouldAttemptCleanup, CLEANUP_TIMEOUT_MS, CLEANUP_MODEL } from './cleanupPass'
 import { closeImmediate as abortStream, isStreaming, hasStreamForChunk, closeAndAwait, setStreamPromptProvider } from './paywall/paywall-stream'
 import { setLastEngine, registerCaptureQualitySink, registerDraftAcceptHandler } from './paywall/main-extensions'
 import { SttArbiter } from './sttArbiter'
@@ -372,20 +372,29 @@ class SessionManager {
       if (!raw || !shouldAttemptCleanup(raw)) return raw
       if (!getDictationCleanupEnabled()) return raw
       const t0 = Date.now()
-      const attempt = tryManagedLLM(buildCleanupMessages(raw), { temperature: 0 }, signal)
+      const attempt = tryManagedLLM(buildCleanupMessages(raw), { temperature: 0, model: CLEANUP_MODEL }, signal)
         .then((r) => r?.text ?? null)
         .catch(() => null)
       const timeout = new Promise<null>((r) => setTimeout(() => r(null), CLEANUP_TIMEOUT_MS))
       const cleaned = await Promise.race([attempt, timeout])
-      const result = acceptCleanupResult(raw, cleaned)
+      const timedOut = cleaned === null
+      const verdict = evaluateCleanup(raw, cleaned)
+      // Full audit trail: what the model was given, what it returned, and
+      // what the guard decided. Raw texts logged in DEV builds only.
       logTelemetry('cleanup-pass', {
+        model: CLEANUP_MODEL,
         ms: Date.now() - t0,
-        applied: result !== raw,
+        timedOut,
+        applied: verdict.accepted && verdict.text !== raw,
+        rejectReason: verdict.reason || undefined,
         rawChars: raw.length,
-        outChars: result.length,
+        llmChars: cleaned?.length ?? 0,
+        outChars: verdict.text.length,
+        ...(DEV_BUILD ? { rawText: raw, llmText: cleaned ?? null } : {}),
       })
-      if (result !== raw) console.log(`[session] ✨ cleanup pass applied in ${Date.now() - t0}ms (${raw.length}→${result.length} chars)`)
-      return result
+      if (verdict.text !== raw) console.log(`[session] ✨ cleanup pass applied in ${Date.now() - t0}ms (${raw.length}→${verdict.text.length} chars, ${CLEANUP_MODEL})`)
+      else if (verdict.reason) console.log(`[session] cleanup rejected by guard: ${verdict.reason} (raw pasted)`)
+      return verdict.text
     } catch {
       return raw
     }

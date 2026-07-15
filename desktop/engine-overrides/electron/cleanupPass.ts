@@ -20,6 +20,10 @@
 // lives in sessionManager (tryManagedLLM) with a hard timeout.
 
 export const CLEANUP_TIMEOUT_MS = 900
+// 2026-07-15 field decision: Scout (preview status, weak instruction
+// following — it summarized a dictation) → gpt-oss-120b, production-tier,
+// near-identical cost, strongest instruction-following on Groq.
+export const CLEANUP_MODEL = 'openai/gpt-oss-120b'
 const MIN_RAW_CHARS = 40
 /** Cleaned text must keep at least this fraction of the raw WORDS.
  *  Heavy stutter legitimately removes ~25-35%; summarization removes more. */
@@ -72,17 +76,29 @@ export function isDeletionOnly(original: string[], kept: string[]): boolean {
   return true
 }
 
-export function acceptCleanupResult(raw: string, cleaned: string | null): string {
-  if (!cleaned) return raw
+export interface CleanupVerdict {
+  text: string
+  accepted: boolean
+  /** Why the LLM output was rejected ('' when accepted) — telemetry food. */
+  reason: '' | 'empty' | 'refusal' | 'over-deletion' | 'grew' | 'reworded'
+}
+
+export function evaluateCleanup(raw: string, cleaned: string | null): CleanupVerdict {
+  const reject = (reason: CleanupVerdict['reason']): CleanupVerdict => ({ text: raw, accepted: false, reason })
+  if (!cleaned) return reject('empty')
   const c = cleaned.trim()
-  if (!c) return raw
-  if (REFUSAL_RE.test(c)) return raw
+  if (!c) return reject('empty')
+  if (REFUSAL_RE.test(c)) return reject('refusal')
   const rawWords = words(raw)
   const cleanedWords = words(c)
-  if (rawWords.length === 0) return raw
+  if (rawWords.length === 0) return reject('empty')
   // Structural verbatim guard: deletion-only, bounded deletion.
-  if (cleanedWords.length / rawWords.length < MIN_WORD_KEEP_RATIO) return raw
-  if (cleanedWords.length > rawWords.length) return raw
-  if (!isDeletionOnly(rawWords, cleanedWords)) return raw
-  return c
+  if (cleanedWords.length / rawWords.length < MIN_WORD_KEEP_RATIO) return reject('over-deletion')
+  if (cleanedWords.length > rawWords.length) return reject('grew')
+  if (!isDeletionOnly(rawWords, cleanedWords)) return reject('reworded')
+  return { text: c, accepted: true, reason: '' }
+}
+
+export function acceptCleanupResult(raw: string, cleaned: string | null): string {
+  return evaluateCleanup(raw, cleaned).text
 }

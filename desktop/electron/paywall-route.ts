@@ -261,7 +261,7 @@ export async function tryManagedSTT(
  */
 export async function tryManagedLLM(
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-  options: { temperature?: number; maxTokens?: number } = {},
+  options: { temperature?: number; maxTokens?: number; model?: string } = {},
   signal?: AbortSignal,
 ): Promise<ManagedLLMResult | null> {
   if (!shouldTryManaged()) return null
@@ -281,6 +281,9 @@ export async function tryManagedLLM(
         messages,
         temperature: options.temperature,
         max_tokens: options.maxTokens,
+        // Per-call model override — worker honors body.model || LLM_MODEL.
+        // Used by the dictation cleanup pass (gpt-oss-120b, 2026-07-15).
+        model: options.model,
       }),
       signal,
     })
