@@ -771,7 +771,7 @@ export default function OrchestrateWall() {
                   Store order is newest-first, so newest renders left. */}
               {gridTasks.length === 0 && <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>}
               {groupSections(gridTasks).map((sec, i) => (
-                <div key={sec.name ?? '·ungrouped'} style={{ marginTop: i === 0 ? 0 : 14 }}>
+                <div key={sec.name ?? '·ungrouped'} style={{ marginTop: i === 0 ? 0 : 28 }}>
                   {sec.name != null && (
                     <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase', marginBottom: 6 }}>{sec.name}</div>
                   )}
