@@ -276,6 +276,7 @@ function snapshotOf(t: Task, now: number, surfaced: boolean): RoutableTask {
     project: t.cwd !== t.home ? basename(t.cwd) : null,
     category: t.category ?? null,
     ageSec: Math.max(0, Math.round((now - t.updatedAt) / 1000)),
+    group: t.group ?? null,
     surfaced,
     awaiting: t.state === 'needs-user',
     question: t.state === 'needs-user' ? (t.question?.text ?? null) : null,
@@ -459,6 +460,7 @@ function serializeTask(t: Task) {
     shelved: t.shelved ?? false,
     note: t.note ?? null,
     spawnedBy: t.spawnedBy ?? null,
+    group: t.group ?? null,
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,
@@ -1145,6 +1147,9 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
             log.event('routed-as-answer', { taskId: tid, via: 'router' })
             typeStagedInto(tid, staged)
             manager.answer(tid, decision.intent || raw)
+            // Assign-once grouping: the router may group the task it acted on,
+            // never regroup one that already has a group (freeze).
+            if (decision.group && !target?.group) manager.setGroup(tid, decision.group)
             pendingBeat = `Passed to ${targetName}.`
             return tid
           }
@@ -1152,12 +1157,37 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
           typeStagedInto(tid, staged)
           if (manager.followUp(tid, decision.intent)) {
             log.event('routed-as-continuation', { taskId: tid, via: 'router' })
+            // Assign-once grouping — covers graduation too: a one-off's 2nd
+            // follow-up (which just promoted it to a session inside followUp)
+            // gets its group in the same routed turn. Zero extra LLM calls.
+            if (decision.group && !target?.group) manager.setGroup(tid, decision.group)
             pendingBeat = targetBusy
               ? `Queued for ${targetName} — it\u2019s mid-task, I\u2019ll pass it on when it\u2019s free.`
               : `Passed to ${targetName}.`
             return tid
           }
         }
+      }
+      // CURATE (wall organization): the user spoke about the wall itself —
+      // "group these two as X", "rename that group". Nothing is spawned or
+      // injected; ops were hard-validated at parse (known ids, live groups).
+      // Sessions still cannot touch the wall — this path exists only for the
+      // user's own routed voice commands (the MCP invariant stands).
+      if (decision.action === 'curate' && decision.ops?.length) {
+        let touched = 0
+        const groupNames = new Set<string>()
+        for (const op of decision.ops) {
+          if (op.op === 'set_group') {
+            for (const id of op.taskIds) { manager.setGroup(id, op.group); touched++ }
+            groupNames.add(op.group)
+          } else if (op.op === 'rename_group') {
+            touched += manager.renameGroup(op.from, op.to)
+            groupNames.add(op.to)
+          }
+        }
+        log.event('routed-as-curate', { ops: decision.ops.length, touched })
+        pendingBeat = touched ? `Regrouped — ${[...groupNames].join(', ')}.` : 'Nothing matched that.'
+        return null
       }
       // SPEAK (meta-command): the user asked to HEAR something — read-only,
       // nothing spawned, nothing injected. Speech is composed deterministically
@@ -1211,6 +1241,9 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
       if (decision.name) manager.setName(newId, decision.name)
+      // Group new PERSISTENT sessions at birth (one-offs stay ungrouped until
+      // they graduate — the wall groups streams, not errands).
+      if (decision.group && decision.kind === 'session') manager.setGroup(newId, decision.group)
       pendingBeat = decision.name ? `On it \u2014 ${decision.name}.` : 'On it.'
       // Declinable offer (§6.2 — never a silent reroute, never a blocking prompt):
       // the router chose NEW but seriously weighed one open task. Surface a

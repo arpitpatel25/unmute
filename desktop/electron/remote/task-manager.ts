@@ -65,6 +65,12 @@ export interface Task {
    *  survives app restarts as interrupted-but-resumable (`--continue` restores
    *  full context). Default 'oneoff' (status quo). */
   kind?: 'oneoff' | 'session'
+  /** Workspace group — "what is this work about" ("unmute", "launch video",
+   *  "on-call"). Assigned ONCE by the router (user's own words win), mutated
+   *  only by user curation. Live groups = distinct values across live tasks;
+   *  no registry, no history — the screen is the entire state (spec
+   *  2026-07-16-cockpit-grouping). */
+  group?: string
   state: UiTaskState
   createdAt: number
   updatedAt: number
@@ -822,7 +828,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       const statusPath = join(dir, 'status.json')
@@ -861,6 +867,7 @@ export class TaskManager extends EventEmitter {
         shelved: meta.shelved || undefined,
         note: meta.note || undefined,
         spawnedBy: meta.spawnedBy || undefined,
+        group: meta.group || undefined,
       }
       this.tasks.set(id, task)
       this.emit('created', task)
@@ -1088,6 +1095,35 @@ export class TaskManager extends EventEmitter {
     task.updatedAt = this.clock()
     this.emit('updated', task)
     this.mergeMeta(task, { note: n }, 'setNote')
+  }
+
+  /** Assign/clear a task's workspace group. Groups are minted lazily by the
+   *  router or by user curation — this just records the word. Empty clears.
+   *  Persists to meta.json; emits 'updated' for the wall. */
+  setGroup(id: string, group: string | null): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    const g = (group || '').trim().slice(0, 32)
+    if ((task.group ?? '') === g) return
+    task.group = g || undefined
+    task.updatedAt = this.clock()
+    this.emit('updated', task)
+    log.child({ taskId: id }).event('group-changed', { group: g || null })
+    this.mergeMeta(task, { group: g }, 'setGroup')
+  }
+
+  /** Rename a live group: every task currently carrying `from` moves to `to`.
+   *  Returns how many tasks moved (0 = the group didn't exist). */
+  renameGroup(from: string, to: string): number {
+    const f = (from || '').trim()
+    const t = (to || '').trim().slice(0, 32)
+    if (!f || !t || f === t) return 0
+    let moved = 0
+    for (const task of this.tasks.values()) {
+      if (task.group === f) { this.setGroup(task.id, t); moved++ }
+    }
+    if (moved) log.event('group-renamed', { from: f, to: t, moved })
+    return moved
   }
 
   followUp(id: string, text: string): boolean {

@@ -51,6 +51,9 @@ export interface RoutableTask {
   /** the pending question text, when awaiting — so the router can judge whether
    *  this utterance answers it. */
   question?: string | null
+  /** workspace group ("what the work is about") — live groups only; the router
+   *  joins/creates against exactly what it sees here. */
+  group?: string | null
 }
 
 /** A known project a NEW session can be bound to (curated by projects.ts). */
@@ -59,13 +62,21 @@ export interface RoutableProject {
   path: string
 }
 
+/** A single wall-curation operation (user-initiated, via voice — the router
+ *  resolves references like "these two" against the snapshot it was given). */
+export type CurateOp =
+  | { op: 'set_group'; taskIds: string[]; group: string }
+  | { op: 'rename_group'; from: string; to: string }
+
 export interface RouteDecision {
   /** 'resume' = revive a recently-finished one-off (session dead, window-capped)
    *  and deliver this utterance inside it — the thread continues on its card.
    *  'speak' = the user asked to HEAR something (a blocked task's question, a
    *  task's state, overall status) — Unmute speaks it aloud; NOTHING is spawned
    *  or injected. Read-only by construction. */
-  action: 'new' | 'continue' | 'resume' | 'speak'
+  /** 'curate' = the command organizes the WALL itself (group/rename) — nothing
+   *  is spawned or injected; the host applies validated ops directly. */
+  action: 'new' | 'continue' | 'resume' | 'speak' | 'curate'
   targetTaskId?: string
   /** cleaned intent (router folds in transcript cleanup). */
   intent: string
@@ -96,6 +107,12 @@ export interface RouteDecision {
    *  gets that task's status + transcript paths appended so it reads the actual
    *  record instead of guessing (§6.6: own the pointer, not the plumbing). */
   contextTaskId?: string
+  /** Workspace group for the task this decision creates or targets — applied
+   *  by the host ONLY if that task has no group yet (assign-once). Aboutness,
+   *  never activity type; user's words win; omitted = ungrouped. */
+  group?: string
+  /** For action 'curate': the validated operations to apply. */
+  ops?: CurateOp[]
 }
 
 // ─── Pure helpers (unit-tested) ───────────────────────────────────
@@ -114,6 +131,7 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
   const lines = tasks.map((t) =>
     `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — ${t.state}` +
     `${t.kind === 'session' ? ' · PERSISTENT SESSION' : ''}${t.project ? ` · project: ${t.project}` : ''}` +
+    `${t.group ? ` · group: ${t.group}` : ''}` +
     `${t.category ? ` · ${t.category}` : ''} · ${fmtAge(t.ageSec)}${t.surfaced ? ' · ON SCREEN' : ''}` +
     (t.awaiting ? ` · ⏳ BLOCKED — awaiting your answer to: "${t.question || ''}"` : ''),
   )
@@ -223,12 +241,20 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `and set "contextTaskId" to that task's id: the new task receives that task's`,
     `actual record (status + transcript) to read before answering.`,
     ``,
-    `Write exactly: {"action":"new"|"continue"|"resume"|"speak","targetTaskId":"<id when continue/resume/speak>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>","contextTaskId":"<task id whose record a NEW task should read, or omit>"}`,
+    `CURATION (action "curate"): if the command organizes the wall ITSELF — "group`,
+    `these two as X", "put the video tasks together", "rename group A to B" — do`,
+    `NOT start or continue anything: choose action "curate" with "ops", resolving`,
+    `references against the tasks listed above. Ops: {"op":"set_group","taskIds":`,
+    `["<id>",...],"group":"<name>"} assigns tasks to a group (creating it if new);`,
+    `{"op":"rename_group","from":"<existing group>","to":"<new name>"} renames one.`,
+    ``,
+    `Write exactly: {"action":"new"|"continue"|"resume"|"speak"|"curate","targetTaskId":"<id when continue/resume/speak>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>","contextTaskId":"<task id whose record a NEW task should read, or omit>","group":"<workspace group or omit>","ops":[<curate ops, action "curate" only>]}`,
     `name (for action "new"): a 2-4 word title capturing the essence, for a session list in a UI — plain words, no quotes/punctuation (e.g. "Unmute pricing check", "WhatsApp message", "Gating feature work").`,
     `alternate (only with action "new", optional): if exactly one open task was a PLAUSIBLE alternative you seriously weighed before choosing NEW, give its id — the user gets a one-tap "or send it there?" offer. Omit it when nothing came close (most of the time).`,
     `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
     `mode: use "raw" for "open me a session to work in" / open-ended coding where injected memory hints would pollute long reasoning; use "managed" for short, surface-operating dictated tasks. If ambiguous, choose "raw".`,
     `kind (only for action "new"): "session" for a working session the user will keep coming back to — coding, a project (anything with "dir"), open-ended "work on X" — it stays alive until they end it. "oneoff" for a quick errand they fire and forget (open/check/find something). If ambiguous, "oneoff".`,
+    `group: the workspace group for the task this command creates or continues — the answer to "what is this work ABOUT" (a project, artifact, or stream: a repo name, "launch video", "on-call"), NEVER an activity type ("coding", "research", "media"). The live groups are shown on the tasks above ("group: ..."): JOIN one when this task belongs to that stream — prefer joining. Create a new name (2-3 words, the subject in the user's own words; if the user names a group in the command, use exactly their words) only for a clearly distinct ongoing stream. A group is something the user will still care about next week; the specific deliverable is the task, not the group. When unsure, omit — ungrouped is fine and common.`,
   ].join('\n')
 }
 
@@ -265,7 +291,7 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   // live tasks can never be 'resumed').
   const resumeIds = new Set(finished.filter((t) => t.state === 'done' || t.state === 'ready').map((t) => t.id))
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
-  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string; contextTaskId?: string }
+  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string; contextTaskId?: string; group?: string; ops?: unknown }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
   const intent = (obj.intent && obj.intent.trim()) || fallbackIntent
   const mode = obj.mode === 'raw' ? 'raw' : 'managed'
@@ -273,11 +299,39 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   // emitted "jiohotstar", "x", etc. freely) becomes undefined, and the caller
   // falls back to the deterministic detectSurface — so the store can't fragment.
   const surface = normalizeSurface(obj.surface)
+  // workspace group: trimmed, de-quoted, bounded — junk becomes undefined.
+  // Grouping is metadata, never a gate: a bad group must never break routing.
+  const rawGroup = (obj.group ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
+  const group = rawGroup && rawGroup.length <= 32 ? rawGroup : undefined
   if (obj.action === 'continue' && obj.targetTaskId && validIds.has(obj.targetTaskId)) {
-    return { action: 'continue', targetTaskId: obj.targetTaskId, intent, mode, surface }
+    return { action: 'continue', targetTaskId: obj.targetTaskId, intent, mode, surface, ...(group ? { group } : {}) }
   }
   if (obj.action === 'resume' && obj.targetTaskId && resumeIds.has(obj.targetTaskId)) {
-    return { action: 'resume', targetTaskId: obj.targetTaskId, intent, mode, surface }
+    return { action: 'resume', targetTaskId: obj.targetTaskId, intent, mode, surface, ...(group ? { group } : {}) }
+  }
+  // CURATE: wall organization only — nothing spawned, nothing injected. Ops are
+  // validated hard: task ids must be ones we offered (live or cold — the user's
+  // explicit command is the consent; group metadata is not injection), rename
+  // sources must be groups that actually exist. Nothing valid → failsafe.
+  if (obj.action === 'curate') {
+    const curatableIds = alternateIds // live + cold sessions
+    const liveGroups = new Set([...tasks, ...coldSessions].map((t) => t.group).filter((g): g is string => !!g))
+    const sane = (v: unknown): string => typeof v === 'string' ? v.trim().replace(/^["'`]+|["'`.]+$/g, '').trim().slice(0, 32) : ''
+    const ops: CurateOp[] = []
+    for (const rawOp of Array.isArray(obj.ops) ? obj.ops : []) {
+      const o = rawOp as { op?: string; taskIds?: unknown; group?: unknown; from?: unknown; to?: unknown }
+      if (o?.op === 'set_group') {
+        const g = sane(o.group)
+        const ids = (Array.isArray(o.taskIds) ? o.taskIds : []).filter((i): i is string => typeof i === 'string' && curatableIds.has(i))
+        if (g && ids.length) ops.push({ op: 'set_group', taskIds: ids, group: g })
+      } else if (o?.op === 'rename_group') {
+        const from = typeof o.from === 'string' ? o.from.trim() : ''
+        const to = sane(o.to)
+        if (from && to && liveGroups.has(from)) ops.push({ op: 'rename_group', from, to })
+      }
+    }
+    if (ops.length) return { action: 'curate', intent, ops }
+    return failsafeDecision(tasks, intent)
   }
   // speak: read-only by construction — any KNOWN id is fine (cold sessions too:
   // hearing about a session is not injecting into it); unknown id → overall.
@@ -303,7 +357,7 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
     // falls back to a truncated intent, never breaks).
     const rawName = (obj.name ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
     const name = rawName && rawName.length <= 48 ? rawName : undefined
-    return { action: 'new', intent, mode, surface, kind, dir, alternate, name, contextTaskId }
+    return { action: 'new', intent, mode, surface, kind, dir, alternate, name, contextTaskId, ...(group ? { group } : {}) }
   }
   return failsafeDecision(tasks, intent)
 }

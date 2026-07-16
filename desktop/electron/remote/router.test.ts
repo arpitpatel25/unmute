@@ -395,3 +395,47 @@ test('ready one-offs are RESUMABLE resume targets (the most natural continue)', 
   assert.equal(d.action, 'resume')
   assert.equal(d.targetTaskId, 'parked-ready')
 })
+
+// ─── Workspace grouping (spec 2026-07-16-cockpit-grouping) ────────────────
+
+const GROUPED: RoutableTask[] = [
+  { id: 'g1', intent: 'fix webhook ticket', state: 'ready', kind: 'session', ageSec: 60, group: 'on-call' },
+  { id: 'g2', intent: 'color grade the outro', state: 'done', kind: 'session', ageSec: 120, group: 'launch video' },
+  { id: 'g3', intent: 'ungrouped errand', state: 'done', ageSec: 30 },
+]
+
+test('buildRoutingPrompt surfaces live groups on task lines and the grouping guidance', () => {
+  const p = buildRoutingPrompt('x', GROUPED, '/d/decision.json')
+  assert.ok(p.includes('· group: on-call'))
+  assert.ok(p.includes('· group: launch video'))
+  assert.ok(p.includes('NEVER an activity type'))
+  assert.ok(p.includes('"curate"'))
+})
+
+test('parseDecision: group rides new/continue; junk group dropped; never a stray key', () => {
+  const withGroup = parseDecision(JSON.stringify({ action: 'new', intent: 'x', kind: 'session', group: ' on-call ' }), 'x', GROUPED)
+  assert.equal(withGroup.group, 'on-call')
+  const cont = parseDecision(JSON.stringify({ action: 'continue', targetTaskId: 'g1', intent: 'x', group: 'on-call' }), 'x', GROUPED)
+  assert.equal(cont.group, 'on-call')
+  const junk = parseDecision(JSON.stringify({ action: 'new', intent: 'x', group: 'a'.repeat(60) }), 'x', GROUPED)
+  assert.ok(!('group' in junk))
+})
+
+test('parseDecision curate: valid ops pass, unknown ids and nonexistent rename sources are dropped', () => {
+  const d = parseDecision(JSON.stringify({ action: 'curate', intent: 'group these', ops: [
+    { op: 'set_group', taskIds: ['g2', 'g3', 'nope'], group: 'launch video' },
+    { op: 'rename_group', from: 'on-call', to: 'incidents' },
+    { op: 'rename_group', from: 'never-existed', to: 'x' },
+    { op: 'set_group', taskIds: ['g1'], group: '' },
+  ] }), 'group these', GROUPED)
+  assert.equal(d.action, 'curate')
+  assert.deepEqual(d.ops, [
+    { op: 'set_group', taskIds: ['g2', 'g3'], group: 'launch video' },
+    { op: 'rename_group', from: 'on-call', to: 'incidents' },
+  ])
+})
+
+test('parseDecision curate: zero valid ops falls back to failsafe (never a dead-end)', () => {
+  const d = parseDecision(JSON.stringify({ action: 'curate', intent: 'x', ops: [{ op: 'rename_group', from: 'ghost', to: 'y' }] }), 'x', GROUPED)
+  assert.notEqual(d.action, 'curate')
+})

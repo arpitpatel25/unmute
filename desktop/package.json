@@ -8,7 +8,7 @@
     "build:fast": "./build/wire-into-engine.sh build --no-sign",
     "dev": "./build/wire-into-engine.sh dev",
     "engine:sync": "./build/wire-into-engine.sh sync",
-    "test": "node --import tsx --import ./electron/remote/test-setup.ts --test 'electron/remote/**/*.test.ts' 'engine-overrides/renderer/widget/**/*.test.ts' 'engine-overrides/electron/**/*.test.ts'",
+    "test": "node --import tsx --import ./electron/remote/test-setup.ts --test 'electron/remote/**/*.test.ts' 'engine-overrides/renderer/widget/**/*.test.ts' 'engine-overrides/electron/**/*.test.ts' 'engine-overrides/renderer/remote/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.typecheck.json && tsc -p tsconfig.renderer.json"
   },
   "dependencies": {

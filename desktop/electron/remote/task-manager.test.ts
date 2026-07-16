@@ -1041,3 +1041,42 @@ test('dispatch with forkFromSessionId: spawn omits the pinned session id and pas
   assert.equal(spawned!.extraEnv?.UNMUTE_MCP_TOKEN, 'tok', 'intercom identity rides the spawn env')
   tm.kill(id)
 })
+
+// ─── Workspace grouping (spec 2026-07-16-cockpit-grouping) ────────────────
+
+test('setGroup persists to meta.json, survives rehydrate, and freezes semantics live in the caller (assign is idempotent)', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('fix the webhook ticket')
+  tm.setGroup(id, '  on-call  ')
+  assert.equal(tm.get(id)!.group, 'on-call')
+  await new Promise((r) => setTimeout(r, 50))
+  const meta = JSON.parse(await fs.readFile(path.join(tm.get(id)!.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.group, 'on-call')
+  tm.killAll()
+
+  // rehydrate restores the group
+  const tm2 = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm2.rehydrate()
+  assert.equal(tm2.get(id)?.group, 'on-call')
+  tm2.killAll()
+})
+
+test('setGroup with empty clears; renameGroup moves every member and reports the count', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const a = await tm.dispatch('ticket one')
+  const b = await tm.dispatch('ticket two')
+  const c = await tm.dispatch('unrelated')
+  tm.setGroup(a, 'on-call')
+  tm.setGroup(b, 'on-call')
+  tm.setGroup(c, 'video')
+  assert.equal(tm.renameGroup('on-call', 'incidents'), 2)
+  assert.equal(tm.get(a)!.group, 'incidents')
+  assert.equal(tm.get(b)!.group, 'incidents')
+  assert.equal(tm.get(c)!.group, 'video')
+  assert.equal(tm.renameGroup('ghost', 'x'), 0)
+  tm.setGroup(a, '')
+  assert.equal(tm.get(a)!.group, undefined)
+  tm.killAll()
+})

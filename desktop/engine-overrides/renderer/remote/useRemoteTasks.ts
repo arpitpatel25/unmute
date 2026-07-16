@@ -27,6 +27,9 @@ export interface RemoteTask {
   note?: string | null
   /** Provenance: task id that agent-spawned this one via the Unmute MCP. */
   spawnedBy?: string | null
+  /** Workspace group ("what is this work about") — assigned once by the router,
+   *  mutated only by user curation; null = ungrouped. */
+  group?: string | null
   state: 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
   category?: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
   step?: string | null
