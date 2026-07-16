@@ -210,7 +210,7 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
       `sessions, choose NEW and set "alternate" to that session's id — the user`,
       `gets a one-tap offer to redirect (their tap is the consent):`,
       ...coldSessions.map((t) =>
-        `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}"${t.project ? ` · project: ${t.project}` : ''} · ${fmtAge(t.ageSec)}`),
+        `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}"${t.project ? ` · project: ${t.project}` : ''}${t.group ? ` · group: ${t.group}` : ''} · ${fmtAge(t.ageSec)}`),
     ] : []),
     ...(finishedLines.length ? [
       ``,
