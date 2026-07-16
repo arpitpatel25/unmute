@@ -439,3 +439,28 @@ test('parseDecision curate: zero valid ops falls back to failsafe (never a dead-
   const d = parseDecision(JSON.stringify({ action: 'curate', intent: 'x', ops: [{ op: 'rename_group', from: 'ghost', to: 'y' }] }), 'x', GROUPED)
   assert.notEqual(d.action, 'curate')
 })
+
+test('curate resolves against THE WALL: old done sessions are curatable but never continue-targets', () => {
+  const wall: RoutableTask[] = [
+    { id: 'w1', intent: 'old unmute session', name: 'Unmute walkthrough', state: 'done', kind: 'session', ageSec: 999999 },
+    { id: 'w2', intent: 'old canva edit', name: 'Canva video edit', state: 'done', kind: 'session', ageSec: 999999 },
+  ]
+  // curate against wall ids works even with ZERO routable tasks
+  const d = parseDecision(JSON.stringify({ action: 'curate', intent: 'group them', ops: [
+    { op: 'set_group', taskIds: ['w1', 'w2'], group: 'unmute' },
+  ] }), 'group them', [], [], [], [], wall)
+  assert.equal(d.action, 'curate')
+  assert.deepEqual(d.ops, [{ op: 'set_group', taskIds: ['w1', 'w2'], group: 'unmute' }])
+  // but a wall id can NEVER be a continue target (consent guard stands)
+  const c = parseDecision(JSON.stringify({ action: 'continue', targetTaskId: 'w1', intent: 'x' }), 'x', [], [], [], [], wall)
+  assert.notEqual(c.action, 'continue')
+})
+
+test('buildRoutingPrompt: species ladder up front, wall section with groups, curate contrast example', () => {
+  const wall: RoutableTask[] = [{ id: 'w1', intent: 'x', name: 'Unmute walkthrough', state: 'done', kind: 'session', ageSec: 10, group: 'unmute' }]
+  const p = buildRoutingPrompt('y', [], '/d/decision.json', [], [], [], wall)
+  assert.ok(p.indexOf('classify the command’s SPECIES') < p.indexOf('Open tasks') || p.includes("command's SPECIES"))
+  assert.ok(p.includes('THE WALL'))
+  assert.ok(p.includes('[w1] "Unmute walkthrough" — done · group: unmute'))
+  assert.ok(p.includes('"add grouping to the unmute repo"'))
+})

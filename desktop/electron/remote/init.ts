@@ -1128,7 +1128,21 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         ageSec: Math.max(0, Math.round((nowMs - t.updatedAt) / 1000)),
       }))
       const { targetable, coldSessions } = partitionRoutable(nowMs)
-      const decision = await router.route(raw, targetable, projects, finished, coldSessions)
+      // THE WALL for curation: everything the user can currently SEE (mirrors
+      // the renderer's visibleOnWall: non-shelved sessions always; active
+      // states; recent finishes). Curation references resolve against what's
+      // on screen — a wall the router can't see caused the first field bug
+      // (a curation command misrouted into a junk task, 2026-07-16).
+      const DONE_FADE_MS = 15 * 60_000
+      const ATTN_FADE_MS = 60 * 60_000
+      const wall = manager.list().filter((t) => {
+        if (t.shelved) return false
+        if ((t.kind ?? 'oneoff') === 'session') return true
+        if (t.state === 'processing' || t.state === 'needs-user' || t.state === 'ready') return true
+        const age = nowMs - t.updatedAt
+        return t.state === 'done' ? age < DONE_FADE_MS : age < ATTN_FADE_MS
+      }).map((t) => snapshotOf(t, nowMs, false))
+      const decision = await router.route(raw, targetable, projects, finished, coldSessions, wall)
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       if (decision.action === 'continue' && decision.targetTaskId) {
