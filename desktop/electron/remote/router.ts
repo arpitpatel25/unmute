@@ -246,6 +246,27 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `and set "contextTaskId" to that task's id: the new task receives that task's`,
     `actual record (status + transcript) to read before answering.`,
     ``,
+    ...((): string[] => {
+      const members = new Map<string, string[]>()
+      for (const t of [...tasks, ...coldSessions, ...wall]) {
+        const g = (t.group ?? '').trim()
+        if (!g) continue
+        const label = (t.name || t.intent).slice(0, 40)
+        const list = members.get(g) ?? []
+        if (list.length < 2 && !list.includes(label)) list.push(label)
+        members.set(g, list)
+      }
+      if (!members.size) return []
+      return [
+        ``,
+        `LIVE GROUPS — the workspace streams currently on the user's wall. These are`,
+        `the ONLY groups that exist right now: groups are creatures of the present`,
+        `(they fade when their tasks end; new ones are minted only by you or the`,
+        `user). Each is "what the work is about", shown with example members:`,
+        ...[...members.entries()].map(([g, ms]) => `  • ${g} — e.g. ${ms.map((m) => `"${m}"`).join(', ')}`),
+      ]
+    })(),
+    ``,
     `CURATION (action "curate"): if the command organizes the wall ITSELF — "group`,
     `these two as X", "put the video tasks together", "rename group A to B" — do`,
     `NOT start or continue anything: choose action "curate" with "ops". Ops:`,
@@ -271,7 +292,7 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
     `mode: use "raw" for "open me a session to work in" / open-ended coding where injected memory hints would pollute long reasoning; use "managed" for short, surface-operating dictated tasks. If ambiguous, choose "raw".`,
     `kind (only for action "new"): "session" for a working session the user will keep coming back to — coding, a project (anything with "dir"), open-ended "work on X" — it stays alive until they end it. "oneoff" for a quick errand they fire and forget (open/check/find something). If ambiguous, "oneoff".`,
-    `group: the workspace group for the task this command creates or continues — the answer to "what is this work ABOUT" (a project, artifact, or stream: a repo name, "launch video", "on-call"), NEVER an activity type ("coding", "research", "media"). The live groups are shown on the tasks above ("group: ..."): JOIN one when this task belongs to that stream — prefer joining. Create a new name (2-3 words, the subject in the user's own words; if the user names a group in the command, use exactly their words) only for a clearly distinct ongoing stream. A group is something the user will still care about next week; the specific deliverable is the task, not the group. When unsure, omit — ungrouped is fine and common.`,
+    `group: the workspace group for the task this command creates or continues — the answer to "what is this work ABOUT" (a project, artifact, or stream: a repo name, "launch video", "on-call"), NEVER an activity type ("coding", "research", "media"). Decide it DELIBERATELY, in this order: (1) check the LIVE GROUPS list above — JOIN one when this task belongs to that same stream of work (not merely when it mentions the same product/word: a group that swallows everything is no group); (2) if the user names a group in the command, use exactly their words; (3) create a new name (2-3 words, the subject in the user's own words) for a clearly distinct ongoing stream; (4) otherwise omit — ungrouped is an honest answer, and the user regroups by voice in one sentence. A group is something the user will still care about next week; the specific deliverable is the task, not the group.`,
   ].join('\n')
 }
 
@@ -468,7 +489,7 @@ export class Router {
       const raw = await this.waitForDecision(prompt)
       const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall)
       // TEMP(memory-debug)
-      log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, MEMORY_DEBUG: true })
+      log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, group: decision.group ?? null, ops: decision.ops?.length ?? 0, MEMORY_DEBUG: true })
       return decision
     } catch (e) {
       log.warn('route failed — using failsafe', { error: (e as Error).message })

@@ -464,3 +464,24 @@ test('buildRoutingPrompt: species ladder up front, wall section with groups, cur
   assert.ok(p.includes('[w1] "Unmute walkthrough" — done · group: unmute'))
   assert.ok(p.includes('"add grouping to the unmute repo"'))
 })
+
+test('buildRoutingPrompt: LIVE GROUPS section lists each group with member examples and explains liveness', () => {
+  const wall: RoutableTask[] = [
+    { id: 'w1', intent: 'landing page fix', name: 'Unmute landing page', state: 'done', kind: 'session', ageSec: 10, group: 'Unmute' },
+    { id: 'w2', intent: 'cloud build check', name: 'Cloud repo build check', state: 'done', kind: 'session', ageSec: 10, group: 'Unmute' },
+    { id: 'w3', intent: 'grade the outro', name: 'Oasis color grade', state: 'done', kind: 'session', ageSec: 10, group: 'oasis video' },
+  ]
+  const p = buildRoutingPrompt('y', [], '/d/decision.json', [], [], [], wall)
+  assert.ok(p.includes('LIVE GROUPS'))
+  assert.ok(p.includes('• Unmute — e.g. "Unmute landing page", "Cloud repo build check"'))
+  assert.ok(p.includes('• oasis video — e.g. "Oasis color grade"'))
+  assert.ok(p.includes('creatures of the present'))
+  assert.ok(p.includes('a group that swallows everything is no group'))
+})
+
+test('buildRoutingPrompt: no LIVE GROUPS section when nothing is grouped', () => {
+  const p = buildRoutingPrompt('y', TASKS, '/d/decision.json')
+  // The guidance line may still REFERENCE the list by name; the section
+  // itself (header + bullets) must be absent when no groups exist.
+  assert.ok(!p.includes('LIVE GROUPS — the workspace streams'))
+})
