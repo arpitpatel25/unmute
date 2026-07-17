@@ -17,7 +17,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createLogger } from '../log'
-import { AX_MCP_PORT, AX_MCP_PATH } from './server'
+import { CUA_MCP_PORT as AX_MCP_PORT, CUA_MCP_PATH as AX_MCP_PATH } from '../cua/server'
 
 const log = createLogger('ax-register')
 
@@ -27,8 +27,9 @@ const STEER_BEGIN = '<!-- UNMUTE-COMPUTER-USE:BEGIN -->'
 const STEER_END = '<!-- UNMUTE-COMPUTER-USE:END -->'
 const STEER_BODY =
   'For GUI tasks that touch a desktop app (Notion, WhatsApp, Slack, Notes, Mail, any Mac app), ' +
-  'PREFER the `computer` MCP tools (list_apps, find, press, set_value, menu_action, capture_window). ' +
-  'They operate apps in the BACKGROUND without stealing focus or moving the user\'s windows. ' +
+  'PREFER the `computer` MCP tools (list_apps, get_window_state, click, type_text, press_key, set_value). ' +
+  'They operate apps in the BACKGROUND without stealing focus or moving the user\'s windows or cursor. ' +
+  'If a result reports an escalation recommending foreground, re-call that tool with delivery_mode:"foreground". ' +
   'Do NOT reach for built-in computer-use / screen control unless the `computer` tools genuinely cannot do it — ' +
   'screen control brings apps to the front and interrupts the user.'
 
