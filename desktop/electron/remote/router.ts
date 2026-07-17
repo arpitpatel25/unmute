@@ -76,7 +76,10 @@ export interface RouteDecision {
    *  or injected. Read-only by construction. */
   /** 'curate' = the command organizes the WALL itself (group/rename) — nothing
    *  is spawned or injected; the host applies validated ops directly. */
-  action: 'new' | 'continue' | 'resume' | 'speak' | 'curate'
+  /** 'skill_feedback' = the command is feedback ABOUT a listed skill's behavior
+   *  (a complaint/correction/suggestion) — nothing is spawned; the host records
+   *  it against the named skill. */
+  action: 'new' | 'continue' | 'resume' | 'speak' | 'curate' | 'skill_feedback'
   targetTaskId?: string
   /** cleaned intent (router folds in transcript cleanup). */
   intent: string
@@ -113,6 +116,10 @@ export interface RouteDecision {
   group?: string
   /** For action 'curate': the validated operations to apply. */
   ops?: CurateOp[]
+  /** Skill the user explicitly asked to use by name (validated against the
+   *  offered list) — or, for skill_feedback, the skill the feedback is about.
+   *  Unmute never chooses one unprompted. */
+  skill?: string
 }
 
 // ─── Pure helpers (unit-tested) ───────────────────────────────────
@@ -127,7 +134,7 @@ export function fmtAge(ageSec: number): string {
 
 /** The instruction we type into the warm REPL each call. Self-contained: the
  *  router relies on THIS snapshot, not on accumulated memory (keeps it thin). */
-export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = []): string {
+export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = []): string {
   const lines = tasks.map((t) =>
     `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — ${t.state}` +
     `${t.kind === 'session' ? ' · PERSISTENT SESSION' : ''}${t.project ? ` · project: ${t.project}` : ''}` +
@@ -285,8 +292,21 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
       ...wall.map((t) =>
         `  [${t.id}]${t.name ? ` "${t.name}"` : ` "${t.intent.slice(0, 60)}"`} — ${t.state}${t.group ? ` · group: ${t.group}` : ' · ungrouped'}`),
     ] : []),
+    ...(skillNames.length ? [
+      ``,
+      `THE USER'S SKILLS (reference list — names only): ${skillNames.join(', ')}`,
+      `If the command EXPLICITLY asks to use one of these by (fuzzy) name — "use my`,
+      `PR review skill", "run the video load skill" — set "skill" to that EXACT`,
+      `listed name on your normal WORK decision. Only when the user names one;`,
+      `never volunteer a skill.`,
+      `SKILL FEEDBACK: if the command is feedback ABOUT one of these skills — a`,
+      `complaint, correction, or suggestion about how the skill itself behaves`,
+      `("the pr-review skill keeps missing lockfiles") — choose action`,
+      `"skill_feedback" with "skill" set to that name and intent = the feedback,`,
+      `cleaned. Nothing is spawned.`,
+    ] : []),
     ``,
-    `Write exactly: {"action":"new"|"continue"|"resume"|"speak"|"curate","targetTaskId":"<id when continue/resume/speak>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>","contextTaskId":"<task id whose record a NEW task should read, or omit>","group":"<workspace group or omit>","ops":[<curate ops, action "curate" only>]}`,
+    `Write exactly: {"action":"new"|"continue"|"resume"|"speak"|"curate"${skillNames.length ? '|"skill_feedback"' : ''},"targetTaskId":"<id when continue/resume/speak>","intent":"<cleaned one-line command>","name":"<2-4 word title for a new task>","surface":"<app/tool or omit>","mode":"managed"|"raw","kind":"oneoff"|"session","dir":"<known project path or omit>","alternate":"<task id or omit>","contextTaskId":"<task id whose record a NEW task should read, or omit>","group":"<workspace group or omit>","ops":[<curate ops, action "curate" only>]${skillNames.length ? ',"skill":"<listed skill name or omit>"' : ''}}`,
     `name (for action "new"): a 2-4 word title capturing the essence, for a session list in a UI — plain words, no quotes/punctuation (e.g. "Unmute pricing check", "WhatsApp message", "Gating feature work").`,
     `alternate (only with action "new", optional): if exactly one open task was a PLAUSIBLE alternative you seriously weighed before choosing NEW, give its id — the user gets a one-tap "or send it there?" offer. Omit it when nothing came close (most of the time).`,
     `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
@@ -317,7 +337,7 @@ export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSe
 /** Parse the decision file. EXPLICIT router decisions (new, or continue→known id)
  *  are honored. Everything else — null/malformed/unknown-action/unknown-id —
  *  routes through failsafeDecision (continue-latest-if-single). */
-export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = [], coldSessions: RoutableTask[] = [], finished: RoutableTask[] = [], wall: RoutableTask[] = []): RouteDecision {
+export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = [], coldSessions: RoutableTask[] = [], finished: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = []): RouteDecision {
   // CONSENT ENFORCEMENT (layer 2): continue-targets are ONLY the targetable
   // tasks; a cold session id in targetTaskId is rejected here no matter what
   // the model wrote (falls through to a safe NEW). Cold ids ARE valid for
@@ -328,11 +348,18 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   // (a failed task resumes via its own nudge path, not here; cold sessions and
   // live tasks can never be 'resumed').
   const resumeIds = new Set(finished.filter((t) => t.state === 'done' || t.state === 'ready').map((t) => t.id))
+  // Skills the user was actually offered — Unmute never chooses one unprompted,
+  // and an off-list name (or a hallucinated one) is dropped at this boundary.
+  const knownSkills = new Set(skillNames)
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
-  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string; contextTaskId?: string; group?: string; ops?: unknown }
+  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string; contextTaskId?: string; group?: string; ops?: unknown; skill?: string }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
   const intent = (obj.intent && obj.intent.trim()) || fallbackIntent
   const mode = obj.mode === 'raw' ? 'raw' : 'managed'
+  // skill: trimmed, de-quoted, kept ONLY if it names a skill we offered — junk
+  // and off-list names become undefined (the user must have named it explicitly).
+  const rawSkill = (obj.skill ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
+  const skill = knownSkills.has(rawSkill) ? rawSkill : undefined
   // Pin to the canonical vocabulary: an off-list / invented surface (the LM
   // emitted "jiohotstar", "x", etc. freely) becomes undefined, and the caller
   // falls back to the deterministic detectSurface — so the store can't fragment.
@@ -342,10 +369,17 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   const rawGroup = (obj.group ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
   const group = rawGroup && rawGroup.length <= 32 ? rawGroup : undefined
   if (obj.action === 'continue' && obj.targetTaskId && validIds.has(obj.targetTaskId)) {
-    return { action: 'continue', targetTaskId: obj.targetTaskId, intent, mode, surface, ...(group ? { group } : {}) }
+    return { action: 'continue', targetTaskId: obj.targetTaskId, intent, mode, surface, ...(group ? { group } : {}), ...(skill ? { skill } : {}) }
   }
   if (obj.action === 'resume' && obj.targetTaskId && resumeIds.has(obj.targetTaskId)) {
-    return { action: 'resume', targetTaskId: obj.targetTaskId, intent, mode, surface, ...(group ? { group } : {}) }
+    return { action: 'resume', targetTaskId: obj.targetTaskId, intent, mode, surface, ...(group ? { group } : {}), ...(skill ? { skill } : {}) }
+  }
+  // SKILL FEEDBACK: feedback ABOUT a listed skill's behavior — nothing spawned,
+  // nothing injected; the host records it against the named skill. We NEVER
+  // invent a feedback target: an unknown/missing skill falls through to failsafe.
+  if (obj.action === 'skill_feedback') {
+    if (skill) return { action: 'skill_feedback', skill, intent }
+    return failsafeDecision(tasks, intent)
   }
   // CURATE: wall organization only — nothing spawned, nothing injected. Ops are
   // validated hard: task ids must be ones we offered (live or cold — the user's
@@ -398,7 +432,7 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
     // falls back to a truncated intent, never breaks).
     const rawName = (obj.name ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
     const name = rawName && rawName.length <= 48 ? rawName : undefined
-    return { action: 'new', intent, mode, surface, kind, dir, alternate, name, contextTaskId, ...(group ? { group } : {}) }
+    return { action: 'new', intent, mode, surface, kind, dir, alternate, name, contextTaskId, ...(group ? { group } : {}), ...(skill ? { skill } : {}) }
   }
   return failsafeDecision(tasks, intent)
 }
@@ -454,8 +488,8 @@ export class Router {
 
   /** Classify one utterance against the current task snapshot. Single-flighted;
    *  always resolves (fail-safe to a new task). */
-  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = []): Promise<RouteDecision> {
-    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects, finished, coldSessions, wall))
+  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = []): Promise<RouteDecision> {
+    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects, finished, coldSessions, wall, skillNames))
     // After the decision resolves to the caller, keep the chain alive with
     // housekeeping (/clear + maybe-recycle) — off the hot path, but serialized
     // so it can never overlap the next route.
@@ -472,13 +506,13 @@ export class Router {
     return run
   }
 
-  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = []): Promise<RouteDecision> {
+  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = []): Promise<RouteDecision> {
     const fallback = (utterance || '').trim()
     try {
       await this.ensureSession()
       await fs.mkdir(this.dir, { recursive: true })
       await fs.rm(this.decisionPath, { force: true }).catch(() => {})
-      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished, coldSessions, wall)
+      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished, coldSessions, wall, skillNames)
       this.ex!.writeStdin(prompt)
       // The multi-line prompt is captured by Claude's TUI as a paste that lands
       // one Enter short of submitting — so it sits as "[Pasted text]" and the
@@ -487,7 +521,7 @@ export class Router {
       await this.sleep(this.o.submitConfirmMs)
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
       const raw = await this.waitForDecision(prompt)
-      const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall)
+      const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames)
       // TEMP(memory-debug)
       log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, group: decision.group ?? null, ops: decision.ops?.length ?? 0, MEMORY_DEBUG: true })
       return decision

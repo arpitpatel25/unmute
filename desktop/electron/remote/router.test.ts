@@ -485,3 +485,26 @@ test('buildRoutingPrompt: no LIVE GROUPS section when nothing is grouped', () =>
   // itself (header + bullets) must be absent when no groups exist.
   assert.ok(!p.includes('LIVE GROUPS — the workspace streams'))
 })
+
+test('prompt lists skills and instructs skill/skill_feedback when names supplied', () => {
+  const p = buildRoutingPrompt('u', [], '/d.json', [], [], [], [], ['pr-review', 'video-load-premiere'])
+  assert.ok(p.includes('pr-review'))
+  assert.ok(/skill_feedback/.test(p))
+  const bare = buildRoutingPrompt('u', [], '/d.json')
+  assert.ok(!/skill_feedback/.test(bare))              // section only renders when skills exist
+})
+
+test('parseDecision: skill honored only when known; junk dropped', () => {
+  const d = parseDecision(JSON.stringify({ action: 'new', intent: 'i', skill: 'pr-review' }), 'i', [], [], [], [], [], ['pr-review'])
+  assert.equal(d.skill, 'pr-review')
+  const junk = parseDecision(JSON.stringify({ action: 'new', intent: 'i', skill: 'made-up' }), 'i', [], [], [], [], [], ['pr-review'])
+  assert.equal(junk.skill, undefined)
+})
+
+test('parseDecision: skill_feedback requires a known skill, else failsafe', () => {
+  const fb = parseDecision(JSON.stringify({ action: 'skill_feedback', intent: 'it misses lockfiles', skill: 'pr-review' }), 'x', [], [], [], [], [], ['pr-review'])
+  assert.equal(fb.action, 'skill_feedback')
+  assert.equal(fb.skill, 'pr-review')
+  const bad = parseDecision(JSON.stringify({ action: 'skill_feedback', intent: 'x', skill: 'unknown' }), 'x', [], [], [], [], [], ['pr-review'])
+  assert.equal(bad.action, 'new')                      // failsafe — never invent a feedback target
+})
