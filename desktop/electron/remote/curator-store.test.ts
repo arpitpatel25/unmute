@@ -71,3 +71,26 @@ test('readTranscriptDelta returns lines from offset with lookback and new offset
   assert.deepEqual(none.lines, [])
   assert.equal(none.newOffset, 4)
 })
+
+// --- Task 4: occurrence accumulator ---
+
+import { occurrenceKey, mergeDistill, type CandidatesFile } from './curator-store.ts'
+
+test('occurrenceKey normalizes stably', () => {
+  assert.equal(occurrenceKey('Load video → Premiere via MCP!'), 'load-video-premiere-via-mcp')
+  assert.equal(occurrenceKey('load VIDEO premiere via mcp'), 'load-video-premiere-via-mcp')
+})
+
+test('mergeDistill accumulates across sweeps and sessions, idempotent per (key,task,sweep)', () => {
+  const empty: CandidatesFile = { version: 1, candidates: {} }
+  const proc = { title: 'Load video Premiere via MCP', skeleton: 's', count: 2, struggle: true }
+  const a = mergeDistill(empty, [proc], { taskId: 't1', sweepId: 'sw1', at: '2026-07-14', tracePointer: 'traces/a' })
+  const b = mergeDistill(a, [proc], { taskId: 't2', sweepId: 'sw2', at: '2026-07-17', tracePointer: 'traces/b' })
+  const c = mergeDistill(b, [proc], { taskId: 't2', sweepId: 'sw2', at: '2026-07-17', tracePointer: 'traces/b' }) // retry — no-op
+  const cand = c.candidates[occurrenceKey(proc.title)]
+  assert.equal(cand.total, 4)                       // 2 + 2, retry ignored
+  assert.equal(cand.occurrences.length, 2)
+  assert.equal(cand.firstSeen, '2026-07-14')
+  assert.equal(cand.lastSeen, '2026-07-17')
+  assert.equal(cand.struggle, true)
+})

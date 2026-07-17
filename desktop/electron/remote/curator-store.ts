@@ -107,6 +107,60 @@ export async function writeCandidates(p: CuratorPaths, f: CandidatesFile): Promi
 }
 
 // ---------------------------------------------------------------------------
+// Accumulator merge (§4.6) — cross-sweep occurrence memory. Repetition is
+// ledger arithmetic: a candidate's `total` is the SUM of its occurrence counts
+// across every sweep that ever saw it. This is the only reason repetition
+// detection works across days — Monday's sighting is remembered so Thursday's
+// makes two. Merge is idempotent per (key, taskId, sweepId): a retried sweep
+// re-submitting the same distill report never double-counts.
+
+/** A distilled procedure from one task's transcript, as produced by the LLM
+ *  distill pass (Task 5) and consumed by the sweep pipeline (Task 9). */
+export interface DistillProcedure { title: string; skeleton: string; count: number; struggle: boolean; usedCuratedSkill?: { name: string; friction: string } }
+
+/** Stable slug from a procedure title: lowercase, non-alphanumeric runs → '-',
+ *  collapsed, trimmed of leading/trailing '-', capped at 60 chars. Two titles
+ *  that name the same procedure must map to the same key. */
+export function occurrenceKey(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .replace(/-+$/g, '') // re-trim in case the slice landed mid-separator
+}
+
+/** Merge distill reports into the candidates ledger. PURE: returns a new
+ *  CandidatesFile, never mutates `file` (the pipeline may retry with the same
+ *  input object). No IO — persistence goes through writeCandidates. */
+export function mergeDistill(file: CandidatesFile, procs: DistillProcedure[], ctx: { taskId: string; sweepId: string; at: string; tracePointer: string }): CandidatesFile {
+  const candidates: Record<string, Candidate> = {}
+  for (const [k, c] of Object.entries(file.candidates)) {
+    candidates[k] = { ...c, occurrences: c.occurrences.slice() }
+  }
+  for (const proc of procs) {
+    const key = occurrenceKey(proc.title)
+    const existing = candidates[key]
+    // title/skeleton are fixed at first sighting and kept thereafter.
+    const cand: Candidate = existing
+      ? { ...existing, occurrences: existing.occurrences.slice() }
+      : { key, title: proc.title, skeleton: proc.skeleton, total: 0, struggle: false, firstSeen: ctx.at, lastSeen: ctx.at, occurrences: [] }
+    // Idempotency: skip if this (taskId, sweepId) already contributed an occurrence.
+    if (cand.occurrences.some(o => o.taskId === ctx.taskId && o.sweepId === ctx.sweepId)) {
+      candidates[key] = cand
+      continue
+    }
+    cand.occurrences.push({ taskId: ctx.taskId, sweepId: ctx.sweepId, count: proc.count, at: ctx.at, tracePointer: ctx.tracePointer })
+    cand.total = cand.occurrences.reduce((s, o) => s + o.count, 0)
+    cand.struggle = cand.struggle || proc.struggle
+    cand.firstSeen = cand.occurrences.reduce((m, o) => (o.at < m ? o.at : m), cand.firstSeen)
+    cand.lastSeen = cand.occurrences.reduce((m, o) => (o.at > m ? o.at : m), cand.lastSeen)
+    candidates[key] = cand
+  }
+  return { version: 1, candidates }
+}
+
+// ---------------------------------------------------------------------------
 // Ledger — the D10 authority on which skills the curator owns.
 
 const emptyLedger = (): LedgerFile => ({ version: 1, entries: [] })
