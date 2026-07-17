@@ -1,0 +1,240 @@
+// Unmute Remote — the Skill Curator's on-disk store (single owner).
+//
+// Everything the curator persists lives under ~/.unmute/remote/curator/ and
+// every byte of it flows through this module: the sweep cursor (how far each
+// session transcript has been read), the candidate patterns, the curation
+// ledger (the authority on which skills the curator created), rejections,
+// user feedback, and the proposal directories awaiting a decision.
+//
+// Two invariants, copied from skill-usage.ts (the meta.json lesson):
+//   1. Every mutation runs on a module-level serialized write-chain — two
+//      near-simultaneous writers never interleave a read-modify-write.
+//   2. Every file write is atomic: write `<file>.tmp`, then rename. A reader
+//      never sees a torn file.
+//
+// All paths are injectable (curatorPaths(baseDir)) so tests run in tmp dirs.
+
+import { promises as fs } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { homedir } from 'node:os'
+
+export interface CuratorPaths { root: string; cursor: string; candidates: string; ledger: string; rejections: string; feedback: string; proposalsDir: string; tracesDir: string }
+
+export function curatorPaths(baseDir?: string): CuratorPaths {
+  const root = baseDir ?? join(homedir(), '.unmute', 'remote', 'curator')
+  return {
+    root,
+    cursor: join(root, 'cursor.json'),
+    candidates: join(root, 'candidates.json'),
+    ledger: join(root, 'ledger.json'),
+    rejections: join(root, 'rejections.json'),
+    feedback: join(root, 'feedback.json'),
+    proposalsDir: join(root, 'proposals'),
+    tracesDir: join(root, 'traces'),
+  }
+}
+
+export interface SessionCursor { transcriptPath: string; lineOffset: number; lastSweptAt: number; sweeps: number }
+export interface CursorFile { version: 1; lastSweepAt: number; sessions: Record<string, SessionCursor> }
+
+export interface CandidateOccurrence { taskId: string; sweepId: string; count: number; at: string; tracePointer: string }
+export interface Candidate { key: string; title: string; skeleton: string; total: number; struggle: boolean; firstSeen: string; lastSeen: string; occurrences: CandidateOccurrence[] }
+export interface CandidatesFile { version: 1; candidates: Record<string, Candidate> }
+
+export type LedgerAction = 'proposed' | 'created' | 'updated' | 'user-edited-accept' | 'rejected' | 'user-modified-detected'
+export interface LedgerEntry { at: string; skill: string; action: LedgerAction; proposalId?: string; sweepId?: string; contentHash?: string; diff?: string }
+export interface LedgerFile { version: 1; entries: LedgerEntry[] }
+
+export interface ProposalDraft { name: string; description: string; body: string }
+export interface ProposalEvidence { occurrences: number; sessions: Array<{ id: string; intent: string; at: string; tracePointer: string }>; firstSeen: string; lastSeen: string; struggle: { errors: number; recoveries: number; wallClockMin: number } }
+export interface Proposal { id: string; sweepId: string; proposedAt: string; kind: 'create' | 'update'; draft: ProposalDraft; evidence: ProposalEvidence; rationale: string; targetSkill?: string; diff?: string; triggeringEvidence?: string[]; affectedSessions?: Array<{ id: string; invokedAt: string }>; resolution: null | { action: 'accepted' | 'rejected'; at: string; userEdited: boolean; reason?: string } }
+
+export interface FeedbackEntry { at: string; skill: string; note: string; consumedBySweep?: string }
+
+// ---------------------------------------------------------------------------
+// Serialized write-chain + atomic JSON IO (the two invariants).
+
+let chain: Promise<unknown> = Promise.resolve()
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const p = chain.then(fn, fn)
+  chain = p.catch(() => { /* keep the chain alive */ })
+  return p
+}
+
+async function readJson<T>(file: string, empty: T): Promise<T> {
+  try {
+    return JSON.parse(await fs.readFile(file, 'utf8')) as T
+  } catch {
+    return empty
+  }
+}
+
+async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+  await fs.mkdir(dirname(file), { recursive: true })
+  const tmp = `${file}.tmp`
+  await fs.writeFile(tmp, JSON.stringify(value, null, 2))
+  await fs.rename(tmp, file) // atomic — a reader never sees a torn file
+}
+
+// ---------------------------------------------------------------------------
+// Cursor
+
+const emptyCursor = (): CursorFile => ({ version: 1, lastSweepAt: 0, sessions: {} })
+
+export async function readCursor(p: CuratorPaths): Promise<CursorFile> {
+  const raw = await readJson<CursorFile>(p.cursor, emptyCursor())
+  if (raw && raw.version === 1 && raw.sessions) return raw
+  return emptyCursor()
+}
+
+export async function writeCursor(p: CuratorPaths, f: CursorFile): Promise<void> {
+  return serialized(() => writeJsonAtomic(p.cursor, f))
+}
+
+// ---------------------------------------------------------------------------
+// Candidates
+
+const emptyCandidates = (): CandidatesFile => ({ version: 1, candidates: {} })
+
+export async function readCandidates(p: CuratorPaths): Promise<CandidatesFile> {
+  const raw = await readJson<CandidatesFile>(p.candidates, emptyCandidates())
+  if (raw && raw.version === 1 && raw.candidates) return raw
+  return emptyCandidates()
+}
+
+export async function writeCandidates(p: CuratorPaths, f: CandidatesFile): Promise<void> {
+  return serialized(() => writeJsonAtomic(p.candidates, f))
+}
+
+// ---------------------------------------------------------------------------
+// Ledger — the D10 authority on which skills the curator owns.
+
+const emptyLedger = (): LedgerFile => ({ version: 1, entries: [] })
+
+export async function readLedger(p: CuratorPaths): Promise<LedgerFile> {
+  const raw = await readJson<LedgerFile>(p.ledger, emptyLedger())
+  if (raw && raw.version === 1 && Array.isArray(raw.entries)) return raw
+  return emptyLedger()
+}
+
+export async function appendLedger(p: CuratorPaths, e: LedgerEntry): Promise<void> {
+  return serialized(async () => {
+    const f = await readLedger(p)
+    f.entries.push(e)
+    await writeJsonAtomic(p.ledger, f)
+  })
+}
+
+/** Names with a materialized skill on disk per the ledger: any 'created',
+ *  'updated', or 'user-edited-accept' entry adds the name. No removal action
+ *  exists yet — retirement is out of scope (D15). */
+export function curatedSkillNames(l: LedgerFile): Set<string> {
+  const names = new Set<string>()
+  for (const e of l.entries) {
+    if (e.action === 'created' || e.action === 'updated' || e.action === 'user-edited-accept') names.add(e.skill)
+  }
+  return names
+}
+
+// ---------------------------------------------------------------------------
+// Rejections
+
+export async function readRejections(p: CuratorPaths): Promise<Array<{ at: string; name: string; reason?: string }>> {
+  const raw = await readJson<Array<{ at: string; name: string; reason?: string }>>(p.rejections, [])
+  return Array.isArray(raw) ? raw : []
+}
+
+export async function appendRejection(p: CuratorPaths, r: { at: string; name: string; reason?: string }): Promise<void> {
+  return serialized(async () => {
+    const all = await readRejections(p)
+    all.push(r)
+    await writeJsonAtomic(p.rejections, all)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Feedback
+
+export async function readFeedback(p: CuratorPaths): Promise<FeedbackEntry[]> {
+  const raw = await readJson<FeedbackEntry[]>(p.feedback, [])
+  return Array.isArray(raw) ? raw : []
+}
+
+export async function appendFeedback(p: CuratorPaths, f: FeedbackEntry): Promise<void> {
+  return serialized(async () => {
+    const all = await readFeedback(p)
+    all.push(f)
+    await writeJsonAtomic(p.feedback, all)
+  })
+}
+
+/** Stamp every not-yet-consumed feedback entry as consumed by this sweep. */
+export async function markFeedbackConsumed(p: CuratorPaths, sweepId: string): Promise<void> {
+  return serialized(async () => {
+    const all = await readFeedback(p)
+    let changed = false
+    for (const e of all) {
+      if (!e.consumedBySweep) {
+        e.consumedBySweep = sweepId
+        changed = true
+      }
+    }
+    if (changed) await writeJsonAtomic(p.feedback, all)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Proposals — each lives in its own DIRECTORY (proposals/<id>/proposal.json)
+// so draft.md and the review conversation can live beside the JSON.
+
+const proposalFile = (p: CuratorPaths, id: string): string => join(p.proposalsDir, id, 'proposal.json')
+
+export async function writeProposal(p: CuratorPaths, prop: Proposal): Promise<void> {
+  return serialized(() => writeJsonAtomic(proposalFile(p, prop.id), prop))
+}
+
+export async function readProposal(p: CuratorPaths, id: string): Promise<Proposal | null> {
+  return readJson<Proposal | null>(proposalFile(p, id), null)
+}
+
+export async function listPendingProposals(p: CuratorPaths): Promise<Proposal[]> {
+  let ids: string[]
+  try {
+    ids = await fs.readdir(p.proposalsDir)
+  } catch {
+    return [] // no proposals dir yet
+  }
+  const pending: Proposal[] = []
+  for (const id of ids) {
+    const prop = await readProposal(p, id)
+    if (prop && prop.resolution === null) pending.push(prop)
+  }
+  return pending.sort((a, b) => (a.proposedAt < b.proposedAt ? 1 : a.proposedAt > b.proposedAt ? -1 : 0))
+}
+
+export async function resolveProposal(p: CuratorPaths, id: string, res: NonNullable<Proposal['resolution']>): Promise<void> {
+  return serialized(async () => {
+    const prop = await readJson<Proposal | null>(proposalFile(p, id), null)
+    if (!prop) return // nothing to resolve
+    prop.resolution = res
+    await writeJsonAtomic(proposalFile(p, id), prop)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Transcript deltas — read only what's new since the cursor, plus a small
+// lookback window for context. Read-only: transcripts belong to Claude Code.
+
+export async function readTranscriptDelta(transcriptPath: string, fromLine: number, lookbackLines?: number): Promise<{ lines: string[]; lookback: string[]; newOffset: number }> {
+  let raw: string
+  try {
+    raw = await fs.readFile(transcriptPath, 'utf8')
+  } catch {
+    return { lines: [], lookback: [], newOffset: fromLine }
+  }
+  const all = raw.split('\n')
+  while (all.length && all[all.length - 1] === '') all.pop() // drop trailing empties
+  const lines = all.slice(fromLine)
+  const lookback = all.slice(Math.max(0, fromLine - (lookbackLines ?? 200)), fromLine)
+  return { lines, lookback, newOffset: all.length }
+}
