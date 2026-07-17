@@ -13,6 +13,7 @@
 //      control. Belt-and-braces on top of the routing priority.
 
 import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -20,6 +21,16 @@ import { createLogger } from '../log'
 import { CUA_MCP_PORT as AX_MCP_PORT, CUA_MCP_PATH as AX_MCP_PATH } from '../cua/server'
 
 const log = createLogger('ax-register')
+const execFileP = promisify(execFile)
+
+// `claude mcp get <name>` → its stdout if registered, else null. Every `claude
+// mcp` invocation writes ~/.claude.json, so these MUST run serially (see
+// applyAxRegistration): two concurrent ones clobber each other's write, which
+// is exactly how the rename migration silently failed to remove the old entry.
+async function mcpGet(name: string): Promise<string | null> {
+  try { return (await execFileP('claude', ['mcp', 'get', name], { timeout: 10_000 })).stdout }
+  catch { return null }
+}
 
 // The MCP server name Claude Code sees. Prefixed with `unmute-` so it's
 // unambiguously OURS: it can't collide with Claude Code's built-in
@@ -44,38 +55,43 @@ function claudeMdPath(home = homedir()): string { return join(home, '.claude', '
 function claudeConfigPath(home = homedir()): string { return join(home, '.claude.json') }
 
 /** Register (idempotent) the ax-mcp server in Claude's user-scope config. */
-export function registerAxServer(port = AX_MCP_PORT): void {
-  execFile('claude', ['mcp', 'get', AX_MCP_NAME], { timeout: 10_000 }, (err) => {
-    if (!err) return // already registered
-    const cfg = JSON.stringify({ type: 'http', url: `http://127.0.0.1:${port}${AX_MCP_PATH}` })
-    execFile('claude', ['mcp', 'add-json', AX_MCP_NAME, cfg, '--scope', 'user'], { timeout: 15_000 }, (e2, _o, stderr2) => {
-      if (e2) log.warn('ax registration failed', { error: String(stderr2 || e2.message) })
-      else log.event('ax-registered-user-scope', { port })
-    })
-  })
+export async function registerAxServer(port = AX_MCP_PORT): Promise<void> {
+  if (await mcpGet(AX_MCP_NAME)) return // already registered
+  const cfg = JSON.stringify({ type: 'http', url: `http://127.0.0.1:${port}${AX_MCP_PATH}` })
+  try {
+    await execFileP('claude', ['mcp', 'add-json', AX_MCP_NAME, cfg, '--scope', 'user'], { timeout: 15_000 })
+    log.event('ax-registered-user-scope', { port })
+  } catch (e) {
+    log.warn('ax registration failed', { error: String((e as any).stderr || (e as Error).message) })
+  }
 }
 
 /** One-time migration from the old `computer` name to `unmute-computer`.
  *  Removes the legacy registration ONLY if it points at our bridge (so we never
  *  delete an unrelated `computer` MCP the user set up themselves). */
-export function migrateLegacyRegistration(port = AX_MCP_PORT): void {
-  execFile('claude', ['mcp', 'get', LEGACY_MCP_NAME], { timeout: 10_000 }, (err, stdout) => {
-    if (err) return // not registered → nothing to migrate
-    const isOurs = String(stdout).includes(`127.0.0.1:${port}${AX_MCP_PATH}`) || String(stdout).includes(`:${port}${AX_MCP_PATH}`)
-    if (!isOurs) return // a different `computer` server — leave it alone
-    execFile('claude', ['mcp', 'remove', LEGACY_MCP_NAME, '--scope', 'user'], { timeout: 10_000 }, (e2, _o, stderr2) => {
-      if (e2 && !String(stderr2).includes('not found')) log.warn('legacy computer removal failed', { error: String(stderr2 || e2.message) })
-      else log.event('ax-legacy-computer-removed', {})
-    })
-  })
+export async function migrateLegacyRegistration(port = AX_MCP_PORT): Promise<void> {
+  const out = await mcpGet(LEGACY_MCP_NAME)
+  if (!out) return // not registered → nothing to migrate
+  const isOurs = out.includes(`127.0.0.1:${port}${AX_MCP_PATH}`) || out.includes(`:${port}${AX_MCP_PATH}`)
+  if (!isOurs) return // a different `computer` server — leave it alone
+  try {
+    await execFileP('claude', ['mcp', 'remove', LEGACY_MCP_NAME, '--scope', 'user'], { timeout: 10_000 })
+    log.event('ax-legacy-computer-removed', {})
+  } catch (e) {
+    const msg = String((e as any).stderr || (e as Error).message)
+    if (!msg.includes('not found')) log.warn('legacy computer removal failed', { error: msg })
+  }
 }
 
 /** Remove the ax-mcp server registration (toggle off). */
-export function unregisterAxServer(): void {
-  execFile('claude', ['mcp', 'remove', AX_MCP_NAME, '--scope', 'user'], { timeout: 10_000 }, (err, _o, stderr) => {
-    if (err && !String(stderr).includes('not found')) log.warn('ax unregister failed', { error: String(stderr || err.message) })
-    else log.event('ax-unregistered', {})
-  })
+export async function unregisterAxServer(): Promise<void> {
+  try {
+    await execFileP('claude', ['mcp', 'remove', AX_MCP_NAME, '--scope', 'user'], { timeout: 10_000 })
+    log.event('ax-unregistered', {})
+  } catch (e) {
+    const msg = String((e as any).stderr || (e as Error).message)
+    if (!msg.includes('not found')) log.warn('ax unregister failed', { error: msg })
+  }
 }
 
 /** Append (or refresh) the CLAUDE.md steer block. Idempotent — replaces any
@@ -168,15 +184,18 @@ export async function ensureNotDisabled(names: string[], home = homedir()): Prom
   }
 }
 
-/** Apply the whole registration state for a given enabled flag. */
+/** Apply the whole registration state for a given enabled flag. Every step is
+ *  awaited in sequence: the `claude mcp` calls each rewrite ~/.claude.json, so
+ *  running them concurrently clobbers writes (the bug that left both `computer`
+ *  and `unmute-computer` registered). Serial = deterministic. */
 export async function applyAxRegistration(enabled: boolean, port = AX_MCP_PORT): Promise<void> {
   if (enabled) {
-    migrateLegacyRegistration(port)
-    registerAxServer(port)
+    await migrateLegacyRegistration(port)
+    await registerAxServer(port)
     await ensureNotDisabled([AX_MCP_NAME, LEGACY_MCP_NAME])
     await addSteer()
   } else {
-    unregisterAxServer()
+    await unregisterAxServer()
     await removeSteer()
   }
 }
