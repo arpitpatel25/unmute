@@ -55,7 +55,12 @@ export interface FeedbackEntry { at: string; skill: string; note: string; consum
 // Serialized write-chain + atomic JSON IO (the two invariants).
 
 let chain: Promise<unknown> = Promise.resolve()
-function serialized<T>(fn: () => Promise<T>): Promise<T> {
+/** Run `fn` on the module-level serialized write-chain: two near-simultaneous
+ *  callers never interleave a read-modify-write. Exported so other writers
+ *  (e.g. curator-writer's collision-guard-through-write critical section) can
+ *  share the SAME chain — do NOT nest serialized() inside serialized(), that
+ *  self-deadlocks; use the *Core helpers for work already inside the lock. */
+export function serialized<T>(fn: () => Promise<T>): Promise<T> {
   const p = chain.then(fn, fn)
   chain = p.catch(() => { /* keep the chain alive */ })
   return p
@@ -171,12 +176,17 @@ export async function readLedger(p: CuratorPaths): Promise<LedgerFile> {
   return emptyLedger()
 }
 
+/** Append a ledger entry WITHOUT taking the serialization lock. Only call from
+ *  code already running inside a serialized() critical section (nesting the
+ *  lock self-deadlocks). Standalone callers must use appendLedger. */
+export async function appendLedgerCore(p: CuratorPaths, e: LedgerEntry): Promise<void> {
+  const f = await readLedger(p)
+  f.entries.push(e)
+  await writeJsonAtomic(p.ledger, f)
+}
+
 export async function appendLedger(p: CuratorPaths, e: LedgerEntry): Promise<void> {
-  return serialized(async () => {
-    const f = await readLedger(p)
-    f.entries.push(e)
-    await writeJsonAtomic(p.ledger, f)
-  })
+  return serialized(() => appendLedgerCore(p, e))
 }
 
 /** Names with a materialized skill on disk per the ledger: any 'created',
