@@ -21,19 +21,27 @@ import { CUA_MCP_PORT as AX_MCP_PORT, CUA_MCP_PATH as AX_MCP_PATH } from '../cua
 
 const log = createLogger('ax-register')
 
-export const AX_MCP_NAME = 'computer'
+// The MCP server name Claude Code sees. Prefixed with `unmute-` so it's
+// unambiguously OURS: it can't collide with Claude Code's built-in
+// `computer-use`, nor with any other computer-use MCP the user installs, and
+// it reads as Unmute's in the /mcp list. Pairs with the `unmute` task MCP.
+export const AX_MCP_NAME = 'unmute-computer'
+// The pre-rename name. We remove it on migration so upgraded installs don't
+// keep a dead/duplicate `computer` entry pointing at our bridge.
+export const LEGACY_MCP_NAME = 'computer'
 
 const STEER_BEGIN = '<!-- UNMUTE-COMPUTER-USE:BEGIN -->'
 const STEER_END = '<!-- UNMUTE-COMPUTER-USE:END -->'
 const STEER_BODY =
   'For GUI tasks that touch a desktop app (Notion, WhatsApp, Slack, Notes, Mail, any Mac app), ' +
-  'PREFER the `computer` MCP tools (list_apps, get_window_state, click, type_text, press_key, set_value). ' +
+  'PREFER the `unmute-computer` MCP tools (list_apps, get_window_state, click, type_text, press_key, set_value). ' +
   'They operate apps in the BACKGROUND without stealing focus or moving the user\'s windows or cursor. ' +
   'If a result reports an escalation recommending foreground, re-call that tool with delivery_mode:"foreground". ' +
-  'Do NOT reach for built-in computer-use / screen control unless the `computer` tools genuinely cannot do it — ' +
+  'Do NOT reach for built-in computer-use / screen control unless the `unmute-computer` tools genuinely cannot do it — ' +
   'screen control brings apps to the front and interrupts the user.'
 
 function claudeMdPath(home = homedir()): string { return join(home, '.claude', 'CLAUDE.md') }
+function claudeConfigPath(home = homedir()): string { return join(home, '.claude.json') }
 
 /** Register (idempotent) the ax-mcp server in Claude's user-scope config. */
 export function registerAxServer(port = AX_MCP_PORT): void {
@@ -43,6 +51,21 @@ export function registerAxServer(port = AX_MCP_PORT): void {
     execFile('claude', ['mcp', 'add-json', AX_MCP_NAME, cfg, '--scope', 'user'], { timeout: 15_000 }, (e2, _o, stderr2) => {
       if (e2) log.warn('ax registration failed', { error: String(stderr2 || e2.message) })
       else log.event('ax-registered-user-scope', { port })
+    })
+  })
+}
+
+/** One-time migration from the old `computer` name to `unmute-computer`.
+ *  Removes the legacy registration ONLY if it points at our bridge (so we never
+ *  delete an unrelated `computer` MCP the user set up themselves). */
+export function migrateLegacyRegistration(port = AX_MCP_PORT): void {
+  execFile('claude', ['mcp', 'get', LEGACY_MCP_NAME], { timeout: 10_000 }, (err, stdout) => {
+    if (err) return // not registered → nothing to migrate
+    const isOurs = String(stdout).includes(`127.0.0.1:${port}${AX_MCP_PATH}`) || String(stdout).includes(`:${port}${AX_MCP_PATH}`)
+    if (!isOurs) return // a different `computer` server — leave it alone
+    execFile('claude', ['mcp', 'remove', LEGACY_MCP_NAME, '--scope', 'user'], { timeout: 10_000 }, (e2, _o, stderr2) => {
+      if (e2 && !String(stderr2).includes('not found')) log.warn('legacy computer removal failed', { error: String(stderr2 || e2.message) })
+      else log.event('ax-legacy-computer-removed', {})
     })
   })
 }
@@ -96,8 +119,64 @@ export function removeBlock(content: string): string {
   return content.slice(0, start) + content.slice(end + STEER_END.length)
 }
 
+/** Pure helper (exported for tests): strip `names` from every project's
+ *  `disabledMcpServers` list (and the top-level `disabledMcpjsonServers`) in a
+ *  parsed ~/.claude.json object. Returns whether anything actually changed —
+ *  callers write back only on change, so the common "nothing disabled" path
+ *  never rewrites the file (no clobber risk against Claude Code's own writes). */
+export function pruneDisabledServers(config: any, names: string[]): { changed: boolean } {
+  const kill = new Set(names)
+  let changed = false
+  const prune = (arr: unknown): unknown => {
+    if (!Array.isArray(arr)) return arr
+    const next = arr.filter((n) => !kill.has(n as string))
+    if (next.length !== arr.length) changed = true
+    return next
+  }
+  const projects = config?.projects
+  if (projects && typeof projects === 'object') {
+    for (const key of Object.keys(projects)) {
+      const proj = projects[key]
+      if (proj && typeof proj === 'object' && Array.isArray(proj.disabledMcpServers)) {
+        proj.disabledMcpServers = prune(proj.disabledMcpServers)
+      }
+    }
+  }
+  if (Array.isArray(config?.disabledMcpjsonServers)) {
+    config.disabledMcpjsonServers = prune(config.disabledMcpjsonServers)
+  }
+  return { changed }
+}
+
+/** Make Unmute's toggle authoritative: whenever Computer Use is ON, ensure our
+ *  MCP is not sitting in any project's `disabledMcpServers` (which Unmute's
+ *  toggle otherwise can't override — Claude Code has no enable/disable CLI).
+ *  Best-effort, atomic, and a no-op when nothing is disabled. */
+export async function ensureNotDisabled(names: string[], home = homedir()): Promise<void> {
+  const path = claudeConfigPath(home)
+  try {
+    const raw = await fs.readFile(path, 'utf-8')
+    const config = JSON.parse(raw)
+    const { changed } = pruneDisabledServers(config, names)
+    if (!changed) return // common path — never rewrite, no race with Claude Code
+    const tmp = `${path}.unmute-${process.pid}.tmp`
+    await fs.writeFile(tmp, JSON.stringify(config, null, 2))
+    await fs.rename(tmp, path) // atomic swap
+    log.event('ax-cleared-disabled-flag', { names })
+  } catch (e) {
+    log.warn('ensureNotDisabled failed', { error: (e as Error).message })
+  }
+}
+
 /** Apply the whole registration state for a given enabled flag. */
 export async function applyAxRegistration(enabled: boolean, port = AX_MCP_PORT): Promise<void> {
-  if (enabled) { registerAxServer(port); await addSteer() }
-  else { unregisterAxServer(); await removeSteer() }
+  if (enabled) {
+    migrateLegacyRegistration(port)
+    registerAxServer(port)
+    await ensureNotDisabled([AX_MCP_NAME, LEGACY_MCP_NAME])
+    await addSteer()
+  } else {
+    unregisterAxServer()
+    await removeSteer()
+  }
 }

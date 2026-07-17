@@ -110,7 +110,7 @@ async function handleRequest(deps: CuaServerDeps, req: http.IncomingMessage, res
         result = {
           protocolVersion: PROTOCOL_VERSION,
           capabilities: { tools: {} },
-          serverInfo: { name: 'computer', version: '2.0.0' },
+          serverInfo: { name: 'unmute-computer', version: '2.0.0' },
         }
       }
       respond(rpcResult(msg.id, result), { 'Mcp-Session-Id': sid })
