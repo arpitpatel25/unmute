@@ -395,3 +395,93 @@ test('ready one-offs are RESUMABLE resume targets (the most natural continue)', 
   assert.equal(d.action, 'resume')
   assert.equal(d.targetTaskId, 'parked-ready')
 })
+
+// ─── Workspace grouping (spec 2026-07-16-cockpit-grouping) ────────────────
+
+const GROUPED: RoutableTask[] = [
+  { id: 'g1', intent: 'fix webhook ticket', state: 'ready', kind: 'session', ageSec: 60, group: 'on-call' },
+  { id: 'g2', intent: 'color grade the outro', state: 'done', kind: 'session', ageSec: 120, group: 'launch video' },
+  { id: 'g3', intent: 'ungrouped errand', state: 'done', ageSec: 30 },
+]
+
+test('buildRoutingPrompt surfaces live groups on task lines and the grouping guidance', () => {
+  const p = buildRoutingPrompt('x', GROUPED, '/d/decision.json')
+  assert.ok(p.includes('· group: on-call'))
+  assert.ok(p.includes('· group: launch video'))
+  assert.ok(p.includes('NEVER an activity type'))
+  assert.ok(p.includes('"curate"'))
+})
+
+test('parseDecision: group rides new/continue; junk group dropped; never a stray key', () => {
+  const withGroup = parseDecision(JSON.stringify({ action: 'new', intent: 'x', kind: 'session', group: ' on-call ' }), 'x', GROUPED)
+  assert.equal(withGroup.group, 'on-call')
+  const cont = parseDecision(JSON.stringify({ action: 'continue', targetTaskId: 'g1', intent: 'x', group: 'on-call' }), 'x', GROUPED)
+  assert.equal(cont.group, 'on-call')
+  const junk = parseDecision(JSON.stringify({ action: 'new', intent: 'x', group: 'a'.repeat(60) }), 'x', GROUPED)
+  assert.ok(!('group' in junk))
+})
+
+test('parseDecision curate: valid ops pass, unknown ids and nonexistent rename sources are dropped', () => {
+  const d = parseDecision(JSON.stringify({ action: 'curate', intent: 'group these', ops: [
+    { op: 'set_group', taskIds: ['g2', 'g3', 'nope'], group: 'launch video' },
+    { op: 'rename_group', from: 'on-call', to: 'incidents' },
+    { op: 'rename_group', from: 'never-existed', to: 'x' },
+    { op: 'set_group', taskIds: ['g1'], group: '' },
+  ] }), 'group these', GROUPED)
+  assert.equal(d.action, 'curate')
+  assert.deepEqual(d.ops, [
+    { op: 'set_group', taskIds: ['g2', 'g3'], group: 'launch video' },
+    { op: 'rename_group', from: 'on-call', to: 'incidents' },
+  ])
+})
+
+test('parseDecision curate: zero valid ops falls back to failsafe (never a dead-end)', () => {
+  const d = parseDecision(JSON.stringify({ action: 'curate', intent: 'x', ops: [{ op: 'rename_group', from: 'ghost', to: 'y' }] }), 'x', GROUPED)
+  assert.notEqual(d.action, 'curate')
+})
+
+test('curate resolves against THE WALL: old done sessions are curatable but never continue-targets', () => {
+  const wall: RoutableTask[] = [
+    { id: 'w1', intent: 'old unmute session', name: 'Unmute walkthrough', state: 'done', kind: 'session', ageSec: 999999 },
+    { id: 'w2', intent: 'old canva edit', name: 'Canva video edit', state: 'done', kind: 'session', ageSec: 999999 },
+  ]
+  // curate against wall ids works even with ZERO routable tasks
+  const d = parseDecision(JSON.stringify({ action: 'curate', intent: 'group them', ops: [
+    { op: 'set_group', taskIds: ['w1', 'w2'], group: 'unmute' },
+  ] }), 'group them', [], [], [], [], wall)
+  assert.equal(d.action, 'curate')
+  assert.deepEqual(d.ops, [{ op: 'set_group', taskIds: ['w1', 'w2'], group: 'unmute' }])
+  // but a wall id can NEVER be a continue target (consent guard stands)
+  const c = parseDecision(JSON.stringify({ action: 'continue', targetTaskId: 'w1', intent: 'x' }), 'x', [], [], [], [], wall)
+  assert.notEqual(c.action, 'continue')
+})
+
+test('buildRoutingPrompt: species ladder up front, wall section with groups, curate contrast example', () => {
+  const wall: RoutableTask[] = [{ id: 'w1', intent: 'x', name: 'Unmute walkthrough', state: 'done', kind: 'session', ageSec: 10, group: 'unmute' }]
+  const p = buildRoutingPrompt('y', [], '/d/decision.json', [], [], [], wall)
+  assert.ok(p.indexOf('classify the command’s SPECIES') < p.indexOf('Open tasks') || p.includes("command's SPECIES"))
+  assert.ok(p.includes('THE WALL'))
+  assert.ok(p.includes('[w1] "Unmute walkthrough" — done · group: unmute'))
+  assert.ok(p.includes('"add grouping to the unmute repo"'))
+})
+
+test('buildRoutingPrompt: LIVE GROUPS section lists each group with member examples and explains liveness', () => {
+  const wall: RoutableTask[] = [
+    { id: 'w1', intent: 'landing page fix', name: 'Unmute landing page', state: 'done', kind: 'session', ageSec: 10, group: 'Unmute' },
+    { id: 'w2', intent: 'cloud build check', name: 'Cloud repo build check', state: 'done', kind: 'session', ageSec: 10, group: 'Unmute' },
+    { id: 'w3', intent: 'grade the outro', name: 'Oasis color grade', state: 'done', kind: 'session', ageSec: 10, group: 'oasis video' },
+  ]
+  const p = buildRoutingPrompt('y', [], '/d/decision.json', [], [], [], wall)
+  assert.ok(p.includes('LIVE GROUPS'))
+  assert.ok(p.includes('• Unmute — e.g. "Unmute landing page", "Cloud repo build check"'))
+  assert.ok(p.includes('• oasis video — e.g. "Oasis color grade"'))
+  assert.ok(p.includes('creatures of the present'))
+  assert.ok(p.includes('a group that swallows everything is no group'))
+})
+
+test('buildRoutingPrompt: no LIVE GROUPS section when nothing is grouped', () => {
+  const p = buildRoutingPrompt('y', TASKS, '/d/decision.json')
+  // The guidance line may still REFERENCE the list by name; the section
+  // itself (header + bullets) must be absent when no groups exist.
+  assert.ok(!p.includes('LIVE GROUPS — the workspace streams'))
+})

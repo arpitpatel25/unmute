@@ -21,6 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
+import { groupSections } from './groupSections'
 import { LiveTerminal } from './LiveTerminal'
 
 // ─── Ops Console palette — neutral everywhere; hue lives ONLY in `status`. ───
@@ -765,10 +766,23 @@ export default function OrchestrateWall() {
                   {digest} <span style={{ color: C.faintText }}>· dismiss</span>
                 </button>
               )}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))', gap: 11, alignContent: 'start' }}>
-                {gridTasks.length === 0 && <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>}
-                {gridTasks.map((t) => <Card key={t.id} t={t} now={now} queuePos={queuePos.get(t.id) ?? null} promoted={(promotedAt.get(t.id) ?? 0) > now - 8000} onClick={() => focus(t.id)} />)}
-              </div>
+              {/* Group sections (spec 2026-07-16): position encodes what the
+                  work is ABOUT. Zero named groups → exactly the old flat grid.
+                  Store order is newest-first, so newest renders left. */}
+              {gridTasks.length === 0 && <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>}
+              {groupSections(gridTasks).map((sec, i) => (
+                <div key={sec.name ?? '·ungrouped'} style={{ marginTop: i === 0 ? 0 : 28 }}>
+                  {sec.name != null && (
+                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase', marginBottom: 6 }}>{sec.name}</div>
+                  )}
+                  {sec.name == null && i > 0 && (
+                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.faintText, textTransform: 'uppercase', marginBottom: 6 }}>ungrouped</div>
+                  )}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))', gap: 11, alignContent: 'start' }}>
+                    {sec.tasks.map((t) => <Card key={t.id} t={t} now={now} queuePos={queuePos.get(t.id) ?? null} promoted={(promotedAt.get(t.id) ?? 0) > now - 8000} onClick={() => focus(t.id)} />)}
+                  </div>
+                </div>
+              ))}
             </>
           )}
         </div>

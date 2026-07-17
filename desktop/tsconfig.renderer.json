@@ -4,13 +4,26 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "types": ["react", "react-dom"]
+    "types": [
+      "react",
+      "react-dom"
+    ]
   },
-  "include": ["engine-overrides/renderer/remote/**/*.tsx", "engine-overrides/renderer/remote/**/*.ts"]
+  "include": [
+    "engine-overrides/renderer/remote/**/*.tsx",
+    "engine-overrides/renderer/remote/**/*.ts"
+  ],
+  "exclude": [
+    "engine-overrides/renderer/remote/**/*.test.ts"
+  ]
 }

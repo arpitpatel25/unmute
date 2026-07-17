@@ -276,6 +276,7 @@ function snapshotOf(t: Task, now: number, surfaced: boolean): RoutableTask {
     project: t.cwd !== t.home ? basename(t.cwd) : null,
     category: t.category ?? null,
     ageSec: Math.max(0, Math.round((now - t.updatedAt) / 1000)),
+    group: t.group ?? null,
     surfaced,
     awaiting: t.state === 'needs-user',
     question: t.state === 'needs-user' ? (t.question?.text ?? null) : null,
@@ -459,6 +460,7 @@ function serializeTask(t: Task) {
     shelved: t.shelved ?? false,
     note: t.note ?? null,
     spawnedBy: t.spawnedBy ?? null,
+    group: t.group ?? null,
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,
@@ -1126,7 +1128,21 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         ageSec: Math.max(0, Math.round((nowMs - t.updatedAt) / 1000)),
       }))
       const { targetable, coldSessions } = partitionRoutable(nowMs)
-      const decision = await router.route(raw, targetable, projects, finished, coldSessions)
+      // THE WALL for curation: everything the user can currently SEE (mirrors
+      // the renderer's visibleOnWall: non-shelved sessions always; active
+      // states; recent finishes). Curation references resolve against what's
+      // on screen — a wall the router can't see caused the first field bug
+      // (a curation command misrouted into a junk task, 2026-07-16).
+      const DONE_FADE_MS = 15 * 60_000
+      const ATTN_FADE_MS = 60 * 60_000
+      const wall = manager.list().filter((t) => {
+        if (t.shelved) return false
+        if ((t.kind ?? 'oneoff') === 'session') return true
+        if (t.state === 'processing' || t.state === 'needs-user' || t.state === 'ready') return true
+        const age = nowMs - t.updatedAt
+        return t.state === 'done' ? age < DONE_FADE_MS : age < ATTN_FADE_MS
+      }).map((t) => snapshotOf(t, nowMs, false))
+      const decision = await router.route(raw, targetable, projects, finished, coldSessions, wall)
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       if (decision.action === 'continue' && decision.targetTaskId) {
@@ -1145,6 +1161,9 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
             log.event('routed-as-answer', { taskId: tid, via: 'router' })
             typeStagedInto(tid, staged)
             manager.answer(tid, decision.intent || raw)
+            // Assign-once grouping: the router may group the task it acted on,
+            // never regroup one that already has a group (freeze).
+            if (decision.group && !target?.group) manager.setGroup(tid, decision.group)
             pendingBeat = `Passed to ${targetName}.`
             return tid
           }
@@ -1152,12 +1171,37 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
           typeStagedInto(tid, staged)
           if (manager.followUp(tid, decision.intent)) {
             log.event('routed-as-continuation', { taskId: tid, via: 'router' })
+            // Assign-once grouping — covers graduation too: a one-off's 2nd
+            // follow-up (which just promoted it to a session inside followUp)
+            // gets its group in the same routed turn. Zero extra LLM calls.
+            if (decision.group && !target?.group) manager.setGroup(tid, decision.group)
             pendingBeat = targetBusy
               ? `Queued for ${targetName} — it\u2019s mid-task, I\u2019ll pass it on when it\u2019s free.`
               : `Passed to ${targetName}.`
             return tid
           }
         }
+      }
+      // CURATE (wall organization): the user spoke about the wall itself —
+      // "group these two as X", "rename that group". Nothing is spawned or
+      // injected; ops were hard-validated at parse (known ids, live groups).
+      // Sessions still cannot touch the wall — this path exists only for the
+      // user's own routed voice commands (the MCP invariant stands).
+      if (decision.action === 'curate' && decision.ops?.length) {
+        let touched = 0
+        const groupNames = new Set<string>()
+        for (const op of decision.ops) {
+          if (op.op === 'set_group') {
+            for (const id of op.taskIds) { manager.setGroup(id, op.group); touched++ }
+            groupNames.add(op.group)
+          } else if (op.op === 'rename_group') {
+            touched += manager.renameGroup(op.from, op.to)
+            groupNames.add(op.to)
+          }
+        }
+        log.event('routed-as-curate', { ops: decision.ops.length, touched })
+        pendingBeat = touched ? `Regrouped — ${[...groupNames].join(', ')}.` : 'Nothing matched that.'
+        return null
       }
       // SPEAK (meta-command): the user asked to HEAR something — read-only,
       // nothing spawned, nothing injected. Speech is composed deterministically
@@ -1211,6 +1255,9 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
       if (decision.name) manager.setName(newId, decision.name)
+      // Group new PERSISTENT sessions at birth (one-offs stay ungrouped until
+      // they graduate — the wall groups streams, not errands).
+      if (decision.group && decision.kind === 'session') manager.setGroup(newId, decision.group)
       pendingBeat = decision.name ? `On it \u2014 ${decision.name}.` : 'On it.'
       // Declinable offer (§6.2 — never a silent reroute, never a blocking prompt):
       // the router chose NEW but seriously weighed one open task. Surface a
