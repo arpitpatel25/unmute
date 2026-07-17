@@ -1363,6 +1363,24 @@ export class TaskManager extends EventEmitter {
     ex.write(data)
   }
 
+  /** Tap-to-invoke plumbing (D14): write RAW text into a task's live PTY with NO
+   *  carriage return — mirrors attachFile's unsubmitted-path contract. The caller
+   *  (tap-to-invoke) sends `/${name} ` WITH a trailing space so the space dismisses
+   *  the slash autocomplete popup and the user's later Enter submits directly. We
+   *  MUST use write() (raw, no CR), never writeStdin() (which appends a CR and
+   *  would submit prematurely). Returns false if the task is unknown or its
+   *  session is gone/dead. */
+  typeUnsubmitted(taskId: string, text: string): boolean {
+    const ex = this.executors.get(taskId)
+    if (!this.tasks.has(taskId) || !ex?.alive) {
+      log.child({ taskId }).warn('typeUnsubmitted: no live session', {})
+      return false
+    }
+    ex.write(text)
+    log.child({ taskId }).event('type-unsubmitted', { chars: text.length })
+    return true
+  }
+
   /** Typed-turn detection: a MANUAL prompt submitted into a finished session's
    *  terminal is a real new turn — the card must leave 'done' and the status
    *  polling must wake back up (it stopped at parkWarm, so even the agent's own

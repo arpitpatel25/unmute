@@ -35,6 +35,7 @@ import {
   readFeedback,
   markFeedbackConsumed,
   readTranscriptDelta,
+  readProposal,
   type CuratorPaths,
 } from './curator-store'
 import {
@@ -407,5 +408,107 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     await writeCursor(paths, cursor)
     await markFeedbackConsumed(paths, sweepId)
     log2.event('sweep-pipeline-done', { sweepId, proposals: proposals.length })
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Task 10 — the review popup's CONVERSATION backend.
+//
+// One live Claude Code session per proposal under review, spawned INSIDE the
+// proposal's own dir (proposals/<id>/) so it can only see that proposal's two
+// files: proposal.json (read-only context + evidence pointers) and draft.md
+// (the editable draft the session EDITS in place when the user asks). Raw PTY
+// output streams straight to the popup terminal via onData; raw keystrokes flow
+// back through write() (no carriage return added — the xterm sends exact bytes).
+//
+// The Curator holds a Map<proposalId, ProposalConversation> (Task 12) so a
+// second start for the same id stops the first; THIS class is one conversation.
+
+const log3 = createLogger('proposal-conversation')
+
+/** Grace after accepting the folder-trust prompt, before the primer is typed —
+ *  the REPL needs a moment to settle past the trust dialog into its input box. */
+const PROPOSAL_READY_GRACE_MS = 1_500
+
+export interface ProposalConversationOpts {
+  executorFactory: ExecutorFactory
+  paths: CuratorPaths
+  proposalId: string
+  onData: (chunk: string) => void
+  /** Test seam / tunable: ms to wait after the trust-clear before typing the
+   *  primer. Defaults to PROPOSAL_READY_GRACE_MS. */
+  readyGraceMs?: number
+}
+
+export class ProposalConversation {
+  private readonly executorFactory: ExecutorFactory
+  private readonly paths: CuratorPaths
+  private readonly proposalId: string
+  private readonly onData: (chunk: string) => void
+  private readonly readyGraceMs: number
+  private ex: AgentExecutor | null = null
+
+  constructor(opts: ProposalConversationOpts) {
+    this.executorFactory = opts.executorFactory
+    this.paths = opts.paths
+    this.proposalId = opts.proposalId
+    this.onData = opts.onData
+    this.readyGraceMs = opts.readyGraceMs ?? PROPOSAL_READY_GRACE_MS
+  }
+
+  /** True while the session's PTY is alive. */
+  get alive(): boolean {
+    return this.ex?.alive === true
+  }
+
+  /** Spawn a CC session in proposals/<id>/, primed to discuss THIS proposal and
+   *  edit its draft.md in place. Streams raw output via onData. Returns false if
+   *  the proposal is missing or the session fails to start. */
+  async start(): Promise<boolean> {
+    const prop = await readProposal(this.paths, this.proposalId)
+    if (!prop) {
+      log3.warn('start refused: proposal not found', { proposalId: this.proposalId })
+      return false
+    }
+    const cwd = join(this.paths.proposalsDir, this.proposalId)
+    const ex = this.executorFactory()
+    this.ex = ex
+    ex.onData((chunk) => this.onData(chunk))     // popup renders raw PTY output verbatim
+    try {
+      await ex.spawn({ cwd, env: process.env, taskId: `curator-review-${this.proposalId}` })
+      await ex.isReady()
+      ex.writeStdin('')                          // accept folder-trust prompt (fresh dir)
+      await new Promise((r) => setTimeout(r, this.readyGraceMs))
+      ex.writeStdin(this.primer())               // ONE priming turn — points the session at the files
+      log3.event('proposal-conversation-started', { proposalId: this.proposalId, cwd })
+      return true
+    } catch (e) {
+      log3.warn('start failed', { proposalId: this.proposalId, error: (e as Error).message })
+      try { ex.kill() } catch { /* best-effort */ }
+      this.ex = null
+      return false
+    }
+  }
+
+  /** Raw keystrokes from the popup terminal straight into the PTY (no CR added). */
+  write(data: string): void {
+    if (this.ex?.alive) this.ex.write(data)
+  }
+
+  /** Kill the session (the popup closed / a fresh conversation supersedes it). */
+  stop(): void {
+    if (!this.ex) return
+    try { this.ex.kill() } catch { /* best-effort */ }
+    this.ex = null
+  }
+
+  private primer(): string {
+    return [
+      '[Unmute curator — proposal review] You are discussing ONE proposed skill with the user.',
+      `The proposal: ./proposal.json (evidence pointers inside reference reduced traces under ${this.paths.tracesDir}).`,
+      'The editable draft: ./draft.md — when the user asks for changes, EDIT that file in place and confirm what changed.',
+      "Answer questions about why this skill was proposed (read proposal.json's evidence + rationale).",
+      'Never touch any file outside this directory. Start by summarizing the proposal in two sentences.',
+    ].join('\n')
   }
 }

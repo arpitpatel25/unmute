@@ -1080,3 +1080,19 @@ test('setGroup with empty clears; renameGroup moves every member and reports the
   assert.equal(tm.get(a)!.group, undefined)
   tm.killAll()
 })
+
+// ─── D14 tap-to-invoke plumbing: typeUnsubmitted writes RAW, no carriage return ─
+
+test('typeUnsubmitted writes raw text with no CR to the task executor', async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('review the PR')
+  fake.raw.length = 0                                      // ignore dispatch's confirm-Enter
+  const ok = tm.typeUnsubmitted(id, '/pr-review ')
+  assert.equal(ok, true)
+  assert.deepEqual(fake.raw, ['/pr-review '])             // written raw, no '\r' appended anywhere
+  assert.deepEqual(fake.writes.filter((w) => w === '/pr-review '), []) // NOT via writeStdin (which appends CR)
+  assert.equal(tm.typeUnsubmitted('nope', 'x'), false)    // unknown task
+  tm.kill(id)
+})

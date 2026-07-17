@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { Curator, type MaterialSession, makeRunSweep, RateLimitedError } from './curator.ts'
-import { curatorPaths, readCursor, writeCursor, readCandidates, listPendingProposals, readLedger } from './curator-store.ts'
+import { Curator, type MaterialSession, makeRunSweep, RateLimitedError, ProposalConversation } from './curator.ts'
+import { curatorPaths, readCursor, writeCursor, readCandidates, listPendingProposals, readLedger, writeProposal, type Proposal } from './curator-store.ts'
 import type { AgentExecutor } from './executor'
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'cu-'))
@@ -169,4 +169,33 @@ test('runSweep: rate-limit aborts — cursor NOT advanced, no proposals', async 
   )
   assert.equal((await readCursor(p)).sessions.t1?.lineOffset ?? 0, 0)  // untouched
   assert.equal((await listPendingProposals(p)).length, 0)
+})
+
+// ── Task 10: the review popup's conversation backend ─────────────────────────
+
+const prop = (id: string): Proposal => ({
+  id, sweepId: 'sw_1', proposedAt: new Date().toISOString(), kind: 'create',
+  draft: { name: id, description: 'd', body: 'body' },
+  evidence: { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 5 } },
+  rationale: 'seen twice with struggle', resolution: null,
+})
+
+test('ProposalConversation: spawns in the proposal dir, primes with draft, streams, forwards keys', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  await writeProposal(p, prop('prop_c'))
+  await fs.writeFile(path.join(p.proposalsDir, 'prop_c', 'draft.md'), 'body v1')
+  const chunks: string[] = []; const typed: string[] = []; const raw: string[] = []
+  let emit: (c: string) => void = () => {}
+  const ex = {
+    alive: true, spawn: async (o: { cwd: string }) => { assert.ok(o.cwd.endsWith('prop_c')) },
+    isReady: async () => {}, writeStdin: (t: string) => typed.push(t), write: (d: string) => raw.push(d),
+    resize: () => {}, onData: (cb: (c: string) => void) => { emit = cb }, kill: () => {},
+  } as unknown as AgentExecutor
+  const conv = new ProposalConversation({ executorFactory: () => ex, paths: p, proposalId: 'prop_c', onData: (c) => chunks.push(c), readyGraceMs: 0 })
+  assert.equal(await conv.start(), true)
+  emit('hello')
+  assert.deepEqual(chunks, ['hello'])
+  assert.ok(typed.join('\n').includes('draft.md'))        // primer points the session at the draft file + evidence
+  conv.write('why?')
+  assert.deepEqual(raw.filter((r) => r === 'why?'), ['why?'])
 })
