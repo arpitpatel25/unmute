@@ -131,6 +131,12 @@ wall tasks, and hold no wall-mutating capability).
   delta. No material → no sweep, at any interval. A quiet day costs nothing.
 - Single-flighted; a sweep never overlaps another. Never blocks the UI, a
   session, or an utterance. Skipped while an utterance is in flight.
+- **Idle-preference:** sweeps fire when no utterance or task dispatch is in
+  flight — the curator shares the user's subscription window and must never
+  compete with live work for it. (Estimated spend: ~100–200k tokens per
+  sweep, ≤2 sweeps/day ⇒ single-digit % of an active day's usage; a good
+  skill repays this by deleting re-exploration, so the success case is net
+  token-negative.)
 
 ### 4.2 Cursor + delta (the "live session" problem)
 
@@ -434,6 +440,9 @@ data is not.
   (`skill-usage.ts`'s write-chain pattern) and atomic (tmp + rename).
 - Cursor advances only on success (§ 4.2). Malformed JSONL lines are skipped
   (transcripts can be mid-write; the reducer already tolerates this).
+- **Rate-limit backoff:** if a curator session hits a usage-limit response,
+  the sweep aborts, the cursor does not advance, and the sweep retries in a
+  later window. The curator must never spend the user's last tokens.
 - The writer's hard invariants: never write a name not in our ledger (D10);
   never write outside `~/.claude/skills/<name>/`; ledger-first, then file;
   every write carries `disable-model-invocation: true` (D8).
