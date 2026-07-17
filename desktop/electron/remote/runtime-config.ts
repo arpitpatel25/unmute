@@ -89,6 +89,8 @@ export interface ConfigKnobs {
   routerDecisionTimeoutMs: number
   /** Router: max lifetime of a router session before recycle. */
   routerMaxSessionMs: number
+  /** Curator: minimum gap between sweeps (the twice-daily ceiling). */
+  curatorSweepIntervalMs: number
 }
 
 export interface RuntimeConfigData {
@@ -115,6 +117,7 @@ const KNOB_SPEC: Record<keyof ConfigKnobs, KnobSpec> = {
   readyDecayMs:            { def: 60 * 60_000,   min: 60_000, max: 7 * DAY },
   routerDecisionTimeoutMs: { def: 60_000,        min: 1_000,  max: 10 * 60_000 },
   routerMaxSessionMs:      { def: 2 * 60 * 60_000, min: 60_000, max: DAY },
+  curatorSweepIntervalMs:  { def: 12 * 60 * 60_000, min: 60_000, max: 30 * DAY },
 }
 
 function knobDefaults(): ConfigKnobs {

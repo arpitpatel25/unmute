@@ -51,6 +51,10 @@ test('compiled floor mirrors config.ts + contract exactly', () => {
   assert.equal(d.knobs.routerMaxSessionMs, 2 * 60 * 60_000)
 })
 
+test('curator sweep knob defaults to 12h (the twice-daily ceiling)', () => {
+  assert.equal(compiledDefaults().knobs.curatorSweepIntervalMs, 12 * 60 * 60_000)
+})
+
 test('accessors return the compiled floor before any init', () => {
   assert.equal(getModels().doerDefault, MODELS.doerDefault)
   assert.equal(getPrompts().contract, CONTRACT_TEXT)

@@ -1295,6 +1295,10 @@ export function setDictationKey(key: TriggerKey): void {
   log.event('dictation-key-set', { dictationKey: key, derivedRemoteKey: deriveRemoteKey(key) })
 }
 
+// Librarian PARKED (skill-curator spec §12): no librarian sessions spawn — the
+// curator supersedes it. Code + recipes stay on disk; flip to false to revive.
+const LIBRARIAN_PARKED = true
+
 export function initRemote(deps: RemoteInitDeps): TaskManager {
   if (manager) return manager
 
@@ -1372,7 +1376,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const librarian = new Librarian({ executorFactory: librarianExecutorFactory, writeEnabled: settings.get('librarianWriteEnabled') === true })
   manager = new TaskManager({
     executorFactory,
-    librarian,
+    // PARKED: withholding the librarian trips the `!this.opts.librarian` gate in
+    // handToLibrarian, so no session is ever spawned. (§12)
+    librarian: LIBRARIAN_PARKED ? undefined : librarian,
     // Behavioral knobs from runtime config (Tier B) — read once at construction.
     // A live update takes effect on the next relaunch (lifecycle timers are set
     // at construction); the values still ratchet forward via the cache.
@@ -1448,6 +1454,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // write-enabled setting so calibration-mode users are never affected.
   const GARDEN_MS = 24 * 60 * 60 * 1000
   const gardenTimer = setInterval(() => {
+    if (LIBRARIAN_PARKED) return // PARKED: no autonomous gardening sweeps (§12)
     if (settings.get('librarianWriteEnabled') !== true) return
     // Run the prune INSIDE the librarian's serial queue so it never overlaps a
     // write-mode librarian session (single-writer invariant covers gardening).
