@@ -3,8 +3,9 @@ import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { Curator, type MaterialSession } from './curator.ts'
-import { curatorPaths, readCursor, writeCursor } from './curator-store.ts'
+import { Curator, type MaterialSession, makeRunSweep, RateLimitedError } from './curator.ts'
+import { curatorPaths, readCursor, writeCursor, readCandidates, listPendingProposals, readLedger } from './curator-store.ts'
+import type { AgentExecutor } from './executor'
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'cu-'))
 // A transcript delta that clears triage: 16 tool calls over 11 minutes.
@@ -115,4 +116,57 @@ test('scheduler resilience: a throwing runSweep is swallowed on scheduler ticks 
   const before = sweepAttempts
   await assert.rejects(() => curator.checkNow())
   assert.equal(sweepAttempts, before + 1)
+})
+
+// ── Task 9: the real sweep pipeline ──────────────────────────────────────────
+
+function fakeExecutor(behavior: (prompt: string) => Promise<void>, emit?: (cb: (c: string) => void) => void): AgentExecutor {
+  let dataCb: (c: string) => void = () => {}
+  return {
+    alive: true,
+    spawn: async () => { if (emit) emit((c) => dataCb(c)) },
+    isReady: async () => {},
+    writeStdin: (text: string) => { void behavior(text) },
+    write: () => {}, resize: () => {}, onData: (cb) => { dataCb = cb }, kill: () => {},
+  } as unknown as AgentExecutor
+}
+
+const distillJson = { procedures: [{ title: 'Load video Premiere', skeleton: 'S', count: 2, struggle: true }] }
+const synthJson = { proposals: [{ kind: 'create', draft: { name: 'video-load-premiere', description: 'd', body: 'Goal…' }, evidence: { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 30 } }, rationale: 'seen twice with struggle' }] }
+
+test('runSweep: distills, accumulates, synthesizes, writes proposal + ledger, advances cursor', async () => {
+  const root = await tmp()
+  const p = curatorPaths(root)
+  const writes = async (prompt: string) => {
+    const m = prompt.match(/(\/\S+?(?:distill|synth)\.json)/)
+    if (!m) return
+    const payload = m[1].endsWith('distill.json') ? distillJson : synthJson
+    await fs.mkdir(path.dirname(m[1]), { recursive: true })
+    await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
+  }
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run([{ taskId: 't1', intent: 'video work', transcriptPath: path.join(root, 't1.jsonl'), fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }])
+  const cands = await readCandidates(p)
+  assert.equal(Object.values(cands.candidates)[0]?.total, 2)
+  const pending = await listPendingProposals(p)
+  assert.equal(pending.length, 1)
+  assert.equal(pending[0].draft.name, 'video-load-premiere')
+  const cursor = await readCursor(p)
+  assert.equal(cursor.sessions.t1.lineOffset, 1)                       // advanced on success
+  assert.ok((await readLedger(p)).entries.some((e) => e.action === 'proposed' && e.skill === 'video-load-premiere'))
+})
+
+test('runSweep: rate-limit aborts — cursor NOT advanced, no proposals', async () => {
+  const root = await tmp()
+  const p = curatorPaths(root)
+  const run = makeRunSweep({
+    executorFactory: () => fakeExecutor(async () => {}, (cb) => setTimeout(() => cb('You have reached your usage limit'), 30)),
+    paths: p, curatedIndex: async () => [], sessionTimeoutMs: 3_000, pollMs: 20,
+  })
+  await assert.rejects(
+    run([{ taskId: 't1', intent: 'x', transcriptPath: '/nope', fromLine: 0, lines: ['{}'], lookback: [], newOffset: 1 }]),
+    RateLimitedError,
+  )
+  assert.equal((await readCursor(p)).sessions.t1?.lineOffset ?? 0, 0)  // untouched
+  assert.equal((await listPendingProposals(p)).length, 0)
 })

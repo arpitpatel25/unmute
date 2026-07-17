@@ -20,15 +20,32 @@
 // re-readable on the next check.
 
 import { promises as fs } from 'node:fs'
+import { join, dirname, relative } from 'node:path'
 import { createLogger } from './log'
 import {
   curatorPaths,
   readCursor,
+  writeCursor,
+  readCandidates,
+  writeCandidates,
+  mergeDistill,
+  writeProposal,
+  appendLedger,
+  readRejections,
+  readFeedback,
+  markFeedbackConsumed,
   readTranscriptDelta,
   type CuratorPaths,
 } from './curator-store'
+import {
+  buildDistillPrompt,
+  parseDistillOutput,
+  buildSynthesizePrompt,
+  parseSynthesizeOutput,
+} from './curator-prompts'
 import { computeTriageMetrics, passesTriage } from './curator-triage'
-import { locateTranscript } from './trace-reducer'
+import { locateTranscript, reduceTranscript } from './trace-reducer'
+import type { ExecutorFactory, AgentExecutor } from './executor'
 
 const log = createLogger('curator')
 
@@ -178,5 +195,217 @@ export class Curator {
     } catch {
       return false
     }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Task 9 — the REAL sweep pipeline.
+//
+// makeRunSweep returns the runSweep the scheduler injects. Per cycle it drives
+// one-shot Claude Code sessions (via the ExecutorFactory) to DISTILL each
+// session's reduced trace into procedures, ACCUMULATES those into the candidate
+// ledger, then a single SYNTHESIZE session turns the accumulated candidates into
+// skill PROPOSALS. Everything is agent-agnostic through the executor seam.
+//
+// Two load-bearing properties:
+//   • RATE-LIMIT BACKOFF — the moment a session's output shows a usage/rate cap,
+//     we kill it and throw RateLimitedError out of the whole sweep. No partial
+//     bookkeeping; the scheduler logs and the next check re-reads the same delta.
+//   • CURSOR-ON-SUCCESS — cursors, lastSweepAt and feedback-consumption advance
+//     ONLY after every distill, the merge, the synthesize, and all proposal
+//     writes have succeeded. Any throw (incl. RateLimitedError) happens BEFORE
+//     those writes, so a failed sweep leaves every delta fully re-readable.
+
+const log2 = createLogger('curator-sweep')
+
+/** Thrown when a one-shot session's output reveals a usage/rate-limit cap. It
+ *  propagates out of runSweep so the scheduler can back off without advancing. */
+export class RateLimitedError extends Error {
+  constructor(message = 'Claude Code reported a usage/rate limit') {
+    super(message)
+    this.name = 'RateLimitedError'
+  }
+}
+
+const RATE_LIMIT_RE = /usage limit|rate limit|limit reached|out of.*(credits|usage)/i
+const OUT_CAP = 64_000                 // tail-cap on accumulated session output
+const READY_GRACE_MS = 1_500           // settle the REPL past folder-trust before dispatch
+const REINJECT_AT_MS = 15_000          // one re-inject if the prompt landed unsubmitted
+
+export interface SweepDeps {
+  executorFactory: ExecutorFactory
+  paths: CuratorPaths
+  curatedIndex: () => Promise<Array<{ name: string; description: string }>>  // init wires: ledger names + on-disk descriptions
+  sessionTimeoutMs?: number      // per one-shot, default 5 * 60_000
+  submitConfirmMs?: number       // default 450 (the router/task-lane paste quirk)
+  pollMs?: number                // default 250
+  now?: () => number
+}
+
+/** A rate-limit sentinel: accumulates a session's output (tail-capped) and, the
+ *  moment it matches the cap regex, rejects `signal` with RateLimitedError so any
+ *  in-flight sleep/poll unwinds immediately. `signal` never resolves — only
+ *  rejects — so racing it against a step aborts that step on a cap. */
+function makeRateLimitWatch() {
+  let buf = ''
+  let tripped = false
+  let error: RateLimitedError | null = null
+  let doReject: ((e: RateLimitedError) => void) | null = null
+  const signal = new Promise<never>((_, rej) => { doReject = rej })
+  signal.catch(() => { /* keep un-awaited rejection from surfacing as unhandled */ })
+  const onData = (chunk: string): void => {
+    if (tripped) return
+    buf += chunk
+    if (buf.length > OUT_CAP) buf = buf.slice(-OUT_CAP)
+    if (RATE_LIMIT_RE.test(buf)) {
+      tripped = true
+      error = new RateLimitedError()
+      doReject?.(error)
+    }
+  }
+  return {
+    onData,
+    signal,
+    isTripped: (): boolean => tripped,
+    error: (): RateLimitedError => error ?? new RateLimitedError(),
+  }
+}
+
+export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => Promise<void> {
+  const { executorFactory, paths, curatedIndex } = deps
+  const sessionTimeoutMs = deps.sessionTimeoutMs ?? 5 * 60_000
+  const submitConfirmMs = deps.submitConfirmMs ?? 450
+  const pollMs = deps.pollMs ?? 250
+  const now = deps.now ?? (() => Date.now())
+  const nowIso = (): string => new Date(now()).toISOString()
+
+  /** Sleep `ms`, but reject early (clearing the timer) if the watch trips. */
+  const raceSleep = (ms: number, watch: ReturnType<typeof makeRateLimitWatch>): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const t = setTimeout(resolve, ms)
+      watch.signal.then(undefined, (e) => { clearTimeout(t); reject(e) })
+    })
+
+  /** Drive one one-shot Claude Code session: spawn, settle past folder-trust,
+   *  paste the prompt + confirm-submit, then poll the OUTPUT FILE until it
+   *  appears or the timeout fires (with one re-inject at 15s). Throws
+   *  RateLimitedError immediately on a usage/rate cap. Returns the file's raw
+   *  contents, or null on timeout. Always kills the session (finally). */
+  const runOneShot = async (label: string, prompt: string, outPath: string, workDir: string): Promise<string | null> => {
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.rm(outPath, { force: true }).catch(() => {})
+    const watch = makeRateLimitWatch()
+    const ex: AgentExecutor = executorFactory()
+    ex.onData(watch.onData)
+    try {
+      await ex.spawn({ cwd: workDir, env: process.env, taskId: `curator-${label}` })
+      await ex.isReady()
+      ex.writeStdin('')                                  // accept folder-trust prompt (fresh dir)
+      await raceSleep(READY_GRACE_MS, watch)
+      ex.writeStdin(prompt)
+      await raceSleep(submitConfirmMs, watch)            // the TUI captures the multi-line prompt as a paste…
+      if (ex.alive) ex.write('\r')                       // …that lands one Enter short — confirm-submit it
+
+      const start = now()
+      const deadline = start + sessionTimeoutMs
+      let reinjected = false
+      while (now() < deadline) {
+        if (watch.isTripped()) throw watch.error()
+        try {
+          const raw = await fs.readFile(outPath, 'utf8')
+          if (raw.trim()) return raw
+        } catch { /* not written yet */ }
+        const elapsed = now() - start
+        // Self-heal: the paste occasionally sits unsubmitted. Clear the input
+        // line (Ctrl-U, never Esc) and re-inject once.
+        if (!reinjected && elapsed >= REINJECT_AT_MS && ex.alive) {
+          reinjected = true
+          log2.warn('one-shot slow — re-injecting prompt once', { label, elapsedMs: elapsed })
+          ex.write('\x15')
+          await raceSleep(200, watch)
+          ex.writeStdin(prompt)
+          await raceSleep(submitConfirmMs, watch)
+          if (ex.alive) ex.write('\r')
+        }
+        await raceSleep(pollMs, watch)
+      }
+      log2.warn('one-shot timed out — no output file', { label, ms: sessionTimeoutMs, outPath })
+      return null
+    } finally {
+      try { ex.kill() } catch { /* best-effort */ }
+    }
+  }
+
+  return async function runSweep(material: MaterialSession[]): Promise<void> {
+    const sweepId = `sw_${now()}`
+    const workRoot = join(paths.root, 'work', sweepId)
+    log2.event('sweep-pipeline-start', { sweepId, sessions: material.length })
+
+    // ── 1+2. Reduce + distill each session SEQUENTIALLY (parallelism would
+    //         multiply peak subscription quota draw). Collect the procedures.
+    const curatedNames = (await curatedIndex()).map((s) => s.name)
+    const distilled: Array<{ m: MaterialSession; procs: ReturnType<typeof parseDistillOutput>; tracePointer: string }> = []
+    for (const m of material) {
+      const reduced = reduceTranscript(m.lookback.concat(m.lines).join('\n'), { maxChars: 200_000 })
+      const traceFile = join(paths.tracesDir, `${m.taskId}-${sweepId}.txt`)
+      await fs.mkdir(paths.tracesDir, { recursive: true })
+      await fs.writeFile(traceFile, reduced)
+
+      const outPath = join(workRoot, `distill-${m.taskId}`, 'distill.json')
+      const prompt = buildDistillPrompt({ taskId: m.taskId, intent: m.intent, tracePath: traceFile, outPath, curatedNames })
+      const raw = await runOneShot(`distill-${m.taskId}`, prompt, outPath, dirname(outPath))
+      const procs = parseDistillOutput(raw)
+      log2.event('distilled', { taskId: m.taskId, procedures: procs.length })
+      distilled.push({ m, procs, tracePointer: relative(paths.root, traceFile) })
+    }
+
+    // ── 3. Accumulate: fold every session's procedures into the candidate
+    //       ledger (pure, idempotent per key,task,sweep), then persist once.
+    let candFile = await readCandidates(paths)
+    const at = nowIso()
+    for (const { m, procs, tracePointer } of distilled) {
+      candFile = mergeDistill(candFile, procs, { taskId: m.taskId, sweepId, at, tracePointer })
+    }
+    await writeCandidates(paths, candFile)
+
+    // ── 4. Synthesize ONCE over the freshly-merged candidates + context.
+    const merged = await readCandidates(paths)
+    const candidates = Object.values(merged.candidates)
+    const curatedFull = await curatedIndex()
+    const rejections = (await readRejections(paths)).map((r) => ({ name: r.name, reason: r.reason }))
+    const feedback = (await readFeedback(paths)).filter((f) => !f.consumedBySweep).map((f) => ({ skill: f.skill, note: f.note }))
+
+    const synthOut = join(workRoot, 'synth', 'synth.json')
+    const synthPrompt = buildSynthesizePrompt({ sweepId, candidates, curatedIndex: curatedFull, rejections, feedback, outPath: synthOut })
+    const synthRaw = await runOneShot('synth', synthPrompt, synthOut, dirname(synthOut))
+    const proposals = parseSynthesizeOutput(synthRaw, sweepId, now)
+    log2.event('synthesized', { sweepId, proposals: proposals.length })
+
+    // ── 5. Persist each proposal: the JSON, its editable draft.md, a ledger row.
+    for (const prop of proposals) {
+      await writeProposal(paths, prop)
+      const draftPath = join(paths.proposalsDir, prop.id, 'draft.md')
+      await fs.mkdir(dirname(draftPath), { recursive: true })
+      await fs.writeFile(draftPath, prop.draft.body)
+      await appendLedger(paths, { at: nowIso(), skill: prop.draft.name, action: 'proposed', proposalId: prop.id, sweepId })
+    }
+
+    // ── 6. Success bookkeeping — ONLY now. Any throw above (incl. a rate limit)
+    //       skips this, leaving cursors/lastSweepAt untouched and re-readable.
+    const tNow = now()
+    const cursor = await readCursor(paths)
+    for (const m of material) {
+      const prev = cursor.sessions[m.taskId]
+      cursor.sessions[m.taskId] = {
+        transcriptPath: m.transcriptPath,
+        lineOffset: m.newOffset,
+        lastSweptAt: tNow,
+        sweeps: (prev?.sweeps ?? 0) + 1,
+      }
+    }
+    cursor.lastSweepAt = tNow
+    await writeCursor(paths, cursor)
+    await markFeedbackConsumed(paths, sweepId)
+    log2.event('sweep-pipeline-done', { sweepId, proposals: proposals.length })
   }
 }
