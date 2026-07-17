@@ -73,3 +73,46 @@ test('busy → deferred; single-flight; short/clean delta fails triage → curso
   assert.equal(swept.length, 0)
   assert.equal((await readCursor(curatorPaths(root))).sessions.t1?.lineOffset ?? 0, 0)  // triage-fail advances nothing
 })
+
+test('scheduler resilience: a throwing runSweep is swallowed on scheduler ticks (no unhandledRejection); single-flight released', async () => {
+  const root = await tmp()
+  const t = path.join(root, 't1.jsonl')
+  await fs.writeFile(t, busyLines())
+  let sweepAttempts = 0
+  let signalSwept!: () => void
+  const sweptOnce = new Promise<void>((res) => { signalSwept = res })
+  const { curator } = make(root, {
+    locateTranscriptFor: async () => t,
+    runSweep: async () => { sweepAttempts++; signalSwept(); throw new Error('sweep boom') },  // Task 9's pipeline rejects
+  } as never)
+  curator.notifyCheckpoint('t1')                 // material gate passes → runSweep will fire
+
+  const flush = () => new Promise((r) => setImmediate(r))
+
+  // 1) Production path: start()'s setImmediate/interval ticks drive checkNow via a
+  //    void-discarded promise. A rejecting runSweep must NOT surface as an
+  //    unhandledRejection (which, under Node's default, can kill the Electron main).
+  const unhandled: unknown[] = []
+  const onUnhandled = (e: unknown) => { unhandled.push(e) }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    curator.start()
+    await sweptOnce                              // the immediate tick reached runSweep, which threw
+    await flush(); await flush()                 // let the .catch run + any unhandledRejection surface
+    assert.equal(sweepAttempts, 1)
+    assert.equal(unhandled.length, 0)            // fix: rejection was caught+logged, not left dangling
+  } finally {
+    curator.stop()
+    process.removeListener('unhandledRejection', onUnhandled)
+  }
+
+  // 2) The scheduler wraps checkNow in a swallowing .catch (as start() does); that
+  //    wrapped tick resolves even though checkNow itself rejects when runSweep throws.
+  await assert.doesNotReject(curator.checkNow().catch(() => {}))
+
+  // 3) Single-flight was released via finally (even on the rejecting path): a
+  //    subsequent check re-enters and runs the sweep again (it still throws).
+  const before = sweepAttempts
+  await assert.rejects(() => curator.checkNow())
+  assert.equal(sweepAttempts, before + 1)
+})

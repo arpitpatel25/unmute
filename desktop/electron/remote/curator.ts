@@ -82,8 +82,8 @@ export class Curator {
 
   /** Catch-up-on-wake: an immediate check, then a periodic (unref'd) retry. */
   start(): void {
-    setImmediate(() => { void this.checkNow() })
-    this.timer = setInterval(() => { void this.checkNow() }, this.checkEveryMs)
+    setImmediate(() => { this.checkNow().catch((err) => log.warn('checkNow failed', { error: (err as Error).message })) })
+    this.timer = setInterval(() => { this.checkNow().catch((err) => log.warn('checkNow failed', { error: (err as Error).message })) }, this.checkEveryMs)
     this.timer.unref()
   }
 
