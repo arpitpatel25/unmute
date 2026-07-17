@@ -23,7 +23,7 @@ import Store from 'electron-store'
 import { join, dirname, basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, writeFileSync, mkdirSync, promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
@@ -48,6 +48,13 @@ import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
+import { Curator, makeRunSweep, ProposalConversation, type SessionInfo } from './curator'
+import {
+  curatorPaths, readLedger, curatedSkillNames, appendLedger, appendRejection, appendFeedback,
+  resolveProposal, readProposal, listPendingProposals,
+  type CuratorPaths, type Proposal, type LedgerEntry,
+} from './curator-store'
+import { writeSkill } from './curator-writer'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -248,6 +255,9 @@ let manager: TaskManager | null = null
 let completeFn: CompleteFn | null = null
 // The warm routing classifier (lazy — spawns on first routed utterance).
 let router: Router | null = null
+// Curator store paths (fixed, homedir-based) — shared by initRemote's wiring and
+// the route handler in dispatchFromCaptureInner (both module-scope readers).
+const curatorPathsV: CuratorPaths = curatorPaths()
 
 /** A minimal, tool-less classifier session for the router: no --chrome, no tmux;
  *  --dangerously-skip-permissions so it can write its decision file unprompted.
@@ -1046,6 +1056,19 @@ async function mcpTaskStatus(callerTaskId: string, taskId: string): Promise<Reco
   }
 }
 
+/** Invokable skill names the router may reference (explicit "use my X skill" or
+ *  skill_feedback): ~/.claude/skills folders + loose .md files — the /name set.
+ *  A cheap disk walk; called per routed utterance (freshness over caching). */
+async function listClaudeSkillNames(): Promise<string[]> {
+  const dir = join(homedir(), '.claude', 'skills')
+  const names: string[] = []
+  for (const entry of await fs.readdir(dir).catch(() => [] as string[])) {
+    if (entry.startsWith('.')) continue
+    names.push(entry.replace(/\.md$/, ''))
+  }
+  return names
+}
+
 export async function dispatchFromCapture(rawTranscript: string): Promise<string | null> {
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
@@ -1142,9 +1165,17 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         const age = nowMs - t.updatedAt
         return t.state === 'done' ? age < DONE_FADE_MS : age < ATTN_FADE_MS
       }).map((t) => snapshotOf(t, nowMs, false))
-      const decision = await router.route(raw, targetable, projects, finished, coldSessions, wall)
+      // The user's skills (names only) — lets the router honor an explicit
+      // "use my X skill" (prefixes the intent below) and record skill_feedback.
+      const skillNames = await listClaudeSkillNames()
+      const decision = await router.route(raw, targetable, projects, finished, coldSessions, wall, skillNames)
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
+      // Explicit-skill prefix: when the user named a skill, prefix the
+      // dispatched/injected intent with `/name ` (trailing space per preflight —
+      // it dismisses the autocomplete so the user's Enter submits). Only ever set
+      // on a WORK decision (new/continue/resume); undefined for speak/curate.
+      const withSkill = (t: string): string => decision.skill ? `/${decision.skill} ${t}` : t
       if (decision.action === 'continue' && decision.targetTaskId) {
         const tid = decision.targetTaskId
         // CONSENT GUARD (layer 3 of 3 — parse validation should make this
@@ -1160,7 +1191,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
           if (awaitingIds.has(tid)) {
             log.event('routed-as-answer', { taskId: tid, via: 'router' })
             typeStagedInto(tid, staged)
-            manager.answer(tid, decision.intent || raw)
+            manager.answer(tid, withSkill(decision.intent || raw))
             // Assign-once grouping: the router may group the task it acted on,
             // never regroup one that already has a group (freeze).
             if (decision.group && !target?.group) manager.setGroup(tid, decision.group)
@@ -1169,7 +1200,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
           }
           const targetBusy = target?.state === 'processing' // mid-turn — the follow-up will queue
           typeStagedInto(tid, staged)
-          if (manager.followUp(tid, decision.intent)) {
+          if (manager.followUp(tid, withSkill(decision.intent))) {
             log.event('routed-as-continuation', { taskId: tid, via: 'router' })
             // Assign-once grouping — covers graduation too: a one-off's 2nd
             // follow-up (which just promoted it to a session inside followUp)
@@ -1212,6 +1243,23 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         pendingBeat = '' // the spoken answer IS the acknowledgment
         return null
       }
+      // SKILL FEEDBACK (meta-command): the user gave feedback ABOUT a listed
+      // skill's behavior — nothing is spawned or injected. If it's a skill the
+      // curator MANAGES, record it against that skill's next review; otherwise
+      // say so plainly. (The router only sets this with a known-listed skill.)
+      if (decision.action === 'skill_feedback' && decision.skill) {
+        const managed = curatedSkillNames(await readLedger(curatorPathsV)).has(decision.skill)
+        if (managed) {
+          await appendFeedback(curatorPathsV, { at: new Date().toISOString(), skill: decision.skill, note: decision.intent })
+          log.event('routed-as-skill-feedback', { skill: decision.skill, managed: true })
+          speakLine("Noted — I'll factor that into the skill's next review.")
+        } else {
+          log.event('routed-as-skill-feedback', { skill: decision.skill, managed: false })
+          speakLine("Noted, but that skill isn't one I manage.")
+        }
+        pendingBeat = '' // the spoken acknowledgment stands on its own
+        return null
+      }
       // RESUME-ROUTING: the utterance follows up a recently-finished one-off
       // (≤15min, capped). Revive that exact session (`--continue` restores its
       // full context), then deliver — the thread literally continues on its own
@@ -1223,7 +1271,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         try {
           if (await manager.resume(tid)) {
             typeStagedInto(tid, staged) // images + words submit as one message
-            if (manager.followUp(tid, decision.intent || raw)) {
+            if (manager.followUp(tid, withSkill(decision.intent || raw))) {
               pendingBeat = `Continuing ${(manager.get(tid)?.name || 'it').slice(0, 50)}.`
               return tid
             }
@@ -1242,7 +1290,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // the new task that task's ACTUAL record (status + Claude transcript) so it
       // reads ground truth instead of guessing. Read-only; works for any known
       // task including cold sessions (hearing about one is not injecting into it).
-      let intentText = decision.intent || raw
+      let intentText = withSkill(decision.intent || raw)
       if (decision.contextTaskId) {
         const ctx = manager.get(decision.contextTaskId)
         if (ctx) {
@@ -1477,6 +1525,55 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // utterance hits a warm session, never a cold spawn + timeout. Fire-and-forget.
   void router.warm()
 
+  // ── The Skill Curator (spec §11) — supersedes the parked librarian ──
+  // A background scheduler that sweeps session transcripts, distills recurring
+  // procedures, and PROPOSES skills for the user to review. It reuses the SAME
+  // tool-less, autonomous spawn profile as the librarian (skip-permissions, no
+  // browser) — see librarianExecutorFactory. All heavy lifting (Tasks 2–11) is
+  // injected; this is pure wiring. (curatorPathsV is module-scoped — the route
+  // handler reads it too.)
+  const curatorSkillsRoot = join(homedir(), '.claude', 'skills')
+  // curatedIndex: the skills WE own (ledger authority) each paired with its
+  // on-disk SKILL.md description — the synthesize pass reads this so it never
+  // re-proposes or collides with a skill the curator already created.
+  const buildCuratedIndex = async (): Promise<Array<{ name: string; description: string }>> => {
+    const names = curatedSkillNames(await readLedger(curatorPathsV))
+    const out: Array<{ name: string; description: string }> = []
+    for (const name of names) {
+      let description = ''
+      try {
+        const head = (await fs.readFile(join(curatorSkillsRoot, name, 'SKILL.md'), 'utf8')).slice(0, 4096)
+        description = (/^description:\s*(.+)$/m.exec(head)?.[1] ?? '').trim().slice(0, 600)
+      } catch { /* file gone — the name still counts as owned */ }
+      out.push({ name, description })
+    }
+    return out
+  }
+  const curator = new Curator({
+    paths: curatorPathsV,
+    sweepIntervalMs: () => getKnobs().curatorSweepIntervalMs,
+    listSessions: async () => {
+      // Session-kind tasks from disk: ~/.unmute/remote/local/*/meta.json.
+      const base = join(homedir(), '.unmute', 'remote', 'local')
+      const out: SessionInfo[] = []
+      for (const id of await fs.readdir(base).catch(() => [] as string[])) {
+        try {
+          const m = JSON.parse(await fs.readFile(join(base, id, 'meta.json'), 'utf8'))
+          if (m.kind === 'session') out.push({ taskId: id, intent: m.intent ?? '', cwd: m.cwd ?? join(base, id), kind: 'session' })
+        } catch { /* skip unreadable/partial meta */ }
+      }
+      return out
+    },
+    // Idle-preference: defer a sweep while any task is mid-turn.
+    isBusy: () => manager?.hasProcessingTask() ?? false,
+    runSweep: makeRunSweep({ executorFactory: librarianExecutorFactory, paths: curatorPathsV, curatedIndex: buildCuratedIndex }),
+  })
+  curator.start()
+  // One live review conversation per proposal (Task 10). Held HERE so a second
+  // start for the same id stops the first — ProposalConversation does not
+  // self-guard; that carry-forward enforcement is this map's responsibility.
+  const curatorConversations = new Map<string, ProposalConversation>()
+
   // ── Wire the Remote trigger key → capture (PRD §2.4.4 / §5) ──
   // keyboard.ts emits 'remote-start'/'remote-stop' for the non-dictation key;
   // route them to the sessionManager's Remote capture (which reuses the STT
@@ -1581,7 +1678,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       })().catch((e) => log.warn('skill-usage credit failed', { taskId: t.id, error: (e as Error).message }))
     }, 3000) // let Claude flush the transcript tail
   }
-  manager.on('updated', (t: Task) => { if (t.state === 'ready') creditSkillUsage(t) })
+  manager.on('updated', (t: Task) => {
+    if (t.state === 'ready') { creditSkillUsage(t); curator.notifyCheckpoint(t.id) } // ready = a natural stopping point → sweep-eligible
+  })
 
   manager.on('done', (t: Task) => {
     broadcast('remote:task-done', t)
@@ -1589,6 +1688,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     reconcileDock(activeTaskCount())
     notify('Task done', t.result?.summary ? `${t.intent} — ${t.result.summary}` : t.intent)
     creditSkillUsage(t)
+    curator.notifyCheckpoint(t.id) // done → the session's delta is sweep-eligible
   })
   manager.on('failed', (t: Task) => {
     broadcast('remote:task-failed', t)
@@ -1610,6 +1710,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       if (!w.isDestroyed()) w.webContents.send('remote:task-removed', { id: t.id })
     }
     reconcileDock(activeTaskCount())
+    curator.notifyCheckpoint(t.id) // kill/delete → whatever ran is a closed chapter, sweep-eligible
   })
 
   // Master kill switch: closing Unmute terminates every Claude/tmux session so
@@ -1726,6 +1827,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // ~/.unmute/remote/{skills,recipes}/**/*.md + ~/.claude/skills entries.
     // Name = filename (they ARE the names); recency = file mtime. Zero tokens.
     const { readdirSync, statSync, readFileSync } = await import('node:fs')
+    // Provenance: names the curator authored (ledger authority) get an 'unmute'
+    // origin badge on the rail. Read once at the top of the handler.
+    const curatedNames = curatedSkillNames(await readLedger(curatorPathsV))
     // The tooltip's substance: the skill's own frontmatter description (first
     // ~4KB read, single-line 'description:' field — the format both stores use).
     const metaOf = (mdPath: string): { description: string; runs: number; lastUsed: string } => {
@@ -1793,6 +1897,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           runs: s.runs + (u?.runs ?? 0),
           lastUsed: u?.lastUsed && u.lastUsed > (s.lastUsed || '') ? u.lastUsed : s.lastUsed,
           pinned: pinned.has(s.name),
+          origin: curatedNames.has(s.name) ? 'unmute' as const : undefined,
         }
       })
       .sort((a, b) =>
@@ -1800,6 +1905,87 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         b.runs - a.runs ||
         (b.lastUsed || '').localeCompare(a.lastUsed || ''))
       .slice(0, 30)
+  })
+  // ── Skill Curator IPC (spec §11) — thin calls into Tasks 2/6/10 ──
+  // The review surface: list pending proposals, read one, accept (materialize the
+  // skill on disk) or reject (record + resolve), read the curation ledger, drive
+  // the per-proposal review conversation, and tap a skill into a live session.
+  ipcMain.handle('curator:list-proposals', async (): Promise<Proposal[]> =>
+    listPendingProposals(curatorPathsV))
+  ipcMain.handle('curator:get-proposal', async (_e, id: string): Promise<Proposal | null> =>
+    readProposal(curatorPathsV, id))
+  ipcMain.handle('curator:accept', async (_e, id: string): Promise<{ ok: boolean; error?: string }> => {
+    const proposal = await readProposal(curatorPathsV, id)
+    if (!proposal) return { ok: false, error: 'proposal not found' }
+    // The user may have edited draft.md in the review conversation — if the
+    // on-disk draft differs from the proposal's stored body, that edit wins and
+    // marks the acceptance user-edited (ledger records it distinctly).
+    let body = proposal.draft.body
+    let userEdited = false
+    try {
+      const onDisk = await fs.readFile(join(curatorPathsV.proposalsDir, id, 'draft.md'), 'utf8')
+      if (onDisk !== proposal.draft.body) { body = onDisk; userEdited = true }
+    } catch { /* no draft.md — accept the proposal body as-is */ }
+    const res = await writeSkill({
+      draft: { ...proposal.draft, body },
+      kind: proposal.kind,
+      userEdited,
+      proposalId: id,
+      paths: curatorPathsV,
+      originStamp: true, // preflight confirmed the `origin: unmute` key is tolerated (§11)
+      diff: proposal.diff,
+    })
+    if (res.ok) {
+      await resolveProposal(curatorPathsV, id, { action: 'accepted', at: new Date().toISOString(), userEdited })
+      return { ok: true }
+    }
+    // Surface the human-readable reason for the popup (collision / invalid-name / io).
+    return { ok: false, error: res.detail ?? res.error ?? 'write failed' }
+  })
+  ipcMain.handle('curator:reject', async (_e, id: string, reason?: string): Promise<boolean> => {
+    const proposal = await readProposal(curatorPathsV, id)
+    if (!proposal) return false
+    const at = new Date().toISOString()
+    await appendRejection(curatorPathsV, { at, name: proposal.draft.name, reason })
+    await appendLedger(curatorPathsV, { at, skill: proposal.draft.name, action: 'rejected', proposalId: id })
+    await resolveProposal(curatorPathsV, id, { action: 'rejected', at, userEdited: false, reason })
+    return true
+  })
+  ipcMain.handle('curator:ledger', async (): Promise<LedgerEntry[]> =>
+    (await readLedger(curatorPathsV)).entries)
+  ipcMain.handle('curator:converse-start', async (_e, id: string): Promise<boolean> => {
+    // Second-start-stops-first (Task 10 carry-forward): ProposalConversation does
+    // NOT self-guard, so we retire any existing session for this id here.
+    const existing = curatorConversations.get(id)
+    if (existing) { existing.stop(); curatorConversations.delete(id) }
+    const conv = new ProposalConversation({
+      executorFactory: librarianExecutorFactory, // same autonomous, no-browser profile the sweep uses
+      paths: curatorPathsV,
+      proposalId: id,
+      // Raw PTY output → the review popup terminal, mirroring the task-output send.
+      onData: (chunk) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+          if (!w.isDestroyed()) w.webContents.send('curator:conv-data', { id, chunk })
+        }
+      },
+    })
+    curatorConversations.set(id, conv)
+    const ok = await conv.start()
+    if (!ok) curatorConversations.delete(id) // failed to spawn — don't leave a dead entry
+    return ok
+  })
+  ipcMain.handle('curator:converse-write', async (_e, id: string, data: string): Promise<void> => {
+    curatorConversations.get(id)?.write(data)
+  })
+  ipcMain.handle('curator:converse-stop', async (_e, id: string): Promise<void> => {
+    curatorConversations.get(id)?.stop()
+    curatorConversations.delete(id)
+  })
+  ipcMain.handle('curator:tap-skill', async (_e, taskId: string, name: string): Promise<boolean> => {
+    if (!manager) return false
+    // Trailing space per preflight: it dismisses the autocomplete menu so the
+    // user's Enter submits the typed `/name` as a real skill invocation.
+    return manager.typeUnsubmitted(taskId, `/${name} `)
   })
   // Pin/unpin a skill (the manual override of earned-trust ranking).
   ipcMain.handle('remote:pin-skill', async (_e, name: string, on: boolean) => {

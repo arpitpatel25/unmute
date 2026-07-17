@@ -292,6 +292,13 @@ export class TaskManager extends EventEmitter {
     return [...this.tasks.values()].filter((t) => !TERMINAL.includes(t.state)).length
   }
 
+  /** Any task mid-turn ('processing')? Feeds the curator's idle-preference gate
+   *  (a background sweep defers while a task is actively working). */
+  hasProcessingTask(): boolean {
+    for (const t of this.tasks.values()) if (t.state === 'processing') return true
+    return false
+  }
+
   /**
    * Dispatch a new task. Returns the taskId immediately; execution + polling
    * proceed asynchronously (PRD §4.4 — dispatch and forget).

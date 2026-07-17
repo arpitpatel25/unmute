@@ -4,6 +4,7 @@
 // Each method maps to an IPC handler/broadcast registered in remote/init.ts.
 
 import { ipcRenderer } from 'electron'
+import type { Proposal, LedgerEntry } from './remote/curator-store'
 
 export interface RemoteTaskSnapshot {
   id: string
@@ -91,11 +92,47 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:attach-image', taskId, data, ext),
   /** Glance vocabulary: ALL skills (both memory tiers + ~/.claude/skills,
    *  recency-ranked) + known projects. */
-  remoteListSkills: (): Promise<Array<{ name: string; lastUsed: string; description: string; runs: number; pinned: boolean }>> =>
+  remoteListSkills: (): Promise<Array<{ name: string; lastUsed: string; description: string; runs: number; pinned: boolean; origin?: 'unmute' }>> =>
     ipcRenderer.invoke('remote:list-skills'),
   /** Pin/unpin a skill to the top of the cockpit rail. */
   remotePinSkill: (name: string, on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:pin-skill', name, on),
+
+  // ── Skill Curator (spec §11) — proposal review + tap-to-invoke ──
+  /** Pending skill proposals awaiting the user's review. */
+  curatorListProposals: (): Promise<Proposal[]> => ipcRenderer.invoke('curator:list-proposals'),
+  /** Read one proposal in full (evidence, rationale, editable draft). */
+  curatorGetProposal: (id: string): Promise<Proposal | null> =>
+    ipcRenderer.invoke('curator:get-proposal', id),
+  /** Accept: materialize the skill on disk. On failure, `error` carries the
+   *  human-readable reason (collision / invalid-name) for the popup. */
+  curatorAccept: (id: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('curator:accept', id),
+  /** Reject: record the rejection + resolve the proposal. */
+  curatorReject: (id: string, reason?: string): Promise<boolean> =>
+    ipcRenderer.invoke('curator:reject', id, reason),
+  /** The curation ledger (proposed / created / rejected history). */
+  curatorLedger: (): Promise<LedgerEntry[]> => ipcRenderer.invoke('curator:ledger'),
+  /** Start the per-proposal review conversation; output streams on
+   *  'curator:conv-data' (subscribe via curatorOnConvData). */
+  curatorConverseStart: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke('curator:converse-start', id),
+  /** Raw keystrokes from the popup terminal → the conversation's PTY. */
+  curatorConverseWrite: (id: string, data: string): Promise<void> =>
+    ipcRenderer.invoke('curator:converse-write', id, data),
+  /** Stop + tear down the review conversation. */
+  curatorConverseStop: (id: string): Promise<void> =>
+    ipcRenderer.invoke('curator:converse-stop', id),
+  /** Tap a skill into a live session's input (unsubmitted `/name ` — the user
+   *  presses Enter to invoke it). */
+  curatorTapSkill: (taskId: string, name: string): Promise<boolean> =>
+    ipcRenderer.invoke('curator:tap-skill', taskId, name),
+  /** Subscribe to review-conversation output chunks. Returns an unsubscribe fn. */
+  curatorOnConvData: (cb: (d: { id: string; chunk: string }) => void): (() => void) => {
+    const handler = (_e: unknown, d: { id: string; chunk: string }) => cb(d)
+    ipcRenderer.on('curator:conv-data', handler)
+    return () => ipcRenderer.removeListener('curator:conv-data', handler)
+  },
   /** Shelve/unshelve a task — kept but out of the way (hidden from the wall grid). */
   remoteSetShelved: (taskId: string, on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-shelved', taskId, on),
