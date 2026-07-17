@@ -34,6 +34,10 @@ rl.on('line', (line) => {
       if (name && !name.startsWith('__')) toolCalls.push(name)
       if (name === '__calls') {
         reply({ content: [{ type: 'text', text: JSON.stringify(toolCalls) }], isError: false })
+      } else if (name === '__echo') {
+        // echoes the arguments the child actually received (proves the bridge
+        // stripped `session` before forwarding)
+        reply({ content: [{ type: 'text', text: 'echo' }], structuredContent: { receivedArgs: msg.params?.arguments ?? null }, isError: false })
       } else if (name === '__env') {
         reply({ content: [{ type: 'text', text: JSON.stringify({
           embedded: process.env.CUA_DRIVER_EMBEDDED,

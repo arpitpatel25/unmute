@@ -135,6 +135,19 @@ async function handleRequest(deps: CuaServerDeps, req: http.IncomingMessage, res
         return
       }
       const app = typeof msg.params?.arguments?.app === 'string' ? msg.params.arguments.app : undefined
+      // Strip cua's per-session `session` arg. cua's agent-cursor overlay is
+      // PER-SESSION and every session cursor is born ENABLED — so the model
+      // passing a `session` (which cua's own instructions encourage) mints a
+      // fresh VISIBLE cursor that ignores our startup disable. We already
+      // isolate each Claude Code session into its OWN driver child (forSession
+      // above), so cua's in-child session concept is redundant for us:
+      // removing it forces every call onto the child's default cursor, which
+      // DriverClient disables at startup ⇒ no overlay ever. (Deliberate,
+      // narrow exception to pass-through, same class as the kill switch.)
+      if (msg.params?.arguments && typeof msg.params.arguments === 'object' && 'session' in msg.params.arguments) {
+        const { session: _dropped, ...rest } = msg.params.arguments as Record<string, unknown>
+        msg.params = { ...msg.params, arguments: rest }
+      }
       try {
         const out: any = await deps.manager.forSession(sessionId).request('tools/call', msg.params)
         deps.onActivity?.({ app, tool: toolName, ok: out?.isError !== true })

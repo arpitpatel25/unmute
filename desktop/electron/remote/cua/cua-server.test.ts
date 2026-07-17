@@ -51,6 +51,17 @@ test('tools/list + tools/call pass through verbatim', async () => {
   } finally { s.close(); m.dispose() }
 })
 
+test('strips cua session arg so the overlay never turns on (per-session cursors are born enabled)', async () => {
+  const m = mgr()
+  const s = await startCuaServer({ manager: m, getPolicy: () => ON, port: 0 })
+  try {
+    const call = await post(s.port, rpc('tools/call', { name: '__echo', arguments: { session: 'grpA', app: 'Notes', x: 1 } }))
+    const received = call.json.result.structuredContent.receivedArgs
+    assert.ok(!('session' in received), `session should be stripped, got ${JSON.stringify(received)}`)
+    assert.deepEqual(received, { app: 'Notes', x: 1 }) // everything else forwarded verbatim
+  } finally { s.close(); m.dispose() }
+})
+
 test('sessions route to distinct driver children', async () => {
   const m = mgr()
   const s = await startCuaServer({ manager: m, getPolicy: () => ON, port: 0 })
