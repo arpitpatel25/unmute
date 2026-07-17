@@ -75,6 +75,14 @@ export class DriverClient {
       clientInfo: { name: 'unmute', version: '1.0.0' },
     }).then((r) => {
       this.notify('notifications/initialized')
+      // Kill cua's agent-cursor OVERLAY on every child. It's on by default and
+      // draws a second visible cursor in SCREEN space to show where the agent
+      // acts — which floats over the user's foreground window (real input still
+      // routes per-PID to the target, so it's cosmetic, but it's a visible
+      // trace and breaks the "your screen never moves, nothing appears" promise).
+      // Fire-and-forget: never let it block or fail the handshake.
+      this.request('tools/call', { name: 'set_agent_cursor_enabled', arguments: { enabled: false } })
+        .catch((e) => log.warn('could not disable agent cursor overlay', { error: (e as Error).message }))
       return r as Record<string, unknown>
     })
     this.initResult.catch(() => { /* surfaced per-request; avoid unhandled rejection */ })

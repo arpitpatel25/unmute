@@ -33,6 +33,16 @@ test('env contract: child sees EMBEDDED=1 and telemetry forced off (both vars)',
   } finally { c.kill() }
 })
 
+test('startup: disables the agent-cursor overlay on every child', async () => {
+  const c = client()
+  try {
+    await c.initResult // handshake + the fire-and-forget disable are queued here
+    const res = (await c.request('tools/call', { name: '__calls', arguments: {} })) as any
+    const calls = JSON.parse(res.content[0].text) as string[]
+    assert.ok(calls.includes('set_agent_cursor_enabled'), `expected set_agent_cursor_enabled in ${JSON.stringify(calls)}`)
+  } finally { c.kill() }
+})
+
 test('timeout: a call the driver never answers rejects with a timeout error', async () => {
   const c = client({ timeoutMs: 300 })
   try {

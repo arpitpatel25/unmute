@@ -2,11 +2,14 @@
 // Minimal stand-in for `cua-driver mcp`: line-delimited JSON-RPC 2.0 on stdio,
 // mirroring the real driver's shapes (initialize / tools/list / tools/call).
 // Special tools let tests PROVE client behavior:
-//   __env  → echoes the embedded/telemetry env vars the client must set
-//   __pid  → echoes this process's pid (session-routing proof)
-//   __slow → never replies (timeout path)
+//   __env   → echoes the embedded/telemetry env vars the client must set
+//   __pid   → echoes this process's pid (session-routing proof)
+//   __slow  → never replies (timeout path)
+//   __calls → returns the tool names this child has been asked to call
+//             (proves startup side-effects like the agent-cursor disable fired)
 import { createInterface } from 'node:readline'
 
+const toolCalls = []
 const rl = createInterface({ input: process.stdin })
 rl.on('line', (line) => {
   if (!line.trim()) return
@@ -28,7 +31,10 @@ rl.on('line', (line) => {
       break
     case 'tools/call': {
       const name = msg.params?.name
-      if (name === '__env') {
+      if (name && !name.startsWith('__')) toolCalls.push(name)
+      if (name === '__calls') {
+        reply({ content: [{ type: 'text', text: JSON.stringify(toolCalls) }], isError: false })
+      } else if (name === '__env') {
         reply({ content: [{ type: 'text', text: JSON.stringify({
           embedded: process.env.CUA_DRIVER_EMBEDDED,
           telemetry: process.env.CUA_DRIVER_RS_TELEMETRY_ENABLED,
