@@ -40,6 +40,24 @@ test('timeout: a call the driver never answers rejects with a timeout error', as
   } finally { c.kill() }
 })
 
+test('spawn failure: missing binary rejects initResult fast and marks dead', async () => {
+  // No binArgs override — exercise the real spawn of a nonexistent path.
+  // spawn() failure fires only 'error' (never 'exit'); this proves the error
+  // handler rejects pending requests instead of letting them sit out the 60s
+  // request timer. The 2s test-side race is the proof it's NOT the timer path.
+  const c = new DriverClient({ binPath: '/nonexistent/definitely-not-a-binary' })
+  try {
+    await assert.rejects(
+      Promise.race([
+        c.initResult,
+        new Promise((_r, rej) => setTimeout(() => rej(new Error('test-race-timeout')), 2000)),
+      ]),
+      /failed to start/,
+    )
+    assert.equal(c.alive, false)
+  } finally { c.kill() }
+})
+
 test('death: kill() fails in-flight and future requests, fires onExit', async () => {
   let exited = false
   const c = client({ onExit: () => { exited = true } })

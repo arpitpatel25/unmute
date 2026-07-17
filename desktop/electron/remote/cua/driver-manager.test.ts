@@ -59,3 +59,26 @@ test('dispose kills everything', async () => {
   assert.equal(a.alive, false)
   assert.equal(d.alive, false)
 })
+
+test('after dispose: default()/forSession() throw and spawn nothing (no leak)', () => {
+  const m = mgr()
+  m.dispose()
+  const before = (m as any).spawnCount as number
+  assert.throws(() => m.default(), /disposed/)
+  assert.throws(() => m.forSession('x'), /disposed/)
+  assert.throws(() => m.forSession(undefined), /disposed/)
+  assert.equal((m as any).spawnCount, before) // a throw that still spawned would leak
+})
+
+test('permission poll gated on getEnabled: disabled users never get a child', async () => {
+  // Tiny poll cadence + a binPath that would be observable if ever spawned.
+  const m = new DriverManager({
+    binPath: '/nonexistent/definitely-not-a-binary',
+    permissionPollMs: 50,
+    getEnabled: () => false,
+  })
+  try {
+    await new Promise((r) => setTimeout(r, 200)) // several poll ticks
+    assert.equal((m as any).spawnCount, 0)
+  } finally { m.dispose() }
+})

@@ -1436,7 +1436,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     || (app.isPackaged
       ? join(process.resourcesPath, 'cua-driver', 'cua-driver')
       : join(app.getAppPath(), 'vendor', 'cua-driver', 'cua-driver'))
-  cuaManager = new DriverManager({ binPath: driverBin, hostBundleId: 'unmute' })
+  cuaManager = new DriverManager({
+    binPath: driverBin,
+    hostBundleId: 'unmute',
+    // Opt-in principle: the 30s permission poll must not spawn a resident
+    // driver child for users who never turned Computer Use on. User-initiated
+    // paths (IPC ax-trusted check, bridge tool calls) still spawn on demand.
+    getEnabled: () => normalizePolicy(settings.get('computerUse')).enabled,
+  })
   void startCuaServer({
     manager: cuaManager,
     getPolicy: () => normalizePolicy(settings.get('computerUse')),

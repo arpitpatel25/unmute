@@ -57,7 +57,18 @@ export class DriverClient {
       this.pending.clear()
       this.opts.onExit?.(code)
     })
-    this.child.on('error', (e) => log.warn('driver spawn error', { error: e.message }))
+    // spawn() failure (ENOENT etc.) fires ONLY 'error', never 'exit' — without
+    // this, every request would sit its full timeout and the manager would
+    // never respawn (alive stays true). Fail fast, mirroring the exit path.
+    this.child.on('error', (e) => {
+      log.warn('driver spawn error', { error: e.message })
+      this.dead = true
+      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error(`cua-driver failed to start: ${e.message}`)) }
+      this.pending.clear()
+    })
+    // EPIPE race: notify() writes without a callback; a dying child would
+    // otherwise turn that write error into an uncaught 'error' crash.
+    this.child.stdin.on('error', (e) => log.warn('driver stdin error', { error: e.message }))
     this.initResult = this.request('initialize', {
       protocolVersion: '2025-06-18',
       capabilities: {},

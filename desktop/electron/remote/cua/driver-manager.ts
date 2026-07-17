@@ -25,6 +25,10 @@ export interface DriverManagerOpts {
   sessionIdleMs?: number
   /** Permission re-check cadence ms. Default 30s; 0 disables (tests). */
   permissionPollMs?: number
+  /** Opt-in gate for the background poll: when provided and false, the poll
+   *  never spawns a child — nothing runs until the user enables Computer Use.
+   *  On-demand paths (IPC, bridge tool calls) are user-initiated and unaffected. */
+  getEnabled?: () => boolean
 }
 
 export class DriverManager {
@@ -46,7 +50,11 @@ export class DriverManager {
     }
   }
 
+  /** Test observability only — proves gating paths never spawned. */
+  private spawnCount = 0
+
   private spawnClient(): DriverClient {
+    this.spawnCount++
     return new DriverClient({
       binPath: this.opts.binPath,
       binArgs: this.opts.binArgs,
@@ -57,6 +65,9 @@ export class DriverManager {
 
   /** The shared child. Respawned lazily if it died (crash resilience). */
   default(): DriverClient {
+    // After dispose() (app before-quit) the timers are gone — a late spawn
+    // here would be a child nothing ever kills. Refuse instead of leaking.
+    if (this.disposed) throw new Error('DriverManager disposed')
     if (!this.def || !this.def.alive) this.def = this.spawnClient()
     return this.def
   }
@@ -91,6 +102,9 @@ export class DriverManager {
   }
 
   private async pollPermissions(): Promise<void> {
+    // Opt-in principle: the background poll must not be the thing that spawns
+    // a resident driver for users who never enabled Computer Use.
+    if (this.opts.getEnabled && !this.opts.getEnabled()) return
     try {
       const { accessibility } = await this.checkPermissions()
       if (this.lastAccessibility === false && accessibility) {
