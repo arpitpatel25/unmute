@@ -27,7 +27,7 @@ test('synthesize prompt: method-oriented filter excludes app-navigation, asks fo
   const p = buildSynthesizePrompt({
     sweepId: 'sw1',
     candidates: [{ key: 'k', title: 'T', skeleton: 'S', total: 3, struggle: true, firstSeen: 'a', lastSeen: 'b', occurrences: [] }],
-    curatedIndex: [{ name: 'pr-review', description: 'd' }],
+    curatedIndex: [{ name: 'pr-review', description: 'd', body: '## Goal\nreview' }],
     rejections: [{ name: 'noise-skill', reason: 'too niche' }],
     feedback: [{ skill: 'pr-review', note: 'misses lockfiles' }],
     outPath: '/out/synth.json',

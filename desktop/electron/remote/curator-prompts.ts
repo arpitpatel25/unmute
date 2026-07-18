@@ -93,7 +93,9 @@ export function parseDistillOutput(raw: string | null): DistillProcedure[] {
 export function buildSynthesizePrompt(i: {
   sweepId: string
   candidates: Candidate[]
-  curatedIndex: Array<{ name: string; description: string }>
+  // Each owned skill's body is carried too (the sweep diffs against it, D19); the
+  // listing below stays name+description to keep the prompt lean.
+  curatedIndex: Array<{ name: string; description: string; body: string }>
   rejections: Array<{ name: string; reason?: string }>
   feedback: Array<{ skill: string; note: string }>
   outPath: string

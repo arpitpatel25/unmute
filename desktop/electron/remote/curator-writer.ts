@@ -86,9 +86,9 @@ export interface WriteResult { ok: boolean; error?: 'collision' | 'io' | 'invali
 /** Materialize (or update) a curated skill on disk, collision-guarded and
  *  ownership-first. See the module header for the invariants this enforces. */
 export async function writeSkill(o: {
-  draft: ProposalDraft; kind: 'create' | 'update'; userEdited: boolean
+  draft: ProposalDraft; kind: 'create' | 'update'
   proposalId: string; paths: CuratorPaths; skillsRoot?: string
-  originStamp: boolean; diff?: string
+  originStamp: boolean
 }): Promise<WriteResult> {
   const skillsRoot = o.skillsRoot ?? defaultSkillsRoot()
   const name = o.draft.name

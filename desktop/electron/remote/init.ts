@@ -1553,16 +1553,26 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // curatedIndex: the skills WE own (ownership-record authority) each paired with
   // its on-disk SKILL.md description — the synthesize pass reads this so it never
   // re-proposes or collides with a skill the curator already created.
-  const buildCuratedIndex = async (): Promise<Array<{ name: string; description: string }>> => {
+  // Strip the YAML frontmatter (everything up to and including the closing `---`)
+  // to recover the SKILL.md BODY — the "current version" the deterministic diff
+  // (D19) compares a proposed update against. Resilient: a body with no
+  // frontmatter is returned whole.
+  const stripFrontmatter = (md: string): string => {
+    const m = /^---\n[\s\S]*?\n---\n?/.exec(md)
+    return (m ? md.slice(m[0].length) : md).replace(/^\n/, '')
+  }
+  const buildCuratedIndex = async (): Promise<Array<{ name: string; description: string; body: string }>> => {
     const names = ownedSkillNames(await readOwnership(curatorPathsV))
-    const out: Array<{ name: string; description: string }> = []
+    const out: Array<{ name: string; description: string; body: string }> = []
     for (const name of names) {
       let description = ''
+      let body = ''
       try {
-        const head = (await fs.readFile(join(curatorSkillsRoot, name, 'SKILL.md'), 'utf8')).slice(0, 4096)
-        description = (/^description:\s*(.+)$/m.exec(head)?.[1] ?? '').trim().slice(0, 600)
-      } catch { /* file gone — the name still counts as owned */ }
-      out.push({ name, description })
+        const md = await fs.readFile(join(curatorSkillsRoot, name, 'SKILL.md'), 'utf8')
+        description = (/^description:\s*(.+)$/m.exec(md.slice(0, 4096))?.[1] ?? '').trim().slice(0, 600)
+        body = stripFrontmatter(md)
+      } catch { /* file gone — the name still counts as owned, body stays '' */ }
+      out.push({ name, description, body })
     }
     return out
   }
@@ -1941,11 +1951,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const res = await writeSkill({
       draft: { ...proposal.draft, body },
       kind: proposal.kind,
-      userEdited,
       proposalId: id,
       paths: curatorPathsV,
       originStamp: true, // preflight confirmed the `origin: unmute` key is tolerated (§11)
-      diff: proposal.diff,
     })
     if (res.ok) {
       await resolveProposal(curatorPathsV, id, { action: 'accepted', at: new Date().toISOString(), userEdited })

@@ -44,6 +44,7 @@ import {
   parseSynthesizeOutput,
 } from './curator-prompts'
 import { computeTriageMetrics, passesTriage } from './curator-triage'
+import { unifiedDiff } from './curator-diff'
 import { locateTranscript, reduceTranscript } from './trace-reducer'
 import type { ExecutorFactory, AgentExecutor } from './executor'
 
@@ -235,7 +236,7 @@ const REINJECT_AT_MS = 15_000          // one re-inject if the prompt landed uns
 export interface SweepDeps {
   executorFactory: ExecutorFactory
   paths: CuratorPaths
-  curatedIndex: () => Promise<Array<{ name: string; description: string }>>  // init wires: owned names + on-disk descriptions
+  curatedIndex: () => Promise<Array<{ name: string; description: string; body: string }>>  // init wires: owned names + on-disk descriptions + full SKILL.md bodies (for the D19 diff)
   sessionTimeoutMs?: number      // per one-shot, default 5 * 60_000
   submitConfirmMs?: number       // default 450 (the router/task-lane paste quirk)
   pollMs?: number                // default 250
@@ -380,6 +381,21 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     const synthRaw = await runOneShot('synth', synthPrompt, synthOut, dirname(synthOut))
     const proposals = parseSynthesizeOutput(synthRaw, sweepId, now)
     log2.event('synthesized', { sweepId, proposals: proposals.length })
+
+    // ── 4b. DETERMINISTIC diff (D19). The raw diff a user sees for an update is a
+    //       pure function of the CURRENT on-disk body vs the proposed body —
+    //       never LLM-authored, so it can never be plausible fiction. Creates
+    //       have no previous version (the popup shows the full body), so they
+    //       carry no diff. curatedFull already holds every owned skill's body.
+    const bodyByName = new Map(curatedFull.map((s) => [s.name, s.body]))
+    for (const prop of proposals) {
+      if (prop.kind === 'update' && prop.targetSkill) {
+        const currentBody = bodyByName.get(prop.targetSkill)
+        // Not found should not happen (an update targets an owned skill); if it
+        // does, leave diff undefined rather than diff against a phantom body.
+        if (currentBody !== undefined) prop.diff = unifiedDiff(currentBody, prop.draft.body)
+      }
+    }
 
     // ── 5. Persist each proposal: the JSON and its editable draft.md. A proposal
     //       is transient (D17) — it is NOT recorded in the ownership record;

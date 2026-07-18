@@ -21,7 +21,7 @@ test('renderSkillMd: frontmatter carries the flag; origin stamp is conditional',
 test('writeSkill create: ownership-first, atomic dir write, hash recorded', async () => {
   const root = await tmp(); const skills = path.join(root, 'skills')
   const p = curatorPaths(root)
-  const r = await writeSkill({ draft, kind: 'create', userEdited: false, proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: true })
+  const r = await writeSkill({ draft, kind: 'create', proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: true })
   assert.equal(r.ok, true)
   const onDisk = await fs.readFile(path.join(skills, 'pr-review', 'SKILL.md'), 'utf8')
   const owned = (await readOwnership(p)).skills['pr-review']
@@ -35,7 +35,7 @@ test('writeSkill: HARD STOP on collision with a skill we did not author (D10)', 
   const root = await tmp(); const skills = path.join(root, 'skills')
   await fs.mkdir(path.join(skills, 'pr-review'), { recursive: true })
   await fs.writeFile(path.join(skills, 'pr-review', 'SKILL.md'), 'user-owned')
-  const r = await writeSkill({ draft, kind: 'create', userEdited: false, proposalId: 'p1', paths: curatorPaths(root), skillsRoot: skills, originStamp: false })
+  const r = await writeSkill({ draft, kind: 'create', proposalId: 'p1', paths: curatorPaths(root), skillsRoot: skills, originStamp: false })
   assert.equal(r.ok, false)
   assert.equal(r.error, 'collision')
   assert.equal(await fs.readFile(path.join(skills, 'pr-review', 'SKILL.md'), 'utf8'), 'user-owned')  // untouched
@@ -44,9 +44,9 @@ test('writeSkill: HARD STOP on collision with a skill we did not author (D10)', 
 test('writeSkill update: allowed only for owned names; user-edited accept upserts ownership', async () => {
   const root = await tmp(); const skills = path.join(root, 'skills')
   const p = curatorPaths(root)
-  await writeSkill({ draft, kind: 'create', userEdited: false, proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
+  await writeSkill({ draft, kind: 'create', proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
   const before = (await readOwnership(p)).skills['pr-review']
-  const r2 = await writeSkill({ draft: { ...draft, body: 'v2' }, kind: 'update', userEdited: true, proposalId: 'p2', paths: p, skillsRoot: skills, originStamp: false, diff: '-a+b' })
+  const r2 = await writeSkill({ draft: { ...draft, body: 'v2' }, kind: 'update', proposalId: 'p2', paths: p, skillsRoot: skills, originStamp: false })
   assert.equal(r2.ok, true)
   const after = (await readOwnership(p)).skills['pr-review']
   const onDisk = await fs.readFile(path.join(skills, 'pr-review', 'SKILL.md'), 'utf8')
@@ -58,7 +58,7 @@ test('writeSkill update: allowed only for owned names; user-edited accept upsert
 test('detectDrift: hand-edited curated skill flagged once', async () => {
   const root = await tmp(); const skills = path.join(root, 'skills')
   const p = curatorPaths(root)
-  await writeSkill({ draft, kind: 'create', userEdited: false, proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
+  await writeSkill({ draft, kind: 'create', proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
   await fs.appendFile(path.join(skills, 'pr-review', 'SKILL.md'), '\nhand edit')
   assert.deepEqual(await detectDrift(p, skills), ['pr-review'])
   assert.deepEqual(await detectDrift(p, skills), [])   // already flagged at this hash — not re-flagged
@@ -67,7 +67,7 @@ test('detectDrift: hand-edited curated skill flagged once', async () => {
 test('writeSkill update: HARD STOP (D10) when the name is not one we own — nothing written', async () => {
   const root = await tmp(); const skills = path.join(root, 'skills')
   const p = curatorPaths(root)
-  const r = await writeSkill({ draft, kind: 'update', userEdited: false, proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
+  const r = await writeSkill({ draft, kind: 'update', proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
   assert.equal(r.ok, false)
   assert.equal(r.error, 'collision')
   await assert.rejects(fs.readFile(path.join(skills, 'pr-review', 'SKILL.md'), 'utf8'))  // never written
@@ -77,11 +77,11 @@ test('writeSkill update: HARD STOP (D10) when the name is not one we own — not
 test('writeSkill create: HARD STOP (D10) via the ownership record — second create collides even without a dir', async () => {
   const root = await tmp(); const skills = path.join(root, 'skills')
   const p = curatorPaths(root)
-  const first = await writeSkill({ draft, kind: 'create', userEdited: false, proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
+  const first = await writeSkill({ draft, kind: 'create', proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
   assert.equal(first.ok, true)
   const owned1 = (await readOwnership(p)).skills['pr-review']
   await fs.rm(path.join(skills, 'pr-review'), { recursive: true, force: true })  // remove dir; ownership still owns the name
-  const second = await writeSkill({ draft, kind: 'create', userEdited: false, proposalId: 'p2', paths: p, skillsRoot: skills, originStamp: false })
+  const second = await writeSkill({ draft, kind: 'create', proposalId: 'p2', paths: p, skillsRoot: skills, originStamp: false })
   assert.equal(second.ok, false)
   assert.equal(second.error, 'collision')  // owned.has(name), not the on-disk dir
   const owned2 = (await readOwnership(p)).skills['pr-review']
@@ -91,9 +91,9 @@ test('writeSkill create: HARD STOP (D10) via the ownership record — second cre
 test('writeSkill update: a non-user-edited update upserts ownership for an owned skill', async () => {
   const root = await tmp(); const skills = path.join(root, 'skills')
   const p = curatorPaths(root)
-  await writeSkill({ draft, kind: 'create', userEdited: false, proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
+  await writeSkill({ draft, kind: 'create', proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
   const before = (await readOwnership(p)).skills['pr-review']
-  const r = await writeSkill({ draft: { ...draft, body: 'v2' }, kind: 'update', userEdited: false, proposalId: 'p2', paths: p, skillsRoot: skills, originStamp: false })
+  const r = await writeSkill({ draft: { ...draft, body: 'v2' }, kind: 'update', proposalId: 'p2', paths: p, skillsRoot: skills, originStamp: false })
   assert.equal(r.ok, true)
   const after = (await readOwnership(p)).skills['pr-review']
   const onDisk = await fs.readFile(path.join(skills, 'pr-review', 'SKILL.md'), 'utf8')
@@ -105,7 +105,7 @@ test('writeSkill update: a non-user-edited update upserts ownership for an owned
 test('writeSkill: path traversal in name is refused (invalid-name) and writes nothing outside skillsRoot', async () => {
   const root = await tmp(); const skills = path.join(root, 'skills')
   const p = curatorPaths(root)
-  const r = await writeSkill({ draft: { ...draft, name: '../escaped' }, kind: 'create', userEdited: false, proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
+  const r = await writeSkill({ draft: { ...draft, name: '../escaped' }, kind: 'create', proposalId: 'p1', paths: p, skillsRoot: skills, originStamp: false })
   assert.equal(r.ok, false)
   assert.equal(r.error, 'invalid-name')
   // If '../escaped' had been joined onto skillsRoot it would land at <root>/escaped/SKILL.md (a sibling of skillsRoot).

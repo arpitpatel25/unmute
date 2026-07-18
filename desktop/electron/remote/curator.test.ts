@@ -155,6 +155,33 @@ test('runSweep: distills, accumulates, synthesizes, writes proposal, advances cu
   assert.equal(cursor.sessions.t1.lineOffset, 1)                       // advanced on success
 })
 
+test('runSweep: update proposal gets a DETERMINISTIC diff from the current body; create gets none (D19)', async () => {
+  const root = await tmp()
+  const p = curatorPaths(root)
+  const synthUpdate = { proposals: [
+    { kind: 'update', targetSkill: 'pr-review', draft: { name: 'pr-review', description: 'd', body: 'line1\nline2-new' },
+      evidence: { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 5 } }, rationale: 'gap found' },
+    { kind: 'create', draft: { name: 'brand-new-skill', description: 'd', body: 'B' },
+      evidence: { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 5 } }, rationale: 'seen twice' },
+  ] }
+  const writes = async (prompt: string) => {
+    const m = prompt.match(/(\/\S+?(?:distill|synth)\.json)/)
+    if (!m) return
+    const payload = m[1].endsWith('distill.json') ? distillJson : synthUpdate
+    await fs.mkdir(path.dirname(m[1]), { recursive: true })
+    await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
+  }
+  // curatedIndex now carries the current on-disk BODY — the diff's left side.
+  const curatedIndex = async () => [{ name: 'pr-review', description: 'd', body: 'line1\nline2' }]
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex, sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run([{ taskId: 't1', intent: 'x', transcriptPath: path.join(root, 't1.jsonl'), fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }])
+  const pending = await listPendingProposals(p)
+  const upd = pending.find((x) => x.kind === 'update')
+  const cre = pending.find((x) => x.kind === 'create')
+  assert.ok(upd?.diff && upd.diff.includes('-line2') && upd.diff.includes('+line2-new'))   // real diff off the real body
+  assert.equal(cre?.diff, undefined)                                                       // create → no previous version → no diff
+})
+
 test('runSweep: rate-limit aborts — cursor NOT advanced, no proposals', async () => {
   const root = await tmp()
   const p = curatorPaths(root)
