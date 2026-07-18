@@ -21,11 +21,13 @@
 
 export const CLEANUP_TIMEOUT_MS = 900
 // Model history (field-tested): Scout summarized a dictation (2026-07-15)
-// → tried gpt-oss-120b → timed out on 4/5 real calls (900ms budget, wasted
-// latency, zero value) → back to Scout (user decision 2026-07-16): its real
-// latency (~300-450ms) fits the budget, and the deletion-only guard now
-// makes its summarizing tendency harmless (raw pastes instead).
-export const CLEANUP_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
+// → tried gpt-oss-120b on GROQ → timed out on 4/5 real calls (900ms budget)
+// → back to Scout (2026-07-16) → 2026-07-18: Groq DEPRECATED Scout, so every
+// call 404'd. Moved /v1/llm to CEREBRAS, whose gpt-oss-120b returns in ~0.6s
+// (full round-trip) — fast enough for the noisy-path CORRECTION_TIMEOUT_MS
+// (1500ms) budget, with strong quality. This model name is sent to the worker
+// and MUST be a valid Cerebras model, or it 404s (the exact Scout failure).
+export const CLEANUP_MODEL = 'gpt-oss-120b'
 const MIN_RAW_CHARS = 40
 /** Cleaned text must keep at least this fraction of the raw WORDS.
  *  Heavy stutter legitimately removes ~25-35%; summarization removes more. */

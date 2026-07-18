@@ -7,20 +7,25 @@
 
 export const GROQ_STT_URL = 'https://api.groq.com/openai/v1/audio/transcriptions'
 export const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions'
+// LLM (chat) runs on Cerebras — same OpenAI-compatible shape as Groq, but far
+// lower TTFT so a 120B model fits the dictation-cleanup budget. STT stays Groq
+// (Cerebras has no Whisper). 2026-07-18: Groq deprecated llama-4-scout, which
+// 404'd every /v1/llm call — this move both fixes that and upgrades the model.
+export const CEREBRAS_CHAT_URL = 'https://api.cerebras.ai/v1/chat/completions'
 
 // ─── Models (server-side defaults — change here to roll out across all users) ─
 
-export const STT_MODEL = 'whisper-large-v3-turbo' // $0.04 / hour
-export const LLM_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
+export const STT_MODEL = 'whisper-large-v3-turbo' // $0.04 / hour (Groq)
+export const LLM_MODEL = 'gpt-oss-120b' // Cerebras — ~0.6s round-trip, strong quality
 
 // ─── Pricing (USD) ──────────────────────────────────────────────
 
 /** STT cost per second of audio (USD). */
 const STT_COST_PER_SECOND = 0.04 / 3600 // $0.04/hr → $0.0000111/s
 
-/** LLM cost per token (USD). Llama-4-Scout. */
-const LLM_INPUT_PRICE = 0.11 / 1_000_000 // $0.11 per million input tokens
-const LLM_OUTPUT_PRICE = 0.34 / 1_000_000 // $0.34 per million output tokens
+/** LLM cost per token (USD). Cerebras gpt-oss-120b. */
+const LLM_INPUT_PRICE = 0.35 / 1_000_000 // $0.35 per million input tokens
+const LLM_OUTPUT_PRICE = 0.75 / 1_000_000 // $0.75 per million output tokens
 
 // ─── Markup ─────────────────────────────────────────────────────
 
