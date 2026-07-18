@@ -225,3 +225,28 @@ test('ProposalConversation: spawns in the proposal dir, primes with draft, strea
   conv.write('why?')
   assert.deepEqual(raw.filter((r) => r === 'why?'), ['why?'])
 })
+
+test('ProposalConversation: input written before the PTY is ready is buffered and flushed in order (not dropped)', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  await writeProposal(p, prop('prop_d'))
+  await fs.writeFile(path.join(p.proposalsDir, 'prop_d', 'draft.md'), 'body v1')
+  const raw: string[] = []
+  // Executor that is NOT alive until start() completes — mirrors the real race:
+  // the popup's sendLine fires ensureStarted() then curatorConverseWrite in the
+  // same synchronous tick, so write() lands while start() is still awaiting.
+  let ready = false
+  const ex = {
+    get alive() { return ready },
+    spawn: async () => {},
+    isReady: async () => { await new Promise((r) => setTimeout(r, 5)); ready = true },
+    writeStdin: () => {}, write: (d: string) => raw.push(d),
+    resize: () => {}, onData: () => {}, kill: () => { ready = false },
+  } as unknown as AgentExecutor
+  const conv = new ProposalConversation({ executorFactory: () => ex, paths: p, proposalId: 'prop_d', onData: () => {}, readyGraceMs: 0 })
+  const started = conv.start()             // in-flight — not alive yet
+  conv.write('first instruction')          // arrives BEFORE the PTY is ready
+  conv.write(' second')                    // and a follow-up in the same window
+  assert.equal(raw.length, 0)              // nothing written through while not alive
+  assert.equal(await started, true)
+  assert.deepEqual(raw, ['first instruction', ' second'])   // buffered chunks flushed, in order
+})

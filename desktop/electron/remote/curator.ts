@@ -463,6 +463,11 @@ export class ProposalConversation {
   private readonly onData: (chunk: string) => void
   private readonly readyGraceMs: number
   private ex: AgentExecutor | null = null
+  /** Keystrokes that arrived before the PTY was alive (the popup starts the
+   *  session lazily on the first NL edit, then writes in the same tick — see
+   *  SkillReviewPopup.sendLine). Buffered here and flushed in order once start()
+   *  has the PTY ready, so the FIRST edit instruction is never dropped. */
+  private pending: string[] = []
 
   constructor(opts: ProposalConversationOpts) {
     this.executorFactory = opts.executorFactory
@@ -496,19 +501,28 @@ export class ProposalConversation {
       ex.writeStdin('')                          // accept folder-trust prompt (fresh dir)
       await new Promise((r) => setTimeout(r, this.readyGraceMs))
       ex.writeStdin(this.primer())               // ONE priming turn — points the session at the files
+      // PTY is now ready to accept raw keystrokes — flush anything the popup
+      // wrote before we got here (preserving order), then reset the buffer.
+      const queued = this.pending
+      this.pending = []
+      for (const chunk of queued) ex.write(chunk)
       log3.event('proposal-conversation-started', { proposalId: this.proposalId, cwd })
       return true
     } catch (e) {
       log3.warn('start failed', { proposalId: this.proposalId, error: (e as Error).message })
       try { ex.kill() } catch { /* best-effort */ }
       this.ex = null
+      this.pending = []                          // spawn failed — drop buffered input, don't leak it
       return false
     }
   }
 
-  /** Raw keystrokes from the popup terminal straight into the PTY (no CR added). */
+  /** Raw keystrokes from the popup terminal straight into the PTY (no CR added).
+   *  Before the PTY is alive (lazy-start race), buffer so start() can flush. */
   write(data: string): void {
-    if (this.ex?.alive) this.ex.write(data)
+    if (this.ex?.alive) { this.ex.write(data); return }
+    this.pending.push(data)
+    if (this.pending.length > 64) this.pending.shift()   // safety valve — a review won't exceed this
   }
 
   /** Kill the session (the popup closed / a fresh conversation supersedes it). */
