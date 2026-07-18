@@ -1564,8 +1564,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       }
       return out
     },
-    // Idle-preference: defer a sweep while any task is mid-turn.
-    isBusy: () => manager?.hasProcessingTask() ?? false,
+    // Idle-preference (§4.1): defer a sweep while any task is mid-turn OR an
+    // utterance is in flight (captureBusy is true through listening/transcribing/
+    // routing, false at idle) — never compete with live work for the window.
+    isBusy: () => (manager?.hasProcessingTask() ?? false) || captureBusy,
     runSweep: makeRunSweep({ executorFactory: librarianExecutorFactory, paths: curatorPathsV, curatedIndex: buildCuratedIndex }),
   })
   curator.start()
