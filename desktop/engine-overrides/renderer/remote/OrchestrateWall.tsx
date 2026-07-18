@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
 import { groupSections } from './groupSections'
 import { LiveTerminal } from './LiveTerminal'
+import SkillReviewPopup from './SkillReviewPopup'
 
 // ─── Ops Console palette — neutral everywhere; hue lives ONLY in `status`. ───
 const C = {
@@ -1074,6 +1075,21 @@ export default function OrchestrateWall() {
           </>
         )}
       </div>
+
+      {/* Skill Curator review popup (Task 14): opened from a SUGGESTIONS row.
+          Overlays everything (position:fixed scrim). Cancel keeps the proposal
+          pending; Accept/Reject resolve it — either way we refresh the inbox so
+          a resolved row disappears. */}
+      {openProposalId && (
+        <SkillReviewPopup
+          proposalId={openProposalId}
+          onClose={() => {
+            setOpenProposalId(null)
+            const api = (window as unknown as { electronAPI?: { curatorListProposals?: () => Promise<Array<{ id: string; kind: 'create' | 'update'; draft: { name: string; description: string } }>> } }).electronAPI
+            void api?.curatorListProposals?.().then((p) => setProposals(p ?? []))
+          }}
+        />
+      )}
     </div>
   )
 }
