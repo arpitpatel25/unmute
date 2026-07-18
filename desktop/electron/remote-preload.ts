@@ -63,9 +63,6 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-computer-use', patch),
   /** Is Unmute trusted for Accessibility? (onboarding hint) */
   remoteAxTrusted: (): Promise<boolean> => ipcRenderer.invoke('remote:ax-trusted'),
-  /** Running apps for the allowlist picker. */
-  remoteAxListApps: (): Promise<Array<{ name: string; bundleId: string; pid: number; windowsHere: number; windowsAnywhere: number }>> =>
-    ipcRenderer.invoke('remote:ax-list-apps'),
   /** Subscribe to live "an app is being driven" activity (menu-bar/overlay indicator). */
   remoteOnAxActivity: (cb: (d: { app?: string; tool: string; ok: boolean; at: number }) => void): (() => void) => {
     const handler = (_e: unknown, d: { app?: string; tool: string; ok: boolean; at: number }) => cb(d)
