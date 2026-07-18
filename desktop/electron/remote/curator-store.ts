@@ -47,7 +47,7 @@ export interface LedgerFile { version: 1; entries: LedgerEntry[] }
 
 export interface ProposalDraft { name: string; description: string; body: string }
 export interface ProposalEvidence { occurrences: number; sessions: Array<{ id: string; intent: string; at: string; tracePointer: string }>; firstSeen: string; lastSeen: string; struggle: { errors: number; recoveries: number; wallClockMin: number } }
-export interface Proposal { id: string; sweepId: string; proposedAt: string; kind: 'create' | 'update'; draft: ProposalDraft; evidence: ProposalEvidence; rationale: string; targetSkill?: string; diff?: string; triggeringEvidence?: string[]; affectedSessions?: Array<{ id: string; invokedAt: string }>; resolution: null | { action: 'accepted' | 'rejected'; at: string; userEdited: boolean; reason?: string } }
+export interface Proposal { id: string; sweepId: string; proposedAt: string; kind: 'create' | 'update'; draft: ProposalDraft; evidence: ProposalEvidence; rationale: string; changeSummary?: string[]; targetSkill?: string; diff?: string; triggeringEvidence?: string[]; affectedSessions?: Array<{ id: string; invokedAt: string }>; resolution: null | { action: 'accepted' | 'rejected'; at: string; userEdited: boolean; reason?: string } }
 
 export interface FeedbackEntry { at: string; skill: string; note: string; consumedBySweep?: string }
 
