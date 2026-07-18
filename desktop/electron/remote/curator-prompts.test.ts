@@ -75,3 +75,13 @@ test('parseSynthesizeOutput: changeSummary is string[], missing→[], invalid en
   assert.deepEqual(out[1].changeSummary, [])
   assert.deepEqual(out[2].changeSummary, [])
 })
+
+test('parseSynthesizeOutput: a synth-provided diff field is IGNORED (D19 — only the sweep sets diff)', () => {
+  const out = parseSynthesizeOutput(JSON.stringify({ proposals: [
+    { kind: 'update', draft: { name: 'a-skill', description: 'd', body: 'new body' },
+      evidence: { occurrences: 1, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 0, recoveries: 0, wallClockMin: 1 } },
+      rationale: 'why', targetSkill: 'a-skill', diff: '--- fabricated\n+++ fiction\n+not real' },
+  ] }), 'sw1', () => 1)
+  assert.equal(out.length, 1)
+  assert.equal(out[0].diff, undefined)   // the LLM's diff is dropped; only the deterministic sweep sets it
+})

@@ -47,6 +47,7 @@ interface Proposal {
     struggle: { errors: number; recoveries: number; wallClockMin: number }
   }
   rationale: string
+  changeSummary?: string[]
   targetSkill?: string
   diff?: string
   triggeringEvidence?: string[]
@@ -95,16 +96,19 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
     return () => { live = false }
   }, [proposalId])
 
-  // ─── Conversation pane state ───
-  const [discussing, setDiscussing] = useState(false)
+  // ─── Raw diff/body toggle (collapsed by default — the summary leads, D20) ───
+  const [showRaw, setShowRaw] = useState(false)
+
+  // ─── Conversation state (the PRIMARY edit affordance — always visible, D20) ───
   const [convText, setConvText] = useState('')
   const [input, setInput] = useState('')
   const startedRef = useRef(false) // guard: start the CC session exactly once
   const scrollRef = useRef<HTMLPreElement | null>(null)
 
-  // Subscribe to conversation chunks FOR THIS PROPOSAL for the popup's whole life,
-  // and start/stop the underlying CC session with the discuss toggle. The listener
-  // is filtered by id so a chunk from another proposal's session never appends here.
+  // Subscribe to conversation chunks FOR THIS PROPOSAL for the popup's whole life.
+  // The listener is filtered by id so a chunk from another proposal's session never
+  // appends here. (Subscription is lifecycle-independent of when the CC session
+  // actually starts — we start it lazily on the user's first message.)
   useEffect(() => {
     const api = curatorApi()
     const off = api?.curatorOnConvData?.((d) => {
@@ -119,9 +123,9 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
     return () => { void curatorApi()?.curatorConverseStop?.(proposalId) }
   }, [proposalId])
 
-  // First time the user opens "discuss / edit": spawn the real CC session.
-  const openDiscuss = useCallback(() => {
-    setDiscussing(true)
+  // Spawn the real CC session lazily — on the user's first message. The edit box is
+  // always visible (D20), but we don't pay for a session until they actually engage.
+  const ensureStarted = useCallback(() => {
     if (startedRef.current) return
     startedRef.current = true
     void curatorApi()?.curatorConverseStart?.(proposalId)
@@ -129,15 +133,16 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
 
   // Keep the scrollback pinned to the newest output.
   useEffect(() => {
-    if (discussing && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [convText, discussing])
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [convText])
 
   const sendLine = useCallback(() => {
     const v = input
     if (!v.trim()) return
+    ensureStarted()
     void curatorApi()?.curatorConverseWrite?.(proposalId, v + '\r')
     setInput('')
-  }, [input, proposalId])
+  }, [input, proposalId, ensureStarted])
 
   // ─── Accept / Reject state ───
   const [busy, setBusy] = useState(false)
@@ -176,6 +181,10 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
   const kindChip = proposal?.kind === 'update'
     ? { label: 'skill edit', color: AMBER }
     : { label: 'new skill', color: GREEN }
+
+  // The plain-language summary the user reads to decide (D20). Empty/missing →
+  // fall back to the rationale so the primary area is never blank.
+  const summaryBullets = (proposal?.changeSummary ?? []).filter((s) => typeof s === 'string' && s.trim().length > 0)
 
   return (
     // Scrim — click anywhere outside the panel = Cancel.
@@ -221,74 +230,92 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
               <div style={{ fontSize: 11, color: AMBER, fontWeight: 600, letterSpacing: 0.2 }}>
                 seen {proposal.evidence.occurrences}× · {proposal.evidence.sessions.length} session{proposal.evidence.sessions.length === 1 ? '' : 's'} · {proposal.evidence.struggle.wallClockMin}min of work
               </div>
-              {proposal.rationale && (
-                <div style={{ fontSize: 12, color: C.midText, lineHeight: 1.55, marginTop: 6 }}>{proposal.rationale}</div>
-              )}
             </div>
 
-            {/* ── Body: full draft (create) or unified diff (update) ── */}
-            <div style={{ flex: 1, minHeight: 120, overflow: 'auto', padding: '12px 16px' }}>
-              {proposal.kind === 'create' ? (
-                <pre style={{ margin: 0, fontFamily: C.mono, fontSize: 12, lineHeight: 1.55, color: C.nameText, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {proposal.draft.body}
-                </pre>
-              ) : proposal.diff ? (
-                <pre style={{ margin: 0, fontFamily: C.mono, fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {proposal.diff.split('\n').map((line, i) => {
-                    const isMeta = line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@') || line.startsWith('diff ') || line.startsWith('index ')
-                    const color = isMeta ? C.dimText
-                      : line.startsWith('+') ? GREEN
-                      : line.startsWith('-') ? RED
-                      : C.midText
-                    const bg = isMeta ? 'transparent'
-                      : line.startsWith('+') ? 'rgba(63,185,80,0.08)'
-                      : line.startsWith('-') ? 'rgba(248,81,73,0.08)'
-                      : 'transparent'
-                    return (
-                      <div key={i} style={{ color, background: bg, padding: '0 4px', margin: '0 -4px' }}>{line || ' '}</div>
-                    )
-                  })}
-                </pre>
+            {/* PRIMARY: plain-language summary of the change (D20). This is what the
+                user reads to decide. changeSummary bullets, else the rationale. */}
+            <div style={{ flex: 1, minHeight: 96, overflow: 'auto', padding: '14px 16px' }}>
+              {summaryBullets.length > 0 ? (
+                <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 9 }}>
+                  {summaryBullets.map((b, i) => (
+                    <li key={i} style={{ display: 'flex', gap: 9, fontSize: 13, lineHeight: 1.55, color: C.nameText }}>
+                      <span style={{ flex: 'none', color: AMBER }}>{'•'}</span>
+                      <span>{b}</span>
+                    </li>
+                  ))}
+                </ul>
               ) : (
-                <div style={{ fontSize: 12, color: C.dimText, fontStyle: 'italic' }}>
-                  no diff was recorded for this edit — discuss it below to see the intended change
-                </div>
+                <div style={{ fontSize: 13, color: C.nameText, lineHeight: 1.6 }}>{proposal.rationale}</div>
               )}
             </div>
 
-            {/* ── Conversation pane (behind the discuss / edit toggle) ── */}
+            {/* Raw diff/body behind a toggle, collapsed by default. NOTE: the diff
+                (D19, deterministic) and the summary describe Unmute's ORIGINAL
+                proposal. If the user refines draft.md via the conversation below,
+                these are NOT live-recomputed -- they show the original (the user drove
+                those edits, so they know them). Accept always writes the CURRENT
+                draft.md on disk regardless of what's shown here. */}
             <div style={{ borderTop: `1px solid ${C.border}`, flex: 'none' }}>
-              {!discussing ? (
-                <button onClick={openDiscuss}
-                  style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontFamily: C.mono, fontSize: 11.5, color: C.midText, padding: '9px 16px' }}>
-                  💬 discuss / edit — ask why, or tell it to change the draft
-                </button>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', padding: '10px 16px 12px', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase' }}>conversation</span>
-                    <span style={{ fontSize: 10, color: C.faintText }}>a real Claude Code session — edits change the draft on disk</span>
-                    <button onClick={() => setDiscussing(false)} title="Hide (session keeps running)"
-                      style={{ marginLeft: 'auto', background: 'none', border: 'none', color: C.dimText, cursor: 'pointer', fontFamily: C.mono, fontSize: 11 }}>
-                      hide
-                    </button>
-                  </div>
-                  <pre ref={scrollRef}
-                    style={{ margin: 0, height: 150, overflow: 'auto', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, padding: '8px 10px', fontFamily: C.mono, fontSize: 11.5, lineHeight: 1.5, color: C.midText, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                    {convText || 'starting session…'}
-                  </pre>
-                  <input
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Escape') { e.stopPropagation(); return }
-                      if (e.key === 'Enter') { e.preventDefault(); sendLine() }
-                    }}
-                    placeholder="e.g. make the description shorter, then press Enter"
-                    style={{ fontFamily: C.mono, fontSize: 12, color: C.nameText, background: C.surfaceHi, border: `1px solid ${C.borderHi}`, borderRadius: 6, padding: '7px 10px', outline: 'none' }}
-                  />
+              <button onClick={() => setShowRaw((v) => !v)}
+                style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontFamily: C.mono, fontSize: 11.5, color: C.midText, padding: '9px 16px' }}>
+                {showRaw ? '▾ ' : '▸ '}{proposal.kind === 'update' ? (showRaw ? 'Hide diff' : 'Show diff') : (showRaw ? 'Hide details' : 'Show details')}
+              </button>
+              {showRaw && (
+                <div style={{ maxHeight: 220, overflow: 'auto', padding: '2px 16px 12px' }}>
+                  {proposal.kind === 'create' ? (
+                    <pre style={{ margin: 0, fontFamily: C.mono, fontSize: 12, lineHeight: 1.55, color: C.nameText, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {proposal.draft.body}
+                    </pre>
+                  ) : proposal.diff ? (
+                    <pre style={{ margin: 0, fontFamily: C.mono, fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {proposal.diff.split('\n').map((line, i) => {
+                        const isMeta = line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@') || line.startsWith('diff ') || line.startsWith('index ')
+                        const color = isMeta ? C.dimText
+                          : line.startsWith('+') ? GREEN
+                          : line.startsWith('-') ? RED
+                          : C.midText
+                        const bg = isMeta ? 'transparent'
+                          : line.startsWith('+') ? 'rgba(63,185,80,0.08)'
+                          : line.startsWith('-') ? 'rgba(248,81,73,0.08)'
+                          : 'transparent'
+                        return (
+                          <div key={i} style={{ color, background: bg, padding: '0 4px', margin: '0 -4px' }}>{line || ' '}</div>
+                        )
+                      })}
+                    </pre>
+                  ) : (
+                    <div style={{ fontSize: 12, color: C.dimText, fontStyle: 'italic' }}>
+                      no diff was recorded for this edit -- tell me below to see the intended change
+                    </div>
+                  )}
                 </div>
               )}
+            </div>
+
+            {/* PRIMARY edit affordance: natural-language editing (D20). The user tells
+                this Claude Code session what to change; it rewrites draft.md. The user
+                never hand-types skill markdown. Always visible. */}
+            <div style={{ borderTop: `1px solid ${C.border}`, flex: 'none', display: 'flex', flexDirection: 'column', padding: '11px 16px 12px', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: C.nameText }}>Tell me what to change</span>
+                <span style={{ fontSize: 10.5, color: C.dimText }}>{'— I’ll rewrite it (a real Claude Code session)'}</span>
+              </div>
+              {convText && (
+                <pre ref={scrollRef}
+                  style={{ margin: 0, maxHeight: 150, overflow: 'auto', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, padding: '8px 10px', fontFamily: C.mono, fontSize: 11.5, lineHeight: 1.5, color: C.midText, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {convText}
+                </pre>
+              )}
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') { e.stopPropagation(); return }
+                  if (e.key === 'Enter') { e.preventDefault(); sendLine() }
+                }}
+                placeholder="e.g. make the description shorter, then press Enter"
+                style={{ fontFamily: C.mono, fontSize: 12, color: C.nameText, background: C.surfaceHi, border: `1px solid ${C.borderHi}`, borderRadius: 6, padding: '8px 10px', outline: 'none' }}
+              />
             </div>
 
             {/* ── Footer: Accept / Reject ── */}

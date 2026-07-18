@@ -271,7 +271,9 @@ export function parseSynthesizeOutput(raw: string | null, sweepId: string, now: 
       resolution: null,
     }
     if (nonEmptyString(e.targetSkill)) prop.targetSkill = e.targetSkill as string
-    if (nonEmptyString(e.diff)) prop.diff = e.diff as string
+    // D19: the raw diff is deterministic-only — computed by the sweep from the real
+    // on-disk body vs the proposed body, never taken from the synthesize LLM output.
+    // Any `diff` field the LLM emits is deliberately IGNORED here (it could be fiction).
     if (Array.isArray(e.triggeringEvidence)) prop.triggeringEvidence = e.triggeringEvidence as string[]
     if (Array.isArray(e.affectedSessions)) prop.affectedSessions = e.affectedSessions as Proposal['affectedSessions']
 
