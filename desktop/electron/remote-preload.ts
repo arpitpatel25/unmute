@@ -4,7 +4,7 @@
 // Each method maps to an IPC handler/broadcast registered in remote/init.ts.
 
 import { ipcRenderer } from 'electron'
-import type { Proposal, LedgerEntry } from './remote/curator-store'
+import type { Proposal } from './remote/curator-store'
 
 export interface RemoteTaskSnapshot {
   id: string
@@ -108,8 +108,6 @@ export const remotePreloadExtensions = {
   /** Reject: record the rejection + resolve the proposal. */
   curatorReject: (id: string, reason?: string): Promise<boolean> =>
     ipcRenderer.invoke('curator:reject', id, reason),
-  /** The curation ledger (proposed / created / rejected history). */
-  curatorLedger: (): Promise<LedgerEntry[]> => ipcRenderer.invoke('curator:ledger'),
   /** Start the per-proposal review conversation; output streams on
    *  'curator:conv-data' (subscribe via curatorOnConvData). */
   curatorConverseStart: (id: string): Promise<boolean> =>

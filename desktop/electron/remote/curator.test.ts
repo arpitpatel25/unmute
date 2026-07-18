@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Curator, type MaterialSession, makeRunSweep, RateLimitedError, ProposalConversation } from './curator.ts'
-import { curatorPaths, readCursor, writeCursor, readCandidates, listPendingProposals, readLedger, writeProposal, type Proposal } from './curator-store.ts'
+import { curatorPaths, readCursor, writeCursor, readCandidates, listPendingProposals, writeProposal, type Proposal } from './curator-store.ts'
 import type { AgentExecutor } from './executor'
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'cu-'))
@@ -134,7 +134,7 @@ function fakeExecutor(behavior: (prompt: string) => Promise<void>, emit?: (cb: (
 const distillJson = { procedures: [{ title: 'Load video Premiere', skeleton: 'S', count: 2, struggle: true }] }
 const synthJson = { proposals: [{ kind: 'create', draft: { name: 'video-load-premiere', description: 'd', body: 'Goal…' }, evidence: { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 30 } }, rationale: 'seen twice with struggle' }] }
 
-test('runSweep: distills, accumulates, synthesizes, writes proposal + ledger, advances cursor', async () => {
+test('runSweep: distills, accumulates, synthesizes, writes proposal, advances cursor', async () => {
   const root = await tmp()
   const p = curatorPaths(root)
   const writes = async (prompt: string) => {
@@ -153,7 +153,6 @@ test('runSweep: distills, accumulates, synthesizes, writes proposal + ledger, ad
   assert.equal(pending[0].draft.name, 'video-load-premiere')
   const cursor = await readCursor(p)
   assert.equal(cursor.sessions.t1.lineOffset, 1)                       // advanced on success
-  assert.ok((await readLedger(p)).entries.some((e) => e.action === 'proposed' && e.skill === 'video-load-premiere'))
 })
 
 test('runSweep: rate-limit aborts — cursor NOT advanced, no proposals', async () => {

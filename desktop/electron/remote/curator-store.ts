@@ -2,9 +2,10 @@
 //
 // Everything the curator persists lives under ~/.unmute/remote/curator/ and
 // every byte of it flows through this module: the sweep cursor (how far each
-// session transcript has been read), the candidate patterns, the curation
-// ledger (the authority on which skills the curator created), rejections,
-// user feedback, and the proposal directories awaiting a decision.
+// session transcript has been read), the candidate patterns, the ownership
+// record (the authority on which skills the curator created — one compact entry
+// per owned skill, current state only), rejections, user feedback, and the
+// proposal directories awaiting a decision.
 //
 // Two invariants, copied from skill-usage.ts (the meta.json lesson):
 //   1. Every mutation runs on a module-level serialized write-chain — two
@@ -18,7 +19,7 @@ import { promises as fs } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 
-export interface CuratorPaths { root: string; cursor: string; candidates: string; ledger: string; rejections: string; feedback: string; proposalsDir: string; tracesDir: string }
+export interface CuratorPaths { root: string; cursor: string; candidates: string; ownership: string; rejections: string; feedback: string; proposalsDir: string; tracesDir: string }
 
 export function curatorPaths(baseDir?: string): CuratorPaths {
   const root = baseDir ?? join(homedir(), '.unmute', 'remote', 'curator')
@@ -26,7 +27,7 @@ export function curatorPaths(baseDir?: string): CuratorPaths {
     root,
     cursor: join(root, 'cursor.json'),
     candidates: join(root, 'candidates.json'),
-    ledger: join(root, 'ledger.json'),
+    ownership: join(root, 'ownership.json'),
     rejections: join(root, 'rejections.json'),
     feedback: join(root, 'feedback.json'),
     proposalsDir: join(root, 'proposals'),
@@ -41,9 +42,8 @@ export interface CandidateOccurrence { taskId: string; sweepId: string; count: n
 export interface Candidate { key: string; title: string; skeleton: string; total: number; struggle: boolean; firstSeen: string; lastSeen: string; occurrences: CandidateOccurrence[] }
 export interface CandidatesFile { version: 1; candidates: Record<string, Candidate> }
 
-export type LedgerAction = 'proposed' | 'created' | 'updated' | 'user-edited-accept' | 'rejected' | 'user-modified-detected'
-export interface LedgerEntry { at: string; skill: string; action: LedgerAction; proposalId?: string; sweepId?: string; contentHash?: string; diff?: string }
-export interface LedgerFile { version: 1; entries: LedgerEntry[] }
+export interface SkillOwnership { origin: 'unmute'; contentHash: string; createdAt: string; updatedAt: string; userModified?: boolean }
+export interface OwnershipFile { version: 1; skills: Record<string, SkillOwnership> }
 
 export interface ProposalDraft { name: string; description: string; body: string }
 export interface ProposalEvidence { occurrences: number; sessions: Array<{ id: string; intent: string; at: string; tracePointer: string }>; firstSeen: string; lastSeen: string; struggle: { errors: number; recoveries: number; wallClockMin: number } }
@@ -166,38 +166,61 @@ export function mergeDistill(file: CandidatesFile, procs: DistillProcedure[], ct
 }
 
 // ---------------------------------------------------------------------------
-// Ledger — the D10 authority on which skills the curator owns.
+// Ownership — the D10/D17 authority on which skills the curator owns. A COMPACT
+// record: one entry per owned skill holding CURRENT state only (origin, current
+// content-hash, created/last-updated timestamps, an optional user-modified
+// flag). Bounded by the number of owned skills — never an append-only event log.
 
-const emptyLedger = (): LedgerFile => ({ version: 1, entries: [] })
+const emptyOwnership = (): OwnershipFile => ({ version: 1, skills: {} })
 
-export async function readLedger(p: CuratorPaths): Promise<LedgerFile> {
-  const raw = await readJson<LedgerFile>(p.ledger, emptyLedger())
-  if (raw && raw.version === 1 && Array.isArray(raw.entries)) return raw
-  return emptyLedger()
+export async function readOwnership(p: CuratorPaths): Promise<OwnershipFile> {
+  const raw = await readJson<OwnershipFile>(p.ownership, emptyOwnership())
+  if (raw && raw.version === 1 && raw.skills) return raw
+  return emptyOwnership() // tolerate a missing file or an old-format ledger
 }
 
-/** Append a ledger entry WITHOUT taking the serialization lock. Only call from
- *  code already running inside a serialized() critical section (nesting the
- *  lock self-deadlocks). Standalone callers must use appendLedger. */
-export async function appendLedgerCore(p: CuratorPaths, e: LedgerEntry): Promise<void> {
-  const f = await readLedger(p)
-  f.entries.push(e)
-  await writeJsonAtomic(p.ledger, f)
+/** Names with a materialized skill on disk per the ownership record. No removal
+ *  path exists yet — retirement is out of scope (D15). */
+export function ownedSkillNames(o: OwnershipFile): Set<string> {
+  return new Set(Object.keys(o.skills))
 }
 
-export async function appendLedger(p: CuratorPaths, e: LedgerEntry): Promise<void> {
-  return serialized(() => appendLedgerCore(p, e))
+/** Upsert an ownership entry WITHOUT taking the serialization lock. Creates the
+ *  entry if absent (createdAt = updatedAt = at), else advances updatedAt = at;
+ *  ALWAYS sets contentHash and clears userModified (a fresh curator write
+ *  supersedes any prior hand-edit flag). Only call from code already running
+ *  inside a serialized() critical section (nesting the lock self-deadlocks).
+ *  Standalone callers must use recordOwnership. */
+export async function recordOwnershipCore(p: CuratorPaths, name: string, contentHash: string, at: string): Promise<void> {
+  const f = await readOwnership(p)
+  const existing = f.skills[name]
+  f.skills[name] = existing
+    ? { ...existing, origin: 'unmute', contentHash, updatedAt: at, userModified: false }
+    : { origin: 'unmute', contentHash, createdAt: at, updatedAt: at, userModified: false }
+  await writeJsonAtomic(p.ownership, f)
 }
 
-/** Names with a materialized skill on disk per the ledger: any 'created',
- *  'updated', or 'user-edited-accept' entry adds the name. No removal action
- *  exists yet — retirement is out of scope (D15). */
-export function curatedSkillNames(l: LedgerFile): Set<string> {
-  const names = new Set<string>()
-  for (const e of l.entries) {
-    if (e.action === 'created' || e.action === 'updated' || e.action === 'user-edited-accept') names.add(e.skill)
-  }
-  return names
+export async function recordOwnership(p: CuratorPaths, name: string, contentHash: string, at: string): Promise<void> {
+  return serialized(() => recordOwnershipCore(p, name, contentHash, at))
+}
+
+/** Mark an owned skill as user-modified and adopt the current on-disk hash.
+ *  LOCK-FREE — only call from code already inside a serialized() section.
+ *  Idempotent: if the stored hash already equals currentHash it is a no-op and
+ *  returns false. Returns true iff it changed something. A name we do not own is
+ *  a no-op (nothing to flag). */
+export async function markUserModifiedCore(p: CuratorPaths, name: string, currentHash: string): Promise<boolean> {
+  const f = await readOwnership(p)
+  const existing = f.skills[name]
+  if (!existing) return false // not owned — nothing to flag
+  if (existing.contentHash === currentHash) return false // already at this hash — idempotent
+  f.skills[name] = { ...existing, contentHash: currentHash, userModified: true }
+  await writeJsonAtomic(p.ownership, f)
+  return true
+}
+
+export async function markUserModified(p: CuratorPaths, name: string, currentHash: string): Promise<boolean> {
+  return serialized(() => markUserModifiedCore(p, name, currentHash))
 }
 
 // ---------------------------------------------------------------------------

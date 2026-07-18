@@ -30,7 +30,6 @@ import {
   writeCandidates,
   mergeDistill,
   writeProposal,
-  appendLedger,
   readRejections,
   readFeedback,
   markFeedbackConsumed,
@@ -236,7 +235,7 @@ const REINJECT_AT_MS = 15_000          // one re-inject if the prompt landed uns
 export interface SweepDeps {
   executorFactory: ExecutorFactory
   paths: CuratorPaths
-  curatedIndex: () => Promise<Array<{ name: string; description: string }>>  // init wires: ledger names + on-disk descriptions
+  curatedIndex: () => Promise<Array<{ name: string; description: string }>>  // init wires: owned names + on-disk descriptions
   sessionTimeoutMs?: number      // per one-shot, default 5 * 60_000
   submitConfirmMs?: number       // default 450 (the router/task-lane paste quirk)
   pollMs?: number                // default 250
@@ -382,13 +381,14 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     const proposals = parseSynthesizeOutput(synthRaw, sweepId, now)
     log2.event('synthesized', { sweepId, proposals: proposals.length })
 
-    // ── 5. Persist each proposal: the JSON, its editable draft.md, a ledger row.
+    // ── 5. Persist each proposal: the JSON and its editable draft.md. A proposal
+    //       is transient (D17) — it is NOT recorded in the ownership record;
+    //       ownership is upserted only when a proposal is accepted and written.
     for (const prop of proposals) {
       await writeProposal(paths, prop)
       const draftPath = join(paths.proposalsDir, prop.id, 'draft.md')
       await fs.mkdir(dirname(draftPath), { recursive: true })
       await fs.writeFile(draftPath, prop.draft.body)
-      await appendLedger(paths, { at: nowIso(), skill: prop.draft.name, action: 'proposed', proposalId: prop.id, sweepId })
     }
 
     // ── 6. Success bookkeeping — ONLY now. Any throw above (incl. a rate limit)

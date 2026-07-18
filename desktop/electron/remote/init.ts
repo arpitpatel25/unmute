@@ -51,9 +51,9 @@ import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TM
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
 import { Curator, makeRunSweep, ProposalConversation, type SessionInfo } from './curator'
 import {
-  curatorPaths, readLedger, curatedSkillNames, appendLedger, appendRejection, appendFeedback,
+  curatorPaths, readOwnership, ownedSkillNames, appendRejection, appendFeedback,
   resolveProposal, readProposal, listPendingProposals,
-  type CuratorPaths, type Proposal, type LedgerEntry,
+  type CuratorPaths, type Proposal,
 } from './curator-store'
 import { writeSkill } from './curator-writer'
 
@@ -1250,7 +1250,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // curator MANAGES, record it against that skill's next review; otherwise
       // say so plainly. (The router only sets this with a known-listed skill.)
       if (decision.action === 'skill_feedback' && decision.skill) {
-        const managed = curatedSkillNames(await readLedger(curatorPathsV)).has(decision.skill)
+        const managed = ownedSkillNames(await readOwnership(curatorPathsV)).has(decision.skill)
         if (managed) {
           await appendFeedback(curatorPathsV, { at: new Date().toISOString(), skill: decision.skill, note: decision.intent })
           log.event('routed-as-skill-feedback', { skill: decision.skill, managed: true })
@@ -1550,11 +1550,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // injected; this is pure wiring. (curatorPathsV is module-scoped — the route
   // handler reads it too.)
   const curatorSkillsRoot = join(homedir(), '.claude', 'skills')
-  // curatedIndex: the skills WE own (ledger authority) each paired with its
-  // on-disk SKILL.md description — the synthesize pass reads this so it never
+  // curatedIndex: the skills WE own (ownership-record authority) each paired with
+  // its on-disk SKILL.md description — the synthesize pass reads this so it never
   // re-proposes or collides with a skill the curator already created.
   const buildCuratedIndex = async (): Promise<Array<{ name: string; description: string }>> => {
-    const names = curatedSkillNames(await readLedger(curatorPathsV))
+    const names = ownedSkillNames(await readOwnership(curatorPathsV))
     const out: Array<{ name: string; description: string }> = []
     for (const name of names) {
       let description = ''
@@ -1839,9 +1839,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // ~/.unmute/remote/{skills,recipes}/**/*.md + ~/.claude/skills entries.
     // Name = filename (they ARE the names); recency = file mtime. Zero tokens.
     const { readdirSync, statSync, readFileSync } = await import('node:fs')
-    // Provenance: names the curator authored (ledger authority) get an 'unmute'
-    // origin badge on the rail. Read once at the top of the handler.
-    const curatedNames = curatedSkillNames(await readLedger(curatorPathsV))
+    // Provenance: names the curator authored (ownership-record authority) get an
+    // 'unmute' origin badge on the rail. Read once at the top of the handler.
+    const curatedNames = ownedSkillNames(await readOwnership(curatorPathsV))
     // The tooltip's substance: the skill's own frontmatter description (first
     // ~4KB read, single-line 'description:' field — the format both stores use).
     const metaOf = (mdPath: string): { description: string; runs: number; lastUsed: string } => {
@@ -1920,8 +1920,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
   // ── Skill Curator IPC (spec §11) — thin calls into Tasks 2/6/10 ──
   // The review surface: list pending proposals, read one, accept (materialize the
-  // skill on disk) or reject (record + resolve), read the curation ledger, drive
-  // the per-proposal review conversation, and tap a skill into a live session.
+  // skill on disk) or reject (record + resolve), drive the per-proposal review
+  // conversation, and tap a skill into a live session.
   ipcMain.handle('curator:list-proposals', async (): Promise<Proposal[]> =>
     listPendingProposals(curatorPathsV))
   ipcMain.handle('curator:get-proposal', async (_e, id: string): Promise<Proposal | null> =>
@@ -1931,7 +1931,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     if (!proposal) return { ok: false, error: 'proposal not found' }
     // The user may have edited draft.md in the review conversation — if the
     // on-disk draft differs from the proposal's stored body, that edit wins and
-    // marks the acceptance user-edited (ledger records it distinctly).
+    // marks the acceptance user-edited (the accepted content is recorded either way).
     let body = proposal.draft.body
     let userEdited = false
     try {
@@ -1959,12 +1959,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     if (!proposal) return false
     const at = new Date().toISOString()
     await appendRejection(curatorPathsV, { at, name: proposal.draft.name, reason })
-    await appendLedger(curatorPathsV, { at, skill: proposal.draft.name, action: 'rejected', proposalId: id })
     await resolveProposal(curatorPathsV, id, { action: 'rejected', at, userEdited: false, reason })
     return true
   })
-  ipcMain.handle('curator:ledger', async (): Promise<LedgerEntry[]> =>
-    (await readLedger(curatorPathsV)).entries)
   ipcMain.handle('curator:converse-start', async (_e, id: string): Promise<boolean> => {
     // Second-start-stops-first (Task 10 carry-forward): ProposalConversation does
     // NOT self-guard, so we retire any existing session for this id here.

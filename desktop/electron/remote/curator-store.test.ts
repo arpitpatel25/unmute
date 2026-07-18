@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  curatorPaths, readCursor, writeCursor, readLedger, appendLedger, curatedSkillNames,
+  curatorPaths, readCursor, writeCursor, readOwnership, recordOwnership, ownedSkillNames, markUserModified,
   writeProposal, readProposal, listPendingProposals, resolveProposal,
   appendFeedback, readFeedback, markFeedbackConsumed, readTranscriptDelta,
   type Proposal,
@@ -29,14 +29,51 @@ test('cursor round-trips and defaults to empty', async () => {
   assert.equal(back.sessions.t1.lineOffset, 10)
 })
 
-test('ledger appends and curatedSkillNames reflects created skills', async () => {
+test('ownership defaults empty; recordOwnership creates then updates; ownedSkillNames reflects keys', async () => {
   const p = curatorPaths(await tmp())
-  await appendLedger(p, { at: 't', skill: 'pr-review', action: 'proposed', proposalId: 'p1' })
-  await appendLedger(p, { at: 't', skill: 'pr-review', action: 'created', contentHash: 'h' })
-  const l = await readLedger(p)
-  assert.equal(l.entries.length, 2)
-  assert.ok(curatedSkillNames(l).has('pr-review'))
-  assert.ok(!curatedSkillNames({ version: 1, entries: [{ at: 't', skill: 'x', action: 'proposed' }] }).has('x'))
+  const empty = await readOwnership(p)
+  assert.equal(empty.version, 1)
+  assert.deepEqual(empty.skills, {})
+  assert.equal(ownedSkillNames(empty).size, 0)
+
+  // Create: createdAt = updatedAt = at, contentHash set, userModified cleared.
+  await recordOwnership(p, 'pr-review', 'h1', '2026-07-17T00:00:00Z')
+  const after1 = await readOwnership(p)
+  assert.deepEqual([...ownedSkillNames(after1)], ['pr-review'])
+  assert.equal(after1.skills['pr-review'].origin, 'unmute')
+  assert.equal(after1.skills['pr-review'].createdAt, '2026-07-17T00:00:00Z')
+  assert.equal(after1.skills['pr-review'].updatedAt, '2026-07-17T00:00:00Z')
+  assert.equal(after1.skills['pr-review'].contentHash, 'h1')
+  assert.equal(after1.skills['pr-review'].userModified, false)
+
+  // Update: createdAt stable, updatedAt advances, contentHash changes, userModified cleared.
+  await recordOwnership(p, 'pr-review', 'h2', '2026-07-18T00:00:00Z')
+  const after2 = await readOwnership(p)
+  assert.equal(after2.skills['pr-review'].createdAt, '2026-07-17T00:00:00Z')  // stable
+  assert.equal(after2.skills['pr-review'].updatedAt, '2026-07-18T00:00:00Z')  // advanced
+  assert.equal(after2.skills['pr-review'].contentHash, 'h2')
+  assert.equal(after2.skills['pr-review'].userModified, false)
+})
+
+test('markUserModified sets the flag, adopts the hash, and is idempotent at the same hash', async () => {
+  const p = curatorPaths(await tmp())
+  await recordOwnership(p, 'pr-review', 'h1', '2026-07-17T00:00:00Z')
+
+  // First flag: hash differs → mutates, returns true, adopts hash + sets flag.
+  assert.equal(await markUserModified(p, 'pr-review', 'edited'), true)
+  const flagged = await readOwnership(p)
+  assert.equal(flagged.skills['pr-review'].contentHash, 'edited')
+  assert.equal(flagged.skills['pr-review'].userModified, true)
+
+  // Idempotent: same on-disk hash → no-op, returns false.
+  assert.equal(await markUserModified(p, 'pr-review', 'edited'), false)
+
+  // Unowned name → no-op, returns false.
+  assert.equal(await markUserModified(p, 'not-ours', 'x'), false)
+
+  // A fresh curator write supersedes the hand-edit flag.
+  await recordOwnership(p, 'pr-review', 'h3', '2026-07-19T00:00:00Z')
+  assert.equal((await readOwnership(p)).skills['pr-review'].userModified, false)
 })
 
 test('proposal lifecycle: write → list pending → resolve → no longer pending', async () => {

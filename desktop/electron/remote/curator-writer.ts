@@ -7,12 +7,12 @@
 //         always, unconditionally. A curated skill is invoked by the user
 //         (explicit /name), never auto-injected into the model's context.
 //   D10 — never write a name we did not author. `create` refuses if the name is
-//         already ours (ledger) OR a directory already sits on disk; `update`
-//         refuses anything not already in our ledger — we only edit what we own.
-//   Ledger-FIRST — appendLedger runs BEFORE the file is written, so a crash
-//         between the two leaves a recorded intent (which drift detection
-//         reconciles) rather than an unrecorded file on disk. The ledger is the
-//         authority; the filesystem is downstream of it.
+//         already ours (ownership record) OR a directory already sits on disk;
+//         `update` refuses anything we do not already own — we only edit ours.
+//   Ownership-FIRST — the ownership record is upserted BEFORE the file is
+//         written, so a crash between the two leaves a recorded intent (which
+//         drift detection reconciles) rather than an unrecorded file on disk.
+//         The ownership record is the authority; the filesystem is downstream.
 //
 // Writes are atomic (tmp + rename) and land only at
 // <skillsRoot>/<name>/SKILL.md. `skillsRoot` defaults to ~/.claude/skills but
@@ -22,8 +22,8 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
-import { readLedger, appendLedger, appendLedgerCore, curatedSkillNames, serialized } from './curator-store'
-import type { CuratorPaths, ProposalDraft, LedgerEntry } from './curator-store'
+import { readOwnership, ownedSkillNames, recordOwnershipCore, markUserModified, serialized } from './curator-store'
+import type { CuratorPaths, ProposalDraft } from './curator-store'
 
 export function defaultSkillsRoot(): string {
   return join(homedir(), '.claude', 'skills')
@@ -84,7 +84,7 @@ async function dirExists(dir: string): Promise<boolean> {
 export interface WriteResult { ok: boolean; error?: 'collision' | 'io' | 'invalid-name'; detail?: string }
 
 /** Materialize (or update) a curated skill on disk, collision-guarded and
- *  ledger-first. See the module header for the invariants this enforces. */
+ *  ownership-first. See the module header for the invariants this enforces. */
 export async function writeSkill(o: {
   draft: ProposalDraft; kind: 'create' | 'update'; userEdited: boolean
   proposalId: string; paths: CuratorPaths; skillsRoot?: string
@@ -94,7 +94,7 @@ export async function writeSkill(o: {
   const name = o.draft.name
 
   // 0. Name guard (C1 path-traversal + C2 frontmatter-injection) — BEFORE the
-  //    collision guard, any ledger append, or any FS op. A name that fails the
+  //    collision guard, any ownership upsert, or any FS op. A name that fails the
   //    slug rule can neither escape <skillsRoot>/<name> via '../' nor inject
   //    frontmatter via a newline. Reject with nothing written, nothing logged.
   if (!isValidSkillName(name)) {
@@ -105,13 +105,13 @@ export async function writeSkill(o: {
   const rendered = renderSkillMd(o.draft, { originStamp: o.originStamp })
   const hash = contentHash(rendered)
 
-  // The collision guard (read) → ledger-first append → file write run inside a
+  // The collision guard (read) → ownership-first upsert → file write run inside a
   // SINGLE serialized critical section on the store's write-chain, so two
   // concurrent creates for the same name can't both pass the guard (TOCTOU).
   return serialized(async () => {
-    // 1. Collision guard (D10) — decided against the ledger + disk BEFORE any write.
-    const ledger = await readLedger(o.paths)
-    const owned = curatedSkillNames(ledger)
+    // 1. Collision guard (D10) — decided against the ownership record + disk BEFORE any write.
+    const ownership = await readOwnership(o.paths)
+    const owned = ownedSkillNames(ownership)
     if (o.kind === 'create') {
       if (owned.has(name)) {
         return { ok: false, error: 'collision', detail: `already curated: ${name}` }
@@ -126,20 +126,13 @@ export async function writeSkill(o: {
       }
     }
 
-    // 2. Ledger FIRST — record the intent before touching disk. A crash between
-    //    this append and the write leaves a recorded intent, never an orphan file.
-    //    appendLedgerCore (not appendLedger) because we already hold the lock.
-    const action: LedgerEntry['action'] =
-      o.kind === 'create' ? 'created' : o.userEdited ? 'user-edited-accept' : 'updated'
-    const entry: LedgerEntry = {
-      at: new Date().toISOString(),
-      skill: name,
-      action,
-      proposalId: o.proposalId,
-      contentHash: hash,
-    }
-    if (o.diff !== undefined) entry.diff = o.diff
-    await appendLedgerCore(o.paths, entry)
+    // 2. Ownership FIRST — record the intent before touching disk. A crash
+    //    between this upsert and the write leaves a recorded intent, never an
+    //    orphan file. The upsert sets createdAt once (first create) and advances
+    //    updatedAt each time; the create-vs-update/user-edited distinction is no
+    //    longer persisted as an event (D17). recordOwnershipCore (not
+    //    recordOwnership) because we already hold the lock.
+    await recordOwnershipCore(o.paths, name, hash, new Date().toISOString())
 
     // 3. Write the file atomically: tmp + rename, under skillsRoot/name only.
     const dest = join(skillDir, 'SKILL.md')
@@ -149,8 +142,9 @@ export async function writeSkill(o: {
       await fs.writeFile(tmp, rendered)
       await fs.rename(tmp, dest) // atomic — a reader never sees a torn file
     } catch (err) {
-      // The intent is recorded in the ledger; drift detection reconciles later.
-      // Best-effort: sweep the orphan tmp so a failed write leaves no litter.
+      // The intent is recorded in the ownership record; drift detection
+      // reconciles later. Best-effort: sweep the orphan tmp so a failed write
+      // leaves no litter.
       await fs.unlink(tmp).catch(() => { /* nothing to clean up */ })
       return { ok: false, error: 'io', detail: err instanceof Error ? err.message : String(err) }
     }
@@ -160,15 +154,14 @@ export async function writeSkill(o: {
 }
 
 /** Detect skills we own whose on-disk content diverged from what we last wrote.
- *  For each owned name, compare the current SKILL.md hash against the LAST
- *  ledger entry for that skill that carries a contentHash. A mismatch that is
- *  not already flagged at the current hash appends a 'user-modified-detected'
- *  entry and is returned. Idempotent: a second call at the same hash re-reads
- *  that fresh flag and does not re-flag. */
+ *  For each owned name, hash the current SKILL.md and compare it to the hash in
+ *  the ownership record. A mismatch calls markUserModified (flag + adopt the
+ *  current hash) and the name is returned. Idempotent: a second call at the same
+ *  on-disk hash sees the adopted hash, matches, and stays quiet. */
 export async function detectDrift(paths: CuratorPaths, skillsRoot?: string): Promise<string[]> {
   const root = skillsRoot ?? defaultSkillsRoot()
-  const ledger = await readLedger(paths)
-  const owned = curatedSkillNames(ledger)
+  const ownership = await readOwnership(paths)
+  const owned = ownedSkillNames(ownership)
   const drifted: string[] = []
 
   for (const name of owned) {
@@ -180,25 +173,11 @@ export async function detectDrift(paths: CuratorPaths, skillsRoot?: string): Pro
     }
     const currentHash = contentHash(onDisk)
 
-    // The LAST ledger entry for this skill that carries a contentHash.
-    let last: LedgerEntry | undefined
-    for (const e of ledger.entries) {
-      if (e.skill === name && e.contentHash !== undefined) last = e
-    }
-    if (!last) continue // nothing to compare against.
+    // Matches what we last recorded — no drift (also the idempotency case: after
+    // the first flag adopts the on-disk hash, a second call matches and stays quiet).
+    if (ownership.skills[name].contentHash === currentHash) continue
 
-    // Matches what we last recorded (incl. the case where our LAST entry is
-    // itself a user-modified-detected flag at THIS hash — idempotency: a second
-    // call at the same on-disk hash re-reads that fresh flag and stays quiet).
-    if (last.contentHash === currentHash) continue
-
-    await appendLedger(paths, {
-      at: new Date().toISOString(),
-      skill: name,
-      action: 'user-modified-detected',
-      contentHash: currentHash,
-    })
-    drifted.push(name)
+    if (await markUserModified(paths, name, currentHash)) drifted.push(name)
   }
 
   return drifted
