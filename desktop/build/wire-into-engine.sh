@@ -118,6 +118,20 @@ wire_paywall() {
     log "WARN: $ROOT/native-ax not found — Computer Use (ax-mcp) will be unavailable"
   fi
 
+  # Vendor the cua-driver embedded binary (Computer Use v2 engine). Unmute
+  # spawns it as a DIRECT child so it runs inside the signed .app's TCC
+  # responsibility chain (embedded mode). Fail LOUDLY if missing rather than
+  # shipping an app whose Computer Use silently cannot work.
+  if [[ -x "$ROOT/vendor/cua-driver/cua-driver" ]]; then
+    log "Copying cua-driver binary (Computer Use v2)"
+    mkdir -p "$engine/vendor/cua-driver"
+    cp "$ROOT/vendor/cua-driver/cua-driver" "$engine/vendor/cua-driver/cua-driver"
+    cp "$ROOT/vendor/cua-driver/NOTICE.md" "$engine/vendor/cua-driver/NOTICE.md"
+  else
+    log "ERROR: vendor/cua-driver/cua-driver missing — run desktop/vendor/cua-driver/fetch.sh first"
+    exit 1
+  fi
+
   # Patch engine package.json:
   #   * Add @supabase/supabase-js for the paywall layer
   #   * Pin electron-store to ^8 (CJS). v11+ is ESM-only and crashes our
@@ -185,6 +199,13 @@ wire_paywall() {
       pkg.build.extraResources = pkg.build.extraResources.filter(
         (r) => !(r && typeof r === 'object' && /faster-whisper/.test(String(r.from)))
       )
+    }
+    // Computer Use v2: ship the vendored cua-driver into Resources/cua-driver/
+    // so the packaged app resolves it at process.resourcesPath. electron-builder
+    // signs bundle binaries during the deep sign; Task 7 verifies the identity.
+    pkg.build.extraResources = pkg.build.extraResources || []
+    if (!pkg.build.extraResources.some((r) => r && typeof r === 'object' && /cua-driver/.test(String(r.from)))) {
+      pkg.build.extraResources.push({ from: 'vendor/cua-driver', to: 'cua-driver' })
     }
     if (process.env.PAYWALL_APP_ID) {
       pkg.build = pkg.build || {}

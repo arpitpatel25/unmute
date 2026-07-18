@@ -69,6 +69,8 @@ declare module 'electron' {
   export interface App {
     on(event: string, cb: (...a: unknown[]) => void): void
     getPath(name: string): string
+    getAppPath(): string
+    isPackaged: boolean
   }
   export const app: App
   export class Notification {
@@ -76,4 +78,10 @@ declare module 'electron' {
     show(): void
     static isSupported(): boolean
   }
+}
+
+// Electron augments Node's process with resourcesPath (the packaged app's
+// Contents/Resources dir). Typecheck-only mirror of that augmentation.
+declare namespace NodeJS {
+  interface Process { resourcesPath: string }
 }

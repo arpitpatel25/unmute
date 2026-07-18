@@ -42,7 +42,8 @@ import { Router, type RoutableTask } from './router'
 import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
-import { startAxServer, type AxServer } from './ax/server'
+import { startCuaServer, type CuaServer } from './cua/server'
+import { DriverManager } from './cua/driver-manager'
 import { applyAxRegistration } from './ax/register'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
@@ -171,7 +172,8 @@ const settings = new Store<RemoteSettings>({
 // menu-bar / overlay can subscribe to (shows what's being driven — the live
 // "kill switch" affordance: the user sees an app is under control and can flip
 // Computer Use off, which every subsequent tool call reads immediately).
-let axServer: AxServer | null = null
+let cuaServer: CuaServer | null = null
+let cuaManager: DriverManager | null = null
 function broadcastAxActivity(ev: { app?: string; tool: string; ok: boolean }): void {
   try {
     for (const w of BrowserWindow.getAllWindows()) {
@@ -1477,15 +1479,30 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     })
   })
 
-  // ── Computer Use (ax-mcp): background macOS app control ──
-  // The HTTP MCP server always runs (cheap, bound to 127.0.0.1); the POLICY is
-  // what gates it — every tool call reads the live policy and refuses when the
-  // master toggle is off. Claude registration + CLAUDE.md steer are applied to
-  // match the current enabled state, and re-applied whenever the toggle flips.
-  void startAxServer({
+  // ── Computer Use v2: cua-driver, EMBEDDED. Unmute (this process — the
+  // signed .app) is the DIRECT SPAWNER of every driver child, so each child
+  // runs inside Unmute's TCC responsibility chain and inherits its
+  // Accessibility + Screen Recording grants. A Claude-Code-spawned stdio
+  // server would inherit the TERMINAL's identity and silently have no grants
+  // (cua EMBEDDING.md's hard rule) — that spawn must never move out of here.
+  // The bridge keeps v1's port/path/name, so existing registrations just work.
+  const driverBin = process.env.CUA_DRIVER_PATH
+    || (app.isPackaged
+      ? join(process.resourcesPath, 'cua-driver', 'cua-driver')
+      : join(app.getAppPath(), 'vendor', 'cua-driver', 'cua-driver'))
+  cuaManager = new DriverManager({
+    binPath: driverBin,
+    hostBundleId: 'unmute',
+    // Opt-in principle: the 30s permission poll must not spawn a resident
+    // driver child for users who never turned Computer Use on. User-initiated
+    // paths (IPC ax-trusted check, bridge tool calls) still spawn on demand.
+    getEnabled: () => normalizePolicy(settings.get('computerUse')).enabled,
+  })
+  void startCuaServer({
+    manager: cuaManager,
     getPolicy: () => normalizePolicy(settings.get('computerUse')),
     onActivity: (ev) => broadcastAxActivity(ev),
-  }).then((s) => { axServer = s }).catch((e) => log.warn('ax server not started', { error: (e as Error).message }))
+  }).then((s) => { cuaServer = s }).catch((e) => log.warn('cua server not started', { error: (e as Error).message }))
   void applyAxRegistration(normalizePolicy(settings.get('computerUse')).enabled)
 
   // Recover the user's tasks after an app crash/restart: rebuild the rows from
@@ -1719,6 +1736,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // none is left orphaned on the user's machine/plan (PRD §10.4).
   app.on('before-quit', () => {
     try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
+    try { cuaManager?.dispose(); cuaServer?.close() } catch (e) { log.warn('cua shutdown failed', { error: (e as Error).message }) }
     try { router?.dispose() } catch { /* best-effort */ }
   })
   // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
@@ -1780,15 +1798,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Is this process trusted for Accessibility? (Onboarding: tells the user
   // whether they still need to grant permission to Unmute.)
   ipcMain.handle('remote:ax-trusted', async () => {
-    try { const { getAxBridge } = await import('./ax/ax-bridge'); return await getAxBridge().trusted() }
-    catch { return false }
-  })
-  // Live list of running apps for the allowlist picker.
-  ipcMain.handle('remote:ax-list-apps', async () => {
-    try {
-      const { getAxBridge } = await import('./ax/ax-bridge')
-      return await getAxBridge().call('listApps', [])
-    } catch (e) { log.warn('ax-list-apps failed', { error: (e as Error).message }); return [] }
+    try { return (await cuaManager!.checkPermissions()).accessibility } catch { return false }
   })
 
   // Pin/unpin a task's species from the UI (manual graduation §5): 'session'
