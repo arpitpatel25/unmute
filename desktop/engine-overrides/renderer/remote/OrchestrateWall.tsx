@@ -475,20 +475,25 @@ export default function OrchestrateWall() {
 
   // Glance vocabulary (rails): skills + projects from disk, so the words you can
   // SAY are always in front of you. Loaded on mount, refreshed every 5 min.
-  const [skills, setSkills] = useState<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean }>>([])
+  const [skills, setSkills] = useState<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean; origin?: 'unmute' }>>([])
   // Signal over noise: the rail shows only the trusted top (pinned + most-used);
   // the long tail hides behind one expander so 30 skills never bury the 5 that matter.
   const [skillsExpanded, setSkillsExpanded] = useState(false)
+  // Curator inbox (spec §11): pending skill proposals the sweep surfaced. Loaded
+  // beside skills; `openProposalId` is held here for Task 14's review popup to mount.
+  const [proposals, setProposals] = useState<Array<{ id: string; kind: 'create' | 'update'; draft: { name: string; description: string } }>>([])
+  const [openProposalId, setOpenProposalId] = useState<string | null>(null)
   // Anchor coords captured at hover time — the card renders at WINDOW level
   // (position: fixed) because the rail is overflow:auto and clips anything
   // placed outside it (the bug: tooltips positioned left of the rail never showed).
   const [hoveredSkill, setHoveredSkill] = useState<{ name: string; top: number; rightPx: number } | null>(null)
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   useEffect(() => {
-    const api = (window as unknown as { electronAPI?: { remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean }>>; remoteListProjects?: () => Promise<Array<{ name: string; path: string }>> } }).electronAPI
+    const api = (window as unknown as { electronAPI?: { remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean; origin?: 'unmute' }>>; remoteListProjects?: () => Promise<Array<{ name: string; path: string }>>; curatorListProposals?: () => Promise<Array<{ id: string; kind: 'create' | 'update'; draft: { name: string; description: string } }>> } }).electronAPI
     const load = () => {
       void api?.remoteListSkills?.().then((s) => setSkills(s ?? [])).catch(() => {})
       void api?.remoteListProjects?.().then((p) => setProjects(p ?? [])).catch(() => {})
+      void api?.curatorListProposals?.().then((p) => setProposals(p ?? [])).catch(() => {})
     }
     load()
     const i = setInterval(load, 5 * 60_000)
@@ -497,6 +502,13 @@ export default function OrchestrateWall() {
   const togglePinSkill = useCallback((name: string, on: boolean) => {
     const api = (window as unknown as { electronAPI?: { remotePinSkill?: (n: string, on: boolean) => Promise<boolean>; remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean }>> } }).electronAPI
     void api?.remotePinSkill?.(name, on).then(() => api?.remoteListSkills?.().then((s) => setSkills(s ?? [])))
+  }, [])
+  // Tap-to-invoke (spec §11, D14): drop `/name ` (unsubmitted) into a live session's
+  // input. NEVER auto-submits — the user presses Enter. Only wired when a task
+  // terminal is actually open (see openTerminalTaskId), so a stray tap can't misfire.
+  const tapSkill = useCallback((taskId: string, name: string) => {
+    const api = (window as unknown as { electronAPI?: { curatorTapSkill?: (taskId: string, name: string) => Promise<boolean> } }).electronAPI
+    void api?.curatorTapSkill?.(taskId, name)
   }, [])
   const spawnInProject = useCallback((p: { name: string; path: string }) => {
     // A click must never silently spawn a whole session (learned the hard way —
@@ -623,6 +635,9 @@ export default function OrchestrateWall() {
 
   const focused = focusedId ? tasks.find((t) => t.id === focusedId) ?? null : null
   const top = queue[0] ?? null
+  // Tap-to-invoke target: a skill can be inserted only when a real terminal is
+  // live on the stage (a focused, alive task). Otherwise unmute-skill rows are inert.
+  const openTerminalTaskId = focused?.alive ? focused.id : null
 
   // Species split (§5): the grid is the space of WORKING SESSIONS; one-off
   // errands live (and resolve) in the rail. Until the user has any sessions,
@@ -718,6 +733,44 @@ export default function OrchestrateWall() {
   // Focused rail = switch targets: sessions + LIVE one-offs only (present tense —
   // no more "SESSIONS · 21" listing every dead errand of the day).
   const others = focused ? visible.filter((t) => t.id !== focused.id) : []
+
+  // Origin split (spec §11): curator-authored skills get their own badged section
+  // (with tap-to-invoke); everything else stays in the existing Skills list.
+  const unmuteSkills = skills.filter((s) => s.origin === 'unmute')
+  const otherSkills = skills.filter((s) => s.origin !== 'unmute')
+  // One row renderer for BOTH sections so the hover card + pin logic stay identical.
+  // `unmute` rows carry the origin badge and, when a terminal is open, tap-to-invoke.
+  const renderSkillRow = (s: (typeof skills)[number], unmute: boolean) => {
+    const canTap = unmute && !!openTerminalTaskId
+    return (
+      <div
+        key={s.name}
+        className="ow-row"
+        style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 6px', margin: '0 -6px', cursor: unmute ? (canTap ? 'pointer' : 'default') : 'default' }}
+        title={unmute ? (canTap ? `insert /${s.name} into the open terminal — you press Enter` : 'open a task’s terminal to insert this skill') : undefined}
+        onClick={unmute ? () => { if (openTerminalTaskId) tapSkill(openTerminalTaskId, s.name) } : undefined}
+        onMouseEnter={(e) => {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          setHoveredSkill({ name: s.name, top: r.top, rightPx: window.innerWidth - r.left + 12 })
+        }}
+        onMouseLeave={() => setHoveredSkill((h) => (h?.name === s.name ? null : h))}
+      >
+        {/* pin: hollow star always visible (dim) so the affordance is discoverable;
+            bright on the hovered row; gold = pinned. stopPropagation so a pin click
+            on a tappable unmute row doesn't also fire tap-to-invoke. */}
+        <button
+          onClick={(e) => { e.stopPropagation(); togglePinSkill(s.name, !s.pinned) }}
+          title={s.pinned ? 'Unpin' : 'Pin to top'}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 15, lineHeight: 1, flex: 'none', alignSelf: 'center', color: s.pinned ? '#d29922' : hoveredSkill?.name === s.name ? C.nameText : C.midText }}
+        >{s.pinned ? '★' : '☆'}</button>
+        <span style={{ fontSize: 11.5, color: hoveredSkill?.name === s.name ? C.nameText : C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{s.name}</span>
+        {unmute && (
+          <span title="Curated by the Unmute skill curator" style={{ fontSize: 8.5, letterSpacing: 0.4, textTransform: 'uppercase', color: '#39c5cf', border: '1px solid rgba(57,197,207,0.35)', borderRadius: 4, padding: '0 4px', flex: 'none', alignSelf: 'center' }}>unmute</span>
+        )}
+        <span style={{ fontSize: 10, color: C.faintText, flex: 'none' }}>{(s.runs ?? 0) > 0 ? `${s.runs}×` : s.lastUsed ? s.lastUsed.slice(5, 10) : ''}</span>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -839,39 +892,45 @@ export default function OrchestrateWall() {
                     ))}
                   </RailSection>
                 )}
-                {skills.length > 0 && (
+                {/* SUGGESTIONS (spec §11): the curator's review inbox — pending
+                    skill proposals from the last sweep. Amber (needs-you hue): it
+                    wants a decision. A row opens the proposal in Task 14's popup.
+                    Empty → the whole section renders nothing. */}
+                {proposals.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1.4, color: '#d29922', textTransform: 'uppercase' }}>
+                      suggestions <span style={{ color: 'rgba(210,153,34,0.5)' }}>({proposals.length})</span>
+                    </div>
+                    {proposals.map((p) => (
+                      <button key={p.id} onClick={() => setOpenProposalId(p.id)} className="ow-row"
+                        style={{ display: 'flex', alignItems: 'baseline', gap: 7, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', fontFamily: C.mono }}>
+                        <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.4, color: 'rgba(210,153,34,0.7)', flex: 'none' }}>{p.kind === 'update' ? 'edit' : 'new'}</span>
+                        <span style={{ fontSize: 11.5, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{p.draft.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {/* UNMUTE SKILLS (spec §11): skills the curator authored, badged by
+                    origin. Same row as any skill (hover card + pin preserved); when a
+                    task terminal is open, a tap drops `/name ` (unsubmitted). Empty →
+                    header hidden. */}
+                {unmuteSkills.length > 0 && (
+                  <RailSection title="Unmute Skills">
+                    {unmuteSkills.map((s) => renderSkillRow(s, true))}
+                  </RailSection>
+                )}
+                {otherSkills.length > 0 && (
                   <RailSection title="Skills">
                     {/* glance vocabulary — say a skill's name to use it. Hover →
                         a card with the FULL name + the skill's own description,
                         so 'should I invoke this?' is answerable at a glance.
                         Ranked pinned → proven use → recency (main side); collapsed
                         to the trusted top 6 with the tail behind "N more". */}
-                    {(skillsExpanded ? skills : skills.slice(0, 6)).map((s) => (
-                      <div
-                        key={s.name}
-                        className="ow-row"
-                        style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 6px', margin: '0 -6px', cursor: 'default' }}
-                        onMouseEnter={(e) => {
-                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                          setHoveredSkill({ name: s.name, top: r.top, rightPx: window.innerWidth - r.left + 12 })
-                        }}
-                        onMouseLeave={() => setHoveredSkill((h) => (h?.name === s.name ? null : h))}
-                      >
-                        {/* pin: hollow star always visible (dim) so the affordance
-                            is discoverable; bright on the hovered row; gold = pinned. */}
-                        <button
-                          onClick={() => togglePinSkill(s.name, !s.pinned)}
-                          title={s.pinned ? 'Unpin' : 'Pin to top'}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 15, lineHeight: 1, flex: 'none', alignSelf: 'center', color: s.pinned ? '#d29922' : hoveredSkill?.name === s.name ? C.nameText : C.midText }}
-                        >{s.pinned ? '★' : '☆'}</button>
-                        <span style={{ fontSize: 11.5, color: hoveredSkill?.name === s.name ? C.nameText : C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{s.name}</span>
-                        <span style={{ fontSize: 10, color: C.faintText, flex: 'none' }}>{(s.runs ?? 0) > 0 ? `${s.runs}×` : s.lastUsed ? s.lastUsed.slice(5, 10) : ''}</span>
-                      </div>
-                    ))}
-                    {skills.length > 6 && (
+                    {(skillsExpanded ? otherSkills : otherSkills.slice(0, 6)).map((s) => renderSkillRow(s, false))}
+                    {otherSkills.length > 6 && (
                       <button onClick={() => setSkillsExpanded((v) => !v)}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', textAlign: 'left', fontFamily: C.mono, fontSize: 10.5, color: C.faintText }}>
-                        {skillsExpanded ? '· show less' : `· ${skills.length - 6} more…`}
+                        {skillsExpanded ? '· show less' : `· ${otherSkills.length - 6} more…`}
                       </button>
                     )}
                   </RailSection>
