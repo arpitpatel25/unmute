@@ -9,7 +9,10 @@
 // edit individually:
 //   * substitutions  — accepted only if the replacement SOUNDS like what it
 //     replaces (STT errors are sound-alikes; meaning-changes are not)
-//   * deletions      — accepted only if small (fillers/stutters), never a clause
+//   * deletions      — TRUST THE LLM: any bounded, non-inverting deletion is
+//     accepted (the LLM, with full context, is the only thing that can tell
+//     filler-"like" from verb-"like"). The gate blocks only CATASTROPHES:
+//     deleting a negation/number (meaning inversion) or a clause-scale run.
 //   * insertions     — always rejected (new content cannot come from noise)
 //   * numbers and negations — locked (a not→now flip passes phonetics but
 //     inverts meaning; the stakes dwarf the win)
@@ -24,20 +27,11 @@ export interface GatedCorrection {
 }
 
 const NEGATIONS = new Set(['no', 'not', 'never', 'none', 'nor', "don't", "can't", "won't", "isn't", "aren't", "didn't", "doesn't", "shouldn't", "couldn't", "wouldn't"])
-const FILLERS = new Set(['uh', 'um', 'erm', 'uhm', 'hmm'])
-/** Discourse fillers + the component words of common multiword fillers
- *  ("you know", "I mean", "sort of", "kind of"). Deletion-only Job A: dropping
- *  any of these cannot change meaning. Deliberately EXCLUDES genuinely
- *  ambiguous words that routinely carry meaning (so, well, just, right, now,
- *  then, okay) — those are left to stutter logic and the LLM, never
- *  blanket-deletable. */
-const DISCOURSE_FILLERS = new Set([
-  'like', 'yeah', 'yep', 'yah', 'basically', 'actually', 'literally', 'honestly', 'anyways', 'anyway',
-  'you', 'know', 'mean', 'sort', 'kind', 'of',
-])
-/** A deletion hunk larger than this many words is a clause, not a filler.
- *  4 lets "you know what I mean"-scale phrases pass; a real clause cannot. */
-const MAX_DELETION_WORDS = 4
+/** A deletion hunk larger than this many words is a clause, not a filler run.
+ *  6 is generous enough for a filler string like "you know what I mean like"
+ *  yet tight enough to block a whole clause (summarization). The global
+ *  MAX_CHANGED_FRACTION (0.8) remains the wholesale-rewrite backstop. */
+const MAX_DELETION_WORDS = 6
 /** Substitution accepted at or above this phonetic/char similarity. */
 const MIN_SIMILARITY = 0.5
 /** Stricter bar when a number or negation is involved. */
@@ -176,28 +170,6 @@ function isSpellingPropagation(h: { equal: boolean } & Hunk, rawNormSet: Set<str
   )
 }
 
-/** Job A (remove noise) is generous-but-guarded. A deletion hunk qualifies when
- *  ALL hold:
- *   (a) size ≤ MAX_DELETION_WORDS — a clause can never be deleted;
- *   (b) it contains NO negation and NO number (containsLocked) — deleting one
- *       would invert/change meaning, the one thing cleanup must never do;
- *   (c) every token is a filler/discourse-filler OR a stutter-repeat — a word
- *       duplicated inside the hunk ("so so", "the the") or repeating an adjacent
- *       KEPT word ("I I" → "I"). Any real content word that is not a
- *       filler/repeat disqualifies the whole hunk, so the gate can only ever
- *       delete plausible-noise words. `neighborNorms` carries the norms of the
- *       kept words immediately bordering the hunk, for the adjacent-repeat case. */
-function isFillerDeletion(tokens: Token[], neighborNorms: Set<string>): boolean {
-  if (tokens.length === 0 || tokens.length > MAX_DELETION_WORDS) return false
-  if (containsLocked(tokens)) return false // never delete a negation or a number
-  return tokens.every((t, idx) => {
-    if (FILLERS.has(t.norm) || DISCOURSE_FILLERS.has(t.norm)) return true
-    if (tokens.some((o, j) => j !== idx && o.norm === t.norm)) return true // stutter within hunk
-    if (neighborNorms.has(t.norm)) return true // stutter against an adjacent kept word
-    return false
-  })
-}
-
 export function applyGatedCorrection(raw: string, proposed: string | null): GatedCorrection {
   const asRaw = (rejected: number): GatedCorrection => ({ text: raw, acceptedEdits: 0, rejectedEdits: rejected })
   if (!proposed) return asRaw(0)
@@ -239,15 +211,20 @@ export function applyGatedCorrection(raw: string, proposed: string | null): Gate
       continue
     }
     if (h.propTokens.length === 0) {
-      // Deletion — only fillers/stutter-scale removals allowed. Adjacent kept
-      // words (last raw token before, first raw token after) let "I I" → "I"
-      // register as a stutter-repeat.
-      const neighborNorms = new Set<string>()
-      const prev = hunks[hi - 1]?.rawTokens
-      const next = hunks[hi + 1]?.rawTokens
-      if (prev && prev.length) neighborNorms.add(prev[prev.length - 1].norm)
-      if (next && next.length) neighborNorms.add(next[0].norm)
-      if (isFillerDeletion(h.rawTokens, neighborNorms)) { accepted++ } else { rejected++; parts.push(rawSeg) }
+      // Deletion — TRUST THE LLM, block only catastrophes. Which words are
+      // filler vs. content depends on context ("like" the filler vs. "like"
+      // the verb), and the LLM is the only judge with that context. So the
+      // gate does NOT re-decide filler-ness; it only HARD-BLOCKS the two
+      // irreversible harms:
+      //   (a) meaning INVERSION — deleting a negation or a number flips what
+      //       was said ("do not send" → "do send"); never allowed.
+      //   (b) clause-scale deletion — a run longer than MAX_DELETION_WORDS is
+      //       a whole clause, i.e. summarization, not a filler run.
+      // Anything bounded and non-inverting is accepted as trusted filler/
+      // stutter/false-start.
+      if (containsLocked(h.rawTokens)) { rejected++; parts.push(rawSeg) }        // (a) inversion lock
+      else if (h.rawTokens.length > MAX_DELETION_WORDS) { rejected++; parts.push(rawSeg) } // (b) clause guard
+      else { accepted++ }                                                        // trusted deletion
       continue
     }
     // Substitution — phonetic gate, with a stricter bar around numbers/negations.

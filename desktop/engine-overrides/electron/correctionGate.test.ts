@@ -56,8 +56,10 @@ describe('applyGatedCorrection', () => {
     assert.equal(r.text, proposed)
   })
 
-  test('rejects deletion of a whole clause', () => {
-    const raw = 'ship it today and be concise with the response'
+  test('rejects deletion of a whole clause (over the clause cap)', () => {
+    // 8-word contiguous deletion — larger than MAX_DELETION_WORDS (6), so the
+    // clause guard rejects it even though nothing is locked.
+    const raw = 'ship it today and please be concise with the final response'
     const proposed = 'ship it today'
     const r = applyGatedCorrection(raw, proposed)
     assert.equal(r.text, raw)
@@ -126,8 +128,18 @@ describe('applyGatedCorrection', () => {
     assert.equal(r.text, raw)
   })
 
-  // ─── generous-on-deletion, strict-on-substitution (2026-07-19) ──────────
-  describe('deletion generosity (discourse fillers / stutters), meaning locked', () => {
+  // ─── deletion contract: trust-LLM + catastrophe locks (2026-07-19) ──────
+  // The gate does NOT decide which deleted words are filler — that is a
+  // context call ("like" the filler vs. "like" the verb) only the LLM can
+  // make, and the user has chosen to trust it there. So for DELETIONS the
+  // gate accepts any bounded, non-inverting removal and HARD-BLOCKS only the
+  // two catastrophes: meaning INVERSION (deleting a negation or a number) and
+  // CLAUSE-SIZE deletion (a run longer than MAX_DELETION_WORDS = summarization).
+  // This is deliberately NOT the old per-word filler-set gate: that approach
+  // rejected legitimate content-word deletions the LLM proposed (it turned
+  // "can you send this" into a rejected edit) yet still couldn't tell filler
+  // from content — so it was replaced with "trust the LLM, block catastrophes".
+  describe('deletion contract: trust-LLM, block only inversions + clause-size', () => {
     test('discourse filler ACCEPTED: "like" is dropped', () => {
       const raw = 'So I like want you to do it'
       const proposed = 'So I want you to do it'
@@ -145,12 +157,18 @@ describe('applyGatedCorrection', () => {
       assert.ok(r.acceptedEdits >= 1)
     })
 
-    test('content-word deletion REJECTED: "red" is kept', () => {
-      const raw = 'I want the red car'
-      const proposed = 'I want the car'
+    test('bounded non-locked deletion ACCEPTED (trust-LLM): the gate no longer re-judges content vs filler', () => {
+      // NEW CONTRACT: a bounded, non-inverting deletion the LLM proposed is
+      // TRUSTED and accepted — the gate does not second-guess whether "you" was
+      // filler here. (The OLD per-word filler-set gate REJECTED exactly this,
+      // which was the "can you send this" → "can send this" content-word hole.
+      // We stop the gate guessing; only inversions and clause-size are blocked.)
+      const raw = 'can you send this'
+      const proposed = 'can send this'
       const r = applyGatedCorrection(raw, proposed)
-      assert.ok(r.text.split(/\s+/).includes('red'))
-      assert.ok(r.rejectedEdits >= 1)
+      assert.equal(r.text, proposed)
+      assert.ok(r.acceptedEdits >= 1)
+      assert.equal(r.rejectedEdits, 0)
     })
 
     test('negation deletion REJECTED (meaning lock): "not" is preserved', () => {
@@ -177,15 +195,25 @@ describe('applyGatedCorrection', () => {
       assert.ok(r.acceptedEdits >= 1)
     })
 
-    test('a 4-word discourse hunk passes but a real clause does not', () => {
-      // A 4-word all-filler hunk ("you know kind of") is allowed …
-      const okRaw = 'we can you know kind of start'
+    test('a filler run within the cap passes but an over-cap clause does not', () => {
+      // A 5-word filler run ("you know what I mean") is within MAX_DELETION_WORDS
+      // (6) and accepted — trusted as filler …
+      const okRaw = 'we can you know what I mean start'
       const okProp = 'we can start'
       assert.equal(applyGatedCorrection(okRaw, okProp).text, okProp)
-      // … but a genuine clause (content words) is not.
-      const clauseRaw = 'ship it today and be concise please'
+      // … but a >6-word contiguous deletion is a clause and is rejected.
+      const clauseRaw = 'ship it today and please be concise with the final response'
       const clauseProp = 'ship it today'
       assert.equal(applyGatedCorrection(clauseRaw, clauseProp).text, clauseRaw)
+    })
+
+    test('oversized deletion REJECTED (clause guard): a >6-word contiguous drop', () => {
+      const raw = 'please review the document and send it back to me before noon'
+      const proposed = 'please review the document'
+      // Deleted "and send it back to me before noon" = 8 words > 6 → clause guard.
+      const r = applyGatedCorrection(raw, proposed)
+      assert.equal(r.text, raw)
+      assert.ok(r.rejectedEdits >= 1)
     })
 
     test('non-sound-alike substitution still REJECTED (Job B unchanged)', () => {

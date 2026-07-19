@@ -80,3 +80,22 @@ describe('structural verbatim guard (2026-07-15 field incident)', () => {
     assert.equal(acceptCleanupResult(raw, repunct), repunct)
   })
 })
+
+describe('meaning-lock guard (deletion-only can still invert)', () => {
+  test('rejects a deletion-only cleanup that dropped a negation', () => {
+    // Pure deletion, within the keep ratio, but it deletes "not" → inverts.
+    const raw = 'please do not send the final report to the whole team today'
+    const dropped = 'please do send the final report to the whole team today'
+    assert.equal(acceptCleanupResult(raw, dropped), raw)
+  })
+  test('rejects a deletion-only cleanup that dropped a number', () => {
+    const raw = 'please send 3 copies of the signed contract to the client today'
+    const dropped = 'please send copies of the signed contract to the client today'
+    assert.equal(acceptCleanupResult(raw, dropped), raw)
+  })
+  test('still accepts a clean filler-only deletion that keeps negations/numbers', () => {
+    const raw = 'uh so do not send the 3 copies you know today'
+    const cleaned = 'so do not send the 3 copies today'
+    assert.equal(acceptCleanupResult(raw, cleaned), cleaned)
+  })
+})

@@ -35,17 +35,41 @@ const MIN_WORD_KEEP_RATIO = 0.7
 
 const REFUSAL_RE = /(i('m| am) sorry.{0,20}(can't|cannot)|i (can't|cannot) (help|assist|process)|as an ai|against my (guidelines|policy))/i
 
+/** Meaning-inversion lock (mirrors correctionGate.NEGATIONS): deleting one of
+ *  these — or a number — flips what was said, the one thing cleanup must never
+ *  do. Even a deletion-only edit can invert meaning ("do not send" → "do
+ *  send"), so the deletion-only guard is not enough on its own. */
+const CLEANUP_NEGATIONS = new Set(['no', 'not', 'never', 'none', 'nor', "don't", "can't", "won't", "isn't", "aren't", "didn't", "doesn't", "shouldn't", "couldn't", "wouldn't"])
+
+function isLockedWord(w: string): boolean {
+  return /\d/.test(w) || CLEANUP_NEGATIONS.has(w)
+}
+
+/** True iff the cleaned text dropped any negation/number that the raw contained
+ *  (compares per-token occurrence counts of locked words). */
+function droppedLockedWord(rawWords: string[], cleanedWords: string[]): boolean {
+  const cleanedCounts = new Map<string, number>()
+  for (const w of cleanedWords) if (isLockedWord(w)) cleanedCounts.set(w, (cleanedCounts.get(w) ?? 0) + 1)
+  const rawCounts = new Map<string, number>()
+  for (const w of rawWords) if (isLockedWord(w)) rawCounts.set(w, (rawCounts.get(w) ?? 0) + 1)
+  for (const [w, n] of rawCounts) if ((cleanedCounts.get(w) ?? 0) < n) return true
+  return false
+}
+
 const SYSTEM_PROMPT = [
   'You clean up raw speech-to-text dictation. Apply ONLY these edits:',
   '1. Remove filler words and discourse fillers (uh, um, like, yeah, you know,',
   '   I mean, sort of, kind of, basically, actually) when used as filler.',
   '2. Collapse stutter repeats ("so so", "I I", "the the" → one).',
-  '3. Remove false starts the speaker abandoned mid-phrase.',
+  '3. Remove abandoned false starts the speaker dropped mid-phrase.',
   'Rules: you may ONLY DELETE words — never add, replace, reorder, or',
   'rephrase. Every word you keep must appear exactly as in the input.',
+  'NEVER delete a meaningful/content word and NEVER change the meaning:',
+  'delete ONLY genuine filler/discourse words, stutters, and abandoned',
+  'false-starts. When in doubt, keep the word.',
   'Keep questions, instructions, and trailing sentences — they are',
-  'content, not filler. Do not summarize. Keep slang, profanity, and',
-  'technical terms exactly as spoken.',
+  'content, not filler. Do not summarize. Never change numbers or',
+  'negations. Keep slang, profanity, and technical terms exactly as spoken.',
   'Return ONLY the cleaned text — no quotes, no commentary.',
 ].join(' ')
 
@@ -64,7 +88,10 @@ const CORRECTION_PROMPT = [
   'words that were plausibly misheard — every replacement must sound like',
   'what it replaces. You may also remove filler words and discourse fillers',
   '(uh, um, like, yeah, you know, I mean, sort of, kind of, basically,',
-  'actually) and stutter repeats and abandoned false starts.',
+  'actually) and stutter repeats and abandoned false starts. But NEVER',
+  'delete a meaningful/content word and NEVER change the meaning — delete',
+  'only genuine filler, stutters, and abandoned false-starts; when in doubt,',
+  'keep the word.',
   // Spelling propagation: users spell a name/product/technical term out loud
   // to force its spelling. STT gets it right where they spelled it but mishears
   // it elsewhere — so the same term ends up spelled several ways.
@@ -121,7 +148,7 @@ export interface CleanupVerdict {
   text: string
   accepted: boolean
   /** Why the LLM output was rejected ('' when accepted) — telemetry food. */
-  reason: '' | 'empty' | 'refusal' | 'over-deletion' | 'grew' | 'reworded'
+  reason: '' | 'empty' | 'refusal' | 'over-deletion' | 'grew' | 'reworded' | 'meaning-lock'
 }
 
 export function evaluateCleanup(raw: string, cleaned: string | null): CleanupVerdict {
@@ -137,6 +164,9 @@ export function evaluateCleanup(raw: string, cleaned: string | null): CleanupVer
   if (cleanedWords.length / rawWords.length < MIN_WORD_KEEP_RATIO) return reject('over-deletion')
   if (cleanedWords.length > rawWords.length) return reject('grew')
   if (!isDeletionOnly(rawWords, cleanedWords)) return reject('reworded')
+  // Meaning lock: a deletion-only edit can still invert meaning by dropping a
+  // negation or number ("do not send" → "do send"). Never allow it.
+  if (droppedLockedWord(rawWords, cleanedWords)) return reject('meaning-lock')
   return { text: c, accepted: true, reason: '' }
 }
 
