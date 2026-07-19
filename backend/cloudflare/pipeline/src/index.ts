@@ -32,7 +32,7 @@ import {
 } from '../../shared/balance'
 import {
   GROQ_STT_URL,
-  GROQ_CHAT_URL,
+  CEREBRAS_CHAT_URL,
   STT_MODEL,
   LLM_MODEL,
   sttCostCents,
@@ -515,7 +515,7 @@ async function handleLLM(
     })
   }
 
-  // ─── Forward to Groq ──────────────────────────────────────────
+  // ─── Forward to Cerebras (OpenAI-compatible) ──────────────────
   const groqBody = {
     model: body.model || LLM_MODEL,
     messages: body.messages,
@@ -525,10 +525,10 @@ async function handleLLM(
   }
 
   const t0 = Date.now()
-  const groqRes = await fetch(GROQ_CHAT_URL, {
+  const groqRes = await fetch(CEREBRAS_CHAT_URL, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${env.GROQ_API_KEY}`,
+      Authorization: `Bearer ${env.CEREBRAS_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(groqBody),
@@ -537,10 +537,10 @@ async function handleLLM(
 
   if (!groqRes.ok) {
     const txt = await groqRes.text().catch(() => '')
-    console.error('[pipeline] Groq LLM failed:', groqRes.status, txt.slice(0, 200))
+    console.error('[pipeline] Cerebras LLM failed:', groqRes.status, txt.slice(0, 200))
     return err(
       groqRes.status === 429 ? 'RATE_LIMITED' : 'UPSTREAM_ERROR',
-      `Groq LLM returned ${groqRes.status}`,
+      `Cerebras LLM returned ${groqRes.status}`,
       groqRes.status === 429 ? 429 : 502
     )
   }
@@ -570,7 +570,7 @@ async function handleLLM(
         p_user_id: userId,
         p_call_type: 'llm',
         p_flow_type: 'transform',
-        p_provider: 'groq',
+        p_provider: 'cerebras',
         p_model: groqJson.model || LLM_MODEL,
         p_prompt_tokens: pt,
         p_completion_tokens: ct,

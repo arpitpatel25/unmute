@@ -5,6 +5,7 @@ import type { KVNamespace } from '@cloudflare/workers-types'
 export interface PipelineEnv {
   // Set via `wrangler secret put`
   GROQ_API_KEY: string
+  CEREBRAS_API_KEY: string // /v1/llm runs on Cerebras (gpt-oss-120b); STT stays Groq
   SUPABASE_URL: string
   SUPABASE_SERVICE_ROLE_KEY: string
 

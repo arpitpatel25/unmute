@@ -57,8 +57,16 @@ const NOISY_CLEAR_EVALS = 4
 // is only a safety so a hot mic in a silent room can't be flagged.
 // 2026-07-15: capture DSP is now OFF — raw floors run higher, so the noisy
 // hint may fire more readily. Signal-only; re-calibrate constants if it nags.
-const NOISY_FLOOR_RMS = 0.012          // gaps clearly above a quiet room's near-zero floor
+// 2026-07-18: lowered 0.012 → 0.010 — field-observed that genuine public
+// settings (close mic keeps the floor deceptively low) often slipped under
+// 0.012 and never triggered correction. More sensitive, but the fraction gate
+// below + the delete/phonetic guards keep false positives low-harm.
+const NOISY_FLOOR_RMS = 0.010          // gaps clearly above a quiet room's near-zero floor
 const NOISY_MAX_RATIO = 12             // safety: voice hugely above floor = mic is fine
+// Cleanup runs when noise was present for a MEANINGFUL FRACTION of the
+// recording — not "ever noisy once" (a 2s blip early on used to commit a whole
+// 30s dictation to the slower correction path). ≥25% of evals noisy ⇒ correct.
+const NOISY_FRACTION = 0.25
 const NOISY_HINT_COOLDOWN_MS = 10 * 60_000 // same café, three dictations ≠ three nags
 let lastNoisyHintAt = 0 // module-level: survives pill remounts within the session
 
@@ -207,6 +215,8 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const noisyFlaggedRef = useRef<boolean>(false)      // chip currently up
   const noisyEverFlaggedRef = useRef<boolean>(false)  // fired at least once THIS recording (re-flag skips the global cooldown)
   const noisyQuietEvalsRef = useRef<number>(0)        // consecutive quiet evals while flagged
+  const noisyEvalTotalRef = useRef<number>(0)         // total noise evals this recording
+  const noisyEvalHitRef = useRef<number>(0)           // evals that met the noisy condition (→ fraction gate)
 
   // ─── Server-config-driven chunking params (loaded at recording start) ───
   const chunkMinMsRef = useRef<number>(DEFAULT_CHUNK_MIN_MS)
@@ -446,6 +456,11 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           const floor = sorted[Math.floor(sorted.length * 0.2)]   // the "gaps"
           noiseFloorRef.current = floor
           const speech = sorted[Math.floor(sorted.length * 0.9)]  // the voice
+          // Per-eval noisy verdict, counted for the fraction gate (drives the
+          // correction decision) AND reused by the live-chip hysteresis below.
+          const isNoisyNow = floor > NOISY_FLOOR_RMS && speech / Math.max(floor, 1e-6) < NOISY_MAX_RATIO
+          noisyEvalTotalRef.current++
+          if (isNoisyNow) noisyEvalHitRef.current++
           // Too-quiet: judged on the recording's loudest moment so far.
           {
             const tel = telemetryRef.current
@@ -467,7 +482,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
             // Raise: global cooldown applies to the FIRST fire of a recording
             // only — a re-raise after mid-recording noise-return is fresh signal.
             const cooldownOk = noisyEverFlaggedRef.current || Date.now() - lastNoisyHintAt > NOISY_HINT_COOLDOWN_MS
-            if (cooldownOk && floor > NOISY_FLOOR_RMS && speech / Math.max(floor, 1e-6) < NOISY_MAX_RATIO) {
+            if (cooldownOk && isNoisyNow) {
               noisyFlaggedRef.current = true
               noisyEverFlaggedRef.current = true
               noisyQuietEvalsRef.current = 0
@@ -648,7 +663,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       api.paywallCaptureQuality?.(frozenSessionIdRef.current, {
         // Environment verdict for THIS recording — routes the correction
         // pass in main (noisy → LLM correction, quiet → raw fast path).
-        noisy: noisyEverFlaggedRef.current,
+        // Fraction gate: noisy for a meaningful share of the recording, NOT a
+        // single early blip (which the sticky ever-flag used to latch on).
+        noisy: noisyEvalTotalRef.current > 0
+          && noisyEvalHitRef.current / noisyEvalTotalRef.current >= NOISY_FRACTION,
         rmsMax: +tel.rmsMax.toFixed(4),
         rmsAvg: tel.frames ? +(tel.rmsSum / tel.frames).toFixed(4) : 0,
         peak: +tel.peak.toFixed(3),
@@ -688,6 +706,8 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     noisyFlaggedRef.current = false
     noisyEverFlaggedRef.current = false
     noisyQuietEvalsRef.current = 0
+    noisyEvalTotalRef.current = 0
+    noisyEvalHitRef.current = 0
     quietFlaggedRef.current = false
     setTooQuiet(false)
     setNoisyEnvironment(false)
