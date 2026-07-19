@@ -31,6 +31,17 @@ const MAX_DELETION_WORDS = 3
 const MIN_SIMILARITY = 0.5
 /** Stricter bar when a number or negation is involved. */
 const LOCKED_SIMILARITY = 0.95
+/** Spelling propagation: a below-bar substitution is accepted ONLY when the
+ *  replacement already appears elsewhere in the raw transcript (the user's own
+ *  ground-truth spelling — e.g. they spelled a name out once) AND it still
+ *  sounds at least this related to what it replaces. The "appears elsewhere"
+ *  proof is the safety: the model can normalize to a spelling the user produced
+ *  but can never invent one; this sound floor blocks swapping one distinct term
+ *  for an unrelated one that merely happens to appear elsewhere. */
+const SPELLING_SIMILARITY = 0.34
+/** Only propagate distinctive terms (names/products/tech words), never short
+ *  common words where an "appears elsewhere" match would be coincidental. */
+const MIN_PROPAGATION_LEN = 4
 /** If more than this fraction of raw words sit in changed hunks, distrust
  *  the whole proposal (the model rewrote, not corrected). Deliberately
  *  loose: the per-edit gate is the real defense — this only catches the
@@ -142,6 +153,18 @@ function containsLocked(tokens: Token[]): boolean {
   return tokens.some((t) => /\d/.test(t.norm) || NEGATIONS.has(t.norm))
 }
 
+/** Is this substitution a safe spelling-propagation? (see SPELLING_SIMILARITY) */
+function isSpellingPropagation(h: { equal: boolean } & Hunk, rawNormSet: Set<string>, sim: number): boolean {
+  if (containsLocked(h.rawTokens) || containsLocked(h.propTokens)) return false // numbers/negations stay locked
+  if (sim < SPELLING_SIMILARITY) return false // must still sound related — not an arbitrary term swap
+  // Every proposed word is a distinctive term the user produced ELSEWHERE in
+  // the transcript. (In a substitution hunk the raw side differs from the
+  // proposal, so a norm found in rawNormSet necessarily came from another hunk.)
+  return h.propTokens.length > 0 && h.propTokens.every(
+    (t) => t.norm.length >= MIN_PROPAGATION_LEN && rawNormSet.has(t.norm),
+  )
+}
+
 function isFillerDeletion(tokens: Token[]): boolean {
   if (tokens.length === 0 || tokens.length > MAX_DELETION_WORDS) return false
   // Pure fillers, or a short stutter run (all words repeat within the hunk
@@ -166,6 +189,9 @@ export function applyGatedCorrection(raw: string, proposed: string | null): Gate
   const rawTokens = tokenize(raw)
   const propTokens = tokenize(p)
   if (rawTokens.length === 0) return asRaw(0)
+  // Every spelling the user actually produced — the only spellings we let the
+  // model propagate to other (misheard) occurrences of the same term.
+  const rawNormSet = new Set(rawTokens.map((t) => t.norm))
 
   const hunks = diffHunks(rawTokens, propTokens)
 
@@ -205,6 +231,7 @@ export function applyGatedCorrection(raw: string, proposed: string | null): Gate
       h.propTokens.map((t) => t.norm).join(' '),
     )
     if (sim >= bar) { parts.push(propSeg); accepted++ }
+    else if (isSpellingPropagation(h, rawNormSet, sim)) { parts.push(propSeg); accepted++ } // normalize to the user's own spelling
     else { parts.push(rawSeg); rejected++ }
   }
 
