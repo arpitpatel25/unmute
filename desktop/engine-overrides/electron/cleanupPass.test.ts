@@ -30,14 +30,17 @@ describe('buildCleanupMessages', () => {
 })
 
 describe('buildCorrectionMessages', () => {
-  test('names discourse fillers, keeps sound-alike + number/negation guards', () => {
+  // SUBSTITUTION-ONLY: the correction prompt's only job is replacing misheard
+  // words. It must NOT invite removing fillers, and must forbid removals/adds.
+  test('substitution-only: replace misheard words, never remove or add', () => {
     const m = buildCorrectionMessages('raw')
     assert.equal(m.length, 2)
     assert.equal(m[0].role, 'system')
-    assert.match(m[0].content, /discourse fillers?/i)
-    assert.match(m[0].content, /you know/i)
-    assert.match(m[0].content, /sound like|misheard/i)      // substitution rule intact
+    assert.match(m[0].content, /sound like|misheard/i)          // substitution rule intact
+    assert.match(m[0].content, /do NOT remove|not remove any words/i) // no deletions
+    assert.match(m[0].content, /do NOT add|not add words/i)     // no insertions
     assert.match(m[0].content, /numbers or negations|never change numbers/i)
+    assert.doesNotMatch(m[0].content, /discourse fillers?/i)    // no longer invites filler removal
     assert.equal(m[1].content, 'raw')
   })
 })

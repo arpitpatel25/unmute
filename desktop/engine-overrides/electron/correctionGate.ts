@@ -1,18 +1,19 @@
 // correctionGate — per-edit acceptance for LLM speech-to-text corrections.
 //
-// DESIGN (settled with the user, 2026-07-16): in noisy environments Whisper
+// DESIGN (settled with the user, 2026-07-19): in noisy environments Whisper
 // mishears words ("world wall tree" for "worktree"). An LLM given the whole
 // transcript can often recover the intended words — but an unconstrained
 // LLM corrects toward PLAUSIBILITY, not intent, and on garbled input it
 // invents fluent text the user never said. So: the LLM only PROPOSES.
 // This gate diffs the proposal against the raw transcript and judges each
-// edit individually:
+// edit individually. Cleanup is SUBSTITUTION-ONLY: the STT model errs by
+// choosing WRONG words (substitutions), not by adding extra ones, so the only
+// legitimate correction is REPLACING a misheard word with the right one.
 //   * substitutions  — accepted only if the replacement SOUNDS like what it
 //     replaces (STT errors are sound-alikes; meaning-changes are not)
-//   * deletions      — TRUST THE LLM: any bounded, non-inverting deletion is
-//     accepted (the LLM, with full context, is the only thing that can tell
-//     filler-"like" from verb-"like"). The gate blocks only CATASTROPHES:
-//     deleting a negation/number (meaning inversion) or a clause-scale run.
+//   * deletions      — ALWAYS rejected: there is nothing legitimate to remove
+//     (fillers/stutters are faithful to what the user said), and removing
+//     risks dropping a word they actually said, incl. a negation.
 //   * insertions     — always rejected (new content cannot come from noise)
 //   * numbers and negations — locked (a not→now flip passes phonetics but
 //     inverts meaning; the stakes dwarf the win)
@@ -27,11 +28,6 @@ export interface GatedCorrection {
 }
 
 const NEGATIONS = new Set(['no', 'not', 'never', 'none', 'nor', "don't", "can't", "won't", "isn't", "aren't", "didn't", "doesn't", "shouldn't", "couldn't", "wouldn't"])
-/** A deletion hunk larger than this many words is a clause, not a filler run.
- *  6 is generous enough for a filler string like "you know what I mean like"
- *  yet tight enough to block a whole clause (summarization). The global
- *  MAX_CHANGED_FRACTION (0.8) remains the wholesale-rewrite backstop. */
-const MAX_DELETION_WORDS = 6
 /** Substitution accepted at or above this phonetic/char similarity. */
 const MIN_SIMILARITY = 0.5
 /** Stricter bar when a number or negation is involved. */
@@ -211,20 +207,11 @@ export function applyGatedCorrection(raw: string, proposed: string | null): Gate
       continue
     }
     if (h.propTokens.length === 0) {
-      // Deletion — TRUST THE LLM, block only catastrophes. Which words are
-      // filler vs. content depends on context ("like" the filler vs. "like"
-      // the verb), and the LLM is the only judge with that context. So the
-      // gate does NOT re-decide filler-ness; it only HARD-BLOCKS the two
-      // irreversible harms:
-      //   (a) meaning INVERSION — deleting a negation or a number flips what
-      //       was said ("do not send" → "do send"); never allowed.
-      //   (b) clause-scale deletion — a run longer than MAX_DELETION_WORDS is
-      //       a whole clause, i.e. summarization, not a filler run.
-      // Anything bounded and non-inverting is accepted as trusted filler/
-      // stutter/false-start.
-      if (containsLocked(h.rawTokens)) { rejected++; parts.push(rawSeg) }        // (a) inversion lock
-      else if (h.rawTokens.length > MAX_DELETION_WORDS) { rejected++; parts.push(rawSeg) } // (b) clause guard
-      else { accepted++ }                                                        // trusted deletion
+      // Deletion is never applied: STT errs by mis-hearing words, not by adding
+      // them, so there is nothing legitimate to remove — and removing risks
+      // dropping a word the user actually said (incl. a negation). Substitution-only.
+      rejected++
+      parts.push(rawSeg)
       continue
     }
     // Substitution — phonetic gate, with a stricter bar around numbers/negations.

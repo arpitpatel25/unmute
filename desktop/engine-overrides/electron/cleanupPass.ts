@@ -84,14 +84,12 @@ export const CORRECTION_TIMEOUT_MS = 1500
 const CORRECTION_PROMPT = [
   'You fix speech-to-text transcription errors. The text below was dictated',
   'in a NOISY environment, so some words were misheard as similar-sounding',
-  'wrong words. Using the context of the whole transcript, replace ONLY',
+  'wrong words. Using the context of the whole transcript, REPLACE only',
   'words that were plausibly misheard — every replacement must sound like',
-  'what it replaces. You may also remove filler words and discourse fillers',
-  '(uh, um, like, yeah, you know, I mean, sort of, kind of, basically,',
-  'actually) and stutter repeats and abandoned false starts. But NEVER',
-  'delete a meaningful/content word and NEVER change the meaning — delete',
-  'only genuine filler, stutters, and abandoned false-starts; when in doubt,',
-  'keep the word.',
+  'what it replaces. Do NOT remove any words (not even fillers, "um", or',
+  'repeats) and do NOT add words — your output must have exactly the same',
+  'words as the input, except misheard ones replaced. Never rephrase passages',
+  'that already make sense, never summarize, never change numbers or negations.',
   // Spelling propagation: users spell a name/product/technical term out loud
   // to force its spelling. STT gets it right where they spelled it but mishears
   // it elsewhere — so the same term ends up spelled several ways.

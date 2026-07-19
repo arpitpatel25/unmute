@@ -2,6 +2,9 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert'
 import { phoneticKey, segmentSimilarity, applyGatedCorrection } from './correctionGate'
 
+// Cleanup is SUBSTITUTION-ONLY — the gate never removes or inserts words; it
+// only replaces misheard words with sound-alike corrections.
+
 describe('phoneticKey', () => {
   test('sound-alike words map to close keys', () => {
     assert.equal(phoneticKey('worktree'), phoneticKey('worktree'))
@@ -49,16 +52,17 @@ describe('applyGatedCorrection', () => {
     assert.equal(r.text, raw)
   })
 
-  test('accepts small filler deletions', () => {
+  test('rejects filler deletions — the raw words are preserved', () => {
+    // Substitution-only: fillers are faithful to what the user said, so the gate
+    // keeps them rather than risk dropping a real word.
     const raw = 'so um I want um the file'
     const proposed = 'so I want the file'
     const r = applyGatedCorrection(raw, proposed)
-    assert.equal(r.text, proposed)
+    assert.equal(r.text, raw)
+    assert.ok(r.rejectedEdits >= 1)
   })
 
-  test('rejects deletion of a whole clause (over the clause cap)', () => {
-    // 8-word contiguous deletion — larger than MAX_DELETION_WORDS (6), so the
-    // clause guard rejects it even though nothing is locked.
+  test('rejects deletion of a whole clause', () => {
     const raw = 'ship it today and please be concise with the final response'
     const proposed = 'ship it today'
     const r = applyGatedCorrection(raw, proposed)
@@ -128,47 +132,36 @@ describe('applyGatedCorrection', () => {
     assert.equal(r.text, raw)
   })
 
-  // ─── deletion contract: trust-LLM + catastrophe locks (2026-07-19) ──────
-  // The gate does NOT decide which deleted words are filler — that is a
-  // context call ("like" the filler vs. "like" the verb) only the LLM can
-  // make, and the user has chosen to trust it there. So for DELETIONS the
-  // gate accepts any bounded, non-inverting removal and HARD-BLOCKS only the
-  // two catastrophes: meaning INVERSION (deleting a negation or a number) and
-  // CLAUSE-SIZE deletion (a run longer than MAX_DELETION_WORDS = summarization).
-  // This is deliberately NOT the old per-word filler-set gate: that approach
-  // rejected legitimate content-word deletions the LLM proposed (it turned
-  // "can you send this" into a rejected edit) yet still couldn't tell filler
-  // from content — so it was replaced with "trust the LLM, block catastrophes".
-  describe('deletion contract: trust-LLM, block only inversions + clause-size', () => {
-    test('discourse filler ACCEPTED: "like" is dropped', () => {
+  // ─── deletion contract: SUBSTITUTION-ONLY (2026-07-19) ──────────────────
+  // The STT model errs by choosing WRONG words (substitutions), not by adding
+  // extra ones. So the gate NEVER removes a word: fillers/stutters/false-starts
+  // are faithful to what the user said, and removing risks dropping a word they
+  // actually spoke (incl. a negation). Every deletion the LLM proposes is
+  // rejected and the raw words are preserved. Substitution (sound-alike
+  // replacement) is UNCHANGED; insertions stay rejected.
+  describe('deletion contract: substitution-only, every deletion rejected', () => {
+    test('discourse filler REJECTED: "like" is preserved', () => {
       const raw = 'So I like want you to do it'
       const proposed = 'So I want you to do it'
       const r = applyGatedCorrection(raw, proposed)
-      assert.equal(r.text, proposed)
-      assert.ok(r.acceptedEdits >= 1)
-      assert.equal(r.rejectedEdits, 0)
+      assert.equal(r.text, raw) // "like" kept — deletion rejected
+      assert.ok(r.rejectedEdits >= 1)
     })
 
-    test('multiword filler ACCEPTED: "you know" is removed', () => {
+    test('multiword filler REJECTED: "you know" is preserved', () => {
       const raw = 'we can you know start now'
       const proposed = 'we can start now'
       const r = applyGatedCorrection(raw, proposed)
-      assert.equal(r.text, proposed)
-      assert.ok(r.acceptedEdits >= 1)
+      assert.equal(r.text, raw)
+      assert.ok(r.rejectedEdits >= 1)
     })
 
-    test('bounded non-locked deletion ACCEPTED (trust-LLM): the gate no longer re-judges content vs filler', () => {
-      // NEW CONTRACT: a bounded, non-inverting deletion the LLM proposed is
-      // TRUSTED and accepted — the gate does not second-guess whether "you" was
-      // filler here. (The OLD per-word filler-set gate REJECTED exactly this,
-      // which was the "can you send this" → "can send this" content-word hole.
-      // We stop the gate guessing; only inversions and clause-size are blocked.)
+    test('bounded non-locked deletion REJECTED: content word never dropped', () => {
       const raw = 'can you send this'
       const proposed = 'can send this'
       const r = applyGatedCorrection(raw, proposed)
-      assert.equal(r.text, proposed)
-      assert.ok(r.acceptedEdits >= 1)
-      assert.equal(r.rejectedEdits, 0)
+      assert.equal(r.text, raw)
+      assert.ok(r.rejectedEdits >= 1)
     })
 
     test('negation deletion REJECTED (meaning lock): "not" is preserved', () => {
@@ -187,41 +180,36 @@ describe('applyGatedCorrection', () => {
       assert.ok(r.rejectedEdits >= 1)
     })
 
-    test('stutter still accepted: "I I" collapses', () => {
+    test('stutter REJECTED: "I I" is preserved (substitution-only)', () => {
       const raw = 'I I want'
       const proposed = 'I want'
-      const r = applyGatedCorrection(raw, proposed)
-      assert.equal(r.text, proposed)
-      assert.ok(r.acceptedEdits >= 1)
-    })
-
-    test('a filler run within the cap passes but an over-cap clause does not', () => {
-      // A 5-word filler run ("you know what I mean") is within MAX_DELETION_WORDS
-      // (6) and accepted — trusted as filler …
-      const okRaw = 'we can you know what I mean start'
-      const okProp = 'we can start'
-      assert.equal(applyGatedCorrection(okRaw, okProp).text, okProp)
-      // … but a >6-word contiguous deletion is a clause and is rejected.
-      const clauseRaw = 'ship it today and please be concise with the final response'
-      const clauseProp = 'ship it today'
-      assert.equal(applyGatedCorrection(clauseRaw, clauseProp).text, clauseRaw)
-    })
-
-    test('oversized deletion REJECTED (clause guard): a >6-word contiguous drop', () => {
-      const raw = 'please review the document and send it back to me before noon'
-      const proposed = 'please review the document'
-      // Deleted "and send it back to me before noon" = 8 words > 6 → clause guard.
       const r = applyGatedCorrection(raw, proposed)
       assert.equal(r.text, raw)
       assert.ok(r.rejectedEdits >= 1)
     })
 
-    test('non-sound-alike substitution still REJECTED (Job B unchanged)', () => {
+    test('oversized deletion REJECTED: a long contiguous drop', () => {
+      const raw = 'please review the document and send it back to me before noon'
+      const proposed = 'please review the document'
+      const r = applyGatedCorrection(raw, proposed)
+      assert.equal(r.text, raw)
+      assert.ok(r.rejectedEdits >= 1)
+    })
+
+    test('non-sound-alike substitution still REJECTED (substitution gate unchanged)', () => {
       const raw = 'please show up the results'
       const proposed = 'please show it the results'
       const r = applyGatedCorrection(raw, proposed)
       assert.ok(r.text.toLowerCase().split(/\s+/).includes('up'))
       assert.ok(r.rejectedEdits >= 1)
+    })
+
+    test('sound-alike substitution still ACCEPTED (substitution gate unchanged)', () => {
+      const raw = 'create a new world wall tree here'
+      const proposed = 'create a new worktree here'
+      const r = applyGatedCorrection(raw, proposed)
+      assert.ok(r.text.includes('worktree'))
+      assert.ok(r.acceptedEdits >= 1)
     })
   })
 })
