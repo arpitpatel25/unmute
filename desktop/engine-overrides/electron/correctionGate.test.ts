@@ -125,4 +125,75 @@ describe('applyGatedCorrection', () => {
     const r = applyGatedCorrection(raw, proposed)
     assert.equal(r.text, raw)
   })
+
+  // ─── generous-on-deletion, strict-on-substitution (2026-07-19) ──────────
+  describe('deletion generosity (discourse fillers / stutters), meaning locked', () => {
+    test('discourse filler ACCEPTED: "like" is dropped', () => {
+      const raw = 'So I like want you to do it'
+      const proposed = 'So I want you to do it'
+      const r = applyGatedCorrection(raw, proposed)
+      assert.equal(r.text, proposed)
+      assert.ok(r.acceptedEdits >= 1)
+      assert.equal(r.rejectedEdits, 0)
+    })
+
+    test('multiword filler ACCEPTED: "you know" is removed', () => {
+      const raw = 'we can you know start now'
+      const proposed = 'we can start now'
+      const r = applyGatedCorrection(raw, proposed)
+      assert.equal(r.text, proposed)
+      assert.ok(r.acceptedEdits >= 1)
+    })
+
+    test('content-word deletion REJECTED: "red" is kept', () => {
+      const raw = 'I want the red car'
+      const proposed = 'I want the car'
+      const r = applyGatedCorrection(raw, proposed)
+      assert.ok(r.text.split(/\s+/).includes('red'))
+      assert.ok(r.rejectedEdits >= 1)
+    })
+
+    test('negation deletion REJECTED (meaning lock): "not" is preserved', () => {
+      const raw = 'do not send it'
+      const proposed = 'do send it'
+      const r = applyGatedCorrection(raw, proposed)
+      assert.ok(r.text.toLowerCase().split(/\s+/).includes('not'))
+      assert.ok(r.rejectedEdits >= 1)
+    })
+
+    test('number deletion REJECTED (meaning lock): "3" is preserved', () => {
+      const raw = 'send 3 copies'
+      const proposed = 'send copies'
+      const r = applyGatedCorrection(raw, proposed)
+      assert.ok(r.text.split(/\s+/).includes('3'))
+      assert.ok(r.rejectedEdits >= 1)
+    })
+
+    test('stutter still accepted: "I I" collapses', () => {
+      const raw = 'I I want'
+      const proposed = 'I want'
+      const r = applyGatedCorrection(raw, proposed)
+      assert.equal(r.text, proposed)
+      assert.ok(r.acceptedEdits >= 1)
+    })
+
+    test('a 4-word discourse hunk passes but a real clause does not', () => {
+      // A 4-word all-filler hunk ("you know kind of") is allowed …
+      const okRaw = 'we can you know kind of start'
+      const okProp = 'we can start'
+      assert.equal(applyGatedCorrection(okRaw, okProp).text, okProp)
+      // … but a genuine clause (content words) is not.
+      const clauseRaw = 'ship it today and be concise please'
+      const clauseProp = 'ship it today'
+      assert.equal(applyGatedCorrection(clauseRaw, clauseProp).text, clauseRaw)
+    })
+
+    test('non-sound-alike substitution still REJECTED (Job B unchanged)', () => {
+      const raw = 'please show up the results'
+      const proposed = 'please show it the results'
+      const r = applyGatedCorrection(raw, proposed)
+      assert.ok(r.text.toLowerCase().split(/\s+/).includes('up'))
+      assert.ok(r.rejectedEdits >= 1)
+    })
+  })
 })

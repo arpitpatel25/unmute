@@ -25,8 +25,19 @@ export interface GatedCorrection {
 
 const NEGATIONS = new Set(['no', 'not', 'never', 'none', 'nor', "don't", "can't", "won't", "isn't", "aren't", "didn't", "doesn't", "shouldn't", "couldn't", "wouldn't"])
 const FILLERS = new Set(['uh', 'um', 'erm', 'uhm', 'hmm'])
-/** A deletion hunk larger than this many words is a clause, not a filler. */
-const MAX_DELETION_WORDS = 3
+/** Discourse fillers + the component words of common multiword fillers
+ *  ("you know", "I mean", "sort of", "kind of"). Deletion-only Job A: dropping
+ *  any of these cannot change meaning. Deliberately EXCLUDES genuinely
+ *  ambiguous words that routinely carry meaning (so, well, just, right, now,
+ *  then, okay) — those are left to stutter logic and the LLM, never
+ *  blanket-deletable. */
+const DISCOURSE_FILLERS = new Set([
+  'like', 'yeah', 'yep', 'yah', 'basically', 'actually', 'literally', 'honestly', 'anyways', 'anyway',
+  'you', 'know', 'mean', 'sort', 'kind', 'of',
+])
+/** A deletion hunk larger than this many words is a clause, not a filler.
+ *  4 lets "you know what I mean"-scale phrases pass; a real clause cannot. */
+const MAX_DELETION_WORDS = 4
 /** Substitution accepted at or above this phonetic/char similarity. */
 const MIN_SIMILARITY = 0.5
 /** Stricter bar when a number or negation is involved. */
@@ -165,19 +176,26 @@ function isSpellingPropagation(h: { equal: boolean } & Hunk, rawNormSet: Set<str
   )
 }
 
-function isFillerDeletion(tokens: Token[]): boolean {
+/** Job A (remove noise) is generous-but-guarded. A deletion hunk qualifies when
+ *  ALL hold:
+ *   (a) size ≤ MAX_DELETION_WORDS — a clause can never be deleted;
+ *   (b) it contains NO negation and NO number (containsLocked) — deleting one
+ *       would invert/change meaning, the one thing cleanup must never do;
+ *   (c) every token is a filler/discourse-filler OR a stutter-repeat — a word
+ *       duplicated inside the hunk ("so so", "the the") or repeating an adjacent
+ *       KEPT word ("I I" → "I"). Any real content word that is not a
+ *       filler/repeat disqualifies the whole hunk, so the gate can only ever
+ *       delete plausible-noise words. `neighborNorms` carries the norms of the
+ *       kept words immediately bordering the hunk, for the adjacent-repeat case. */
+function isFillerDeletion(tokens: Token[], neighborNorms: Set<string>): boolean {
   if (tokens.length === 0 || tokens.length > MAX_DELETION_WORDS) return false
-  // Pure fillers, or a short stutter run (all words repeat within the hunk
-  // or match an adjacent kept word is too complex — accept short hunks made
-  // of fillers/duplicated words only).
-  const seen = new Set<string>()
-  for (const t of tokens) {
-    if (FILLERS.has(t.norm)) continue
-    if (seen.has(t.norm)) continue
-    seen.add(t.norm)
-  }
-  // A hunk qualifies when every word is a filler or a repeat inside the hunk.
-  return tokens.every((t) => FILLERS.has(t.norm)) || tokens.length <= MAX_DELETION_WORDS && tokens.every((t, idx) => FILLERS.has(t.norm) || tokens.findIndex(o => o.norm === t.norm) < idx || FILLERS.has(t.norm)) && tokens.some((t) => FILLERS.has(t.norm))
+  if (containsLocked(tokens)) return false // never delete a negation or a number
+  return tokens.every((t, idx) => {
+    if (FILLERS.has(t.norm) || DISCOURSE_FILLERS.has(t.norm)) return true
+    if (tokens.some((o, j) => j !== idx && o.norm === t.norm)) return true // stutter within hunk
+    if (neighborNorms.has(t.norm)) return true // stutter against an adjacent kept word
+    return false
+  })
 }
 
 export function applyGatedCorrection(raw: string, proposed: string | null): GatedCorrection {
@@ -205,7 +223,8 @@ export function applyGatedCorrection(raw: string, proposed: string | null): Gate
   const parts: string[] = []
   let accepted = 0
   let rejected = 0
-  for (const h of hunks) {
+  for (let hi = 0; hi < hunks.length; hi++) {
+    const h = hunks[hi]
     if (h.equal) {
       // Same words — take the proposal's surface (it may carry better
       // punctuation/casing; the words themselves are identical).
@@ -220,8 +239,15 @@ export function applyGatedCorrection(raw: string, proposed: string | null): Gate
       continue
     }
     if (h.propTokens.length === 0) {
-      // Deletion — only fillers/stutter-scale removals allowed.
-      if (isFillerDeletion(h.rawTokens)) { accepted++ } else { rejected++; parts.push(rawSeg) }
+      // Deletion — only fillers/stutter-scale removals allowed. Adjacent kept
+      // words (last raw token before, first raw token after) let "I I" → "I"
+      // register as a stutter-repeat.
+      const neighborNorms = new Set<string>()
+      const prev = hunks[hi - 1]?.rawTokens
+      const next = hunks[hi + 1]?.rawTokens
+      if (prev && prev.length) neighborNorms.add(prev[prev.length - 1].norm)
+      if (next && next.length) neighborNorms.add(next[0].norm)
+      if (isFillerDeletion(h.rawTokens, neighborNorms)) { accepted++ } else { rejected++; parts.push(rawSeg) }
       continue
     }
     // Substitution — phonetic gate, with a stricter bar around numbers/negations.

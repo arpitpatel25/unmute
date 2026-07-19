@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert'
-import { buildCleanupMessages, acceptCleanupResult, shouldAttemptCleanup } from './cleanupPass'
+import { buildCleanupMessages, buildCorrectionMessages, acceptCleanupResult, shouldAttemptCleanup } from './cleanupPass'
 
 describe('shouldAttemptCleanup', () => {
   test('skips short utterances (not worth latency)', () => {
@@ -19,6 +19,26 @@ describe('buildCleanupMessages', () => {
     assert.match(m[0].content, /do not add|never add/i)
     assert.equal(m[1].role, 'user')
     assert.equal(m[1].content, 'raw text here')
+  })
+  test('names discourse fillers to remove, keeps the never-add guard', () => {
+    const m = buildCleanupMessages('raw')
+    assert.match(m[0].content, /discourse fillers?/i)
+    assert.match(m[0].content, /you know/i)
+    assert.match(m[0].content, /never add|do not add|only delete|only DELETE/i)
+    assert.match(m[0].content, /do not summarize|never summarize/i)
+  })
+})
+
+describe('buildCorrectionMessages', () => {
+  test('names discourse fillers, keeps sound-alike + number/negation guards', () => {
+    const m = buildCorrectionMessages('raw')
+    assert.equal(m.length, 2)
+    assert.equal(m[0].role, 'system')
+    assert.match(m[0].content, /discourse fillers?/i)
+    assert.match(m[0].content, /you know/i)
+    assert.match(m[0].content, /sound like|misheard/i)      // substitution rule intact
+    assert.match(m[0].content, /numbers or negations|never change numbers/i)
+    assert.equal(m[1].content, 'raw')
   })
 })
 

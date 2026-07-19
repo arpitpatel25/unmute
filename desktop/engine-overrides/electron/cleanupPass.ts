@@ -37,7 +37,8 @@ const REFUSAL_RE = /(i('m| am) sorry.{0,20}(can't|cannot)|i (can't|cannot) (help
 
 const SYSTEM_PROMPT = [
   'You clean up raw speech-to-text dictation. Apply ONLY these edits:',
-  '1. Remove filler words (uh, um, like when used as filler).',
+  '1. Remove filler words and discourse fillers (uh, um, like, yeah, you know,',
+  '   I mean, sort of, kind of, basically, actually) when used as filler.',
   '2. Collapse stutter repeats ("so so", "I I", "the the" → one).',
   '3. Remove false starts the speaker abandoned mid-phrase.',
   'Rules: you may ONLY DELETE words — never add, replace, reorder, or',
@@ -61,8 +62,9 @@ const CORRECTION_PROMPT = [
   'in a NOISY environment, so some words were misheard as similar-sounding',
   'wrong words. Using the context of the whole transcript, replace ONLY',
   'words that were plausibly misheard — every replacement must sound like',
-  'what it replaces. You may also remove filler words (uh, um) and stutter',
-  'repeats.',
+  'what it replaces. You may also remove filler words and discourse fillers',
+  '(uh, um, like, yeah, you know, I mean, sort of, kind of, basically,',
+  'actually) and stutter repeats and abandoned false starts.',
   // Spelling propagation: users spell a name/product/technical term out loud
   // to force its spelling. STT gets it right where they spelled it but mishears
   // it elsewhere — so the same term ends up spelled several ways.
