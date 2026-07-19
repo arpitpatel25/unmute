@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildDistillPrompt, parseDistillOutput, buildSynthesizePrompt, parseSynthesizeOutput } from './curator-prompts.ts'
+import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSynthesizePrompt, parseSynthesizeOutput, parseSynthesizeReasoning } from './curator-prompts.ts'
 
 test('distill prompt: points at trace file, demands JSON at outPath, forbids facts/preferences + app-navigation, asks for methods', () => {
   const p = buildDistillPrompt({ taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedNames: ['pr-review'] })
@@ -74,6 +74,40 @@ test('parseSynthesizeOutput: changeSummary is string[], missing→[], invalid en
   assert.deepEqual(out[0].changeSummary, ['does X', 'why suggested'])
   assert.deepEqual(out[1].changeSummary, [])
   assert.deepEqual(out[2].changeSummary, [])
+})
+
+test('devMode (DEV-ONLY): reasoning ask is present only when devMode=true — prod pays zero extra tokens', () => {
+  const dArgs = { taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedNames: ['pr-review'] }
+  assert.ok(!/reasoning/i.test(buildDistillPrompt(dArgs)))                    // default (undefined) → no ask
+  assert.ok(!/reasoning/i.test(buildDistillPrompt({ ...dArgs, devMode: false })))
+  const dDev = buildDistillPrompt({ ...dArgs, devMode: true })
+  assert.ok(/reasoning/i.test(dDev))                                         // devMode adds the ask
+  assert.ok(/exclude|excluded/i.test(dDev) && /developer diagnostics/i.test(dDev))
+
+  const sArgs = {
+    sweepId: 'sw1',
+    candidates: [{ key: 'k', title: 'T', skeleton: 'S', total: 3, struggle: true, firstSeen: 'a', lastSeen: 'b', occurrences: [] }],
+    curatedIndex: [{ name: 'pr-review', description: 'd', body: '## Goal\nreview' }],
+    rejections: [], feedback: [], outPath: '/out/synth.json',
+  }
+  assert.ok(!/reasoning/i.test(buildSynthesizePrompt(sArgs)))                 // default → no ask
+  assert.ok(!/reasoning/i.test(buildSynthesizePrompt({ ...sArgs, devMode: false })))
+  const sDev = buildSynthesizePrompt({ ...sArgs, devMode: true })
+  assert.ok(/reasoning/i.test(sDev))
+  assert.ok(/developer diagnostics/i.test(sDev))
+})
+
+test('parse*Reasoning (DEV-ONLY): captures a top-level reasoning field when present; undefined otherwise', () => {
+  assert.equal(parseDistillReasoning(null), undefined)
+  assert.equal(parseDistillReasoning('not json'), undefined)
+  assert.equal(parseDistillReasoning(JSON.stringify({ procedures: [] })), undefined)   // absent
+  assert.equal(parseDistillReasoning(JSON.stringify({ procedures: [], reasoning: '   ' })), undefined) // blank → undefined
+  assert.equal(parseDistillReasoning(JSON.stringify({ procedures: [], reasoning: 'excluded X because navigation' })), 'excluded X because navigation')
+  // The main parser is unaffected by a reasoning field (decision path unchanged).
+  assert.equal(parseDistillOutput(JSON.stringify({ procedures: [{ title: 'T', skeleton: 'S', count: 1, struggle: false }], reasoning: 'r' })).length, 1)
+
+  assert.equal(parseSynthesizeReasoning(JSON.stringify({ proposals: [] })), undefined)
+  assert.equal(parseSynthesizeReasoning(JSON.stringify({ proposals: [], reasoning: 'considered all candidates' })), 'considered all candidates')
 })
 
 test('parseSynthesizeOutput: a synth-provided diff field is IGNORED (D19 — only the sweep sets diff)', () => {

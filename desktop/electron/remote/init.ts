@@ -56,6 +56,7 @@ import {
   type CuratorPaths, type Proposal,
 } from './curator-store'
 import { writeSkill } from './curator-writer'
+import { devlog } from './curator-devlog'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -1352,6 +1353,14 @@ const LIBRARIAN_PARKED = true
 export function initRemote(deps: RemoteInitDeps): TaskManager {
   if (manager) return manager
 
+  // DEV-ONLY curator diagnostics gate — set VERY EARLY, before the Curator is
+  // constructed. An UNPACKAGED dev/test run auto-enables comprehensive curator
+  // logging (engine reasoning + full UX timeline). A PACKAGED public build never
+  // sets it, so it stays off (privacy: the logs hold session transcripts +
+  // reasoning) — a developer can still opt in by exporting the var explicitly.
+  // Fail-safe-off: devLogEnabled() checks === '1', so `||=` only fills a blank.
+  if (!app.isPackaged) process.env.UNMUTE_CURATOR_DEVLOG ||= '1'
+
   // Adopt the user's real login-shell PATH FIRST. A Finder/Dock-launched app
   // gets a minimal PATH without ~/.local/bin etc., so `claude` isn't found and
   // sessions die at 0s. Sessions spawn with env: process.env, so this fixes them
@@ -2003,6 +2012,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // Trailing space per preflight: it dismisses the autocomplete menu so the
     // user's Enter submits the typed `/name` as a real skill invocation.
     return manager.typeUnsubmitted(taskId, `/${name} `)
+  })
+  // DEV-ONLY full-UX logging (fire-and-forget). The renderer emits this
+  // UNCONDITIONALLY for every user-facing curator action; the single gate lives
+  // HERE — devlog() drops it when the dev-log gate is off (no file, no dir). So a
+  // packaged public build logs nothing even though the renderer keeps calling.
+  ipcMain.on('curator:devlog', (_e, payload: Record<string, unknown>) => {
+    devlog({ stage: 'ux', ...(payload && typeof payload === 'object' ? payload : {}) })
   })
   // Pin/unpin a skill (the manual override of earned-trust ranking).
   ipcMain.handle('remote:pin-skill', async (_e, name: string, on: boolean) => {

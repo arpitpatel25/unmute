@@ -9,16 +9,20 @@ import type { DistillProcedure, Candidate, Proposal } from './curator-store.ts'
 
 // ── Distill ────────────────────────────────────────────────────────────────
 
-/** Build the distill prompt: one work session's reduced trace → procedures. */
+/** Build the distill prompt: one work session's reduced trace → procedures.
+ *  devMode (DEV-ONLY, default false) asks the model to ALSO emit a top-level
+ *  `reasoning` string for developer diagnostics. Production (devMode false) pays
+ *  zero extra tokens — the ask is simply not present. */
 export function buildDistillPrompt(i: {
   taskId: string
   intent: string
   tracePath: string
   outPath: string
   curatedNames: string[]
+  devMode?: boolean
 }): string {
   const curated = i.curatedNames.length ? i.curatedNames.join(', ') : '(none)'
-  return [
+  const lines = [
     `[Unmute curator — distill] You are analyzing ONE work session's reduced trace.`,
     `Read the trace file at ${i.tracePath} (use the Read tool; read it fully, in chunks if large).`,
     `Session intent: "${i.intent}"`,
@@ -48,7 +52,18 @@ export function buildDistillPrompt(i: {
     `{"procedures":[{"title":"…","skeleton":"…","count":N,"struggle":true|false,`,
     `  "usedCuratedSkill":{"name":"…","friction":"…"}?}]}`,
     `No methods found → {"procedures":[]}. Do nothing else — no other tools than Read and the file write.`,
-  ].join('\n')
+  ]
+  if (i.devMode) {
+    lines.push(
+      ``,
+      `[developer diagnostics] ALSO add a top-level "reasoning" string to that same`,
+      `JSON object: explain what you considered and, importantly, what you EXCLUDED`,
+      `— especially WHY anything was app-navigation-and-not-a-method. This field is`,
+      `for a developer inspecting the run; it does not affect any decision.`,
+      `Shape: {"procedures":[…], "reasoning":"…"}.`,
+    )
+  }
+  return lines.join('\n')
 }
 
 /** Parse the distill output file. [] on null/malformed; drops entries missing title/skeleton. */
@@ -86,6 +101,14 @@ export function parseDistillOutput(raw: string | null): DistillProcedure[] {
   return out
 }
 
+/** DEV-ONLY: capture the top-level `reasoning` string the devMode distill prompt
+ *  asks for. Returns undefined on null/malformed/absent. Kept as a SEPARATE read
+ *  (not folded into parseDistillOutput's return) so the decision path is byte-for-
+ *  byte unchanged; the sweep only LOGS this — it never feeds a decision. */
+export function parseDistillReasoning(raw: string | null): string | undefined {
+  return topLevelReasoning(raw)
+}
+
 // ── Synthesize ───────────────────────────────────────────────────────────────
 
 /** Build the synthesize prompt: candidates + context → proposals. Inherits the
@@ -99,6 +122,9 @@ export function buildSynthesizePrompt(i: {
   rejections: Array<{ name: string; reason?: string }>
   feedback: Array<{ skill: string; note: string }>
   outPath: string
+  // DEV-ONLY: ask the model to ALSO emit a top-level `reasoning` string for
+  // developer diagnostics. Default false — production pays zero extra tokens.
+  devMode?: boolean
 }): string {
   const candidateLines = i.candidates.length
     ? i.candidates
@@ -121,7 +147,7 @@ export function buildSynthesizePrompt(i: {
     ? i.feedback.map((f) => `- ${f.skill}: ${f.note}`).join('\n')
     : '(none)'
 
-  return [
+  const lines = [
     // (1) role + inherited librarian filter block
     `[Unmute curator — synthesize] Sweep ${i.sweepId}. You decide whether the`,
     `accumulated candidates below justify CREATING new skills or UPDATING existing`,
@@ -206,7 +232,18 @@ export function buildSynthesizePrompt(i: {
     `── Posture ──`,
     `Zero proposals is the expected common case. Write {"proposals":[]} and finish`,
     `whenever nothing clears the filter and the admission criteria.`,
-  ].join('\n')
+  ]
+  if (i.devMode) {
+    lines.push(
+      ``,
+      `── Developer diagnostics (dev-only) ──`,
+      `ALSO add a top-level "reasoning" string to the output JSON`,
+      `({"proposals":[…], "reasoning":"…"}). In it, cover EVERY candidate you saw`,
+      `and why you PROPOSED / UPDATED / NO-OP'd / REJECTED each. This is for a`,
+      `developer inspecting the run; it never affects the decision.`,
+    )
+  }
+  return lines.join('\n')
 }
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/
@@ -280,4 +317,26 @@ export function parseSynthesizeOutput(raw: string | null, sweepId: string, now: 
     out.push(prop)
   }
   return out
+}
+
+/** DEV-ONLY: capture the top-level `reasoning` string the devMode synthesize
+ *  prompt asks for. Returns undefined on null/malformed/absent. Separate read
+ *  (not folded into parseSynthesizeOutput) so the decision path is unchanged; the
+ *  sweep only LOGS this — it never feeds a decision. */
+export function parseSynthesizeReasoning(raw: string | null): string | undefined {
+  return topLevelReasoning(raw)
+}
+
+/** Shared: pull a non-empty top-level `reasoning` string out of a stage's raw
+ *  JSON output. Tolerant — undefined on null / non-JSON / missing / non-string. */
+function topLevelReasoning(raw: string | null): string | undefined {
+  if (raw == null) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  const r = (parsed as { reasoning?: unknown } | null)?.reasoning
+  return typeof r === 'string' && r.trim() !== '' ? r : undefined
 }

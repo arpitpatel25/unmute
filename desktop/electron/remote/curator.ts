@@ -35,15 +35,19 @@ import {
   markFeedbackConsumed,
   readTranscriptDelta,
   readProposal,
+  occurrenceKey,
   type CuratorPaths,
 } from './curator-store'
 import {
   buildDistillPrompt,
   parseDistillOutput,
+  parseDistillReasoning,
   buildSynthesizePrompt,
   parseSynthesizeOutput,
+  parseSynthesizeReasoning,
 } from './curator-prompts'
 import { computeTriageMetrics, passesTriage } from './curator-triage'
+import { devLogEnabled, devlog, devlogDump } from './curator-devlog'
 import { unifiedDiff } from './curator-diff'
 import { locateTranscript, reduceTranscript } from './trace-reducer'
 import type { ExecutorFactory, AgentExecutor } from './executor'
@@ -128,17 +132,21 @@ export class Curator {
 
   private async runCheck(): Promise<boolean> {
     const now = this.now()
+    // DEV-ONLY correlation id for this scheduler pass (no-op in prod).
+    const checkId = `chk_${now}`
 
     // Gate 2 — due. Cursor is the authority on when we last swept.
     const cursor = await readCursor(this.paths)
     if (now - cursor.lastSweepAt < this.sweepIntervalMs()) {
       log.debug('checkNow refused: not due', { sinceLast: now - cursor.lastSweepAt, interval: this.sweepIntervalMs() })
+      devlog({ stage: 'scheduler', kind: 'skip-not-due', checkId, sinceLast: now - cursor.lastSweepAt, interval: this.sweepIntervalMs() })
       return false
     }
 
     // Gate 3 — idle-preference. The interval will retry once things quiet down.
     if (this.isBusy()) {
       log.debug('checkNow deferred: app is busy (idle-preference)')
+      devlog({ stage: 'scheduler', kind: 'skip-busy', checkId })
       return false
     }
 
@@ -148,12 +156,18 @@ export class Curator {
     const sessions = await this.listSessions()
     for (const s of sessions) {
       const transcriptPath = await this.locateTranscriptFor(s)
-      if (!transcriptPath) continue
+      if (!transcriptPath) {
+        devlog({ stage: 'scheduler', kind: 'session-skip', checkId, taskId: s.taskId, reason: 'no-transcript' })
+        continue
+      }
 
       const prior = cursor.sessions[s.taskId]
       const fromLine = prior?.lineOffset ?? 0
       const delta = await readTranscriptDelta(transcriptPath, fromLine)
-      if (delta.lines.length === 0) continue   // nothing new since last sweep
+      if (delta.lines.length === 0) {
+        devlog({ stage: 'scheduler', kind: 'session-skip', checkId, taskId: s.taskId, reason: 'no-new-lines', fromLine })
+        continue   // nothing new since last sweep
+      }
 
       // Checkpoint requirement: an explicit checkpoint mark, OR the transcript
       // has been quiescent long enough to be sure the session isn't mid-flight.
@@ -161,15 +175,20 @@ export class Curator {
       const quiescent = checkpointed ? false : await this.isQuiescent(transcriptPath, now)
       if (!checkpointed && !quiescent) {
         log.debug('session skipped: no checkpoint and not yet quiescent', { taskId: s.taskId })
+        devlog({ stage: 'scheduler', kind: 'session-skip', checkId, taskId: s.taskId, reason: 'not-checkpointed-not-quiescent', newLines: delta.lines.length })
         continue
       }
 
       // Triage — is this delta worth an LLM's attention?
-      if (!passesTriage(computeTriageMetrics(delta.lines))) {
+      const metrics = computeTriageMetrics(delta.lines)
+      const passed = passesTriage(metrics)
+      if (!passed) {
         log.debug('session skipped: delta fails triage', { taskId: s.taskId, lines: delta.lines.length })
+        devlog({ stage: 'scheduler', kind: 'session-skip', checkId, taskId: s.taskId, reason: 'fails-triage', checkpointed, metrics })
         continue
       }
 
+      devlog({ stage: 'scheduler', kind: 'session-admit', checkId, taskId: s.taskId, intent: s.intent, checkpointed, fromLine, newLines: delta.lines.length, metrics })
       material.push({ taskId: s.taskId, intent: s.intent, transcriptPath, fromLine, lines: delta.lines, lookback: delta.lookback, newOffset: delta.newOffset })
       if (checkpointed) consumed.push(s.taskId)
     }
@@ -177,15 +196,18 @@ export class Curator {
     // Gate 5 — no material, no LLM.
     if (material.length === 0) {
       log.debug('checkNow refused: no material this cycle')
+      devlog({ stage: 'scheduler', kind: 'skip-no-material', checkId, sessionsScanned: sessions.length })
       return false
     }
 
     log.event('sweep-start', { sessions: material.length })
+    devlog({ stage: 'scheduler', kind: 'sweep-start', checkId, sessions: material.map((m) => m.taskId) })
     await this.runSweep(material)
     // Cursor advancement belongs to the sweep (Task 9), not the scheduler —
     // a failed sweep (thrown above) leaves every delta re-readable next check.
     for (const id of consumed) this.pendingCheckpoints.delete(id)
     log.event('sweep-done', { sessions: material.length })
+    devlog({ stage: 'scheduler', kind: 'sweep-done', checkId, sessions: material.length })
     return true
   }
 
@@ -340,8 +362,14 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
   return async function runSweep(material: MaterialSession[]): Promise<void> {
     const sweepId = `sw_${now()}`
     const workRoot = join(paths.root, 'work', sweepId)
+    // DEV-ONLY: thread the dev-log gate into the prompts so production pays no
+    // extra tokens (the reasoning ask is absent when off). Reads the same single
+    // gate the logger uses — one source of truth.
+    const devMode = devLogEnabled()
     log2.event('sweep-pipeline-start', { sweepId, sessions: material.length })
+    devlog({ stage: 'scheduler', kind: 'pipeline-start', sweepId, sessions: material.map((m) => m.taskId), devMode })
 
+    try {
     // ── 1+2. Reduce + distill each session SEQUENTIALLY (parallelism would
     //         multiply peak subscription quota draw). Collect the procedures.
     const curatedNames = (await curatedIndex()).map((s) => s.name)
@@ -353,10 +381,16 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
       await fs.writeFile(traceFile, reduced)
 
       const outPath = join(workRoot, `distill-${m.taskId}`, 'distill.json')
-      const prompt = buildDistillPrompt({ taskId: m.taskId, intent: m.intent, tracePath: traceFile, outPath, curatedNames })
+      const prompt = buildDistillPrompt({ taskId: m.taskId, intent: m.intent, tracePath: traceFile, outPath, curatedNames, devMode })
       const raw = await runOneShot(`distill-${m.taskId}`, prompt, outPath, dirname(outPath))
       const procs = parseDistillOutput(raw)
+      const reasoning = parseDistillReasoning(raw)   // DEV-ONLY: logged, never a decision input
       log2.event('distilled', { taskId: m.taskId, procedures: procs.length })
+      // DEV-ONLY: the heavy inputs+output for this distill (trace pointer, full
+      // prompt, raw model output) go to a per-stage dump; the structured decision
+      // (methods found + reasoning) goes to the timeline.
+      devlogDump(`${sweepId}-distill-${m.taskId}`, { sweepId, taskId: m.taskId, intent: m.intent, traceFile, reducedChars: reduced.length, prompt, rawOutput: raw })
+      devlog({ stage: 'distill', kind: 'distilled', sweepId, taskId: m.taskId, intent: m.intent, traceFile, procedures: procs.map((p) => ({ title: p.title, count: p.count, struggle: p.struggle, usedCuratedSkill: p.usedCuratedSkill?.name })), reasoning })
       distilled.push({ m, procs, tracePointer: relative(paths.root, traceFile) })
     }
 
@@ -365,7 +399,15 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     let candFile = await readCandidates(paths)
     const at = nowIso()
     for (const { m, procs, tracePointer } of distilled) {
+      const before = candFile.candidates
       candFile = mergeDistill(candFile, procs, { taskId: m.taskId, sweepId, at, tracePointer })
+      // DEV-ONLY: what this session's procedures did to the ledger — new keys,
+      // bumped totals, and whether the repetition (≥2) threshold got crossed.
+      devlog({ stage: 'accumulate', kind: 'merged', sweepId, taskId: m.taskId, merged: procs.map((p) => {
+        const key = occurrenceKey(p.title)
+        const cand = candFile.candidates[key]
+        return { key, title: p.title, wasNew: !before[key], total: cand?.total, struggle: cand?.struggle, crossedRepetition: (cand?.total ?? 0) >= 2 }
+      }) })
     }
     await writeCandidates(paths, candFile)
 
@@ -377,10 +419,15 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     const feedback = (await readFeedback(paths)).filter((f) => !f.consumedBySweep).map((f) => ({ skill: f.skill, note: f.note }))
 
     const synthOut = join(workRoot, 'synth', 'synth.json')
-    const synthPrompt = buildSynthesizePrompt({ sweepId, candidates, curatedIndex: curatedFull, rejections, feedback, outPath: synthOut })
+    const synthPrompt = buildSynthesizePrompt({ sweepId, candidates, curatedIndex: curatedFull, rejections, feedback, outPath: synthOut, devMode })
+    devlog({ stage: 'synthesize', kind: 'synth-inputs', sweepId, candidateCount: candidates.length, librarySize: curatedFull.length, rejections: rejections.length, feedback: feedback.length })
     const synthRaw = await runOneShot('synth', synthPrompt, synthOut, dirname(synthOut))
     const proposals = parseSynthesizeOutput(synthRaw, sweepId, now)
+    const synthReasoning = parseSynthesizeReasoning(synthRaw)   // DEV-ONLY: logged, never a decision input
     log2.event('synthesized', { sweepId, proposals: proposals.length })
+    // DEV-ONLY: dump the full synth inputs + prompt + raw output; log the decision.
+    devlogDump(`${sweepId}-synth`, { sweepId, candidates, curatedIndex: curatedFull.map((s) => ({ name: s.name, description: s.description })), rejections, feedback, prompt: synthPrompt, rawOutput: synthRaw })
+    devlog({ stage: 'synthesize', kind: 'synthesized', sweepId, proposals: proposals.map((p) => ({ id: p.id, kind: p.kind, name: p.draft.name, targetSkill: p.targetSkill, rationale: p.rationale })), reasoning: synthReasoning })
 
     // ── 4b. DETERMINISTIC diff (D19). The raw diff a user sees for an update is a
     //       pure function of the CURRENT on-disk body vs the proposed body —
@@ -405,6 +452,7 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
       const draftPath = join(paths.proposalsDir, prop.id, 'draft.md')
       await fs.mkdir(dirname(draftPath), { recursive: true })
       await fs.writeFile(draftPath, prop.draft.body)
+      devlog({ stage: 'writer', kind: 'proposal-written', sweepId, proposalId: prop.id, proposalKind: prop.kind, name: prop.draft.name, targetSkill: prop.targetSkill, hasDiff: prop.diff !== undefined })
     }
 
     // ── 6. Success bookkeeping — ONLY now. Any throw above (incl. a rate limit)
@@ -419,11 +467,20 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
         lastSweptAt: tNow,
         sweeps: (prev?.sweeps ?? 0) + 1,
       }
+      devlog({ stage: 'scheduler', kind: 'cursor-advance', sweepId, taskId: m.taskId, lineOffset: m.newOffset, sweeps: (prev?.sweeps ?? 0) + 1 })
     }
     cursor.lastSweepAt = tNow
     await writeCursor(paths, cursor)
     await markFeedbackConsumed(paths, sweepId)
     log2.event('sweep-pipeline-done', { sweepId, proposals: proposals.length })
+    devlog({ stage: 'scheduler', kind: 'pipeline-done', sweepId, proposals: proposals.length })
+    } catch (err) {
+      // DEV-ONLY: record the failure (rate-limit backoff or any throw) then
+      // re-throw UNCHANGED — the sweep's cursor-on-success/backoff behavior is
+      // untouched. A RateLimitedError still propagates so the scheduler backs off.
+      devlog({ stage: 'scheduler', kind: err instanceof RateLimitedError ? 'rate-limited' : 'error', sweepId, error: (err as Error).message })
+      throw err
+    }
   }
 }
 

@@ -112,6 +112,15 @@ function withMorph(fn: () => void) {
   else fn()
 }
 
+// DEV-ONLY full-UX logging: emit a structured curator event for every user-facing
+// action. UNCONDITIONAL — main holds the single gate (devLogEnabled) and drops it
+// when off, so a packaged build logs nothing while this keeps calling. Payloads
+// stay small + structured (no giant blobs; the engine side dumps heavy data).
+function curatorDevLog(payload: Record<string, unknown>) {
+  const api = (window as unknown as { electronAPI?: { curatorDevLog?: (p: Record<string, unknown>) => void } }).electronAPI
+  api?.curatorDevLog?.(payload)
+}
+
 // Report the focused session to main — focus IS the voice address (§6.2). When set,
 // a capture routes here deterministically; null restores pure router behaviour.
 function setMainFocus(id: string | null) {
@@ -500,6 +509,11 @@ export default function OrchestrateWall() {
     const i = setInterval(load, 5 * 60_000)
     return () => clearInterval(i)
   }, [])
+  // DEV-ONLY: SUGGESTIONS surfaced — log the pending-proposal list + count each
+  // time it changes, so the log shows exactly what the user was offered and when.
+  useEffect(() => {
+    curatorDevLog({ kind: 'suggestions-surfaced', count: proposals.length, proposals: proposals.map((p) => ({ id: p.id, kind: p.kind, name: p.draft.name })) })
+  }, [proposals])
   const togglePinSkill = useCallback((name: string, on: boolean) => {
     const api = (window as unknown as { electronAPI?: { remotePinSkill?: (n: string, on: boolean) => Promise<boolean>; remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean }>> } }).electronAPI
     void api?.remotePinSkill?.(name, on).then(() => api?.remoteListSkills?.().then((s) => setSkills(s ?? [])))
@@ -508,6 +522,7 @@ export default function OrchestrateWall() {
   // input. NEVER auto-submits — the user presses Enter. Only wired when a task
   // terminal is actually open (see openTerminalTaskId), so a stray tap can't misfire.
   const tapSkill = useCallback((taskId: string, name: string) => {
+    curatorDevLog({ kind: 'skill-tap-invoke', skill: name, taskId })
     const api = (window as unknown as { electronAPI?: { curatorTapSkill?: (taskId: string, name: string) => Promise<boolean> } }).electronAPI
     void api?.curatorTapSkill?.(taskId, name)
   }, [])
@@ -903,7 +918,7 @@ export default function OrchestrateWall() {
                       suggestions <span style={{ color: 'rgba(210,153,34,0.5)' }}>({proposals.length})</span>
                     </div>
                     {proposals.map((p) => (
-                      <button key={p.id} onClick={() => setOpenProposalId(p.id)} className="ow-row"
+                      <button key={p.id} onClick={() => { curatorDevLog({ kind: 'suggestion-tap', proposalId: p.id, proposalKind: p.kind, name: p.draft.name }); setOpenProposalId(p.id) }} className="ow-row"
                         style={{ display: 'flex', alignItems: 'baseline', gap: 7, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', fontFamily: C.mono }}>
                         <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.4, color: 'rgba(210,153,34,0.7)', flex: 'none' }}>{p.kind === 'update' ? 'edit' : 'new'}</span>
                         <span style={{ fontSize: 11.5, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{p.draft.name}</span>

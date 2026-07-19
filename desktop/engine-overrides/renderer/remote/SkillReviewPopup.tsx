@@ -69,6 +69,14 @@ function curatorApi(): CuratorAPI | undefined {
   return (window as unknown as { electronAPI?: CuratorAPI }).electronAPI
 }
 
+// DEV-ONLY full-UX logging: emit a structured curator event for every user-facing
+// action in the review popup. UNCONDITIONAL — main holds the single gate and drops
+// it when off, so a packaged build logs nothing. Payloads stay small + structured.
+function curatorDevLog(payload: Record<string, unknown>) {
+  const api = (window as unknown as { electronAPI?: { curatorDevLog?: (p: Record<string, unknown>) => void } }).electronAPI
+  api?.curatorDevLog?.(payload)
+}
+
 // Terminals speak in ANSI: strip CSI cursor/color codes and OSC title sequences so
 // the scrollback reads as plain text (we render Claude's words, not its redraws).
 function stripAnsi(s: string): string {
@@ -90,7 +98,7 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
     if (!api?.curatorGetProposal) { setLoadError('curator IPC unavailable'); return }
     void api.curatorGetProposal(proposalId).then((p) => {
       if (!live) return
-      if (p) setProposal(p)
+      if (p) { setProposal(p); curatorDevLog({ kind: 'popup-open', proposalId, proposalKind: p.kind, name: p.draft.name }) }
       else setLoadError('proposal not found — it may have been resolved already')
     }).catch(() => { if (live) setLoadError('could not load proposal') })
     return () => { live = false }
@@ -113,6 +121,9 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
     const api = curatorApi()
     const off = api?.curatorOnConvData?.((d) => {
       if (d.id !== proposalId) return
+      // DEV-ONLY: log activity only (chunk length, not content — the content is
+      // the CC session's raw output; keep the UX log small + non-sensitive).
+      curatorDevLog({ kind: 'conversation-activity', proposalId, chars: d.chunk.length })
       setConvText((prev) => prev + stripAnsi(d.chunk))
     })
     return () => { off?.() }
@@ -139,6 +150,7 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
   const sendLine = useCallback(() => {
     const v = input
     if (!v.trim()) return
+    curatorDevLog({ kind: 'conversation-instruction', proposalId, text: v })
     ensureStarted()
     void curatorApi()?.curatorConverseWrite?.(proposalId, v + '\r')
     setInput('')
@@ -153,30 +165,40 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
   const accept = useCallback(() => {
     setBusy(true)
     setAcceptError(null)
+    curatorDevLog({ kind: 'accept-click', proposalId })
     const api = curatorApi()
     if (!api?.curatorAccept) { setBusy(false); setAcceptError('curator IPC unavailable'); return }
     void api.curatorAccept(proposalId).then((res) => {
-      if (res?.ok) { onClose(); return }
+      if (res?.ok) { curatorDevLog({ kind: 'accept-result', proposalId, ok: true }); onClose(); return }
       // Failure keeps the popup open and shows the message inline (e.g. a name
       // collision → the user should discuss a rename, not lose their place).
       const raw = res?.error || 'could not accept — try again'
+      curatorDevLog({ kind: 'accept-result', proposalId, ok: false, error: raw })
       setAcceptError(/exist|collision|taken/i.test(raw) ? `${raw} — discuss a rename` : raw)
       setBusy(false)
-    }).catch(() => { setAcceptError('could not accept — try again'); setBusy(false) })
+    }).catch(() => { curatorDevLog({ kind: 'accept-result', proposalId, ok: false, error: 'threw' }); setAcceptError('could not accept — try again'); setBusy(false) })
   }, [proposalId, onClose])
 
   const reject = useCallback(() => {
     setBusy(true)
     const reason = rejectReason.trim() || undefined
+    curatorDevLog({ kind: 'reject-click', proposalId, reason })
     void curatorApi()?.curatorReject?.(proposalId, reason).finally(() => onClose())
   }, [proposalId, rejectReason, onClose])
 
+  // Cancel/close (proposal stays pending) — distinct from accept/reject, which
+  // resolve it. DEV-ONLY log so the timeline shows the user backed out.
+  const cancel = useCallback(() => {
+    curatorDevLog({ kind: 'popup-cancel', proposalId })
+    onClose()
+  }, [proposalId, onClose])
+
   // Esc anywhere = Cancel (proposal stays pending). Inputs stopPropagation on Esc.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cancel() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [cancel])
 
   const kindChip = proposal?.kind === 'update'
     ? { label: 'skill edit', color: AMBER }
@@ -189,7 +211,7 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
   return (
     // Scrim — click anywhere outside the panel = Cancel.
     <div
-      onClick={onClose}
+      onClick={cancel}
       style={{
         position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
         background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(2px)', WebkitBackdropFilter: 'blur(2px)', fontFamily: C.mono,
@@ -213,7 +235,7 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
           <span style={{ fontSize: 14.5, fontWeight: 700, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {proposal?.draft.name ?? '…'}
           </span>
-          <button onClick={onClose} title="Cancel — keeps the proposal pending"
+          <button onClick={cancel} title="Cancel — keeps the proposal pending"
             style={{ marginLeft: 'auto', flex: 'none', background: 'none', border: `1px solid ${C.border}`, color: C.midText, borderRadius: 5, fontSize: 13, lineHeight: 1, padding: '3px 8px', cursor: 'pointer', fontFamily: C.mono }}>
             ✕
           </button>
@@ -256,7 +278,7 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
                 those edits, so they know them). Accept always writes the CURRENT
                 draft.md on disk regardless of what's shown here. */}
             <div style={{ borderTop: `1px solid ${C.border}`, flex: 'none' }}>
-              <button onClick={() => setShowRaw((v) => !v)}
+              <button onClick={() => setShowRaw((v) => { curatorDevLog({ kind: 'show-raw-toggle', proposalId, show: !v, view: proposal.kind === 'update' ? 'diff' : 'details' }); return !v })}
                 style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontFamily: C.mono, fontSize: 11.5, color: C.midText, padding: '9px 16px' }}>
                 {showRaw ? '▾ ' : '▸ '}{proposal.kind === 'update' ? (showRaw ? 'Hide diff' : 'Show diff') : (showRaw ? 'Hide details' : 'Show details')}
               </button>
@@ -352,7 +374,7 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
                     Reject
                   </button>
                 )}
-                <button onClick={onClose} disabled={busy}
+                <button onClick={cancel} disabled={busy}
                   style={{ marginLeft: 'auto', fontFamily: C.mono, fontSize: 11.5, color: C.dimText, background: 'none', border: 'none', cursor: 'pointer' }}>
                   cancel — keep pending
                 </button>

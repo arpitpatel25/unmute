@@ -19,7 +19,7 @@ import { promises as fs } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 
-export interface CuratorPaths { root: string; cursor: string; candidates: string; ownership: string; rejections: string; feedback: string; proposalsDir: string; tracesDir: string }
+export interface CuratorPaths { root: string; cursor: string; candidates: string; ownership: string; rejections: string; feedback: string; proposalsDir: string; tracesDir: string; logsDir: string }
 
 export function curatorPaths(baseDir?: string): CuratorPaths {
   const root = baseDir ?? join(homedir(), '.unmute', 'remote', 'curator')
@@ -32,6 +32,9 @@ export function curatorPaths(baseDir?: string): CuratorPaths {
     feedback: join(root, 'feedback.json'),
     proposalsDir: join(root, 'proposals'),
     tracesDir: join(root, 'traces'),
+    // DEV-ONLY diagnostics sink (curator-devlog.ts). Never created unless the
+    // dev-log gate is on — an unpackaged dev run, or an explicit env export.
+    logsDir: join(root, 'logs'),
   }
 }
 

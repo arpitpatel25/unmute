@@ -122,6 +122,11 @@ export const remotePreloadExtensions = {
    *  presses Enter to invoke it). */
   curatorTapSkill: (taskId: string, name: string): Promise<boolean> =>
     ipcRenderer.invoke('curator:tap-skill', taskId, name),
+  /** DEV-ONLY full-UX logging (fire-and-forget). Emit for every user-facing
+   *  curator action; main writes it only when the dev-log gate is on (single
+   *  gate in main — the renderer always calls, a packaged build drops it). */
+  curatorDevLog: (payload: Record<string, unknown>): void =>
+    ipcRenderer.send('curator:devlog', payload),
   /** Subscribe to review-conversation output chunks. Returns an unsubscribe fn. */
   curatorOnConvData: (cb: (d: { id: string; chunk: string }) => void): (() => void) => {
     const handler = (_e: unknown, d: { id: string; chunk: string }) => cb(d)
