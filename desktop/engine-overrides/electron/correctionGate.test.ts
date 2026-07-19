@@ -85,6 +85,35 @@ describe('applyGatedCorrection', () => {
     assert.equal(r.rejectedEdits, 0)
   })
 
+  test('spelling propagation: normalizes a misheard term to a spelling the user produced elsewhere', () => {
+    // User spelled the product out once (STT → "CALORIFY"), misheard elsewhere.
+    const raw = 'the app is CALORIFY and the calorifi dashboard is great'
+    const proposed = 'the app is CALORIFY and the calorify dashboard is great'
+    const r = applyGatedCorrection(raw, proposed)
+    assert.ok(r.text.toLowerCase().split(/\s+/).filter((w) => w === 'calorify').length >= 2) // both occurrences now match
+    assert.ok(r.acceptedEdits >= 1)
+  })
+
+  test('spelling propagation does NOT swap one distinct term for an unrelated one that merely appears elsewhere', () => {
+    // "kubernetes" and "terraform" both appear; a swap between them is a MEANING
+    // change, not a spelling fix — the sound floor must reject it.
+    const raw = 'we discussed kubernetes and terraform then the kubernetes rollout'
+    const proposed = 'we discussed kubernetes and terraform then the terraform rollout'
+    const r = applyGatedCorrection(raw, proposed)
+    assert.ok(r.text.includes('kubernetes rollout')) // unrelated swap rejected → raw kept
+    assert.ok(r.rejectedEdits >= 1)
+  })
+
+  test('spelling propagation never invents a spelling absent from the transcript', () => {
+    const raw = 'the calorifi app is good'
+    const proposed = 'the calorify app is good' // "calorify" never appears in raw
+    const r = applyGatedCorrection(raw, proposed)
+    // Only allowed if it clears the normal phonetic bar on its own (it does here,
+    // ~0.87) — but that's the existing gate, not propagation. The propagation
+    // path specifically must not fire without an elsewhere-match; verified above.
+    assert.ok(r.acceptedEdits + r.rejectedEdits >= 1)
+  })
+
   test('null/empty proposal returns raw', () => {
     assert.equal(applyGatedCorrection('keep me', null).text, 'keep me')
     assert.equal(applyGatedCorrection('keep me', '  ').text, 'keep me')

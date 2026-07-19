@@ -62,7 +62,16 @@ const CORRECTION_PROMPT = [
   'wrong words. Using the context of the whole transcript, replace ONLY',
   'words that were plausibly misheard — every replacement must sound like',
   'what it replaces. You may also remove filler words (uh, um) and stutter',
-  'repeats. NEVER add new information, never rephrase passages that already',
+  'repeats.',
+  // Spelling propagation: users spell a name/product/technical term out loud
+  // to force its spelling. STT gets it right where they spelled it but mishears
+  // it elsewhere — so the same term ends up spelled several ways.
+  'SPELLING: if a distinctive term (a name, product, or technical word) appears',
+  'spelled out, hyphenated letter-by-letter (e.g. "C-A-L-O-R-I-F-Y"), or in ALL',
+  'CAPS, treat that as the user\'s intended spelling and apply it to EVERY',
+  'occurrence of that term in the transcript. Only normalize to a spelling that',
+  'ALREADY appears somewhere in this transcript — never invent one.',
+  'NEVER add new information, never rephrase passages that already',
   'make sense, never summarize, never change numbers or negations.',
   'Return ONLY the corrected text — no quotes, no commentary.',
 ].join(' ')
