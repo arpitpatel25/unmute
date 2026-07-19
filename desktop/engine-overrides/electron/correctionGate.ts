@@ -1,15 +1,19 @@
 // correctionGate — per-edit acceptance for LLM speech-to-text corrections.
 //
-// DESIGN (settled with the user, 2026-07-16): in noisy environments Whisper
+// DESIGN (settled with the user, 2026-07-19): in noisy environments Whisper
 // mishears words ("world wall tree" for "worktree"). An LLM given the whole
 // transcript can often recover the intended words — but an unconstrained
 // LLM corrects toward PLAUSIBILITY, not intent, and on garbled input it
 // invents fluent text the user never said. So: the LLM only PROPOSES.
 // This gate diffs the proposal against the raw transcript and judges each
-// edit individually:
+// edit individually. Cleanup is SUBSTITUTION-ONLY: the STT model errs by
+// choosing WRONG words (substitutions), not by adding extra ones, so the only
+// legitimate correction is REPLACING a misheard word with the right one.
 //   * substitutions  — accepted only if the replacement SOUNDS like what it
 //     replaces (STT errors are sound-alikes; meaning-changes are not)
-//   * deletions      — accepted only if small (fillers/stutters), never a clause
+//   * deletions      — ALWAYS rejected: there is nothing legitimate to remove
+//     (fillers/stutters are faithful to what the user said), and removing
+//     risks dropping a word they actually said, incl. a negation.
 //   * insertions     — always rejected (new content cannot come from noise)
 //   * numbers and negations — locked (a not→now flip passes phonetics but
 //     inverts meaning; the stakes dwarf the win)
@@ -24,9 +28,6 @@ export interface GatedCorrection {
 }
 
 const NEGATIONS = new Set(['no', 'not', 'never', 'none', 'nor', "don't", "can't", "won't", "isn't", "aren't", "didn't", "doesn't", "shouldn't", "couldn't", "wouldn't"])
-const FILLERS = new Set(['uh', 'um', 'erm', 'uhm', 'hmm'])
-/** A deletion hunk larger than this many words is a clause, not a filler. */
-const MAX_DELETION_WORDS = 3
 /** Substitution accepted at or above this phonetic/char similarity. */
 const MIN_SIMILARITY = 0.5
 /** Stricter bar when a number or negation is involved. */
@@ -165,21 +166,6 @@ function isSpellingPropagation(h: { equal: boolean } & Hunk, rawNormSet: Set<str
   )
 }
 
-function isFillerDeletion(tokens: Token[]): boolean {
-  if (tokens.length === 0 || tokens.length > MAX_DELETION_WORDS) return false
-  // Pure fillers, or a short stutter run (all words repeat within the hunk
-  // or match an adjacent kept word is too complex — accept short hunks made
-  // of fillers/duplicated words only).
-  const seen = new Set<string>()
-  for (const t of tokens) {
-    if (FILLERS.has(t.norm)) continue
-    if (seen.has(t.norm)) continue
-    seen.add(t.norm)
-  }
-  // A hunk qualifies when every word is a filler or a repeat inside the hunk.
-  return tokens.every((t) => FILLERS.has(t.norm)) || tokens.length <= MAX_DELETION_WORDS && tokens.every((t, idx) => FILLERS.has(t.norm) || tokens.findIndex(o => o.norm === t.norm) < idx || FILLERS.has(t.norm)) && tokens.some((t) => FILLERS.has(t.norm))
-}
-
 export function applyGatedCorrection(raw: string, proposed: string | null): GatedCorrection {
   const asRaw = (rejected: number): GatedCorrection => ({ text: raw, acceptedEdits: 0, rejectedEdits: rejected })
   if (!proposed) return asRaw(0)
@@ -205,7 +191,8 @@ export function applyGatedCorrection(raw: string, proposed: string | null): Gate
   const parts: string[] = []
   let accepted = 0
   let rejected = 0
-  for (const h of hunks) {
+  for (let hi = 0; hi < hunks.length; hi++) {
+    const h = hunks[hi]
     if (h.equal) {
       // Same words — take the proposal's surface (it may carry better
       // punctuation/casing; the words themselves are identical).
@@ -220,8 +207,11 @@ export function applyGatedCorrection(raw: string, proposed: string | null): Gate
       continue
     }
     if (h.propTokens.length === 0) {
-      // Deletion — only fillers/stutter-scale removals allowed.
-      if (isFillerDeletion(h.rawTokens)) { accepted++ } else { rejected++; parts.push(rawSeg) }
+      // Deletion is never applied: STT errs by mis-hearing words, not by adding
+      // them, so there is nothing legitimate to remove — and removing risks
+      // dropping a word the user actually said (incl. a negation). Substitution-only.
+      rejected++
+      parts.push(rawSeg)
       continue
     }
     // Substitution — phonetic gate, with a stricter bar around numbers/negations.

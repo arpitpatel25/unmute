@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert'
-import { buildCleanupMessages, acceptCleanupResult, shouldAttemptCleanup } from './cleanupPass'
+import { buildCleanupMessages, buildCorrectionMessages, acceptCleanupResult, shouldAttemptCleanup } from './cleanupPass'
 
 describe('shouldAttemptCleanup', () => {
   test('skips short utterances (not worth latency)', () => {
@@ -19,6 +19,29 @@ describe('buildCleanupMessages', () => {
     assert.match(m[0].content, /do not add|never add/i)
     assert.equal(m[1].role, 'user')
     assert.equal(m[1].content, 'raw text here')
+  })
+  test('names discourse fillers to remove, keeps the never-add guard', () => {
+    const m = buildCleanupMessages('raw')
+    assert.match(m[0].content, /discourse fillers?/i)
+    assert.match(m[0].content, /you know/i)
+    assert.match(m[0].content, /never add|do not add|only delete|only DELETE/i)
+    assert.match(m[0].content, /do not summarize|never summarize/i)
+  })
+})
+
+describe('buildCorrectionMessages', () => {
+  // SUBSTITUTION-ONLY: the correction prompt's only job is replacing misheard
+  // words. It must NOT invite removing fillers, and must forbid removals/adds.
+  test('substitution-only: replace misheard words, never remove or add', () => {
+    const m = buildCorrectionMessages('raw')
+    assert.equal(m.length, 2)
+    assert.equal(m[0].role, 'system')
+    assert.match(m[0].content, /sound like|misheard/i)          // substitution rule intact
+    assert.match(m[0].content, /do NOT remove|not remove any words/i) // no deletions
+    assert.match(m[0].content, /do NOT add|not add words/i)     // no insertions
+    assert.match(m[0].content, /numbers or negations|never change numbers/i)
+    assert.doesNotMatch(m[0].content, /discourse fillers?/i)    // no longer invites filler removal
+    assert.equal(m[1].content, 'raw')
   })
 })
 
@@ -58,5 +81,24 @@ describe('structural verbatim guard (2026-07-15 field incident)', () => {
   test('punctuation/case changes alone are accepted (words unchanged)', () => {
     const repunct = raw.replace('slow?', 'slow.').replace('So yeah,', 'so yeah —')
     assert.equal(acceptCleanupResult(raw, repunct), repunct)
+  })
+})
+
+describe('meaning-lock guard (deletion-only can still invert)', () => {
+  test('rejects a deletion-only cleanup that dropped a negation', () => {
+    // Pure deletion, within the keep ratio, but it deletes "not" → inverts.
+    const raw = 'please do not send the final report to the whole team today'
+    const dropped = 'please do send the final report to the whole team today'
+    assert.equal(acceptCleanupResult(raw, dropped), raw)
+  })
+  test('rejects a deletion-only cleanup that dropped a number', () => {
+    const raw = 'please send 3 copies of the signed contract to the client today'
+    const dropped = 'please send copies of the signed contract to the client today'
+    assert.equal(acceptCleanupResult(raw, dropped), raw)
+  })
+  test('still accepts a clean filler-only deletion that keeps negations/numbers', () => {
+    const raw = 'uh so do not send the 3 copies you know today'
+    const cleaned = 'so do not send the 3 copies today'
+    assert.equal(acceptCleanupResult(raw, cleaned), cleaned)
   })
 })
