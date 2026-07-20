@@ -7,7 +7,7 @@
 // capability-gap proxy), skills are task/domain units grouped by domain, and
 // cross-cutting disciplines / app-navigation are excluded.
 
-import type { DistillProcedure, Candidate, Proposal, ProposalDraft } from './curator-store.ts'
+import type { DistillProcedure, Candidate, Proposal, ProposalDraft, ProposalEvidence } from './curator-store.ts'
 import { entryStatus, distinctSessionCount } from './curator-store'
 
 // ── Distill ────────────────────────────────────────────────────────────────
@@ -460,6 +460,35 @@ export function parseSynthesizeOutput(raw: string | null, sweepId: string, now: 
 
     if (!nonEmptyString(e.rationale)) continue
 
+    // NORMALIZE the evidence strip before it reaches the sweep's backfill (which
+    // reads struggle.errors / sessions.length unconditionally) and the popup.
+    // The judge validates only `occurrences`; `struggle` and `sessions` may be
+    // absent or malformed. Default sessions to [] (keeping only well-formed
+    // entries) and struggle to a fully-zeroed object (coercing each numeric,
+    // defaulting absent to 0) so no downstream consumer can throw on them.
+    const coerceNum = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+    const strugRaw = ev.struggle && typeof ev.struggle === 'object' ? (ev.struggle as Record<string, unknown>) : {}
+    const sessionsRaw = Array.isArray(ev.sessions) ? ev.sessions : []
+    const sessions = sessionsRaw.filter(
+      (s): s is ProposalEvidence['sessions'][number] =>
+        !!s && typeof s === 'object' &&
+        typeof (s as Record<string, unknown>).id === 'string' &&
+        typeof (s as Record<string, unknown>).intent === 'string' &&
+        typeof (s as Record<string, unknown>).at === 'string' &&
+        typeof (s as Record<string, unknown>).tracePointer === 'string',
+    )
+    const normalizedEvidence: ProposalEvidence = {
+      occurrences: ev.occurrences,
+      sessions,
+      firstSeen: typeof ev.firstSeen === 'string' ? ev.firstSeen : '',
+      lastSeen: typeof ev.lastSeen === 'string' ? ev.lastSeen : '',
+      struggle: {
+        errors: coerceNum(strugRaw.errors),
+        recoveries: coerceNum(strugRaw.recoveries),
+        wallClockMin: coerceNum(strugRaw.wallClockMin),
+      },
+    }
+
     const index = out.length
     const prop: Proposal = {
       id: `prop_${ts}_${index}`,
@@ -467,7 +496,7 @@ export function parseSynthesizeOutput(raw: string | null, sweepId: string, now: 
       proposedAt: new Date(ts).toISOString(),
       kind,
       draft,
-      evidence: evidence as Proposal['evidence'],
+      evidence: normalizedEvidence,
       rationale: e.rationale as string,
       changeSummary: Array.isArray(e.changeSummary)
         ? e.changeSummary.filter(nonEmptyString)

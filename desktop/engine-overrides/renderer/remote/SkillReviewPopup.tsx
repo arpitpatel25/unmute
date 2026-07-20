@@ -273,7 +273,7 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
             {/* ── Evidence strip: why this earned a review ── */}
             <div style={{ padding: '11px 16px', borderBottom: `1px solid ${C.border}`, flex: 'none', background: C.surface }}>
               <div style={{ fontSize: 11, color: AMBER, fontWeight: 600, letterSpacing: 0.2 }}>
-                seen {proposal.evidence.occurrences}× · {proposal.evidence.sessions.length} session{proposal.evidence.sessions.length === 1 ? '' : 's'} · {proposal.evidence.struggle.wallClockMin}min of work
+                seen {proposal.evidence.occurrences ?? 0}× · {proposal.evidence.sessions?.length ?? 0} session{(proposal.evidence.sessions?.length ?? 0) === 1 ? '' : 's'} · {proposal.evidence.struggle?.wallClockMin ?? 0}min of work
               </div>
             </div>
 

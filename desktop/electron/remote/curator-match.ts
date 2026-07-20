@@ -58,23 +58,31 @@ function tokenize(s: string): Set<string> {
   return out
 }
 
+/** A shortlist entry, carrying the shared-unique-token `score` that ranked it.
+ *  score 0 = zero-overlap padding (no shared tokens) — the combined-shortlist
+ *  union in the sweep drops these so genuine matches are never crowded past the
+ *  cap by another proc's padding. */
+export interface ShortlistEntry { key: string; title: string; skeleton: string; score: number }
+
 /** Cheap, no-LLM ranking so the matcher only sees plausibly-related ledger
  *  entries: score every existing candidate by shared-unique-token count
- *  against `proc`'s title+skeleton, return the top `limit` (default 12). */
+ *  against `proc`'s title+skeleton, return the top `limit` (default 12). Each
+ *  entry carries its `score` (0 = zero-overlap padding) so a caller unioning
+ *  many procs' shortlists can rank by real overlap and drop the padding. */
 export function shortlist(
   file: CandidatesFile,
   proc: DistillProcedure,
   limit = 12,
-): Array<{ key: string; title: string; skeleton: string }> {
+): ShortlistEntry[] {
   const queryTokens = tokenize(`${proc.title} ${proc.skeleton}`)
-  const scored = Object.values(file.candidates).map((c) => {
+  const scored: ShortlistEntry[] = Object.values(file.candidates).map((c) => {
     const candTokens = tokenize(`${c.title} ${c.skeleton}`)
     let shared = 0
     for (const t of queryTokens) if (candTokens.has(t)) shared++
     return { key: c.key, title: c.title, skeleton: c.skeleton, score: shared }
   })
   scored.sort((a, b) => b.score - a.score)
-  return scored.slice(0, limit).map(({ key, title, skeleton }) => ({ key, title, skeleton }))
+  return scored.slice(0, limit)
 }
 
 /** Fold `arr`'s unique elements into `varying`, deduping, without mutating

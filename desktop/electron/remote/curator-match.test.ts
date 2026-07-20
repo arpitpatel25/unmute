@@ -60,6 +60,30 @@ test('shortlist ranks candidates by shared-token overlap and returns the top `li
   assert.equal(top[0].key, 'edit-talking-head-video')
 })
 
+test('shortlist EXPOSES a shared-token score — real matches score >0, zero-overlap padding scores 0 (M5)', () => {
+  // The combined-shortlist union in the sweep relies on this score to drop
+  // zero-overlap padding so a real match is never crowded past the cap.
+  const file: CandidatesFile = {
+    version: 1,
+    candidates: {
+      'real-match': {
+        key: 'real-match', title: 'editing a talking-head video', skeleton: 'trim silence crop vertical add captions',
+        total: 3, struggle: true, firstSeen: 'a', lastSeen: 'a', occurrences: [],
+      },
+      'zero-overlap': {
+        key: 'zero-overlap', title: 'quarterly bookkeeping reconciliation', skeleton: 'reconcile ledgers against statements',
+        total: 1, struggle: false, firstSeen: 'a', lastSeen: 'a', occurrences: [],
+      },
+    },
+  }
+  const proc = { title: 'edit a talking head video', skeleton: 'trim silence and crop vertical', count: 1, struggle: true }
+  const top = shortlist(file, proc, 12)
+  const real = top.find((e) => e.key === 'real-match')
+  const zero = top.find((e) => e.key === 'zero-overlap')
+  assert.ok(real && real.score > 0)       // genuine token overlap
+  assert.equal(zero?.score, 0)            // padding — no shared tokens
+})
+
 test('shortlist returns all entries when the ledger is smaller than the limit', () => {
   const file: CandidatesFile = {
     version: 1,

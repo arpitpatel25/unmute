@@ -285,6 +285,42 @@ test('parseSynthesizeOutput: retire requires targetSkill but NOT draft.body — 
   assert.equal(emptyBody[0].draft.body, '')
 })
 
+test('parseSynthesizeOutput: NORMALIZES evidence missing struggle/sessions (I2 — backfill/popup read them unconditionally)', () => {
+  // A judge that emits only `occurrences` (no struggle, no sessions) must not
+  // yield a proposal whose evidence.struggle is undefined — the sweep backfill
+  // and the popup both dereference struggle.errors / sessions.length.
+  const out = parseSynthesizeOutput(JSON.stringify({ proposals: [
+    { kind: 'create', draft: { name: 'video-load-premiere', description: 'd', body: 'b' },
+      evidence: { occurrences: 3 }, rationale: 'why' },
+  ] }), 'sw1', () => 1)
+  assert.equal(out.length, 1)
+  assert.deepEqual(out[0].evidence.struggle, { errors: 0, recoveries: 0, wallClockMin: 0 })
+  assert.deepEqual(out[0].evidence.sessions, [])
+  assert.equal(out[0].evidence.occurrences, 3)
+  // firstSeen/lastSeen default to strings (never undefined)
+  assert.equal(typeof out[0].evidence.firstSeen, 'string')
+  assert.equal(typeof out[0].evidence.lastSeen, 'string')
+})
+
+test('parseSynthesizeOutput: coerces numeric struggle fields and drops malformed session entries (I2)', () => {
+  const out = parseSynthesizeOutput(JSON.stringify({ proposals: [
+    { kind: 'create', draft: { name: 'a-skill', description: 'd', body: 'b' },
+      evidence: {
+        occurrences: 2,
+        sessions: [
+          { id: 's1', intent: 'work', at: 't', tracePointer: 'traces/a' },  // well-formed → kept
+          { id: 's2' },                                                      // malformed → dropped
+          'nonsense',                                                        // malformed → dropped
+        ],
+        struggle: { errors: '5', recoveries: 2, wallClockMin: null },        // errors non-numeric, wallClockMin null
+      }, rationale: 'why' },
+  ] }), 'sw1', () => 1)
+  assert.equal(out.length, 1)
+  assert.equal(out[0].evidence.sessions.length, 1)
+  assert.equal(out[0].evidence.sessions[0].id, 's1')
+  assert.deepEqual(out[0].evidence.struggle, { errors: 0, recoveries: 2, wallClockMin: 0 })
+})
+
 // ── Match (Cadence A — semantic matcher) ────────────────────────────────────
 
 test('buildMatchPrompt: references shortlist keys, outPath, and the repeatable-core / variedThisRun instruction', () => {

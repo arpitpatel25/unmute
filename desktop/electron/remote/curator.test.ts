@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Curator, type MaterialSession, makeRunSweep, RateLimitedError, ProposalConversation } from './curator.ts'
-import { curatorPaths, readCursor, writeCursor, readCandidates, writeCandidates, listPendingProposals, writeProposal, appendRejection, type CandidatesFile, type Proposal } from './curator-store.ts'
+import { curatorPaths, readCursor, writeCursor, readCandidates, writeCandidates, listPendingProposals, writeProposal, appendRejection, recordOwnership, type CandidatesFile, type Proposal } from './curator-store.ts'
 import type { AgentExecutor } from './executor'
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'cu-'))
@@ -424,6 +424,72 @@ test('runSweep: rate-limit aborts — cursor NOT advanced, no proposals', async 
   )
   assert.equal((await readCursor(p)).sessions.t1?.lineOffset ?? 0, 0)  // untouched
   assert.equal((await listPendingProposals(p)).length, 0)
+})
+
+test('runSweep: a SYNTH-stage rate limit leaves candidates.json + cursor UNCHANGED — no pre-synth ledger write, no double-count (I1)', async () => {
+  const root = await tmp()
+  const p = curatorPaths(root)
+  // distill + match succeed (write their output files); the synth one-shot trips
+  // the rate-limit sentinel instead of writing. If the sweep persisted the ledger
+  // BEFORE synth, an occurrence for t1 would already be on disk here (and, since
+  // sweepId regenerates next sweep, it would re-append → permanent double-count).
+  const executorFactory = (): AgentExecutor => {
+    let dataCb: (c: string) => void = () => {}
+    return {
+      alive: true,
+      spawn: async () => {},
+      isReady: async () => {},
+      writeStdin: (text: string) => {
+        const m = text.match(/(\/\S+?(?:distill|match|synth)\.json)/)
+        if (!m) return
+        if (m[1].endsWith('synth.json')) { setTimeout(() => dataCb('You have reached your usage limit'), 10); return }
+        const payload = m[1].endsWith('distill.json') ? distillJson : { matches: [] }
+        void (async () => {
+          await fs.mkdir(path.dirname(m[1]), { recursive: true })
+          await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
+        })()
+      },
+      write: () => {}, resize: () => {}, onData: (cb: (c: string) => void) => { dataCb = cb }, kill: () => {},
+    } as unknown as AgentExecutor
+  }
+  const run = makeRunSweep({ executorFactory, paths: p, curatedIndex: async () => [], sessionTimeoutMs: 3_000, pollMs: 20 })
+  await assert.rejects(run(oneMaterial(root)), RateLimitedError)
+  const cands = await readCandidates(p)
+  assert.equal(Object.keys(cands.candidates).length, 0)                 // NOTHING persisted pre-synth
+  assert.equal((await readCursor(p)).sessions.t1?.lineOffset ?? 0, 0)    // cursor not advanced
+  assert.equal((await listPendingProposals(p)).length, 0)
+})
+
+test('runSweep: judge evidence missing struggle/sessions completes without throwing and persists the proposal (I2)', async () => {
+  const root = await tmp()
+  const p = curatorPaths(root)
+  // create carries sourceKeys → exercises the evidence backfill (which reads
+  // ev.struggle.errors / ev.occurrences unconditionally). Evidence lacks both
+  // struggle and sessions — the parse normalization must have supplied them.
+  const synthNoStruggle = { proposals: [
+    { kind: 'create', draft: { name: 'video-load-premiere', description: 'd', body: 'Goal…' },
+      evidence: { occurrences: 2 }, rationale: 'seen', sourceKeys: ['load-video-premiere'] },
+  ] }
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writesWith(synthNoStruggle)), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run(oneMaterial(root))                       // must NOT throw
+  const pending = await listPendingProposals(p)
+  assert.equal(pending.length, 1)
+  assert.deepEqual(pending[0].evidence.sessions, [])
+  assert.equal(pending[0].evidence.struggle.errors, 0)         // no per-occurrence errors in this material → stays 0
+  assert.equal(pending[0].evidence.occurrences, 2)             // backfilled from candidate.total
+})
+
+test('runSweep: a create for an ALREADY-OWNED skill name is pre-filtered (M3 — would only dead-end at accept with a collision)', async () => {
+  const root = await tmp()
+  const p = curatorPaths(root)
+  await recordOwnership(p, 'video-load-premiere', 'hash', 'x')   // we already own this name
+  const synthOwnedCreate = { proposals: [
+    { kind: 'create', draft: { name: 'video-load-premiere', description: 'd', body: 'B' }, evidence: evid, rationale: 'seen twice' },
+  ] }
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writesWith(synthOwnedCreate)), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run(oneMaterial(root))
+  const pending = await listPendingProposals(p)
+  assert.equal(pending.find((x) => x.kind === 'create' && x.draft.name === 'video-load-premiere'), undefined)   // dropped, never persisted
 })
 
 // ── Task 10: the review popup's conversation backend ─────────────────────────

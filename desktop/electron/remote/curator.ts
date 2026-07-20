@@ -35,6 +35,8 @@ import {
   markFeedbackConsumed,
   readTranscriptDelta,
   readProposal,
+  readOwnership,
+  ownedSkillNames,
   occurrenceKey,
   pruneTraces,
   type CuratorPaths,
@@ -426,13 +428,24 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     //       token-overlap shortlist, deduped by key, capped generously so the
     //       matcher prompt stays bounded.
     let candFile = await readCandidates(paths)
-    const shortlistByKey = new Map<string, { key: string; title: string; skeleton: string }>()
+    // Score-aware union: each proc's shortlist pads up to its limit with
+    // zero-overlap entries; unioning in insertion order let earlier procs'
+    // padding crowd a later proc's genuine match past the 40-cap (a D2 fusion
+    // miss). Drop zero-overlap (score 0) entries, dedup keeping the MAX score,
+    // rank by shared-token score, THEN cap — a real match is never displaced by
+    // another proc's padding.
+    const shortlistByKey = new Map<string, { key: string; title: string; skeleton: string; score: number }>()
     for (const { proc } of flat) {
       for (const entry of shortlist(candFile, proc)) {
-        if (!shortlistByKey.has(entry.key)) shortlistByKey.set(entry.key, entry)
+        if (entry.score <= 0) continue                        // zero-overlap padding — never worth a cap slot
+        const prev = shortlistByKey.get(entry.key)
+        if (!prev || entry.score > prev.score) shortlistByKey.set(entry.key, entry)
       }
     }
-    const ledgerShortlist = Array.from(shortlistByKey.values()).slice(0, 40)
+    const ledgerShortlist = Array.from(shortlistByKey.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 40)
+      .map(({ key, title, skeleton }) => ({ key, title, skeleton }))
 
     //   3c. Exactly ONE matcher session per sweep (quota). It goes through the
     //       same runOneShot watch/RateLimitedError path as distill/synth, so a
@@ -477,11 +490,16 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
         devlog({ stage: 'accumulate', kind: 'divergence-recorded', sweepId, taskId: ctx.taskId, skill: proc.skillObservation.skill, verdict: proc.skillObservation.verdict })
       }
     }
-    await writeCandidates(paths, candFile)
+    // NB (I1): the merged ledger stays IN-MEMORY in `candFile` for the whole
+    // sweep. We do NOT persist it here — a pre-synth write means a synth-stage
+    // throw (the primary RateLimitedError backoff path) leaves candidates.json
+    // mutated while the cursor stays put, so next sweep re-reads the same delta
+    // AND regenerates sweepId → the (taskId, sweepId) idempotency key differs →
+    // a SECOND occurrence is appended, permanently inflating total/struggle. The
+    // single writeCandidates lives in the success-bookkeeping block below.
 
-    // ── 4. Synthesize ONCE over the freshly-merged candidates + context.
-    const merged = await readCandidates(paths)
-    const candidates = Object.values(merged.candidates)
+    // ── 4. Synthesize ONCE over the freshly-merged (in-memory) candidates + context.
+    const candidates = Object.values(candFile.candidates)
     // curatedFull was fetched once at step 1 (reused here for synth + the D19 diff).
     const rejectionsRaw = await readRejections(paths)
     const rejections = rejectionsRaw.map((r) => ({ name: r.name, reason: r.reason }))
@@ -520,10 +538,22 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     //       proposals are name-suppressible; narrow/split/merge/retire target
     //       an EXISTING owned skill (targetSkill), not a would-be new name, so
     //       they are not gated here.
+    // M4: a create ACCEPTED downstream relies on its sourceKeys to link the new
+    // skill back to its ledger entries (init.ts moves them to 'live' with
+    // linkedSkillId) — that link is what later gardening (narrow/split/merge)
+    // reads. LLM-dependent, so not enforced here.
+    const ownedNames = ownedSkillNames(await readOwnership(paths))
     proposals = proposals.filter((prop) => {
       if (prop.kind !== 'create') return true
       if (isSuppressed(prop.draft.name, rejectionsRaw)) {
         devlog({ stage: 'synthesize', kind: 'create-dropped-suppressed', sweepId, proposalId: prop.id, name: prop.draft.name })
+        return false
+      }
+      // A create for a name we ALREADY own would only dead-end at accept with a
+      // 'collision'. Pre-filter it here (same drop as rejected-name suppression);
+      // gardening kinds target an existing owned skill and are unaffected.
+      if (ownedNames.has(prop.draft.name)) {
+        devlog({ stage: 'synthesize', kind: 'create-dropped-owned-name', sweepId, proposalId: prop.id, name: prop.draft.name })
         return false
       }
       return true
@@ -557,7 +587,7 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     for (const prop of proposals) {
       if (!prop.sourceKeys || prop.sourceKeys.length === 0) continue
       const sources = prop.sourceKeys
-        .map((k) => merged.candidates[k])
+        .map((k) => candFile.candidates[k])
         .filter((c): c is Candidate => c !== undefined)
       if (sources.length === 0) continue
       const ev = prop.evidence
@@ -581,22 +611,23 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     }
 
     // ── 5b. Lifecycle: every candidate a proposal drew from (its sourceKeys) is
-    //       now SURFACED to the user for review. Written AFTER proposals persist
-    //       (a throw above leaves the ledger — and thus re-read — untouched). One
-    //       read-modify-write over the whole ledger; proposals without sourceKeys
-    //       are skipped. accept/reject later move these to live/rejected.
+    //       now SURFACED to the user for review. Folded into the SAME in-memory
+    //       candFile (I1) so it lands in the single writeCandidates below,
+    //       alongside the cursor advance. Proposals without sourceKeys are
+    //       skipped. accept/reject later move these to live/rejected.
     const sourced = proposals.filter((prop) => prop.sourceKeys && prop.sourceKeys.length)
-    if (sourced.length) {
-      let ledger = await readCandidates(paths)
-      for (const prop of sourced) {
-        for (const key of prop.sourceKeys!) ledger = setCandidateStatus(ledger, key, 'surfaced')
-      }
-      await writeCandidates(paths, ledger)
+    for (const prop of sourced) {
+      for (const key of prop.sourceKeys!) candFile = setCandidateStatus(candFile, key, 'surfaced')
     }
 
     // ── 6. Success bookkeeping — ONLY now. Any throw above (incl. a rate limit)
-    //       skips this, leaving cursors/lastSweepAt untouched and re-readable.
+    //       skips this, leaving candidates.json / cursors / lastSweepAt untouched
+    //       and every delta re-readable (re-fusing cleanly, no double-count).
     const tNow = now()
+    // The SINGLE ledger write (I1): all mutations (applyMatch fold,
+    // recordSkillObservation, surfaced-status) accumulated in `candFile`. A throw
+    // before this point never touched candidates.json on disk.
+    await writeCandidates(paths, candFile)
     const cursor = await readCursor(paths)
     for (const m of material) {
       const prev = cursor.sessions[m.taskId]
