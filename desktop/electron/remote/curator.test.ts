@@ -155,6 +155,28 @@ test('runSweep: distills, accumulates, synthesizes, writes proposal, advances cu
   assert.equal(cursor.sessions.t1.lineOffset, 1)                       // advanced on success
 })
 
+test('runSweep: a proposal.sourceKeys moves its ledger candidate to status "surfaced"', async () => {
+  const root = await tmp()
+  const p = curatorPaths(root)
+  // distillJson title 'Load video Premiere' → occurrenceKey 'load-video-premiere'.
+  const synthSourced = { proposals: [
+    { kind: 'create', draft: { name: 'video-load-premiere', description: 'd', body: 'Goal…' },
+      evidence: { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 30 } },
+      rationale: 'seen twice', sourceKeys: ['load-video-premiere'] },
+  ] }
+  const writes = async (prompt: string) => {
+    const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
+    if (!m) return
+    const payload = m[1].endsWith('distill.json') ? distillJson : m[1].endsWith('match.json') ? { matches: [] } : synthSourced
+    await fs.mkdir(path.dirname(m[1]), { recursive: true })
+    await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
+  }
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run([{ taskId: 't1', intent: 'video work', transcriptPath: path.join(root, 't1.jsonl'), fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }])
+  const cands = await readCandidates(p)
+  assert.equal(cands.candidates['load-video-premiere'].status, 'surfaced')
+})
+
 test('runSweep: the matcher FUSES two differently-titled procedures from two sessions into ONE ledger entry (semantic match replaces slug-keying)', async () => {
   const root = await tmp()
   const p = curatorPaths(root)
@@ -195,7 +217,7 @@ test('runSweep: update proposal gets a DETERMINISTIC diff from the current body;
   const root = await tmp()
   const p = curatorPaths(root)
   const synthUpdate = { proposals: [
-    { kind: 'update', targetSkill: 'pr-review', draft: { name: 'pr-review', description: 'd', body: 'line1\nline2-new' },
+    { kind: 'narrow', targetSkill: 'pr-review', draft: { name: 'pr-review', description: 'd', body: 'line1\nline2-new' },
       evidence: { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 5 } }, rationale: 'gap found' },
     { kind: 'create', draft: { name: 'brand-new-skill', description: 'd', body: 'B' },
       evidence: { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 5 } }, rationale: 'seen twice' },
@@ -212,7 +234,7 @@ test('runSweep: update proposal gets a DETERMINISTIC diff from the current body;
   const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex, sessionTimeoutMs: 5_000, pollMs: 20 })
   await run([{ taskId: 't1', intent: 'x', transcriptPath: path.join(root, 't1.jsonl'), fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }])
   const pending = await listPendingProposals(p)
-  const upd = pending.find((x) => x.kind === 'update')
+  const upd = pending.find((x) => x.kind === 'narrow')
   const cre = pending.find((x) => x.kind === 'create')
   assert.ok(upd?.diff && upd.diff.includes('-line2') && upd.diff.includes('+line2-new'))   // real diff off the real body
   assert.equal(cre?.diff, undefined)                                                       // create → no previous version → no diff

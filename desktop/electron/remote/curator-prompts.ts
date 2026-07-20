@@ -301,8 +301,12 @@ export function buildSynthesizePrompt(i: {
     ` "evidence":{"occurrences":N,"sessions":[{"id":"…","intent":"…","at":"…","tracePointer":"…"}],`,
     `   "firstSeen":"…","lastSeen":"…","struggle":{"errors":N,"recoveries":N,"wallClockMin":N}},`,
     ` "rationale":"which door (or gardening reason) this clears, and why",`,
+    ` "sourceKeys":["<ledger key>","…"],`,
     ` "targetSkill":"…"?, "triggeringEvidence":["…"]?, "affectedSessions":[{"id":"…","invokedAt":"…"}]?}`,
     `targetSkill is REQUIRED for narrow/split/merge/retire and omitted for create.`,
+    `"sourceKeys" lists the ledger candidate keys this proposal drew from — copy the`,
+    `[key] shown in square brackets on each Pattern-ledger entry above. This links`,
+    `the proposal back to the pattern(s) it graduates so their lifecycle advances.`,
     ``,
     `"changeSummary" is 2-5 short plain-language bullet strings for a HUMAN`,
     `reviewer (no markdown, plain sentences). For a create: what the skill does +`,
@@ -444,6 +448,14 @@ export function parseSynthesizeOutput(raw: string | null, sweepId: string, now: 
     // Any `diff` field the LLM emits is deliberately IGNORED here (it could be fiction).
     if (Array.isArray(e.triggeringEvidence)) prop.triggeringEvidence = e.triggeringEvidence as string[]
     if (Array.isArray(e.affectedSessions)) prop.affectedSessions = e.affectedSessions as Proposal['affectedSessions']
+    // sourceKeys link the proposal back to the ledger candidates it drew from
+    // (their lifecycle then advances to 'surfaced'). Best-effort: keep only
+    // non-empty strings; a malformed/absent value is simply omitted — it must
+    // NEVER drop the proposal.
+    if (Array.isArray(e.sourceKeys)) {
+      const keys = e.sourceKeys.filter(nonEmptyString)
+      if (keys.length) prop.sourceKeys = keys
+    }
 
     out.push(prop)
   }

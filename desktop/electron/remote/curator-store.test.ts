@@ -122,7 +122,28 @@ test('readTranscriptDelta returns lines from offset with lookback and new offset
 
 // --- Task 4: occurrence accumulator ---
 
-import { occurrenceKey, mergeDistill, entryStatus, distinctSessionCount, type CandidatesFile, type Candidate } from './curator-store.ts'
+import { occurrenceKey, mergeDistill, entryStatus, distinctSessionCount, setCandidateStatus, type CandidatesFile, type Candidate } from './curator-store.ts'
+
+const candFile = (over: Partial<Candidate> = {}): CandidatesFile => ({
+  version: 1,
+  candidates: {
+    'load-video': { key: 'load-video', title: 'Load video', skeleton: 's', total: 2, struggle: true, firstSeen: 'a', lastSeen: 'b', occurrences: [], ...over },
+  },
+})
+
+test('setCandidateStatus updates status (+ optional linkedSkillId), is pure, and no-ops on a missing key', () => {
+  const before = candFile()
+  const after = setCandidateStatus(before, 'load-video', 'surfaced')
+  assert.equal(after.candidates['load-video'].status, 'surfaced')
+  assert.equal(before.candidates['load-video'].status, undefined)  // pure — original untouched
+
+  const live = setCandidateStatus(before, 'load-video', 'live', { linkedSkillId: 'video-load' })
+  assert.equal(live.candidates['load-video'].status, 'live')
+  assert.equal(live.candidates['load-video'].linkedSkillId, 'video-load')
+
+  const missing = setCandidateStatus(before, 'not-here', 'rejected')
+  assert.deepEqual(missing, before)  // absent key → no-op (returns an equivalent file)
+})
 
 test('occurrenceKey normalizes stably', () => {
   assert.equal(occurrenceKey('Load video → Premiere via MCP!'), 'load-video-premiere-via-mcp')

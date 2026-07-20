@@ -147,6 +147,24 @@ test('parseSynthesizeOutput: a synth-provided diff field is IGNORED (D19 — onl
   assert.equal(out[0].diff, undefined)   // the LLM's diff is dropped; only the deterministic sweep sets it
 })
 
+test('parseSynthesizeOutput: sourceKeys pass through when a non-empty string array, else omitted', () => {
+  const out = parseSynthesizeOutput(JSON.stringify({ proposals: [
+    { kind: 'create', draft: { name: 'a-skill', description: 'd', body: 'b' },
+      evidence: { occurrences: 1, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 0, recoveries: 0, wallClockMin: 1 } },
+      rationale: 'why', sourceKeys: ['load-video', 'other-key', '', 42] },   // '' and 42 filtered out
+    { kind: 'create', draft: { name: 'b-skill', description: 'd', body: 'b' },
+      evidence: { occurrences: 1, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 0, recoveries: 0, wallClockMin: 1 } },
+      rationale: 'why' },                                                    // absent → undefined, proposal survives
+    { kind: 'create', draft: { name: 'c-skill', description: 'd', body: 'b' },
+      evidence: { occurrences: 1, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 0, recoveries: 0, wallClockMin: 1 } },
+      rationale: 'why', sourceKeys: 'not-an-array' },                        // malformed → omitted, proposal survives
+  ] }), 'sw1', () => 1)
+  assert.equal(out.length, 3)
+  assert.deepEqual(out[0].sourceKeys, ['load-video', 'other-key'])
+  assert.equal(out[1].sourceKeys, undefined)
+  assert.equal(out[2].sourceKeys, undefined)
+})
+
 // ── Typed proposal kinds (create/narrow/split/merge/retire) ────────────────
 
 const evidence = { occurrences: 1, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 0, recoveries: 0, wallClockMin: 1 } }

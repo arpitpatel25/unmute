@@ -82,6 +82,20 @@ export interface CandidatesFile { version: 1; candidates: Record<string, Candida
 /** Lifecycle status of a ledger entry, defaulting legacy/undefined entries to 'watched'. */
 export function entryStatus(c: Candidate): EntryStatus { return c.status ?? 'watched' }
 
+/** PURE: return a new CandidatesFile with candidate `key`'s status (and, when
+ *  supplied, linkedSkillId) updated. Never mutates `file`. A key that is absent
+ *  from the ledger is a no-op — the same file shape is returned unchanged. This
+ *  is how a proposal's lifecycle (surfaced → live / rejected) is written back to
+ *  the pattern the proposal was drawn from. No IO — persistence goes through
+ *  writeCandidates. */
+export function setCandidateStatus(file: CandidatesFile, key: string, status: EntryStatus, patch?: Partial<Pick<Candidate, 'linkedSkillId'>>): CandidatesFile {
+  const existing = file.candidates[key]
+  if (!existing) return file // absent key — nothing to transition
+  const updated: Candidate = { ...existing, status }
+  if (patch && patch.linkedSkillId !== undefined) updated.linkedSkillId = patch.linkedSkillId
+  return { version: 1, candidates: { ...file.candidates, [key]: updated } }
+}
+
 /** Number of distinct sessions (taskIds) that have produced an occurrence of this candidate. */
 export function distinctSessionCount(c: Candidate): number {
   return new Set(c.occurrences.map(o => o.taskId)).size
@@ -97,7 +111,7 @@ export interface ProposalEvidence { occurrences: number; sessions: Array<{ id: s
 // one. 'update' is retired from this union — a persisted proposal with the old
 // kind is mapped to 'narrow' at the readProposal load boundary (see below) so
 // every caller only ever sees the new union.
-export interface Proposal { id: string; sweepId: string; proposedAt: string; kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'; draft: ProposalDraft; evidence: ProposalEvidence; rationale: string; changeSummary?: string[]; targetSkill?: string; diff?: string; triggeringEvidence?: string[]; affectedSessions?: Array<{ id: string; invokedAt: string }>; resolution: null | { action: 'accepted' | 'rejected'; at: string; userEdited: boolean; reason?: string } }
+export interface Proposal { id: string; sweepId: string; proposedAt: string; kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'; draft: ProposalDraft; evidence: ProposalEvidence; rationale: string; changeSummary?: string[]; targetSkill?: string; diff?: string; triggeringEvidence?: string[]; affectedSessions?: Array<{ id: string; invokedAt: string }>; sourceKeys?: string[]; resolution: null | { action: 'accepted' | 'rejected'; at: string; userEdited: boolean; reason?: string } }
 
 export interface FeedbackEntry { at: string; skill: string; note: string; consumedBySweep?: string }
 

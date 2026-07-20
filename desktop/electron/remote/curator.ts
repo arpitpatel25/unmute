@@ -28,6 +28,7 @@ import {
   writeCursor,
   readCandidates,
   writeCandidates,
+  setCandidateStatus,
   writeProposal,
   readRejections,
   readFeedback,
@@ -473,16 +474,18 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     devlogDump(`${sweepId}-synth`, { sweepId, candidates, curatedIndex: curatedFull.map((s) => ({ name: s.name, description: s.description })), rejections, feedback, prompt: synthPrompt, rawOutput: synthRaw })
     devlog({ stage: 'synthesize', kind: 'synthesized', sweepId, proposals: proposals.map((p) => ({ id: p.id, kind: p.kind, name: p.draft.name, targetSkill: p.targetSkill, rationale: p.rationale })), reasoning: synthReasoning })
 
-    // ── 4b. DETERMINISTIC diff (D19). The raw diff a user sees for an update is a
-    //       pure function of the CURRENT on-disk body vs the proposed body —
-    //       never LLM-authored, so it can never be plausible fiction. Creates
-    //       have no previous version (the popup shows the full body), so they
-    //       carry no diff. curatedFull already holds every owned skill's body.
+    // ── 4b. DETERMINISTIC diff (D19). The raw diff a user sees for a REWRITE
+    //       (narrow/split/merge — each carries a full replacement body against an
+    //       existing owned skill) is a pure function of the CURRENT on-disk body
+    //       vs the proposed body — never LLM-authored, so it can never be
+    //       plausible fiction. create (no previous version) and retire (no new
+    //       body) carry no diff. curatedFull already holds every owned skill's body.
     const bodyByName = new Map(curatedFull.map((s) => [s.name, s.body]))
+    const REWRITE_KINDS = new Set(['narrow', 'split', 'merge'])
     for (const prop of proposals) {
-      if (prop.kind === 'update' && prop.targetSkill) {
+      if (REWRITE_KINDS.has(prop.kind) && prop.targetSkill) {
         const currentBody = bodyByName.get(prop.targetSkill)
-        // Not found should not happen (an update targets an owned skill); if it
+        // Not found should not happen (a rewrite targets an owned skill); if it
         // does, leave diff undefined rather than diff against a phantom body.
         if (currentBody !== undefined) prop.diff = unifiedDiff(currentBody, prop.draft.body)
       }
@@ -497,6 +500,20 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
       await fs.mkdir(dirname(draftPath), { recursive: true })
       await fs.writeFile(draftPath, prop.draft.body)
       devlog({ stage: 'writer', kind: 'proposal-written', sweepId, proposalId: prop.id, proposalKind: prop.kind, name: prop.draft.name, targetSkill: prop.targetSkill, hasDiff: prop.diff !== undefined })
+    }
+
+    // ── 5b. Lifecycle: every candidate a proposal drew from (its sourceKeys) is
+    //       now SURFACED to the user for review. Written AFTER proposals persist
+    //       (a throw above leaves the ledger — and thus re-read — untouched). One
+    //       read-modify-write over the whole ledger; proposals without sourceKeys
+    //       are skipped. accept/reject later move these to live/rejected.
+    const sourced = proposals.filter((prop) => prop.sourceKeys && prop.sourceKeys.length)
+    if (sourced.length) {
+      let ledger = await readCandidates(paths)
+      for (const prop of sourced) {
+        for (const key of prop.sourceKeys!) ledger = setCandidateStatus(ledger, key, 'surfaced')
+      }
+      await writeCandidates(paths, ledger)
     }
 
     // ── 6. Success bookkeeping — ONLY now. Any throw above (incl. a rate limit)

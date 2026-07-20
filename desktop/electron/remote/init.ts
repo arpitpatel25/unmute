@@ -53,6 +53,7 @@ import { Curator, makeRunSweep, ProposalConversation, type SessionInfo } from '.
 import {
   curatorPaths, readOwnership, ownedSkillNames, appendRejection, appendFeedback,
   resolveProposal, readProposal, listPendingProposals,
+  readCandidates, writeCandidates, setCandidateStatus,
   type CuratorPaths, type Proposal,
 } from './curator-store'
 import { writeSkill } from './curator-writer'
@@ -1966,6 +1967,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     })
     if (res.ok) {
       await resolveProposal(curatorPathsV, id, { action: 'accepted', at: new Date().toISOString(), userEdited })
+      // Lifecycle: the accepted skill is now LIVE. Move every ledger candidate
+      // this proposal drew from to 'live' and link it to the materialized skill.
+      if (proposal.sourceKeys && proposal.sourceKeys.length) {
+        let ledger = await readCandidates(curatorPathsV)
+        for (const key of proposal.sourceKeys) ledger = setCandidateStatus(ledger, key, 'live', { linkedSkillId: proposal.draft.name })
+        await writeCandidates(curatorPathsV, ledger)
+      }
       return { ok: true }
     }
     // Surface the human-readable reason for the popup (collision / invalid-name / io).
@@ -1977,6 +1985,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const at = new Date().toISOString()
     await appendRejection(curatorPathsV, { at, name: proposal.draft.name, reason })
     await resolveProposal(curatorPathsV, id, { action: 'rejected', at, userEdited: false, reason })
+    // Lifecycle: move every ledger candidate this proposal drew from to 'rejected'.
+    if (proposal.sourceKeys && proposal.sourceKeys.length) {
+      let ledger = await readCandidates(curatorPathsV)
+      for (const key of proposal.sourceKeys) ledger = setCandidateStatus(ledger, key, 'rejected')
+      await writeCandidates(curatorPathsV, ledger)
+    }
     return true
   })
   ipcMain.handle('curator:converse-start', async (_e, id: string): Promise<boolean> => {
