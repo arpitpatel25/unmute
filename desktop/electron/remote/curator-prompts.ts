@@ -21,10 +21,12 @@ export function buildDistillPrompt(i: {
   intent: string
   tracePath: string
   outPath: string
-  curatedNames: string[]
+  curatedSkills: Array<{ name: string; description: string }>
   devMode?: boolean
 }): string {
-  const curated = i.curatedNames.length ? i.curatedNames.join(', ') : '(none)'
+  const curated = i.curatedSkills.length
+    ? i.curatedSkills.map((s) => `- ${s.name} — ${s.description}`).join('\n')
+    : '(none)'
   const lines = [
     `[Unmute curator — distill] You are analyzing ONE work session's reduced trace.`,
     `Read the trace file at ${i.tracePath} (use the Read tool; read it fully, in chunks if large).`,
@@ -53,14 +55,26 @@ export function buildDistillPrompt(i: {
     `(brittle, tool-locked — not our job); bare facts or preferences; raw`,
     `coordinates / pixels / tab-ids / one-off values.`,
     ``,
-    `These curated skills already exist: ${curated}. If the trace`,
-    `shows one being invoked, report what happened AROUND the invocation`,
-    `(extra steps appended, corrections, failure) as usedCuratedSkill.`,
+    `The user's skills already in their library (name — description):`,
+    curated,
+    `If the trace shows one being INVOKED, report what happened AROUND the`,
+    `invocation (extra steps appended, corrections, failure) as usedCuratedSkill.`,
+    ``,
+    `MODIFICATION SIGNAL — if the WORK in this trace CORRESPONDS to one of the`,
+    `skills above, add a "skillObservation" to that procedure comparing what you`,
+    `observed against that skill. Report this WHETHER OR NOT the skill was`,
+    `explicitly invoked — the user may do the task BY HAND, and that still counts.`,
+    `  verdict "agree" = the observed approach MATCHES the skill's method.`,
+    `  verdict "diverge" = it DIFFERS from the skill; in "note" say EXACTLY what`,
+    `    differed (a step added/skipped/reordered, a different tool or standard).`,
+    `For "agree", "note" is what matched. Only emit skillObservation when there is a`,
+    `GENUINE correspondence to an existing skill; omit it otherwise.`,
     `Reply ONLY by writing JSON to ${i.outPath} (write ${i.outPath}.tmp then rename).`,
     `In each entry, "skeleton" carries what the work involves and how it was done`,
     `well — the concrete approach, order, standards, and traps:`,
     `{"procedures":[{"title":"…","skeleton":"…","count":N,"struggle":true|false,`,
-    `  "usedCuratedSkill":{"name":"…","friction":"…"}?}]}`,
+    `  "usedCuratedSkill":{"name":"…","friction":"…"}?,`,
+    `  "skillObservation":{"skill":"<existing skill name>","verdict":"agree"|"diverge","note":"…"}?}]}`,
     `Nothing worth capturing → {"procedures":[]}. Do nothing else — no other tools than Read and the file write.`,
   ]
   if (i.devMode) {
@@ -104,6 +118,20 @@ export function parseDistillOutput(raw: string | null): DistillProcedure[] {
       const u = used as Record<string, unknown>
       if (typeof u.name === 'string' && typeof u.friction === 'string') {
         proc.usedCuratedSkill = { name: u.name, friction: u.friction }
+      }
+    }
+    // skillObservation (Constraint 7 modification signal) — read only when fully
+    // well-formed: non-empty skill, verdict ∈ {agree,diverge}, string note. A bad
+    // one is dropped silently; it NEVER drops the whole procedure.
+    const obs = e.skillObservation
+    if (obs && typeof obs === 'object') {
+      const o = obs as Record<string, unknown>
+      if (
+        typeof o.skill === 'string' && o.skill.trim() !== '' &&
+        (o.verdict === 'agree' || o.verdict === 'diverge') &&
+        typeof o.note === 'string'
+      ) {
+        proc.skillObservation = { skill: o.skill, verdict: o.verdict, note: o.note }
       }
     }
     out.push(proc)

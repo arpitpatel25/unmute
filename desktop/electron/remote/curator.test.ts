@@ -155,6 +155,26 @@ test('runSweep: distills, accumulates, synthesizes, writes proposal, advances cu
   assert.equal(cursor.sessions.t1.lineOffset, 1)                       // advanced on success
 })
 
+test('runSweep: passes the existing skills WITH descriptions into the distill prompt (Constraint 7 modification signal)', async () => {
+  const root = await tmp()
+  const p = curatorPaths(root)
+  let distillPrompt = ''
+  const writes = async (prompt: string) => {
+    const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
+    if (!m) return
+    if (m[1].endsWith('distill.json')) distillPrompt = prompt
+    const payload = m[1].endsWith('distill.json') ? distillJson : m[1].endsWith('match.json') ? { matches: [] } : synthJson
+    await fs.mkdir(path.dirname(m[1]), { recursive: true })
+    await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
+  }
+  const curatedIndex = async () => [{ name: 'pr-review', description: 'review a pull request end to end', body: '## Goal\nreview' }]
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex, sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run([{ taskId: 't1', intent: 'video work', transcriptPath: path.join(root, 't1.jsonl'), fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }])
+  assert.ok(distillPrompt.includes('pr-review'))
+  assert.ok(distillPrompt.includes('review a pull request end to end'))   // the description, not just the name
+  assert.ok(/skillObservation/.test(distillPrompt))
+})
+
 test('runSweep: a proposal.sourceKeys moves its ledger candidate to status "surfaced"', async () => {
   const root = await tmp()
   const p = curatorPaths(root)

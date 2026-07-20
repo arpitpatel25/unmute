@@ -184,8 +184,12 @@ export async function writeCandidates(p: CuratorPaths, f: CandidatesFile): Promi
 // re-submitting the same distill report never double-counts.
 
 /** A distilled procedure from one task's transcript, as produced by the LLM
- *  distill pass (Task 5) and consumed by the sweep pipeline (Task 9). */
-export interface DistillProcedure { title: string; skeleton: string; count: number; struggle: boolean; usedCuratedSkill?: { name: string; friction: string } }
+ *  distill pass (Task 5) and consumed by the sweep pipeline (Task 9).
+ *  `skillObservation` (Constraint 7) is the MODIFICATION signal: when this
+ *  procedure's work corresponds to an EXISTING skill — invoked or done by hand —
+ *  the distiller reports whether the observed approach AGREED with or DIVERGED
+ *  from that skill. A later task accumulates it to gate modification proposals. */
+export interface DistillProcedure { title: string; skeleton: string; count: number; struggle: boolean; usedCuratedSkill?: { name: string; friction: string }; skillObservation?: { skill: string; verdict: 'agree' | 'diverge'; note: string } }
 
 /** Stable slug from a procedure title: lowercase, non-alphanumeric runs → '-',
  *  collapsed, trimmed of leading/trailing '-', capped at 60 chars. Two titles

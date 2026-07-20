@@ -378,7 +378,12 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     try {
     // ── 1+2. Reduce + distill each session SEQUENTIALLY (parallelism would
     //         multiply peak subscription quota draw). Collect the procedures.
-    const curatedNames = (await curatedIndex()).map((s) => s.name)
+    // Existing skills WITH descriptions — the distiller compares observed work
+    // against these to emit the agree/diverge modification signal (Constraint 7).
+    // Derived from the SAME curatedIndex() the synth stage uses (called once,
+    // reused below at step 4 as curatedFull).
+    const curatedFull = await curatedIndex()
+    const curatedSkills = curatedFull.map((s) => ({ name: s.name, description: s.description }))
     const distilled: Array<{ m: MaterialSession; procs: ReturnType<typeof parseDistillOutput>; tracePointer: string }> = []
     for (const m of material) {
       const reduced = reduceTranscript(m.lookback.concat(m.lines).join('\n'), { maxChars: 200_000 })
@@ -387,7 +392,7 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
       await fs.writeFile(traceFile, reduced)
 
       const outPath = join(workRoot, `distill-${m.taskId}`, 'distill.json')
-      const prompt = buildDistillPrompt({ taskId: m.taskId, intent: m.intent, tracePath: traceFile, outPath, curatedNames, devMode })
+      const prompt = buildDistillPrompt({ taskId: m.taskId, intent: m.intent, tracePath: traceFile, outPath, curatedSkills, devMode })
       const raw = await runOneShot(`distill-${m.taskId}`, prompt, outPath, dirname(outPath))
       const procs = parseDistillOutput(raw)
       const reasoning = parseDistillReasoning(raw)   // DEV-ONLY: logged, never a decision input
@@ -459,7 +464,7 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     // ── 4. Synthesize ONCE over the freshly-merged candidates + context.
     const merged = await readCandidates(paths)
     const candidates = Object.values(merged.candidates)
-    const curatedFull = await curatedIndex()
+    // curatedFull was fetched once at step 1 (reused here for synth + the D19 diff).
     const rejections = (await readRejections(paths)).map((r) => ({ name: r.name, reason: r.reason }))
     const feedback = (await readFeedback(paths)).filter((f) => !f.consumedBySweep).map((f) => ({ skill: f.skill, note: f.note }))
 

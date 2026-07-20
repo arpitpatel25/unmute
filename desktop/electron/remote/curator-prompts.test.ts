@@ -3,13 +3,32 @@ import assert from 'node:assert/strict'
 import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSynthesizePrompt, parseSynthesizeOutput, parseSynthesizeReasoning, buildMatchPrompt, parseMatchOutput } from './curator-prompts.ts'
 
 test('distill prompt: points at trace file, demands JSON at outPath, forbids facts/preferences + app-navigation, makes struggle the key signal', () => {
-  const p = buildDistillPrompt({ taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedNames: ['pr-review'] })
+  const p = buildDistillPrompt({ taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedSkills: [{ name: 'pr-review', description: 'review a pull request' }] })
   assert.ok(p.includes('/tr/a.txt'))
   assert.ok(p.includes('/out/distill.json'))
   assert.ok(/fact|preference/i.test(p))                           // V4 — bare facts/preferences out of scope
   assert.ok(/struggle/i.test(p) && /MOST IMPORTANT|PRIMARY|key/i.test(p)) // V1 — struggle is the key signal
   assert.ok(/app-navigation|click-path|reach-a-state/i.test(p))   // V4 — app-navigation excluded
   assert.ok(p.includes('pr-review'))                              // curated names for friction spotting
+})
+
+test('distill prompt: renders existing skills WITH descriptions and asks for an agree/diverge skillObservation (Constraint 7)', () => {
+  const p = buildDistillPrompt({
+    taskId: 't1', intent: 'review a PR', tracePath: '/tr/a.txt', outPath: '/out/distill.json',
+    curatedSkills: [
+      { name: 'pr-review', description: 'review a pull request end to end' },
+      { name: 'extract-invoice', description: 'pull structured fields from an invoice PDF' },
+    ],
+  })
+  // Both name AND description render so the model can judge divergence.
+  assert.ok(p.includes('pr-review') && p.includes('review a pull request end to end'))
+  assert.ok(p.includes('extract-invoice') && p.includes('pull structured fields from an invoice PDF'))
+  // The signal itself: an agree/diverge skillObservation, reported invoked-or-not.
+  assert.ok(/skillObservation/.test(p))
+  assert.ok(/agree/i.test(p) && /diverge/i.test(p))
+  assert.ok(/whether or not|invoked or not|by hand/i.test(p))            // reported even when done by hand
+  // The output contract shows the optional skillObservation on a procedure.
+  assert.ok(/"skillObservation"/.test(p))
 })
 
 test('parseDistillOutput: tolerates junk, validates entries', () => {
@@ -21,6 +40,33 @@ test('parseDistillOutput: tolerates junk, validates entries', () => {
   ] }))
   assert.equal(ok.length, 1)
   assert.equal(ok[0].count, 2)
+})
+
+test('parseDistillOutput: reads a valid skillObservation (agree/diverge)', () => {
+  const out = parseDistillOutput(JSON.stringify({ procedures: [
+    { title: 'A', skeleton: 'S', count: 1, struggle: false,
+      skillObservation: { skill: 'pr-review', verdict: 'diverge', note: 'skipped the lockfile check' } },
+    { title: 'B', skeleton: 'S', count: 1, struggle: false,
+      skillObservation: { skill: 'extract-invoice', verdict: 'agree', note: 'same fields, same order' } },
+  ] }))
+  assert.equal(out.length, 2)
+  assert.deepEqual(out[0].skillObservation, { skill: 'pr-review', verdict: 'diverge', note: 'skipped the lockfile check' })
+  assert.deepEqual(out[1].skillObservation, { skill: 'extract-invoice', verdict: 'agree', note: 'same fields, same order' })
+})
+
+test('parseDistillOutput: an invalid skillObservation is dropped WITHOUT dropping the procedure', () => {
+  const out = parseDistillOutput(JSON.stringify({ procedures: [
+    { title: 'bad-verdict', skeleton: 'S', count: 1, struggle: false,
+      skillObservation: { skill: 'pr-review', verdict: 'maybe', note: 'n' } },       // bad verdict
+    { title: 'missing-skill', skeleton: 'S', count: 1, struggle: false,
+      skillObservation: { skill: '', verdict: 'agree', note: 'n' } },                // empty skill
+    { title: 'missing-note', skeleton: 'S', count: 1, struggle: false,
+      skillObservation: { skill: 'pr-review', verdict: 'agree' } },                  // note not a string
+    { title: 'not-object', skeleton: 'S', count: 1, struggle: false,
+      skillObservation: 'nope' },                                                    // not an object
+  ] }))
+  assert.equal(out.length, 4)                          // every procedure survives
+  for (const p of out) assert.equal(p.skillObservation, undefined)   // but the bad observation is dropped
 })
 
 // Anti-drift guard: the Cadence-B judge prompt MUST literally carry the binding
@@ -104,7 +150,7 @@ test('parseSynthesizeOutput: changeSummary is string[], missing→[], invalid en
 })
 
 test('devMode (DEV-ONLY): reasoning ask is present only when devMode=true — prod pays zero extra tokens', () => {
-  const dArgs = { taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedNames: ['pr-review'] }
+  const dArgs = { taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedSkills: [{ name: 'pr-review', description: 'review a pull request' }] }
   assert.ok(!/reasoning/i.test(buildDistillPrompt(dArgs)))                    // default (undefined) → no ask
   assert.ok(!/reasoning/i.test(buildDistillPrompt({ ...dArgs, devMode: false })))
   const dDev = buildDistillPrompt({ ...dArgs, devMode: true })
