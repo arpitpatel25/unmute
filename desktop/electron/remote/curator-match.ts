@@ -12,6 +12,8 @@
 // on a later sweep.
 
 import { createHash } from 'node:crypto'
+import { occurrenceKey, type Candidate, type CandidatesFile, type DistillProcedure, type VarianceMap } from './curator-store.ts'
+import type { MatchDecision } from './curator-prompts.ts'
 
 /** sha256 hex of `${draftName} ${norm}`, where `norm` is `signature`
  *  lowercased, whitespace collapsed to single spaces, and trimmed. Mirrors
@@ -26,4 +28,131 @@ export function suppressionFingerprint(draftName: string, signature: string): st
  *  name, so that's the suppression key — a rejected name never re-surfaces. */
 export function isSuppressed(name: string, rejections: Array<{ at: string; name: string; reason?: string }>): boolean {
   return rejections.some(r => r.name === name)
+}
+
+// ---------------------------------------------------------------------------
+// Retrieval shortlist + apply-match merge (Task 4).
+//
+// The matcher (Task 3's buildMatchPrompt) needs a per-sweep, per-procedure
+// shortlist of ledger entries to judge against — showing it the WHOLE ledger
+// would be unbounded prompt size. `shortlist` is a cheap, no-LLM token-overlap
+// ranking so the matcher only sees plausibly-related entries. `applyMatch`
+// folds one matcher verdict into the ledger, mirroring mergeDistill's
+// occurrence-append idempotency + `total = Σ occurrence counts` exactly, plus
+// variance bookkeeping (constant vs. per-run-varying slots).
+
+const STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'this', 'that', 'into', 'onto', 'over',
+  'under', 'then', 'than', 'when', 'what', 'how', 'are', 'was', 'were', 'has',
+  'have', 'had', 'not', 'but', 'you', 'your', 'its', 'it', 'to', 'of', 'in',
+  'on', 'at', 'by', 'an', 'as', 'is', 'be', 'or', 'via', 'a', 'do', 'does',
+])
+
+/** lowercase, split on non-alphanumerics, drop stopwords and very short (≤2
+ *  char) tokens, return the unique set. */
+function tokenize(s: string): Set<string> {
+  const out = new Set<string>()
+  for (const t of s.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (t.length > 2 && !STOPWORDS.has(t)) out.add(t)
+  }
+  return out
+}
+
+/** Cheap, no-LLM ranking so the matcher only sees plausibly-related ledger
+ *  entries: score every existing candidate by shared-unique-token count
+ *  against `proc`'s title+skeleton, return the top `limit` (default 12). */
+export function shortlist(
+  file: CandidatesFile,
+  proc: DistillProcedure,
+  limit = 12,
+): Array<{ key: string; title: string; skeleton: string }> {
+  const queryTokens = tokenize(`${proc.title} ${proc.skeleton}`)
+  const scored = Object.values(file.candidates).map((c) => {
+    const candTokens = tokenize(`${c.title} ${c.skeleton}`)
+    let shared = 0
+    for (const t of queryTokens) if (candTokens.has(t)) shared++
+    return { key: c.key, title: c.title, skeleton: c.skeleton, score: shared }
+  })
+  scored.sort((a, b) => b.score - a.score)
+  return scored.slice(0, limit).map(({ key, title, skeleton }) => ({ key, title, skeleton }))
+}
+
+/** Fold `arr`'s unique elements into `varying`, deduping, without mutating
+ *  either input. */
+function foldVarying(variance: VarianceMap | undefined, additions: string[]): VarianceMap {
+  const v: VarianceMap = variance
+    ? { constant: variance.constant.slice(), varying: variance.varying.slice() }
+    : { constant: [], varying: [] }
+  for (const a of additions) {
+    if (!v.varying.includes(a)) v.varying.push(a)
+  }
+  return v
+}
+
+/** PURE, no-IO. Fold one matched (or new) procedure into the ledger; returns a
+ *  NEW CandidatesFile (never mutates `file` — mirrors mergeDistill). Occurrence
+ *  append is IDEMPOTENT per (key, taskId, sweepId): a retried sweep re-applying
+ *  the same decision never double-counts `total` or the variance list. */
+export function applyMatch(
+  file: CandidatesFile,
+  proc: DistillProcedure,
+  decision: MatchDecision,
+  ctx: { taskId: string; sweepId: string; at: string; tracePointer: string },
+): CandidatesFile {
+  const candidates: Record<string, Candidate> = {}
+  for (const [k, c] of Object.entries(file.candidates)) {
+    candidates[k] = { ...c, occurrences: c.occurrences.slice() }
+  }
+  const variedThisRun = decision.variedThisRun ?? []
+  const matchedKey = decision.matchedKey && candidates[decision.matchedKey] ? decision.matchedKey : null
+
+  if (matchedKey) {
+    let cand = candidates[matchedKey]
+    cand = { ...cand, occurrences: cand.occurrences.slice() }
+    // Idempotency: skip if this (taskId, sweepId) already contributed an occurrence.
+    if (cand.occurrences.some((o) => o.taskId === ctx.taskId && o.sweepId === ctx.sweepId)) {
+      candidates[matchedKey] = cand
+      return { version: 1, candidates }
+    }
+    cand.occurrences.push({ taskId: ctx.taskId, sweepId: ctx.sweepId, count: proc.count, at: ctx.at, tracePointer: ctx.tracePointer })
+    cand.total = cand.occurrences.reduce((s, o) => s + o.count, 0)
+    cand.struggle = cand.struggle || proc.struggle
+    cand.firstSeen = cand.occurrences.reduce((m, o) => (o.at < m ? o.at : m), cand.firstSeen)
+    cand.lastSeen = cand.occurrences.reduce((m, o) => (o.at > m ? o.at : m), cand.lastSeen)
+    cand.variance = foldVarying(cand.variance, variedThisRun)
+    candidates[matchedKey] = cand
+    return { version: 1, candidates }
+  }
+
+  // matchedKey null or unknown — new (or re-discovered-under-the-same-key) entry.
+  const key = occurrenceKey(proc.title)
+  const existing = candidates[key]
+  const cand: Candidate = existing
+    ? { ...existing, occurrences: existing.occurrences.slice() }
+    : {
+        key,
+        title: proc.title,
+        skeleton: proc.skeleton,
+        total: 0,
+        struggle: false,
+        firstSeen: ctx.at,
+        lastSeen: ctx.at,
+        occurrences: [],
+        status: 'watched',
+        variance: { constant: [], varying: [] },
+      }
+  // Idempotency: skip if this (taskId, sweepId) already contributed an occurrence.
+  if (cand.occurrences.some((o) => o.taskId === ctx.taskId && o.sweepId === ctx.sweepId)) {
+    candidates[key] = cand
+    return { version: 1, candidates }
+  }
+  cand.occurrences.push({ taskId: ctx.taskId, sweepId: ctx.sweepId, count: proc.count, at: ctx.at, tracePointer: ctx.tracePointer })
+  cand.total = cand.occurrences.reduce((s, o) => s + o.count, 0)
+  cand.struggle = cand.struggle || proc.struggle
+  cand.firstSeen = cand.occurrences.reduce((m, o) => (o.at < m ? o.at : m), cand.firstSeen)
+  cand.lastSeen = cand.occurrences.reduce((m, o) => (o.at > m ? o.at : m), cand.lastSeen)
+  if (!cand.status) cand.status = 'watched'
+  cand.variance = foldVarying(cand.variance, variedThisRun)
+  candidates[key] = cand
+  return { version: 1, candidates }
 }
