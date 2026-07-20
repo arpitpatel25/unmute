@@ -2,8 +2,10 @@
 //
 // Pure module: builds the exact one-shot prompts the distill and synthesize
 // sessions receive, and parses/validates the JSON files they write back. No fs,
-// no LLM, no side effects. The synthesize prompt inherits the librarian's
-// battle-tested filter language nearly verbatim (see librarian.ts:163-169).
+// no LLM, no side effects. The prompts implement Curator Operating Theory v2
+// (spec §15, V1–V9): selection is driven by observed STRUGGLE (the free
+// capability-gap proxy), skills are task/domain units grouped by domain, and
+// cross-cutting disciplines / app-navigation are excluded.
 
 import type { DistillProcedure, Candidate, Proposal } from './curator-store.ts'
 
@@ -27,31 +29,38 @@ export function buildDistillPrompt(i: {
     `Read the trace file at ${i.tracePath} (use the Read tool; read it fully, in chunks if large).`,
     `Session intent: "${i.intent}"`,
     ``,
-    `Report every reusable METHOD / WORKFLOW / STANDARD the work demonstrates — a`,
-    `body of domain know-how that makes the agent do a KIND OF WORK the way the`,
-    `user wants it done. For each, report: what KIND OF WORK it accomplishes, the`,
-    `approach / standards / judgment it encodes (the reusable method, not a UI`,
-    `click-path), when it applies, how many separate times it occurred in THIS`,
-    `trace, and whether it involved visible struggle (errors, backtracking,`,
-    `re-derivation). A method qualifies only if it is transferable beyond one`,
-    `app's mechanics, encodes judgment/standards (not just steps-to-a-state), and`,
-    `is recognizable as "my way of doing X" worth deliberately invoking.`,
+    `Your job: find the reusable, recurring pieces of WORK a thoughtful person`,
+    `would want to capture so they never have to figure it out again. For each`,
+    `candidate report:`,
+    `- title: the TASK or kind of work, named plainly the way the USER would say`,
+    `  it (e.g. "editing a talking-head video", "setting up a vendor's MCP`,
+    `  connector", "pulling and summarizing a standup"). Name the WORK, not an`,
+    `  abstract principle.`,
+    `- skeleton: what the work involves and HOW it was done well here — the`,
+    `  concrete approach, order, standards, and any non-obvious trap discovered.`,
+    `- count: how many separate times this kind of work occurred in THIS trace.`,
+    `- struggle: TRUE if the agent visibly STRUGGLED — hit errors, backtracked,`,
+    `  went down a wrong path, re-derived something, or the USER corrected its`,
+    `  approach. This is the MOST IMPORTANT signal: struggle is evidence the model`,
+    `  did not know how to do this well by default. Report it honestly.`,
     ``,
-    `Do NOT report app-navigation, tool-operation paths, UI click-sequences, or`,
-    `"how to reach a state in an app" — those are transient, brittle, tool-locked,`,
-    `and judgment-free; they are NOT skills (they are the librarian's domain).`,
-    `NEVER report bare facts or preferences — they are not methods and are out of`,
-    `scope. NEVER store raw coordinates, pixel positions, tab ids, or one-off`,
-    `values.`,
+    `STRONGLY PREFER candidates with struggle — those are worth capturing. A task`,
+    `the agent did smoothly first try, no errors, no correction, is probably NOT`,
+    `worth a skill (the model already handles it) — omit it or mark struggle:false.`,
+    ``,
+    `Do NOT report app-navigation / UI click-paths / how-to-reach-a-state-in-an-app`,
+    `(brittle, tool-locked — not our job); bare facts or preferences; raw`,
+    `coordinates / pixels / tab-ids / one-off values.`,
+    ``,
     `These curated skills already exist: ${curated}. If the trace`,
     `shows one being invoked, report what happened AROUND the invocation`,
     `(extra steps appended, corrections, failure) as usedCuratedSkill.`,
     `Reply ONLY by writing JSON to ${i.outPath} (write ${i.outPath}.tmp then rename).`,
-    `In each entry, "skeleton" carries the reusable method/approach (what it does,`,
-    `the standards/judgment it encodes, when it applies) — NOT ordered UI steps:`,
+    `In each entry, "skeleton" carries what the work involves and how it was done`,
+    `well — the concrete approach, order, standards, and traps:`,
     `{"procedures":[{"title":"…","skeleton":"…","count":N,"struggle":true|false,`,
     `  "usedCuratedSkill":{"name":"…","friction":"…"}?}]}`,
-    `No methods found → {"procedures":[]}. Do nothing else — no other tools than Read and the file write.`,
+    `Nothing worth capturing → {"procedures":[]}. Do nothing else — no other tools than Read and the file write.`,
   ]
   if (i.devMode) {
     lines.push(
@@ -111,8 +120,9 @@ export function parseDistillReasoning(raw: string | null): string | undefined {
 
 // ── Synthesize ───────────────────────────────────────────────────────────────
 
-/** Build the synthesize prompt: candidates + context → proposals. Inherits the
- *  librarian filter language (librarian.ts:163-169) nearly verbatim. */
+/** Build the synthesize prompt: candidates + context → proposals. Judges on the
+ *  v2 three tests (GAP/TASK/REUSE, spec §15 V5), groups by domain, excludes
+ *  cross-cutting disciplines and app-navigation. */
 export function buildSynthesizePrompt(i: {
   sweepId: string
   candidates: Candidate[]
@@ -148,40 +158,75 @@ export function buildSynthesizePrompt(i: {
     : '(none)'
 
   const lines = [
-    // (1) role + inherited librarian filter block
-    `[Unmute curator — synthesize] Sweep ${i.sweepId}. You decide whether the`,
-    `accumulated candidates below justify CREATING new skills or UPDATING existing`,
-    `ones. You produce PROPOSALS only — a human reviews and applies them.`,
+    // (1) role
+    `[Unmute curator — synthesize] Sweep ${i.sweepId}. From the candidates below,`,
+    `propose a SMALL number of genuinely useful SKILLS for THIS specific user.`,
+    `Proposals only — a human reviews.`,
     ``,
-    `── The filter — what clears the bar to propose (create OR update) ──`,
-    `A SKILL is a durable, transferable METHOD / WORKFLOW / STANDARD / body of`,
-    `domain know-how that makes the agent do a KIND OF WORK the way the user wants`,
-    `it done. Propose ONLY when the candidate is such a method AND it is worth`,
-    `deliberately invoking: transferable beyond one app's mechanics; encodes`,
-    `judgment/standards, not just steps-to-a-state; recognizable as "my way of`,
-    `doing X".`,
-    `Do NOT propose APP-NAVIGATION / tool-operation paths / UI click-sequences /`,
-    `"how to reach a state in an app" — those are transient, brittle, tool-locked,`,
-    `judgment-free, and are NOT skills (they are the librarian's domain). An`,
-    `expensive NAVIGATION does not qualify; only an expensive METHOD does.`,
-    `Everything else — facts, preferences, transient state, mere app-navigation —`,
-    `DROP.`,
-    `The default is NO change. A wrong or excess skill degrades the executor's own intelligence MORE`,
-    `than a missing one; bloat is the enemy. When unsure, DON'T.`,
+    // (2) what a skill is
+    `── What a skill IS ──`,
+    `A skill is a reusable capability for a RECURRING TASK the user does — named`,
+    `the way the user would name that task (extract-invoice, edit-talking-head-`,
+    `video, setup-mcp-connector). It can be small (a specific repeated fetch) or`,
+    `large (a whole workflow). It is SELF-CONTAINED: it bakes in the specifics it`,
+    `needs — which source/account/channel, how to reach it, the format the user`,
+    `wants — because there is no separate profile or memory to lean on. The`,
+    `reusable method/standards live INSIDE the task skill.`,
     ``,
-    // (2) admission criteria (spec D3)
-    `── Admission criteria ──`,
-    `A candidate is admissible only if it is a genuine method (above) AND it clears`,
-    `the bar by EITHER: REPETITION (≥2 total occurrences across sessions), OR a`,
-    `VALUABLE ONE-OFF method that involved visible struggle (errors, backtracking,`,
-    `re-derivation). A one-off that is mere app-navigation does NOT qualify, no`,
-    `matter how expensive. A single frictionless occurrence is NOT admissible.`,
+    // (3) the one bar — three tests (V5)
+    `── The one bar: would THIS user keep it and actually invoke it again? Three`,
+    `tests, ALL must hold ──`,
+    `(1) GAP: would the base model have STRUGGLED without this? A candidate marked`,
+    `    struggle:y is your evidence (errors, backtracking, user correction). If`,
+    `    the model already did it smoothly by default, there is NO gap → NOT a skill.`,
+    `(2) TASK: is it a recognizable TASK a human would name and reach for — not an`,
+    `    abstract principle?`,
+    `(3) REUSE: would this specific user plausibly do it again?`,
+    `Struggle (the GAP) is the PRIMARY signal. Repetition (seen Nx) only STRENGTHENS`,
+    `a struggling candidate — it never qualifies a frictionless one alone.`,
     ``,
-    // (3) candidates
-    `── Candidates (accumulated across sessions) ──`,
+    // (4) what is NOT a skill (V4, V6 — negatives first)
+    `── What is NOT a skill (pass-1 went wrong here — read carefully) ──`,
+    `REJECT, do not propose:`,
+    `• A cross-cutting DISCIPLINE that applies to ALL work, not one task — e.g.`,
+    `  "always verify a change before saving", "read the schema before guessing",`,
+    `  "prove which artifact is running". Good habits, but not tasks you invoke;`,
+    `  they apply everywhere. DROP.`,
+    `• APP-NAVIGATION / how-to-click-through-an-app / how-to-reach-a-state —`,
+    `  brittle, tool-locked. DROP.`,
+    `• A TRIVIAL task the model already nails. No gap → no skill.`,
+    `• A one-off with NO struggle. DROP.`,
+    `Contrastive examples (the DECISION, across professions — learn the boundary):`,
+    `• "extract action items from a call transcript and file them" (recurred;`,
+    `  model kept formatting wrong until corrected) → YES, task skill.`,
+    `• "always double-check numbers before sending" → NO — a discipline, applies`,
+    `  to everything.`,
+    `• "click through Figma's export dialog" → NO — app-navigation.`,
+    `• "summarize this article" (model nailed it first try) → NO — no gap.`,
+    `• "pull my weekly sales figures from the dashboard and format them my way"`,
+    `  (recurred; model kept fetching the wrong range) → YES, self-contained task`,
+    `  skill.`,
+    ``,
+    // (5) group by domain (V3)
+    `── GROUP BY DOMAIN — no slivers ──`,
+    `Cluster candidates of the SAME kind of work into ONE skill, sub-methods as`,
+    `sections of its body (three video-editing candidates → ONE video-editing`,
+    `skill, not three). Separate only if genuinely unrelated. Prefer FEW`,
+    `well-scoped skills over many thin ones.`,
+    ``,
+    // (6) naming (V7)
+    `── Naming ──`,
+    `Name each skill a concrete TASK/domain noun in kebab-case the way a human`,
+    `would (extract-invoice, video-editing, mcp-connector-setup) — NEVER an`,
+    `abstract coined phrase (not "verify-mutations-against-observed-state").`,
+    `description = what it does AND when to use it, phrased to trigger on the`,
+    `user's words.`,
+    ``,
+    // (7) candidates
+    `── Candidates (accumulated across sessions; struggle:y = agent struggled) ──`,
     candidateLines,
     ``,
-    // (4) existing curated index
+    // (8) existing curated index
     `── Existing curated skills (this curator's OWN library) ──`,
     curatedLines,
     `If a candidate OVERLAPS an existing skill, propose kind:"update" against that`,
@@ -189,25 +234,25 @@ export function buildSynthesizePrompt(i: {
     `skill, and NEVER a hand-written diff (the diff is computed deterministically`,
     `elsewhere from your body vs the file on disk).`,
     ``,
-    // (5) rejections
+    // (9) rejections
     `── Previously rejected (never re-offer these or close variants) ──`,
     rejectionLines,
     ``,
-    // (6) user feedback
+    // (10) user feedback
     `── User feedback (first-class evidence for updates) ──`,
     feedbackLines,
     `Feedback on an existing skill is strong evidence to propose an update.`,
     ``,
-    // (7) output contract
+    // (11) output contract
     `── Output contract ──`,
     `Write {"proposals":[…]} to ${i.outPath} atomically (write ${i.outPath}.tmp then rename).`,
     `Each proposal:`,
     `{"kind":"create"|"update",`,
-    ` "draft":{"name":"kebab-case-2-to-4-words","description":"trigger phrasing","body":"full SKILL.md body per template"},`,
+    ` "draft":{"name":"kebab-case-task-noun","description":"what it does + when to use","body":"full SKILL.md body per template"},`,
     ` "changeSummary":["short plain-language bullet","…"],`,
     ` "evidence":{"occurrences":N,"sessions":[{"id":"…","intent":"…","at":"…","tracePointer":"…"}],`,
     `   "firstSeen":"…","lastSeen":"…","struggle":{"errors":N,"recoveries":N,"wallClockMin":N}},`,
-    ` "rationale":"why this clears the filter",`,
+    ` "rationale":"why this clears all three tests",`,
     ` "targetSkill":"…"?, "triggeringEvidence":["…"]?, "affectedSessions":[{"id":"…","invokedAt":"…"}]?}`,
     `kind:"update" MUST include targetSkill AND put the COMPLETE new SKILL.md body`,
     `in draft.body — the full replacement text, not a diff. Do NOT emit a "diff"`,
@@ -219,7 +264,7 @@ export function buildSynthesizePrompt(i: {
     `(e.g. ["Adds a lockfile check before merge","Tightens the description so it`,
     `triggers on 'review my PR'"]).`,
     ``,
-    // (8) SKILL.md body template (spec §5.1)
+    // (12) SKILL.md body template (spec §5.1)
     `── SKILL.md body template (use these headings) ──`,
     `## Goal            — what the skill accomplishes`,
     `## When to use     — the trigger conditions`,
@@ -228,10 +273,11 @@ export function buildSynthesizePrompt(i: {
     `## Verify          — how to know it worked (definition of done)`,
     `## Gotchas         — non-obvious traps discovered (optional)`,
     ``,
-    // (9) closing posture
+    // (13) closing posture
     `── Posture ──`,
-    `Zero proposals is the expected common case. Write {"proposals":[]} and finish`,
-    `whenever nothing clears the filter and the admission criteria.`,
+    `FEW is the goal. Zero is a fine and common answer — write {"proposals":[]} if`,
+    `nothing clears all three tests. A handful of skills a human would genuinely`,
+    `keep beats a long list they'd wade through. When unsure, DON'T.`,
   ]
   if (i.devMode) {
     lines.push(

@@ -2,13 +2,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSynthesizePrompt, parseSynthesizeOutput, parseSynthesizeReasoning } from './curator-prompts.ts'
 
-test('distill prompt: points at trace file, demands JSON at outPath, forbids facts/preferences + app-navigation, asks for methods', () => {
+test('distill prompt: points at trace file, demands JSON at outPath, forbids facts/preferences + app-navigation, makes struggle the key signal', () => {
   const p = buildDistillPrompt({ taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedNames: ['pr-review'] })
   assert.ok(p.includes('/tr/a.txt'))
   assert.ok(p.includes('/out/distill.json'))
-  assert.ok(/never|not/i.test(p) && /fact|preference/i.test(p))   // D4 stated in-prompt
-  assert.ok(/METHOD|WORKFLOW|STANDARD/.test(p))                   // D3 — methods, not procedures
-  assert.ok(/app-navigation|click-sequence|tool-operation/i.test(p)) // D18/D19 — app-navigation excluded
+  assert.ok(/fact|preference/i.test(p))                           // V4 — bare facts/preferences out of scope
+  assert.ok(/struggle/i.test(p) && /MOST IMPORTANT|PRIMARY|key/i.test(p)) // V1 — struggle is the key signal
+  assert.ok(/app-navigation|click-path|reach-a-state/i.test(p))   // V4 — app-navigation excluded
   assert.ok(p.includes('pr-review'))                              // curated names for friction spotting
 })
 
@@ -23,7 +23,7 @@ test('parseDistillOutput: tolerates junk, validates entries', () => {
   assert.equal(ok[0].count, 2)
 })
 
-test('synthesize prompt: method-oriented filter excludes app-navigation, asks for changeSummary + full body, keeps restraint', () => {
+test('synthesize prompt: v2 three tests, disciplines-not-skills exclusion, group-by-domain, task-noun naming, negatives-first examples, changeSummary + full body, restraint', () => {
   const p = buildSynthesizePrompt({
     sweepId: 'sw1',
     candidates: [{ key: 'k', title: 'T', skeleton: 'S', total: 3, struggle: true, firstSeen: 'a', lastSeen: 'b', occurrences: [] }],
@@ -32,12 +32,25 @@ test('synthesize prompt: method-oriented filter excludes app-navigation, asks fo
     feedback: [{ skill: 'pr-review', note: 'misses lockfiles' }],
     outPath: '/out/synth.json',
   })
-  assert.ok(/METHOD|WORKFLOW|STANDARD/.test(p))                    // D3 — target is methods
-  assert.ok(/app-navigation|click-sequence|tool-operation/i.test(p)) // navigation explicitly excluded
-  assert.ok(/default is NO|when unsure, DON'T/i.test(p))           // restraint posture stays
-  assert.ok(/changeSummary/.test(p))                              // D20 plain-language summary
-  assert.ok(/full[^\n]*body|complete[^\n]*body/i.test(p))         // update emits full body
-  assert.ok(!/unified diff of the body/i.test(p))                 // no hand-written diff
+  // V5 — the three tests (GAP / TASK / REUSE)
+  assert.ok(/GAP/.test(p) && /TASK/.test(p) && /REUSE/.test(p))
+  assert.ok(/three tests/i.test(p) && /ALL must hold/i.test(p))
+  // V4 — cross-cutting disciplines are NOT skills, and app-navigation excluded
+  assert.ok(/DISCIPLINE/i.test(p) && /verify a change before saving|applies to ALL work/i.test(p))
+  assert.ok(/app-navigation|click-through-an-app|reach-a-state/i.test(p))
+  // V6 — negatives-first contrastive examples (NO before YES)
+  assert.ok(/Contrastive examples/i.test(p))
+  assert.ok(p.includes('→ NO') && p.includes('→ YES'))
+  // V3 — group by domain, no slivers
+  assert.ok(/GROUP BY DOMAIN/i.test(p) && /ONE skill/i.test(p))
+  // V7 — concrete task/domain noun naming, not abstract coined phrases
+  assert.ok(/task\/domain noun|kebab-case/i.test(p) && /NEVER an\s*\n?\s*abstract coined phrase|abstract coined phrase/i.test(p))
+  // struggle is the primary selection signal (V1)
+  assert.ok(/struggle/i.test(p) && /PRIMARY/i.test(p))
+  assert.ok(/when unsure, DON'T/i.test(p))                        // restraint posture stays
+  assert.ok(/changeSummary/.test(p))                             // D20 plain-language summary
+  assert.ok(/full[^\n]*body|complete[^\n]*body/i.test(p))        // update emits full body
+  assert.ok(!/unified diff of the body/i.test(p))                // no hand-written diff
   assert.ok(p.includes('seen 3x') || p.includes('total: 3'))
   assert.ok(p.includes('too niche'))
   assert.ok(p.includes('misses lockfiles'))
