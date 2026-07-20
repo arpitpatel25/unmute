@@ -92,7 +92,12 @@ export interface OwnershipFile { version: 1; skills: Record<string, SkillOwnersh
 
 export interface ProposalDraft { name: string; description: string; body: string }
 export interface ProposalEvidence { occurrences: number; sessions: Array<{ id: string; intent: string; at: string; tracePointer: string }>; firstSeen: string; lastSeen: string; struggle: { errors: number; recoveries: number; wallClockMin: number } }
-export interface Proposal { id: string; sweepId: string; proposedAt: string; kind: 'create' | 'update'; draft: ProposalDraft; evidence: ProposalEvidence; rationale: string; changeSummary?: string[]; targetSkill?: string; diff?: string; triggeringEvidence?: string[]; affectedSessions?: Array<{ id: string; invokedAt: string }>; resolution: null | { action: 'accepted' | 'rejected'; at: string; userEdited: boolean; reason?: string } }
+// Gardening verbs (Task 6): create graduates a new candidate; narrow/split/merge
+// rewrite an existing owned skill's body (the update-family); retire removes
+// one. 'update' is retired from this union — a persisted proposal with the old
+// kind is mapped to 'narrow' at the readProposal load boundary (see below) so
+// every caller only ever sees the new union.
+export interface Proposal { id: string; sweepId: string; proposedAt: string; kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'; draft: ProposalDraft; evidence: ProposalEvidence; rationale: string; changeSummary?: string[]; targetSkill?: string; diff?: string; triggeringEvidence?: string[]; affectedSessions?: Array<{ id: string; invokedAt: string }>; resolution: null | { action: 'accepted' | 'rejected'; at: string; userEdited: boolean; reason?: string } }
 
 export interface FeedbackEntry { at: string; skill: string; note: string; consumedBySweep?: string }
 
@@ -325,8 +330,17 @@ export async function writeProposal(p: CuratorPaths, prop: Proposal): Promise<vo
   return serialized(() => writeJsonAtomic(proposalFile(p, prop.id), prop))
 }
 
+/** Load boundary for a persisted Proposal: maps the retired `kind:'update'`
+ *  (proposals written before the create/narrow/split/merge/retire rename) to
+ *  its successor `'narrow'`, so every caller past this point only ever sees
+ *  the new union. Read as an untyped record first — a stale on-disk `'update'`
+ *  is not a valid `Proposal['kind']`, so trusting the `Proposal` type here
+ *  would hide the very value this function exists to normalize. */
 export async function readProposal(p: CuratorPaths, id: string): Promise<Proposal | null> {
-  return readJson<Proposal | null>(proposalFile(p, id), null)
+  const raw = await readJson<(Record<string, unknown> & { kind?: unknown }) | null>(proposalFile(p, id), null)
+  if (!raw) return null
+  if (raw.kind === 'update') raw.kind = 'narrow'
+  return raw as unknown as Proposal
 }
 
 export async function listPendingProposals(p: CuratorPaths): Promise<Proposal[]> {

@@ -125,12 +125,82 @@ test('parse*Reasoning (DEV-ONLY): captures a top-level reasoning field when pres
 
 test('parseSynthesizeOutput: a synth-provided diff field is IGNORED (D19 — only the sweep sets diff)', () => {
   const out = parseSynthesizeOutput(JSON.stringify({ proposals: [
-    { kind: 'update', draft: { name: 'a-skill', description: 'd', body: 'new body' },
+    { kind: 'narrow', draft: { name: 'a-skill', description: 'd', body: 'new body' },
       evidence: { occurrences: 1, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 0, recoveries: 0, wallClockMin: 1 } },
       rationale: 'why', targetSkill: 'a-skill', diff: '--- fabricated\n+++ fiction\n+not real' },
   ] }), 'sw1', () => 1)
   assert.equal(out.length, 1)
   assert.equal(out[0].diff, undefined)   // the LLM's diff is dropped; only the deterministic sweep sets it
+})
+
+// ── Typed proposal kinds (create/narrow/split/merge/retire) ────────────────
+
+const evidence = { occurrences: 1, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 0, recoveries: 0, wallClockMin: 1 } }
+
+test('parseSynthesizeOutput: a raw "update" kind from the model is dropped (model is retrained to emit the new kinds; legacy mapping is a read-boundary concern only)', () => {
+  const out = parseSynthesizeOutput(JSON.stringify({ proposals: [
+    { kind: 'update', draft: { name: 'a-skill', description: 'd', body: 'b' }, evidence, rationale: 'why', targetSkill: 'a-skill' },
+  ] }), 'sw1', () => 1)
+  assert.equal(out.length, 0)
+})
+
+test('parseSynthesizeOutput: an unrecognized kind is dropped', () => {
+  const out = parseSynthesizeOutput(JSON.stringify({ proposals: [
+    { kind: 'bogus', draft: { name: 'a-skill', description: 'd', body: 'b' }, evidence, rationale: 'why', targetSkill: 'a-skill' },
+  ] }), 'sw1', () => 1)
+  assert.equal(out.length, 0)
+})
+
+test('parseSynthesizeOutput: create is unchanged — requires valid name/description/body, no targetSkill needed', () => {
+  const out = parseSynthesizeOutput(JSON.stringify({ proposals: [
+    { kind: 'create', draft: { name: 'video-load-premiere', description: 'd', body: 'b' }, evidence, rationale: 'why' },
+  ] }), 'sw1', () => 1)
+  assert.equal(out.length, 1)
+  assert.equal(out[0].kind, 'create')
+  assert.equal(out[0].draft.name, 'video-load-premiere')
+})
+
+for (const kind of ['narrow', 'split', 'merge'] as const) {
+  test(`parseSynthesizeOutput: ${kind} requires targetSkill + a draft with non-empty body — dropped without targetSkill`, () => {
+    const withoutTarget = parseSynthesizeOutput(JSON.stringify({ proposals: [
+      { kind, draft: { name: 'a-skill', description: 'd', body: 'full new body' }, evidence, rationale: 'why' }, // no targetSkill
+    ] }), 'sw1', () => 1)
+    assert.equal(withoutTarget.length, 0)
+
+    const withoutBody = parseSynthesizeOutput(JSON.stringify({ proposals: [
+      { kind, draft: { name: 'a-skill', description: 'd', body: '' }, evidence, rationale: 'why', targetSkill: 'a-skill' }, // empty body
+    ] }), 'sw1', () => 1)
+    assert.equal(withoutBody.length, 0)
+
+    const ok = parseSynthesizeOutput(JSON.stringify({ proposals: [
+      { kind, draft: { name: 'a-skill', description: 'd', body: 'full new body' }, evidence, rationale: 'why', targetSkill: 'a-skill' },
+    ] }), 'sw1', () => 1)
+    assert.equal(ok.length, 1)
+    assert.equal(ok[0].kind, kind)
+    assert.equal(ok[0].targetSkill, 'a-skill')
+    assert.equal(ok[0].draft.body, 'full new body')
+  })
+}
+
+test('parseSynthesizeOutput: retire requires targetSkill but NOT draft.body — accepted with an empty/absent draft', () => {
+  const noTarget = parseSynthesizeOutput(JSON.stringify({ proposals: [
+    { kind: 'retire', evidence, rationale: 'why' }, // no targetSkill → dropped
+  ] }), 'sw1', () => 1)
+  assert.equal(noTarget.length, 0)
+
+  const noDraftAtAll = parseSynthesizeOutput(JSON.stringify({ proposals: [
+    { kind: 'retire', evidence, rationale: 'why', targetSkill: 'stale-skill' }, // draft omitted entirely
+  ] }), 'sw1', () => 1)
+  assert.equal(noDraftAtAll.length, 1)
+  assert.equal(noDraftAtAll[0].kind, 'retire')
+  assert.equal(noDraftAtAll[0].targetSkill, 'stale-skill')
+  assert.equal(noDraftAtAll[0].draft.body, '')
+
+  const emptyBody = parseSynthesizeOutput(JSON.stringify({ proposals: [
+    { kind: 'retire', draft: { name: 'stale-skill', description: '', body: '' }, evidence, rationale: 'why', targetSkill: 'stale-skill' },
+  ] }), 'sw1', () => 1)
+  assert.equal(emptyBody.length, 1)
+  assert.equal(emptyBody[0].draft.body, '')
 })
 
 // ── Match (Cadence A — semantic matcher) ────────────────────────────────────

@@ -88,6 +88,17 @@ test('proposal lifecycle: write → list pending → resolve → no longer pendi
   assert.equal((await readProposal(p, 'prop_a'))?.resolution?.reason, 'too niche')
 })
 
+test('readProposal back-compat: a persisted kind:"update" proposal loads as "narrow"', async () => {
+  const p = curatorPaths(await tmp())
+  // Write a legacy-shaped proposal directly (bypassing writeProposal's typed
+  // signature, since 'update' is no longer part of the Proposal.kind union) —
+  // this simulates a proposal persisted to disk before the kind rename.
+  const legacy = { ...prop('prop_legacy'), kind: 'update' as unknown as Proposal['kind'] }
+  await writeProposal(p, legacy)
+  const back = await readProposal(p, 'prop_legacy')
+  assert.equal(back?.kind, 'narrow')
+})
+
 test('feedback appends and is marked consumed by sweep', async () => {
   const p = curatorPaths(await tmp())
   await appendFeedback(p, { at: 't', skill: 'pr-review', note: 'misses lockfiles' })

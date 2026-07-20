@@ -7,7 +7,7 @@
 // capability-gap proxy), skills are task/domain units grouped by domain, and
 // cross-cutting disciplines / app-navigation are excluded.
 
-import type { DistillProcedure, Candidate, Proposal } from './curator-store.ts'
+import type { DistillProcedure, Candidate, Proposal, ProposalDraft } from './curator-store.ts'
 
 // ── Distill ────────────────────────────────────────────────────────────────
 
@@ -298,6 +298,45 @@ function nonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim() !== ''
 }
 
+const VALID_KINDS = new Set<Proposal['kind']>(['create', 'narrow', 'split', 'merge', 'retire'])
+
+/** Build this proposal's `draft` per its kind's rules, or return null to drop
+ *  the row. `create` needs a fully-formed draft (valid name/description/body).
+ *  `narrow`/`split`/`merge` write a full SKILL.md so need a non-empty body,
+ *  but may omit name/description (defaulted from targetSkill / ''). `retire`
+ *  carries no new body — a missing/empty `draft.body` is fine; a `draft`
+ *  object is still returned (downstream code expects one) using targetSkill
+ *  as a placeholder name. */
+function buildDraft(kind: Proposal['kind'], e: Record<string, unknown>, targetSkill: string | undefined): ProposalDraft | null {
+  const draftRaw = e.draft
+  const d = (draftRaw && typeof draftRaw === 'object') ? draftRaw as Record<string, unknown> : null
+
+  if (kind === 'create') {
+    if (!d) return null
+    if (typeof d.name !== 'string' || !NAME_RE.test(d.name)) return null
+    if (!nonEmptyString(d.description)) return null
+    if (!nonEmptyString(d.body)) return null
+    return { name: d.name, description: d.description as string, body: d.body as string }
+  }
+
+  if (kind === 'narrow' || kind === 'split' || kind === 'merge') {
+    if (!d) return null
+    if (!nonEmptyString(d.body)) return null
+    return {
+      name: nonEmptyString(d.name) ? (d.name as string) : (targetSkill as string),
+      description: nonEmptyString(d.description) ? (d.description as string) : '',
+      body: d.body as string,
+    }
+  }
+
+  // retire — draft.body is NOT required.
+  return {
+    name: (d && nonEmptyString(d.name)) ? (d.name as string) : (targetSkill as string),
+    description: (d && nonEmptyString(d.description)) ? (d.description as string) : '',
+    body: (d && nonEmptyString(d.body)) ? (d.body as string) : '',
+  }
+}
+
 /** Parse the synthesize output file. Validates each proposal's shape and drops
  *  invalid entries; stamps id / sweepId / proposedAt / resolution on survivors. */
 export function parseSynthesizeOutput(raw: string | null, sweepId: string, now: () => number): Proposal[] {
@@ -317,14 +356,20 @@ export function parseSynthesizeOutput(raw: string | null, sweepId: string, now: 
     if (!raw2 || typeof raw2 !== 'object') continue
     const e = raw2 as Record<string, unknown>
 
-    if (e.kind !== 'create' && e.kind !== 'update') continue
+    // Only the 5 typed kinds are accepted from fresh model output. A raw
+    // 'update' (or anything else unrecognized) is dropped here — the legacy
+    // 'update'→'narrow' mapping is a curator-store.ts READ-boundary concern
+    // for proposals already persisted to disk, not for the model's output.
+    if (typeof e.kind !== 'string' || !VALID_KINDS.has(e.kind as Proposal['kind'])) continue
+    const kind = e.kind as Proposal['kind']
 
-    const draft = e.draft
-    if (!draft || typeof draft !== 'object') continue
-    const d = draft as Record<string, unknown>
-    if (typeof d.name !== 'string' || !NAME_RE.test(d.name)) continue
-    if (!nonEmptyString(d.description)) continue
-    if (!nonEmptyString(d.body)) continue
+    // narrow/split/merge/retire all rewrite or remove an EXISTING owned skill,
+    // so all four require a targetSkill; create needs none (it has nothing to target).
+    const targetSkill = nonEmptyString(e.targetSkill) ? (e.targetSkill as string) : undefined
+    if (kind !== 'create' && !targetSkill) continue
+
+    const draft = buildDraft(kind, e, targetSkill)
+    if (!draft) continue
 
     const evidence = e.evidence
     if (!evidence || typeof evidence !== 'object') continue
@@ -333,19 +378,13 @@ export function parseSynthesizeOutput(raw: string | null, sweepId: string, now: 
 
     if (!nonEmptyString(e.rationale)) continue
 
-    if (e.kind === 'update' && !nonEmptyString(e.targetSkill)) continue
-
     const index = out.length
     const prop: Proposal = {
       id: `prop_${ts}_${index}`,
       sweepId,
       proposedAt: new Date(ts).toISOString(),
-      kind: e.kind,
-      draft: {
-        name: d.name,
-        description: d.description as string,
-        body: d.body as string,
-      },
+      kind,
+      draft,
       evidence: evidence as Proposal['evidence'],
       rationale: e.rationale as string,
       changeSummary: Array.isArray(e.changeSummary)
@@ -353,7 +392,7 @@ export function parseSynthesizeOutput(raw: string | null, sweepId: string, now: 
         : [],
       resolution: null,
     }
-    if (nonEmptyString(e.targetSkill)) prop.targetSkill = e.targetSkill as string
+    if (targetSkill) prop.targetSkill = targetSkill
     // D19: the raw diff is deterministic-only — computed by the sweep from the real
     // on-disk body vs the proposed body, never taken from the synthesize LLM output.
     // Any `diff` field the LLM emits is deliberately IGNORED here (it could be fiction).
