@@ -134,6 +134,49 @@ test('mergeDistill accumulates across sweeps and sessions, idempotent per (key,t
 
 // --- Task 1: ledger entry enrichment (status/variance/divergence) — backward-compatible ---
 
+// --- Task 2: rolling trace retention ---
+
+import { pruneTraces } from './curator-store.ts'
+
+test('pruneTraces deletes trace files older than keepDays and keeps recent ones', async () => {
+  const p = curatorPaths(await tmp())
+  await fs.mkdir(p.tracesDir, { recursive: true })
+  const oldFile = path.join(p.tracesDir, 'task1-sweep1.txt')
+  const recentFile = path.join(p.tracesDir, 'task2-sweep2.txt')
+  await fs.writeFile(oldFile, 'old trace')
+  await fs.writeFile(recentFile, 'recent trace')
+
+  const now = Date.now()
+  const oldMtime = new Date(now - 20 * 86400_000) // 20 days ago — older than the 14-day default
+  const recentMtime = new Date(now - 1 * 86400_000) // 1 day ago — well within the window
+  await fs.utimes(oldFile, oldMtime, oldMtime)
+  await fs.utimes(recentFile, recentMtime, recentMtime)
+
+  const pruned = await pruneTraces(p, now)
+  assert.deepEqual(pruned, ['task1-sweep1.txt'])
+
+  const remaining = await fs.readdir(p.tracesDir)
+  assert.deepEqual(remaining, ['task2-sweep2.txt'])
+})
+
+test('pruneTraces respects a custom keepDays and returns [] when tracesDir is missing', async () => {
+  const p = curatorPaths(await tmp())
+  // No tracesDir created at all — best-effort, must not throw.
+  const pruned = await pruneTraces(p, Date.now())
+  assert.deepEqual(pruned, [])
+
+  await fs.mkdir(p.tracesDir, { recursive: true })
+  const f = path.join(p.tracesDir, 'task3-sweep3.txt')
+  await fs.writeFile(f, 'x')
+  const now = Date.now()
+  const twoDaysAgo = new Date(now - 2 * 86400_000)
+  await fs.utimes(f, twoDaysAgo, twoDaysAgo)
+
+  // With keepDays=1, a 2-day-old file should be pruned.
+  const pruned2 = await pruneTraces(p, now, 1)
+  assert.deepEqual(pruned2, ['task3-sweep3.txt'])
+})
+
 test('legacy Candidate (no new fields) loads and defaults via pure accessors', () => {
   const legacy: Candidate = {
     key: 'load-video-premiere-via-mcp',

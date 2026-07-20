@@ -370,3 +370,42 @@ export async function readTranscriptDelta(transcriptPath: string, fromLine: numb
   const lookback = all.slice(Math.max(0, fromLine - (lookbackLines ?? 200)), fromLine)
   return { lines, lookback, newOffset: all.length }
 }
+
+// ---------------------------------------------------------------------------
+// Trace retention — raw session traces live on a short rolling window (the
+// blessed retention default, Global Constraint 12): distilled patterns in
+// candidates.json persist forever, but the raw traces under tracesDir/
+// (filenames shaped `<taskId>-<sweepId>.txt`, see curator.ts's traceFile) are
+// pruned after `keepDays`. Best-effort and defensive by design: a missing
+// tracesDir or a per-file stat/unlink failure must never throw or break a
+// sweep — this is housekeeping, not a correctness path. Only trace files are
+// touched; candidates.json and everything else under root is untouched.
+
+/** Delete trace files under `p.tracesDir` whose mtime is older than
+ *  `nowMs - keepDays*86400_000` (default keepDays = 14). Returns the
+ *  filenames pruned. Best-effort: a missing tracesDir yields `[]`; a
+ *  per-file stat/unlink error is swallowed and that file is skipped. */
+export async function pruneTraces(p: CuratorPaths, nowMs: number, keepDays = 14): Promise<string[]> {
+  const cutoff = nowMs - keepDays * 86400_000
+  let names: string[]
+  try {
+    names = await fs.readdir(p.tracesDir)
+  } catch {
+    return [] // no traces dir yet — nothing to prune
+  }
+  const pruned: string[] = []
+  for (const name of names) {
+    try {
+      const file = join(p.tracesDir, name)
+      const st = await fs.stat(file)
+      if (st.mtimeMs < cutoff) {
+        await fs.unlink(file)
+        pruned.push(name)
+      }
+    } catch {
+      // Best-effort: a stat/unlink race or permission error skips this file,
+      // never aborts the sweep.
+    }
+  }
+  return pruned
+}
