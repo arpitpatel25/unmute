@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSynthesizePrompt, parseSynthesizeOutput, parseSynthesizeReasoning } from './curator-prompts.ts'
+import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSynthesizePrompt, parseSynthesizeOutput, parseSynthesizeReasoning, buildMatchPrompt, parseMatchOutput } from './curator-prompts.ts'
 
 test('distill prompt: points at trace file, demands JSON at outPath, forbids facts/preferences + app-navigation, makes struggle the key signal', () => {
   const p = buildDistillPrompt({ taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedNames: ['pr-review'] })
@@ -131,4 +131,64 @@ test('parseSynthesizeOutput: a synth-provided diff field is IGNORED (D19 — onl
   ] }), 'sw1', () => 1)
   assert.equal(out.length, 1)
   assert.equal(out[0].diff, undefined)   // the LLM's diff is dropped; only the deterministic sweep sets it
+})
+
+// ── Match (Cadence A — semantic matcher) ────────────────────────────────────
+
+test('buildMatchPrompt: references shortlist keys, outPath, and the repeatable-core / variedThisRun instruction', () => {
+  const p = buildMatchPrompt({
+    procedures: [{ title: 'File quarterly taxes', skeleton: 'gather forms, compute, file', count: 1, struggle: true }],
+    ledgerShortlist: [
+      { key: 'file-taxes', title: 'File taxes', skeleton: 'gather forms, compute, file' },
+      { key: 'edit-video', title: 'Edit talking-head video', skeleton: 'cut, caption, export' },
+    ],
+    outPath: '/out/match.json',
+  })
+  assert.ok(p.includes('/out/match.json'))
+  assert.ok(p.includes('file-taxes') && p.includes('edit-video'))     // shortlist keys present
+  assert.ok(/repeatable core/i.test(p))                               // the binding match rule
+  assert.ok(/variedThisRun/.test(p))
+  assert.ok(/file path|branch|ticket|account/i.test(p))                // examples of per-run specifics
+  assert.ok(p.includes('"matches":[') || p.includes('{"matches":['))   // output contract shape
+  assert.ok(!/reasoning/i.test(p))                                     // default: no dev-diagnostics ask
+})
+
+test('buildMatchPrompt: devMode adds the top-level reasoning ask', () => {
+  const args = {
+    procedures: [{ title: 'T', skeleton: 'S', count: 1, struggle: false }],
+    ledgerShortlist: [{ key: 'k', title: 'T2', skeleton: 'S2' }],
+    outPath: '/out/match.json',
+  }
+  assert.ok(!/reasoning/i.test(buildMatchPrompt(args)))
+  assert.ok(!/reasoning/i.test(buildMatchPrompt({ ...args, devMode: false })))
+  const dev = buildMatchPrompt({ ...args, devMode: true })
+  assert.ok(/reasoning/i.test(dev))
+  assert.ok(/developer diagnostics/i.test(dev))
+})
+
+test('parseMatchOutput: [] on null/malformed/matches-not-array', () => {
+  assert.deepEqual(parseMatchOutput(null), [])
+  assert.deepEqual(parseMatchOutput('not json'), [])
+  assert.deepEqual(parseMatchOutput(JSON.stringify({ matches: 'nope' })), [])
+  assert.deepEqual(parseMatchOutput(JSON.stringify({})), [])
+})
+
+test('parseMatchOutput: drops malformed rows, coerces confidence, defaults variedThisRun, accepts matchedKey:null', () => {
+  const out = parseMatchOutput(JSON.stringify({ matches: [
+    { procedureIndex: 0, matchedKey: 'file-taxes', confidence: 0.8, variedThisRun: ['q3', 42, 'acct-9'] },
+    { procedureIndex: 1, matchedKey: null, confidence: 0.4 },                 // no variedThisRun → []
+    { procedureIndex: 'nope', matchedKey: 'x', confidence: 0.5 },             // dropped: non-numeric procedureIndex
+    { procedureIndex: 2, matchedKey: '', confidence: 0.5 },                   // dropped: empty-string matchedKey
+    { procedureIndex: 3, matchedKey: 42, confidence: 0.5 },                   // dropped: non-string/non-null matchedKey
+    { procedureIndex: 4, matchedKey: null, confidence: 'high' },              // confidence coerced → 0
+    'not an object',                                                          // dropped
+  ] }))
+  assert.equal(out.length, 3)
+  assert.deepEqual(out[0], { procedureIndex: 0, matchedKey: 'file-taxes', confidence: 0.8, variedThisRun: ['q3', 'acct-9'] })
+  assert.deepEqual(out[1], { procedureIndex: 1, matchedKey: null, confidence: 0.4, variedThisRun: [] })
+  assert.deepEqual(out[2], { procedureIndex: 4, matchedKey: null, confidence: 0, variedThisRun: [] })
+})
+
+test('parseMatchOutput: nothing to match → []', () => {
+  assert.deepEqual(parseMatchOutput(JSON.stringify({ matches: [] })), [])
 })

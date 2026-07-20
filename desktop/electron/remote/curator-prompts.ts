@@ -373,6 +373,112 @@ export function parseSynthesizeReasoning(raw: string | null): string | undefined
   return topLevelReasoning(raw)
 }
 
+// ── Match (Cadence A — semantic matcher) ────────────────────────────────────
+
+/** A matcher's per-procedure verdict: which existing ledger entry (by `key`) a
+ *  distilled procedure EXTENDS, or `null` for a new entry. */
+export interface MatchDecision {
+  procedureIndex: number
+  matchedKey: string | null // null = a NEW ledger entry
+  confidence: number // 0..1
+  variedThisRun: string[] // per-run specifics to record as slots, not reasons to call it new
+}
+
+/** Build the matcher prompt: this sweep's distilled procedures + a per-procedure
+ *  shortlist of candidate ledger entries → a match decision for each. Replaces
+ *  brittle title-slug equality with an LLM judgment of "same repeatable core?" —
+ *  this is what fuses the same pattern across differently-worded sessions. */
+export function buildMatchPrompt(i: {
+  procedures: DistillProcedure[]
+  ledgerShortlist: Array<{ key: string; title: string; skeleton: string }>
+  outPath: string
+  devMode?: boolean
+}): string {
+  const procLines = i.procedures.length
+    ? i.procedures
+        .map((p, idx) => `[${idx}] "${p.title}"\n  skeleton: ${p.skeleton}`)
+        .join('\n')
+    : '(no procedures this sweep)'
+
+  const shortlistLines = i.ledgerShortlist.length
+    ? i.ledgerShortlist.map((s) => `- [${s.key}] "${s.title}"\n  skeleton: ${s.skeleton}`).join('\n')
+    : '(ledger is empty — everything is new)'
+
+  const lines = [
+    `[Unmute curator — match] For EACH distilled procedure below, decide against`,
+    `the SHORTLIST ONLY whether it EXTENDS an existing ledger entry (same`,
+    `repeatable core) or is NEW.`,
+    ``,
+    `── Distilled procedures (this sweep) ──`,
+    procLines,
+    ``,
+    `── Shortlist of existing ledger entries (candidates to match against) ──`,
+    shortlistLines,
+    ``,
+    `── The match rule ──`,
+    `Match on the REPEATABLE CORE — the underlying method/approach a procedure`,
+    `captures. Treat differing PER-RUN SPECIFICS (a file path, a branch name, a`,
+    `ticket id, an account, a date) as "variedThisRun" entries to RECORD, not as`,
+    `reasons to call it a different pattern. Two procedures worded completely`,
+    `differently are the SAME entry if they are the same repeatable core with`,
+    `different specifics plugged in. If a procedure genuinely does not extend`,
+    `anything on the shortlist, it is NEW: matchedKey:null.`,
+    ``,
+    `For each procedure, reference the shortlist entry it extends by its "key"`,
+    `(never invent a key that isn't on the shortlist), or use null for new.`,
+    ``,
+    `── Output contract ──`,
+    `Reply ONLY by writing JSON to ${i.outPath} atomically (write ${i.outPath}.tmp`,
+    `then rename):`,
+    `{"matches":[{"procedureIndex":N,"matchedKey":"<key>"|null,"confidence":0.0-1.0,"variedThisRun":["…"]}]}`,
+    `Nothing to match → {"matches":[]}. Do nothing else — no other tools than the file write.`,
+  ]
+  if (i.devMode) {
+    lines.push(
+      ``,
+      `[developer diagnostics] ALSO add a top-level "reasoning" string to that same`,
+      `JSON object: explain your match/no-match call for each procedure. This`,
+      `field is for a developer inspecting the run; it does not affect any decision.`,
+      `Shape: {"matches":[…], "reasoning":"…"}.`,
+    )
+  }
+  return lines.join('\n')
+}
+
+/** Parse the matcher output file. [] on null/malformed/`matches` not array. Per
+ *  row: requires numeric procedureIndex; matchedKey must be a non-empty string OR
+ *  null (else the row is dropped); confidence coerced to a finite number
+ *  (default 0); variedThisRun defaults to [], keeping only string elements. */
+export function parseMatchOutput(raw: string | null): MatchDecision[] {
+  if (raw == null) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  const matches = (parsed as { matches?: unknown } | null)?.matches
+  if (!Array.isArray(matches)) return []
+  const out: MatchDecision[] = []
+  for (const m of matches) {
+    if (!m || typeof m !== 'object') continue
+    const e = m as Record<string, unknown>
+    if (typeof e.procedureIndex !== 'number' || !Number.isFinite(e.procedureIndex)) continue
+    let matchedKey: string | null
+    if (e.matchedKey === null) {
+      matchedKey = null
+    } else if (typeof e.matchedKey === 'string' && e.matchedKey.trim() !== '') {
+      matchedKey = e.matchedKey
+    } else {
+      continue
+    }
+    const confidence = typeof e.confidence === 'number' && Number.isFinite(e.confidence) ? e.confidence : 0
+    const variedThisRun = Array.isArray(e.variedThisRun) ? e.variedThisRun.filter((v): v is string => typeof v === 'string') : []
+    out.push({ procedureIndex: e.procedureIndex, matchedKey, confidence, variedThisRun })
+  }
+  return out
+}
+
 /** Shared: pull a non-empty top-level `reasoning` string out of a stage's raw
  *  JSON output. Tolerant — undefined on null / non-JSON / missing / non-string. */
 function topLevelReasoning(raw: string | null): string | undefined {
