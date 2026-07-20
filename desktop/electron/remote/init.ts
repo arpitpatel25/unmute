@@ -1949,9 +1949,35 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('curator:accept', async (_e, id: string): Promise<{ ok: boolean; error?: string }> => {
     const proposal = await readProposal(curatorPathsV, id)
     if (!proposal) return { ok: false, error: 'proposal not found' }
-    // The user may have edited draft.md in the review conversation — if the
-    // on-disk draft differs from the proposal's stored body, that edit wins and
-    // marks the acceptance user-edited (the accepted content is recorded either way).
+
+    // retire — a DELETE, no body: skip the draft.md/edited-body/userEdited logic
+    // entirely. writeSkill removes the owned skill's dir + ownership entry; on
+    // success the linked ledger entries move to 'retired' (not 'live').
+    if (proposal.kind === 'retire') {
+      const res = await writeSkill({
+        draft: proposal.draft,
+        kind: 'retire',
+        targetSkill: proposal.targetSkill,
+        proposalId: id,
+        paths: curatorPathsV,
+        originStamp: true,
+      })
+      if (res.ok) {
+        await resolveProposal(curatorPathsV, id, { action: 'accepted', at: new Date().toISOString(), userEdited: false })
+        if (proposal.sourceKeys && proposal.sourceKeys.length) {
+          let ledger = await readCandidates(curatorPathsV)
+          for (const key of proposal.sourceKeys) ledger = setCandidateStatus(ledger, key, 'retired')
+          await writeCandidates(curatorPathsV, ledger)
+        }
+        return { ok: true }
+      }
+      return { ok: false, error: res.detail ?? res.error ?? 'write failed' }
+    }
+
+    // create / narrow / split / merge — a WRITE. The user may have edited
+    // draft.md in the review conversation — if the on-disk draft differs from the
+    // proposal's stored body, that edit wins and marks the acceptance user-edited
+    // (the accepted content is recorded either way).
     let body = proposal.draft.body
     let userEdited = false
     try {
@@ -1961,6 +1987,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const res = await writeSkill({
       draft: { ...proposal.draft, body },
       kind: proposal.kind,
+      targetSkill: proposal.targetSkill,
       proposalId: id,
       paths: curatorPathsV,
       originStamp: true, // preflight confirmed the `origin: unmute` key is tolerated (§11)

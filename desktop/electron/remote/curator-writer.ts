@@ -22,7 +22,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
-import { readOwnership, ownedSkillNames, recordOwnershipCore, markUserModified, serialized } from './curator-store'
+import { readOwnership, ownedSkillNames, recordOwnershipCore, removeOwnershipCore, markUserModified, serialized } from './curator-store'
 import type { CuratorPaths, ProposalDraft } from './curator-store'
 
 export function defaultSkillsRoot(): string {
@@ -83,15 +83,25 @@ async function dirExists(dir: string): Promise<boolean> {
 
 export interface WriteResult { ok: boolean; error?: 'collision' | 'io' | 'invalid-name'; detail?: string }
 
-/** Materialize (or update) a curated skill on disk, collision-guarded and
- *  ownership-first. See the module header for the invariants this enforces. */
+/** Materialize, update, or retire a curated skill on disk, collision-guarded and
+ *  ownership-first. The writer needs only TWO physical operations: WRITE a
+ *  SKILL.md and DELETE a SKILL.md — the five proposal kinds map onto them:
+ *    create                 → WRITE a NEW skill (reject if already ours / on disk)
+ *    narrow | split | merge → WRITE the target skill's full new body (must be OWNED)
+ *    retire                 → DELETE the target skill's dir + ownership entry (must be OWNED)
+ *  (split's brand-new skill and merge's absorbed-skill deletion arrive as their
+ *  OWN separate create/retire proposals — not special-cased here.) See the
+ *  module header for the invariants this enforces. */
 export async function writeSkill(o: {
-  draft: ProposalDraft; kind: 'create' | 'update'
+  draft: ProposalDraft; kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'
   proposalId: string; paths: CuratorPaths; skillsRoot?: string
-  originStamp: boolean
+  originStamp: boolean; targetSkill?: string
 }): Promise<WriteResult> {
   const skillsRoot = o.skillsRoot ?? defaultSkillsRoot()
-  const name = o.draft.name
+  // create graduates a fresh draft (operate on draft.name); the gardening verbs
+  // (narrow/split/merge/retire) operate on the proposal's EXISTING targetSkill,
+  // falling back to draft.name when a caller omits it.
+  const name = o.kind === 'create' ? o.draft.name : (o.targetSkill ?? o.draft.name)
 
   // 0. Name guard (C1 path-traversal + C2 frontmatter-injection) — BEFORE the
   //    collision guard, any ownership upsert, or any FS op. A name that fails the
@@ -102,12 +112,11 @@ export async function writeSkill(o: {
   }
 
   const skillDir = join(skillsRoot, name)
-  const rendered = renderSkillMd(o.draft, { originStamp: o.originStamp })
-  const hash = contentHash(rendered)
 
-  // The collision guard (read) → ownership-first upsert → file write run inside a
-  // SINGLE serialized critical section on the store's write-chain, so two
-  // concurrent creates for the same name can't both pass the guard (TOCTOU).
+  // The collision guard (read) → ownership-first upsert → file write (or the
+  // retire delete → ownership removal) run inside a SINGLE serialized critical
+  // section on the store's write-chain, so two concurrent operations on the same
+  // name can't both pass the guard (TOCTOU).
   return serialized(async () => {
     // 1. Collision guard (D10) — decided against the ownership record + disk BEFORE any write.
     const ownership = await readOwnership(o.paths)
@@ -120,11 +129,30 @@ export async function writeSkill(o: {
         return { ok: false, error: 'collision', detail: `directory exists on disk: ${name}` }
       }
     } else {
-      // update — we only ever edit a name we authored.
+      // narrow/split/merge/retire — we only ever touch a name we authored.
       if (!owned.has(name)) {
-        return { ok: false, error: 'collision', detail: `not ours to update: ${name}` }
+        const verb = o.kind === 'retire' ? 'retire' : 'update'
+        return { ok: false, error: 'collision', detail: `not ours to ${verb}: ${name}` }
       }
     }
+
+    // retire — DELETE the owned skill's directory (recursive) and remove its
+    // ownership entry. draft.body is irrelevant. Ownership-guarded above: we
+    // NEVER delete a directory that isn't in the ownership record.
+    if (o.kind === 'retire') {
+      try {
+        await fs.rm(skillDir, { recursive: true, force: true }) // only skillsRoot/name
+      } catch (err) {
+        return { ok: false, error: 'io', detail: err instanceof Error ? err.message : String(err) }
+      }
+      // removeOwnershipCore (not removeOwnership) — we already hold the lock.
+      await removeOwnershipCore(o.paths, name)
+      return { ok: true }
+    }
+
+    // create / narrow / split / merge — WRITE the full body.
+    const rendered = renderSkillMd({ ...o.draft, name }, { originStamp: o.originStamp })
+    const hash = contentHash(rendered)
 
     // 2. Ownership FIRST — record the intent before touching disk. A crash
     //    between this upsert and the write leaves a recorded intent, never an

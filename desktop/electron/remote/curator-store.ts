@@ -247,10 +247,26 @@ export async function readOwnership(p: CuratorPaths): Promise<OwnershipFile> {
   return emptyOwnership() // tolerate a missing file or an old-format ledger
 }
 
-/** Names with a materialized skill on disk per the ownership record. No removal
- *  path exists yet — retirement is out of scope (D15). */
+/** Names with a materialized skill on disk per the ownership record. Retirement
+ *  removes the entry (removeOwnership), so this set shrinks when a skill is
+ *  retired. */
 export function ownedSkillNames(o: OwnershipFile): Set<string> {
   return new Set(Object.keys(o.skills))
+}
+
+/** Remove an owned skill's ownership entry (retirement). LOCK-FREE — only call
+ *  from code already inside a serialized() section (nesting the lock self-
+ *  deadlocks). A name we do not own is a no-op. Standalone callers must use
+ *  removeOwnership. */
+export async function removeOwnershipCore(p: CuratorPaths, name: string): Promise<void> {
+  const f = await readOwnership(p)
+  if (!f.skills[name]) return // not owned — nothing to remove
+  delete f.skills[name]
+  await writeJsonAtomic(p.ownership, f)
+}
+
+export async function removeOwnership(p: CuratorPaths, name: string): Promise<void> {
+  return serialized(() => removeOwnershipCore(p, name))
 }
 
 /** Upsert an ownership entry WITHOUT taking the serialization lock. Creates the
