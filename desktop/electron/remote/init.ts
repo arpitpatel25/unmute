@@ -1596,7 +1596,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       for (const id of await fs.readdir(base).catch(() => [] as string[])) {
         try {
           const m = JSON.parse(await fs.readFile(join(base, id, 'meta.json'), 'utf8'))
-          if (m.kind === 'session') out.push({ taskId: id, intent: m.intent ?? '', cwd: m.cwd ?? join(base, id), kind: 'session' })
+          if (m.kind === 'session') out.push({ taskId: id, intent: m.intent ?? '', cwd: m.cwd ?? join(base, id), kind: 'session', sessionId: m.sessionId })
         } catch { /* skip unreadable/partial meta */ }
       }
       return out

@@ -38,6 +38,8 @@ import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
 import { detectSurface } from './surface'
 import { readNurseryRecipes, listRecipes, isStaleHigh, selectNurseryWithinBudget, type Confidence } from './recipe-store'
 import { detectMcpGap, type McpGap } from './mcp-gap'
+import { resolveTranscriptById } from './trace-reducer'
+import { projectSlug } from './projects'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
 import { settleRepl } from './repl-settle'
@@ -1024,7 +1026,12 @@ export class TaskManager extends EventEmitter {
     if (!task) return
     try {
       const { homedir } = await import('node:os')
-      const slug = task.cwd.replace(/[/.]/g, '-')
+      // A fork's id is minted by Claude (we can't pin it), so discovery here is
+      // inherently "newest .jsonl in the slug that isn't the fork SOURCE" — unlike
+      // the curator, which now keys on the pinned id (see transcriptPathFor). Use
+      // the SAME verified slug transform as init.ts's exact-path lookup so the dir
+      // resolves for cwds with underscores/spaces (the old /[/.]/g missed those).
+      const slug = projectSlug(task.cwd)
       const dir = join(homedir(), '.claude', 'projects', slug)
       const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.jsonl') && !f.startsWith(forkFrom))
       const withM = await Promise.all(files.map(async (f) => {
@@ -1227,9 +1234,17 @@ export class TaskManager extends EventEmitter {
     if (this.executors.get(id)?.alive) { tlog.event('resume-noop-already-alive', {}); return true }
     try { await fs.access(task.cwd) } catch { tlog.warn('resume: task dir gone — cannot resume', {}); return false }
 
-    tlog.event('resume-start', { cwd: task.cwd })
+    // Resume by the task's PINNED session id when that exact conversation exists
+    // on disk: `--resume <id>` attaches to THIS task's session even when several
+    // sessions share a cwd (bare `--continue` grabs merely the most-recent one —
+    // the wrong conversation for a shared repo dir). Fall back to `--continue`
+    // when the id can't be confirmed (a fork whose id-adoption never landed, or a
+    // pre-sessionId receipt whose sessionId defaulted to the taskId) so resume
+    // still works. NEVER passes --fork-session — that would branch, not resume.
+    const byId = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
+    tlog.event('resume-start', { cwd: task.cwd, resumeBy: byId ? 'session-id' : 'continue' })
     try {
-      const ex = this.opts.executorFactory(true) // --continue (resume the cwd's session)
+      const ex = this.opts.executorFactory(!byId) // --continue only when we can't target the exact session by id
       this.executors.set(id, ex)
       this.outputBuffers.set(id, this.outputBuffers.get(id) ?? '')
       ex.onData((chunk) => {
@@ -1238,7 +1253,7 @@ export class TaskManager extends EventEmitter {
         this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
         this.emit('output', { taskId: id, chunk })
       })
-      await ex.spawn({ cwd: task.cwd, env: process.env, taskId: id })
+      await ex.spawn({ cwd: task.cwd, env: process.env, taskId: id, resumeSessionId: byId ? task.sessionId : undefined })
       await ex.isReady()
       ex.writeStdin('') // accept folder-trust; session reopens with full prior context
       await new Promise((r) => setTimeout(r, this.opts.trustAcceptMs))

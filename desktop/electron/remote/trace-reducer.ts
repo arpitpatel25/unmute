@@ -2,11 +2,32 @@ import { promises as fs } from 'node:fs'
 import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { createLogger } from './log'
+import { projectSlug } from './projects'
 
 const log = createLogger('trace-reducer')
 const reducerLog = createLogger('trace-reducer:reduce')
 
 function defaultProjectsDir(): string { return join(homedir(), '.claude', 'projects') }
+
+/** The DETERMINISTIC transcript path for a (cwd, Claude session id) pair. Claude
+ *  Code stores each conversation at
+ *  ~/.claude/projects/<cwd-slug>/<sessionId>.jsonl, and Unmute mints + pins that
+ *  session id (--session-id) at spawn, so this resolves the EXACT conversation —
+ *  one file per task — instead of "the newest .jsonl in the folder" (which
+ *  collapses multiple sessions sharing a repo dir onto one transcript). Uses the
+ *  same slug transform init.ts already uses for this path (projectSlug: every run
+ *  of non-alphanumerics → '-', verified against a real install). */
+export function transcriptPathFor(cwd: string, sessionId: string, opts: { projectsDir?: string } = {}): string {
+  const projectsDir = opts.projectsDir ?? defaultProjectsDir()
+  return join(projectsDir, projectSlug(cwd), `${sessionId}.jsonl`)
+}
+
+/** transcriptPathFor, but null when the file doesn't exist yet — e.g. a
+ *  freshly-spawned session whose transcript Claude hasn't written. */
+export async function resolveTranscriptById(cwd: string, sessionId: string, opts: { projectsDir?: string } = {}): Promise<string | null> {
+  const p = transcriptPathFor(cwd, sessionId, opts)
+  try { await fs.stat(p); return p } catch { return null }
+}
 
 /** Resolve the executor's JSONL by taskId (the cwd's last segment), which is the
  *  suffix of Claude's encoded project-dir name. Robust to the exact encoding:

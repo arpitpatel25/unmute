@@ -99,17 +99,24 @@ export class CliAgentExecutor implements AgentExecutor {
     //    tmux client. Env is still the stripped one above — and the private
     //    socket (-L) means our OWN tmux server with that env (PRD §3.2). ──
     let bin = this.cfg.bin
-    // Pin the Claude session id when the caller minted one (fresh spawns only;
-    // resume omits it and relies on --continue). Folded into extraArgs so it flows
-    // through BOTH the direct and tmux-wrapped launch paths identically.
+    // Pin the Claude session id when the caller minted one (fresh spawns only).
+    // Three mutually-exclusive shapes, folded into extraArgs so they flow through
+    // BOTH the direct and tmux-wrapped launch paths identically:
+    //   • fork  → --resume <id> --fork-session (branch a NEW conversation off it)
+    //   • resume→ --resume <id>                (CONTINUE that exact conversation)
+    //   • fresh → --session-id <id>            (pin a newly-minted conversation)
     const extraArgs = spawnOpts.forkFromSessionId
       // Fork spawn: inherit an existing conversation's context. Claude mints
       // the fork's NEW session id itself (cannot be pinned) — the dispatcher
       // discovers it post-boot from the project slug.
       ? [...this.cfg.extraArgs, '--resume', spawnOpts.forkFromSessionId, '--fork-session']
-      : spawnOpts.sessionId
-        ? [...this.cfg.extraArgs, '--session-id', spawnOpts.sessionId]
-        : this.cfg.extraArgs
+      : spawnOpts.resumeSessionId
+        // Resume: continue THIS exact session by id (no --fork-session — that
+        // would branch a new conversation instead of resuming the existing one).
+        ? [...this.cfg.extraArgs, '--resume', spawnOpts.resumeSessionId]
+        : spawnOpts.sessionId
+          ? [...this.cfg.extraArgs, '--session-id', spawnOpts.sessionId]
+          : this.cfg.extraArgs
     let args = extraArgs
     if (this.cfg.tmux) {
       const session = sessionNameFor(this.taskId)

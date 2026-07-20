@@ -25,8 +25,14 @@ export interface SpawnOpts {
   /** Claude Code session id to PIN for this spawn (passed as `--session-id`).
    *  We mint it so the session is addressable by a stable handle (resume, read
    *  Claude's session store, future orchestration). Omitted on resume — there the
-   *  cwd's existing session is continued via `--continue`, which keeps this id. */
+   *  session is CONTINUED by id (resumeSessionId) or, lacking one, via `--continue`. */
   sessionId?: string
+  /** RESUME (continue, NOT fork) this exact Claude session by id: `--resume <id>`
+   *  with NO `--fork-session`. Used by TaskManager.resume() so a resume in a cwd
+   *  shared by several sessions attaches to THIS task's conversation, not merely
+   *  the most-recent one that bare `--continue` would grab. Mutually exclusive
+   *  with forkFromSessionId and sessionId. */
+  resumeSessionId?: string
 }
 
 export interface AgentExecutor {

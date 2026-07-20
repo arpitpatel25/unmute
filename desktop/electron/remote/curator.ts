@@ -58,12 +58,12 @@ import { shortlist, applyMatch, recordSkillObservation, hasAccumulatedDivergence
 import { computeTriageMetrics, passesTriage } from './curator-triage'
 import { devLogEnabled, devlog, devlogDump } from './curator-devlog'
 import { unifiedDiff } from './curator-diff'
-import { locateTranscript, reduceTranscript } from './trace-reducer'
+import { locateTranscript, resolveTranscriptById, reduceTranscript } from './trace-reducer'
 import type { ExecutorFactory, AgentExecutor } from './executor'
 
 const log = createLogger('curator')
 
-export interface SessionInfo { taskId: string; intent: string; cwd: string; kind: 'oneoff' | 'session' }
+export interface SessionInfo { taskId: string; intent: string; cwd: string; kind: 'oneoff' | 'session'; sessionId?: string }
 
 export interface CuratorOpts {
   paths?: CuratorPaths
@@ -78,7 +78,12 @@ export interface CuratorOpts {
   locateTranscriptFor?: (s: SessionInfo) => Promise<string | null>
 }
 
-export interface MaterialSession { taskId: string; intent: string; transcriptPath: string; fromLine: number; lines: string[]; lookback: string[]; newOffset: number }
+// convKey — the CONVERSATION identity a cursor is keyed by (s.sessionId ?? s.taskId).
+// Keying on the Claude session id (which Unmute pins) rather than the taskId or
+// the cwd is what lets a RESUME (same sessionId → same key → cursor advances over
+// the grown transcript, delta only) and a FORK (its own adopted sessionId → own
+// key → separate cursor) both stay correct even when sessions share a repo dir.
+export interface MaterialSession { taskId: string; intent: string; transcriptPath: string; fromLine: number; lines: string[]; lookback: string[]; newOffset: number; convKey?: string }
 
 export class Curator {
   private readonly paths: CuratorPaths
@@ -108,7 +113,12 @@ export class Curator {
     this.checkEveryMs = opts.checkEveryMs ?? 10 * 60_000
     this.quiescentMs = opts.quiescentMs ?? 10 * 60_000
     this.now = opts.now ?? (() => Date.now())
-    this.locateTranscriptFor = opts.locateTranscriptFor ?? ((s) => locateTranscript(s.cwd))
+    // Resolve by CONVERSATION identity: when we know the pinned Claude session id
+    // (the common case — Unmute mints it at dispatch), read that EXACT transcript
+    // (null until Claude first writes it), never "newest .jsonl in the folder"
+    // (the bug that collapsed sessions sharing a cwd). Fall back to the folder
+    // heuristic only for a session with no known id (e.g. a pre-sessionId receipt).
+    this.locateTranscriptFor = opts.locateTranscriptFor ?? ((s) => s.sessionId ? resolveTranscriptById(s.cwd, s.sessionId) : locateTranscript(s.cwd))
   }
 
   /** Catch-up-on-wake: an immediate check, then a periodic (unref'd) retry. */
@@ -170,7 +180,10 @@ export class Curator {
         continue
       }
 
-      const prior = cursor.sessions[s.taskId]
+      // Cursor is keyed by CONVERSATION (the pinned session id), not the taskId —
+      // a resume re-reads the SAME conversation and must advance the SAME cursor.
+      const convKey = s.sessionId ?? s.taskId
+      const prior = cursor.sessions[convKey]
       const fromLine = prior?.lineOffset ?? 0
       const delta = await readTranscriptDelta(transcriptPath, fromLine)
       if (delta.lines.length === 0) {
@@ -198,7 +211,7 @@ export class Curator {
       }
 
       devlog({ stage: 'scheduler', kind: 'session-admit', checkId, taskId: s.taskId, intent: s.intent, checkpointed, fromLine, newLines: delta.lines.length, metrics })
-      material.push({ taskId: s.taskId, intent: s.intent, transcriptPath, fromLine, lines: delta.lines, lookback: delta.lookback, newOffset: delta.newOffset })
+      material.push({ taskId: s.taskId, intent: s.intent, transcriptPath, fromLine, lines: delta.lines, lookback: delta.lookback, newOffset: delta.newOffset, convKey })
       if (checkpointed) consumed.push(s.taskId)
     }
 
@@ -630,14 +643,18 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     await writeCandidates(paths, candFile)
     const cursor = await readCursor(paths)
     for (const m of material) {
-      const prev = cursor.sessions[m.taskId]
-      cursor.sessions[m.taskId] = {
+      // Advance the CONVERSATION cursor (same key the scheduler read from), so a
+      // resume of the same session picks up where the last sweep left off and two
+      // sessions sharing a cwd keep independent cursors.
+      const convKey = m.convKey ?? m.taskId
+      const prev = cursor.sessions[convKey]
+      cursor.sessions[convKey] = {
         transcriptPath: m.transcriptPath,
         lineOffset: m.newOffset,
         lastSweptAt: tNow,
         sweeps: (prev?.sweeps ?? 0) + 1,
       }
-      devlog({ stage: 'scheduler', kind: 'cursor-advance', sweepId, taskId: m.taskId, lineOffset: m.newOffset, sweeps: (prev?.sweeps ?? 0) + 1 })
+      devlog({ stage: 'scheduler', kind: 'cursor-advance', sweepId, taskId: m.taskId, convKey, lineOffset: m.newOffset, sweeps: (prev?.sweeps ?? 0) + 1 })
     }
     cursor.lastSweepAt = tNow
     await writeCursor(paths, cursor)

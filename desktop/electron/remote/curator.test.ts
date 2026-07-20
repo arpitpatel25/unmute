@@ -118,6 +118,87 @@ test('scheduler resilience: a throwing runSweep is swallowed on scheduler ticks 
   assert.equal(sweepAttempts, before + 1)
 })
 
+// ── Bugfix: transcripts keyed by CONVERSATION id, not folder-newest ──────────
+
+test('curator: two sessions sharing a cwd but with DISTINCT sessionIds resolve to DISTINCT transcripts and keep SEPARATE cursors (no collapse)', async () => {
+  const root = await tmp()
+  const sessDir = path.join(root, 'sess')
+  const fA = path.join(root, 'A.jsonl'); await fs.writeFile(fA, busyLines())
+  const fB = path.join(root, 'B.jsonl'); await fs.writeFile(fB, busyLines())
+  const captured: MaterialSession[][] = []
+  const curator = new Curator({
+    paths: curatorPaths(root),
+    sweepIntervalMs: () => 12 * 60 * 60_000,
+    listSessions: async () => [
+      { taskId: 't1', intent: 'a', cwd: sessDir, kind: 'session', sessionId: 'sA' },
+      { taskId: 't2', intent: 'b', cwd: sessDir, kind: 'session', sessionId: 'sB' },
+    ],
+    isBusy: () => false,
+    runSweep: async (m: MaterialSession[]) => { captured.push(m) },
+    // Resolve per CONVERSATION — each session id maps to its own file, never the
+    // "newest .jsonl in the folder" both would collapse onto.
+    locateTranscriptFor: async (s) => (s.sessionId === 'sA' ? fA : fB),
+  })
+  // Pre-seed sB's cursor PAST all its lines. If cursors were keyed by taskId (or
+  // by folder), this couldn't suppress sB — but keyed by the SESSION id, sB has
+  // no new delta and is skipped, proving per-conversation cursor reads.
+  await writeCursor(curatorPaths(root), { version: 1, lastSweepAt: 0, sessions: { sB: { transcriptPath: fB, lineOffset: 999, lastSweptAt: 0, sweeps: 1 } } })
+  curator.notifyCheckpoint('t1'); curator.notifyCheckpoint('t2')
+  assert.equal(await curator.checkNow(), true)
+  const material = captured[0]
+  assert.equal(material.length, 1)                 // sA admitted; sB suppressed by ITS OWN cursor
+  assert.equal(material[0].taskId, 't1')
+  assert.equal(material[0].transcriptPath, fA)     // sA's own transcript, not a shared "newest"
+  assert.equal(material[0].convKey, 'sA')
+})
+
+test('curator: a RESUMED conversation (same sessionId, transcript grew) reads only the GROWN delta from its existing cursor — not from offset 0', async () => {
+  const root = await tmp()
+  const sessDir = path.join(root, 'sess')
+  const f = path.join(root, 'sA.jsonl')
+  await fs.writeFile(f, busyLines() + busyLines())   // 32 lines: 16 already swept + 16 new
+  // Prior sweep left the conversation cursor at line 16 (keyed by session id).
+  await writeCursor(curatorPaths(root), { version: 1, lastSweepAt: 0, sessions: { sA: { transcriptPath: f, lineOffset: 16, lastSweptAt: 0, sweeps: 1 } } })
+  const captured: MaterialSession[][] = []
+  const curator = new Curator({
+    paths: curatorPaths(root),
+    sweepIntervalMs: () => 12 * 60 * 60_000,
+    listSessions: async () => [{ taskId: 't1', intent: 'a', cwd: sessDir, kind: 'session', sessionId: 'sA' }],
+    isBusy: () => false,
+    runSweep: async (m: MaterialSession[]) => { captured.push(m) },
+    locateTranscriptFor: async () => f,
+  })
+  curator.notifyCheckpoint('t1')
+  assert.equal(await curator.checkNow(), true)
+  const m = captured[0][0]
+  assert.equal(m.convKey, 'sA')
+  assert.equal(m.fromLine, 16)          // resumed from the prior cursor, NOT re-reading from 0
+  assert.equal(m.lines.length, 16)      // only the delta (the 16 new lines)
+  assert.equal(m.newOffset, 32)
+})
+
+test('runSweep: cursors advance keyed by convKey (the pinned session id), so two sessions sharing a cwd advance SEPARATE cursors', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  const writes = async (prompt: string) => {
+    const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
+    if (!m) return
+    const payload = m[1].endsWith('distill.json') ? distillJson : m[1].endsWith('match.json') ? { matches: [] } : { proposals: [] }
+    await fs.mkdir(path.dirname(m[1]), { recursive: true })
+    await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
+  }
+  const line = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run([
+    { taskId: 't1', intent: 'x', convKey: 'sA', transcriptPath: path.join(root, 't1.jsonl'), fromLine: 0, lines: [line], lookback: [], newOffset: 5 },
+    { taskId: 't2', intent: 'y', convKey: 'sB', transcriptPath: path.join(root, 't2.jsonl'), fromLine: 0, lines: [line], lookback: [], newOffset: 7 },
+  ])
+  const cursor = await readCursor(p)
+  assert.equal(cursor.sessions.sA?.lineOffset, 5)   // keyed by conversation id…
+  assert.equal(cursor.sessions.sB?.lineOffset, 7)   // …two separate cursors, no collapse
+  assert.equal(cursor.sessions.t1, undefined)       // NOT keyed by taskId
+  assert.equal(cursor.sessions.t2, undefined)
+})
+
 // ── Task 9: the real sweep pipeline ──────────────────────────────────────────
 
 function fakeExecutor(behavior: (prompt: string) => Promise<void>, emit?: (cb: (c: string) => void) => void): AgentExecutor {
