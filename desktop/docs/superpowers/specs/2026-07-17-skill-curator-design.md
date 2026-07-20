@@ -523,3 +523,38 @@ data is not.
 - Retirement *action* (D15 — data collected, action deferred).
 - Editing/curating skills the curator did not author (D10 — never).
 - Any auto-invocation of curated skills, by any component, ever.
+
+---
+
+## 15. Curator Operating Theory v2 (2026-07-20 re-aim)
+
+The first live sweep produced technically-valid but **machine-feeling** output —
+abstract method/discipline "skills" (`verify-mutations-against-observed-state`)
+a human would not have authored, too many, flat, jargon-named. Root cause: the
+curator selected on **recurrence** and emitted **free-floating methods**. This
+section re-aims it. Research basis: Anthropic `skill-creator`, the "Equipping
+agents with Agent Skills" engineering post, and the agentskills.io / hasna
+(202-skill) registries — all converge on: skills are **task/domain units**,
+named as concrete nouns, and skill-worthiness is proven by **capability gap /
+observed struggle**, validated with-vs-without, not by recurrence.
+
+Decisions of record (supersede earlier ones where they conflict):
+
+| # | Decision |
+| - | -------- |
+| V1 | **Selection driver = STRUGGLE, not recurrence.** Propose where the agent visibly *failed / backtracked / re-derived / was corrected by the user* in a real session — that struggle IS the proven capability gap (the session is a free "without-skill" arm). Recurrence only *boosts* a struggling candidate; it never selects on its own. (Promotes triage's error→recovery / user-turn metrics from a cost-gate to the primary signal at synthesize.) |
+| V2 | **Unit = a TASK/domain**, any size (a small recurring fetch → a large workflow). **Self-contained**: bakes in the facts/access/format it needs (no profile or librarian to lean on right now). The reusable method lives *inside* the task skill, never as its own skill. |
+| V3 | **Group by DOMAIN.** Cluster related candidates into ONE skill (sub-methods become sections / reference files), per skill-creator's variant-organization guidance. Never emit flat method-slivers. Split only when contexts are genuinely unrelated. |
+| V4 | **Exclusions — NOT skills:** cross-cutting *disciplines* that should apply to all work ("verify before saving") → dropped for now (no standing-guidance home; forcing them into invocable skills is the pass-1 junk); *app-navigation / tool paths* → librarian's domain (parked); *trivial* tasks the base model already nails → nothing; *no-struggle one-offs* → nothing. |
+| V5 | **Judgment = TESTS, not a taxonomy.** For each candidate: (a) would the base model have *struggled* without this? (b) is it a *task a human would name and reach for*? (c) would *this user* plausibly *invoke it again*? All three must hold. |
+| V6 | **Prompt teaches the DECISION, not the domain.** Use domain-agnostic *tests* + a few *contrastive, cross-profession* (candidate → yes/no → why) examples, **negatives first** (the pass-1 failure was over-inclusion, so the exclusion boundary is what needs teaching). NEVER a list of example *skills* — content examples narrow a general-purpose curator to their domains. |
+| V7 | **Naming = concrete task/domain noun**, kebab-case (ecosystem convention: `extract-invoice`, `frontend-design` — glanceable). `description` states *what it does + when to use*, slightly "pushy" (skill-creator). No abstract coined phrases. |
+| V8 | **North star + enforcement = "would THIS human keep and invoke it."** Gated by human accept/reject and the **retire-what's-never-invoked** loop (the ultimate corrector for future-use, which cannot be predicted perfectly up front). |
+| V9 | **Scope of the re-aim.** Change only the *selection brain* (synthesize judges on struggle/gap + the V5 tests; distill reports per-candidate struggle) and the *output shaping* (task-units, domain-grouping, V6 prompt, V4 exclusions, V7 naming). UNCHANGED: pipeline shape, triage metrics, store, writer, UI (rail + popup + accept/reject), logging, the Claude-Code-session engine. This is a re-aim of two components, not a rebuild. |
+
+**Known-still-hard (accepted, not blocking the build):** a *cheap* gap-check at
+scale (full with-vs-without evals per candidate are costly — we lean on the
+session's own struggle as the free retrospective proxy); the domain-clustering
+mechanism (principle clear, is new code in synthesize); and the fact that
+"would-you-use-it" is only ever *confirmed* by the retire-loop over time. Build
+now, validate on real sweeps, iterate.
