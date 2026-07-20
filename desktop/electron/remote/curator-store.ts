@@ -42,8 +42,50 @@ export interface SessionCursor { transcriptPath: string; lineOffset: number; las
 export interface CursorFile { version: 1; lastSweepAt: number; sessions: Record<string, SessionCursor> }
 
 export interface CandidateOccurrence { taskId: string; sweepId: string; count: number; at: string; tracePointer: string }
-export interface Candidate { key: string; title: string; skeleton: string; total: number; struggle: boolean; firstSeen: string; lastSeen: string; occurrences: CandidateOccurrence[] }
+
+// Pattern Ledger lifecycle status. A candidate starts 'watched' (implicit —
+// legacy/undefined status defaults here via entryStatus()) and can progress
+// through graduation/surfacing/acceptance into a live skill, or be rejected
+// or retired.
+export type EntryStatus =
+  | 'watched' | 'graduated' | 'surfaced' | 'accepted' | 'live' | 'rejected' | 'retired'
+
+// Splits a candidate's distilled content into the parts that stay constant
+// across every occurrence (the skill body) vs. the parts that vary per run
+// (candidates to become template slots).
+export interface VarianceMap {
+  constant: string[]   // parts stable across every occurrence (skill body)
+  varying: string[]    // parts that change per run (become slots)
+}
+
+// One observation of whether a fresh occurrence agrees with or diverges from
+// the ledger entry's established pattern.
+export interface DivergenceObservation {
+  sessionId: string
+  at: string
+  verdict: 'agree' | 'diverge'
+  note: string
+}
+
+export interface Candidate {
+  key: string; title: string; skeleton: string; total: number; struggle: boolean; firstSeen: string; lastSeen: string; occurrences: CandidateOccurrence[]
+  // --- Enrichment (all optional — existing candidates.json entries have none of these) ---
+  status?: EntryStatus
+  variance?: VarianceMap
+  priorScore?: number
+  priorRationale?: string
+  linkedSkillId?: string
+  divergenceLog?: DivergenceObservation[]
+}
 export interface CandidatesFile { version: 1; candidates: Record<string, Candidate> }
+
+/** Lifecycle status of a ledger entry, defaulting legacy/undefined entries to 'watched'. */
+export function entryStatus(c: Candidate): EntryStatus { return c.status ?? 'watched' }
+
+/** Number of distinct sessions (taskIds) that have produced an occurrence of this candidate. */
+export function distinctSessionCount(c: Candidate): number {
+  return new Set(c.occurrences.map(o => o.taskId)).size
+}
 
 export interface SkillOwnership { origin: 'unmute'; contentHash: string; createdAt: string; updatedAt: string; userModified?: boolean }
 export interface OwnershipFile { version: 1; skills: Record<string, SkillOwnership> }

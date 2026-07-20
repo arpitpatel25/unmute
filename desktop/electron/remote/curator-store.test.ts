@@ -111,7 +111,7 @@ test('readTranscriptDelta returns lines from offset with lookback and new offset
 
 // --- Task 4: occurrence accumulator ---
 
-import { occurrenceKey, mergeDistill, type CandidatesFile } from './curator-store.ts'
+import { occurrenceKey, mergeDistill, entryStatus, distinctSessionCount, type CandidatesFile, type Candidate } from './curator-store.ts'
 
 test('occurrenceKey normalizes stably', () => {
   assert.equal(occurrenceKey('Load video → Premiere via MCP!'), 'load-video-premiere-via-mcp')
@@ -130,4 +130,26 @@ test('mergeDistill accumulates across sweeps and sessions, idempotent per (key,t
   assert.equal(cand.firstSeen, '2026-07-14')
   assert.equal(cand.lastSeen, '2026-07-17')
   assert.equal(cand.struggle, true)
+})
+
+// --- Task 1: ledger entry enrichment (status/variance/divergence) — backward-compatible ---
+
+test('legacy Candidate (no new fields) loads and defaults via pure accessors', () => {
+  const legacy: Candidate = {
+    key: 'load-video-premiere-via-mcp',
+    title: 'Load video Premiere via MCP',
+    skeleton: 's',
+    total: 4,
+    struggle: true,
+    firstSeen: '2026-07-14',
+    lastSeen: '2026-07-17',
+    occurrences: [
+      { taskId: 't1', sweepId: 'sw1', count: 2, at: '2026-07-14', tracePointer: 'traces/a' },
+      { taskId: 't2', sweepId: 'sw2', count: 2, at: '2026-07-17', tracePointer: 'traces/b' },
+      { taskId: 't2', sweepId: 'sw3', count: 1, at: '2026-07-18', tracePointer: 'traces/c' }, // same taskId, different sweep
+    ],
+  }
+  assert.equal(entryStatus(legacy), 'watched')
+  assert.equal(distinctSessionCount(legacy), 2) // distinct taskIds: t1, t2
+  assert.deepEqual(legacy.divergenceLog ?? [], [])
 })
