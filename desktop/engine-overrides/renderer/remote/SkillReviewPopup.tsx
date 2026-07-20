@@ -37,7 +37,7 @@ interface Proposal {
   id: string
   sweepId: string
   proposedAt: string
-  kind: 'create' | 'update'
+  kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'
   draft: { name: string; description: string; body: string }
   evidence: {
     occurrences: number
@@ -200,13 +200,36 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
     return () => window.removeEventListener('keydown', onKey)
   }, [cancel])
 
-  const kindChip = proposal?.kind === 'update'
-    ? { label: 'skill edit', color: AMBER }
-    : { label: 'new skill', color: GREEN }
+  const KIND_CHIP: Record<Proposal['kind'], { label: string; color: string }> = {
+    create: { label: 'new skill', color: GREEN },
+    narrow: { label: 'narrow', color: AMBER },
+    split: { label: 'split', color: AMBER },
+    merge: { label: 'merge', color: AMBER },
+    retire: { label: 'retire', color: RED },
+  }
+  const kindChip = proposal ? KIND_CHIP[proposal.kind] : { label: 'new skill', color: GREEN }
+
+  // Kind-aware, human, first-person-from-the-user's-side summary line (Task 12):
+  // this is what the user reads FIRST to understand what's being asked of them,
+  // ahead of the bullets/rationale below.
+  function kindSummaryLine(p: Proposal): string {
+    const target = p.targetSkill ?? p.draft.name
+    switch (p.kind) {
+      case 'create': return `New skill: ${p.draft.name}`
+      case 'narrow': return `Narrow ${target} to the part you actually repeat`
+      case 'split': return `Split ${target} into two`
+      case 'merge': return `Merge into ${target}`
+      case 'retire': return `Retire ${target}`
+      default: return p.rationale
+    }
+  }
 
   // The plain-language summary the user reads to decide (D20). Empty/missing →
   // fall back to the rationale so the primary area is never blank.
   const summaryBullets = (proposal?.changeSummary ?? []).filter((s) => typeof s === 'string' && s.trim().length > 0)
+  // Rewrite kinds carry a full replacement body diffed against the current one
+  // (D19, deterministic — computed in curator.ts, never LLM-authored).
+  const REWRITE_KINDS = new Set<Proposal['kind']>(['narrow', 'split', 'merge'])
 
   return (
     // Scrim — click anywhere outside the panel = Cancel.
@@ -255,8 +278,12 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
             </div>
 
             {/* PRIMARY: plain-language summary of the change (D20). This is what the
-                user reads to decide. changeSummary bullets, else the rationale. */}
+                user reads to decide. Kind-aware headline first, then changeSummary
+                bullets, else the rationale. */}
             <div style={{ flex: 1, minHeight: 96, overflow: 'auto', padding: '14px 16px' }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: C.nameText, lineHeight: 1.5, marginBottom: summaryBullets.length > 0 || proposal.rationale ? 8 : 0 }}>
+                {kindSummaryLine(proposal)}
+              </div>
               {summaryBullets.length > 0 ? (
                 <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 9 }}>
                   {summaryBullets.map((b, i) => (
@@ -276,11 +303,15 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
                 proposal. If the user refines draft.md via the conversation below,
                 these are NOT live-recomputed -- they show the original (the user drove
                 those edits, so they know them). Accept always writes the CURRENT
-                draft.md on disk regardless of what's shown here. */}
+                draft.md on disk regardless of what's shown here.
+                `retire` has no body/diff to preview (it deletes a skill) — the
+                evidence strip + rationale above already say everything there is,
+                so this whole toggle is omitted for that kind. */}
+            {proposal.kind !== 'retire' && (
             <div style={{ borderTop: `1px solid ${C.border}`, flex: 'none' }}>
-              <button onClick={() => setShowRaw((v) => { curatorDevLog({ kind: 'show-raw-toggle', proposalId, show: !v, view: proposal.kind === 'update' ? 'diff' : 'details' }); return !v })}
+              <button onClick={() => setShowRaw((v) => { curatorDevLog({ kind: 'show-raw-toggle', proposalId, show: !v, view: REWRITE_KINDS.has(proposal.kind) ? 'diff' : 'details' }); return !v })}
                 style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontFamily: C.mono, fontSize: 11.5, color: C.midText, padding: '9px 16px' }}>
-                {showRaw ? '▾ ' : '▸ '}{proposal.kind === 'update' ? (showRaw ? 'Hide diff' : 'Show diff') : (showRaw ? 'Hide details' : 'Show details')}
+                {showRaw ? '▾ ' : '▸ '}{REWRITE_KINDS.has(proposal.kind) ? (showRaw ? 'Hide diff' : 'Show diff') : (showRaw ? 'Hide details' : 'Show details')}
               </button>
               {showRaw && (
                 <div style={{ maxHeight: 220, overflow: 'auto', padding: '2px 16px 12px' }}>
@@ -313,6 +344,7 @@ export default function SkillReviewPopup({ proposalId, onClose }: { proposalId: 
                 </div>
               )}
             </div>
+            )}
 
             {/* PRIMARY edit affordance: natural-language editing (D20). The user tells
                 this Claude Code session what to change; it rewrites draft.md. The user

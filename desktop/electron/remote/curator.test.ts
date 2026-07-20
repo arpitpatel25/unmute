@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Curator, type MaterialSession, makeRunSweep, RateLimitedError, ProposalConversation } from './curator.ts'
-import { curatorPaths, readCursor, writeCursor, readCandidates, writeCandidates, listPendingProposals, writeProposal, type CandidatesFile, type Proposal } from './curator-store.ts'
+import { curatorPaths, readCursor, writeCursor, readCandidates, writeCandidates, listPendingProposals, writeProposal, appendRejection, type CandidatesFile, type Proposal } from './curator-store.ts'
 import type { AgentExecutor } from './executor'
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'cu-'))
@@ -314,6 +314,46 @@ test('runSweep: a narrow proposal SURVIVES when its linked entry has ≥2 accumu
   await run(oneMaterial(root))
   const pending = await listPendingProposals(p)
   assert.ok(pending.find((x) => x.kind === 'narrow'))                 // survives the gate
+})
+
+// ── Task 12: deterministic create-suppression (a rejected create never re-surfaces) ──
+
+test('runSweep: a create proposal whose draft name was previously rejected is dropped (create-suppression)', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  await appendRejection(p, { at: 'x', name: 'foo' })   // the user already said no to this exact name
+  const synthRejectedCreate = { proposals: [
+    { kind: 'create', draft: { name: 'foo', description: 'd', body: 'B' }, evidence: evid, rationale: 'seen twice' },
+  ] }
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writesWith(synthRejectedCreate)), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run(oneMaterial(root))
+  const pending = await listPendingProposals(p)
+  assert.equal(pending.find((x) => x.kind === 'create' && x.draft.name === 'foo'), undefined)   // suppressed — never persisted
+})
+
+test('runSweep: a create proposal with a NON-rejected name is unaffected by suppression', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  await appendRejection(p, { at: 'x', name: 'some-other-name' })
+  const synthCreate = { proposals: [
+    { kind: 'create', draft: { name: 'foo', description: 'd', body: 'B' }, evidence: evid, rationale: 'seen twice' },
+  ] }
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writesWith(synthCreate)), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run(oneMaterial(root))
+  const pending = await listPendingProposals(p)
+  assert.ok(pending.find((x) => x.kind === 'create' && x.draft.name === 'foo'))   // not suppressed — survives
+})
+
+test('runSweep: gardening kinds (narrow/split/merge/retire) targeting an existing skill are NOT create-suppressed even if that skill name was once rejected', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  await appendRejection(p, { at: 'x', name: 'pr-review' })   // rejected once, unrelated to today's gardening proposal
+  await writeCandidates(p, seededLedger(2))   // pr-review has accumulated divergence — narrow clears its own gate
+  const synthGardening = { proposals: [
+    { kind: 'narrow', targetSkill: 'pr-review', draft: { name: 'pr-review', description: 'd', body: 'new body' }, evidence: evid, rationale: 'gap' },
+  ] }
+  const curatedIndex = async () => [{ name: 'pr-review', description: 'd', body: 'line1\nline2' }]
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writesWith(synthGardening)), paths: p, curatedIndex, sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run(oneMaterial(root))
+  const pending = await listPendingProposals(p)
+  assert.ok(pending.find((x) => x.kind === 'narrow' && x.targetSkill === 'pr-review'))   // create-suppression doesn't apply to gardening kinds
 })
 
 test('runSweep: a proc.skillObservation is recorded against the ledger entry linked to that skill', async () => {

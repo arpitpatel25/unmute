@@ -51,7 +51,7 @@ import {
   parseMatchOutput,
   type MatchDecision,
 } from './curator-prompts'
-import { shortlist, applyMatch, recordSkillObservation, hasAccumulatedDivergence } from './curator-match'
+import { shortlist, applyMatch, recordSkillObservation, hasAccumulatedDivergence, isSuppressed } from './curator-match'
 import { computeTriageMetrics, passesTriage } from './curator-triage'
 import { devLogEnabled, devlog, devlogDump } from './curator-devlog'
 import { unifiedDiff } from './curator-diff'
@@ -478,7 +478,8 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     const merged = await readCandidates(paths)
     const candidates = Object.values(merged.candidates)
     // curatedFull was fetched once at step 1 (reused here for synth + the D19 diff).
-    const rejections = (await readRejections(paths)).map((r) => ({ name: r.name, reason: r.reason }))
+    const rejectionsRaw = await readRejections(paths)
+    const rejections = rejectionsRaw.map((r) => ({ name: r.name, reason: r.reason }))
     const feedback = (await readFeedback(paths)).filter((f) => !f.consumedBySweep).map((f) => ({ skill: f.skill, note: f.note }))
 
     const synthOut = join(workRoot, 'synth', 'synth.json')
@@ -503,6 +504,21 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
       const linked = candidates.find((c) => c.linkedSkillId === prop.targetSkill)
       if (!linked || !hasAccumulatedDivergence(linked)) {
         devlog({ stage: 'synthesize', kind: 'narrow-dropped-no-accumulated-divergence', sweepId, proposalId: prop.id, targetSkill: prop.targetSkill })
+        return false
+      }
+      return true
+    })
+
+    // ── 4a-bis. CREATE-SUPPRESSION (Constraint 8 — "Reject → suppress (never
+    //       re-surface)"). Once the user has rejected a name, that judgment is
+    //       final and deterministic — no LLM re-litigation. Only `create`
+    //       proposals are name-suppressible; narrow/split/merge/retire target
+    //       an EXISTING owned skill (targetSkill), not a would-be new name, so
+    //       they are not gated here.
+    proposals = proposals.filter((prop) => {
+      if (prop.kind !== 'create') return true
+      if (isSuppressed(prop.draft.name, rejectionsRaw)) {
+        devlog({ stage: 'synthesize', kind: 'create-dropped-suppressed', sweepId, proposalId: prop.id, name: prop.draft.name })
         return false
       }
       return true

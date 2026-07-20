@@ -39,6 +39,16 @@ const C = {
   mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
 }
 
+// SUGGESTIONS chip label per proposal kind (Task 12) — short, glanceable verbs
+// distinguishing the five typed proposals the curator can surface.
+const PROPOSAL_KIND_LABEL: Record<'create' | 'narrow' | 'split' | 'merge' | 'retire', string> = {
+  create: 'new',
+  narrow: 'narrow',
+  split: 'split',
+  merge: 'merge',
+  retire: 'retire',
+}
+
 // The ONLY colored variable in the whole surface (R1).
 const STATUS = {
   processing: { label: 'working', color: '#3fb950', rank: 99 }, // never queues
@@ -491,7 +501,7 @@ export default function OrchestrateWall() {
   const [skillsExpanded, setSkillsExpanded] = useState(false)
   // Curator inbox (spec §11): pending skill proposals the sweep surfaced. Loaded
   // beside skills; `openProposalId` is held here for Task 14's review popup to mount.
-  const [proposals, setProposals] = useState<Array<{ id: string; kind: 'create' | 'update'; draft: { name: string; description: string } }>>([])
+  const [proposals, setProposals] = useState<Array<{ id: string; kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'; draft: { name: string; description: string } }>>([])
   const [openProposalId, setOpenProposalId] = useState<string | null>(null)
   // Anchor coords captured at hover time — the card renders at WINDOW level
   // (position: fixed) because the rail is overflow:auto and clips anything
@@ -499,7 +509,7 @@ export default function OrchestrateWall() {
   const [hoveredSkill, setHoveredSkill] = useState<{ name: string; top: number; rightPx: number } | null>(null)
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   useEffect(() => {
-    const api = (window as unknown as { electronAPI?: { remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean; origin?: 'unmute' }>>; remoteListProjects?: () => Promise<Array<{ name: string; path: string }>>; curatorListProposals?: () => Promise<Array<{ id: string; kind: 'create' | 'update'; draft: { name: string; description: string } }>> } }).electronAPI
+    const api = (window as unknown as { electronAPI?: { remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean; origin?: 'unmute' }>>; remoteListProjects?: () => Promise<Array<{ name: string; path: string }>>; curatorListProposals?: () => Promise<Array<{ id: string; kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'; draft: { name: string; description: string } }>> } }).electronAPI
     const load = () => {
       void api?.remoteListSkills?.().then((s) => setSkills(s ?? [])).catch(() => {})
       void api?.remoteListProjects?.().then((p) => setProjects(p ?? [])).catch(() => {})
@@ -920,7 +930,7 @@ export default function OrchestrateWall() {
                     {proposals.map((p) => (
                       <button key={p.id} onClick={() => { curatorDevLog({ kind: 'suggestion-tap', proposalId: p.id, proposalKind: p.kind, name: p.draft.name }); setOpenProposalId(p.id) }} className="ow-row"
                         style={{ display: 'flex', alignItems: 'baseline', gap: 7, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', fontFamily: C.mono }}>
-                        <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.4, color: 'rgba(210,153,34,0.7)', flex: 'none' }}>{p.kind === 'update' ? 'edit' : 'new'}</span>
+                        <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.4, color: 'rgba(210,153,34,0.7)', flex: 'none' }}>{PROPOSAL_KIND_LABEL[p.kind] ?? p.kind}</span>
                         <span style={{ fontSize: 11.5, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{p.draft.name}</span>
                       </button>
                     ))}
@@ -1100,7 +1110,7 @@ export default function OrchestrateWall() {
           proposalId={openProposalId}
           onClose={() => {
             setOpenProposalId(null)
-            const api = (window as unknown as { electronAPI?: { curatorListProposals?: () => Promise<Array<{ id: string; kind: 'create' | 'update'; draft: { name: string; description: string } }>> } }).electronAPI
+            const api = (window as unknown as { electronAPI?: { curatorListProposals?: () => Promise<Array<{ id: string; kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'; draft: { name: string; description: string } }>> } }).electronAPI
             void api?.curatorListProposals?.().then((p) => setProposals(p ?? []))
           }}
         />
