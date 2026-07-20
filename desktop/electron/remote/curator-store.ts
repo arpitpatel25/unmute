@@ -41,7 +41,7 @@ export function curatorPaths(baseDir?: string): CuratorPaths {
 export interface SessionCursor { transcriptPath: string; lineOffset: number; lastSweptAt: number; sweeps: number }
 export interface CursorFile { version: 1; lastSweepAt: number; sessions: Record<string, SessionCursor> }
 
-export interface CandidateOccurrence { taskId: string; sweepId: string; count: number; at: string; tracePointer: string }
+export interface CandidateOccurrence { taskId: string; sweepId: string; count: number; at: string; tracePointer: string; errors?: number; recoveries?: number; wallClockMs?: number }
 
 // Pattern Ledger lifecycle status. A candidate starts 'watched' (implicit —
 // legacy/undefined status defaults here via entryStatus()) and can progress

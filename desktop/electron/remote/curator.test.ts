@@ -197,6 +197,41 @@ test('runSweep: a proposal.sourceKeys moves its ledger candidate to status "surf
   assert.equal(cands.candidates['load-video-premiere'].status, 'surfaced')
 })
 
+test('runSweep: backfills evidence occurrences + struggle from sourceKeys candidates when the judge left them zero (the 0-min bug)', async () => {
+  const root = await tmp()
+  const p = curatorPaths(root)
+  // A struggling session: one tool_use at t0, an is_error tool_result, then a
+  // recovery 10 minutes later → computeTriageMetrics yields errors:1, recoveries:1,
+  // wallClockMs:600_000. distillJson (count:2) → candidate 'load-video-premiere' total 2.
+  const strugLines = [
+    JSON.stringify({ timestamp: new Date(1_000_000).toISOString(), message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } }),
+    JSON.stringify({ timestamp: new Date(1_060_000).toISOString(), message: { role: 'user', content: [{ type: 'tool_result', is_error: true }] } }),
+    JSON.stringify({ timestamp: new Date(1_600_000).toISOString(), message: { role: 'user', content: [{ type: 'tool_result', is_error: false }] } }),
+  ]
+  // Judge emits a create pointing at the candidate but with ZEROED evidence.
+  const synthBackfill = { proposals: [
+    { kind: 'create', draft: { name: 'video-load-premiere', description: 'd', body: 'Goal…' },
+      evidence: { occurrences: 0, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 0, recoveries: 0, wallClockMin: 0 } },
+      rationale: 'seen', sourceKeys: ['load-video-premiere'] },
+  ] }
+  const writes = async (prompt: string) => {
+    const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
+    if (!m) return
+    const payload = m[1].endsWith('distill.json') ? distillJson : m[1].endsWith('match.json') ? { matches: [] } : synthBackfill
+    await fs.mkdir(path.dirname(m[1]), { recursive: true })
+    await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
+  }
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run([{ taskId: 't1', intent: 'video work', transcriptPath: path.join(root, 't1.jsonl'), fromLine: 0, lines: strugLines, lookback: [], newOffset: 3 }])
+  const pending = await listPendingProposals(p)
+  assert.equal(pending.length, 1)
+  const ev = pending[0].evidence
+  assert.equal(ev.occurrences, 2)             // backfilled from candidate.total (was 0)
+  assert.equal(ev.struggle.wallClockMin, 10)  // round(600_000 / 60_000) (was 0)
+  assert.equal(ev.struggle.errors, 1)
+  assert.equal(ev.struggle.recoveries, 1)
+})
+
 test('runSweep: the matcher FUSES two differently-titled procedures from two sessions into ONE ledger entry (semantic match replaces slug-keying)', async () => {
   const root = await tmp()
   const p = curatorPaths(root)

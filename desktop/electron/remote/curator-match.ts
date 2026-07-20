@@ -97,7 +97,7 @@ export function applyMatch(
   file: CandidatesFile,
   proc: DistillProcedure,
   decision: MatchDecision,
-  ctx: { taskId: string; sweepId: string; at: string; tracePointer: string },
+  ctx: { taskId: string; sweepId: string; at: string; tracePointer: string; errors?: number; recoveries?: number; wallClockMs?: number },
 ): CandidatesFile {
   const candidates: Record<string, Candidate> = {}
   for (const [k, c] of Object.entries(file.candidates)) {
@@ -114,7 +114,7 @@ export function applyMatch(
       candidates[matchedKey] = cand
       return { version: 1, candidates }
     }
-    cand.occurrences.push({ taskId: ctx.taskId, sweepId: ctx.sweepId, count: proc.count, at: ctx.at, tracePointer: ctx.tracePointer })
+    cand.occurrences.push({ taskId: ctx.taskId, sweepId: ctx.sweepId, count: proc.count, at: ctx.at, tracePointer: ctx.tracePointer, errors: ctx.errors, recoveries: ctx.recoveries, wallClockMs: ctx.wallClockMs })
     cand.total = cand.occurrences.reduce((s, o) => s + o.count, 0)
     cand.struggle = cand.struggle || proc.struggle
     cand.firstSeen = cand.occurrences.reduce((m, o) => (o.at < m ? o.at : m), cand.firstSeen)
@@ -146,7 +146,7 @@ export function applyMatch(
     candidates[key] = cand
     return { version: 1, candidates }
   }
-  cand.occurrences.push({ taskId: ctx.taskId, sweepId: ctx.sweepId, count: proc.count, at: ctx.at, tracePointer: ctx.tracePointer })
+  cand.occurrences.push({ taskId: ctx.taskId, sweepId: ctx.sweepId, count: proc.count, at: ctx.at, tracePointer: ctx.tracePointer, errors: ctx.errors, recoveries: ctx.recoveries, wallClockMs: ctx.wallClockMs })
   cand.total = cand.occurrences.reduce((s, o) => s + o.count, 0)
   cand.struggle = cand.struggle || proc.struggle
   cand.firstSeen = cand.occurrences.reduce((m, o) => (o.at < m ? o.at : m), cand.firstSeen)

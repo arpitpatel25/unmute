@@ -39,6 +39,7 @@ import {
   pruneTraces,
   type CuratorPaths,
   type DistillProcedure,
+  type Candidate,
 } from './curator-store'
 import {
   buildDistillPrompt,
@@ -412,9 +413,13 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     //   3a. Flatten every session's procedures into one ordered array. The flat
     //       index IS MatchDecision.procedureIndex — order is load-bearing.
     const at = nowIso()
-    const flat: Array<{ proc: DistillProcedure; ctx: { taskId: string; sweepId: string; at: string; tracePointer: string } }> = []
+    const flat: Array<{ proc: DistillProcedure; ctx: { taskId: string; sweepId: string; at: string; tracePointer: string; errors: number; recoveries: number; wallClockMs: number } }> = []
     for (const { m, procs, tracePointer } of distilled) {
-      for (const proc of procs) flat.push({ proc, ctx: { taskId: m.taskId, sweepId, at, tracePointer } })
+      // Deterministic per-session struggle metrics — persisted onto every
+      // occurrence this session contributes so a later proposal can backfill the
+      // evidence strip even when the judge zeroed it (the "0 min of work" bug).
+      const sm = computeTriageMetrics(m.lines)
+      for (const proc of procs) flat.push({ proc, ctx: { taskId: m.taskId, sweepId, at, tracePointer, errors: sm.errors, recoveries: sm.recoveries, wallClockMs: sm.wallClockMs } })
     }
 
     //   3b. Combined shortlist off the CURRENT ledger — union of each proc's
@@ -539,6 +544,29 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
         // does, leave diff undefined rather than diff against a phantom body.
         if (currentBody !== undefined) prop.diff = unifiedDiff(currentBody, prop.draft.body)
       }
+    }
+
+    // ── 4c. BACKFILL evidence from the sourceKeys candidates (the "0 min of
+    //       work" fix). The judge often omits or zeros the evidence strip's
+    //       numbers; those are DETERMINISTIC facts of the ledger, not judgment
+    //       calls. For each field the judge left falsy/zero, fill it from the
+    //       candidates the proposal was drawn from (their accumulated occurrences
+    //       carry the per-session struggle metrics). A value the judge DID
+    //       provide (non-zero) is left untouched. Proposals without sourceKeys —
+    //       or whose keys aren't on the ledger — are left as-is.
+    for (const prop of proposals) {
+      if (!prop.sourceKeys || prop.sourceKeys.length === 0) continue
+      const sources = prop.sourceKeys
+        .map((k) => merged.candidates[k])
+        .filter((c): c is Candidate => c !== undefined)
+      if (sources.length === 0) continue
+      const ev = prop.evidence
+      const sumOcc = (pick: (o: Candidate['occurrences'][number]) => number): number =>
+        sources.reduce((s, c) => s + c.occurrences.reduce((a, o) => a + pick(o), 0), 0)
+      if (!ev.occurrences) ev.occurrences = sources.reduce((s, c) => s + (c.total || 0), 0)
+      if (!ev.struggle.errors) ev.struggle.errors = sumOcc((o) => o.errors ?? 0)
+      if (!ev.struggle.recoveries) ev.struggle.recoveries = sumOcc((o) => o.recoveries ?? 0)
+      if (!ev.struggle.wallClockMin) ev.struggle.wallClockMin = Math.round(sumOcc((o) => o.wallClockMs ?? 0) / 60000)
     }
 
     // ── 5. Persist each proposal: the JSON and its editable draft.md. A proposal

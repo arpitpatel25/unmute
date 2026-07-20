@@ -152,6 +152,40 @@ test('applyMatch treats an unknown matchedKey (not on the ledger) as a new entry
   assert.equal(out.candidates['not-a-real-key'], undefined)
 })
 
+// --- Task 13: per-occurrence struggle metrics ---
+
+test('applyMatch writes errors/recoveries/wallClockMs onto a NEW-entry occurrence', () => {
+  const empty: CandidatesFile = { version: 1, candidates: {} }
+  const proc = { title: 'Struggled through a thing', skeleton: 'S', count: 1, struggle: true }
+  const decision: MatchDecision = { procedureIndex: 0, matchedKey: null, confidence: 0, variedThisRun: [] }
+  const out = applyMatch(empty, proc, decision, { ...ctx1, errors: 3, recoveries: 2, wallClockMs: 600_000 })
+  const occ = out.candidates[occurrenceKey(proc.title)].occurrences[0]
+  assert.equal(occ.errors, 3)
+  assert.equal(occ.recoveries, 2)
+  assert.equal(occ.wallClockMs, 600_000)
+})
+
+test('applyMatch writes errors/recoveries/wallClockMs onto a MATCHED-entry occurrence', () => {
+  const key = occurrenceKey('editing a talking-head video')
+  const seeded: CandidatesFile = {
+    version: 1,
+    candidates: {
+      [key]: {
+        key, title: 'editing a talking-head video', skeleton: 'trim, crop, caption',
+        total: 2, struggle: true, firstSeen: '2026-07-10', lastSeen: '2026-07-10',
+        occurrences: [{ taskId: 't0', sweepId: 'sw0', count: 2, at: '2026-07-10', tracePointer: 'traces/z' }],
+      },
+    },
+  }
+  const proc = { title: 'edit a talking head video', skeleton: 'trim, crop, caption', count: 3, struggle: true }
+  const decision: MatchDecision = { procedureIndex: 0, matchedKey: key, confidence: 0.9, variedThisRun: [] }
+  const out = applyMatch(seeded, proc, decision, { ...ctx2, errors: 5, recoveries: 4, wallClockMs: 900_000 })
+  const occ = out.candidates[key].occurrences[1]
+  assert.equal(occ.errors, 5)
+  assert.equal(occ.recoveries, 4)
+  assert.equal(occ.wallClockMs, 900_000)
+})
+
 // --- Task 10: divergence accumulation ---
 
 const linkedEntry = (over: Partial<Candidate> = {}): Candidate => ({
