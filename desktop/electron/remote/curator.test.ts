@@ -138,9 +138,9 @@ test('runSweep: distills, accumulates, synthesizes, writes proposal, advances cu
   const root = await tmp()
   const p = curatorPaths(root)
   const writes = async (prompt: string) => {
-    const m = prompt.match(/(\/\S+?(?:distill|synth)\.json)/)
+    const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
     if (!m) return
-    const payload = m[1].endsWith('distill.json') ? distillJson : synthJson
+    const payload = m[1].endsWith('distill.json') ? distillJson : m[1].endsWith('match.json') ? { matches: [] } : synthJson
     await fs.mkdir(path.dirname(m[1]), { recursive: true })
     await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
   }
@@ -155,6 +155,42 @@ test('runSweep: distills, accumulates, synthesizes, writes proposal, advances cu
   assert.equal(cursor.sessions.t1.lineOffset, 1)                       // advanced on success
 })
 
+test('runSweep: the matcher FUSES two differently-titled procedures from two sessions into ONE ledger entry (semantic match replaces slug-keying)', async () => {
+  const root = await tmp()
+  const p = curatorPaths(root)
+  // Two sessions distill DIFFERENT-worded titles for the same repeatable core.
+  // Under the old title-slug fold these were two entries; the matcher fuses them.
+  const distillT1 = { procedures: [{ title: 'Alpha pattern one', skeleton: 'S1', count: 1, struggle: false }] }
+  const distillT2 = { procedures: [{ title: 'Beta different wording', skeleton: 'S2', count: 1, struggle: false }] }
+  // The single matcher session: proc[0] is new, proc[1] EXTENDS proc[0]'s entry.
+  const matchJson = { matches: [
+    { procedureIndex: 0, matchedKey: null, confidence: 0.9, variedThisRun: [] },
+    { procedureIndex: 1, matchedKey: 'alpha-pattern-one', confidence: 0.9, variedThisRun: [] },
+  ] }
+  const synthJson = { proposals: [] }
+  const writes = async (prompt: string) => {
+    const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
+    if (!m) return
+    const out = m[1]
+    const payload = out.endsWith('distill.json')
+      ? (out.includes('distill-t1') ? distillT1 : distillT2)
+      : out.endsWith('match.json') ? matchJson : synthJson
+    await fs.mkdir(path.dirname(out), { recursive: true })
+    await fs.writeFile(out + '.tmp', JSON.stringify(payload)); await fs.rename(out + '.tmp', out)
+  }
+  const line = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run([
+    { taskId: 't1', intent: 'work one', transcriptPath: path.join(root, 't1.jsonl'), fromLine: 0, lines: [line], lookback: [], newOffset: 1 },
+    { taskId: 't2', intent: 'work two', transcriptPath: path.join(root, 't2.jsonl'), fromLine: 0, lines: [line], lookback: [], newOffset: 1 },
+  ])
+  const cands = await readCandidates(p)
+  const entries = Object.values(cands.candidates)
+  assert.equal(entries.length, 1)                     // ONE fused entry, not two slug-keyed ones
+  assert.equal(entries[0].occurrences.length, 2)      // both sessions contributed an occurrence
+  assert.equal(entries[0].total, 2)
+})
+
 test('runSweep: update proposal gets a DETERMINISTIC diff from the current body; create gets none (D19)', async () => {
   const root = await tmp()
   const p = curatorPaths(root)
@@ -165,9 +201,9 @@ test('runSweep: update proposal gets a DETERMINISTIC diff from the current body;
       evidence: { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 5 } }, rationale: 'seen twice' },
   ] }
   const writes = async (prompt: string) => {
-    const m = prompt.match(/(\/\S+?(?:distill|synth)\.json)/)
+    const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
     if (!m) return
-    const payload = m[1].endsWith('distill.json') ? distillJson : synthUpdate
+    const payload = m[1].endsWith('distill.json') ? distillJson : m[1].endsWith('match.json') ? { matches: [] } : synthUpdate
     await fs.mkdir(path.dirname(m[1]), { recursive: true })
     await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
   }

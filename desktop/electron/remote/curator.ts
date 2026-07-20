@@ -28,7 +28,6 @@ import {
   writeCursor,
   readCandidates,
   writeCandidates,
-  mergeDistill,
   writeProposal,
   readRejections,
   readFeedback,
@@ -36,7 +35,9 @@ import {
   readTranscriptDelta,
   readProposal,
   occurrenceKey,
+  pruneTraces,
   type CuratorPaths,
+  type DistillProcedure,
 } from './curator-store'
 import {
   buildDistillPrompt,
@@ -45,7 +46,11 @@ import {
   buildSynthesizePrompt,
   parseSynthesizeOutput,
   parseSynthesizeReasoning,
+  buildMatchPrompt,
+  parseMatchOutput,
+  type MatchDecision,
 } from './curator-prompts'
+import { shortlist, applyMatch } from './curator-match'
 import { computeTriageMetrics, passesTriage } from './curator-triage'
 import { devLogEnabled, devlog, devlogDump } from './curator-devlog'
 import { unifiedDiff } from './curator-diff'
@@ -394,20 +399,59 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
       distilled.push({ m, procs, tracePointer: relative(paths.root, traceFile) })
     }
 
-    // ── 3. Accumulate: fold every session's procedures into the candidate
-    //       ledger (pure, idempotent per key,task,sweep), then persist once.
-    let candFile = await readCandidates(paths)
+    // ── 3. Accumulate via a SINGLE semantic-matcher pass. Instead of a
+    //       title-slug fold (which splits the same repeatable core across
+    //       differently-worded sessions), ONE matcher session judges each
+    //       distilled procedure against the ledger and fuses same-core findings.
+    //   3a. Flatten every session's procedures into one ordered array. The flat
+    //       index IS MatchDecision.procedureIndex — order is load-bearing.
     const at = nowIso()
+    const flat: Array<{ proc: DistillProcedure; ctx: { taskId: string; sweepId: string; at: string; tracePointer: string } }> = []
     for (const { m, procs, tracePointer } of distilled) {
+      for (const proc of procs) flat.push({ proc, ctx: { taskId: m.taskId, sweepId, at, tracePointer } })
+    }
+
+    //   3b. Combined shortlist off the CURRENT ledger — union of each proc's
+    //       token-overlap shortlist, deduped by key, capped generously so the
+    //       matcher prompt stays bounded.
+    let candFile = await readCandidates(paths)
+    const shortlistByKey = new Map<string, { key: string; title: string; skeleton: string }>()
+    for (const { proc } of flat) {
+      for (const entry of shortlist(candFile, proc)) {
+        if (!shortlistByKey.has(entry.key)) shortlistByKey.set(entry.key, entry)
+      }
+    }
+    const ledgerShortlist = Array.from(shortlistByKey.values()).slice(0, 40)
+
+    //   3c. Exactly ONE matcher session per sweep (quota). It goes through the
+    //       same runOneShot watch/RateLimitedError path as distill/synth, so a
+    //       usage cap here still aborts the sweep with cursors untouched.
+    let decisions: MatchDecision[] = []
+    if (flat.length > 0) {
+      const matchOut = join(workRoot, 'match', 'match.json')
+      const matchPrompt = buildMatchPrompt({ procedures: flat.map((f) => f.proc), ledgerShortlist, outPath: matchOut, devMode })
+      const matchRaw = await runOneShot('match', matchPrompt, matchOut, dirname(matchOut))
+      decisions = parseMatchOutput(matchRaw)
+      // DEV-ONLY: dump the matcher's full inputs+output; log the structured verdicts.
+      devlogDump(`${sweepId}-match`, { sweepId, procedures: flat.map((f) => ({ title: f.proc.title, taskId: f.ctx.taskId })), ledgerShortlist, prompt: matchPrompt, rawOutput: matchRaw })
+      devlog({ stage: 'accumulate', kind: 'matched', sweepId, procedures: flat.length, shortlist: ledgerShortlist.length, decisions: decisions.map((d) => ({ procedureIndex: d.procedureIndex, matchedKey: d.matchedKey, confidence: d.confidence, variedThisRun: d.variedThisRun })) })
+    }
+
+    //   3d. Fold each proc by its verdict. A missing/parse-empty/out-of-range
+    //       decision degrades to {matchedKey:null} so a bad matcher NEVER loses
+    //       data — every proc still becomes at least a watched entry.
+    const decisionByIndex = new Map<number, MatchDecision>()
+    for (const d of decisions) decisionByIndex.set(d.procedureIndex, d)
+    for (let i = 0; i < flat.length; i++) {
+      const { proc, ctx } = flat[i]
+      const decision = decisionByIndex.get(i) ?? { procedureIndex: i, matchedKey: null, confidence: 0, variedThisRun: [] }
       const before = candFile.candidates
-      candFile = mergeDistill(candFile, procs, { taskId: m.taskId, sweepId, at, tracePointer })
-      // DEV-ONLY: what this session's procedures did to the ledger — new keys,
-      // bumped totals, and whether the repetition (≥2) threshold got crossed.
-      devlog({ stage: 'accumulate', kind: 'merged', sweepId, taskId: m.taskId, merged: procs.map((p) => {
-        const key = occurrenceKey(p.title)
-        const cand = candFile.candidates[key]
-        return { key, title: p.title, wasNew: !before[key], total: cand?.total, struggle: cand?.struggle, crossedRepetition: (cand?.total ?? 0) >= 2 }
-      }) })
+      candFile = applyMatch(candFile, proc, decision, ctx)
+      const key = decision.matchedKey && before[decision.matchedKey] ? decision.matchedKey : occurrenceKey(proc.title)
+      const cand = candFile.candidates[key]
+      // DEV-ONLY: what this proc did to the ledger — matched vs new, bumped total,
+      // whether the repetition (≥2) threshold got crossed.
+      devlog({ stage: 'accumulate', kind: 'folded', sweepId, taskId: ctx.taskId, title: proc.title, key, matchedKey: decision.matchedKey, wasNew: !before[key], total: cand?.total, struggle: cand?.struggle, crossedRepetition: (cand?.total ?? 0) >= 2 })
     }
     await writeCandidates(paths, candFile)
 
@@ -472,6 +516,9 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     cursor.lastSweepAt = tNow
     await writeCursor(paths, cursor)
     await markFeedbackConsumed(paths, sweepId)
+    // Retention (Global Constraint 12): prune raw traces past the rolling window.
+    // Best-effort housekeeping — a prune failure must never break a done sweep.
+    try { await pruneTraces(paths, tNow, 14) } catch { /* best-effort */ }
     log2.event('sweep-pipeline-done', { sweepId, proposals: proposals.length })
     devlog({ stage: 'scheduler', kind: 'pipeline-done', sweepId, proposals: proposals.length })
     } catch (err) {
