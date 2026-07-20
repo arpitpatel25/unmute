@@ -23,7 +23,13 @@ test('parseDistillOutput: tolerates junk, validates entries', () => {
   assert.equal(ok[0].count, 2)
 })
 
-test('synthesize prompt: v2 three tests, disciplines-not-skills exclusion, group-by-domain, task-noun naming, negatives-first examples, changeSummary + full body, restraint', () => {
+// Anti-drift guard: the Cadence-B judge prompt MUST literally carry the binding
+// two-door selection philosophy. These substring assertions are the project's
+// guard against the prompt silently drifting away from the decided design.
+// (Replaces the retired v2 "three tests / GAP-TASK-REUSE / struggle-is-PRIMARY"
+// test — that framing was deliberately superseded by the two doors, where
+// struggle is one input rather than the gate.)
+test('synthesize prompt (Cadence-B two-door judge): binding rules render verbatim + evidence/rejections/feedback', () => {
   const p = buildSynthesizePrompt({
     sweepId: 'sw1',
     candidates: [{ key: 'k', title: 'T', skeleton: 'S', total: 3, struggle: true, firstSeen: 'a', lastSeen: 'b', occurrences: [] }],
@@ -32,28 +38,36 @@ test('synthesize prompt: v2 three tests, disciplines-not-skills exclusion, group
     feedback: [{ skill: 'pr-review', note: 'misses lockfiles' }],
     outPath: '/out/synth.json',
   })
-  // V5 — the three tests (GAP / TASK / REUSE)
-  assert.ok(/GAP/.test(p) && /TASK/.test(p) && /REUSE/.test(p))
-  assert.ok(/three tests/i.test(p) && /ALL must hold/i.test(p))
-  // V4 — cross-cutting disciplines are NOT skills, and app-navigation excluded
-  assert.ok(/DISCIPLINE/i.test(p) && /verify a change before saving|applies to ALL work/i.test(p))
-  assert.ok(/app-navigation|click-through-an-app|reach-a-state/i.test(p))
-  // V6 — negatives-first contrastive examples (NO before YES)
-  assert.ok(/Contrastive examples/i.test(p))
-  assert.ok(p.includes('→ NO') && p.includes('→ YES'))
-  // V3 — group by domain, no slivers
-  assert.ok(/GROUP BY DOMAIN/i.test(p) && /ONE skill/i.test(p))
-  // V7 — concrete task/domain noun naming, not abstract coined phrases
-  assert.ok(/task\/domain noun|kebab-case/i.test(p) && /NEVER an\s*\n?\s*abstract coined phrase|abstract coined phrase/i.test(p))
-  // struggle is the primary selection signal (V1)
-  assert.ok(/struggle/i.test(p) && /PRIMARY/i.test(p))
-  assert.ok(/when unsure, DON'T/i.test(p))                        // restraint posture stays
-  assert.ok(/changeSummary/.test(p))                             // D20 plain-language summary
-  assert.ok(/full[^\n]*body|complete[^\n]*body/i.test(p))        // update emits full body
-  assert.ok(!/unified diff of the body/i.test(p))                // no hand-written diff
-  assert.ok(p.includes('seen 3x') || p.includes('total: 3'))
-  assert.ok(p.includes('too niche'))
-  assert.ok(p.includes('misses lockfiles'))
+  // Rule 1 — two doors. Door 1 (strong prior) with the verbatim human-glad test.
+  assert.ok(/Door 1/.test(p) && /Door 2/.test(p))
+  assert.ok(p.includes('If this never happens again, would a human still be glad this skill exists?'))
+  assert.ok(/single sighting|SINGLE sighting|one sighting/i.test(p))     // Door 1 may graduate on 1
+  // Rule 2 — the ≥2 rule: a Door-2 recurrence skill needs ≥2 distinct sessions.
+  assert.ok(/at least 2 distinct sessions/i.test(p))
+  // Rule 3 — struggle is one input, not the gate (NOT the old "PRIMARY" framing).
+  assert.ok(p.includes('Struggle is one input, not the gate.'))
+  assert.ok(!/PRIMARY/.test(p))
+  // Rule 4 — FEW is the goal; cross-cutting disciplines / incidental navigation excluded.
+  assert.ok(/FEW is the goal/.test(p))
+  assert.ok(/no cross-cutting/i.test(p))
+  assert.ok(/recurring cross-app/i.test(p))                              // a recurring cross-app task IS fine
+  // Rule 5 — hardcode-vs-slot: only run-to-run-changing values become slots; secrets from env/keychain.
+  assert.ok(/change from run to run/i.test(p))
+  assert.ok(/secret/i.test(p) && /env|keychain/i.test(p))
+  // Rule 6 — skills independent; no cross-skill facts store; only parent→child composition.
+  assert.ok(/independent/i.test(p) && /no cross-skill facts/i.test(p))
+  assert.ok(/parent.?child composition/i.test(p))
+  // Rule 7 — typed output contract lists all 5 kinds; full body not a diff.
+  for (const kind of ['create', 'narrow', 'split', 'merge', 'retire']) assert.ok(p.includes(kind), `missing kind ${kind}`)
+  assert.ok(/full[^\n]*body|complete[^\n]*body/i.test(p))                // narrow/split/merge emit the COMPLETE new body
+  assert.ok(!/unified diff of the body/i.test(p))                        // never a hand-written diff
+  assert.ok(/changeSummary/.test(p))
+  // Restraint posture preserved.
+  assert.ok(/when unsure, DON'T/i.test(p))
+  // Candidate evidence rendered: occurrences + distinct-session count.
+  assert.ok(p.includes('seen 3x') && /distinct session/i.test(p))
+  assert.ok(p.includes('too niche'))                                    // rejections rendered
+  assert.ok(p.includes('misses lockfiles'))                             // feedback rendered
 })
 
 test('parseSynthesizeOutput: validates, stamps ids/resolution, drops invalid', () => {

@@ -8,6 +8,7 @@
 // cross-cutting disciplines / app-navigation are excluded.
 
 import type { DistillProcedure, Candidate, Proposal, ProposalDraft } from './curator-store.ts'
+import { entryStatus, distinctSessionCount } from './curator-store'
 
 // ── Distill ────────────────────────────────────────────────────────────────
 
@@ -120,9 +121,39 @@ export function parseDistillReasoning(raw: string | null): string | undefined {
 
 // ── Synthesize ───────────────────────────────────────────────────────────────
 
-/** Build the synthesize prompt: candidates + context → proposals. Judges on the
- *  v2 three tests (GAP/TASK/REUSE, spec §15 V5), groups by domain, excludes
- *  cross-cutting disciplines and app-navigation. */
+/** Render one ledger candidate as the evidence block the judge weighs: distinct-
+ *  session count (the Door-2 floor input), lifecycle status, struggle, and — when
+ *  present — variance (hardcode-vs-slot), the Door-1 priorScore/rationale, and the
+ *  accumulated divergenceLog (what fires narrow/refine). Optional fields render
+ *  only when set, keeping the prompt lean for the common bare candidate. */
+function renderCandidate(c: Candidate): string {
+  const sessions = distinctSessionCount(c)
+  const head =
+    `- [${c.key}] "${c.title}" — seen ${c.total}x across ${sessions} distinct session(s) (${c.firstSeen}→${c.lastSeen})` +
+    `; struggle:${c.struggle ? 'y' : 'n'}; status:${entryStatus(c)}` +
+    (typeof c.priorScore === 'number' ? `; priorScore:${c.priorScore}` : '')
+  const parts = [head, `  skeleton: ${c.skeleton}`]
+  if (c.priorRationale) parts.push(`  priorRationale: ${c.priorRationale}`)
+  if (c.variance) {
+    const constant = c.variance.constant.length ? c.variance.constant.join('; ') : '(none observed yet)'
+    const varying = c.variance.varying.length ? c.variance.varying.join('; ') : '(none observed yet)'
+    parts.push(`  variance — constant (bake into body): ${constant}`)
+    parts.push(`  variance — changes run-to-run (slot candidates): ${varying}`)
+  }
+  if (c.divergenceLog && c.divergenceLog.length) {
+    const summary = c.divergenceLog.map((d) => `${d.verdict}: ${d.note}`).join(' | ')
+    parts.push(`  divergenceLog (${c.divergenceLog.length}): ${summary}`)
+  }
+  return parts.join('\n')
+}
+
+/** Build the Cadence-B judge prompt: the durable ledger + the existing skills →
+ *  TYPED proposals (create for graduation; narrow/split/merge/retire for
+ *  gardening). Encodes the two-door selection philosophy LITERALLY (spec §2/§6,
+ *  Global Constraints 2–6) — those exact sentences are asserted by
+ *  curator-prompts.test.ts as the guard against prompt drift. Kept named
+ *  `buildSynthesizePrompt` (curator.ts imports it) with a backward-compatible
+ *  input shape. */
 export function buildSynthesizePrompt(i: {
   sweepId: string
   candidates: Candidate[]
@@ -137,12 +168,7 @@ export function buildSynthesizePrompt(i: {
   devMode?: boolean
 }): string {
   const candidateLines = i.candidates.length
-    ? i.candidates
-        .map(
-          (c) =>
-            `- [${c.key}] "${c.title}" — seen ${c.total}x (${c.firstSeen}→${c.lastSeen}), struggle:${c.struggle ? 'y' : 'n'}\n  skeleton: ${c.skeleton}`,
-        )
-        .join('\n')
+    ? i.candidates.map(renderCandidate).join('\n')
     : '(no candidates this sweep)'
 
   const curatedLines = i.curatedIndex.length
@@ -159,110 +185,130 @@ export function buildSynthesizePrompt(i: {
 
   const lines = [
     // (1) role
-    `[Unmute curator — synthesize] Sweep ${i.sweepId}. From the candidates below,`,
-    `propose a SMALL number of genuinely useful SKILLS for THIS specific user.`,
-    `Proposals only — a human reviews.`,
+    `[Unmute curator — judge] Sweep ${i.sweepId}. You are the periodic judge. You`,
+    `read the durable pattern ledger below + the skills that already exist, and you`,
+    `emit a SMALL number of TYPED proposals for THIS specific user. Proposals only`,
+    `— a human reviews every one; nothing is applied automatically.`,
     ``,
-    // (2) what a skill is
+    // (2) what a skill is (self-contained; hardcode-vs-slot; independence)
     `── What a skill IS ──`,
-    `A skill is a reusable capability for a RECURRING TASK the user does — named`,
-    `the way the user would name that task (extract-invoice, edit-talking-head-`,
-    `video, setup-mcp-connector). It can be small (a specific repeated fetch) or`,
-    `large (a whole workflow). It is SELF-CONTAINED: it bakes in the specifics it`,
-    `needs — which source/account/channel, how to reach it, the format the user`,
-    `wants — because there is no separate profile or memory to lean on. The`,
-    `reusable method/standards live INSIDE the task skill.`,
+    `A skill is a reusable capability for a task the user does — named the way the`,
+    `user would name it (extract-invoice, edit-talking-head-video,`,
+    `setup-mcp-connector). It is SELF-CONTAINED: the reusable method lives INSIDE`,
+    `it; there is no separate profile or memory to lean on.`,
+    `Hardcode-vs-slot rule: bake the specifics that are STABLE for this user`,
+    `(which source/account/channel, the format they want, the standing approach)`,
+    `directly into the body; only values that CHANGE from run to run become slots.`,
+    `Secrets are referenced from env/keychain, never baked into the body.`,
+    `Skills are independent — no cross-skill facts store, no shared memory a skill`,
+    `reads from. The ONLY cross-skill relation is parent→child composition (a skill`,
+    `may invoke a smaller child skill).`,
     ``,
-    // (3) the one bar — three tests (V5)
-    `── The one bar: would THIS user keep it and actually invoke it again? Three`,
-    `tests, ALL must hold ──`,
-    `(1) GAP: would the base model have STRUGGLED without this? A candidate marked`,
-    `    struggle:y is your evidence (errors, backtracking, user correction). If`,
-    `    the model already did it smoothly by default, there is NO gap → NOT a skill.`,
-    `(2) TASK: is it a recognizable TASK a human would name and reach for — not an`,
-    `    abstract principle?`,
-    `(3) REUSE: would this specific user plausibly do it again?`,
-    `Struggle (the GAP) is the PRIMARY signal. Repetition (seen Nx) only STRENGTHENS`,
-    `a struggling candidate — it never qualifies a frictionless one alone.`,
+    // (3) TWO DOORS (Constraint 3 + 2)
+    `── The two doors: how a candidate earns a proposal ──`,
+    `A candidate becomes a skill through EITHER door — they are independent:`,
     ``,
-    // (4) what is NOT a skill (V4, V6 — negatives first)
-    `── What is NOT a skill (pass-1 went wrong here — read carefully) ──`,
-    `REJECT, do not propose:`,
-    `• A cross-cutting DISCIPLINE that applies to ALL work, not one task — e.g.`,
-    `  "always verify a change before saving", "read the schema before guessing",`,
-    `  "prove which artifact is running". Good habits, but not tasks you invoke;`,
-    `  they apply everywhere. DROP.`,
-    `• APP-NAVIGATION / how-to-click-through-an-app / how-to-reach-a-state —`,
-    `  brittle, tool-locked. DROP.`,
-    `• A TRIVIAL task the model already nails. No gap → no skill.`,
-    `• A one-off with NO struggle. DROP.`,
-    `Contrastive examples (the DECISION, across professions — learn the boundary):`,
-    `• "extract action items from a call transcript and file them" (recurred;`,
-    `  model kept formatting wrong until corrected) → YES, task skill.`,
-    `• "always double-check numbers before sending" → NO — a discipline, applies`,
-    `  to everything.`,
-    `• "click through Figma's export dialog" → NO — app-navigation.`,
-    `• "summarize this article" (model nailed it first try) → NO — no gap.`,
-    `• "pull my weekly sales figures from the dashboard and format them my way"`,
-    `  (recurred; model kept fetching the wrong range) → YES, self-contained task`,
-    `  skill.`,
+    `DOOR 1 — strong prior. Propose a skill from even a SINGLE sighting if it`,
+    `passes this test:`,
+    `  "If this never happens again, would a human still be glad this skill exists?"`,
+    `If yes (e.g. a rare-but-brutal task like filing quarterly taxes: frequency ≈ 1,`,
+    `huge cost to re-derive, obviously worth keeping), that single sighting is`,
+    `enough — graduate it via Door 1.`,
     ``,
-    // (5) group by domain (V3)
-    `── GROUP BY DOMAIN — no slivers ──`,
-    `Cluster candidates of the SAME kind of work into ONE skill, sub-methods as`,
-    `sections of its body (three video-editing candidates → ONE video-editing`,
-    `skill, not three). Separate only if genuinely unrelated. Prefer FEW`,
-    `well-scoped skills over many thin ones.`,
+    `DOOR 2 — observed recurrence. A repeatable CORE seen across sessions and`,
+    `judged significant + stable. THE ≥2 RULE: a Door-2 (recurrence) skill requires`,
+    `the pattern in at least 2 distinct sessions (read "distinct session(s)" on`,
+    `each candidate). Door 1 may graduate on 1; Door 2 may NOT — recurrence means`,
+    `two. If a candidate has <2 distinct sessions and does NOT pass Door 1, DON'T`,
+    `propose it yet — leave it watched.`,
     ``,
-    // (6) naming (V7)
+    // (4) struggle is one input, not the gate (Constraint 4)
+    `── What governs: expected future value, not frequency ──`,
+    `Struggle is one input, not the gate. A struggle:y candidate is evidence the`,
+    `base model had a capability GAP, but selection is governed by EXPECTED FUTURE`,
+    `VALUE ≈ P(this kind of work recurs) × cost-of-re-deriving × stability-of-the-`,
+    `path — NOT by frequency or struggle alone. A smooth, high-value, recurring`,
+    `task can still be a skill; a struggle-heavy one-off with no future value is`,
+    `not.`,
+    ``,
+    // (5) FEW is the goal; exclusions (Constraint 4/spec §2)
+    `── FEW is the goal ──`,
+    `FEW is the goal. A handful of skills a human would genuinely keep beats a long`,
+    `list they'd wade through. Exclude:`,
+    `• Cross-cutting DISCIPLINES that apply to ALL work, not one task — "always`,
+    `  verify before saving", "read the schema before guessing". These are good`,
+    `  habits, not tasks you invoke — there is no cross-cutting "skill". DROP.`,
+    `• INCIDENTAL app-navigation — how-to-click-through-an-app / how-to-reach-a-`,
+    `  state. Brittle, tool-locked. DROP.`,
+    `BUT a recurring cross-app TASK is fine and IS a skill — e.g. "each morning`,
+    `sweep my Gmail accounts → fetch X → drop into a Google Doc". The difference is`,
+    `a named, repeatable task vs. incidental clicking.`,
+    ``,
+    // (6) naming
     `── Naming ──`,
-    `Name each skill a concrete TASK/domain noun in kebab-case the way a human`,
+    `Name each skill a concrete task/domain noun in kebab-case the way a human`,
     `would (extract-invoice, video-editing, mcp-connector-setup) — NEVER an`,
     `abstract coined phrase (not "verify-mutations-against-observed-state").`,
     `description = what it does AND when to use it, phrased to trigger on the`,
     `user's words.`,
     ``,
-    // (7) candidates
-    `── Candidates (accumulated across sessions; struggle:y = agent struggled) ──`,
+    // (7) the ledger candidates
+    `── Pattern ledger (accumulated across sessions) ──`,
+    `Each entry shows: distinct-session count (the Door-2 floor input), status,`,
+    `struggle, and — when known — priorScore (a Door-1 judgment), variance`,
+    `(constant vs run-to-run), and a divergenceLog (agree/diverge observations`,
+    `against a skill this pattern already owns).`,
     candidateLines,
     ``,
-    // (8) existing curated index
-    `── Existing curated skills (this curator's OWN library) ──`,
+    // (8) existing curated skills + gardening verbs
+    `── Existing skills (this curator's OWN library) ──`,
     curatedLines,
-    `If a candidate OVERLAPS an existing skill, propose kind:"update" against that`,
-    `skill (targetSkill + the FULL proposed new SKILL.md body) — NEVER a duplicate`,
-    `skill, and NEVER a hand-written diff (the diff is computed deterministically`,
-    `elsewhere from your body vs the file on disk).`,
+    `When the ledger shows an existing skill needs tending, propose the right`,
+    `GARDENING verb against it (targetSkill = its name) instead of a duplicate:`,
+    `• narrow — the divergenceLog shows the user reliably does only a SUBSET of`,
+    `  what the skill says; tighten it to that stable core. (Also use narrow to`,
+    `  fold an accumulated correction / add a learning into the body.)`,
+    `• split — one skill is really two distinct sub-patterns; break it in two.`,
+    `• merge — two skills heavily overlap / co-occur; fold them into one.`,
+    `• retire — a skill is dead: unused across enough time/observation to drop.`,
+    `A SINGLE divergence never modifies a skill — act only on divergence that has`,
+    `ACCUMULATED in the same direction across sessions (the divergenceLog carries`,
+    `it). If nothing has accumulated, leave the skill alone.`,
     ``,
     // (9) rejections
     `── Previously rejected (never re-offer these or close variants) ──`,
     rejectionLines,
     ``,
-    // (10) user feedback
-    `── User feedback (first-class evidence for updates) ──`,
+    // (10) feedback
+    `── User feedback (first-class evidence for gardening) ──`,
     feedbackLines,
-    `Feedback on an existing skill is strong evidence to propose an update.`,
+    `Feedback on an existing skill is strong evidence to propose a narrow/refine.`,
     ``,
-    // (11) output contract
-    `── Output contract ──`,
+    // (11) typed output contract (Constraint 7)
+    `── Output contract (TYPED proposals) ──`,
     `Write {"proposals":[…]} to ${i.outPath} atomically (write ${i.outPath}.tmp then rename).`,
+    `"kind" is exactly one of: create, narrow, split, merge, retire.`,
+    `• create → a full new skill. Carries draft{name,description,body}. No targetSkill.`,
+    `• narrow / split / merge → rewrite an existing skill. Carries targetSkill AND`,
+    `  the COMPLETE new SKILL.md body in draft.body (the full replacement text, NOT`,
+    `  a diff). Never emit a "diff" field — the raw diff is computed`,
+    `  deterministically from your body vs the file on disk.`,
+    `• retire → remove an existing skill. Carries targetSkill + rationale, NO body.`,
     `Each proposal:`,
-    `{"kind":"create"|"update",`,
+    `{"kind":"create"|"narrow"|"split"|"merge"|"retire",`,
     ` "draft":{"name":"kebab-case-task-noun","description":"what it does + when to use","body":"full SKILL.md body per template"},`,
     ` "changeSummary":["short plain-language bullet","…"],`,
     ` "evidence":{"occurrences":N,"sessions":[{"id":"…","intent":"…","at":"…","tracePointer":"…"}],`,
     `   "firstSeen":"…","lastSeen":"…","struggle":{"errors":N,"recoveries":N,"wallClockMin":N}},`,
-    ` "rationale":"why this clears all three tests",`,
+    ` "rationale":"which door (or gardening reason) this clears, and why",`,
     ` "targetSkill":"…"?, "triggeringEvidence":["…"]?, "affectedSessions":[{"id":"…","invokedAt":"…"}]?}`,
-    `kind:"update" MUST include targetSkill AND put the COMPLETE new SKILL.md body`,
-    `in draft.body — the full replacement text, not a diff. Do NOT emit a "diff"`,
-    `field; the raw diff is computed deterministically from your body vs the file.`,
+    `targetSkill is REQUIRED for narrow/split/merge/retire and omitted for create.`,
     ``,
     `"changeSummary" is 2-5 short plain-language bullet strings for a HUMAN`,
     `reviewer (no markdown, plain sentences). For a create: what the skill does +`,
-    `why you're suggesting it. For an update: what is changing and why`,
-    `(e.g. ["Adds a lockfile check before merge","Tightens the description so it`,
-    `triggers on 'review my PR'"]).`,
+    `which door it cleared. For a gardening verb: what is changing and why`,
+    `(e.g. ["Narrows pr-review to the lockfile-check the user always does",`,
+    `"Retires stale-export — unused across the last N sweeps"]).`,
     ``,
     // (12) SKILL.md body template (spec §5.1)
     `── SKILL.md body template (use these headings) ──`,
@@ -276,8 +322,8 @@ export function buildSynthesizePrompt(i: {
     // (13) closing posture
     `── Posture ──`,
     `FEW is the goal. Zero is a fine and common answer — write {"proposals":[]} if`,
-    `nothing clears all three tests. A handful of skills a human would genuinely`,
-    `keep beats a long list they'd wade through. When unsure, DON'T.`,
+    `nothing clears a door and nothing needs gardening. Precision over recall: a`,
+    `missed skill is cheaper than an annoying one. When unsure, DON'T.`,
   ]
   if (i.devMode) {
     lines.push(
@@ -285,8 +331,8 @@ export function buildSynthesizePrompt(i: {
       `── Developer diagnostics (dev-only) ──`,
       `ALSO add a top-level "reasoning" string to the output JSON`,
       `({"proposals":[…], "reasoning":"…"}). In it, cover EVERY candidate you saw`,
-      `and why you PROPOSED / UPDATED / NO-OP'd / REJECTED each. This is for a`,
-      `developer inspecting the run; it never affects the decision.`,
+      `and why you PROPOSED (which door) / GARDENED / NO-OP'd / REJECTED each. This`,
+      `is for a developer inspecting the run; it never affects the decision.`,
     )
   }
   return lines.join('\n')
