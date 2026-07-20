@@ -156,3 +156,42 @@ export function applyMatch(
   candidates[key] = cand
   return { version: 1, candidates }
 }
+
+// ---------------------------------------------------------------------------
+// Divergence accumulation (Task 10, Constraint 7 — "a SINGLE divergence never
+// modifies a skill").
+//
+// The distiller emits a per-procedure skillObservation whenever a session's
+// work corresponds to an EXISTING skill (invoked or done by hand). This module
+// RECORDS those observations onto the ledger entry that OWNS the skill (the one
+// whose linkedSkillId names it), then a deterministic FLOOR gate
+// (hasAccumulatedDivergence) decides whether a modification proposal is even
+// eligible. "Same-direction" refinement is the judge's job; this floor only
+// prevents a single event from reshaping a skill.
+
+/** PURE, no-IO. Append `obs` as a DivergenceObservation to the ledger entry
+ *  whose `linkedSkillId === obs.skill`; returns a NEW CandidatesFile (never
+ *  mutates `file`, mirroring applyMatch). Creates the `divergenceLog` array if
+ *  absent. NO-OP (returns `file` unchanged, same reference) when no entry links
+ *  that skill — an observation about a skill this curator doesn't own on the
+ *  ledger has nowhere to accumulate. */
+export function recordSkillObservation(
+  file: CandidatesFile,
+  obs: { skill: string; verdict: 'agree' | 'diverge'; note: string },
+  ctx: { sessionId: string; at: string },
+): CandidatesFile {
+  const entry = Object.entries(file.candidates).find(([, c]) => c.linkedSkillId === obs.skill)
+  if (!entry) return file // no ledger entry owns this skill — nothing to accumulate
+  const [key, cand] = entry
+  const divergenceLog = (cand.divergenceLog ?? []).slice()
+  divergenceLog.push({ sessionId: ctx.sessionId, at: ctx.at, verdict: obs.verdict, note: obs.note })
+  return { version: 1, candidates: { ...file.candidates, [key]: { ...cand, divergenceLog } } }
+}
+
+/** PURE. Deterministic anti-thrash floor: true iff `entry.divergenceLog` holds
+ *  ≥ 2 observations with verdict 'diverge'. A single divergence may be
+ *  legitimate per-run variation, so it is NOT enough to reshape a skill; the
+ *  "same-direction" refinement is left to the judge. */
+export function hasAccumulatedDivergence(entry: Candidate): boolean {
+  return (entry.divergenceLog ?? []).filter((d) => d.verdict === 'diverge').length >= 2
+}

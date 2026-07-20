@@ -51,7 +51,7 @@ import {
   parseMatchOutput,
   type MatchDecision,
 } from './curator-prompts'
-import { shortlist, applyMatch } from './curator-match'
+import { shortlist, applyMatch, recordSkillObservation, hasAccumulatedDivergence } from './curator-match'
 import { computeTriageMetrics, passesTriage } from './curator-triage'
 import { devLogEnabled, devlog, devlogDump } from './curator-devlog'
 import { unifiedDiff } from './curator-diff'
@@ -459,6 +459,19 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
       // whether the repetition (≥2) threshold got crossed.
       devlog({ stage: 'accumulate', kind: 'folded', sweepId, taskId: ctx.taskId, title: proc.title, key, matchedKey: decision.matchedKey, wasNew: !before[key], total: cand?.total, struggle: cand?.struggle, crossedRepetition: (cand?.total ?? 0) >= 2 })
     }
+
+    //   3e. Record each proc's skillObservation (Constraint 7 MODIFICATION
+    //       signal) onto the ledger entry that OWNS the named skill (linkedSkillId).
+    //       Runs AFTER the applyMatch fold so newly-linked entries are already in
+    //       candFile; a no-op when no entry links the skill. Folds into the SAME
+    //       candFile persisted below — accumulation is the only reason a single
+    //       run can't reshape a skill (hasAccumulatedDivergence gates that later).
+    for (const { proc, ctx } of flat) {
+      if (proc.skillObservation) {
+        candFile = recordSkillObservation(candFile, proc.skillObservation, { sessionId: ctx.taskId, at: ctx.at })
+        devlog({ stage: 'accumulate', kind: 'divergence-recorded', sweepId, taskId: ctx.taskId, skill: proc.skillObservation.skill, verdict: proc.skillObservation.verdict })
+      }
+    }
     await writeCandidates(paths, candFile)
 
     // ── 4. Synthesize ONCE over the freshly-merged candidates + context.
@@ -472,12 +485,28 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     const synthPrompt = buildSynthesizePrompt({ sweepId, candidates, curatedIndex: curatedFull, rejections, feedback, outPath: synthOut, devMode })
     devlog({ stage: 'synthesize', kind: 'synth-inputs', sweepId, candidateCount: candidates.length, librarySize: curatedFull.length, rejections: rejections.length, feedback: feedback.length })
     const synthRaw = await runOneShot('synth', synthPrompt, synthOut, dirname(synthOut))
-    const proposals = parseSynthesizeOutput(synthRaw, sweepId, now)
+    let proposals = parseSynthesizeOutput(synthRaw, sweepId, now)
     const synthReasoning = parseSynthesizeReasoning(synthRaw)   // DEV-ONLY: logged, never a decision input
     log2.event('synthesized', { sweepId, proposals: proposals.length })
     // DEV-ONLY: dump the full synth inputs + prompt + raw output; log the decision.
     devlogDump(`${sweepId}-synth`, { sweepId, candidates, curatedIndex: curatedFull.map((s) => ({ name: s.name, description: s.description })), rejections, feedback, prompt: synthPrompt, rawOutput: synthRaw })
     devlog({ stage: 'synthesize', kind: 'synthesized', sweepId, proposals: proposals.map((p) => ({ id: p.id, kind: p.kind, name: p.draft.name, targetSkill: p.targetSkill, rationale: p.rationale })), reasoning: synthReasoning })
+
+    // ── 4a. DIVERGENCE GATE (Constraint 7). A `narrow` reshapes an existing
+    //       skill toward its stable core — so it is only warranted when the
+    //       ledger entry LINKED to that skill has ACCUMULATED divergence (≥2
+    //       diverge observations). A single divergence is legitimate per-run
+    //       variation, never a reshape; drop the narrow if the floor isn't met.
+    //       create/split/merge/retire are NOT divergence-gated — leave them be.
+    proposals = proposals.filter((prop) => {
+      if (prop.kind !== 'narrow') return true
+      const linked = candidates.find((c) => c.linkedSkillId === prop.targetSkill)
+      if (!linked || !hasAccumulatedDivergence(linked)) {
+        devlog({ stage: 'synthesize', kind: 'narrow-dropped-no-accumulated-divergence', sweepId, proposalId: prop.id, targetSkill: prop.targetSkill })
+        return false
+      }
+      return true
+    })
 
     // ── 4b. DETERMINISTIC diff (D19). The raw diff a user sees for a REWRITE
     //       (narrow/split/merge — each carries a full replacement body against an

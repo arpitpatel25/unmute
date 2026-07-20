@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Curator, type MaterialSession, makeRunSweep, RateLimitedError, ProposalConversation } from './curator.ts'
-import { curatorPaths, readCursor, writeCursor, readCandidates, listPendingProposals, writeProposal, type Proposal } from './curator-store.ts'
+import { curatorPaths, readCursor, writeCursor, readCandidates, writeCandidates, listPendingProposals, writeProposal, type CandidatesFile, type Proposal } from './curator-store.ts'
 import type { AgentExecutor } from './executor'
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'cu-'))
@@ -249,6 +249,15 @@ test('runSweep: update proposal gets a DETERMINISTIC diff from the current body;
     await fs.mkdir(path.dirname(m[1]), { recursive: true })
     await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
   }
+  // The pr-review entry must carry accumulated divergence so the narrow clears
+  // the Task-10 gate and reaches the diff computation this test exercises.
+  await writeCandidates(p, { version: 1, candidates: { 'pr-review-key': {
+    key: 'pr-review-key', title: 'review a PR', skeleton: 'S', total: 3, struggle: true, firstSeen: 'a', lastSeen: 'b', occurrences: [],
+    linkedSkillId: 'pr-review', divergenceLog: [
+      { sessionId: 's0', at: 'x', verdict: 'diverge', note: 'n' },
+      { sessionId: 's1', at: 'y', verdict: 'diverge', note: 'n' },
+    ],
+  } } })
   // curatedIndex now carries the current on-disk BODY — the diff's left side.
   const curatedIndex = async () => [{ name: 'pr-review', description: 'd', body: 'line1\nline2' }]
   const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex, sessionTimeoutMs: 5_000, pollMs: 20 })
@@ -258,6 +267,73 @@ test('runSweep: update proposal gets a DETERMINISTIC diff from the current body;
   const cre = pending.find((x) => x.kind === 'create')
   assert.ok(upd?.diff && upd.diff.includes('-line2') && upd.diff.includes('+line2-new'))   // real diff off the real body
   assert.equal(cre?.diff, undefined)                                                       // create → no previous version → no diff
+})
+
+// ── Task 10: divergence accumulation gates `narrow` proposals ────────────────
+
+const evid = { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 5 } }
+const seededLedger = (divergeCount: number): CandidatesFile => ({
+  version: 1,
+  candidates: {
+    'pr-review-key': {
+      key: 'pr-review-key', title: 'review a PR', skeleton: 'S', total: 3, struggle: true,
+      firstSeen: 'a', lastSeen: 'b', occurrences: [], linkedSkillId: 'pr-review',
+      divergenceLog: Array.from({ length: divergeCount }, (_, i) => ({ sessionId: `s${i}`, at: 'x', verdict: 'diverge' as const, note: 'n' })),
+    },
+  },
+})
+const synthNarrowAndCreate = { proposals: [
+  { kind: 'narrow', targetSkill: 'pr-review', draft: { name: 'pr-review', description: 'd', body: 'new body' }, evidence: evid, rationale: 'gap' },
+  { kind: 'create', draft: { name: 'brand-new-skill', description: 'd', body: 'B' }, evidence: evid, rationale: 'seen twice' },
+] }
+const writesWith = (synthPayload: unknown) => async (prompt: string) => {
+  const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
+  if (!m) return
+  const payload = m[1].endsWith('distill.json') ? distillJson : m[1].endsWith('match.json') ? { matches: [] } : synthPayload
+  await fs.mkdir(path.dirname(m[1]), { recursive: true })
+  await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
+}
+const oneMaterial = (root: string): MaterialSession[] => [{ taskId: 't1', intent: 'x', transcriptPath: path.join(root, 't1.jsonl'), fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }]
+
+test('runSweep: a narrow proposal is DROPPED when its linked entry has <2 accumulated diverges (create survives)', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  await writeCandidates(p, seededLedger(1))   // only ONE diverge — below the anti-thrash floor
+  const curatedIndex = async () => [{ name: 'pr-review', description: 'd', body: 'line1\nline2' }]
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writesWith(synthNarrowAndCreate)), paths: p, curatedIndex, sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run(oneMaterial(root))
+  const pending = await listPendingProposals(p)
+  assert.equal(pending.find((x) => x.kind === 'narrow'), undefined)   // gated out
+  assert.ok(pending.find((x) => x.kind === 'create'))                 // not divergence-gated
+})
+
+test('runSweep: a narrow proposal SURVIVES when its linked entry has ≥2 accumulated diverges', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  await writeCandidates(p, seededLedger(2))   // accumulated divergence — the reshape is warranted
+  const curatedIndex = async () => [{ name: 'pr-review', description: 'd', body: 'line1\nline2' }]
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writesWith(synthNarrowAndCreate)), paths: p, curatedIndex, sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run(oneMaterial(root))
+  const pending = await listPendingProposals(p)
+  assert.ok(pending.find((x) => x.kind === 'narrow'))                 // survives the gate
+})
+
+test('runSweep: a proc.skillObservation is recorded against the ledger entry linked to that skill', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  await writeCandidates(p, seededLedger(0))
+  // distill emits a diverge observation against pr-review; the fold must append it.
+  const distillObs = { procedures: [{ title: 'Load video Premiere', skeleton: 'S', count: 2, struggle: true, skillObservation: { skill: 'pr-review', verdict: 'diverge', note: 'skipped lockfile' } }] }
+  const writes = async (prompt: string) => {
+    const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
+    if (!m) return
+    const payload = m[1].endsWith('distill.json') ? distillObs : m[1].endsWith('match.json') ? { matches: [] } : { proposals: [] }
+    await fs.mkdir(path.dirname(m[1]), { recursive: true })
+    await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
+  }
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex: async () => [{ name: 'pr-review', description: 'd', body: 'b' }], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run(oneMaterial(root))
+  const cands = await readCandidates(p)
+  const log = cands.candidates['pr-review-key'].divergenceLog
+  assert.equal(log?.length, 1)
+  assert.deepEqual(log?.[0], { sessionId: 't1', at: log![0].at, verdict: 'diverge', note: 'skipped lockfile' })
 })
 
 test('runSweep: rate-limit aborts — cursor NOT advanced, no proposals', async () => {

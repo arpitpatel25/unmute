@@ -302,6 +302,10 @@ export function buildSynthesizePrompt(i: {
     `A SINGLE divergence never modifies a skill — act only on divergence that has`,
     `ACCUMULATED in the same direction across sessions (the divergenceLog carries`,
     `it). If nothing has accumulated, leave the skill alone.`,
+    `Concretely: a "narrow" (reshape an existing skill toward its stable core)`,
+    `requires the entry's divergenceLog to show the user REPEATEDLY — at least`,
+    `twice — doing it differently in the SAME way. A single divergence is NOT`,
+    `enough: it may be legitimate per-run variation, not a durable change.`,
     ``,
     // (9) rejections
     `── Previously rejected (never re-offer these or close variants) ──`,

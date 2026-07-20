@@ -108,6 +108,10 @@ test('synthesize prompt (Cadence-B two-door judge): binding rules render verbati
   assert.ok(/full[^\n]*body|complete[^\n]*body/i.test(p))                // narrow/split/merge emit the COMPLETE new body
   assert.ok(!/unified diff of the body/i.test(p))                        // never a hand-written diff
   assert.ok(/changeSummary/.test(p))
+  // Rule 8 — narrow requires REPEATED divergence (≥ twice), not a single event.
+  assert.ok(/at least twice|at least 2|twice/i.test(p))
+  assert.ok(/repeat/i.test(p))
+  assert.ok(/single divergence is NOT enough|single divergence is not enough|a single divergence/i.test(p))
   // Restraint posture preserved.
   assert.ok(/when unsure, DON'T/i.test(p))
   // Candidate evidence rendered: occurrences + distinct-session count.

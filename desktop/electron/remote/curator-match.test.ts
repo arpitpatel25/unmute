@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { suppressionFingerprint, isSuppressed, shortlist, applyMatch } from './curator-match.ts'
-import { occurrenceKey, type CandidatesFile } from './curator-store.ts'
+import { suppressionFingerprint, isSuppressed, shortlist, applyMatch, recordSkillObservation, hasAccumulatedDivergence } from './curator-match.ts'
+import { occurrenceKey, type Candidate, type CandidatesFile } from './curator-store.ts'
 import type { MatchDecision } from './curator-prompts.ts'
 
 test('suppressionFingerprint is stable across identical inputs', () => {
@@ -150,4 +150,66 @@ test('applyMatch treats an unknown matchedKey (not on the ledger) as a new entry
   const key = occurrenceKey(proc.title)
   assert.ok(out.candidates[key])
   assert.equal(out.candidates['not-a-real-key'], undefined)
+})
+
+// --- Task 10: divergence accumulation ---
+
+const linkedEntry = (over: Partial<Candidate> = {}): Candidate => ({
+  key: 'pr-review-key', title: 'review a PR', skeleton: 'S', total: 3, struggle: true,
+  firstSeen: '2026-07-10', lastSeen: '2026-07-14', occurrences: [], linkedSkillId: 'pr-review',
+  ...over,
+})
+
+test('recordSkillObservation appends to the entry linked to that skill and returns a NEW file (pure)', () => {
+  const file: CandidatesFile = { version: 1, candidates: { 'pr-review-key': linkedEntry() } }
+  const out = recordSkillObservation(
+    file,
+    { skill: 'pr-review', verdict: 'diverge', note: 'skipped the lockfile check' },
+    { sessionId: 't7', at: '2026-07-20' },
+  )
+  const log = out.candidates['pr-review-key'].divergenceLog
+  assert.equal(log?.length, 1)
+  assert.deepEqual(log?.[0], { sessionId: 't7', at: '2026-07-20', verdict: 'diverge', note: 'skipped the lockfile check' })
+  // input untouched (pure)
+  assert.equal(file.candidates['pr-review-key'].divergenceLog, undefined)
+})
+
+test('recordSkillObservation appends to an existing divergenceLog (creates array only when absent)', () => {
+  const seeded = linkedEntry({ divergenceLog: [{ sessionId: 't1', at: '2026-07-11', verdict: 'diverge', note: 'first' }] })
+  const file: CandidatesFile = { version: 1, candidates: { 'pr-review-key': seeded } }
+  const out = recordSkillObservation(
+    file,
+    { skill: 'pr-review', verdict: 'agree', note: 'matched this time' },
+    { sessionId: 't2', at: '2026-07-20' },
+  )
+  const log = out.candidates['pr-review-key'].divergenceLog
+  assert.equal(log?.length, 2)
+  assert.deepEqual(log?.[1], { sessionId: 't2', at: '2026-07-20', verdict: 'agree', note: 'matched this time' })
+})
+
+test('recordSkillObservation is a no-op when no entry links that skill', () => {
+  const file: CandidatesFile = { version: 1, candidates: { 'pr-review-key': linkedEntry() } }
+  const out = recordSkillObservation(
+    file,
+    { skill: 'some-other-skill', verdict: 'diverge', note: 'n' },
+    { sessionId: 't2', at: '2026-07-20' },
+  )
+  assert.equal(out, file)   // unchanged (same reference)
+  assert.equal(out.candidates['pr-review-key'].divergenceLog, undefined)
+})
+
+test('hasAccumulatedDivergence: false for 0 or 1 diverge, true for ≥2 (agree observations do not count)', () => {
+  assert.equal(hasAccumulatedDivergence(linkedEntry()), false)                                            // no log
+  assert.equal(hasAccumulatedDivergence(linkedEntry({ divergenceLog: [] })), false)                       // empty
+  assert.equal(hasAccumulatedDivergence(linkedEntry({ divergenceLog: [
+    { sessionId: 'a', at: 'x', verdict: 'diverge', note: 'n' },
+  ] })), false)                                                                                            // 1 diverge
+  assert.equal(hasAccumulatedDivergence(linkedEntry({ divergenceLog: [
+    { sessionId: 'a', at: 'x', verdict: 'diverge', note: 'n' },
+    { sessionId: 'b', at: 'y', verdict: 'agree', note: 'n' },
+  ] })), false)                                                                                            // 1 diverge + 1 agree
+  assert.equal(hasAccumulatedDivergence(linkedEntry({ divergenceLog: [
+    { sessionId: 'a', at: 'x', verdict: 'diverge', note: 'n' },
+    { sessionId: 'b', at: 'y', verdict: 'diverge', note: 'n' },
+  ] })), true)                                                                                             // 2 diverge
 })
