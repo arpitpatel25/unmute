@@ -556,6 +556,11 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     // linkedSkillId) — that link is what later gardening (narrow/split/merge)
     // reads. LLM-dependent, so not enforced here.
     const ownedNames = ownedSkillNames(await readOwnership(paths))
+    // Deterministic backstop for the same "already exists" judgment the judge
+    // was just handed as curatedFull (global ∪ project-scoped skills, per
+    // curator-index.ts) — never trust the LLM alone to police duplicates
+    // against the exact list it was shown.
+    const curatedNames = new Set(curatedFull.map((c) => c.name))
     proposals = proposals.filter((prop) => {
       if (prop.kind !== 'create') return true
       if (isSuppressed(prop.draft.name, rejectionsRaw)) {
@@ -567,6 +572,14 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
       // gardening kinds target an existing owned skill and are unaffected.
       if (ownedNames.has(prop.draft.name)) {
         devlog({ stage: 'synthesize', kind: 'create-dropped-owned-name', sweepId, proposalId: prop.id, name: prop.draft.name })
+        return false
+      }
+      // A create whose name matches a skill the curator does NOT own (e.g. a
+      // project-scoped skill the user authored by hand) is still a duplicate —
+      // ownedNames alone misses these. Drop it against the same curatedIndex()
+      // list the judge already had as "existing skills" context.
+      if (curatedNames.has(prop.draft.name)) {
+        devlog({ stage: 'synthesize', kind: 'create-dropped-duplicate', sweepId, proposalId: prop.id, name: prop.draft.name })
         return false
       }
       return true

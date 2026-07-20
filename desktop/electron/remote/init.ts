@@ -50,6 +50,7 @@ import { locateTranscript } from './trace-reducer'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
 import { Curator, makeRunSweep, ProposalConversation, type SessionInfo } from './curator'
+import { buildCuratedIndexFrom } from './curator-index'
 import {
   curatorPaths, readOwnership, ownedSkillNames, appendRejection, appendFeedback,
   resolveProposal, readProposal, listPendingProposals,
@@ -1560,31 +1561,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // injected; this is pure wiring. (curatorPathsV is module-scoped — the route
   // handler reads it too.)
   const curatorSkillsRoot = join(homedir(), '.claude', 'skills')
-  // curatedIndex: the skills WE own (ownership-record authority) each paired with
-  // its on-disk SKILL.md description — the synthesize pass reads this so it never
-  // re-proposes or collides with a skill the curator already created.
-  // Strip the YAML frontmatter (everything up to and including the closing `---`)
-  // to recover the SKILL.md BODY — the "current version" the deterministic diff
-  // (D19) compares a proposed update against. Resilient: a body with no
-  // frontmatter is returned whole.
-  const stripFrontmatter = (md: string): string => {
-    const m = /^---\n[\s\S]*?\n---\n?/.exec(md)
-    return (m ? md.slice(m[0].length) : md).replace(/^\n/, '')
-  }
+  // curatedIndex: the skills the judge should treat as "already exists" —
+  // GLOBAL (~/.claude/skills) ∪ PROJECT-SCOPED (<project>/.claude/skills)
+  // skills, deduped by name, PLUS every name we own even if its SKILL.md is
+  // gone from disk (ownership-record authority — see curator-index.ts for
+  // why: without the project-scoped half, the curator was blind to skills a
+  // user keeps in a repo's own .claude/skills/ and kept re-proposing
+  // duplicates of them). Read logic (list + parse SKILL.md, strip
+  // frontmatter for the D19 diff body) lives in curator-index.ts.
   const buildCuratedIndex = async (): Promise<Array<{ name: string; description: string; body: string }>> => {
-    const names = ownedSkillNames(await readOwnership(curatorPathsV))
-    const out: Array<{ name: string; description: string; body: string }> = []
-    for (const name of names) {
-      let description = ''
-      let body = ''
-      try {
-        const md = await fs.readFile(join(curatorSkillsRoot, name, 'SKILL.md'), 'utf8')
-        description = (/^description:\s*(.+)$/m.exec(md.slice(0, 4096))?.[1] ?? '').trim().slice(0, 600)
-        body = stripFrontmatter(md)
-      } catch { /* file gone — the name still counts as owned, body stays '' */ }
-      out.push({ name, description, body })
-    }
-    return out
+    const ownedNames = ownedSkillNames(await readOwnership(curatorPathsV))
+    const projectRoots = (await knownProjects()).map((proj) => proj.path)
+    return buildCuratedIndexFrom(ownedNames, curatorSkillsRoot, projectRoots)
   }
   const curator = new Curator({
     paths: curatorPathsV,

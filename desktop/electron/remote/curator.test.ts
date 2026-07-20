@@ -573,6 +573,21 @@ test('runSweep: a create for an ALREADY-OWNED skill name is pre-filtered (M3 —
   assert.equal(pending.find((x) => x.kind === 'create' && x.draft.name === 'video-load-premiere'), undefined)   // dropped, never persisted
 })
 
+test('runSweep: a create proposal whose draft name matches an entry in curatedIndex() (e.g. a project-scoped skill the curator does not own) is dropped as a duplicate (create-dropped-duplicate)', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  // 'foo' is neither rejected nor owned — only curatedIndex() knows about it
+  // (this is the shape of a project-scoped skill: readable, but the curator
+  // never created it, so ownedSkillNames() alone can't catch the duplicate).
+  const synthDuplicateCreate = { proposals: [
+    { kind: 'create', draft: { name: 'foo', description: 'd', body: 'B' }, evidence: evid, rationale: 'seen twice' },
+  ] }
+  const curatedIndex = async () => [{ name: 'foo', description: 'already exists', body: 'b' }]
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writesWith(synthDuplicateCreate)), paths: p, curatedIndex, sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run(oneMaterial(root))
+  const pending = await listPendingProposals(p)
+  assert.equal(pending.find((x) => x.kind === 'create' && x.draft.name === 'foo'), undefined)   // dropped — never persisted
+})
+
 // ── Task 10: the review popup's conversation backend ─────────────────────────
 
 const prop = (id: string): Proposal => ({
