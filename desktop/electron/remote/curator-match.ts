@@ -12,8 +12,8 @@
 // on a later sweep.
 
 import { createHash } from 'node:crypto'
-import { occurrenceKey, type Candidate, type CandidatesFile, type DistillProcedure, type VarianceMap } from './curator-store.ts'
-import type { MatchDecision } from './curator-prompts.ts'
+import { occurrenceKey, type Candidate, type CandidatesFile, type DistillProcedure, type VarianceMap } from './curator-store'
+import type { MatchDecision } from './curator-prompts'
 
 /** sha256 hex of `${draftName} ${norm}`, where `norm` is `signature`
  *  lowercased, whitespace collapsed to single spaces, and trimmed. Mirrors
