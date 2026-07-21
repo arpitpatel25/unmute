@@ -11,6 +11,86 @@ document disagrees with this one on architecture, this one governs.
 
 ---
 
+## 0. REFRAME (2026-07-21) — user-side anchor. **This section supersedes the selection model in §2–§6 below.** The two-cadence structure, storage, writer, scheduler, and conversation-keyed transcript resolution still hold.
+
+The first live runs proved the old selection produced *accurate but useless*
+skills (`unmute-native-mcp`, `verify-paywall-edits`) — deep engineering
+procedures no user would ever invoke. Root cause: it mined **the model's work**
+and gated on **struggle**. Both are wrong. The corrected model:
+
+**A. A skill lives on the USER's side of the conversation, not the model's.**
+A SKILL.md is a thing the *user* keeps asking for. So the curator reads the
+**user's turns** as the index, and reads the model's transcript **only where the
+user's messages point** (the intent it served; the action a correction refers
+to). Never open-scan the model side — that is the noise + wrong-anchor source.
+- **User side = SELECTS + ANCHORS** — what the skill is, whether it recurs, the
+  context to bake in, the corrections/preferences.
+- **Model side = FILLS THE BODY** — the steps that actually worked, read only at
+  the points the user pointed to.
+
+**B. The entry signal = the user supplied *reusable context* for an *actionable
+intent*.** You only bother specifying "look in this field / this order / this
+tool / this location" for things you'll do again — so supplied-context is a
+proxy for recurrence *and* is the skill's value (context-elimination). Entry
+test, judged from the user's messages only: (1) an actionable intent (a task,
+not discussion) AND (2) reusable context/preferences supplied. Clears both → a
+**suspicion**. Neither → ignored. Discussions produce nothing — the normal case.
+
+**C. Context earns a *suspicion*, not a skill. Two gates:**
+- **Entry (suspicion):** actionable intent + reusable context → onto the
+  watch-list. NOT surfaced.
+- **Graduation (skill):** the same intent+context genuinely **recurs** (strict
+  confirm, no fuzzy "close enough"). Only then does it surface for review.
+- **Decay:** a suspicion that doesn't earn a real confirmation within a window
+  **dies**. One-offs (even context-rich ones) quietly expire on the watch-list.
+- Stingy at entry + strict at graduation + decaying is *safe*, because recurring
+  things recur — missing one on first sight costs nothing; a bloated/fuzzy
+  watch-list actively manufactures junk.
+
+**D. Struggle is RELOCATED from the model side to the user side.** Do NOT count
+model errors / backtracks (`is_error` tool results — noisy, drags toward
+hard-implementation tasks). The meaningful signal is **the user had to correct
+the model** — a user-side utterance ("no, do it this way", "why did you use the
+desktop app"). It reveals *how the user wants it* (→ body) and *the real gap a
+skill should close* (→ value). Struggle stays only in this form, as a **bonus,
+never a gate** — its absence must never reject a candidate.
+
+**E. Per-session extraction has TWO modes; judgment is periodic and unified.**
+- **Cadence A (per session):**
+  - **New-work mode (always):** extract user-side intent+context → suspicions /
+    confirm existing suspicions. Returns a structured `reason`.
+  - **Skill-usage-audit mode (only if a skill was invoked — detected
+    deterministically):** did the invoked skill finish the job or leave the user
+    at stage X (then they hand-drove the rest)? → modification/**extend** signal.
+    Its own focused pass. Returns a structured `reason`.
+- **Cadence B (periodic): ONE unified judge** over the accumulated ledger + skill
+  set — create / graduate / dedup / modify / prune / compose / attach-meaning.
+  Never fragmented into per-type passes (they must see each other to stay
+  coherent). Returns a structured `reason`.
+- Rule of thumb: needs only *this transcript* → per-session extraction; needs the
+  *whole accumulated picture* → the periodic judge.
+
+**F. Reasoning capture (global constraint).** Every LLM stage returns a
+structured `reason` for its decision. **Dev-logged only** (devLogEnabled gate) —
+never shown to the user, never stored in a skill, never fed back into a decision.
+Purely for our analysis of what went wrong (prompt vs context vs judgment).
+
+**G. Personal, not general.** These skills carry the user's specifics (their
+locations, tools, preferences). Their whole value is context-elimination for
+*this* user. Borrow SKILL.md *format* and recognizability from skills.md /
+Anthropic; never borrow their "generally useful" selection criterion.
+
+**Old code to REMOVE (not leave dead), when implementing this reframe:**
+- the distill prompt's "hunt reusable pieces of the model's WORK" anchor and its
+  struggle-first framing → replaced by user-side intent+context extraction;
+- struggle-as-selection (triage's `is_error`/backtrack counting used as a
+  *skill* signal — triage may stay as a cheap material gate, but struggle must
+  not drive skill selection);
+- the eager-suspect / fuzzy-confirm / never-decay accumulator behavior →
+  replaced by stingy-entry + strict-confirm + decay.
+
+---
+
 ## 1. Goal
 
 An **observability layer** over the user's Claude Code sessions that watches the
