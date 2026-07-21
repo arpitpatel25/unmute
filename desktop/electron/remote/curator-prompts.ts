@@ -142,9 +142,9 @@ export function parseDistillOutput(raw: string | null): DistillProcedure[] {
         proc.usedCuratedSkill = { name: u.name, friction: u.friction }
       }
     }
-    // (skillObservation is no longer read here — the agree/diverge modification
-    //  signal moved to its own focused skill-usage-audit pass. See buildAuditPrompt
-    //  / parseAuditOutput and spec §0 E.)
+    // (The agree/diverge modification signal is produced by the focused
+    //  skill-usage-audit pass — see buildAuditPrompt / parseAuditOutput and spec
+    //  §0 E — not here. Distill only extracts new-work findings.)
     out.push(proc)
   }
   return out
@@ -700,7 +700,7 @@ export interface MatchDecision {
  *  contextSupplied) where a procedure carries them. */
 export function buildMatchPrompt(i: {
   procedures: DistillProcedure[]
-  ledgerShortlist: Array<{ key: string; title: string; skeleton: string }>
+  ledgerShortlist: Array<{ key: string; title: string; skeleton: string; intent?: string; contextSupplied?: string[] }>
   outPath: string
   devMode?: boolean
 }): string {
@@ -717,7 +717,19 @@ export function buildMatchPrompt(i: {
     : '(no procedures this sweep)'
 
   const shortlistLines = i.ledgerShortlist.length
-    ? i.ledgerShortlist.map((s) => `- [${s.key}] "${s.title}"\n  skeleton: ${s.skeleton}`).join('\n')
+    ? i.ledgerShortlist
+        .map((s) => {
+          // Render the ledger side symmetric to the procedure side (spec §0 A/B):
+          // its user INTENT (falling back to the legacy title) + the reusable
+          // CONTEXT it accumulated, so the matcher compares intent+context on BOTH
+          // sides rather than title-similarity alone.
+          const intent = s.intent && s.intent.trim() !== '' ? s.intent : s.title
+          const ctx = Array.isArray(s.contextSupplied) && s.contextSupplied.length
+            ? `\n  contextSupplied: ${s.contextSupplied.join('; ')}`
+            : ''
+          return `- [${s.key}] intent: "${intent}"${ctx}\n  skeleton: ${s.skeleton}`
+        })
+        .join('\n')
     : '(ledger is empty — everything is new)'
 
   const lines = [

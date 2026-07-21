@@ -84,6 +84,31 @@ test('shortlist EXPOSES a shared-token score — real matches score >0, zero-ove
   assert.equal(zero?.score, 0)            // padding — no shared tokens
 })
 
+test('shortlist PROJECTS the user-side intent + contextSupplied off the ledger candidate (symmetric matching, Task 4 follow-up)', () => {
+  const file: CandidatesFile = {
+    version: 1,
+    candidates: {
+      'extract-invoice': {
+        key: 'extract-invoice', title: 'extracting invoice line items', skeleton: 'parse pdf',
+        total: 3, struggle: true, firstSeen: 'a', lastSeen: 'a', occurrences: [],
+        intent: 'extract invoice totals', contextSupplied: ['vendor field', 'totals in USD'],
+      },
+      'bare': {
+        key: 'bare', title: 'a bare legacy entry', skeleton: 'invoice pdf', total: 1, struggle: false,
+        firstSeen: 'a', lastSeen: 'a', occurrences: [],
+      },
+    },
+  }
+  const proc = { title: 'extract invoice totals', skeleton: 'parse the pdf invoice', count: 1, struggle: false }
+  const top = shortlist(file, proc, 12)
+  const enriched = top.find((e) => e.key === 'extract-invoice')
+  assert.equal(enriched?.intent, 'extract invoice totals')
+  assert.deepEqual(enriched?.contextSupplied, ['vendor field', 'totals in USD'])
+  const bare = top.find((e) => e.key === 'bare')
+  assert.equal(bare?.intent, undefined)               // a legacy entry projects nothing extra
+  assert.equal(bare?.contextSupplied, undefined)
+})
+
 test('shortlist returns all entries when the ledger is smaller than the limit', () => {
   const file: CandidatesFile = {
     version: 1,

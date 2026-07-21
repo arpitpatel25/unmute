@@ -548,6 +548,29 @@ test('buildMatchPrompt: STRICT confirmation — same intent + overlapping contex
   assert.ok(p.includes('vendor field') && p.includes('totals in USD'))
 })
 
+test('buildMatchPrompt: renders the LEDGER side with intent + contextSupplied too (symmetric — matcher compares both sides on the user-side fields)', () => {
+  const p = buildMatchPrompt({
+    procedures: [{
+      intent: 'extract invoice totals', contextSupplied: ['vendor field'],
+      bodySketch: 'parse pdf', title: 'extract invoice totals', skeleton: 'parse pdf', count: 1, struggle: false,
+    }],
+    ledgerShortlist: [{ key: 'extract-invoice', title: 'legacy title', skeleton: 'parse pdf', intent: 'extract invoice totals', contextSupplied: ['totals in USD', 'the vendor column'] }],
+    outPath: '/out/match.json',
+  })
+  // The ledger entry renders its own intent (not just the legacy title) AND its supplied context.
+  assert.ok(/\[extract-invoice\][^\n]*intent: "extract invoice totals"/.test(p))
+  assert.ok(p.includes('totals in USD') && p.includes('the vendor column'))
+})
+
+test('buildMatchPrompt: a ledger entry with no projected intent falls back to its title', () => {
+  const p = buildMatchPrompt({
+    procedures: [{ title: 'T', skeleton: 'S', count: 1, struggle: false }],
+    ledgerShortlist: [{ key: 'k', title: 'File taxes', skeleton: 'S2' }],
+    outPath: '/out/match.json',
+  })
+  assert.ok(/\[k\][^\n]*intent: "File taxes"/.test(p))
+})
+
 test('buildMatchPrompt: devMode adds the top-level reasoning ask', () => {
   const args = {
     procedures: [{ title: 'T', skeleton: 'S', count: 1, struggle: false }],

@@ -61,8 +61,10 @@ function tokenize(s: string): Set<string> {
 /** A shortlist entry, carrying the shared-unique-token `score` that ranked it.
  *  score 0 = zero-overlap padding (no shared tokens) — the combined-shortlist
  *  union in the sweep drops these so genuine matches are never crowded past the
- *  cap by another proc's padding. */
-export interface ShortlistEntry { key: string; title: string; skeleton: string; score: number }
+ *  cap by another proc's padding. `intent`/`contextSupplied` are PROJECTED off
+ *  the ledger candidate (spec §0 A/B) so the matcher can compare the user-side
+ *  fields on BOTH sides — a legacy entry that predates them simply omits them. */
+export interface ShortlistEntry { key: string; title: string; skeleton: string; score: number; intent?: string; contextSupplied?: string[] }
 
 /** Cheap, no-LLM ranking so the matcher only sees plausibly-related ledger
  *  entries: score every existing candidate by shared-unique-token count
@@ -79,7 +81,12 @@ export function shortlist(
     const candTokens = tokenize(`${c.title} ${c.skeleton}`)
     let shared = 0
     for (const t of queryTokens) if (candTokens.has(t)) shared++
-    return { key: c.key, title: c.title, skeleton: c.skeleton, score: shared }
+    const entry: ShortlistEntry = { key: c.key, title: c.title, skeleton: c.skeleton, score: shared }
+    // Project the user-side fields (spec §0 A/B) so the matcher weighs intent +
+    // context on the ledger side too. Omit them for a legacy entry that has none.
+    if (c.intent && c.intent.trim() !== '') entry.intent = c.intent
+    if (c.contextSupplied && c.contextSupplied.length) entry.contextSupplied = c.contextSupplied
+    return entry
   })
   scored.sort((a, b) => b.score - a.score)
   return scored.slice(0, limit)
@@ -189,11 +196,11 @@ export function applyMatch(
 // Divergence accumulation (Task 10, Constraint 7 — "a SINGLE divergence never
 // modifies a skill").
 //
-// The distiller emits a per-procedure skillObservation whenever a session's
-// work corresponds to an EXISTING skill (invoked or done by hand). This module
-// RECORDS those observations onto the ledger entry that OWNS the skill (the one
-// whose linkedSkillId names it), then a deterministic FLOOR gate
-// (hasAccumulatedDivergence) decides whether a modification proposal is even
+// The skill-usage AUDIT pass (spec §0 E) emits a per-skill verdict whenever a
+// session INVOKED one of the user's skills. The sweep RECORDS those verdicts as
+// observations onto the ledger entry that OWNS the skill (the one whose
+// linkedSkillId names it) via recordSkillObservation, then a deterministic FLOOR
+// gate (hasAccumulatedDivergence) decides whether a modification proposal is even
 // eligible. "Same-direction" refinement is the judge's job; this floor only
 // prevents a single event from reshaping a skill.
 

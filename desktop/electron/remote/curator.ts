@@ -39,14 +39,19 @@ import {
   ownedSkillNames,
   occurrenceKey,
   pruneTraces,
+  pruneSuspicions,
   type CuratorPaths,
   type DistillProcedure,
   type Candidate,
+  type AuditResult,
 } from './curator-store'
 import {
   buildDistillPrompt,
   parseDistillOutput,
   parseDistillReasoning,
+  buildAuditPrompt,
+  parseAuditOutput,
+  parseAuditReasoning,
   buildSynthesizePrompt,
   parseSynthesizeOutput,
   parseSynthesizeReasoning,
@@ -54,9 +59,10 @@ import {
   parseMatchOutput,
   type MatchDecision,
 } from './curator-prompts'
-import { shortlist, applyMatch, recordSkillObservation, hasAccumulatedDivergence, isSuppressed } from './curator-match'
+import { shortlist, applyMatch, recordSkillObservation, hasAccumulatedDivergence, isSuppressed, type ShortlistEntry } from './curator-match'
+import { extractSkillUses } from './skill-usage'
 import { computeTriageMetrics, passesTriage } from './curator-triage'
-import { devLogEnabled, devlog, devlogDump } from './curator-devlog'
+import { devLogEnabled, devlog, devlogDump, devlogReason } from './curator-devlog'
 import { unifiedDiff } from './curator-diff'
 import { locateTranscript, resolveTranscriptById, reduceTranscript } from './trace-reducer'
 import type { ExecutorFactory, AgentExecutor } from './executor'
@@ -401,6 +407,11 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     const curatedFull = await curatedIndex()
     const curatedSkills = curatedFull.map((s) => ({ name: s.name, description: s.description }))
     const distilled: Array<{ m: MaterialSession; procs: ReturnType<typeof parseDistillOutput>; tracePointer: string }> = []
+    // Cadence A mode 2 (spec §0 E): the skill-usage audit verdicts collected this
+    // sweep. Each carries the session + timestamp so it folds onto the right
+    // ledger entry after the matcher (step 3e), and the flat AuditResult list
+    // feeds the judge (step 4). Empty on the normal session (no skill invoked).
+    const audits: Array<{ result: AuditResult; taskId: string; at: string }> = []
     for (const m of material) {
       const reduced = reduceTranscript(m.lookback.concat(m.lines).join('\n'), { maxChars: 200_000 })
       const traceFile = join(paths.tracesDir, `${m.taskId}-${sweepId}.txt`)
@@ -419,6 +430,29 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
       devlogDump(`${sweepId}-distill-${m.taskId}`, { sweepId, taskId: m.taskId, intent: m.intent, traceFile, reducedChars: reduced.length, prompt, rawOutput: raw })
       devlog({ stage: 'distill', kind: 'distilled', sweepId, taskId: m.taskId, intent: m.intent, traceFile, procedures: procs.map((p) => ({ title: p.title, count: p.count, struggle: p.struggle, usedCuratedSkill: p.usedCuratedSkill?.name })), reasoning })
       distilled.push({ m, procs, tracePointer: relative(paths.root, traceFile) })
+
+      // ── Cadence A mode 2 — SKILL-USAGE AUDIT (spec §0 E). Runs ONLY when a
+      //    skill was actually INVOKED this session (detected deterministically on
+      //    the resolved transcript, no LLM). Most sessions invoke none and skip
+      //    the whole pass. One focused audit one-shot per session, reading the
+      //    same reduced trace, asks per invoked skill: ok / extend / wrong.
+      let skillsInvoked: string[] = []
+      try {
+        const jsonl = await fs.readFile(m.transcriptPath, 'utf8')
+        skillsInvoked = Array.from(new Set(extractSkillUses(jsonl)))
+      } catch { /* transcript unreadable — treat as no invocation */ }
+      if (skillsInvoked.length > 0) {
+        const auditOut = join(workRoot, `audit-${m.taskId}`, 'audit.json')
+        const auditPrompt = buildAuditPrompt({ skillsInvoked, tracePath: traceFile, outPath: auditOut, devMode })
+        const auditRaw = await runOneShot(`audit-${m.taskId}`, auditPrompt, auditOut, dirname(auditOut))
+        const results = parseAuditOutput(auditRaw)
+        const auditReasoning = parseAuditReasoning(auditRaw)   // DEV-ONLY: logged, never a decision input
+        log2.event('audited', { taskId: m.taskId, skillsInvoked: skillsInvoked.length, audits: results.length })
+        devlogDump(`${sweepId}-audit-${m.taskId}`, { sweepId, taskId: m.taskId, skillsInvoked, traceFile, prompt: auditPrompt, rawOutput: auditRaw })
+        devlog({ stage: 'audit', kind: 'audited', sweepId, taskId: m.taskId, skillsInvoked, results: results.map((r) => ({ skill: r.skill, verdict: r.verdict })) })
+        devlogReason('audit', { sweepId, taskId: m.taskId }, auditReasoning)
+        for (const result of results) audits.push({ result, taskId: m.taskId, at: nowIso() })
+      }
     }
 
     // ── 3. Accumulate via a SINGLE semantic-matcher pass. Instead of a
@@ -447,7 +481,7 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     // miss). Drop zero-overlap (score 0) entries, dedup keeping the MAX score,
     // rank by shared-token score, THEN cap — a real match is never displaced by
     // another proc's padding.
-    const shortlistByKey = new Map<string, { key: string; title: string; skeleton: string; score: number }>()
+    const shortlistByKey = new Map<string, ShortlistEntry>()
     for (const { proc } of flat) {
       for (const entry of shortlist(candFile, proc)) {
         if (entry.score <= 0) continue                        // zero-overlap padding — never worth a cap slot
@@ -455,10 +489,12 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
         if (!prev || entry.score > prev.score) shortlistByKey.set(entry.key, entry)
       }
     }
+    // Carry the projected user-side fields (intent + contextSupplied) through to
+    // the matcher so it compares intent+context on BOTH sides (spec §0 A/B).
     const ledgerShortlist = Array.from(shortlistByKey.values())
       .sort((a, b) => b.score - a.score)
       .slice(0, 40)
-      .map(({ key, title, skeleton }) => ({ key, title, skeleton }))
+      .map(({ key, title, skeleton, intent, contextSupplied }) => ({ key, title, skeleton, intent, contextSupplied }))
 
     //   3c. Exactly ONE matcher session per sweep (quota). It goes through the
     //       same runOneShot watch/RateLimitedError path as distill/synth, so a
@@ -491,17 +527,19 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
       devlog({ stage: 'accumulate', kind: 'folded', sweepId, taskId: ctx.taskId, title: proc.title, key, matchedKey: decision.matchedKey, wasNew: !before[key], total: cand?.total, struggle: cand?.struggle, crossedRepetition: (cand?.total ?? 0) >= 2 })
     }
 
-    //   3e. Record each proc's skillObservation (Constraint 7 MODIFICATION
-    //       signal) onto the ledger entry that OWNS the named skill (linkedSkillId).
-    //       Runs AFTER the applyMatch fold so newly-linked entries are already in
+    //   3e. Fold each skill-usage AUDIT verdict (spec §0 E) into the ledger via
+    //       recordSkillObservation. An 'extend'/'wrong' verdict becomes a
+    //       'diverge' observation on the entry LINKED to that skill (linkedSkillId),
+    //       an 'ok' an 'agree' — so 'extend'/'wrong' ACCUMULATE in divergenceLog and
+    //       the existing narrow-gate (hasAccumulatedDivergence, ≥2) fires. Runs
+    //       AFTER the applyMatch fold so newly-linked entries are already in
     //       candFile; a no-op when no entry links the skill. Folds into the SAME
     //       candFile persisted below — accumulation is the only reason a single
     //       run can't reshape a skill (hasAccumulatedDivergence gates that later).
-    for (const { proc, ctx } of flat) {
-      if (proc.skillObservation) {
-        candFile = recordSkillObservation(candFile, proc.skillObservation, { sessionId: ctx.taskId, at: ctx.at })
-        devlog({ stage: 'accumulate', kind: 'divergence-recorded', sweepId, taskId: ctx.taskId, skill: proc.skillObservation.skill, verdict: proc.skillObservation.verdict })
-      }
+    const auditSignals = audits.map((a) => a.result)
+    for (const { result, taskId, at } of audits) {
+      candFile = recordSkillObservation(candFile, { skill: result.skill, verdict: result.verdict === 'ok' ? 'agree' : 'diverge', note: result.note }, { sessionId: taskId, at })
+      devlog({ stage: 'accumulate', kind: 'audit-divergence-recorded', sweepId, taskId, skill: result.skill, verdict: result.verdict })
     }
     // NB (I1): the merged ledger stays IN-MEMORY in `candFile` for the whole
     // sweep. We do NOT persist it here — a pre-synth write means a synth-stage
@@ -519,8 +557,8 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     const feedback = (await readFeedback(paths)).filter((f) => !f.consumedBySweep).map((f) => ({ skill: f.skill, note: f.note }))
 
     const synthOut = join(workRoot, 'synth', 'synth.json')
-    const synthPrompt = buildSynthesizePrompt({ sweepId, candidates, curatedIndex: curatedFull, rejections, feedback, outPath: synthOut, devMode })
-    devlog({ stage: 'synthesize', kind: 'synth-inputs', sweepId, candidateCount: candidates.length, librarySize: curatedFull.length, rejections: rejections.length, feedback: feedback.length })
+    const synthPrompt = buildSynthesizePrompt({ sweepId, candidates, curatedIndex: curatedFull, auditSignals, rejections, feedback, outPath: synthOut, devMode })
+    devlog({ stage: 'synthesize', kind: 'synth-inputs', sweepId, candidateCount: candidates.length, librarySize: curatedFull.length, auditSignals: auditSignals.length, rejections: rejections.length, feedback: feedback.length })
     const synthRaw = await runOneShot('synth', synthPrompt, synthOut, dirname(synthOut))
     let proposals = parseSynthesizeOutput(synthRaw, sweepId, now)
     const synthReasoning = parseSynthesizeReasoning(synthRaw)   // DEV-ONLY: logged, never a decision input
@@ -650,8 +688,13 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     //       skips this, leaving candidates.json / cursors / lastSweepAt untouched
     //       and every delta re-readable (re-fusing cleanly, no double-count).
     const tNow = now()
-    // The SINGLE ledger write (I1): all mutations (applyMatch fold,
-    // recordSkillObservation, surfaced-status) accumulated in `candFile`. A throw
+    // Decay (spec §0 C): drop watch-list suspicions that never earned a real
+    // confirmation within the window — folded into the SAME in-memory candFile so
+    // it lands in the single writeCandidates below (I1). One-offs (even
+    // context-rich ones) quietly expire; confirmed/linked/recent entries survive.
+    candFile = pruneSuspicions(candFile, tNow)
+    // The SINGLE ledger write (I1): all mutations (applyMatch fold, audit
+    // divergence fold, surfaced-status, decay) accumulated in `candFile`. A throw
     // before this point never touched candidates.json on disk.
     await writeCandidates(paths, candFile)
     const cursor = await readCursor(paths)

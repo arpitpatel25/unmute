@@ -233,11 +233,9 @@ export async function writeCandidates(p: CuratorPaths, f: CandidatesFile): Promi
  *  (title = intent, skeleton = bodySketch, struggle = !!correction) for downstream
  *  compatibility while later tasks re-aim the consumers.
  *
- *  `skillObservation` (Constraint 7) is the legacy MODIFICATION signal. As of the
- *  skill-usage-audit re-aim (spec §0 E) the distiller NO LONGER populates it — the
- *  agree/diverge judgment moved to its own focused audit pass (AuditResult). The
- *  field is retained ONLY so curator.ts's still-live read keeps compiling; a later
- *  task removes both that read and this field. Nothing sets it anymore. */
+ *  The MODIFICATION signal (agree/diverge on an existing skill) is no longer a
+ *  distill field: it moved to its own focused skill-usage-audit pass (AuditResult,
+ *  spec §0 E). Distill only extracts new-work findings. */
 export interface DistillProcedure {
   intent: string
   contextSupplied: string[]
@@ -249,7 +247,6 @@ export interface DistillProcedure {
   count: number
   struggle: boolean
   usedCuratedSkill?: { name: string; friction: string }
-  skillObservation?: { skill: string; verdict: 'agree' | 'diverge'; note: string }
 }
 
 /** One skill-usage AUDIT verdict (spec §0 E, Cadence A mode 2): for a skill that

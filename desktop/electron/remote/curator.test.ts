@@ -484,6 +484,86 @@ test('runSweep: gardening kinds (narrow/split/merge/retire) targeting an existin
 //  proc.skillObservation read in curator.ts. recordSkillObservation itself remains
 //  covered by unit tests in curator-match.test.ts.)
 
+// ── Task 7: two-mode extraction — conditional skill-usage audit wired in ──────
+
+// A transcript line that INVOKES a skill (the deterministic audit trigger).
+const skillUseLine = (skill: string) =>
+  JSON.stringify({ message: { content: [{ type: 'tool_use', name: 'Skill', input: { skill } } ] } })
+
+test('runSweep: a session whose transcript INVOKED a skill runs the audit one-shot and folds its extend verdict into divergenceLog; the judge sees the audit signal', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  // The ledger already links a suspicion to the invoked skill (empty divergenceLog).
+  await writeCandidates(p, seededLedger(0))
+  // The resolved transcript this session read from — contains a Skill tool_use.
+  const transcriptPath = path.join(root, 'sk.jsonl')
+  await fs.writeFile(transcriptPath, skillUseLine('pr-review') + '\n')
+
+  const prompts: string[] = []
+  let synthPrompt = ''
+  const writes = async (prompt: string) => {
+    prompts.push(prompt)
+    const m = prompt.match(/(\/\S+?(?:distill|audit|match|synth)\.json)/)
+    if (!m) return
+    const out = m[1]
+    if (out.endsWith('synth.json')) synthPrompt = prompt
+    const payload = out.endsWith('distill.json') ? distillJson
+      : out.endsWith('audit.json') ? { audits: [{ skill: 'pr-review', verdict: 'extend', note: 'stopped at the lockfile check' }] }
+      : out.endsWith('match.json') ? { matches: [] }
+      : { proposals: [] }
+    await fs.mkdir(path.dirname(out), { recursive: true })
+    await fs.writeFile(out + '.tmp', JSON.stringify(payload)); await fs.rename(out + '.tmp', out)
+  }
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex: async () => [{ name: 'pr-review', description: 'd', body: 'b' }], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run([{ taskId: 't1', intent: 'x', transcriptPath, fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }])
+
+  // The audit one-shot ran…
+  assert.ok(prompts.some((pr) => pr.includes('skill-usage audit')))
+  // …and its extend verdict folded a 'diverge' onto the linked ledger entry.
+  const cands = await readCandidates(p)
+  const log = cands.candidates['pr-review-key'].divergenceLog ?? []
+  assert.equal(log.length, 1)
+  assert.equal(log[0].verdict, 'diverge')
+  // …and the judge received the populated audit signal.
+  assert.ok(synthPrompt.includes('pr-review: extend'))
+})
+
+test('runSweep: a session whose transcript invoked NO skill runs no audit pass', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  const transcriptPath = path.join(root, 'nosk.jsonl')
+  await fs.writeFile(transcriptPath, JSON.stringify({ message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } }) + '\n')
+  const prompts: string[] = []
+  const writes = async (prompt: string) => {
+    prompts.push(prompt)
+    const m = prompt.match(/(\/\S+?(?:distill|audit|match|synth)\.json)/)
+    if (!m) return
+    const payload = m[1].endsWith('distill.json') ? distillJson : m[1].endsWith('match.json') ? { matches: [] } : { proposals: [] }
+    await fs.mkdir(path.dirname(m[1]), { recursive: true })
+    await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
+  }
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
+  await run([{ taskId: 't1', intent: 'x', transcriptPath, fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }])
+  assert.ok(!prompts.some((pr) => pr.includes('skill-usage audit')))   // most sessions skip the audit entirely
+})
+
+test('runSweep: decay — pruneSuspicions drops an old unconfirmed suspicion in success bookkeeping', async () => {
+  const root = await tmp(); const p = curatorPaths(root)
+  // An old (2020) single-sighting suspicion with no link — must expire on a successful sweep.
+  await writeCandidates(p, { version: 1, candidates: {
+    'old-key': {
+      key: 'old-key', title: 'old one-off', skeleton: 's', total: 1, struggle: false,
+      firstSeen: '2020-01-01T00:00:00Z', lastSeen: '2020-01-01T00:00:00Z',
+      occurrences: [{ taskId: 'old', sweepId: 'sw0', count: 1, at: '2020-01-01T00:00:00Z', tracePointer: 'x' }],
+      status: 'watched',
+    },
+  } })
+  const now = () => Date.parse('2026-07-21T00:00:00Z')
+  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writesWith({ proposals: [] })), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20, now })
+  await run(oneMaterial(root))
+  const cands = await readCandidates(p)
+  assert.equal(cands.candidates['old-key'], undefined)                  // decayed
+  assert.ok(Object.keys(cands.candidates).length >= 1)                  // the fresh sighting survives
+})
+
 test('runSweep: rate-limit aborts — cursor NOT advanced, no proposals', async () => {
   const root = await tmp()
   const p = curatorPaths(root)
