@@ -2,20 +2,22 @@
 //
 // Pure module: builds the exact one-shot prompts the distill and synthesize
 // sessions receive, and parses/validates the JSON files they write back. No fs,
-// no LLM, no side effects. The prompts implement Curator Operating Theory v2
-// (spec §15, V1–V9): selection is driven by observed STRUGGLE (the free
-// capability-gap proxy), skills are task/domain units grouped by domain, and
-// cross-cutting disciplines / app-navigation are excluded.
+// no LLM, no side effects. The distill prompt implements the USER-SIDE selection
+// model (spec §0 A/B/D/G): the user's turns are the index, a finding is an
+// actionable intent + the reusable context the user supplied for it, and the
+// struggle signal is the user's corrections — never the model's errors.
 
 import type { DistillProcedure, Candidate, Proposal, ProposalDraft, ProposalEvidence } from './curator-store.ts'
 import { entryStatus, distinctSessionCount } from './curator-store'
 
 // ── Distill ────────────────────────────────────────────────────────────────
 
-/** Build the distill prompt: one work session's reduced trace → procedures.
- *  devMode (DEV-ONLY, default false) asks the model to ALSO emit a top-level
- *  `reasoning` string for developer diagnostics. Production (devMode false) pays
- *  zero extra tokens — the ask is simply not present. */
+/** Build the distill prompt: one work session's reduced trace → USER-SIDE
+ *  findings. The user's turns are the index (spec §0 A/B/D/G); each finding is an
+ *  actionable intent + the reusable context the user supplied for it, with the
+ *  user's corrections as the (bonus) struggle signal. devMode (DEV-ONLY, default
+ *  false) asks the model to ALSO emit a top-level `reasoning` string for developer
+ *  diagnostics. Production (devMode false) pays zero extra tokens. */
 export function buildDistillPrompt(i: {
   taskId: string
   intent: string
@@ -28,69 +30,87 @@ export function buildDistillPrompt(i: {
     ? i.curatedSkills.map((s) => `- ${s.name} — ${s.description}`).join('\n')
     : '(none)'
   const lines = [
-    `[Unmute curator — distill] You are analyzing ONE work session's reduced trace.`,
+    `[Unmute curator — distill] You are analyzing ONE work session's reduced trace`,
+    `to find work the USER will predictably ask for again.`,
     `Read the trace file at ${i.tracePath} (use the Read tool; read it fully, in chunks if large).`,
     `Session intent: "${i.intent}"`,
     ``,
-    `Your job: find the reusable, recurring pieces of WORK a thoughtful person`,
-    `would want to capture so they never have to figure it out again. For each`,
-    `candidate report:`,
-    `- title: the TASK or kind of work, named plainly the way the USER would say`,
-    `  it (e.g. "editing a talking-head video", "setting up a vendor's MCP`,
-    `  connector", "pulling and summarizing a standup"). Name the WORK, not an`,
-    `  abstract principle.`,
-    `- skeleton: what the work involves and HOW it was done well here — the`,
-    `  concrete approach, order, standards, and any non-obvious trap discovered.`,
-    `- count: how many separate times this kind of work occurred in THIS trace.`,
-    `- struggle: TRUE if the agent visibly STRUGGLED — hit errors, backtracked,`,
-    `  went down a wrong path, re-derived something, or the USER corrected its`,
-    `  approach. This is the MOST IMPORTANT signal: struggle is evidence the model`,
-    `  did not know how to do this well by default. Report it honestly.`,
+    `── How to read the session ──`,
+    `Read the USER's turns as the INDEX. A skill lives on the USER's side of the`,
+    `conversation — it is a thing the user keeps asking for. So work from the`,
+    `user's messages: read the model's transcript ONLY where a user message points`,
+    `to it (the intent it served, or the action a correction refers to). NEVER`,
+    `open-scan the model's output for interesting things it did — that is the wrong`,
+    `anchor and the main source of noise.`,
     ``,
-    `STRONGLY PREFER candidates with struggle — those are worth capturing. A task`,
-    `the agent did smoothly first try, no errors, no correction, is probably NOT`,
-    `worth a skill (the model already handles it) — omit it or mark struggle:false.`,
+    `── What to extract, per finding ──`,
+    `For each actionable INTENT the user expressed, capture the REUSABLE CONTEXT the`,
+    `user supplied to get it done — where to look, what to fetch, which tool, which`,
+    `account/location, how they like it: the stuff they would otherwise have to`,
+    `re-type next time. That supplied context IS the skill's value.`,
+    `- intent: the actionable task the user asked for, in the user's own words.`,
+    `- contextSupplied: the reusable context/preferences the user gave, as an array`,
+    `  of short strings. This is the payload a future skill would bake in.`,
+    `- correction: if the user had to CORRECT the model — "no, do it this way", "why`,
+    `  did you use the desktop app" — capture that correction. It reveals HOW the`,
+    `  user wants it and the gap a skill should close. The struggle signal is the`,
+    `  USER's corrections, NOT the model's errors or backtracks. Omit when none.`,
+    `- bodySketch: a short sketch of how it was actually done, drawn ONLY from the`,
+    `  part of the model transcript the user pointed at.`,
+    ``,
+    `── The entry test (apply it strictly) ──`,
+    `Emit a finding ONLY when BOTH hold, judged from the user's messages: (1) there`,
+    `is an actionable INTENT (a task, not discussion) AND (2) the user supplied`,
+    `REUSABLE CONTEXT for it. If either is missing, emit nothing for it. A`,
+    `discussion-only session — questions, opinions, no task with supplied context —`,
+    `emits NOTHING. That empty result is the NORMAL case, not a failure.`,
+    ``,
+    `── Personal, not general ──`,
+    `Capture THIS user's specifics — their locations, tools, accounts, preferences.`,
+    `Do NOT genericize the context away; the whole value is context-elimination for`,
+    `this user.`,
     ``,
     `Do NOT report app-navigation / UI click-paths / how-to-reach-a-state-in-an-app`,
-    `(brittle, tool-locked — not our job); bare facts or preferences; raw`,
-    `coordinates / pixels / tab-ids / one-off values.`,
+    `(brittle, tool-locked); raw coordinates / pixels / tab-ids / one-off values.`,
     ``,
     `The user's skills already in their library (name — description):`,
     curated,
     `If the trace shows one being INVOKED, report what happened AROUND the`,
     `invocation (extra steps appended, corrections, failure) as usedCuratedSkill.`,
     ``,
-    `MODIFICATION SIGNAL — if the WORK in this trace CORRESPONDS to one of the`,
-    `skills above, add a "skillObservation" to that procedure comparing what you`,
-    `observed against that skill. Report this WHETHER OR NOT the skill was`,
-    `explicitly invoked — the user may do the task BY HAND, and that still counts.`,
+    `MODIFICATION SIGNAL — if a finding's work CORRESPONDS to one of the skills`,
+    `above, add a "skillObservation" comparing what you observed against that skill.`,
+    `Report this WHETHER OR NOT the skill was explicitly invoked — the user may do`,
+    `the task BY HAND, and that still counts.`,
     `  verdict "agree" = the observed approach MATCHES the skill's method.`,
     `  verdict "diverge" = it DIFFERS from the skill; in "note" say EXACTLY what`,
     `    differed (a step added/skipped/reordered, a different tool or standard).`,
     `For "agree", "note" is what matched. Only emit skillObservation when there is a`,
     `GENUINE correspondence to an existing skill; omit it otherwise.`,
-    `Reply ONLY by writing JSON to ${i.outPath} (write ${i.outPath}.tmp then rename).`,
-    `In each entry, "skeleton" carries what the work involves and how it was done`,
-    `well — the concrete approach, order, standards, and traps:`,
-    `{"procedures":[{"title":"…","skeleton":"…","count":N,"struggle":true|false,`,
+    `Reply ONLY by writing JSON to ${i.outPath} (write ${i.outPath}.tmp then rename):`,
+    `{"findings":[{"intent":"…","contextSupplied":["…"],"correction":"…"?,"bodySketch":"…",`,
     `  "usedCuratedSkill":{"name":"…","friction":"…"}?,`,
     `  "skillObservation":{"skill":"<existing skill name>","verdict":"agree"|"diverge","note":"…"}?}]}`,
-    `Nothing worth capturing → {"procedures":[]}. Do nothing else — no other tools than Read and the file write.`,
+    `No actionable intent with supplied context → {"findings":[]}. Do nothing else — no other tools than Read and the file write.`,
   ]
   if (i.devMode) {
     lines.push(
       ``,
       `[developer diagnostics] ALSO add a top-level "reasoning" string to that same`,
       `JSON object: explain what you considered and, importantly, what you EXCLUDED`,
-      `— especially WHY anything was app-navigation-and-not-a-method. This field is`,
-      `for a developer inspecting the run; it does not affect any decision.`,
-      `Shape: {"procedures":[…], "reasoning":"…"}.`,
+      `— especially WHY a discussion or a contextless intent produced no finding.`,
+      `This field is for a developer inspecting the run; it does not affect any`,
+      `decision. Shape: {"findings":[…], "reasoning":"…"}.`,
     )
   }
   return lines.join('\n')
 }
 
-/** Parse the distill output file. [] on null/malformed; drops entries missing title/skeleton. */
+/** Parse the distill output file. [] on null/malformed. Maps each `findings`
+ *  entry to a DistillProcedure, populating the primary user-side fields (intent,
+ *  contextSupplied, correction, bodySketch) AND the compat fields (title=intent,
+ *  skeleton=bodySketch, struggle=!!correction). Enforces the entry test: a finding
+ *  lacking an actionable intent, or with no reusable context supplied, is DROPPED. */
 export function parseDistillOutput(raw: string | null): DistillProcedure[] {
   if (raw == null) return []
   let parsed: unknown
@@ -99,20 +119,32 @@ export function parseDistillOutput(raw: string | null): DistillProcedure[] {
   } catch {
     return []
   }
-  const procs = (parsed as { procedures?: unknown } | null)?.procedures
-  if (!Array.isArray(procs)) return []
+  const findings = (parsed as { findings?: unknown } | null)?.findings
+  if (!Array.isArray(findings)) return []
   const out: DistillProcedure[] = []
-  for (const p of procs) {
+  for (const p of findings) {
     if (!p || typeof p !== 'object') continue
     const e = p as Record<string, unknown>
-    if (typeof e.title !== 'string' || e.title.trim() === '') continue
-    if (typeof e.skeleton !== 'string' || e.skeleton.trim() === '') continue
+    // Entry test (spec §0 B): actionable intent AND ≥1 reusable context item.
+    if (typeof e.intent !== 'string' || e.intent.trim() === '') continue
+    const contextSupplied = Array.isArray(e.contextSupplied)
+      ? e.contextSupplied.filter((c): c is string => typeof c === 'string' && c.trim() !== '')
+      : []
+    if (contextSupplied.length === 0) continue
+    const bodySketch = typeof e.bodySketch === 'string' ? e.bodySketch : ''
+    // Struggle relocated to the user side (spec §0 D): a correction, never model errors.
+    const correction = typeof e.correction === 'string' && e.correction.trim() !== '' ? e.correction : undefined
     const proc: DistillProcedure = {
-      title: e.title,
-      skeleton: e.skeleton,
+      intent: e.intent,
+      contextSupplied,
+      bodySketch,
+      // Compat fields for downstream consumers (later tasks re-aim them).
+      title: e.intent,
+      skeleton: bodySketch,
       count: typeof e.count === 'number' && Number.isFinite(e.count) ? e.count : 1,
-      struggle: e.struggle === true,
+      struggle: correction !== undefined,
     }
+    if (correction !== undefined) proc.correction = correction
     const used = e.usedCuratedSkill
     if (used && typeof used === 'object') {
       const u = used as Record<string, unknown>

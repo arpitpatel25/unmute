@@ -183,13 +183,34 @@ export async function writeCandidates(p: CuratorPaths, f: CandidatesFile): Promi
 // makes two. Merge is idempotent per (key, taskId, sweepId): a retried sweep
 // re-submitting the same distill report never double-counts.
 
-/** A distilled procedure from one task's transcript, as produced by the LLM
- *  distill pass (Task 5) and consumed by the sweep pipeline (Task 9).
- *  `skillObservation` (Constraint 7) is the MODIFICATION signal: when this
- *  procedure's work corresponds to an EXISTING skill — invoked or done by hand —
- *  the distiller reports whether the observed approach AGREED with or DIVERGED
- *  from that skill. A later task accumulates it to gate modification proposals. */
-export interface DistillProcedure { title: string; skeleton: string; count: number; struggle: boolean; usedCuratedSkill?: { name: string; friction: string }; skillObservation?: { skill: string; verdict: 'agree' | 'diverge'; note: string } }
+/** A distilled finding from one work session, read USER-SIDE (spec §0 A/B/D/G):
+ *  the user's turns are the index, and each finding is one actionable INTENT the
+ *  user expressed plus the reusable CONTEXT they supplied for it (the payload a
+ *  future skill would bake in). `correction` is the user-side struggle signal —
+ *  a time the user had to correct the model ("no, do it this way") — a bonus, not
+ *  a gate. `bodySketch` sketches how it was actually done, read only where the
+ *  user pointed. The primary fields are intent / contextSupplied / correction /
+ *  bodySketch; `title` / `skeleton` / `count` / `struggle` are kept populated
+ *  (title = intent, skeleton = bodySketch, struggle = !!correction) for downstream
+ *  compatibility while later tasks re-aim the consumers.
+ *
+ *  `skillObservation` (Constraint 7) is the MODIFICATION signal: when a finding's
+ *  work corresponds to an EXISTING skill — invoked or done by hand — the distiller
+ *  reports whether the observed approach AGREED with or DIVERGED from that skill.
+ *  (A later task relocates it to its own focused skill-usage-audit pass.) */
+export interface DistillProcedure {
+  intent: string
+  contextSupplied: string[]
+  correction?: string
+  bodySketch: string
+  // Compatibility fields (populated from the primary fields for downstream consumers).
+  title: string
+  skeleton: string
+  count: number
+  struggle: boolean
+  usedCuratedSkill?: { name: string; friction: string }
+  skillObservation?: { skill: string; verdict: 'agree' | 'diverge'; note: string }
+}
 
 /** Stable slug from a procedure title: lowercase, non-alphanumeric runs → '-',
  *  collapsed, trimmed of leading/trailing '-', capped at 60 chars. Two titles

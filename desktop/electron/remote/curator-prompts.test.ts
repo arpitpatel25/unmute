@@ -2,14 +2,35 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSynthesizePrompt, parseSynthesizeOutput, parseSynthesizeReasoning, buildMatchPrompt, parseMatchOutput, parseMatchReasoning } from './curator-prompts.ts'
 
-test('distill prompt: points at trace file, demands JSON at outPath, forbids facts/preferences + app-navigation, makes struggle the key signal', () => {
+// Anti-drift guard (spec §0 A/B/D/G): the distill prompt is USER-SIDE. These
+// substring assertions pin the re-aim and assert the OLD model-work / struggle-
+// primary framing is gone. If someone drifts the prompt back toward mining the
+// model's work, these fail.
+test('distill prompt (user-side re-aim): user-index rule, entry test, corrections-as-struggle; old model-work/PRIMARY framing GONE', () => {
   const p = buildDistillPrompt({ taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedSkills: [{ name: 'pr-review', description: 'review a pull request' }] })
   assert.ok(p.includes('/tr/a.txt'))
   assert.ok(p.includes('/out/distill.json'))
-  assert.ok(/fact|preference/i.test(p))                           // V4 — bare facts/preferences out of scope
-  assert.ok(/struggle/i.test(p) && /MOST IMPORTANT|PRIMARY|key/i.test(p)) // V1 — struggle is the key signal
-  assert.ok(/app-navigation|click-path|reach-a-state/i.test(p))   // V4 — app-navigation excluded
-  assert.ok(p.includes('pr-review'))                              // curated names for friction spotting
+  // A — the user's turns are the index; the model side is read only where the user points.
+  assert.ok(/user'?s turns as the index/i.test(p))
+  assert.ok(/only where a user message points/i.test(p))
+  assert.ok(/never\s+open-scan/i.test(p))
+  // B — the entry test: actionable intent AND reusable context supplied, both required.
+  assert.ok(/actionable intent/i.test(p) && /reusable context/i.test(p))
+  assert.ok(/emit a finding only when both/i.test(p))
+  assert.ok(/discussion-only/i.test(p) && /emits nothing/i.test(p))   // discussions produce nothing (the normal case)
+  // D — struggle is the USER's corrections, not model errors.
+  assert.ok(/struggle signal is the\s+USER'?s corrections/i.test(p))
+  assert.ok(/not the\s+model'?s errors/i.test(p))
+  // G — personal, not general.
+  assert.ok(/personal, not general/i.test(p))
+  // Output contract is the new findings shape.
+  assert.ok(/"findings":\[/.test(p) && /"contextSupplied"/.test(p))
+  assert.ok(p.includes('pr-review'))                                 // curated names still rendered
+  // OLD framing removed (clean removal, spec §0 removal list).
+  assert.ok(!/pieces of WORK/i.test(p))
+  assert.ok(!/PRIMARY/.test(p))
+  assert.ok(!/MOST IMPORTANT/i.test(p))
+  assert.ok(!/"procedures":\[/.test(p))                              // no legacy output shape
 })
 
 test('distill prompt: renders existing skills WITH descriptions and asks for an agree/diverge skillObservation (Constraint 7)', () => {
@@ -31,22 +52,47 @@ test('distill prompt: renders existing skills WITH descriptions and asks for an 
   assert.ok(/"skillObservation"/.test(p))
 })
 
-test('parseDistillOutput: tolerates junk, validates entries', () => {
+test('parseDistillOutput: maps a valid finding — PRIMARY + compat fields populated; correction drives struggle', () => {
   assert.deepEqual(parseDistillOutput(null), [])
   assert.deepEqual(parseDistillOutput('not json'), [])
-  const ok = parseDistillOutput(JSON.stringify({ procedures: [
-    { title: 'T', skeleton: 'S', count: 2, struggle: true },
-    { title: '', skeleton: 'S', count: 1, struggle: false },      // dropped: no title
+  const out = parseDistillOutput(JSON.stringify({ findings: [
+    { intent: 'edit a talking-head video', contextSupplied: ['crop to 9:16', 'burn captions'],
+      correction: 'no, use the CLI not the desktop app', bodySketch: 'trim silence, crop, caption', count: 2 },
   ] }))
-  assert.equal(ok.length, 1)
-  assert.equal(ok[0].count, 2)
+  assert.equal(out.length, 1)
+  const f = out[0]
+  // PRIMARY user-side fields
+  assert.equal(f.intent, 'edit a talking-head video')
+  assert.deepEqual(f.contextSupplied, ['crop to 9:16', 'burn captions'])
+  assert.equal(f.correction, 'no, use the CLI not the desktop app')
+  assert.equal(f.bodySketch, 'trim silence, crop, caption')
+  // compat fields kept populated for downstream
+  assert.equal(f.title, 'edit a talking-head video')       // title = intent
+  assert.equal(f.skeleton, 'trim silence, crop, caption')  // skeleton = bodySketch
+  assert.equal(f.count, 2)
+  assert.equal(f.struggle, true)                           // struggle = !!correction
+})
+
+test('parseDistillOutput: ENTRY TEST — drops a finding with no actionable intent or empty context; discussion-only → []', () => {
+  // discussion-only session → nothing (the normal case)
+  assert.deepEqual(parseDistillOutput(JSON.stringify({ findings: [] })), [])
+  const out = parseDistillOutput(JSON.stringify({ findings: [
+    { intent: 'sweep my Gmail accounts', contextSupplied: ['both work + personal inboxes'], bodySketch: 'B' }, // kept
+    { intent: '', contextSupplied: ['x'], bodySketch: 'B' },                    // dropped: no actionable intent
+    { intent: 'no context intent', contextSupplied: [], bodySketch: 'B' },      // dropped: empty context
+    { intent: 'no context field', bodySketch: 'B' },                            // dropped: context absent
+    { intent: 'blank context items', contextSupplied: ['', '   '], bodySketch: 'B' }, // dropped: no non-empty items
+  ] }))
+  assert.equal(out.length, 1)
+  assert.equal(out[0].intent, 'sweep my Gmail accounts')
+  assert.equal(out[0].struggle, false)   // no correction → struggle false (its absence never rejects the finding)
 })
 
 test('parseDistillOutput: reads a valid skillObservation (agree/diverge)', () => {
-  const out = parseDistillOutput(JSON.stringify({ procedures: [
-    { title: 'A', skeleton: 'S', count: 1, struggle: false,
+  const out = parseDistillOutput(JSON.stringify({ findings: [
+    { intent: 'A', contextSupplied: ['c'], bodySketch: 'S',
       skillObservation: { skill: 'pr-review', verdict: 'diverge', note: 'skipped the lockfile check' } },
-    { title: 'B', skeleton: 'S', count: 1, struggle: false,
+    { intent: 'B', contextSupplied: ['c'], bodySketch: 'S',
       skillObservation: { skill: 'extract-invoice', verdict: 'agree', note: 'same fields, same order' } },
   ] }))
   assert.equal(out.length, 2)
@@ -54,18 +100,18 @@ test('parseDistillOutput: reads a valid skillObservation (agree/diverge)', () =>
   assert.deepEqual(out[1].skillObservation, { skill: 'extract-invoice', verdict: 'agree', note: 'same fields, same order' })
 })
 
-test('parseDistillOutput: an invalid skillObservation is dropped WITHOUT dropping the procedure', () => {
-  const out = parseDistillOutput(JSON.stringify({ procedures: [
-    { title: 'bad-verdict', skeleton: 'S', count: 1, struggle: false,
+test('parseDistillOutput: an invalid skillObservation is dropped WITHOUT dropping the finding', () => {
+  const out = parseDistillOutput(JSON.stringify({ findings: [
+    { intent: 'bad-verdict', contextSupplied: ['c'], bodySketch: 'S',
       skillObservation: { skill: 'pr-review', verdict: 'maybe', note: 'n' } },       // bad verdict
-    { title: 'missing-skill', skeleton: 'S', count: 1, struggle: false,
+    { intent: 'missing-skill', contextSupplied: ['c'], bodySketch: 'S',
       skillObservation: { skill: '', verdict: 'agree', note: 'n' } },                // empty skill
-    { title: 'missing-note', skeleton: 'S', count: 1, struggle: false,
+    { intent: 'missing-note', contextSupplied: ['c'], bodySketch: 'S',
       skillObservation: { skill: 'pr-review', verdict: 'agree' } },                  // note not a string
-    { title: 'not-object', skeleton: 'S', count: 1, struggle: false,
+    { intent: 'not-object', contextSupplied: ['c'], bodySketch: 'S',
       skillObservation: 'nope' },                                                    // not an object
   ] }))
-  assert.equal(out.length, 4)                          // every procedure survives
+  assert.equal(out.length, 4)                          // every finding survives
   for (const p of out) assert.equal(p.skillObservation, undefined)   // but the bad observation is dropped
 })
 
@@ -177,11 +223,11 @@ test('devMode (DEV-ONLY): reasoning ask is present only when devMode=true — pr
 test('parse*Reasoning (DEV-ONLY): captures a top-level reasoning field when present; undefined otherwise', () => {
   assert.equal(parseDistillReasoning(null), undefined)
   assert.equal(parseDistillReasoning('not json'), undefined)
-  assert.equal(parseDistillReasoning(JSON.stringify({ procedures: [] })), undefined)   // absent
-  assert.equal(parseDistillReasoning(JSON.stringify({ procedures: [], reasoning: '   ' })), undefined) // blank → undefined
-  assert.equal(parseDistillReasoning(JSON.stringify({ procedures: [], reasoning: 'excluded X because navigation' })), 'excluded X because navigation')
+  assert.equal(parseDistillReasoning(JSON.stringify({ findings: [] })), undefined)   // absent
+  assert.equal(parseDistillReasoning(JSON.stringify({ findings: [], reasoning: '   ' })), undefined) // blank → undefined
+  assert.equal(parseDistillReasoning(JSON.stringify({ findings: [], reasoning: 'excluded X because discussion-only' })), 'excluded X because discussion-only')
   // The main parser is unaffected by a reasoning field (decision path unchanged).
-  assert.equal(parseDistillOutput(JSON.stringify({ procedures: [{ title: 'T', skeleton: 'S', count: 1, struggle: false }], reasoning: 'r' })).length, 1)
+  assert.equal(parseDistillOutput(JSON.stringify({ findings: [{ intent: 'T', contextSupplied: ['c'], bodySketch: 'S' }], reasoning: 'r' })).length, 1)
 
   assert.equal(parseSynthesizeReasoning(JSON.stringify({ proposals: [] })), undefined)
   assert.equal(parseSynthesizeReasoning(JSON.stringify({ proposals: [], reasoning: 'considered all candidates' })), 'considered all candidates')
@@ -197,9 +243,9 @@ test('parse*Reasoning (DEV-ONLY): captures a top-level reasoning field when pres
 // through a proposal draft or a distilled procedure, however the model shapes
 // its raw JSON. These lock the contract so a later prompt/parser change can't
 // quietly open a leak path.
-test('reasoning/reason can NEVER leak onto a distilled procedure, whatever field the model used', () => {
+test('reasoning/reason can NEVER leak onto a distilled finding, whatever field the model used', () => {
   const raw = JSON.stringify({
-    procedures: [{ title: 'T', skeleton: 'S', count: 1, struggle: false, reasoning: 'per-proc reasoning', reason: 'per-proc reason' }],
+    findings: [{ intent: 'T', contextSupplied: ['c'], bodySketch: 'S', reasoning: 'per-finding reasoning', reason: 'per-finding reason' }],
     reasoning: 'top-level reasoning',
   })
   const procs = parseDistillOutput(raw)

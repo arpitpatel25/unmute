@@ -212,7 +212,9 @@ function fakeExecutor(behavior: (prompt: string) => Promise<void>, emit?: (cb: (
   } as unknown as AgentExecutor
 }
 
-const distillJson = { procedures: [{ title: 'Load video Premiere', skeleton: 'S', count: 2, struggle: true }] }
+// User-side finding shape (Task 2): intent → title 'Load video Premiere'
+// (occurrenceKey 'load-video-premiere'); a correction keeps struggle:true; count 2.
+const distillJson = { findings: [{ intent: 'Load video Premiere', contextSupplied: ['open the Premiere project first'], correction: 'no, use the CLI', bodySketch: 'S', count: 2 }] }
 const synthJson = { proposals: [{ kind: 'create', draft: { name: 'video-load-premiere', description: 'd', body: 'Goal…' }, evidence: { occurrences: 2, sessions: [], firstSeen: 'a', lastSeen: 'b', struggle: { errors: 1, recoveries: 1, wallClockMin: 30 } }, rationale: 'seen twice with struggle' }] }
 
 test('runSweep: distills, accumulates, synthesizes, writes proposal, advances cursor', async () => {
@@ -318,8 +320,8 @@ test('runSweep: the matcher FUSES two differently-titled procedures from two ses
   const p = curatorPaths(root)
   // Two sessions distill DIFFERENT-worded titles for the same repeatable core.
   // Under the old title-slug fold these were two entries; the matcher fuses them.
-  const distillT1 = { procedures: [{ title: 'Alpha pattern one', skeleton: 'S1', count: 1, struggle: false }] }
-  const distillT2 = { procedures: [{ title: 'Beta different wording', skeleton: 'S2', count: 1, struggle: false }] }
+  const distillT1 = { findings: [{ intent: 'Alpha pattern one', contextSupplied: ['c1'], bodySketch: 'S1', count: 1 }] }
+  const distillT2 = { findings: [{ intent: 'Beta different wording', contextSupplied: ['c2'], bodySketch: 'S2', count: 1 }] }
   // The single matcher session: proc[0] is new, proc[1] EXTENDS proc[0]'s entry.
   const matchJson = { matches: [
     { procedureIndex: 0, matchedKey: null, confidence: 0.9, variedThisRun: [] },
@@ -476,7 +478,7 @@ test('runSweep: a proc.skillObservation is recorded against the ledger entry lin
   const root = await tmp(); const p = curatorPaths(root)
   await writeCandidates(p, seededLedger(0))
   // distill emits a diverge observation against pr-review; the fold must append it.
-  const distillObs = { procedures: [{ title: 'Load video Premiere', skeleton: 'S', count: 2, struggle: true, skillObservation: { skill: 'pr-review', verdict: 'diverge', note: 'skipped lockfile' } }] }
+  const distillObs = { findings: [{ intent: 'Load video Premiere', contextSupplied: ['open the Premiere project first'], correction: 'no, use the CLI', bodySketch: 'S', count: 2, skillObservation: { skill: 'pr-review', verdict: 'diverge', note: 'skipped lockfile' } }] }
   const writes = async (prompt: string) => {
     const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
     if (!m) return
