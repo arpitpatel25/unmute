@@ -76,11 +76,21 @@ export interface Candidate {
   priorRationale?: string
   linkedSkillId?: string
   divergenceLog?: DivergenceObservation[]
+  // User-side anchor (spec §0 A/B). A suspicion carries the actionable INTENT it
+  // watches and the reusable CONTEXT the user supplied for it; on a strict
+  // confirmation (applyMatch fold) the supplied context accumulates by union.
+  intent?: string
+  contextSupplied?: string[]
 }
 export interface CandidatesFile { version: 1; candidates: Record<string, Candidate> }
 
 /** Lifecycle status of a ledger entry, defaulting legacy/undefined entries to 'watched'. */
 export function entryStatus(c: Candidate): EntryStatus { return c.status ?? 'watched' }
+
+/** True iff this entry is a SUSPICION — on the watch-list, not yet graduated to a
+ *  skill (spec §0 C). A newly-created entry is always a suspicion; graduation to
+ *  a live skill is the periodic judge's job (Task 6), never automatic here. */
+export function isSuspicion(c: Candidate): boolean { return entryStatus(c) === 'watched' }
 
 /** PURE: return a new CandidatesFile with candidate `key`'s status (and, when
  *  supplied, linkedSkillId) updated. Never mutates `file`. A key that is absent

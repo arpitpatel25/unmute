@@ -654,9 +654,13 @@ export interface MatchDecision {
 }
 
 /** Build the matcher prompt: this sweep's distilled procedures + a per-procedure
- *  shortlist of candidate ledger entries → a match decision for each. Replaces
- *  brittle title-slug equality with an LLM judgment of "same repeatable core?" —
- *  this is what fuses the same pattern across differently-worded sessions. */
+ *  shortlist of candidate ledger entries → a match decision for each. This is the
+ *  single STRICT confirmation gate (spec §0 C): a finding may fuse into an
+ *  existing suspicion ONLY when it is the SAME user intent carried out with
+ *  OVERLAPPING supplied context — never on loose "close enough"/topical
+ *  similarity. Loose confirmation is exactly what manufactures junk skills, so the
+ *  default is NEW, not match. Judges on the user-side fields (intent +
+ *  contextSupplied) where a procedure carries them. */
 export function buildMatchPrompt(i: {
   procedures: DistillProcedure[]
   ledgerShortlist: Array<{ key: string; title: string; skeleton: string }>
@@ -665,7 +669,13 @@ export function buildMatchPrompt(i: {
 }): string {
   const procLines = i.procedures.length
     ? i.procedures
-        .map((p, idx) => `[${idx}] "${p.title}"\n  skeleton: ${p.skeleton}`)
+        .map((p, idx) => {
+          const intent = p.intent && p.intent.trim() !== '' ? p.intent : p.title
+          const ctx = Array.isArray(p.contextSupplied) && p.contextSupplied.length
+            ? `\n  contextSupplied: ${p.contextSupplied.join('; ')}`
+            : ''
+          return `[${idx}] intent: "${intent}"${ctx}\n  skeleton: ${p.skeleton}`
+        })
         .join('\n')
     : '(no procedures this sweep)'
 
@@ -675,8 +685,8 @@ export function buildMatchPrompt(i: {
 
   const lines = [
     `[Unmute curator — match] For EACH distilled procedure below, decide against`,
-    `the SHORTLIST ONLY whether it EXTENDS an existing ledger entry (same`,
-    `repeatable core) or is NEW.`,
+    `the SHORTLIST ONLY whether it CONFIRMS an existing ledger entry (the SAME`,
+    `repeatable core) or is NEW. This is a STRICT confirmation — bias toward NEW.`,
     ``,
     `── Distilled procedures (this sweep) ──`,
     procLines,
@@ -684,16 +694,19 @@ export function buildMatchPrompt(i: {
     `── Shortlist of existing ledger entries (candidates to match against) ──`,
     shortlistLines,
     ``,
-    `── The match rule ──`,
-    `Match on the REPEATABLE CORE — the underlying method/approach a procedure`,
-    `captures. Treat differing PER-RUN SPECIFICS (a file path, a branch name, a`,
-    `ticket id, an account, a date) as "variedThisRun" entries to RECORD, not as`,
-    `reasons to call it a different pattern. Two procedures worded completely`,
-    `differently are the SAME entry if they are the same repeatable core with`,
-    `different specifics plugged in. If a procedure genuinely does not extend`,
-    `anything on the shortlist, it is NEW: matchedKey:null.`,
+    `── The match rule (STRICT confirmation) ──`,
+    `A procedure CONFIRMS a shortlist entry ONLY when it is the SAME user INTENT`,
+    `carried out with OVERLAPPING supplied CONTEXT — the same repeatable core, NOT`,
+    `merely a topically similar, same-domain, or same-tool task. A DIFFERING`,
+    `intent, or only surface-level / keyword similarity, is NEW — never a match.`,
+    `Treat differing PER-RUN SPECIFICS (a file path, a branch name, a ticket id,`,
+    `an account, a date) as "variedThisRun" entries to RECORD; they are slots to`,
+    `note, never a reason to split a genuine same-intent+context confirmation.`,
+    `This is a DELIBERATE bias AGAINST fusing: loose "close enough" confirmation`,
+    `manufactures junk skills, so recall is not the goal here. WHEN UNCERTAIN,`,
+    `treat it as NEW (matchedKey: null) — never force a match.`,
     ``,
-    `For each procedure, reference the shortlist entry it extends by its "key"`,
+    `For each procedure, reference the shortlist entry it confirms by its "key"`,
     `(never invent a key that isn't on the shortlist), or use null for new.`,
     ``,
     `── Output contract ──`,

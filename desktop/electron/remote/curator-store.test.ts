@@ -122,7 +122,7 @@ test('readTranscriptDelta returns lines from offset with lookback and new offset
 
 // --- Task 4: occurrence accumulator ---
 
-import { occurrenceKey, mergeDistill, entryStatus, distinctSessionCount, setCandidateStatus, type CandidatesFile, type Candidate } from './curator-store.ts'
+import { occurrenceKey, mergeDistill, entryStatus, distinctSessionCount, setCandidateStatus, isSuspicion, type CandidatesFile, type Candidate } from './curator-store.ts'
 
 const candFile = (over: Partial<Candidate> = {}): CandidatesFile => ({
   version: 1,
@@ -143,6 +143,16 @@ test('setCandidateStatus updates status (+ optional linkedSkillId), is pure, and
 
   const missing = setCandidateStatus(before, 'not-here', 'rejected')
   assert.deepEqual(missing, before)  // absent key → no-op (returns an equivalent file)
+})
+
+test('isSuspicion: true for watched/undefined status, false once graduated/surfaced/live', () => {
+  const base: Candidate = { key: 'k', title: 't', skeleton: 's', total: 1, struggle: false, firstSeen: 'a', lastSeen: 'a', occurrences: [] }
+  assert.equal(isSuspicion(base), true)                              // undefined status defaults to watched
+  assert.equal(isSuspicion({ ...base, status: 'watched' }), true)
+  assert.equal(isSuspicion({ ...base, status: 'graduated' }), false)
+  assert.equal(isSuspicion({ ...base, status: 'surfaced' }), false)
+  assert.equal(isSuspicion({ ...base, status: 'live' }), false)
+  assert.equal(isSuspicion({ ...base, status: 'rejected' }), false)
 })
 
 test('occurrenceKey normalizes stably', () => {

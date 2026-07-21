@@ -491,6 +491,31 @@ test('buildMatchPrompt: references shortlist keys, outPath, and the repeatable-c
   assert.ok(!/reasoning/i.test(p))                                     // default: no dev-diagnostics ask
 })
 
+test('buildMatchPrompt: STRICT confirmation — same intent + overlapping context, bias to NEW when uncertain', () => {
+  const p = buildMatchPrompt({
+    procedures: [{
+      intent: 'extract invoice totals', contextSupplied: ['vendor field', 'totals in USD'],
+      bodySketch: 'parse the pdf', title: 'extract invoice totals', skeleton: 'parse the pdf', count: 1, struggle: false,
+    }],
+    ledgerShortlist: [{ key: 'extract-invoice', title: 'extract invoice totals', skeleton: 'parse pdf' }],
+    outPath: '/out/match.json',
+  })
+  // The strict rule: same user intent + overlapping supplied context, not topical similarity.
+  assert.ok(/same\s+user\s+intent/i.test(p))
+  assert.ok(/overlapping\s+supplied\s+context/i.test(p))
+  assert.ok(/topically similar|surface-level|keyword similarity/i.test(p))
+  // Differing intent (or surface similarity) is NEW.
+  assert.ok(/differing\s+intent/i.test(p))
+  // The named anti-bias guard: when uncertain, treat as new — never force a match.
+  assert.ok(/when uncertain/i.test(p))
+  assert.ok(/matchedKey: ?null/i.test(p))
+  assert.ok(/never force a match/i.test(p))
+  assert.ok(/against fusing|deliberate bias/i.test(p))
+  // Judges on the user-side fields where present.
+  assert.ok(/contextSupplied/i.test(p))
+  assert.ok(p.includes('vendor field') && p.includes('totals in USD'))
+})
+
 test('buildMatchPrompt: devMode adds the top-level reasoning ask', () => {
   const args = {
     procedures: [{ title: 'T', skeleton: 'S', count: 1, struggle: false }],

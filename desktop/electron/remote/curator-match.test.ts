@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { suppressionFingerprint, isSuppressed, shortlist, applyMatch, recordSkillObservation, hasAccumulatedDivergence } from './curator-match.ts'
-import { occurrenceKey, type Candidate, type CandidatesFile } from './curator-store.ts'
+import { occurrenceKey, isSuspicion, type Candidate, type CandidatesFile } from './curator-store.ts'
 import type { MatchDecision } from './curator-prompts.ts'
 
 test('suppressionFingerprint is stable across identical inputs', () => {
@@ -174,6 +174,70 @@ test('applyMatch treats an unknown matchedKey (not on the ledger) as a new entry
   const key = occurrenceKey(proc.title)
   assert.ok(out.candidates[key])
   assert.equal(out.candidates['not-a-real-key'], undefined)
+})
+
+// --- Task 4: strict confirmation + suspicion entry ---
+
+test('a new finding creates a status:watched SUSPICION carrying intent + contextSupplied', () => {
+  const empty: CandidatesFile = { version: 1, candidates: {} }
+  const proc = {
+    intent: 'set up a vendor MCP connector', contextSupplied: ['register the app', 'exchange keys'],
+    bodySketch: 'register, exchange, verify', title: 'set up a vendor MCP connector', skeleton: 'register, exchange, verify',
+    count: 1, struggle: false,
+  }
+  const out = applyMatch(empty, proc, { procedureIndex: 0, matchedKey: null, confidence: 0, variedThisRun: [] }, ctx1)
+  const cand = out.candidates[occurrenceKey(proc.title)]
+  assert.equal(cand.status, 'watched')
+  assert.ok(isSuspicion(cand))
+  assert.equal(cand.intent, 'set up a vendor MCP connector')
+  assert.deepEqual(cand.contextSupplied, ['register the app', 'exchange keys'])
+})
+
+test('two findings with the SAME intent + overlapping context CONFIRM into one entry (2 occurrences), context unions', () => {
+  const empty: CandidatesFile = { version: 1, candidates: {} }
+  const first = {
+    intent: 'extract invoice totals', contextSupplied: ['vendor field', 'totals in USD'],
+    bodySketch: 'parse pdf', title: 'extract invoice totals', skeleton: 'parse pdf', count: 1, struggle: false,
+  }
+  const s1 = applyMatch(empty, first, { procedureIndex: 0, matchedKey: null, confidence: 0, variedThisRun: [] }, ctx1)
+  const key = occurrenceKey(first.title)
+
+  // Strict LLM matcher confirmed this is the SAME intent (matchedKey = key); the
+  // per-run specific ("march") is recorded as a slot, and its new context folds in.
+  const second = {
+    intent: 'extract invoice totals for march', contextSupplied: ['vendor field', 'tax line'],
+    bodySketch: 'parse pdf', title: 'extract invoice totals for march', skeleton: 'parse pdf', count: 1, struggle: false,
+  }
+  const s2 = applyMatch(s1, second, { procedureIndex: 0, matchedKey: key, confidence: 0.95, variedThisRun: ['march'] }, ctx2)
+
+  assert.equal(Object.keys(s2.candidates).length, 1)              // fused — one entry
+  assert.equal(s2.candidates[key].occurrences.length, 2)         // two occurrences
+  assert.equal(s2.candidates[key].total, 2)
+  assert.deepEqual(s2.candidates[key].variance?.varying, ['march'])
+  assert.deepEqual(s2.candidates[key].contextSupplied, ['vendor field', 'totals in USD', 'tax line']) // unioned
+})
+
+test('two topically-similar but DIFFERENT-intent findings do NOT fuse — two separate watched suspicions', () => {
+  const empty: CandidatesFile = { version: 1, candidates: {} }
+  const edit = {
+    intent: 'edit a talking-head video', contextSupplied: ['crop to vertical'],
+    bodySketch: 'trim, crop, caption', title: 'edit a talking-head video', skeleton: 'trim, crop, caption', count: 1, struggle: false,
+  }
+  const record = {
+    intent: 'record a talking-head video', contextSupplied: ['use the webcam'],
+    bodySketch: 'set up camera, record', title: 'record a talking-head video', skeleton: 'set up camera, record', count: 1, struggle: false,
+  }
+  // The strict matcher returns matchedKey:null for the second (different intent,
+  // only surface similarity) — the loose "same topic" fuse is exactly what must NOT happen.
+  const a = applyMatch(empty, edit, { procedureIndex: 0, matchedKey: null, confidence: 0, variedThisRun: [] }, ctx1)
+  const b = applyMatch(a, record, { procedureIndex: 0, matchedKey: null, confidence: 0, variedThisRun: [] }, ctx2)
+
+  assert.equal(Object.keys(b.candidates).length, 2)              // stayed two distinct patterns
+  for (const c of Object.values(b.candidates)) {
+    assert.equal(c.status, 'watched')
+    assert.ok(isSuspicion(c))
+    assert.equal(c.occurrences.length, 1)
+  }
 })
 
 // --- Task 13: per-occurrence struggle metrics ---

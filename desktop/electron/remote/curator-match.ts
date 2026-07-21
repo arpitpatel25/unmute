@@ -97,6 +97,17 @@ function foldVarying(variance: VarianceMap | undefined, additions: string[]): Va
   return v
 }
 
+/** Union new supplied-context items into an entry's accumulated `contextSupplied`,
+ *  deduping, without mutating the input. Returns undefined only when there is
+ *  nothing to carry (neither existing nor new items) so a bare entry stays bare. */
+function foldContext(existing: string[] | undefined, additions: string[]): string[] | undefined {
+  const merged = existing ? existing.slice() : []
+  for (const a of additions) {
+    if (a.trim() !== '' && !merged.includes(a)) merged.push(a)
+  }
+  return merged.length ? merged : undefined
+}
+
 /** PURE, no-IO. Fold one matched (or new) procedure into the ledger; returns a
  *  NEW CandidatesFile (never mutates `file` — mirrors mergeDistill). Occurrence
  *  append is IDEMPOTENT per (key, taskId, sweepId): a retried sweep re-applying
@@ -128,11 +139,17 @@ export function applyMatch(
     cand.firstSeen = cand.occurrences.reduce((m, o) => (o.at < m ? o.at : m), cand.firstSeen)
     cand.lastSeen = cand.occurrences.reduce((m, o) => (o.at > m ? o.at : m), cand.lastSeen)
     cand.variance = foldVarying(cand.variance, variedThisRun)
+    // Strict confirmation earned: fold the confirming finding's supplied context
+    // into the suspicion (spec §0 C — a genuine same-intent recurrence enriches it).
+    const foldedCtx = foldContext(cand.contextSupplied, proc.contextSupplied ?? [])
+    if (foldedCtx) cand.contextSupplied = foldedCtx
     candidates[matchedKey] = cand
     return { version: 1, candidates }
   }
 
   // matchedKey null or unknown — new (or re-discovered-under-the-same-key) entry.
+  // A newly created entry is a SUSPICION (status:'watched') carrying the user-side
+  // fields (intent + contextSupplied). Graduation to a skill is the judge's job.
   const key = occurrenceKey(proc.title)
   const existing = candidates[key]
   const cand: Candidate = existing
@@ -148,6 +165,7 @@ export function applyMatch(
         occurrences: [],
         status: 'watched',
         variance: { constant: [], varying: [] },
+        intent: proc.intent && proc.intent.trim() !== '' ? proc.intent : proc.title,
       }
   // Idempotency: skip if this (taskId, sweepId) already contributed an occurrence.
   if (cand.occurrences.some((o) => o.taskId === ctx.taskId && o.sweepId === ctx.sweepId)) {
@@ -161,6 +179,8 @@ export function applyMatch(
   cand.lastSeen = cand.occurrences.reduce((m, o) => (o.at > m ? o.at : m), cand.lastSeen)
   if (!cand.status) cand.status = 'watched'
   cand.variance = foldVarying(cand.variance, variedThisRun)
+  const foldedCtx = foldContext(cand.contextSupplied, proc.contextSupplied ?? [])
+  if (foldedCtx) cand.contextSupplied = foldedCtx
   candidates[key] = cand
   return { version: 1, candidates }
 }
