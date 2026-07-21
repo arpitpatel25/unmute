@@ -260,18 +260,26 @@ export function parseAuditReasoning(raw: string | null): string | undefined {
 
 // ── Synthesize ───────────────────────────────────────────────────────────────
 
-/** Render one ledger candidate as the evidence block the judge weighs: distinct-
- *  session count (the Door-2 floor input), lifecycle status, struggle, and — when
- *  present — variance (hardcode-vs-slot), the Door-1 priorScore/rationale, and the
- *  accumulated divergenceLog (what fires narrow/refine). Optional fields render
- *  only when set, keeping the prompt lean for the common bare candidate. */
+/** Render one ledger SUSPICION as the user-side evidence block the judge weighs
+ *  (spec §0 A/B/D): the user's actionable intent, the reusable context they
+ *  supplied, the distinct-session count (the Door-2 recurrence input), lifecycle
+ *  status, and — when present — the user correction (shapes HOW the skill reads,
+ *  never a graduation reason), variance (hardcode-vs-slot), priorRationale, and
+ *  the accumulated divergenceLog (what, with the audit signals, fires
+ *  narrow/refine). Intent falls back to the legacy title only when a suspicion
+ *  predates the user-side fields. Optional fields render only when set. */
 function renderCandidate(c: Candidate): string {
   const sessions = distinctSessionCount(c)
+  const intent = c.intent && c.intent.trim() !== '' ? c.intent : c.title
   const head =
-    `- [${c.key}] "${c.title}" — seen ${c.total}x across ${sessions} distinct session(s) (${c.firstSeen}→${c.lastSeen})` +
-    `; struggle:${c.struggle ? 'y' : 'n'}; status:${entryStatus(c)}` +
+    `- [${c.key}] intent: "${intent}" — recurred in ${sessions} distinct session(s)` +
+    ` (${c.total} total sighting(s), ${c.firstSeen}→${c.lastSeen}); status:${entryStatus(c)}` +
     (typeof c.priorScore === 'number' ? `; priorScore:${c.priorScore}` : '')
-  const parts = [head, `  skeleton: ${c.skeleton}`]
+  const ctx = c.contextSupplied && c.contextSupplied.length
+    ? c.contextSupplied.join('; ')
+    : '(none captured yet)'
+  const parts = [head, `  reusable context the user supplied (the skill's payload): ${ctx}`]
+  if (c.correction) parts.push(`  user correction (shapes HOW they want it — NOT a graduation reason): ${c.correction}`)
   if (c.priorRationale) parts.push(`  priorRationale: ${c.priorRationale}`)
   if (c.variance) {
     const constant = c.variance.constant.length ? c.variance.constant.join('; ') : '(none observed yet)'
@@ -286,19 +294,24 @@ function renderCandidate(c: Candidate): string {
   return parts.join('\n')
 }
 
-/** Build the Cadence-B judge prompt: the durable ledger + the existing skills →
- *  TYPED proposals (create for graduation; narrow/split/merge/retire for
- *  gardening). Encodes the two-door selection philosophy LITERALLY (spec §2/§6,
- *  Global Constraints 2–6) — those exact sentences are asserted by
- *  curator-prompts.test.ts as the guard against prompt drift. Kept named
- *  `buildSynthesizePrompt` (curator.ts imports it) with a backward-compatible
- *  input shape. */
+/** Build the Cadence-B UNIFIED JUDGE prompt (spec §0 C/E/G): the accumulated
+ *  ledger of suspicions + the skill-usage audit signals + the existing skill set
+ *  → TYPED proposals (create for graduation; narrow/split/merge/retire for
+ *  gardening). Graduation is on VALUE judged from the USER's side — recurrence
+ *  (≥2 distinct sessions) OR a predictable-recurrence prior — and EXPLICITLY not
+ *  difficulty/struggle. Audit `extend` → narrow/refine, `wrong` → flag,
+ *  dead → retire. These exact sentences are asserted by curator-prompts.test.ts
+ *  as the guard against prompt drift. Kept named `buildSynthesizePrompt`
+ *  (curator.ts imports it). `auditSignals` defaults to [] (Task 7 populates it). */
 export function buildSynthesizePrompt(i: {
   sweepId: string
   candidates: Candidate[]
   // Each owned skill's body is carried too (the sweep diffs against it, D19); the
   // listing below stays name+description to keep the prompt lean.
   curatedIndex: Array<{ name: string; description: string; body: string }>
+  // Cadence-A skill-usage audit output for this sweep (spec §0 E). Default [] —
+  // most sweeps invoked no skill; Task 7 wires the populated value in.
+  auditSignals?: AuditResult[]
   rejections: Array<{ name: string; reason?: string }>
   feedback: Array<{ skill: string; note: string }>
   outPath: string
@@ -314,6 +327,11 @@ export function buildSynthesizePrompt(i: {
     ? i.curatedIndex.map((s) => `- ${s.name}: ${s.description}`).join('\n')
     : '(none)'
 
+  const auditSignals = i.auditSignals ?? []
+  const auditLines = auditSignals.length
+    ? auditSignals.map((a) => `- ${a.skill}: ${a.verdict} — ${a.note}`).join('\n')
+    : '(no skill-usage audit signals this sweep)'
+
   const rejectionLines = i.rejections.length
     ? i.rejections.map((r) => `- ${r.name}${r.reason ? ` — ${r.reason}` : ''}`).join('\n')
     : '(none)'
@@ -324,110 +342,129 @@ export function buildSynthesizePrompt(i: {
 
   const lines = [
     // (1) role
-    `[Unmute curator — judge] Sweep ${i.sweepId}. You are the periodic judge. You`,
-    `read the durable pattern ledger below + the skills that already exist, and you`,
-    `emit a SMALL number of TYPED proposals for THIS specific user. Proposals only`,
-    `— a human reviews every one; nothing is applied automatically.`,
+    `[Unmute curator — judge] Sweep ${i.sweepId}. You are the periodic UNIFIED`,
+    `judge. You read the durable ledger of SUSPICIONS below + the skill-usage audit`,
+    `signals + the skills that already exist, and you emit a SMALL number of TYPED`,
+    `proposals for THIS specific user. Proposals only — a human reviews every one;`,
+    `nothing is applied automatically.`,
     ``,
-    // (2) what a skill is (self-contained; hardcode-vs-slot; independence)
-    `── What a skill IS ──`,
-    `A skill is a reusable capability for a task the user does — named the way the`,
-    `user would name it (extract-invoice, edit-talking-head-video,`,
-    `setup-mcp-connector). It is SELF-CONTAINED: the reusable method lives INSIDE`,
-    `it; there is no separate profile or memory to lean on.`,
-    `Hardcode-vs-slot rule: bake the specifics that are STABLE for this user`,
-    `(which source/account/channel, the format they want, the standing approach)`,
-    `directly into the body; only values that CHANGE from run to run become slots.`,
-    `Secrets are referenced from env/keychain, never baked into the body.`,
-    `Skills are independent — no cross-skill facts store, no shared memory a skill`,
-    `reads from. The ONLY cross-skill relation is parent→child composition (a skill`,
-    `may invoke a smaller child skill).`,
+    // (2) what a skill is — value = context-elimination; personal, not general.
+    `── What a skill IS, and where its value comes from ──`,
+    `A skill is a reusable capability for a job THIS user keeps asking for — named`,
+    `the way the user would name it (extract-invoice, edit-talking-head-video,`,
+    `sweep-gmail-into-doc). Its whole value is CONTEXT-ELIMINATION for this user: it`,
+    `bakes in WHERE to look and HOW they like it — their sources, accounts, tools,`,
+    `format, standing preferences — phrased as the user's own recurring intent, so`,
+    `they never have to re-supply that context. These skills are PERSONAL, not`,
+    `general: do NOT genericize the user's specifics away; the specifics ARE the`,
+    `value.`,
+    `It is SELF-CONTAINED: the reusable method lives INSIDE it; there is no separate`,
+    `profile or memory to lean on. Hardcode-vs-slot: bake the specifics that are`,
+    `STABLE for this user directly into the body; only values that CHANGE from run`,
+    `to run become slots. Secrets are referenced from env/keychain, never baked in.`,
+    `Skills are independent — no cross-skill facts store, no shared memory. The only`,
+    `cross-skill relation is parent→child composition (a skill may invoke a smaller`,
+    `child skill).`,
     ``,
-    // (3) TWO DOORS (Constraint 3 + 2)
-    `── The two doors: how a candidate earns a proposal ──`,
-    `A candidate becomes a skill through EITHER door — they are independent:`,
+    // (3) TWO DOORS — value from the user's side, never difficulty (spec §0 C).
+    `── When a suspicion GRADUATES to a "create" — VALUE, from the user's side ──`,
+    `Graduation is judged ONLY on value to THIS user: will they keep asking for`,
+    `this? A suspicion earns a create through EITHER door — they are independent:`,
     ``,
-    `DOOR 1 — strong prior. Propose a skill from even a SINGLE sighting if it`,
-    `passes this test:`,
-    `  "If this never happens again, would a human still be glad this skill exists?"`,
-    `If yes (e.g. a rare-but-brutal task like filing quarterly taxes: frequency ≈ 1,`,
-    `huge cost to re-derive, obviously worth keeping), that single sighting is`,
-    `enough — graduate it via Door 1.`,
+    `DOOR 2 — it RECURRED. The SAME intent + the SAME supplied context has now been`,
+    `seen in at least 2 distinct sessions (read the distinct-session count on each`,
+    `suspicion below). Recurrence means two distinct sessions — a single sighting`,
+    `is not recurrence.`,
     ``,
-    `DOOR 2 — observed recurrence. A repeatable CORE seen across sessions and`,
-    `judged significant + stable. THE ≥2 RULE: a Door-2 (recurrence) skill requires`,
-    `the pattern in at least 2 distinct sessions (read "distinct session(s)" on`,
-    `each candidate). Door 1 may graduate on 1; Door 2 may NOT — recurrence means`,
-    `two. If a candidate has <2 distinct sessions and does NOT pass Door 1, DON'T`,
-    `propose it yet — leave it watched.`,
+    `DOOR 1 — a PREDICTABLE-RECURRENCE PRIOR. Even from a single sighting, this is`,
+    `plainly a job the user will keep asking for: it has a recurring-workflow shape`,
+    `— a weekly / on-call / seasonal / every-release / every-morning routine. When`,
+    `the intent is obviously periodic like that, graduate it via Door 1 without`,
+    `waiting for the second sighting.`,
     ``,
-    // (4) struggle is one input, not the gate (Constraint 4)
-    `── What governs: expected future value, not frequency ──`,
-    `Struggle is one input, not the gate. A struggle:y candidate is evidence the`,
-    `base model had a capability GAP, but selection is governed by EXPECTED FUTURE`,
-    `VALUE ≈ P(this kind of work recurs) × cost-of-re-deriving × stability-of-the-`,
-    `path — NOT by frequency or struggle alone. A smooth, high-value, recurring`,
-    `task can still be a skill; a struggle-heavy one-off with no future value is`,
-    `not.`,
+    // (4) difficulty is EXPLICITLY not a graduation reason (spec §0 C/D).
+    `── Difficulty is NOT a door ──`,
+    `Difficulty is not the test. "Was it hard", "did the model struggle", how long`,
+    `it took, or whether the work was fiddly are NOT reasons to graduate and never`,
+    `were. A brutal one-off the user will never repeat is NOT a skill; a trivially`,
+    `easy chore they do every morning IS. Judge value from the USER's side (will`,
+    `they ask for this again), never from how hard the work was to do. A recorded`,
+    `user correction only shapes HOW the skill should read — it never graduates`,
+    `anything by itself.`,
     ``,
-    // (5) FEW is the goal; exclusions (Constraint 4/spec §2)
+    // (5) FEW is the goal; exclusions (spec §2).
     `── FEW is the goal ──`,
-    `FEW is the goal. A handful of skills a human would genuinely keep beats a long`,
+    `FEW is the goal. A handful of skills the user would genuinely keep beats a long`,
     `list they'd wade through. Exclude:`,
-    `• Cross-cutting DISCIPLINES that apply to ALL work, not one task — "always`,
-    `  verify before saving", "read the schema before guessing". These are good`,
-    `  habits, not tasks you invoke — there is no cross-cutting "skill". DROP.`,
+    `• Cross-cutting DISCIPLINES that apply to ALL work, not one job — "always`,
+    `  verify before saving", "read the schema before guessing". Good habits, not`,
+    `  things you invoke. DROP.`,
     `• INCIDENTAL app-navigation — how-to-click-through-an-app / how-to-reach-a-`,
     `  state. Brittle, tool-locked. DROP.`,
-    `BUT a recurring cross-app TASK is fine and IS a skill — e.g. "each morning`,
-    `sweep my Gmail accounts → fetch X → drop into a Google Doc". The difference is`,
-    `a named, repeatable task vs. incidental clicking.`,
+    `BUT a recurring cross-app job IS a skill — e.g. "each morning sweep my Gmail`,
+    `accounts → fetch X → drop into a Google Doc". The difference is a named,`,
+    `repeatable job vs. incidental clicking.`,
     ``,
-    // (6) naming
-    `── Naming ──`,
-    `Name each skill a concrete task/domain noun in kebab-case the way a human`,
-    `would (extract-invoice, video-editing, mcp-connector-setup) — NEVER an`,
-    `abstract coined phrase (not "verify-mutations-against-observed-state").`,
-    `description = what it does AND when to use it, phrased to trigger on the`,
-    `user's words.`,
+    // (6) naming + attaching meaning (when-to-use).
+    `── Naming + attaching meaning ──`,
+    `Name each skill a concrete job/domain noun in kebab-case the way a human would`,
+    `(extract-invoice, video-editing, sweep-gmail-into-doc) — NEVER an abstract`,
+    `coined phrase (not "verify-mutations-against-observed-state"). Write`,
+    `description = what it does AND WHEN TO USE it, phrased in the user's own words`,
+    `so THEY recognize when to invoke it. Every proposal must attach this meaning:`,
+    `the when-to-use is how the user finds the skill later.`,
     ``,
-    // (7) the ledger candidates
-    `── Pattern ledger (accumulated across sessions) ──`,
-    `Each entry shows: distinct-session count (the Door-2 floor input), status,`,
-    `struggle, and — when known — priorScore (a Door-1 judgment), variance`,
-    `(constant vs run-to-run), and a divergenceLog (agree/diverge observations`,
-    `against a skill this pattern already owns).`,
+    // (7) the ledger suspicions (rendered user-side).
+    `── Pattern ledger — SUSPICIONS accumulated across sessions ──`,
+    `Each suspicion shows: the user's actionable intent, the reusable context they`,
+    `supplied, the distinct-session count (the Door-2 recurrence input), status,`,
+    `and — when present — a user correction (shapes HOW the skill reads, never a`,
+    `graduation reason), variance (constant vs run-to-run), and a divergenceLog.`,
     candidateLines,
     ``,
-    // (8) existing curated skills + gardening verbs
-    `── Existing skills (this curator's OWN library) ──`,
+    // (8) audit signals drive modification (spec §0 E).
+    `── Skill-usage audit signals (sessions where the user invoked one of their`,
+    `   OWN skills this sweep) ──`,
+    auditLines,
+    `Turn these into gardening proposals against the named skill (targetSkill = it):`,
+    `• "extend" — the skill got the user only PARTWAY and they hand-drove the rest.`,
+    `  Propose a narrow/refine that tightens or extends that skill toward what`,
+    `  ACTUALLY finished the job.`,
+    `• "wrong"  — the skill did the wrong thing / the user rejected its output.`,
+    `  FLAG it: a narrow/refine that corrects it, or a retire if it is beyond saving.`,
+    `• "ok"     — it did the job; leave it alone.`,
+    `Also retire any skill that has gone dead — unused across enough time/observation.`,
+    ``,
+    // (9) existing skills — DEDUP + gardening verbs.
+    `── Existing skills — DEDUP against these (the user's global library + project`,
+    `   skills) ──`,
     curatedLines,
-    `When the ledger shows an existing skill needs tending, propose the right`,
-    `GARDENING verb against it (targetSkill = its name) instead of a duplicate:`,
-    `• narrow — the divergenceLog shows the user reliably does only a SUBSET of`,
-    `  what the skill says; tighten it to that stable core. (Also use narrow to`,
-    `  fold an accumulated correction / add a learning into the body.)`,
+    `Before proposing any create, DEDUP against every skill above. If one already`,
+    `covers this intent, do NOT propose a duplicate — instead propose the right`,
+    `GARDENING verb against it (targetSkill = its name), or nothing:`,
+    `• narrow — the divergenceLog / audit shows the user reliably does only a`,
+    `  SUBSET of what the skill says; tighten it to that stable core. (Also use`,
+    `  narrow to fold an accumulated correction / add a learning into the body.)`,
     `• split — one skill is really two distinct sub-patterns; break it in two.`,
     `• merge — two skills heavily overlap / co-occur; fold them into one.`,
     `• retire — a skill is dead: unused across enough time/observation to drop.`,
     `A SINGLE divergence never modifies a skill — act only on divergence that has`,
-    `ACCUMULATED in the same direction across sessions (the divergenceLog carries`,
-    `it). If nothing has accumulated, leave the skill alone.`,
-    `Concretely: a "narrow" (reshape an existing skill toward its stable core)`,
-    `requires the entry's divergenceLog to show the user REPEATEDLY — at least`,
-    `twice — doing it differently in the SAME way. A single divergence is NOT`,
+    `ACCUMULATED in the same direction across sessions (the divergenceLog and the`,
+    `audit signals carry it). If nothing has accumulated, leave the skill alone.`,
+    `Concretely: a "narrow" requires the user to have done it differently`,
+    `REPEATEDLY — at least twice — in the SAME way. A single divergence is NOT`,
     `enough: it may be legitimate per-run variation, not a durable change.`,
     ``,
-    // (9) rejections
+    // (10) rejections
     `── Previously rejected (never re-offer these or close variants) ──`,
     rejectionLines,
     ``,
-    // (10) feedback
+    // (11) feedback
     `── User feedback (first-class evidence for gardening) ──`,
     feedbackLines,
     `Feedback on an existing skill is strong evidence to propose a narrow/refine.`,
     ``,
-    // (11) typed output contract (Constraint 7)
+    // (12) typed output contract
     `── Output contract (TYPED proposals) ──`,
     `Write {"proposals":[…]} to ${i.outPath} atomically (write ${i.outPath}.tmp then rename).`,
     `"kind" is exactly one of: create, narrow, split, merge, retire.`,
@@ -457,7 +494,7 @@ export function buildSynthesizePrompt(i: {
     `(e.g. ["Narrows pr-review to the lockfile-check the user always does",`,
     `"Retires stale-export — unused across the last N sweeps"]).`,
     ``,
-    // (12) SKILL.md body template (spec §5.1)
+    // (13) SKILL.md body template (spec §5.1)
     `── SKILL.md body template (use these headings) ──`,
     `## Goal            — what the skill accomplishes`,
     `## When to use     — the trigger conditions`,
@@ -466,7 +503,7 @@ export function buildSynthesizePrompt(i: {
     `## Verify          — how to know it worked (definition of done)`,
     `## Gotchas         — non-obvious traps discovered (optional)`,
     ``,
-    // (13) closing posture
+    // (14) closing posture
     `── Posture ──`,
     `FEW is the goal. Zero is a fine and common answer — write {"proposals":[]} if`,
     `nothing clears a door and nothing needs gardening. Precision over recall: a`,

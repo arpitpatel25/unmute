@@ -81,6 +81,11 @@ export interface Candidate {
   // confirmation (applyMatch fold) the supplied context accumulates by union.
   intent?: string
   contextSupplied?: string[]
+  // The user-side struggle signal (spec §0 D): a time the user had to CORRECT the
+  // model ("no, do it this way"). Shapes HOW the graduated skill should read — it
+  // is NEVER a graduation reason. Optional: populated by the suspicion-entry fold
+  // (Task 4); the judge (Task 6) only renders it when present.
+  correction?: string
 }
 export interface CandidatesFile { version: 1; candidates: Record<string, Candidate> }
 

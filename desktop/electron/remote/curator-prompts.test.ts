@@ -176,55 +176,87 @@ test('parseAuditReasoning (DEV-ONLY): captures a top-level reasoning field when 
   assert.deepEqual(Object.keys(rows[0]).sort(), ['note', 'skill', 'verdict'])
 })
 
-// Anti-drift guard: the Cadence-B judge prompt MUST literally carry the binding
-// two-door selection philosophy. These substring assertions are the project's
-// guard against the prompt silently drifting away from the decided design.
-// (Replaces the retired v2 "three tests / GAP-TASK-REUSE / struggle-is-PRIMARY"
-// test — that framing was deliberately superseded by the two doors, where
-// struggle is one input rather than the gate.)
-test('synthesize prompt (Cadence-B two-door judge): binding rules render verbatim + evidence/rejections/feedback', () => {
+// Anti-drift guard (spec §0, Task 6): the Cadence-B judge is the UNIFIED JUDGE.
+// Graduation is on VALUE judged from the USER's side (recurrence OR a
+// predictable-recurrence prior) — NEVER difficulty/struggle. Audit signals drive
+// modification; skills are context-elimination and personal; proposals attach
+// meaning; existing skills are deduped. These substring assertions pin the
+// re-aim and assert the retired difficulty/struggle + three-tests framing is
+// gone. Drift back toward "was it hard" / "would a human be glad" and these fail.
+test('synthesize prompt (unified judge): two value-doors, difficulty-excluded, audit-driven modify, dedup, meaning; old struggle/three-tests GONE', () => {
   const p = buildSynthesizePrompt({
     sweepId: 'sw1',
-    candidates: [{ key: 'k', title: 'T', skeleton: 'S', total: 3, struggle: true, firstSeen: 'a', lastSeen: 'b', occurrences: [] }],
+    candidates: [{
+      key: 'gmail-sweep', title: 'sweep gmail', skeleton: 'S',
+      intent: 'each morning sweep my Gmail accounts into a doc',
+      contextSupplied: ['both work + personal inboxes', 'drop into the daily Google Doc'],
+      correction: 'no, use the CLI not the desktop app',
+      total: 3, struggle: true, firstSeen: 'a', lastSeen: 'b',
+      occurrences: [
+        { taskId: 't1', sweepId: 's', count: 1, at: 'a', tracePointer: 'p' },
+        { taskId: 't2', sweepId: 's', count: 1, at: 'b', tracePointer: 'p' },
+      ],
+    }],
     curatedIndex: [{ name: 'pr-review', description: 'd', body: '## Goal\nreview' }],
+    auditSignals: [{ skill: 'pr-review', verdict: 'extend', note: 'stopped before the lockfile check' }],
     rejections: [{ name: 'noise-skill', reason: 'too niche' }],
     feedback: [{ skill: 'pr-review', note: 'misses lockfiles' }],
     outPath: '/out/synth.json',
   })
-  // Rule 1 — two doors. Door 1 (strong prior) with the verbatim human-glad test.
-  assert.ok(/Door 1/.test(p) && /Door 2/.test(p))
-  assert.ok(p.includes('If this never happens again, would a human still be glad this skill exists?'))
-  assert.ok(/single sighting|SINGLE sighting|one sighting/i.test(p))     // Door 1 may graduate on 1
-  // Rule 2 — the ≥2 rule: a Door-2 recurrence skill needs ≥2 distinct sessions.
+  // Two doors — graduation is VALUE, judged from the user's side.
+  assert.ok(/Door 1/i.test(p) && /Door 2/i.test(p))
+  // Door 2 — recurrence = the same intent+context in ≥2 distinct sessions.
   assert.ok(/at least 2 distinct sessions/i.test(p))
-  // Rule 3 — struggle is one input, not the gate (NOT the old "PRIMARY" framing).
-  assert.ok(p.includes('Struggle is one input, not the gate.'))
-  assert.ok(!/PRIMARY/.test(p))
-  // Rule 4 — FEW is the goal; cross-cutting disciplines / incidental navigation excluded.
-  assert.ok(/FEW is the goal/.test(p))
-  assert.ok(/no cross-cutting/i.test(p))
-  assert.ok(/recurring cross-app/i.test(p))                              // a recurring cross-app task IS fine
-  // Rule 5 — hardcode-vs-slot: only run-to-run-changing values become slots; secrets from env/keychain.
-  assert.ok(/change from run to run/i.test(p))
-  assert.ok(/secret/i.test(p) && /env|keychain/i.test(p))
-  // Rule 6 — skills independent; no cross-skill facts store; only parent→child composition.
-  assert.ok(/independent/i.test(p) && /no cross-skill facts/i.test(p))
-  assert.ok(/parent.?child composition/i.test(p))
-  // Rule 7 — typed output contract lists all 5 kinds; full body not a diff.
+  // Door 1 — a predictable-recurrence prior (a job the user will keep asking for), even on ONE sighting.
+  assert.ok(/predictable[- ]recurrence prior/i.test(p))
+  assert.ok(/keep asking for/i.test(p))
+  assert.ok(/weekly|on-call|seasonal|recurring[- ]workflow/i.test(p))
+  assert.ok(/single sighting|one sighting/i.test(p))
+  // Difficulty/struggle is EXPLICITLY not a graduation reason.
+  assert.ok(/difficulty is not (a door|the test)/i.test(p))
+  assert.ok(/not reasons? to graduate/i.test(p))
+  assert.ok(/was it hard/i.test(p) && /did the model struggle/i.test(p))
+  // A skill's value = context-elimination for THIS user; personal, not general.
+  assert.ok(/context-elimination/i.test(p))
+  assert.ok(/personal/i.test(p))
+  // Audit signals drive modification: extend → narrow/refine; wrong → flag; dead → retire.
+  assert.ok(p.includes('extend') && /narrow|refine/i.test(p))
+  assert.ok(/wrong/i.test(p))
+  assert.ok(/retire/i.test(p))
+  assert.ok(p.includes('stopped before the lockfile check'))            // the audit note is rendered for the judge
+  // Dedup against existing skills (global + project).
+  assert.ok(/dedup|duplicate/i.test(p))
+  // Attach meaning — description / when-to-use written for the USER.
+  assert.ok(/when to use/i.test(p))
+  // Typed output contract: all 5 kinds + sourceKeys + full body (never a diff).
   for (const kind of ['create', 'narrow', 'split', 'merge', 'retire']) assert.ok(p.includes(kind), `missing kind ${kind}`)
-  assert.ok(/full[^\n]*body|complete[^\n]*body/i.test(p))                // narrow/split/merge emit the COMPLETE new body
-  assert.ok(!/unified diff of the body/i.test(p))                        // never a hand-written diff
+  assert.ok(/sourceKeys/.test(p))
+  assert.ok(/full[^\n]*body|complete[^\n]*body/i.test(p))
   assert.ok(/changeSummary/.test(p))
-  // Rule 8 — narrow requires REPEATED divergence (≥ twice), not a single event.
-  assert.ok(/at least twice|at least 2|twice/i.test(p))
-  assert.ok(/repeat/i.test(p))
-  assert.ok(/single divergence is NOT enough|single divergence is not enough|a single divergence/i.test(p))
   // Restraint posture preserved.
   assert.ok(/when unsure, DON'T/i.test(p))
-  // Candidate evidence rendered: occurrences + distinct-session count.
-  assert.ok(p.includes('seen 3x') && /distinct session/i.test(p))
-  assert.ok(p.includes('too niche'))                                    // rejections rendered
-  assert.ok(p.includes('misses lockfiles'))                             // feedback rendered
+  // Suspicion rendered with the USER-SIDE fields (intent + contextSupplied +
+  // distinct-session count + correction) — not the legacy title/skeleton framing.
+  assert.ok(p.includes('each morning sweep my Gmail accounts into a doc'))   // intent
+  assert.ok(p.includes('both work + personal inboxes'))                       // contextSupplied
+  assert.ok(p.includes('no, use the CLI not the desktop app'))                // correction
+  assert.ok(/distinct session/i.test(p))
+  // Rejections + feedback still rendered.
+  assert.ok(p.includes('too niche'))
+  assert.ok(p.includes('misses lockfiles'))
+  // Default: no dev-diagnostics ask.
+  assert.ok(!/reasoning/i.test(p))
+  // REMOVED — the difficulty/struggle + three-tests framing (spec §0 removal list).
+  assert.ok(!/Struggle is one input, not the gate/.test(p))
+  assert.ok(!/human still be glad/i.test(p))
+  assert.ok(!/would the base model have struggled/i.test(p))
+  assert.ok(!/expensive to re-derive/i.test(p))
+  assert.ok(!/re-derive/i.test(p))
+  assert.ok(!/\bGAP\b/.test(p))
+  assert.ok(!/\bTASK\b/.test(p))
+  assert.ok(!/\bREUSE\b/.test(p))
+  assert.ok(!/three tests/i.test(p))
+  assert.ok(!/PRIMARY/.test(p))
 })
 
 test('parseSynthesizeOutput: validates, stamps ids/resolution, drops invalid', () => {
