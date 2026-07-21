@@ -150,6 +150,10 @@ export function applyMatch(
     // into the suspicion (spec §0 C — a genuine same-intent recurrence enriches it).
     const foldedCtx = foldContext(cand.contextSupplied, proc.contextSupplied ?? [])
     if (foldedCtx) cand.contextSupplied = foldedCtx
+    // User-side struggle signal (spec §0 D): latest correction wins. Only touch
+    // it when this finding actually carries one — never clobber an existing
+    // correction with undefined just because a later finding lacked one.
+    if (proc.correction) cand.correction = proc.correction
     candidates[matchedKey] = cand
     return { version: 1, candidates }
   }
@@ -173,6 +177,7 @@ export function applyMatch(
         status: 'watched',
         variance: { constant: [], varying: [] },
         intent: proc.intent && proc.intent.trim() !== '' ? proc.intent : proc.title,
+        ...(proc.correction ? { correction: proc.correction } : {}),
       }
   // Idempotency: skip if this (taskId, sweepId) already contributed an occurrence.
   if (cand.occurrences.some((o) => o.taskId === ctx.taskId && o.sweepId === ctx.sweepId)) {
@@ -188,6 +193,10 @@ export function applyMatch(
   cand.variance = foldVarying(cand.variance, variedThisRun)
   const foldedCtx = foldContext(cand.contextSupplied, proc.contextSupplied ?? [])
   if (foldedCtx) cand.contextSupplied = foldedCtx
+  // User-side struggle signal (spec §0 D): latest correction wins, mirroring
+  // the matched-fold branch — never clobber an existing correction (e.g. from
+  // a re-discovered-under-the-same-key entry) with undefined.
+  if (proc.correction) cand.correction = proc.correction
   candidates[key] = cand
   return { version: 1, candidates }
 }

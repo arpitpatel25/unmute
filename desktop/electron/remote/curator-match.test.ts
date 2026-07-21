@@ -265,6 +265,62 @@ test('two topically-similar but DIFFERENT-intent findings do NOT fuse — two se
   }
 })
 
+// --- Wiring gap: propagate proc.correction onto the ledger entry (reaches the judge) ---
+
+test('a new finding WITH a correction creates a candidate carrying that correction', () => {
+  const empty: CandidatesFile = { version: 1, candidates: {} }
+  const proc = {
+    intent: 'set up a vendor MCP connector', contextSupplied: ['register the app'],
+    correction: 'no, use the desktop app not the CLI',
+    bodySketch: 'register, exchange, verify', title: 'set up a vendor MCP connector', skeleton: 'register, exchange, verify',
+    count: 1, struggle: true,
+  }
+  const out = applyMatch(empty, proc, { procedureIndex: 0, matchedKey: null, confidence: 0, variedThisRun: [] }, ctx1)
+  const cand = out.candidates[occurrenceKey(proc.title)]
+  assert.equal(cand.correction, 'no, use the desktop app not the CLI')
+})
+
+test('folding a later finding WITH a correction into a matched entry sets/updates the entry\'s correction', () => {
+  const key = occurrenceKey('editing a talking-head video')
+  const seeded: CandidatesFile = {
+    version: 1,
+    candidates: {
+      [key]: {
+        key, title: 'editing a talking-head video', skeleton: 'trim, crop, caption',
+        total: 2, struggle: true, firstSeen: '2026-07-10', lastSeen: '2026-07-10',
+        occurrences: [{ taskId: 't0', sweepId: 'sw0', count: 2, at: '2026-07-10', tracePointer: 'traces/z' }],
+      },
+    },
+  }
+  const proc = {
+    intent: 'edit a talking head video', contextSupplied: [],
+    correction: 'no, crop to vertical not square',
+    bodySketch: 'trim, crop, caption', title: 'edit a talking head video', skeleton: 'trim, crop, caption', count: 3, struggle: true,
+  }
+  const decision: MatchDecision = { procedureIndex: 0, matchedKey: key, confidence: 0.9, variedThisRun: [] }
+  const out = applyMatch(seeded, proc, decision, ctx2)
+  assert.equal(out.candidates[key].correction, 'no, crop to vertical not square')
+})
+
+test('a fold with NO correction does NOT clobber an existing one', () => {
+  const key = occurrenceKey('editing a talking-head video')
+  const seeded: CandidatesFile = {
+    version: 1,
+    candidates: {
+      [key]: {
+        key, title: 'editing a talking-head video', skeleton: 'trim, crop, caption',
+        total: 2, struggle: true, firstSeen: '2026-07-10', lastSeen: '2026-07-10',
+        occurrences: [{ taskId: 't0', sweepId: 'sw0', count: 2, at: '2026-07-10', tracePointer: 'traces/z' }],
+        correction: 'no, crop to vertical not square',
+      },
+    },
+  }
+  const proc = { title: 'edit a talking head video', skeleton: 'trim, crop, caption', count: 3, struggle: false }
+  const decision: MatchDecision = { procedureIndex: 0, matchedKey: key, confidence: 0.9, variedThisRun: [] }
+  const out = applyMatch(seeded, proc, decision, ctx2)
+  assert.equal(out.candidates[key].correction, 'no, crop to vertical not square')
+})
+
 // --- Task 13: per-occurrence struggle metrics ---
 
 test('applyMatch writes errors/recoveries/wallClockMs onto a NEW-entry occurrence', () => {
