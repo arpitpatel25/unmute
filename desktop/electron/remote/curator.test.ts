@@ -517,7 +517,7 @@ test('runSweep: a session whose transcript INVOKED a skill runs the audit one-sh
   await run([{ taskId: 't1', intent: 'x', transcriptPath, fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }])
 
   // The audit one-shot ran…
-  assert.ok(prompts.some((pr) => pr.includes('skill-usage audit')))
+  assert.ok(prompts.some((pr) => pr.includes('skill-usage audit]')))
   // …and its extend verdict folded a 'diverge' onto the linked ledger entry.
   const cands = await readCandidates(p)
   const log = cands.candidates['pr-review-key'].divergenceLog ?? []
@@ -542,7 +542,7 @@ test('runSweep: a session whose transcript invoked NO skill runs no audit pass',
   }
   const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex: async () => [], sessionTimeoutMs: 5_000, pollMs: 20 })
   await run([{ taskId: 't1', intent: 'x', transcriptPath, fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }])
-  assert.ok(!prompts.some((pr) => pr.includes('skill-usage audit')))   // most sessions skip the audit entirely
+  assert.ok(!prompts.some((pr) => pr.includes('skill-usage audit]')))   // most sessions skip the audit entirely (marker is the audit-prompt-only header)
 })
 
 test('runSweep: decay — pruneSuspicions drops an old unconfirmed suspicion in success bookkeeping', async () => {
