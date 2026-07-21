@@ -109,6 +109,10 @@ export class Curator {
   /** Single-flight guard: the in-progress check (including its awaited sweep). */
   private inFlight: Promise<boolean> | null = null
   private timer: NodeJS.Timeout | null = null
+  /** DEV-ONLY sentinel-file poll (armed by armDevForceWatcher; null in prod). */
+  private forceTimer: NodeJS.Timeout | null = null
+  /** Single-flight for the dev force watcher, so overlapping ticks don't stack. */
+  private forceWatchBusy = false
 
   constructor(opts: CuratorOpts) {
     this.paths = opts.paths ?? curatorPaths()
@@ -132,10 +136,13 @@ export class Curator {
     setImmediate(() => { this.checkNow().catch((err) => log.warn('checkNow failed', { error: (err as Error).message })) })
     this.timer = setInterval(() => { this.checkNow().catch((err) => log.warn('checkNow failed', { error: (err as Error).message })) }, this.checkEveryMs)
     this.timer.unref()
+    // DEV-ONLY on-demand trigger — self-gates on devLogEnabled(), so a no-op in prod.
+    this.armDevForceWatcher()
   }
 
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null }
+    if (this.forceTimer) { clearInterval(this.forceTimer); this.forceTimer = null }
   }
 
   /** Record a natural stopping point for a task (its delta becomes eligible). */
@@ -143,30 +150,100 @@ export class Curator {
     this.pendingCheckpoints.add(taskId)
   }
 
+  /** DEV-ONLY on-demand sweep trigger. When (and ONLY when) the dev-log gate is
+   *  on — an unpackaged dev run, or an explicit UNMUTE_CURATOR_DEVLOG=1 — starts a
+   *  lightweight unref'd poll over the curator root dir for two sentinel files a
+   *  developer can `touch` from a terminal:
+   *    • `<root>/.force-sweep`       → delete, then forceSweep() (skips only the due-gate).
+   *    • `<root>/.force-sweep-reset` → delete, ZERO every session cursor (lineOffset
+   *      and lastSweptAt → 0 so the sweep RE-READS everything), then forceSweep().
+   *  Best-effort (never throws), single-flight (overlapping triggers don't stack).
+   *  A HARD no-op in the packaged/public build: the gate is fail-safe-off there,
+   *  so no timer is ever created and the sentinels are never consumed. */
+  armDevForceWatcher(): void {
+    if (!devLogEnabled()) return                 // prod safety: never activate off-gate
+    if (this.forceTimer) return                  // idempotent — one poll only
+    const rootDir = this.paths.root
+    const forcePath = join(rootDir, '.force-sweep')
+    const resetPath = join(rootDir, '.force-sweep-reset')
+    this.forceTimer = setInterval(() => {
+      if (this.forceWatchBusy) return            // single-flight: don't stack ticks
+      this.forceWatchBusy = true
+      void (async () => {
+        try {
+          // Reset takes precedence: re-read everything, then sweep.
+          if (await this.consumeSentinel(resetPath)) {
+            const cursor = await readCursor(this.paths)
+            for (const key of Object.keys(cursor.sessions)) {
+              cursor.sessions[key].lineOffset = 0
+              cursor.sessions[key].lastSweptAt = 0
+            }
+            await writeCursor(this.paths, cursor)
+            log.event('dev-force-sweep-reset', { sessions: Object.keys(cursor.sessions).length })
+            await this.forceSweep()
+            return
+          }
+          if (await this.consumeSentinel(forcePath)) {
+            log.event('dev-force-sweep')
+            await this.forceSweep()
+          }
+        } catch (err) {
+          log.warn('dev force-sweep watcher tick failed', { error: (err as Error).message })
+        } finally {
+          this.forceWatchBusy = false
+        }
+      })()
+    }, 3_000)
+    this.forceTimer.unref()
+  }
+
+  /** Best-effort consume of a sentinel file: returns true iff it existed (and was
+   *  then deleted). A missing file → false. Never throws. */
+  private async consumeSentinel(p: string): Promise<boolean> {
+    try {
+      await fs.stat(p)
+    } catch {
+      return false
+    }
+    await fs.rm(p, { force: true }).catch(() => {})
+    return true
+  }
+
   /** Due + material + not busy → a sweep ran. Returns whether runSweep fired.
-   *  Single-flight: a concurrent call returns false immediately. */
-  checkNow(): Promise<boolean> {
+   *  Single-flight: a concurrent call returns false immediately.
+   *  `force` (dev on-demand trigger) skips ONLY the due-gate — every other gate
+   *  (single-flight, busy/idle-preference, material scan, quiescence/checkpoint,
+   *  triage) stays the real pipeline. */
+  checkNow(force = false): Promise<boolean> {
     if (this.inFlight) {
       log.debug('checkNow refused: a check is already in flight (single-flight)')
       return Promise.resolve(false)
     }
-    const p = this.runCheck()
+    const p = this.runCheck(force)
     this.inFlight = p
     return p.finally(() => { this.inFlight = null })
   }
 
-  private async runCheck(): Promise<boolean> {
+  /** DEV on-demand: fire a sweep NOW, skipping only the 12-hour due-gate. Every
+   *  other gate stays real. Convenience wrapper over checkNow(true). */
+  async forceSweep(): Promise<boolean> {
+    return this.checkNow(true)
+  }
+
+  private async runCheck(force = false): Promise<boolean> {
     const now = this.now()
     // DEV-ONLY correlation id for this scheduler pass (no-op in prod).
     const checkId = `chk_${now}`
 
-    // Gate 2 — due. Cursor is the authority on when we last swept.
+    // Gate 2 — due. Cursor is the authority on when we last swept. `force` skips
+    // ONLY this gate (the dev on-demand trigger); nothing else below is bypassed.
     const cursor = await readCursor(this.paths)
-    if (now - cursor.lastSweepAt < this.sweepIntervalMs()) {
+    if (!force && now - cursor.lastSweepAt < this.sweepIntervalMs()) {
       log.debug('checkNow refused: not due', { sinceLast: now - cursor.lastSweepAt, interval: this.sweepIntervalMs() })
       devlog({ stage: 'scheduler', kind: 'skip-not-due', checkId, sinceLast: now - cursor.lastSweepAt, interval: this.sweepIntervalMs() })
       return false
     }
+    if (force) devlog({ stage: 'scheduler', kind: 'force-due-gate-skipped', checkId, sinceLast: now - cursor.lastSweepAt, interval: this.sweepIntervalMs() })
 
     // Gate 3 — idle-preference. The interval will retry once things quiet down.
     if (this.isBusy()) {

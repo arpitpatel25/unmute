@@ -118,6 +118,55 @@ test('scheduler resilience: a throwing runSweep is swallowed on scheduler ticks 
   assert.equal(sweepAttempts, before + 1)
 })
 
+// ── Dev-gated ON-DEMAND force sweep (skips ONLY the due-gate) ─────────────────
+
+test('force: checkNow(true) skips ONLY the due-gate — sweeps when NOT due; checkNow(false) in the same situation refuses (existing behavior preserved)', async () => {
+  const root = await tmp()
+  const t = path.join(root, 't1.jsonl'); await fs.writeFile(t, busyLines())
+  const nowMs = 1_000_000
+  const { curator, swept } = make(root, { locateTranscriptFor: async () => t, now: () => nowMs } as never)
+  const p = curatorPaths(root)
+  await writeCursor(p, { version: 1, lastSweepAt: nowMs - 60_000, sessions: {} })   // swept a minute ago — NOT due
+  curator.notifyCheckpoint('t1')
+  assert.equal(await curator.checkNow(false), false)   // due-gate honored → no sweep (unchanged behavior)
+  assert.equal(swept.length, 0)
+  assert.equal(await curator.checkNow(true), true)     // force skips ONLY the due-gate → sweeps
+  assert.equal(swept.length, 1)
+  assert.equal(swept[0][0].taskId, 't1')
+})
+
+test('force: forceSweep() STILL honors the other gates — busy → no sweep even though the due-gate is skipped', async () => {
+  const root = await tmp()
+  const t = path.join(root, 't1.jsonl'); await fs.writeFile(t, busyLines())
+  const nowMs = 1_000_000
+  const { curator, swept } = make(root, { locateTranscriptFor: async () => t, now: () => nowMs, isBusy: () => true } as never)
+  const p = curatorPaths(root)
+  await writeCursor(p, { version: 1, lastSweepAt: nowMs - 60_000, sessions: {} })   // not due either
+  curator.notifyCheckpoint('t1')
+  assert.equal(await curator.forceSweep(), false)   // due-gate skipped, but the busy-gate still holds
+  assert.equal(swept.length, 0)
+})
+
+test('armDevForceWatcher: NO-OP in prod (devLogEnabled() false) — a .force-sweep sentinel is left untouched, no sweep', async () => {
+  const prev = process.env.UNMUTE_CURATOR_DEVLOG
+  delete process.env.UNMUTE_CURATOR_DEVLOG   // prod: dev-log gate OFF
+  try {
+    const root = await tmp()
+    const t = path.join(root, 't1.jsonl'); await fs.writeFile(t, busyLines())
+    const { curator, swept } = make(root, { locateTranscriptFor: async () => t } as never)
+    await fs.mkdir(root, { recursive: true })
+    const sentinel = path.join(root, '.force-sweep')
+    await fs.writeFile(sentinel, '')
+    curator.armDevForceWatcher()                       // gated off → must not start a poll
+    await new Promise((r) => setTimeout(r, 60))
+    assert.ok(await fs.stat(sentinel).then(() => true, () => false))   // still there — watcher inactive
+    assert.equal(swept.length, 0)                                     // and no sweep fired
+    curator.stop()
+  } finally {
+    if (prev !== undefined) process.env.UNMUTE_CURATOR_DEVLOG = prev
+  }
+})
+
 // ── Bugfix: transcripts keyed by CONVERSATION id, not folder-newest ──────────
 
 test('curator: two sessions sharing a cwd but with DISTINCT sessionIds resolve to DISTINCT transcripts and keep SEPARATE cursors (no collapse)', async () => {
