@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSynthesizePrompt, parseSynthesizeOutput, parseSynthesizeReasoning, buildMatchPrompt, parseMatchOutput } from './curator-prompts.ts'
+import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSynthesizePrompt, parseSynthesizeOutput, parseSynthesizeReasoning, buildMatchPrompt, parseMatchOutput, parseMatchReasoning } from './curator-prompts.ts'
 
 test('distill prompt: points at trace file, demands JSON at outPath, forbids facts/preferences + app-navigation, makes struggle the key signal', () => {
   const p = buildDistillPrompt({ taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedSkills: [{ name: 'pr-review', description: 'review a pull request' }] })
@@ -185,6 +185,49 @@ test('parse*Reasoning (DEV-ONLY): captures a top-level reasoning field when pres
 
   assert.equal(parseSynthesizeReasoning(JSON.stringify({ proposals: [] })), undefined)
   assert.equal(parseSynthesizeReasoning(JSON.stringify({ proposals: [], reasoning: 'considered all candidates' })), 'considered all candidates')
+
+  // The match stage gets the same convention as distill/synthesize — a
+  // top-level `reasoning` string, read separately, never fed into a decision.
+  assert.equal(parseMatchReasoning(null), undefined)
+  assert.equal(parseMatchReasoning(JSON.stringify({ matches: [] })), undefined)
+  assert.equal(parseMatchReasoning(JSON.stringify({ matches: [], reasoning: 'matched on repeatable core' })), 'matched on repeatable core')
+})
+
+// Constraint F (spec §0): reason is dev-log-only — it must NEVER be reachable
+// through a proposal draft or a distilled procedure, however the model shapes
+// its raw JSON. These lock the contract so a later prompt/parser change can't
+// quietly open a leak path.
+test('reasoning/reason can NEVER leak onto a distilled procedure, whatever field the model used', () => {
+  const raw = JSON.stringify({
+    procedures: [{ title: 'T', skeleton: 'S', count: 1, struggle: false, reasoning: 'per-proc reasoning', reason: 'per-proc reason' }],
+    reasoning: 'top-level reasoning',
+  })
+  const procs = parseDistillOutput(raw)
+  assert.equal(procs.length, 1)
+  assert.ok(!Object.prototype.hasOwnProperty.call(procs[0], 'reasoning'))
+  assert.ok(!Object.prototype.hasOwnProperty.call(procs[0], 'reason'))
+})
+
+test('reasoning/reason can NEVER leak onto a proposal draft, whatever field the model used', () => {
+  const raw = JSON.stringify({
+    proposals: [{
+      kind: 'create',
+      draft: { name: 'extract-invoice', description: 'd', body: 'b', reasoning: 'draft-level reasoning', reason: 'draft-level reason' },
+      evidence: { occurrences: 1 },
+      rationale: 'r',
+      reasoning: 'proposal-level reasoning',
+      reason: 'proposal-level reason',
+    }],
+    reasoning: 'batch-level reasoning',
+  })
+  const proposals = parseSynthesizeOutput(raw, 'sw_1', () => 1000)
+  assert.equal(proposals.length, 1)
+  const [p] = proposals
+  assert.ok(!Object.prototype.hasOwnProperty.call(p.draft, 'reasoning'))
+  assert.ok(!Object.prototype.hasOwnProperty.call(p.draft, 'reason'))
+  assert.ok(!Object.prototype.hasOwnProperty.call(p, 'reasoning'))
+  assert.ok(!Object.prototype.hasOwnProperty.call(p, 'reason'))
+  assert.deepEqual(Object.keys(p.draft).sort(), ['body', 'description', 'name'])
 })
 
 test('parseSynthesizeOutput: a synth-provided diff field is IGNORED (D19 — only the sweep sets diff)', () => {

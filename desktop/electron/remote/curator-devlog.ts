@@ -44,6 +44,18 @@ export function devlog(entry: Record<string, unknown>): void {
   })
 }
 
+/** Dev-log one LLM stage's structured `reason` as a single 'reason'-kind line,
+ *  correlated by `ids` (sweepId / taskId / proposalId / whatever the caller has)
+ *  plus `stage`. This is the ONE place every stage's reasoning funnels through so
+ *  Task 7's per-stage wiring is a one-line call. Pure side-channel: `reason` is
+ *  NEVER read back by any decision, never stored in a skill/proposal draft — it
+ *  only exists in this dev-only timeline. No-op (no file/dir, no chain entry)
+ *  when the gate is off OR `reason` is missing/blank. */
+export function devlogReason(stage: string, ids: Record<string, string>, reason: string | undefined): void {
+  if (!devLogEnabled() || !reason || !reason.trim()) return
+  devlog({ stage, kind: 'reason', ...ids, reason })
+}
+
 /** Write a pretty JSON file logs/<name>.json — for big per-sweep reasoning dumps
  *  (the full inputs the model saw + its raw output). No-op when the gate is off. */
 export function devlogDump(name: string, data: unknown): void {

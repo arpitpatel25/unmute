@@ -637,6 +637,16 @@ export function parseMatchOutput(raw: string | null): MatchDecision[] {
   return out
 }
 
+/** DEV-ONLY: capture the top-level `reasoning` string the devMode match prompt
+ *  asks for. Returns undefined on null/malformed/absent. Separate read (not
+ *  folded into parseMatchOutput) so the decision path is unchanged; the sweep
+ *  only LOGS this — it never feeds a decision. Completes the same convention as
+ *  parseDistillReasoning/parseSynthesizeReasoning for the third (match) stage,
+ *  so Task 7 can call devlogReason('match', …) exactly like the other two. */
+export function parseMatchReasoning(raw: string | null): string | undefined {
+  return topLevelReasoning(raw)
+}
+
 /** Shared: pull a non-empty top-level `reasoning` string out of a stage's raw
  *  JSON output. Tolerant — undefined on null / non-JSON / missing / non-string. */
 function topLevelReasoning(raw: string | null): string | undefined {
