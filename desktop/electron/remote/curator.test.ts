@@ -255,7 +255,10 @@ test('runSweep: passes the existing skills WITH descriptions into the distill pr
   await run([{ taskId: 't1', intent: 'video work', transcriptPath: path.join(root, 't1.jsonl'), fromLine: 0, lines: [JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } })], lookback: [], newOffset: 1 }])
   assert.ok(distillPrompt.includes('pr-review'))
   assert.ok(distillPrompt.includes('review a pull request end to end'))   // the description, not just the name
-  assert.ok(/skillObservation/.test(distillPrompt))
+  // Task 3: the agree/diverge skillObservation ask is relocated to the audit
+  // pass — distill still renders the skills (for usedCuratedSkill) but no longer
+  // asks for skillObservation.
+  assert.ok(!/skillObservation/.test(distillPrompt))
 })
 
 test('runSweep: a proposal.sourceKeys moves its ledger candidate to status "surfaced"', async () => {
@@ -474,25 +477,12 @@ test('runSweep: gardening kinds (narrow/split/merge/retire) targeting an existin
   assert.ok(pending.find((x) => x.kind === 'narrow' && x.targetSkill === 'pr-review'))   // create-suppression doesn't apply to gardening kinds
 })
 
-test('runSweep: a proc.skillObservation is recorded against the ledger entry linked to that skill', async () => {
-  const root = await tmp(); const p = curatorPaths(root)
-  await writeCandidates(p, seededLedger(0))
-  // distill emits a diverge observation against pr-review; the fold must append it.
-  const distillObs = { findings: [{ intent: 'Load video Premiere', contextSupplied: ['open the Premiere project first'], correction: 'no, use the CLI', bodySketch: 'S', count: 2, skillObservation: { skill: 'pr-review', verdict: 'diverge', note: 'skipped lockfile' } }] }
-  const writes = async (prompt: string) => {
-    const m = prompt.match(/(\/\S+?(?:distill|match|synth)\.json)/)
-    if (!m) return
-    const payload = m[1].endsWith('distill.json') ? distillObs : m[1].endsWith('match.json') ? { matches: [] } : { proposals: [] }
-    await fs.mkdir(path.dirname(m[1]), { recursive: true })
-    await fs.writeFile(m[1] + '.tmp', JSON.stringify(payload)); await fs.rename(m[1] + '.tmp', m[1])
-  }
-  const run = makeRunSweep({ executorFactory: () => fakeExecutor(writes), paths: p, curatedIndex: async () => [{ name: 'pr-review', description: 'd', body: 'b' }], sessionTimeoutMs: 5_000, pollMs: 20 })
-  await run(oneMaterial(root))
-  const cands = await readCandidates(p)
-  const log = cands.candidates['pr-review-key'].divergenceLog
-  assert.equal(log?.length, 1)
-  assert.deepEqual(log?.[0], { sessionId: 't1', at: log![0].at, verdict: 'diverge', note: 'skipped lockfile' })
-})
+// (Removed in Task 3: distill no longer emits skillObservation, so the fold from a
+//  distilled skillObservation into divergenceLog is no longer exercised via the
+//  sweep. The agree/diverge modification signal now lives in the focused skill-usage
+//  audit pass; Task 7 wires the audit into the sweep and removes the now-dead
+//  proc.skillObservation read in curator.ts. recordSkillObservation itself remains
+//  covered by unit tests in curator-match.test.ts.)
 
 test('runSweep: rate-limit aborts — cursor NOT advanced, no proposals', async () => {
   const root = await tmp()

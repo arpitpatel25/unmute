@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSynthesizePrompt, parseSynthesizeOutput, parseSynthesizeReasoning, buildMatchPrompt, parseMatchOutput, parseMatchReasoning } from './curator-prompts.ts'
+import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSynthesizePrompt, parseSynthesizeOutput, parseSynthesizeReasoning, buildMatchPrompt, parseMatchOutput, parseMatchReasoning, buildAuditPrompt, parseAuditOutput, parseAuditReasoning } from './curator-prompts.ts'
 
 // Anti-drift guard (spec §0 A/B/D/G): the distill prompt is USER-SIDE. These
 // substring assertions pin the re-aim and assert the OLD model-work / struggle-
@@ -31,9 +31,14 @@ test('distill prompt (user-side re-aim): user-index rule, entry test, correction
   assert.ok(!/PRIMARY/.test(p))
   assert.ok(!/MOST IMPORTANT/i.test(p))
   assert.ok(!/"procedures":\[/.test(p))                              // no legacy output shape
+  // Task 3: the agree/diverge modification signal is RELOCATED to the audit
+  // pass — distill no longer emits skillObservation.
+  assert.ok(!/skillObservation/.test(p))
+  assert.ok(!/MODIFICATION SIGNAL/i.test(p))
+  assert.ok(!/agree.*diverge|diverge.*agree/i.test(p))
 })
 
-test('distill prompt: renders existing skills WITH descriptions and asks for an agree/diverge skillObservation (Constraint 7)', () => {
+test('distill prompt: renders existing skills WITH descriptions (for usedCuratedSkill friction); NO skillObservation ask (moved to audit)', () => {
   const p = buildDistillPrompt({
     taskId: 't1', intent: 'review a PR', tracePath: '/tr/a.txt', outPath: '/out/distill.json',
     curatedSkills: [
@@ -41,15 +46,13 @@ test('distill prompt: renders existing skills WITH descriptions and asks for an 
       { name: 'extract-invoice', description: 'pull structured fields from an invoice PDF' },
     ],
   })
-  // Both name AND description render so the model can judge divergence.
+  // Both name AND description still render (the usedCuratedSkill friction report needs them).
   assert.ok(p.includes('pr-review') && p.includes('review a pull request end to end'))
   assert.ok(p.includes('extract-invoice') && p.includes('pull structured fields from an invoice PDF'))
-  // The signal itself: an agree/diverge skillObservation, reported invoked-or-not.
-  assert.ok(/skillObservation/.test(p))
-  assert.ok(/agree/i.test(p) && /diverge/i.test(p))
-  assert.ok(/whether or not|invoked or not|by hand/i.test(p))            // reported even when done by hand
-  // The output contract shows the optional skillObservation on a procedure.
-  assert.ok(/"skillObservation"/.test(p))
+  assert.ok(/usedCuratedSkill/.test(p))
+  // Task 3: the agree/diverge modification signal is gone from distill.
+  assert.ok(!/skillObservation/.test(p))
+  assert.ok(!/"skillObservation"/.test(p))
 })
 
 test('parseDistillOutput: maps a valid finding — PRIMARY + compat fields populated; correction drives struggle', () => {
@@ -88,31 +91,89 @@ test('parseDistillOutput: ENTRY TEST — drops a finding with no actionable inte
   assert.equal(out[0].struggle, false)   // no correction → struggle false (its absence never rejects the finding)
 })
 
-test('parseDistillOutput: reads a valid skillObservation (agree/diverge)', () => {
+test('parseDistillOutput: no longer returns skillObservation (relocated to the audit pass, Task 3)', () => {
   const out = parseDistillOutput(JSON.stringify({ findings: [
     { intent: 'A', contextSupplied: ['c'], bodySketch: 'S',
       skillObservation: { skill: 'pr-review', verdict: 'diverge', note: 'skipped the lockfile check' } },
     { intent: 'B', contextSupplied: ['c'], bodySketch: 'S',
       skillObservation: { skill: 'extract-invoice', verdict: 'agree', note: 'same fields, same order' } },
   ] }))
-  assert.equal(out.length, 2)
-  assert.deepEqual(out[0].skillObservation, { skill: 'pr-review', verdict: 'diverge', note: 'skipped the lockfile check' })
-  assert.deepEqual(out[1].skillObservation, { skill: 'extract-invoice', verdict: 'agree', note: 'same fields, same order' })
+  assert.equal(out.length, 2)                              // the findings themselves survive (entry test still passes)
+  for (const p of out) assert.equal(p.skillObservation, undefined)  // but distill never reads/populates it now
 })
 
-test('parseDistillOutput: an invalid skillObservation is dropped WITHOUT dropping the finding', () => {
-  const out = parseDistillOutput(JSON.stringify({ findings: [
-    { intent: 'bad-verdict', contextSupplied: ['c'], bodySketch: 'S',
-      skillObservation: { skill: 'pr-review', verdict: 'maybe', note: 'n' } },       // bad verdict
-    { intent: 'missing-skill', contextSupplied: ['c'], bodySketch: 'S',
-      skillObservation: { skill: '', verdict: 'agree', note: 'n' } },                // empty skill
-    { intent: 'missing-note', contextSupplied: ['c'], bodySketch: 'S',
-      skillObservation: { skill: 'pr-review', verdict: 'agree' } },                  // note not a string
-    { intent: 'not-object', contextSupplied: ['c'], bodySketch: 'S',
-      skillObservation: 'nope' },                                                    // not an object
+// ── Audit (Cadence A — skill-usage audit pass, spec §0 E) ──────────────────
+
+test('buildAuditPrompt: renders the invoked-skill list, the finished-vs-stage-X judgment, and the ok/extend/wrong contract', () => {
+  const p = buildAuditPrompt({ skillsInvoked: ['pr-review', 'extract-invoice'], tracePath: '/tr/a.txt', outPath: '/out/audit.json' })
+  assert.ok(p.includes('/tr/a.txt'))
+  assert.ok(p.includes('/out/audit.json'))
+  // Each invoked skill is listed for judgment.
+  assert.ok(p.includes('pr-review') && p.includes('extract-invoice'))
+  // Read AROUND the invocation.
+  assert.ok(/around the invocation/i.test(p))
+  // The finished-vs-stage-X question.
+  assert.ok(/finish(ed)? the job/i.test(p))
+  assert.ok(/stage/i.test(p) && /hand-?drove|hand-?drive|by hand|the rest/i.test(p))
+  // The three-verdict contract.
+  assert.ok(/\bok\b/i.test(p) && /\bextend\b/i.test(p) && /\bwrong\b/i.test(p))
+  assert.ok(/did the job/i.test(p))       // ok = did the job
+  assert.ok(/partway|more|fell short|short of/i.test(p))   // extend = got partway
+  assert.ok(/wrong thing|rejected/i.test(p))               // wrong = wrong thing / user rejected
+  // Output contract.
+  assert.ok(/"audits":\[/.test(p))
+  assert.ok(/"verdict"/.test(p) && /"note"/.test(p) && /"skill"/.test(p))
+  assert.ok(!/reasoning/i.test(p))        // default: no dev-diagnostics ask
+})
+
+test('buildAuditPrompt: devMode adds the top-level reasoning ask (Task 1 convention)', () => {
+  const args = { skillsInvoked: ['pr-review'], tracePath: '/tr/a.txt', outPath: '/out/audit.json' }
+  assert.ok(!/reasoning/i.test(buildAuditPrompt(args)))
+  assert.ok(!/reasoning/i.test(buildAuditPrompt({ ...args, devMode: false })))
+  const dev = buildAuditPrompt({ ...args, devMode: true })
+  assert.ok(/reasoning/i.test(dev))
+  assert.ok(/developer diagnostics/i.test(dev))
+})
+
+test('parseAuditOutput: maps valid rows; drops invalid verdicts and empty skills', () => {
+  assert.deepEqual(parseAuditOutput(null), [])
+  assert.deepEqual(parseAuditOutput('not json'), [])
+  assert.deepEqual(parseAuditOutput(JSON.stringify({ audits: 'nope' })), [])
+  assert.deepEqual(parseAuditOutput(JSON.stringify({})), [])
+  const out = parseAuditOutput(JSON.stringify({ audits: [
+    { skill: 'pr-review', verdict: 'ok', note: 'did the whole review' },
+    { skill: 'extract-invoice', verdict: 'extend', note: 'stopped before the totals' },
+    { skill: 'setup-mcp', verdict: 'wrong', note: 'user reverted it' },
+    { skill: 'bad-verdict', verdict: 'maybe', note: 'n' },       // dropped: invalid verdict
+    { skill: '', verdict: 'ok', note: 'n' },                     // dropped: empty skill
+    { skill: '   ', verdict: 'ok', note: 'n' },                  // dropped: blank skill
+    { skill: 'no-note', verdict: 'ok' },                         // dropped: note not a string
+    { verdict: 'ok', note: 'n' },                                // dropped: no skill
+    'not an object',                                             // dropped
   ] }))
-  assert.equal(out.length, 4)                          // every finding survives
-  for (const p of out) assert.equal(p.skillObservation, undefined)   // but the bad observation is dropped
+  assert.equal(out.length, 3)
+  assert.deepEqual(out[0], { skill: 'pr-review', verdict: 'ok', note: 'did the whole review' })
+  assert.deepEqual(out[1], { skill: 'extract-invoice', verdict: 'extend', note: 'stopped before the totals' })
+  assert.deepEqual(out[2], { skill: 'setup-mcp', verdict: 'wrong', note: 'user reverted it' })
+})
+
+test('parseAuditOutput: nothing to audit → []', () => {
+  assert.deepEqual(parseAuditOutput(JSON.stringify({ audits: [] })), [])
+})
+
+test('parseAuditReasoning (DEV-ONLY): captures a top-level reasoning field when present; undefined otherwise; never leaks onto a row', () => {
+  assert.equal(parseAuditReasoning(null), undefined)
+  assert.equal(parseAuditReasoning('not json'), undefined)
+  assert.equal(parseAuditReasoning(JSON.stringify({ audits: [] })), undefined)
+  assert.equal(parseAuditReasoning(JSON.stringify({ audits: [], reasoning: '  ' })), undefined)
+  assert.equal(parseAuditReasoning(JSON.stringify({ audits: [], reasoning: 'judged pr-review ok' })), 'judged pr-review ok')
+  // reason/reasoning can never leak onto an audit row.
+  const rows = parseAuditOutput(JSON.stringify({
+    audits: [{ skill: 'pr-review', verdict: 'ok', note: 'n', reasoning: 'row reasoning', reason: 'row reason' }],
+    reasoning: 'top',
+  }))
+  assert.equal(rows.length, 1)
+  assert.deepEqual(Object.keys(rows[0]).sort(), ['note', 'skill', 'verdict'])
 })
 
 // Anti-drift guard: the Cadence-B judge prompt MUST literally carry the binding

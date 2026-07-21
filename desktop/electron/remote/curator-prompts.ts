@@ -7,7 +7,7 @@
 // actionable intent + the reusable context the user supplied for it, and the
 // struggle signal is the user's corrections — never the model's errors.
 
-import type { DistillProcedure, Candidate, Proposal, ProposalDraft, ProposalEvidence } from './curator-store.ts'
+import type { DistillProcedure, Candidate, Proposal, ProposalDraft, ProposalEvidence, AuditResult } from './curator-store.ts'
 import { entryStatus, distinctSessionCount } from './curator-store'
 
 // ── Distill ────────────────────────────────────────────────────────────────
@@ -78,19 +78,9 @@ export function buildDistillPrompt(i: {
     `If the trace shows one being INVOKED, report what happened AROUND the`,
     `invocation (extra steps appended, corrections, failure) as usedCuratedSkill.`,
     ``,
-    `MODIFICATION SIGNAL — if a finding's work CORRESPONDS to one of the skills`,
-    `above, add a "skillObservation" comparing what you observed against that skill.`,
-    `Report this WHETHER OR NOT the skill was explicitly invoked — the user may do`,
-    `the task BY HAND, and that still counts.`,
-    `  verdict "agree" = the observed approach MATCHES the skill's method.`,
-    `  verdict "diverge" = it DIFFERS from the skill; in "note" say EXACTLY what`,
-    `    differed (a step added/skipped/reordered, a different tool or standard).`,
-    `For "agree", "note" is what matched. Only emit skillObservation when there is a`,
-    `GENUINE correspondence to an existing skill; omit it otherwise.`,
     `Reply ONLY by writing JSON to ${i.outPath} (write ${i.outPath}.tmp then rename):`,
     `{"findings":[{"intent":"…","contextSupplied":["…"],"correction":"…"?,"bodySketch":"…",`,
-    `  "usedCuratedSkill":{"name":"…","friction":"…"}?,`,
-    `  "skillObservation":{"skill":"<existing skill name>","verdict":"agree"|"diverge","note":"…"}?}]}`,
+    `  "usedCuratedSkill":{"name":"…","friction":"…"}?}]}`,
     `No actionable intent with supplied context → {"findings":[]}. Do nothing else — no other tools than Read and the file write.`,
   ]
   if (i.devMode) {
@@ -152,20 +142,9 @@ export function parseDistillOutput(raw: string | null): DistillProcedure[] {
         proc.usedCuratedSkill = { name: u.name, friction: u.friction }
       }
     }
-    // skillObservation (Constraint 7 modification signal) — read only when fully
-    // well-formed: non-empty skill, verdict ∈ {agree,diverge}, string note. A bad
-    // one is dropped silently; it NEVER drops the whole procedure.
-    const obs = e.skillObservation
-    if (obs && typeof obs === 'object') {
-      const o = obs as Record<string, unknown>
-      if (
-        typeof o.skill === 'string' && o.skill.trim() !== '' &&
-        (o.verdict === 'agree' || o.verdict === 'diverge') &&
-        typeof o.note === 'string'
-      ) {
-        proc.skillObservation = { skill: o.skill, verdict: o.verdict, note: o.note }
-      }
-    }
+    // (skillObservation is no longer read here — the agree/diverge modification
+    //  signal moved to its own focused skill-usage-audit pass. See buildAuditPrompt
+    //  / parseAuditOutput and spec §0 E.)
     out.push(proc)
   }
   return out
@@ -176,6 +155,106 @@ export function parseDistillOutput(raw: string | null): DistillProcedure[] {
  *  (not folded into parseDistillOutput's return) so the decision path is byte-for-
  *  byte unchanged; the sweep only LOGS this — it never feeds a decision. */
 export function parseDistillReasoning(raw: string | null): string | undefined {
+  return topLevelReasoning(raw)
+}
+
+// ── Audit (Cadence A — skill-usage audit, spec §0 E) ─────────────────────────
+
+/** Build the skill-usage audit prompt (spec §0 E, Cadence A mode 2). Runs ONLY
+ *  when a skill was actually invoked in the session (detected deterministically
+ *  via skill-usage.extractSkillUses). For each invoked skill it asks a single
+ *  focused question: reading the trace AROUND the invocation, did the skill
+ *  FINISH the user's job, or leave the user at some stage so they hand-drove the
+ *  rest? The verdict is ok/extend/wrong. This is the agree/diverge modification
+ *  signal, RELOCATED out of distill into its own pass. devMode (DEV-ONLY, default
+ *  false) additionally asks for a top-level `reasoning` string (Task 1 convention;
+ *  dev-logged only, never fed into a decision). */
+export function buildAuditPrompt(i: {
+  skillsInvoked: string[]
+  tracePath: string
+  outPath: string
+  devMode?: boolean
+}): string {
+  const invoked = i.skillsInvoked.length
+    ? i.skillsInvoked.map((s) => `- ${s}`).join('\n')
+    : '(none)'
+  const lines = [
+    `[Unmute curator — skill-usage audit] One or more of the user's OWN skills was`,
+    `INVOKED in this session. For EACH invoked skill below, judge whether it did`,
+    `the user's job or fell short.`,
+    `Read the trace file at ${i.tracePath} (use the Read tool; read it fully, in chunks if large).`,
+    ``,
+    `── Skills invoked this session ──`,
+    invoked,
+    ``,
+    `── The audit question (per invoked skill) ──`,
+    `Read the trace AROUND the invocation — what the user asked for, what the skill`,
+    `did, and what happened after. Then decide: did the skill FINISH THE JOB, or did`,
+    `it leave the user at some STAGE X so they had to HAND-DRIVE THE REST (add steps,`,
+    `correct it, or the outcome wasn't what they wanted)?`,
+    ``,
+    `── Verdicts (choose exactly one per skill) ──`,
+    `- "ok"     — the skill DID THE JOB: it completed the user's goal, no material`,
+    `             hand-driving afterward.`,
+    `- "extend" — it got the user only PARTWAY: it fell SHORT of the goal and the`,
+    `             user had to add MORE steps to finish. The skill needs extending.`,
+    `- "wrong"  — it did the WRONG THING or the user REJECTED / reverted its output.`,
+    `In "note", say concretely what happened — for extend, the STAGE it stopped at`,
+    `and what the user did next; for wrong, what was wrong or how the user rejected it.`,
+    ``,
+    `Only audit skills that were actually invoked (listed above). Skip a skill you`,
+    `cannot find evidence for rather than guessing.`,
+    ``,
+    `Reply ONLY by writing JSON to ${i.outPath} (write ${i.outPath}.tmp then rename):`,
+    `{"audits":[{"skill":"<invoked skill name>","verdict":"ok"|"extend"|"wrong","note":"…"}]}`,
+    `Nothing to report → {"audits":[]}. Do nothing else — no other tools than Read and the file write.`,
+  ]
+  if (i.devMode) {
+    lines.push(
+      ``,
+      `[developer diagnostics] ALSO add a top-level "reasoning" string to that same`,
+      `JSON object: explain, per skill, WHY you landed on ok/extend/wrong. This field`,
+      `is for a developer inspecting the run; it does not affect any decision.`,
+      `Shape: {"audits":[…], "reasoning":"…"}.`,
+    )
+  }
+  return lines.join('\n')
+}
+
+const AUDIT_VERDICTS = new Set<AuditResult['verdict']>(['ok', 'extend', 'wrong'])
+
+/** Parse the audit output file. [] on null/malformed/`audits` not array. Per row:
+ *  requires a non-empty `skill`, a verdict in {ok,extend,wrong}, and a string
+ *  `note`; any row failing these is DROPPED (defensive, like the other parsers).
+ *  Only the three contract fields are copied through — a stray `reasoning`/`reason`
+ *  the model may attach to a row can never leak onto an AuditResult. */
+export function parseAuditOutput(raw: string | null): AuditResult[] {
+  if (raw == null) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  const audits = (parsed as { audits?: unknown } | null)?.audits
+  if (!Array.isArray(audits)) return []
+  const out: AuditResult[] = []
+  for (const a of audits) {
+    if (!a || typeof a !== 'object') continue
+    const e = a as Record<string, unknown>
+    if (typeof e.skill !== 'string' || e.skill.trim() === '') continue
+    if (typeof e.verdict !== 'string' || !AUDIT_VERDICTS.has(e.verdict as AuditResult['verdict'])) continue
+    if (typeof e.note !== 'string') continue
+    out.push({ skill: e.skill, verdict: e.verdict as AuditResult['verdict'], note: e.note })
+  }
+  return out
+}
+
+/** DEV-ONLY: capture the top-level `reasoning` string the devMode audit prompt
+ *  asks for. Returns undefined on null/malformed/absent. Separate read (not folded
+ *  into parseAuditOutput) so the decision path is unchanged; the sweep only LOGS
+ *  this — it never feeds a decision. Same convention as the other three stages. */
+export function parseAuditReasoning(raw: string | null): string | undefined {
   return topLevelReasoning(raw)
 }
 
