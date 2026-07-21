@@ -238,3 +238,77 @@ test('legacy Candidate (no new fields) loads and defaults via pure accessors', (
   assert.equal(distinctSessionCount(legacy), 2) // distinct taskIds: t1, t2
   assert.deepEqual(legacy.divergenceLog ?? [], [])
 })
+
+// --- Task 5: watch-list decay (pruneSuspicions) — spec §0 constraint C ---
+
+import { pruneSuspicions } from './curator-store.ts'
+
+const NOW = Date.parse('2026-07-21T00:00:00Z')
+const OLD = new Date(NOW - 40 * 86400_000).toISOString()   // 40 days ago — past the 30-day default window
+const RECENT = new Date(NOW - 5 * 86400_000).toISOString() // 5 days ago — well within the window
+
+const occ = (taskId: string, at: string) => ({ taskId, sweepId: `sw-${taskId}`, count: 1, at, tracePointer: `traces/${taskId}` })
+
+const watchedCand = (over: Partial<Candidate> = {}): CandidatesFile => ({
+  version: 1,
+  candidates: {
+    k: { key: 'k', title: 't', skeleton: 's', total: 1, struggle: false, firstSeen: OLD, lastSeen: OLD, occurrences: [occ('t1', OLD)], ...over },
+  },
+})
+
+test('pruneSuspicions drops an unconfirmed (1 distinct session), stale watched suspicion', () => {
+  const file = watchedCand()
+  const after = pruneSuspicions(file, NOW)
+  assert.deepEqual(after.candidates, {})
+})
+
+test('pruneSuspicions keeps a CONFIRMED suspicion (>=2 distinct sessions) even when stale', () => {
+  const file = watchedCand({ total: 2, occurrences: [occ('t1', OLD), occ('t2', OLD)] })
+  const after = pruneSuspicions(file, NOW)
+  assert.ok(after.candidates.k)
+})
+
+test('pruneSuspicions keeps a RECENT unconfirmed watched suspicion', () => {
+  const file = watchedCand({ firstSeen: RECENT, lastSeen: RECENT, occurrences: [occ('t1', RECENT)] })
+  const after = pruneSuspicions(file, NOW)
+  assert.ok(after.candidates.k)
+})
+
+test('pruneSuspicions keeps stale non-watched entries (live/accepted) regardless of session count', () => {
+  const file: CandidatesFile = {
+    version: 1,
+    candidates: {
+      liveOne: { key: 'liveOne', title: 't', skeleton: 's', total: 1, struggle: false, status: 'live', firstSeen: OLD, lastSeen: OLD, occurrences: [occ('t1', OLD)] },
+      acceptedOne: { key: 'acceptedOne', title: 't', skeleton: 's', total: 1, struggle: false, status: 'accepted', firstSeen: OLD, lastSeen: OLD, occurrences: [occ('t1', OLD)] },
+    },
+  }
+  const after = pruneSuspicions(file, NOW)
+  assert.ok(after.candidates.liveOne)
+  assert.ok(after.candidates.acceptedOne)
+})
+
+test('pruneSuspicions keeps a stale, unconfirmed entry that carries a linkedSkillId', () => {
+  const file = watchedCand({ linkedSkillId: 'some-skill' })
+  const after = pruneSuspicions(file, NOW)
+  assert.ok(after.candidates.k)
+})
+
+test('pruneSuspicions keeps an entry with an unparseable lastSeen (never drop on a parse error)', () => {
+  const file = watchedCand({ firstSeen: 'not-a-date', lastSeen: 'not-a-date', occurrences: [occ('t1', 'not-a-date')] })
+  const after = pruneSuspicions(file, NOW)
+  assert.ok(after.candidates.k)
+})
+
+test('pruneSuspicions is pure — does not mutate the input file', () => {
+  const before = watchedCand()
+  const snapshot = JSON.parse(JSON.stringify(before))
+  pruneSuspicions(before, NOW)
+  assert.deepEqual(before, snapshot)
+})
+
+test('pruneSuspicions respects a custom windowDays', () => {
+  const tenDaysAgo = new Date(NOW - 10 * 86400_000).toISOString()
+  const file = watchedCand({ firstSeen: tenDaysAgo, lastSeen: tenDaysAgo, occurrences: [occ('t1', tenDaysAgo)] })
+  assert.ok(pruneSuspicions(file, NOW).candidates.k)              // default 30-day window keeps it
+  assert.deepEqual(pruneSuspicions(file, NOW, 7).candidates, {})  // a 7-day window drops it
+})

@@ -111,6 +111,30 @@ export function distinctSessionCount(c: Candidate): number {
   return new Set(c.occurrences.map(o => o.taskId)).size
 }
 
+/** PURE: drop watch-list suspicions that never earned a real confirmation within
+ *  `windowDays` (default 30) — spec §0 constraint C (decay). One-offs (even
+ *  context-rich ones) must quietly expire so the watch-list stays small and
+ *  unbiased. Drops an entry iff ALL of: it is a suspicion (entryStatus ===
+ *  'watched'), it is UNCONFIRMED (distinctSessionCount < 2), and it is STALE
+ *  (lastSeen older than nowMs - windowDays*86400_000). Keeps everything else:
+ *  confirmed suspicions (>=2 distinct sessions — on track to graduate), any
+ *  non-'watched' status (graduated/surfaced/accepted/live/rejected/retired),
+ *  anything carrying a linkedSkillId, and any recent watched entry. A bad or
+ *  missing `lastSeen` (unparseable) is treated as NOT stale — never drop on a
+ *  parse error. Never mutates `file`; mirrors pruneTraces / applyMatch's
+ *  immutable-return style. No IO — persistence goes through writeCandidates. */
+export function pruneSuspicions(file: CandidatesFile, nowMs: number, windowDays = 30): CandidatesFile {
+  const cutoff = nowMs - windowDays * 86400_000
+  const candidates: Record<string, Candidate> = {}
+  for (const [key, c] of Object.entries(file.candidates)) {
+    const parsed = Date.parse(c.lastSeen)
+    const stale = !Number.isNaN(parsed) && parsed < cutoff
+    const drop = isSuspicion(c) && !c.linkedSkillId && distinctSessionCount(c) < 2 && stale
+    if (!drop) candidates[key] = c
+  }
+  return { version: 1, candidates }
+}
+
 export interface SkillOwnership { origin: 'unmute'; contentHash: string; createdAt: string; updatedAt: string; userModified?: boolean }
 export interface OwnershipFile { version: 1; skills: Record<string, SkillOwnership> }
 
