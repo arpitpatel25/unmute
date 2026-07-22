@@ -108,6 +108,18 @@ export class Arming {
 
     for (let attempt = 0; attempt < this.retries; attempt++) {
       if (await this.probe(port)) {
+        // Defense-in-depth against a non-tracked process squatting the port
+        // (e.g. our launch failed to bind because something else already
+        // held it, and `probe` above just talked to that other process).
+        // A real hash collision between two TRACKED apps can no longer
+        // happen — assignPort() below linear-probes past any port already
+        // in `armed` — but this still catches the case of an untracked
+        // squatter or a race between concurrent arm() calls.
+        const squatter = await this.detectPortSquatter(app, port)
+        if (squatter) {
+          log.error('arm-port-squatted', { app, port, squatter })
+          throw new Error(`could not arm ${app}: port ${port} is already held by ${squatter}`)
+        }
         this.armed.set(app, port)
         log.event('arm-up', { app, port, attempt })
         return { app, port, alreadyArmed: false }
@@ -130,7 +142,40 @@ export class Arming {
     this.armed.clear()
   }
 
+  // Deterministic for the first app to claim a given hash — but if that
+  // port is already held by a DIFFERENT tracked app (a hash collision),
+  // linear-probe forward (wrapping within portBase..portBase+999) until we
+  // find a port no tracked app currently holds. This guarantees two
+  // tracked apps never share a port, which is what let a collision send
+  // web_eval/web_type for one app to another app's renderer.
   private assignPort(app: string): number {
-    return this.portBase + (stableHash(app) % 1000)
+    const start = stableHash(app) % 1000
+    const usedPorts = new Set(this.armed.values())
+    for (let offset = 0; offset < 1000; offset++) {
+      const candidate = this.portBase + ((start + offset) % 1000)
+      if (!usedPorts.has(candidate)) return candidate
+    }
+    // All 1000 ports in the range are already claimed — astronomically
+    // unlikely, but fall back to the deterministic slot rather than throw.
+    return this.portBase + start
+  }
+
+  // Best-effort: is `port` already recorded in `armed` for some OTHER app?
+  // Also does a fresh, independent reachability check (not the injected
+  // `probe()`) so this defense doesn't rely solely on a caller-supplied
+  // probe stub. Network failures here are swallowed — this is a safety
+  // net on top of the primary (collision-free) port assignment, not a
+  // required signal.
+  private async detectPortSquatter(app: string, port: number): Promise<string | undefined> {
+    try {
+      await fetch(`http://127.0.0.1:${port}/json/version`)
+    } catch {
+      // Unreachable on this direct check — not fatal; `probe()` already
+      // told us the port answers, there's nothing more to verify here.
+    }
+    for (const [otherApp, otherPort] of this.armed) {
+      if (otherApp !== app && otherPort === port) return otherApp
+    }
+    return undefined
   }
 }

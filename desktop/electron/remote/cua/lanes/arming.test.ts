@@ -25,3 +25,30 @@ test('arm throws if the endpoint never comes up', async () => {
   const a = new Arming({ launch: () => {}, quit: async () => {}, probe: async () => false, retries: 2, intervalMs: 1 })
   await assert.rejects(() => a.arm('Notion'), /could not arm/)
 })
+
+test('assignPort never gives two tracked apps the same port on a hash collision', async () => {
+  // Mirror arming.ts's djb2 hash so we can brute-force two app names that
+  // collide mod 1000 — the exact scenario I2 describes: app B hashes to a
+  // port app A already holds.
+  const djb2 = (s: string): number => {
+    let h = 5381
+    for (let i = 0; i < s.length; i++) h = (h * 33) ^ s.charCodeAt(i)
+    return Math.abs(h)
+  }
+  const appA = 'App-A'
+  const targetSlot = djb2(appA) % 1000
+  let appB: string | undefined
+  for (let i = 0; i < 100000; i++) {
+    const candidate = `App-${i}`
+    if (candidate === appA) continue
+    if (djb2(candidate) % 1000 === targetSlot) { appB = candidate; break }
+  }
+  assert.ok(appB, 'expected to find a colliding app name within 100000 tries')
+
+  const a = new Arming({ launch: () => {}, quit: async () => {}, probe: async () => true, portBase: 9222 })
+  const rA = await a.arm(appA)
+  const rB = await a.arm(appB!)
+  assert.notEqual(rB.port, rA.port, 'colliding apps must never share a port')
+  assert.equal(a.portFor(appA), rA.port)
+  assert.equal(a.portFor(appB!), rB.port)
+})

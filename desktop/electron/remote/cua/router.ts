@@ -44,6 +44,18 @@ function toolText(text: string, isError = false): RouterToolResult {
 
 const ROUTER_TOOL_NAMES = ['web_arm', 'web_eval', 'web_type', 'web_screenshot', 'run_applescript'] as const
 
+// Matches `tell application "<X>"` (case-insensitive) so run_applescript can
+// be allowlist-checked even though it has no `app` arg of its own.
+const TELL_APPLICATION_RE = /\btell\s+application\s+"([^"]+)"/gi
+function extractAppleScriptTargets(script: string): string[] {
+  return [...script.matchAll(TELL_APPLICATION_RE)].map((m) => m[1])
+}
+
+// `do shell script` runs arbitrary shell commands via osascript — that's a
+// full escape hatch out of the AppleScript-target allowlist, so it's
+// rejected outright whenever the allowlist is enforced.
+const DO_SHELL_SCRIPT_RE = /\bdo\s+shell\s+script\b/i
+
 const TOOLS: McpTool[] = [
   {
     name: 'web_arm',
@@ -126,10 +138,26 @@ export function isRouterTool(name: string): boolean {
 
 export async function handleRouterTool(name: string, args: any, ctx: RouterCtx): Promise<RouterToolResult> {
   const app = typeof args?.app === 'string' ? args.app : undefined
+  const policy = ctx.getPolicy()
   if (app !== undefined) {
-    const policy = ctx.getPolicy()
     if (!policy.allowAll && !isAppAllowed(policy, app)) {
       return toolText(`'${app}' is not allowed by the Computer Use allowlist. The user can add it in Unmute settings, or switch to allow-all.`, true)
+    }
+  }
+
+  // run_applescript has no `app` arg, so the check above never runs for it —
+  // without this it ran fully unrestricted regardless of the allowlist.
+  // Only enforced when the allowlist is actually on; allowAll (the
+  // default) keeps run_applescript unrestricted.
+  if (name === 'run_applescript' && !policy.allowAll) {
+    const script = typeof args?.script === 'string' ? args.script : ''
+    const targets = extractAppleScriptTargets(script)
+    const disallowed = targets.find((t) => !isAppAllowed(policy, t))
+    if (disallowed !== undefined) {
+      return toolText(`'${disallowed}' is not allowed by the Computer Use allowlist. The user can add it in Unmute settings, or switch to allow-all.`, true)
+    }
+    if (DO_SHELL_SCRIPT_RE.test(script)) {
+      return toolText('run_applescript containing "do shell script" is not allowed by the Computer Use allowlist (arbitrary shell escape). Switch to allow-all to run it.', true)
     }
   }
 
@@ -146,11 +174,13 @@ export async function handleRouterTool(name: string, args: any, ctx: RouterCtx):
         return toolText(`armed ${result.app} on port ${result.port} (alreadyArmed: ${result.alreadyArmed})${titlePart}`)
       }
       case 'web_eval': {
-        const result = await ctx.cdp.eval(app!, args?.js)
+        if (typeof args?.js !== 'string') return toolText('missing required argument: js', true)
+        const result = await ctx.cdp.eval(app!, args.js)
         return toolText(JSON.stringify(result))
       }
       case 'web_type': {
-        await ctx.cdp.typeKeys(app!, args?.text)
+        if (typeof args?.text !== 'string') return toolText('missing required argument: text', true)
+        await ctx.cdp.typeKeys(app!, args.text)
         return toolText(`typed into ${app} (background, no focus change)`)
       }
       case 'web_screenshot': {
