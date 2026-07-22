@@ -26,6 +26,7 @@ export interface ArmingDeps {
   launch?: (app: string, port: number) => void
   quit?: (app: string) => Promise<void>
   probe?: (port: number) => Promise<boolean>
+  isRunning?: (app: string) => Promise<boolean>
   portBase?: number
   retries?: number
   intervalMs?: number
@@ -73,10 +74,21 @@ async function defaultProbe(port: number): Promise<boolean> {
     .catch(() => false)
 }
 
+async function defaultIsRunning(app: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const child = spawn('pgrep', ['-x', app], { stdio: ['ignore', 'pipe', 'ignore'] })
+    let out = ''
+    child.stdout?.on('data', (chunk) => { out += chunk })
+    child.on('error', () => resolve(false))
+    child.on('exit', () => resolve(out.trim().length > 0))
+  })
+}
+
 export class Arming {
   private readonly launch: (app: string, port: number) => void
   private readonly quit: (app: string) => Promise<void>
   private readonly probe: (port: number) => Promise<boolean>
+  private readonly isRunning: (app: string) => Promise<boolean>
   private readonly portBase: number
   private readonly retries: number
   private readonly intervalMs: number
@@ -86,6 +98,7 @@ export class Arming {
     this.launch = deps.launch ?? defaultLaunch
     this.quit = deps.quit ?? defaultQuit
     this.probe = deps.probe ?? defaultProbe
+    this.isRunning = deps.isRunning ?? defaultIsRunning
     this.portBase = deps.portBase ?? 9222
     this.retries = deps.retries ?? 20
     this.intervalMs = deps.intervalMs ?? 500
@@ -104,6 +117,10 @@ export class Arming {
     const port = this.portFor(app) ?? this.assignPort(app)
     log.event('arm-relaunch', { app, port })
     await this.quit(app)
+    if (await this.isRunning(app)) {
+      log.event('arm-quit-failed', { app })
+      throw new Error(`ARM_QUIT_FAILED: ${app} would not quit (a modal or unsaved changes may be blocking it) — drive it with the cua tools (get_window_state/click/type_text) instead.`)
+    }
     this.launch(app, port)
 
     for (let attempt = 0; attempt < this.retries; attempt++) {

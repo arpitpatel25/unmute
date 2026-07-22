@@ -6,7 +6,7 @@ test('arm launches with a port and returns it once the endpoint answers', async 
   let launched: any = null; let up = false
   const a = new Arming({
     launch: (app, port) => { launched = { app, port }; up = true },
-    quit: async () => {}, probe: async () => up, portBase: 9222,
+    quit: async () => {}, probe: async () => up, isRunning: async () => false, portBase: 9222,
   })
   const r = await a.arm('Notion')
   assert.equal(r.app, 'Notion'); assert.ok(r.port >= 9222); assert.equal(r.alreadyArmed, false)
@@ -15,14 +15,14 @@ test('arm launches with a port and returns it once the endpoint answers', async 
 
 test('arm is idempotent when the port is already answering', async () => {
   let launches = 0
-  const a = new Arming({ launch: () => { launches++ }, quit: async () => {}, probe: async () => true })
+  const a = new Arming({ launch: () => { launches++ }, quit: async () => {}, probe: async () => true, isRunning: async () => false })
   await a.arm('Notion'); const second = await a.arm('Notion')
   assert.equal(second.alreadyArmed, true); assert.equal(launches, 1)
 })
 
 test('arm throws if the endpoint never comes up', async () => {
   // small retry budget so this runs instantly instead of the 20×500ms default
-  const a = new Arming({ launch: () => {}, quit: async () => {}, probe: async () => false, retries: 2, intervalMs: 1 })
+  const a = new Arming({ launch: () => {}, quit: async () => {}, probe: async () => false, isRunning: async () => false, retries: 2, intervalMs: 1 })
   await assert.rejects(() => a.arm('Notion'), /could not arm/)
 })
 
@@ -45,10 +45,34 @@ test('assignPort never gives two tracked apps the same port on a hash collision'
   }
   assert.ok(appB, 'expected to find a colliding app name within 100000 tries')
 
-  const a = new Arming({ launch: () => {}, quit: async () => {}, probe: async () => true, portBase: 9222 })
+  const a = new Arming({ launch: () => {}, quit: async () => {}, probe: async () => true, isRunning: async () => false, portBase: 9222 })
   const rA = await a.arm(appA)
   const rB = await a.arm(appB!)
   assert.notEqual(rB.port, rA.port, 'colliding apps must never share a port')
   assert.equal(a.portFor(appA), rA.port)
   assert.equal(a.portFor(appB!), rB.port)
+})
+
+test('arm throws ARM_QUIT_FAILED and does NOT relaunch when the app won\'t quit', async () => {
+  let launched = false
+  const a = new Arming({
+    launch: () => { launched = true },
+    quit: async () => {},
+    isRunning: async () => true,
+  })
+  await assert.rejects(() => a.arm('X'), /ARM_QUIT_FAILED/)
+  assert.equal(launched, false)
+})
+
+test('arm proceeds to relaunch when the app quit cleanly', async () => {
+  let launched = false
+  const a = new Arming({
+    launch: () => { launched = true },
+    quit: async () => {},
+    isRunning: async () => false,
+    probe: async () => true,
+  })
+  const r = await a.arm('X')
+  assert.equal(r.alreadyArmed, false)
+  assert.equal(launched, true)
 })
