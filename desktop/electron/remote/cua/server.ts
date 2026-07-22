@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { createLogger } from '../log'
 import type { DriverManager } from './driver-manager'
 import type { AxPolicy } from '../ax/policy'
+import { routerTools, isRouterTool, handleRouterTool, type RouterCtx } from './router'
 
 const log = createLogger('cua-mcp')
 
@@ -29,6 +30,9 @@ export interface CuaServerDeps {
   getPolicy(): AxPolicy
   onActivity?(ev: { app?: string; tool: string; ok: boolean }): void
   port?: number
+  /** Optional lane router (web_arm/web_eval/web_type/web_screenshot/run_applescript).
+   *  Absent ⇒ bridge behaves exactly as before (pure driver pass-through). */
+  router?: RouterCtx
 }
 
 export interface CuaServer { close(): void; port: number }
@@ -120,7 +124,8 @@ async function handleRequest(deps: CuaServerDeps, req: http.IncomingMessage, res
       respond(rpcResult(msg.id, {})); return
     case 'tools/list': {
       try {
-        const out = await deps.manager.forSession(sessionId).request('tools/list', msg.params ?? {})
+        const out: any = await deps.manager.forSession(sessionId).request('tools/list', msg.params ?? {})
+        if (deps.router) out.tools = [...(out.tools ?? []), ...routerTools()]
         respond(rpcResult(msg.id, out))
       } catch (e) {
         respond(rpcError(msg.id, -32603, `cua-driver unavailable: ${(e as Error).message}`))
@@ -135,6 +140,12 @@ async function handleRequest(deps: CuaServerDeps, req: http.IncomingMessage, res
         return
       }
       const app = typeof msg.params?.arguments?.app === 'string' ? msg.params.arguments.app : undefined
+      if (deps.router && isRouterTool(toolName)) {
+        const out = await handleRouterTool(toolName, msg.params?.arguments ?? {}, deps.router)
+        deps.onActivity?.({ app, tool: toolName, ok: out.isError !== true })
+        respond(rpcResult(msg.id, out))
+        return
+      }
       // Strip cua's per-session `session` arg. cua's agent-cursor overlay is
       // PER-SESSION and every session cursor is born ENABLED — so the model
       // passing a `session` (which cua's own instructions encourage) mints a
