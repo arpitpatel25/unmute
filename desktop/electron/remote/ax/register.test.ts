@@ -65,3 +65,9 @@ test('steer body teaches Claude Code which computer-use lane to use per app', ()
   assert.match(STEER_BODY, /run_applescript/)
   assert.match(STEER_BODY, /browser or Electron app/)
 })
+
+test('steer body covers the new CDP verbs and the arm-fail fallback to cua tools', () => {
+  assert.match(STEER_BODY, /web_click/)
+  assert.match(STEER_BODY, /web_key/)
+  assert.match(STEER_BODY, /ARM_QUIT_FAILED/)
+})

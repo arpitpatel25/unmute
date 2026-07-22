@@ -56,7 +56,11 @@ export const STEER_BODY =
   'then drive it with `web_eval` (scroll = set the scroller\'s scrollTop; click = el.click(); read the DOM), ' +
   '`web_type` (types via real key events — use it, not web_eval, to enter text into editors), and `web_screenshot`. ' +
   'For scriptable native apps (Notes, Mail, Calendar): `run_applescript`. ' +
-  'For everything else: the `get_window_state`/`click`/`type_text`/`scroll` tools (they need the app on the current Space).'
+  'For everything else: the `get_window_state`/`click`/`type_text`/`scroll` tools (they need the app on the current Space). ' +
+  'New CDP verbs (after web_arm): web_click(x,y) for a trusted click when el.click() doesn\'t fire or for canvas; web_key for ' +
+  'Enter/Escape/Tab/shortcuts; plus web_drag, web_scroll, web_navigate, web_wait, web_targets, web_click_text. ' +
+  'If web_arm ERRORS (e.g. ARM_QUIT_FAILED — the app wouldn\'t quit to relaunch with the debug port), do NOT retry web_* — drive ' +
+  'that app with the cua tools (get_window_state/click/type_text/scroll) instead.'
 
 function claudeMdPath(home = homedir()): string { return join(home, '.claude', 'CLAUDE.md') }
 function claudeConfigPath(home = homedir()): string { return join(home, '.claude.json') }

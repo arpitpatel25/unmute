@@ -1,14 +1,16 @@
 // Lane router — the tool surface Claude Code actually calls for computer use
 // of Electron/Chromium apps and scriptable native apps. Ties together three
 // already-built lanes (see ./lanes/*) into MCP tool defs + a dispatcher:
-//   - web_arm / web_eval / web_type / web_screenshot  → CdpLane (via Arming
+//   - web_arm / web_eval / web_type / web_screenshot / web_click / web_key /
+//     web_drag / web_navigate / web_scroll / web_wait / web_targets /
+//     web_click_text                                   → CdpLane (via Arming
 //     for web_arm), for Electron/Chromium apps (Notion, Slack, WhatsApp, …).
 //     CDP is immune to Space/focus/compositor state — see lanes/cdp.ts.
 //   - run_applescript                                  → the Apple Events
 //     lane, for scriptable native apps (Notes, Mail, Finder, …).
 // Everything else (native AX driving, non-scriptable apps) stays on the cua
 // tools (list_apps/find/press/…) registered separately — this router only
-// owns the five tools above.
+// owns the tools above.
 //
 // POLICY: the master kill switch (policy.enabled) is enforced upstream in
 // server.ts. This router owns the ALLOWLIST — any call with an `app` arg is
@@ -42,7 +44,11 @@ function toolText(text: string, isError = false): RouterToolResult {
   return { content: [{ type: 'text', text }], isError }
 }
 
-const ROUTER_TOOL_NAMES = ['web_arm', 'web_eval', 'web_type', 'web_screenshot', 'run_applescript'] as const
+const ROUTER_TOOL_NAMES = [
+  'web_arm', 'web_eval', 'web_type', 'web_screenshot',
+  'web_click', 'web_key', 'web_drag', 'web_navigate', 'web_scroll', 'web_wait', 'web_targets', 'web_click_text',
+  'run_applescript',
+] as const
 
 // Matches `tell application "<X>"` (case-insensitive) so run_applescript can
 // be allowlist-checked even though it has no `app` arg of its own.
@@ -112,6 +118,112 @@ const TOOLS: McpTool[] = [
         out_file: { type: 'string', description: 'Optional path to write the PNG to. Defaults to a temp file.' },
       },
       required: ['app'],
+    },
+  },
+  {
+    name: 'web_click',
+    description:
+      'Trusted mouse click at page pixel (x,y) via CDP — use when web_eval\'s el.click() doesn\'t fire the app\'s handlers, or for ' +
+      'canvas/no-DOM targets. Requires web_arm.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'App name — must already be armed via web_arm.' },
+        x: { type: 'number', description: 'Page pixel x coordinate.' },
+        y: { type: 'number', description: 'Page pixel y coordinate.' },
+      },
+      required: ['app', 'x', 'y'],
+    },
+  },
+  {
+    name: 'web_key',
+    description:
+      'Press a key/shortcut (Enter, Escape, Tab, ArrowDown, or a char with modifiers like [\'cmd\']). web_type only enters text — ' +
+      'use this to submit/close/hotkey. Requires web_arm.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'App name — must already be armed via web_arm.' },
+        key: { type: 'string', description: 'Key name (e.g. "Enter", "Escape", "Tab", "ArrowDown") or single character.' },
+        modifiers: { type: 'array', items: { type: 'string' }, description: 'Optional modifier keys, e.g. ["cmd"], ["shift"].' },
+      },
+      required: ['app', 'key'],
+    },
+  },
+  {
+    name: 'web_drag',
+    description: 'Trusted drag (canvas/sliders/reorder). Requires web_arm.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'App name — must already be armed via web_arm.' },
+        x1: { type: 'number', description: 'Start page pixel x.' },
+        y1: { type: 'number', description: 'Start page pixel y.' },
+        x2: { type: 'number', description: 'End page pixel x.' },
+        y2: { type: 'number', description: 'End page pixel y.' },
+      },
+      required: ['app', 'x1', 'y1', 'x2', 'y2'],
+    },
+  },
+  {
+    name: 'web_navigate',
+    description: 'Navigate the armed app\'s page to a URL. Requires web_arm.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'App name — must already be armed via web_arm.' },
+        url: { type: 'string', description: 'URL to navigate to.' },
+      },
+      required: ['app', 'url'],
+    },
+  },
+  {
+    name: 'web_scroll',
+    description: 'Wheel-scroll the page by deltaY/deltaX at optional x,y. Requires web_arm.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'App name — must already be armed via web_arm.' },
+        deltaY: { type: 'number', description: 'Vertical scroll delta.' },
+        deltaX: { type: 'number', description: 'Optional horizontal scroll delta. Defaults to 0.' },
+        x: { type: 'number', description: 'Optional page pixel x to scroll at. Defaults to 0.' },
+        y: { type: 'number', description: 'Optional page pixel y to scroll at. Defaults to 0.' },
+      },
+      required: ['app', 'deltaY'],
+    },
+  },
+  {
+    name: 'web_wait',
+    description: 'Wait until a JS expression returns truthy (up to timeoutMs) — use between steps instead of guessing. Requires web_arm.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'App name — must already be armed via web_arm.' },
+        js: { type: 'string', description: 'JS expression polled until truthy.' },
+        timeoutMs: { type: 'number', description: 'Max time to wait in milliseconds. Defaults to 5000.' },
+      },
+      required: ['app', 'js'],
+    },
+  },
+  {
+    name: 'web_targets',
+    description: 'List the app\'s open pages/tabs (id,title,url) to see which you\'re driving. Requires web_arm.',
+    inputSchema: {
+      type: 'object',
+      properties: { app: { type: 'string', description: 'App name — must already be armed via web_arm.' } },
+      required: ['app'],
+    },
+  },
+  {
+    name: 'web_click_text',
+    description: 'Click the element whose visible text matches. Requires web_arm.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'App name — must already be armed via web_arm.' },
+        text: { type: 'string', description: 'Visible text to match and click.' },
+      },
+      required: ['app', 'text'],
     },
   },
   {
@@ -190,6 +302,48 @@ export async function handleRouterTool(name: string, args: any, ctx: RouterCtx):
           : join(tmpdir(), `unmute-web-screenshot-${randomUUID()}.png`)
         await writeFile(outFile, png)
         return toolText(`screenshot of ${app} written to ${outFile}`)
+      }
+      case 'web_click': {
+        if (typeof args?.x !== 'number' || typeof args?.y !== 'number') return toolText('missing required argument: x, y', true)
+        const result = await ctx.cdp.click(app!, args.x, args.y)
+        return toolText(JSON.stringify(result))
+      }
+      case 'web_key': {
+        if (typeof args?.key !== 'string') return toolText('missing required argument: key', true)
+        const result = await ctx.cdp.key(app!, args.key, Array.isArray(args?.modifiers) ? args.modifiers : [])
+        return toolText(JSON.stringify(result))
+      }
+      case 'web_drag': {
+        if (typeof args?.x1 !== 'number' || typeof args?.y1 !== 'number' || typeof args?.x2 !== 'number' || typeof args?.y2 !== 'number') {
+          return toolText('missing required argument: x1, y1, x2, y2', true)
+        }
+        const result = await ctx.cdp.drag(app!, args.x1, args.y1, args.x2, args.y2)
+        return toolText(JSON.stringify(result))
+      }
+      case 'web_navigate': {
+        if (typeof args?.url !== 'string') return toolText('missing required argument: url', true)
+        const result = await ctx.cdp.navigate(app!, args.url)
+        return toolText(JSON.stringify(result))
+      }
+      case 'web_scroll': {
+        if (typeof args?.deltaY !== 'number') return toolText('missing required argument: deltaY', true)
+        const result = await ctx.cdp.scroll(app!, args.deltaY, typeof args?.deltaX === 'number' ? args.deltaX : 0,
+          typeof args?.x === 'number' ? args.x : 0, typeof args?.y === 'number' ? args.y : 0)
+        return toolText(JSON.stringify(result))
+      }
+      case 'web_wait': {
+        if (typeof args?.js !== 'string') return toolText('missing required argument: js', true)
+        const result = await ctx.cdp.waitFor(app!, args.js, typeof args?.timeoutMs === 'number' ? args.timeoutMs : 5000)
+        return toolText(JSON.stringify(result))
+      }
+      case 'web_targets': {
+        const result = await ctx.cdp.targets(app!)
+        return toolText(JSON.stringify(result))
+      }
+      case 'web_click_text': {
+        if (typeof args?.text !== 'string') return toolText('missing required argument: text', true)
+        const result = await ctx.cdp.clickText(app!, args.text)
+        return toolText(JSON.stringify(result))
       }
       case 'run_applescript': {
         const result = await ctx.runAppleScript(args?.script)

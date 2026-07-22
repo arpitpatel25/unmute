@@ -6,16 +6,30 @@ import type { AxPolicy } from '../ax/policy'
 const ON: AxPolicy = { enabled: true, screenshotEnabled: true, allowAll: true, allowed: [] }
 function ctx(over: Partial<RouterCtx> = {}): RouterCtx {
   return {
-    cdp: { eval: async () => 42, typeKeys: async () => {}, screenshot: async () => Buffer.from('x'), scrollBottom: async () => ({}), clickText: async () => ({}) } as any,
+    cdp: {
+      eval: async () => 42, typeKeys: async () => {}, screenshot: async () => Buffer.from('x'), scrollBottom: async () => ({}),
+      clickText: async () => ({}),
+      click: async (app: string, x: number, y: number) => ({ clicked: { x, y }, app }),
+      key: async (app: string, key: string, modifiers: string[]) => ({ key, modifiers, app }),
+      drag: async () => ({}),
+      navigate: async () => ({}),
+      scroll: async () => ({}),
+      waitFor: async () => ({ ok: true }),
+      targets: async (app: string) => [{ id: '1', title: 'x', url: 'https://x', app }],
+    } as any,
     arming: { arm: async (app: string) => ({ app, port: 9222, alreadyArmed: false }), portFor: () => 9222, disposeAll: async () => {} } as any,
     runAppleScript: async () => 'ok',
     getPolicy: () => ON, ...over,
   }
 }
 
-test('routerTools exposes the five lane tools', () => {
+test('routerTools exposes the lane tools', () => {
   const names = routerTools().map(t => t.name)
-  for (const n of ['web_arm','web_eval','web_type','web_screenshot','run_applescript']) assert.ok(names.includes(n), n)
+  for (const n of [
+    'web_arm', 'web_eval', 'web_type', 'web_screenshot',
+    'web_click', 'web_key', 'web_drag', 'web_navigate', 'web_scroll', 'web_wait', 'web_targets', 'web_click_text',
+    'run_applescript',
+  ]) assert.ok(names.includes(n), n)
 })
 test('isRouterTool matches our tools, not cua tools', () => {
   assert.ok(isRouterTool('web_eval')); assert.ok(!isRouterTool('get_window_state'))
@@ -72,4 +86,33 @@ test('web_type without text returns a clean missing-argument error', async () =>
   const r = await handleRouterTool('web_type', { app: 'Notion' }, ctx())
   assert.equal(r.isError, true)
   assert.match(r.content[0].text, /missing required argument: text/)
+})
+
+// New CDP-lane verbs — dispatch checks against the fake cdp spies.
+test('web_click dispatches to the CDP lane with x,y', async () => {
+  let called: unknown[] = []
+  const r = await handleRouterTool('web_click', { app: 'Notion', x: 10, y: 20 },
+    ctx({ cdp: { click: async (...a: unknown[]) => { called = a; return { clicked: { x: 10, y: 20 } } } } as any }))
+  assert.deepEqual(called, ['Notion', 10, 20])
+  assert.notEqual(r.isError, true)
+})
+test('web_key dispatches to the CDP lane with key and modifiers', async () => {
+  let called: unknown[] = []
+  const r = await handleRouterTool('web_key', { app: 'Notion', key: 'Enter', modifiers: ['cmd'] },
+    ctx({ cdp: { key: async (...a: unknown[]) => { called = a; return { key: 'Enter' } } } as any }))
+  assert.deepEqual(called, ['Notion', 'Enter', ['cmd']])
+  assert.notEqual(r.isError, true)
+})
+test('web_key defaults modifiers to an empty array when omitted', async () => {
+  let called: unknown[] = []
+  await handleRouterTool('web_key', { app: 'Notion', key: 'Escape' },
+    ctx({ cdp: { key: async (...a: unknown[]) => { called = a; return {} } } as any }))
+  assert.deepEqual(called, ['Notion', 'Escape', []])
+})
+test('web_targets dispatches to the CDP lane', async () => {
+  let called: unknown[] = []
+  const r = await handleRouterTool('web_targets', { app: 'Notion' },
+    ctx({ cdp: { targets: async (...a: unknown[]) => { called = a; return [{ id: '1', title: 't', url: 'u' }] } } as any }))
+  assert.deepEqual(called, ['Notion'])
+  assert.match(r.content[0].text, /"id":"1"/)
 })
