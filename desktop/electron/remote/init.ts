@@ -44,6 +44,10 @@ import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usag
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
 import { startCuaServer, type CuaServer } from './cua/server'
 import { DriverManager } from './cua/driver-manager'
+import { CdpLane } from './cua/lanes/cdp'
+import { Arming } from './cua/lanes/arming'
+import { runAppleScript } from './cua/lanes/applescript'
+import { type RouterCtx } from './cua/router'
 import { applyAxRegistration } from './ax/register'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
@@ -1509,10 +1513,19 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // paths (IPC ax-trusted check, bridge tool calls) still spawn on demand.
     getEnabled: () => normalizePolicy(settings.get('computerUse')).enabled,
   })
+  const cuaArming = new Arming()
+  const cuaCdp = new CdpLane((app) => cuaArming.portFor(app))
+  const cuaLaneRouter: RouterCtx = {
+    cdp: cuaCdp,
+    arming: cuaArming,
+    runAppleScript,
+    getPolicy: () => normalizePolicy(settings.get('computerUse')),
+  }
   void startCuaServer({
     manager: cuaManager,
     getPolicy: () => normalizePolicy(settings.get('computerUse')),
     onActivity: (ev) => broadcastAxActivity(ev),
+    router: cuaLaneRouter,
   }).then((s) => { cuaServer = s }).catch((e) => log.warn('cua server not started', { error: (e as Error).message }))
   void applyAxRegistration(normalizePolicy(settings.get('computerUse')).enabled)
 
@@ -1744,7 +1757,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // none is left orphaned on the user's machine/plan (PRD §10.4).
   app.on('before-quit', () => {
     try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
-    try { cuaManager?.dispose(); cuaServer?.close() } catch (e) { log.warn('cua shutdown failed', { error: (e as Error).message }) }
+    try { cuaManager?.dispose(); cuaServer?.close(); void cuaArming.disposeAll() } catch (e) { log.warn('cua shutdown failed', { error: (e as Error).message }) }
     try { router?.dispose() } catch { /* best-effort */ }
   })
   // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
