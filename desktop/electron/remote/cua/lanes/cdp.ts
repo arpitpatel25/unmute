@@ -22,8 +22,16 @@
 // URL/title changes; if that id disappears from the target list (tab
 // closed/reloaded away), we fall back to re-picking the first non-"Tab Bar"
 // page target.
-import WebSocket from 'ws'
+import WsPkg from 'ws'
 import { createLogger } from '../../log'
+
+// Prefer the runtime's BUILT-IN global WebSocket — Node 22+ / Electron 40's
+// main process both expose it, and it's the exact implementation the POC
+// proved against Notion. The `ws` package is kept only as a fallback for
+// runtimes without the global: in the packaged Electron main process the `ws`
+// client hangs on connect (the standalone Node client does not), so the global
+// is both more portable and the one that actually works in the app.
+const WebSocketImpl: any = (globalThis as any).WebSocket ?? WsPkg
 
 const log = createLogger('cua-cdp')
 
@@ -102,27 +110,37 @@ function defaultTransport(): CdpTransport {
       return (await res.json()) as CdpTarget[]
     },
     connect(wsUrl: string): Promise<CdpSocket> {
+      // Uses the WHATWG event API (addEventListener/event.data) so the SAME
+      // code drives both the built-in global WebSocket and the `ws` package.
+      const CONNECT_TIMEOUT_MS = 10_000
+      const REQUEST_TIMEOUT_MS = 20_000
       return new Promise((resolve, reject) => {
-        const ws = new WebSocket(wsUrl)
+        const ws: any = new WebSocketImpl(wsUrl)
         let nextId = 1
         let connected = false
-        const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>()
+        const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
 
-        // A socket error/close AFTER connect leaves any in-flight send()s
-        // unresolved forever (and withSocket's `finally { close() }` never
-        // runs to clean up) unless we fail them out here.
+        // A socket error/close/timeout must fail out in-flight send()s so a
+        // caller never hangs forever (and withSocket's `finally { close() }`
+        // can run). The connect timeout guards the case the packaged `ws`
+        // client exhibited: neither 'open' nor 'error' ever fires.
         function rejectAllPending(reason: Error): void {
-          for (const p of pending.values()) p.reject(reason)
+          for (const p of pending.values()) { clearTimeout(p.timer); p.reject(reason) }
           pending.clear()
         }
+        const connectTimer = setTimeout(() => {
+          if (!connected) { try { ws.close() } catch { /* noop */ } ; reject(new Error(`CDP socket did not open within ${CONNECT_TIMEOUT_MS}ms: ${wsUrl}`)) }
+        }, CONNECT_TIMEOUT_MS)
 
-        ws.on('open', () => {
+        ws.addEventListener('open', () => {
           connected = true
+          clearTimeout(connectTimer)
           resolve({
             send(method: string, params: object = {}): Promise<any> {
               return new Promise((res, rej) => {
                 const id = nextId++
-                pending.set(id, { resolve: res, reject: rej })
+                const timer = setTimeout(() => { pending.delete(id); rej(new Error(`CDP request '${method}' timed out after ${REQUEST_TIMEOUT_MS}ms`)) }, REQUEST_TIMEOUT_MS)
+                pending.set(id, { resolve: res, reject: rej, timer })
                 ws.send(JSON.stringify({ id, method, params }))
               })
             },
@@ -131,12 +149,14 @@ function defaultTransport(): CdpTransport {
             },
           })
         })
-        ws.on('message', (data: WebSocket.RawData) => {
+        ws.addEventListener('message', (ev: any) => {
+          const raw = typeof ev.data === 'string' ? ev.data : (ev.data?.toString?.() ?? '')
           let msg: { id?: number; result?: unknown; error?: { code: number; message: string } }
-          try { msg = JSON.parse(data.toString()) } catch { return }
+          try { msg = JSON.parse(raw) } catch { return }
           if (typeof msg.id !== 'number') return // CDP event, not a reply — ignore
           const p = pending.get(msg.id)
           if (!p) return
+          clearTimeout(p.timer)
           pending.delete(msg.id)
           // Resolve with the FULL JSON-RPC message (not just msg.result) —
           // consumers (eval/screenshot/scrollBottom/clickText/throwOnException)
@@ -144,11 +164,14 @@ function defaultTransport(): CdpTransport {
           if (msg.error) p.reject(new Error(`CDP error ${msg.error.code}: ${msg.error.message}`))
           else p.resolve(msg)
         })
-        ws.on('error', (e) => {
-          if (!connected) { reject(e); return }
-          rejectAllPending(new Error(`CDP socket error: ${e.message}`))
+        ws.addEventListener('error', (ev: any) => {
+          clearTimeout(connectTimer)
+          const emsg = ev?.message || ev?.error?.message || 'unknown'
+          if (!connected) { reject(new Error(`CDP socket error before open: ${emsg}`)); return }
+          rejectAllPending(new Error(`CDP socket error: ${emsg}`))
         })
-        ws.on('close', () => {
+        ws.addEventListener('close', () => {
+          clearTimeout(connectTimer)
           if (!connected) { reject(new Error('CDP socket closed before it opened')); return }
           rejectAllPending(new Error('CDP socket closed'))
         })
