@@ -131,6 +131,93 @@ test('defaultTransport end-to-end: real ws server round-trips Runtime.evaluate',
   }
 })
 
+test('click dispatches mousePressed then mouseReleased at x,y', async () => {
+  const calls: any[] = []
+  const lane = new CdpLane(() => 9222, fakeTransport([target()], (m, p) => { calls.push([m, p]); return {} }))
+  const r = await lane.click('Notion', 10, 20)
+  assert.deepEqual(r, { clicked: { x: 10, y: 20 } })
+  const mouseEvents = calls.filter((c) => c[0] === 'Input.dispatchMouseEvent')
+  assert.equal(mouseEvents.length, 2)
+  assert.equal(mouseEvents[0][1].type, 'mousePressed'); assert.equal(mouseEvents[0][1].x, 10); assert.equal(mouseEvents[0][1].y, 20)
+  assert.equal(mouseEvents[1][1].type, 'mouseReleased'); assert.equal(mouseEvents[1][1].x, 10); assert.equal(mouseEvents[1][1].y, 20)
+})
+
+test('key(Enter) dispatches Input.dispatchKeyEvent with key:Enter', async () => {
+  const calls: any[] = []
+  const lane = new CdpLane(() => 9222, fakeTransport([target()], (m, p) => { calls.push([m, p]); return {} }))
+  await lane.key('Notion', 'Enter')
+  const keyEvents = calls.filter((c) => c[0] === 'Input.dispatchKeyEvent')
+  assert.equal(keyEvents.length, 2)
+  assert.equal(keyEvents[0][1].key, 'Enter')
+  assert.equal(keyEvents[0][1].type, 'keyDown')
+})
+
+test('key(v, [cmd]) dispatches with modifiers bitmask 4', async () => {
+  const calls: any[] = []
+  const lane = new CdpLane(() => 9222, fakeTransport([target()], (m, p) => { calls.push([m, p]); return {} }))
+  await lane.key('Notion', 'v', ['cmd'])
+  const keyEvents = calls.filter((c) => c[0] === 'Input.dispatchKeyEvent')
+  assert.equal(keyEvents[0][1].modifiers, 4)
+  assert.equal(keyEvents[1][1].modifiers, 4)
+})
+
+test('scroll(-300) dispatches a mouseWheel event with deltaY:-300', async () => {
+  const calls: any[] = []
+  const lane = new CdpLane(() => 9222, fakeTransport([target()], (m, p) => { calls.push([m, p]); return {} }))
+  const r = await lane.scroll('Notion', -300)
+  assert.deepEqual(r, { deltaY: -300, deltaX: 0 })
+  assert.equal(calls[0][0], 'Input.dispatchMouseEvent')
+  assert.equal(calls[0][1].type, 'mouseWheel')
+  assert.equal(calls[0][1].deltaY, -300)
+})
+
+test('drag(1,2,3,4) presses at (1,2) and releases at (3,4)', async () => {
+  const calls: any[] = []
+  const lane = new CdpLane(() => 9222, fakeTransport([target()], (m, p) => { calls.push([m, p]); return {} }))
+  const r = await lane.drag('Notion', 1, 2, 3, 4)
+  assert.deepEqual(r, { from: { x1: 1, y1: 2 }, to: { x2: 3, y2: 4 } })
+  const mouseEvents = calls.filter((c) => c[0] === 'Input.dispatchMouseEvent')
+  const pressed = mouseEvents.find((c) => c[1].type === 'mousePressed')
+  const released = mouseEvents.find((c) => c[1].type === 'mouseReleased')
+  assert.equal(pressed[1].x, 1); assert.equal(pressed[1].y, 2)
+  assert.equal(released[1].x, 3); assert.equal(released[1].y, 4)
+})
+
+test('navigate sends Page.navigate with the given url', async () => {
+  const calls: any[] = []
+  const lane = new CdpLane(() => 9222, fakeTransport([target()], (m, p) => { calls.push([m, p]); return {} }))
+  const r = await lane.navigate('Notion', 'https://x')
+  assert.deepEqual(r, { navigated: 'https://x' })
+  const navCall = calls.find((c) => c[0] === 'Page.navigate')
+  assert.equal(navCall[1].url, 'https://x')
+})
+
+test('waitFor resolves when the polled eval returns truthy', async () => {
+  const lane = new CdpLane(() => 9222, fakeTransport([target()], () => ({ result: { result: { value: true } } })))
+  const r = await lane.waitFor('Notion', 'true', 1000)
+  assert.deepEqual(r, { ok: true })
+})
+
+test('waitFor throws after the timeout when eval never returns truthy', async () => {
+  const lane = new CdpLane(() => 9222, fakeTransport([target()], () => ({ result: { result: { value: false } } })))
+  await assert.rejects(() => lane.waitFor('Notion', 'false', 250), /waitFor timed out after 250ms/)
+})
+
+test('targets returns page targets as {id,title,url}', async () => {
+  const targets = [
+    target({ id: 'A1', title: 'Calorify AI', url: 'https://a', type: 'page' }),
+    target({ id: 'B2', title: 'Tab Bar', url: 'https://b', type: 'other' }),
+  ]
+  const lane = new CdpLane(() => 9222, fakeTransport(targets, () => ({})))
+  const r = await lane.targets('Notion')
+  assert.deepEqual(r, [{ id: 'A1', title: 'Calorify AI', url: 'https://a' }])
+})
+
+test('targets throws when the app is not armed', async () => {
+  const lane = new CdpLane(() => undefined, fakeTransport([target()], () => ({})))
+  await assert.rejects(() => lane.targets('Notion'), /not armed/)
+})
+
 test('pending send() rejects (does not hang) when the socket closes mid-flight', async () => {
   const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
   await new Promise<void>((resolve) => wss.once('listening', () => resolve()))

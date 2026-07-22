@@ -102,6 +102,41 @@ function clickTextJs(text: string): string {
 })()`
 }
 
+const MODIFIER_BITS: Record<string, number> = {
+  cmd: 4,
+  meta: 4,
+  ctrl: 2,
+  shift: 8,
+  alt: 1,
+  option: 1,
+}
+
+function modifiersToBitmask(modifiers: string[]): number {
+  return modifiers.reduce((acc, m) => acc | (MODIFIER_BITS[m] ?? 0), 0)
+}
+
+type KeyEventShape = { key: string; code?: string; windowsVirtualKeyCode?: number; text?: string }
+
+// CDP key params for the named keys `key()` accepts, keyed by the SAME
+// name callers pass in. Anything not listed here falls back to a
+// single-printable-character dispatch (see `key()` below).
+const NAMED_KEYS: Record<string, KeyEventShape> = {
+  Enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' },
+  Escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
+  Tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 },
+  Backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 },
+  Delete: { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46 },
+  ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
+  ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 },
+  ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 },
+  ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 },
+  Home: { key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 },
+  End: { key: 'End', code: 'End', windowsVirtualKeyCode: 35 },
+  PageUp: { key: 'PageUp', code: 'PageUp', windowsVirtualKeyCode: 33 },
+  PageDown: { key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34 },
+  Space: { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, text: ' ' },
+}
+
 function defaultTransport(): CdpTransport {
   return {
     async listTargets(port: number): Promise<CdpTarget[]> {
@@ -236,6 +271,78 @@ export class CdpLane {
       if (value === 'NO_MATCH') throw new Error(`no element matching text ${JSON.stringify(text)} found in ${app}`)
       return value
     })
+  }
+
+  async click(app: string, x: number, y: number): Promise<{ clicked: { x: number; y: number } }> {
+    return this.withSocket(app, async (socket) => {
+      await socket.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
+      await socket.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+      return { clicked: { x, y } }
+    })
+  }
+
+  async key(app: string, key: string, modifiers: string[] = []): Promise<{ key: string; modifiers: string[] }> {
+    return this.withSocket(app, async (socket) => {
+      const bitmask = modifiersToBitmask(modifiers)
+      const shape: KeyEventShape | undefined = NAMED_KEYS[key] ?? (key.length === 1 ? { key, text: key } : undefined)
+      if (!shape) throw new Error(`CDP key: unsupported key ${JSON.stringify(key)}`)
+      const includeText = shape.text !== undefined
+
+      const downParams: Record<string, unknown> = { type: 'keyDown', key: shape.key, modifiers: bitmask }
+      if (shape.code !== undefined) downParams.code = shape.code
+      if (shape.windowsVirtualKeyCode !== undefined) downParams.windowsVirtualKeyCode = shape.windowsVirtualKeyCode
+      if (includeText) downParams.text = shape.text
+      await socket.send('Input.dispatchKeyEvent', downParams)
+
+      const upParams: Record<string, unknown> = { type: 'keyUp', key: shape.key, modifiers: bitmask }
+      if (shape.code !== undefined) upParams.code = shape.code
+      if (shape.windowsVirtualKeyCode !== undefined) upParams.windowsVirtualKeyCode = shape.windowsVirtualKeyCode
+      await socket.send('Input.dispatchKeyEvent', upParams)
+
+      return { key, modifiers }
+    })
+  }
+
+  async drag(app: string, x1: number, y1: number, x2: number, y2: number): Promise<{ from: { x1: number; y1: number }; to: { x2: number; y2: number } }> {
+    return this.withSocket(app, async (socket) => {
+      await socket.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x1, y: y1 })
+      await socket.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: x1, y: y1, button: 'left', clickCount: 1 })
+      await socket.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x2, y: y2 })
+      await socket.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x2, y: y2, button: 'left', clickCount: 1 })
+      return { from: { x1, y1 }, to: { x2, y2 } }
+    })
+  }
+
+  async navigate(app: string, url: string): Promise<{ navigated: string }> {
+    return this.withSocket(app, async (socket) => {
+      await socket.send('Page.enable')
+      await socket.send('Page.navigate', { url })
+      return { navigated: url }
+    })
+  }
+
+  async scroll(app: string, deltaY: number, deltaX = 0, x = 0, y = 0): Promise<{ deltaY: number; deltaX: number }> {
+    return this.withSocket(app, async (socket) => {
+      await socket.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX, deltaY })
+      return { deltaY, deltaX }
+    })
+  }
+
+  async waitFor(app: string, js: string, timeoutMs = 5000): Promise<{ ok: true }> {
+    const start = Date.now()
+    for (;;) {
+      const value = await this.eval(app, js)
+      if (value) return { ok: true }
+      if (Date.now() - start >= timeoutMs) throw new Error(`waitFor timed out after ${timeoutMs}ms`)
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+  }
+
+  async targets(app: string): Promise<{ id: string; title: string; url: string }[]> {
+    const port = this.portFor(app)
+    if (port === undefined) throw new Error(`${app} is not armed for CDP (no debug port)`)
+    const pages = (await this.transport.listTargets(port)).filter((t) => t.type === 'page')
+    return pages.map(({ id, title, url }) => ({ id, title, url }))
   }
 
   private throwOnException(app: string, res: any): void {
