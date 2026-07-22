@@ -22,6 +22,7 @@ export function buildDistillPrompt(i: {
   taskId: string
   intent: string
   tracePath: string
+  rawTranscriptPath: string
   outPath: string
   curatedSkills: Array<{ name: string; description: string }>
   devMode?: boolean
@@ -36,12 +37,22 @@ export function buildDistillPrompt(i: {
     `Session intent: "${i.intent}"`,
     ``,
     `── How to read the session ──`,
-    `Read the USER's turns as the INDEX. A skill lives on the USER's side of the`,
-    `conversation — it is a thing the user keeps asking for. So work from the`,
-    `user's messages: read the model's transcript ONLY where a user message points`,
-    `to it (the intent it served, or the action a correction refers to). NEVER`,
+    `The reduced trace keeps the USER's turns as the INDEX (marked USER), interleaved`,
+    `with the assistant's actions. ANCHOR on the user's turns — their intent, the`,
+    `context they supplied, and any corrections. A skill lives on the USER's side of`,
+    `the conversation — it is a thing the user keeps asking for. So work from the`,
+    `user's messages: read the model's actions ONLY where a user message points to`,
+    `them (the intent it served, or the action a correction refers to). NEVER`,
     `open-scan the model's output for interesting things it did — that is the wrong`,
     `anchor and the main source of noise.`,
+    ``,
+    `── Retrieve assistant context on demand from the RAW transcript ──`,
+    `You have the FULL raw transcript at ${i.rawTranscriptPath}; when a user turn is a`,
+    `correction, or you need the exact assistant action that prompted it, Read/grep`,
+    `that file to pull the SPECIFIC assistant messages.`,
+    `Extract the specifics — do not rely on a summary. The reduced trace is only the`,
+    `index onto the user's side; the raw transcript is the source of truth for what`,
+    `the assistant actually did.`,
     ``,
     `── What to extract, per finding ──`,
     `For each actionable INTENT the user expressed, capture the REUSABLE CONTEXT the`,

@@ -57,6 +57,30 @@ async function readJsonl(file: string): Promise<Array<Record<string, unknown>>> 
   return out
 }
 
+/** The session intent = the transcript's FIRST genuine user turn (its content,
+ *  whether a plain string — the "[Unmute Remote task] Task: …" opener — or the
+ *  first human text block). tool_result-only user blocks (tool outputs, not the
+ *  person) are skipped. Falls back to '(sim)' when no user text is found. */
+async function firstUserIntent(file: string): Promise<string> {
+  for (const ev of await readJsonl(file)) {
+    const msg = (ev.message ?? ev) as Record<string, unknown>
+    if (msg?.role !== 'user') continue
+    const content = msg.content
+    if (typeof content === 'string') {
+      const t = content.replace(/\s+/g, ' ').trim()
+      if (t) return t
+    } else if (Array.isArray(content)) {
+      for (const block of content as Array<Record<string, unknown>>) {
+        if (block?.type === 'text' && typeof block.text === 'string') {
+          const t = block.text.replace(/\s+/g, ' ').trim()
+          if (t) return t
+        }
+      }
+    }
+  }
+  return '(sim)'
+}
+
 function hr(title: string): void {
   console.log(`\n${'═'.repeat(78)}\n${title}\n${'═'.repeat(78)}`)
 }
@@ -74,9 +98,14 @@ async function main(): Promise<void> {
     const transcriptPath = resolve(arg)
     const lines = await nonEmptyLines(transcriptPath)
     const taskId = basename(transcriptPath).replace(/\.jsonl$/, '')
+    // Derive the REAL intent from the transcript's first user turn (the
+    // "[Unmute Remote task] Task: …" opener, or the first user message content) so
+    // the distiller receives the same session intent Unmute would pass in prod —
+    // not a placeholder. transcriptPath already flows to distill as the raw path.
+    const intent = await firstUserIntent(transcriptPath)
     material.push({
       taskId,
-      intent: '(sim)',
+      intent,
       transcriptPath,
       fromLine: 0,
       lines,
@@ -84,7 +113,7 @@ async function main(): Promise<void> {
       newOffset: lines.length,
       convKey: taskId,
     })
-    console.log(`• material: ${taskId} — ${lines.length} lines — ${transcriptPath}`)
+    console.log(`• material: ${taskId} — ${lines.length} lines — intent: "${intent}" — ${transcriptPath}`)
   }
 
   // Scratch curator dir — nothing touches the real ~/.unmute/remote/curator.

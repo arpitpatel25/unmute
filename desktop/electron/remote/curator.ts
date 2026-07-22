@@ -490,13 +490,16 @@ export function makeRunSweep(deps: SweepDeps): (material: MaterialSession[]) => 
     // feeds the judge (step 4). Empty on the normal session (no skill invoked).
     const audits: Array<{ result: AuditResult; taskId: string; at: string }> = []
     for (const m of material) {
-      const reduced = reduceTranscript(m.lookback.concat(m.lines).join('\n'), { maxChars: 200_000 })
+      const reduced = reduceTranscript(m.lookback.concat(m.lines).join('\n'), { maxChars: 400_000 })
       const traceFile = join(paths.tracesDir, `${m.taskId}-${sweepId}.txt`)
       await fs.mkdir(paths.tracesDir, { recursive: true })
       await fs.writeFile(traceFile, reduced)
 
       const outPath = join(workRoot, `distill-${m.taskId}`, 'distill.json')
-      const prompt = buildDistillPrompt({ taskId: m.taskId, intent: m.intent, tracePath: traceFile, outPath, curatedSkills, devMode })
+      // Pass the RAW transcript path alongside the reduced trace: the reduced trace
+      // is the user-side index; distill Read/greps the raw file on demand to pull
+      // the exact assistant actions a user correction refers to (never a summary).
+      const prompt = buildDistillPrompt({ taskId: m.taskId, intent: m.intent, tracePath: traceFile, rawTranscriptPath: m.transcriptPath, outPath, curatedSkills, devMode })
       const raw = await runOneShot(`distill-${m.taskId}`, prompt, outPath, dirname(outPath))
       const procs = parseDistillOutput(raw)
       const reasoning = parseDistillReasoning(raw)   // DEV-ONLY: logged, never a decision input

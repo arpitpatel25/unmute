@@ -84,7 +84,10 @@ function toolLine(name: string, input: any): string {
  *  and the assistant's narration. Deterministic extraction only — judgment is
  *  the librarian's. Selector paths reflect the verified fixture schema (README.md). */
 export function reduceTranscript(jsonl: string, opts: { maxChars?: number } = {}): string {
-  const maxChars = opts.maxChars ?? 8000
+  // Generous default: user turns are the distill INDEX and must never be truncated
+  // out (the tail-slice below keeps the END, which would drop the opening task
+  // turn). Cost is not a v1 constraint, so we keep the whole thing.
+  const maxChars = opts.maxChars ?? 400_000
   const out: string[] = []
   // Collapse consecutive identical lines (e.g. a run of clicks) into "… (xN)"
   // so brittle UI churn never drowns the semantic story.
@@ -99,6 +102,16 @@ export function reduceTranscript(jsonl: string, opts: { maxChars?: number } = {}
     let ev: any
     try { ev = JSON.parse(line) } catch { continue }
     const msg = ev.message ?? ev
+    const role = msg?.role
+    // USER turns are the distill INDEX — keep them verbatim, marked USER. A user
+    // message's content is a plain string (the common case, incl. the opening
+    // "[Unmute Remote task] Task: …" turn) OR an array of blocks. Render the human
+    // text; pure tool_result user-role blocks (tool OUTPUTS, not the person) are
+    // handled by the tool_result branch below, never as USER text.
+    if (role === 'user' && typeof msg?.content === 'string') {
+      const t = msg.content.replace(/\s+/g, ' ').trim()
+      if (t) push(`USER: ${t}`)
+    }
     const content = Array.isArray(msg?.content) ? msg.content : []
     for (const block of content) {
       if (block?.type === 'tool_use') {
@@ -114,7 +127,11 @@ export function reduceTranscript(jsonl: string, opts: { maxChars?: number } = {}
         // collapse, and the semantic story isn't buried.
         if (isErr) push(`  -> ERROR: ${clean.slice(0, 200)}`)
         else if (clean) push(`  -> ok: ${clean.slice(0, 200)}`)
-      } else if (block?.type === 'text' && msg?.role === 'assistant') {
+      } else if (block?.type === 'text' && role === 'user') {
+        // A genuine user text turn carried as a block (verbatim — never summarized).
+        const t = String(block.text ?? '').replace(/\s+/g, ' ').trim()
+        if (t) push(`USER: ${t}`)
+      } else if (block?.type === 'text' && role === 'assistant') {
         const t = String(block.text ?? '').replace(/\s+/g, ' ').trim()
         if (t) push(`SAY: ${t.slice(0, 300)}`)
       }

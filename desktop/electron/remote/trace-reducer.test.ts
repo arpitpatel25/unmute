@@ -84,6 +84,33 @@ test('reduceTranscript distills GUI/browser actions to semantics — drops pixel
   assert.match(out, /UI left_click \(x2\)/, 'repeated identical UI actions collapse with a count')
 })
 
+test('reduceTranscript keeps USER turns verbatim, marked USER (the distill index)', () => {
+  const jsonl = [
+    // The opening [Unmute Remote task] turn IS a user turn — string content.
+    JSON.stringify({ type: 'user', message: { role: 'user', content: '[Unmute Remote task] Task: Do my usual review pass on this PR' } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'git diff' } },
+    ] } }),
+    // A tool_result user-role block — this is a TOOL OUTPUT, not the person; it may be skipped as USER text.
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 't1', content: 'diff --git a/x', is_error: false },
+    ] } }),
+    // A genuine user text turn embedded as an array block — MUST be kept.
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [
+      { type: 'text', text: 'no, always check the lockfile too' },
+    ] } }),
+  ].join('\n')
+  const out = reduceTranscript(jsonl)
+  // The user's intent turn survives, verbatim, marked USER.
+  assert.match(out, /USER: \[Unmute Remote task\] Task: Do my usual review pass on this PR/, 'opening user task turn must be kept, marked USER')
+  // The user's correction survives, marked USER.
+  assert.match(out, /USER: no, always check the lockfile too/, 'genuine user text turn must be kept, marked USER')
+  // The tool_result content is NOT rendered as a USER turn (it is a tool output, not the person talking).
+  assert.doesNotMatch(out, /USER:.*diff --git/, 'a tool_result user-role block must not be rendered as USER text')
+  // Assistant tool call still rendered.
+  assert.match(out, /TOOL Bash/, 'assistant tool call still rendered')
+})
+
 test('reduceTranscript tolerates malformed lines', () => {
   const out = reduceTranscript('not json\n{"broken":')
   assert.equal(typeof out, 'string', 'must return a string')

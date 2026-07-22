@@ -7,7 +7,7 @@ import { buildDistillPrompt, parseDistillOutput, parseDistillReasoning, buildSyn
 // primary framing is gone. If someone drifts the prompt back toward mining the
 // model's work, these fail.
 test('distill prompt (user-side re-aim): user-index rule, entry test, corrections-as-struggle; old model-work/PRIMARY framing GONE', () => {
-  const p = buildDistillPrompt({ taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedSkills: [{ name: 'pr-review', description: 'review a pull request' }] })
+  const p = buildDistillPrompt({ taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', rawTranscriptPath: '/raw/s.jsonl', outPath: '/out/distill.json', curatedSkills: [{ name: 'pr-review', description: 'review a pull request' }] })
   assert.ok(p.includes('/tr/a.txt'))
   assert.ok(p.includes('/out/distill.json'))
   // A — the user's turns are the index; the model side is read only where the user points.
@@ -38,9 +38,26 @@ test('distill prompt (user-side re-aim): user-index rule, entry test, correction
   assert.ok(!/agree.*diverge|diverge.*agree/i.test(p))
 })
 
+test('distill prompt: anchors on the user + points at the RAW transcript for on-demand assistant-context retrieval', () => {
+  const p = buildDistillPrompt({
+    taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', rawTranscriptPath: '/raw/session.jsonl',
+    outPath: '/out/distill.json', curatedSkills: [{ name: 'pr-review', description: 'review a pull request' }],
+  })
+  // The reduced trace keeps the USER's turns as the index; anchor on them.
+  assert.ok(/user/i.test(p) && /index/i.test(p))
+  // The raw transcript path is rendered so the model can Read/grep it on demand.
+  assert.ok(p.includes('/raw/session.jsonl'))
+  // The retrieval instruction: pull the SPECIFIC assistant messages from the raw
+  // transcript (Read/grep), don't rely on a summary.
+  assert.ok(/full raw transcript/i.test(p))
+  assert.ok(/read.*grep|grep.*read/i.test(p))
+  assert.ok(/specific/i.test(p))
+  assert.ok(/do not rely on a summary/i.test(p))
+})
+
 test('distill prompt: renders existing skills WITH descriptions (for usedCuratedSkill friction); NO skillObservation ask (moved to audit)', () => {
   const p = buildDistillPrompt({
-    taskId: 't1', intent: 'review a PR', tracePath: '/tr/a.txt', outPath: '/out/distill.json',
+    taskId: 't1', intent: 'review a PR', tracePath: '/tr/a.txt', rawTranscriptPath: '/raw/s.jsonl', outPath: '/out/distill.json',
     curatedSkills: [
       { name: 'pr-review', description: 'review a pull request end to end' },
       { name: 'extract-invoice', description: 'pull structured fields from an invoice PDF' },
@@ -293,7 +310,7 @@ test('parseSynthesizeOutput: changeSummary is string[], missing→[], invalid en
 })
 
 test('devMode (DEV-ONLY): reasoning ask is present only when devMode=true — prod pays zero extra tokens', () => {
-  const dArgs = { taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', outPath: '/out/distill.json', curatedSkills: [{ name: 'pr-review', description: 'review a pull request' }] }
+  const dArgs = { taskId: 't1', intent: 'edit video', tracePath: '/tr/a.txt', rawTranscriptPath: '/raw/s.jsonl', outPath: '/out/distill.json', curatedSkills: [{ name: 'pr-review', description: 'review a pull request' }] }
   assert.ok(!/reasoning/i.test(buildDistillPrompt(dArgs)))                    // default (undefined) → no ask
   assert.ok(!/reasoning/i.test(buildDistillPrompt({ ...dArgs, devMode: false })))
   const dDev = buildDistillPrompt({ ...dArgs, devMode: true })
