@@ -2,7 +2,7 @@
 // (the execFile/fs side effects are exercised live, not unit-tested).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { AX_MCP_NAME, LEGACY_MCP_NAME, pruneDisabledServers, removeBlock, ensureNotDisabled } from './register'
+import { AX_MCP_NAME, LEGACY_MCP_NAME, pruneDisabledServers, removeBlock, ensureNotDisabled, STEER_BODY } from './register'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -58,4 +58,10 @@ test('ensureNotDisabled rewrites the file only when something changed', async ()
 test('steer block markers still round-trip after the rename', () => {
   const md = 'top\n\n<!-- UNMUTE-COMPUTER-USE:BEGIN -->\nuse unmute-computer\n<!-- UNMUTE-COMPUTER-USE:END -->\n'
   assert.equal(removeBlock(md).trim(), 'top')
+})
+
+test('steer body teaches Claude Code which computer-use lane to use per app', () => {
+  assert.match(STEER_BODY, /web_arm/)
+  assert.match(STEER_BODY, /run_applescript/)
+  assert.match(STEER_BODY, /browser or Electron app/)
 })

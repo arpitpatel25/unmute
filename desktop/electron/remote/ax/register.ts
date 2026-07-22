@@ -43,13 +43,20 @@ export const LEGACY_MCP_NAME = 'computer'
 
 const STEER_BEGIN = '<!-- UNMUTE-COMPUTER-USE:BEGIN -->'
 const STEER_END = '<!-- UNMUTE-COMPUTER-USE:END -->'
-const STEER_BODY =
+// Exported (test-only) so register.test.ts can assert on lane guidance without
+// re-duplicating the literal strings.
+export const STEER_BODY =
   'For GUI tasks that touch a desktop app (Notion, WhatsApp, Slack, Notes, Mail, any Mac app), ' +
   'PREFER the `unmute-computer` MCP tools (list_apps, get_window_state, click, type_text, press_key, set_value). ' +
   'They operate apps in the BACKGROUND without stealing focus or moving the user\'s windows or cursor. ' +
   'If a result reports an escalation recommending foreground, re-call that tool with delivery_mode:"foreground". ' +
   'Do NOT reach for built-in computer-use / screen control unless the `unmute-computer` tools genuinely cannot do it — ' +
-  'screen control brings apps to the front and interrupts the user.'
+  'screen control brings apps to the front and interrupts the user. ' +
+  'Lane guide: for a browser or Electron app (Notion, Slack, VS Code, Chrome, any website): `web_arm` the app once, ' +
+  'then drive it with `web_eval` (scroll = set the scroller\'s scrollTop; click = el.click(); read the DOM), ' +
+  '`web_type` (types via real key events — use it, not web_eval, to enter text into editors), and `web_screenshot`. ' +
+  'For scriptable native apps (Notes, Mail, Calendar): `run_applescript`. ' +
+  'For everything else: the `get_window_state`/`click`/`type_text`/`scroll` tools (they need the app on the current Space).'
 
 function claudeMdPath(home = homedir()): string { return join(home, '.claude', 'CLAUDE.md') }
 function claudeConfigPath(home = homedir()): string { return join(home, '.claude.json') }
