@@ -14,7 +14,7 @@
 - The MCP name stays `unmute-computer` on `127.0.0.1:42118/ax`; **do not** rename or break existing registration (`ax/register.ts`).
 - Pass-through is sacred: any tool the router does not own MUST forward to `cua-driver` byte-for-byte as today.
 - Every router tool is gated by `policy.enabled` (master kill switch) and the `policy.allowAll`/`policy.allowed[]` app allowlist — same authority as the existing bridge.
-- CDP debug port is **loopback only** (`127.0.0.1`); one fixed port per app; never leave an app armed after `dispose()`.
+- CDP debug port is **loopback only** (`127.0.0.1`); one fixed, collision-safe port per app. Armed apps keep their loopback port for the app's lifetime (documented, accepted local exposure — see design §12); `disposeAll()` clears tracking without quitting the user's apps.
 - No new global cursor movement, no focus steal in the CDP/Apple-Events lanes (they don't use the screen at all).
 - Test framework is `node:test` + `node:assert/strict`; tests run via `npm test` (`electron/remote/**/*.test.ts`). Backend integration that needs a live browser is a documented manual smoke, not a CI test.
 - TypeScript must pass `npm run typecheck`.

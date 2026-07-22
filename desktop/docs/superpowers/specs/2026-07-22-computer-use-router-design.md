@@ -130,4 +130,6 @@ Claude Code announces which mode a task will use, so the user is never surprised
 
 ## 12. Security note
 
-`--remote-debugging-port` exposes **all** of an app's page content to any local process while open (we read live API keys out of a Notion page during testing). Treat armed ports as sensitive: bind loopback only, consider per-session ports, and don't leave apps armed indefinitely.
+`--remote-debugging-port` exposes **all** of an app's page content to any local process while open (we read live API keys out of a Notion page during testing). It is bound **loopback only** (`127.0.0.1`), so only same-machine processes can reach it.
+
+**Accepted, documented posture (decided 2026-07-22):** once an app is armed, it keeps its loopback debug port for the **lifetime of that app** — including after Unmute itself quits. `Arming.disposeAll()` deliberately does **not** quit the user's apps on shutdown (quitting the user's Notion/Slack when Unmute closes is worse UX for a background driver, and re-arming without the port would need another focus-stealing relaunch). The residual exposure is: loopback-only, same-machine, only apps the user's own agent armed, only while those apps run, and only when the user enabled Computer Use — comparable to running VS Code / Chrome with a debug port. If a deployment needs the port closed on shutdown, the clean option is quit-on-dispose (quit the armed apps in `disposeAll()`) — a config choice, not the default. Surfaced to the user, not silent.
