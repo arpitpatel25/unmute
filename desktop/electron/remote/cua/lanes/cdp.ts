@@ -105,8 +105,19 @@ function defaultTransport(): CdpTransport {
       return new Promise((resolve, reject) => {
         const ws = new WebSocket(wsUrl)
         let nextId = 1
+        let connected = false
         const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>()
+
+        // A socket error/close AFTER connect leaves any in-flight send()s
+        // unresolved forever (and withSocket's `finally { close() }` never
+        // runs to clean up) unless we fail them out here.
+        function rejectAllPending(reason: Error): void {
+          for (const p of pending.values()) p.reject(reason)
+          pending.clear()
+        }
+
         ws.on('open', () => {
+          connected = true
           resolve({
             send(method: string, params: object = {}): Promise<any> {
               return new Promise((res, rej) => {
@@ -127,10 +138,20 @@ function defaultTransport(): CdpTransport {
           const p = pending.get(msg.id)
           if (!p) return
           pending.delete(msg.id)
+          // Resolve with the FULL JSON-RPC message (not just msg.result) —
+          // consumers (eval/screenshot/scrollBottom/clickText/throwOnException)
+          // all read res.result.* off of it.
           if (msg.error) p.reject(new Error(`CDP error ${msg.error.code}: ${msg.error.message}`))
-          else p.resolve(msg.result)
+          else p.resolve(msg)
         })
-        ws.on('error', (e) => reject(e))
+        ws.on('error', (e) => {
+          if (!connected) { reject(e); return }
+          rejectAllPending(new Error(`CDP socket error: ${e.message}`))
+        })
+        ws.on('close', () => {
+          if (!connected) { reject(new Error('CDP socket closed before it opened')); return }
+          rejectAllPending(new Error('CDP socket closed'))
+        })
       })
     },
   }
