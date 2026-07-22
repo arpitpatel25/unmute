@@ -21,6 +21,7 @@ test('arm is idempotent when the port is already answering', async () => {
 })
 
 test('arm throws if the endpoint never comes up', async () => {
-  const a = new Arming({ launch: () => {}, quit: async () => {}, probe: async () => false })
+  // small retry budget so this runs instantly instead of the 20×500ms default
+  const a = new Arming({ launch: () => {}, quit: async () => {}, probe: async () => false, retries: 2, intervalMs: 1 })
   await assert.rejects(() => a.arm('Notion'), /could not arm/)
-}) // implementation must cap retries fast in tests (inject a small retry budget via portBase-independent constant or a test hook)
+})
