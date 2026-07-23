@@ -43,6 +43,8 @@ import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
 import { startCuaServer, type CuaServer } from './cua/server'
+import { NotchClient } from './notch/notch-client'
+import { NotchController } from './notch/notch-controller'
 import { DriverManager } from './cua/driver-manager'
 import { CdpLane } from './cua/lanes/cdp'
 import { Arming } from './cua/lanes/arming'
@@ -181,6 +183,8 @@ const settings = new Store<RemoteSettings>({
 // Computer Use off, which every subsequent tool call reads immediately).
 let cuaServer: CuaServer | null = null
 let cuaManager: DriverManager | null = null
+let notchClient: NotchClient | null = null
+let notchController: NotchController | null = null
 function broadcastAxActivity(ev: { app?: string; tool: string; ok: boolean }): void {
   try {
     for (const w of BrowserWindow.getAllWindows()) {
@@ -1529,6 +1533,50 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   }).then((s) => { cuaServer = s }).catch((e) => log.warn('cua server not started', { error: (e as Error).message }))
   void applyAxRegistration(normalizePolicy(settings.get('computerUse')).enabled)
 
+  // ── Notch shell (native Swift helper) ──
+  // The single task/attention surface (spec 2026-07-24). Spawned by THIS signed
+  // process (like cua-driver) so its NSPanel carries the app's identity and never
+  // steals focus. Gated by UNMUTE_NOTCH_ENABLED so the legacy overlay can be
+  // toggled back during field testing (default: on).
+  if (process.env.UNMUTE_NOTCH_ENABLED !== '0' && manager) {
+    const mgr = manager
+    try {
+      const notchBin = process.env.UNMUTE_NOTCH_PATH
+        || (app.isPackaged
+          ? join(process.resourcesPath, 'unmute-notch', 'unmute-notch')
+          : join(app.getAppPath(), 'native-notch', '.build', 'debug', 'unmute-notch'))
+      notchClient = new NotchClient({
+        binPath: notchBin,
+        onExit: (code) => log.warn('notch helper exited', { code }),
+      })
+      notchController = new NotchController(notchClient, mgr, {
+        answer: (id, text) => { if (text != null) mgr.answer(id, text) },
+        focus: (id) => { orchestrateFocusId = id },
+        showCockpit: () => {
+          try { openOrchestrateWindow() } catch (e) { log.warn('notch open cockpit failed', { error: (e as Error).message }) }
+        },
+        countWorking: () => mgr.list().filter((t) => t.state === 'processing').length,
+        getTask: (id) => {
+          const t = mgr.get(id)
+          if (!t) return undefined
+          return {
+            id: t.id,
+            name: t.name,
+            intent: t.intent,
+            state: t.state,
+            question: t.question?.text,
+            options: t.question?.choices,
+            result: t.result?.summary,
+            error: t.error?.reason,
+          }
+        },
+      })
+      log.info('notch shell started', { bin: notchBin })
+    } catch (e) {
+      log.warn('notch shell not started', { error: (e as Error).message })
+    }
+  }
+
   // Recover the user's tasks after an app crash/restart: rebuild the rows from
   // the on-disk meta + status files (they were never lost — just invisible once
   // the in-memory list reset on relaunch). Then start maintenance so the sweep
@@ -1758,6 +1806,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   app.on('before-quit', () => {
     try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
     try { cuaManager?.dispose(); cuaServer?.close(); void cuaArming.disposeAll() } catch (e) { log.warn('cua shutdown failed', { error: (e as Error).message }) }
+    try { notchClient?.dispose() } catch (e) { log.warn('notch shutdown failed', { error: (e as Error).message }) }
     try { router?.dispose() } catch { /* best-effort */ }
   })
   // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
