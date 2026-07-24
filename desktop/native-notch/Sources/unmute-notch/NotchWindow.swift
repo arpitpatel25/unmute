@@ -38,11 +38,10 @@ final class NotchWindow: NSPanel {
         orderFrontRegardless()
     }
 
-    /// Resize + reposition the window to a state's frame, top-pinned. Animated
-    /// with a spring so the morph reads as "live"; the SwiftUI content animates
-    /// its corner radius / contents in lockstep.
-    func applyState(_ state: NotchState, geometry: NotchGeometry, animated: Bool) {
-        let frame = geometry.windowFrame(for: state)
+    /// Resize + reposition to an explicit top-pinned frame, spring-eased so the
+    /// morph reads as "live"; SwiftUI animates its corner radius / contents in
+    /// lockstep.
+    func applyFrame(_ frame: NSRect, animated: Bool) {
         guard animated else { setFrame(frame, display: true); return }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.34
@@ -52,8 +51,4 @@ final class NotchWindow: NSPanel {
         }
     }
 
-    /// Reposition to the current screen (display change) without changing size.
-    func applyGeometry(_ geometry: NotchGeometry, state: NotchState) {
-        setFrame(geometry.windowFrame(for: state), display: true)
-    }
 }

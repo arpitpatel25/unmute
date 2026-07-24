@@ -13,7 +13,13 @@ final class AppController {
         geometry = NotchGeometry.current()
         applyGeometrySizes()
         window = NotchWindow(geometry: geometry)
-        window.contentView = NSHostingView(rootView: NotchView(model: model))
+        let host = NSHostingView(rootView: NotchView(model: model))
+        // WE own the window size (AppController.frame(for:)); never let the
+        // hosting view resize the window to the SwiftUI content's flexible
+        // height (that was blowing the panel up to ~640px). Empty options = the
+        // window is authoritative; the content fills whatever size we set.
+        host.sizingOptions = []
+        window.contentView = host
         window.present()
     }
 
@@ -24,7 +30,7 @@ final class AppController {
             model.working = working
             withAnimation(Theme.morph) { model.state = state }
             // The window IS the shape now, so resizing it top-pinned is the morph.
-            window.applyState(state, geometry: geometry, animated: true)
+            window.applyFrame(frame(for: state), animated: true)
 
         case let .showTask(task):
             model.task = task
@@ -40,7 +46,7 @@ final class AppController {
             )
             _ = (x, y) // reserved for multi-display placement (Stage 7)
             applyGeometrySizes()
-            window.applyGeometry(geometry, state: model.state)
+            window.applyFrame(frame(for: model.state), animated: false)
 
         case .collapse:
             withAnimation(Theme.morph) { model.state = .idle }
@@ -51,6 +57,23 @@ final class AppController {
 
         case .unknown:
             break
+        }
+    }
+
+    /// Top-pinned frame for a state. Idle/peek use fixed sizes; the panel's
+    /// height is measured from its SwiftUI content so it's a compact card, not a
+    /// window with a void below the content.
+    private func frame(for state: NotchState) -> NSRect {
+        switch state {
+        case .idle, .peek:
+            return geometry.windowFrame(for: state)
+        case .panel:
+            let width = geometry.panelSize.width
+            let contentWidth = width - 40 // NotchView horizontal padding (20 each side)
+            let host = NSHostingController(rootView: PanelView(model: model))
+            let fit = host.sizeThatFits(in: NSSize(width: contentWidth, height: 5000))
+            let height = geometry.clampPanelHeight(fit.height + 32) // + vertical padding (16 each)
+            return geometry.topPinnedFrame(width: width, height: height)
         }
     }
 

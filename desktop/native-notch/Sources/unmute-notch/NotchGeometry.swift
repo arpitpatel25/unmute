@@ -51,9 +51,11 @@ struct NotchGeometry {
     }
     var peekSize: NSSize { NSSize(width: 420, height: 72) }
     var panelSize: NSSize {
-        // ~30–50% of the screen; height caps so it stays a panel, not a wall.
-        let w = min(max(screenFrame.width * 0.42, 520), 900)
-        let h = min(max(screenFrame.height * 0.42, 320), 560)
+        // A compact card, not a wall. Narrower + much shorter than before so a
+        // short task doesn't leave a big empty void. Grows later (Stage 6) when a
+        // terminal is shown.
+        let w = min(max(screenFrame.width * 0.38, 480), 760)
+        let h = min(max(screenFrame.height * 0.30, 240), 400)
         return NSSize(width: w, height: h)
     }
 
@@ -65,15 +67,25 @@ struct NotchGeometry {
         }
     }
 
+    /// Center horizontally, pin the top edge to the physical top of the screen.
+    func topPinnedFrame(width: CGFloat, height: CGFloat) -> NSRect {
+        let x = screenFrame.midX - width / 2
+        let y = screenFrame.maxY - height
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+
     /// The window frame for a given state: sized to the state, centered, and
-    /// TOP-PINNED to the physical top of the screen so it hugs the notch. The
-    /// window IS the visible shape (no giant transparent canvas) — so it never
-    /// swallows clicks meant for the app behind it, and its position is
-    /// deterministic in every state.
+    /// TOP-PINNED so it hugs the notch. The window IS the visible shape (no giant
+    /// transparent canvas) — so it never swallows clicks meant for the app
+    /// behind it, and its position is deterministic in every state. The panel's
+    /// height is content-driven (see AppController), so callers pass it in.
     func windowFrame(for state: NotchState) -> NSRect {
         let size = size(for: state)
-        let x = screenFrame.midX - size.width / 2
-        let y = screenFrame.maxY - size.height // top edge at the physical top
-        return NSRect(x: x, y: y, width: size.width, height: size.height)
+        return topPinnedFrame(width: size.width, height: size.height)
+    }
+
+    /// Panel height clamp so content-sizing can never make it a sliver or a wall.
+    func clampPanelHeight(_ h: CGFloat) -> CGFloat {
+        min(max(h, 180), screenFrame.height * 0.7)
     }
 }

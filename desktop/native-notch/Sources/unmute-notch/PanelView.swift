@@ -9,6 +9,8 @@ struct PanelView: View {
     @ObservedObject var model: NotchModel
 
     var body: some View {
+        // Natural top-down stack (no expanding Spacer) so the panel has a finite
+        // intrinsic height the window can size itself to — no empty void.
         VStack(alignment: .leading, spacing: 12) {
             header
             if let t = model.task {
@@ -30,8 +32,7 @@ struct PanelView: View {
                     .font(.system(size: 13))
                     .foregroundColor(Theme.textDim)
             }
-            Spacer(minLength: 0)
-            footer
+            footer.padding(.top, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
