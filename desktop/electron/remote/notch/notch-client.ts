@@ -128,6 +128,7 @@ export type NotchEvent =
   | { type: 'closeStage' }
   | { type: 'chooseOption'; id: string; index: number }
   | { type: 'answerText'; id: string; text: string }
+  | { type: 'mute'; id: string }
   | { type: 'kill'; id: string }
   | { type: 'resume'; id: string }
   | { type: 'rerun'; id: string }

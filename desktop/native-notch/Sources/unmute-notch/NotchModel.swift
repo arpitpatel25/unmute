@@ -24,7 +24,9 @@ final class NotchModel: ObservableObject {
     // Skills UI state.
     @Published var skillsExpanded: Bool = false
     @Published var hoverSkill: SkillP? = nil
-    @Published var hoverSkillAnchor: CGPoint = .zero
+    /// Hovered row's frame in window coordinates — the detail card anchors
+    /// BESIDE the row (field feedback: never at a far corner of the panel).
+    @Published var hoverSkillFrame: CGRect = .zero
 
     // Skill-review popup.
     @Published var proposal: ProposalDetail? = nil

@@ -207,6 +207,7 @@ enum Event {
     case closeStage                                // Stage esc → back to wall
     case chooseOption(id: String, index: Int)
     case answerText(id: String, text: String)      // free-text / confirm answer
+    case mute(id: String)                          // drop from attention/crank this episode
     case kill(id: String)
     case resume(id: String)
     case rerun(id: String)                         // re-run fresh from intent
@@ -247,6 +248,7 @@ enum Event {
         case .closeStage: return ["type": "closeStage"]
         case .chooseOption(let id, let index): return ["type": "chooseOption", "id": id, "index": index]
         case .answerText(let id, let text): return ["type": "answerText", "id": id, "text": text]
+        case .mute(let id): return ["type": "mute", "id": id]
         case .kill(let id): return ["type": "kill", "id": id]
         case .resume(let id): return ["type": "resume", "id": id]
         case .rerun(let id): return ["type": "rerun", "id": id]

@@ -324,6 +324,60 @@ test('converseWrite lazily starts the review session and streams output', async 
   assert.equal(h.calls.converseStart?.length, 1)
 })
 
+// ── attention policy: staleness + mute (decided 2026-07-24) ─────────────────
+
+test('a ready task older than 6h leaves the crank (cockpit only); blocked never ages out', async () => {
+  const h = setup()
+  const old = Date.now() - 7 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'stale', state: 'ready', kind: 'session', name: 'Old ready', updatedAt: old }))
+  put(h, makeTask({ id: 'oldblocked', state: 'needs-user', name: 'Old blocked', updatedAt: old, question: { text: 'q' } }))
+  // stale ready is NOT fronted; the old blocked one is (blocked never ages out)
+  assert.equal(h.client.last('setState')!.state, 'attention')
+  assert.equal(h.client.last('showTask')!.task.id, 'oldblocked')
+  assert.equal(h.client.last('setState')!.attention, 1)
+  // …but the stale ready is still a cockpit card
+  h.client.fire({ type: 'openDashboard' })
+  await new Promise((r) => setTimeout(r, 10)); h.flush()
+  const cp = h.client.last('setCockpit')!.data
+  assert.ok(cp.groups.flatMap((g) => g.cards).some((c) => c.id === 'stale'))
+  assert.ok(!cp.queue.some((q) => q.id === 'stale'))
+})
+
+test('a fresh ready task IS in the crank', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'fresh', state: 'ready', updatedAt: Date.now() - 60_000 }))
+  assert.equal(h.client.last('setState')!.state, 'attention')
+})
+
+test('mute drops a task from attention until its state changes', () => {
+  const h = setup()
+  put(h, makeTask({ id: 't1', state: 'ready', name: 'Parked' }))
+  assert.equal(h.client.last('setState')!.state, 'attention')
+  h.client.fire({ type: 'mute', id: 't1' })
+  assert.equal(h.client.last('setState')!.state, 'dormant') // nothing else waiting
+  // still muted on a same-state update
+  h.events.emit('updated', h.tasks.get('t1')); h.flush()
+  assert.equal(h.client.last('setState')!.state, 'dormant')
+  // state CHANGE ends the episode: back to work, then ready again → re-enters
+  h.tasks.set('t1', makeTask({ id: 't1', state: 'processing', name: 'Parked' }))
+  h.events.emit('updated', h.tasks.get('t1')); h.flush()
+  h.tasks.set('t1', makeTask({ id: 't1', state: 'ready', name: 'Parked' }))
+  h.events.emit('ready', h.tasks.get('t1')); h.flush()
+  assert.equal(h.client.last('setState')!.state, 'attention')
+})
+
+test('interacting with a muted task (focus) ends its mute episode', () => {
+  const h = setup()
+  put(h, makeTask({ id: 't1', state: 'ready', name: 'Parked' }))
+  h.client.fire({ type: 'mute', id: 't1' })
+  assert.equal(h.client.last('setState')!.state, 'dormant')
+  h.client.fire({ type: 'focusTask', id: 't1' }) // user opened it in the cockpit
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'cockpit')
+  h.client.fire({ type: 'collapsed' }) // back to baseline → it queues again
+  assert.equal(h.client.last('setState')!.state, 'attention')
+})
+
 // ── forwarded notifications ─────────────────────────────────────────────────
 
 test('capture phase forwards with the target task name', () => {

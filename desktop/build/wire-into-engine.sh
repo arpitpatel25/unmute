@@ -538,10 +538,25 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
     # pill at the top would collide with the notch — they'd fight for the same
     # strip. workArea already excludes the Dock, so anchoring to its bottom edge
     # floats the pill just above the Dock without ever interfering with it.
-    sed -i.bak 's|^  const y = workArea.y + 6.*$|  const y = workArea.y + workArea.height - HUD_HEIGHT - 24 // patched: bottom-anchored, small gap above the Dock — the notch owns the top strip (spec 2026-07-24)|' "$wm"
+    sed -i.bak 's|^  const y = workArea.y + 6.*$|  const y = workArea.y + workArea.height - HUD_HEIGHT - 10 // patched: bottom-anchored, Wispr-style — workArea adapts to Dock/fullscreen, so the pill hugs the usable bottom|' "$wm"
     rm -f "$wm.bak"
     if ! grep -q 'patched: bottom-anchored' "$wm"; then
       log "WARN: windowManager.ts HUD bottom-anchor patch did not apply — dictation pill will collide with the notch"
+    fi
+
+    # LIVE reposition (Wispr parity): the show path already recomputes bounds,
+    # but if the Dock hides/shows or the display changes WHILE the pill is up,
+    # follow it. Appended at module scope (same file ⇒ sees hudWindow/getHUDBounds).
+    cat >> "$wm" <<'EOF'
+
+// patched: Wispr-style adaptive pill — live reposition while visible when the
+// Dock hides/shows or display metrics change (show-time recompute covers the rest).
+screen.on('display-metrics-changed', () => {
+  if (hudWindow?.isVisible()) hudWindow.setBounds(getHUDBounds())
+})
+EOF
+    if ! grep -q 'Wispr-style adaptive pill' "$wm"; then
+      log "WARN: windowManager.ts pill live-reposition append did not apply"
     fi
   fi
 

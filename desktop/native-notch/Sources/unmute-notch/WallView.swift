@@ -246,6 +246,13 @@ struct WallView: View {
                 .font(.system(size: 10.5, design: .monospaced)).foregroundColor(Theme.textFaint)
         }
         .contentShape(Rectangle())
+        // Capture the row's window-space frame so the detail card can anchor
+        // BESIDE it (field feedback: it must never float at a far corner).
+        .background(GeometryReader { geo in
+            Color.clear.onChange(of: model.hoverSkill?.name) { hovered in
+                if hovered == s.name { model.hoverSkillFrame = geo.frame(in: .global) }
+            }
+        })
         .onHover { over in
             model.hoverSkill = over ? s : nil
         }
@@ -320,6 +327,12 @@ struct WallView: View {
 
     @ViewBuilder private var hoverCard: some View {
         if let s = model.hoverSkill {
+            let cardW: CGFloat = 280
+            let f = model.hoverSkillFrame
+            // Anchor beside the hovered row: to its LEFT (the rail hugs the right
+            // edge), vertically aligned with the row; clamped on-surface.
+            let x = max(8, f.minX - cardW - 12)
+            let y = max(topInset, f.minY - 10)
             VStack(alignment: .leading, spacing: 5) {
                 Text(s.name).font(.system(size: 13, weight: .semibold)).foregroundColor(Theme.text)
                 Text((s.description?.isEmpty == false) ? s.description! : "No description in this skill's frontmatter.")
@@ -329,12 +342,11 @@ struct WallView: View {
                     .font(.system(size: 10.5, design: .monospaced)).foregroundColor(Theme.textFaint)
             }
             .padding(12)
-            .frame(width: 280, alignment: .leading)
+            .frame(width: cardW, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.07)))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.15), lineWidth: 1))
             .shadow(color: .black.opacity(0.5), radius: 18, y: 8)
-            .padding(.leading, 24)
-            .padding(.top, topInset + 24)
+            .offset(x: x, y: y)
             .allowsHitTesting(false)
         }
     }

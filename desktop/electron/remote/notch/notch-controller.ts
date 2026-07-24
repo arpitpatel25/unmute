@@ -145,6 +145,12 @@ const FADE_DONE_MS = 15 * 60 * 1000       // done fades from the wall after 15m
 const FADE_ERR_MS = 60 * 60 * 1000        // errored/stuck after 60m
 const AWAY_MS = 30 * 60 * 1000            // digest threshold
 const PROMOTED_BADGE_MS = 8 * 1000        // "↑ now a session" narration window
+/** Attention is for CHANGES; the cockpit is for STATE. A `ready` task older
+ *  than this leaves the notch/crank entirely (still a cockpit card) — so a
+ *  session parked ready for days can't hold the surface amber forever.
+ *  Blocked states (needs-user/stuck/errored) never age out: they're stuck ON
+ *  the user. (Decided 2026-07-24.) */
+const STALE_READY_MS = 6 * 60 * 60 * 1000
 
 type Engaged = 'none' | 'task' | 'cockpit'
 
@@ -162,6 +168,11 @@ export class NotchController {
   private promotedUntil = new Map<string, number>()
   private kindSeen = new Map<string, string>()
   private routeOffer: { newTaskId: string; altTaskId: string; altName: string } | null = null
+  /** Episode-mute: id → the state it was muted IN. Cleared when the user
+   *  interacts with the task again or its state changes (a fresh transition
+   *  re-enters the regular flow). Muted tasks stay cockpit cards; they just
+   *  never front the attention strip or the crank. */
+  private muted = new Map<string, TaskStatusName>()
   // Rails cache (skills/projects/proposals) — refreshed on cockpit open + 5min.
   private skills: SkillItemP[] = []
   private projects: Array<{ name: string; path: string }> = []
@@ -201,6 +212,7 @@ export class NotchController {
     on('focusTask', (e) => this.onFocusTask((e as { id: string }).id))
     on('closeStage', () => { this.setFocus(null); this.reconcile() })
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
+    on('mute', (e) => this.onMute((e as { id: string }).id))
     on('answerText', (e) => { const { id, text } = e as { id: string; text: string }; this.deps.answer(id, text); this.advanceAfterAnswer(id) })
     on('kill', (e) => this.deps.kill((e as { id: string }).id))
     on('resume', (e) => void this.deps.resume((e as { id: string }).id))
@@ -243,9 +255,19 @@ export class NotchController {
 
   // ── queue ──────────────────────────────────────────────────────────────────
 
+  /** In the crank/attention flow? your-move AND not shelved AND not a stale
+   *  ready AND not episode-muted. Stale/muted stay cockpit-only. */
+  private crankEligible(t: TaskLite, now = Date.now()): boolean {
+    if (classify(t.state) === null || t.shelved) return false
+    if (t.state === 'ready' && now - (t.updatedAt ?? 0) > STALE_READY_MS) return false
+    if (this.muted.get(t.id) === t.state) return false
+    return true
+  }
+
   private rebuildQueue(): void {
+    const now = Date.now()
     const yours = this.deps.listTasks()
-      .filter((t) => classify(t.state) !== null && !t.shelved)
+      .filter((t) => this.crankEligible(t, now))
       .sort((a, b) => rank(a.state) - rank(b.state) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     const known = new Set(this.queue)
     // Keep existing order (skip=requeue must stick); append newcomers by rank.
@@ -256,10 +278,13 @@ export class NotchController {
   private onTransition(t: TaskLite): void {
     if (!t || !t.id) return
     this.trackKind(t)
-    const yourMove = classify(t.state) !== null && !t.shelved
+    // A state CHANGE ends a mute episode — the task re-enters the regular flow.
+    const mutedIn = this.muted.get(t.id)
+    if (mutedIn !== undefined && mutedIn !== t.state) this.muted.delete(t.id)
+    const eligible = this.crankEligible(t)
     const queued = this.queue.includes(t.id)
-    if (yourMove && !queued) this.queue.push(t.id)
-    else if (!yourMove && queued) this.queue = this.queue.filter((id) => id !== t.id)
+    if (eligible && !queued) this.queue.push(t.id)
+    else if (!eligible && queued) this.queue = this.queue.filter((id) => id !== t.id)
     this.scheduleReconcile()
   }
 
@@ -279,7 +304,7 @@ export class NotchController {
   private front(): TaskLite | undefined {
     while (this.queue.length > 0) {
       const t = this.deps.getTask(this.queue[0])
-      if (t && classify(t.state) !== null && !t.shelved) return t
+      if (t && this.crankEligible(t)) return t
       this.queue.shift()
     }
     return undefined
@@ -362,6 +387,20 @@ export class NotchController {
   private setFocus(id: string | null): void {
     this.focusedId = id
     this.deps.focus(id) // focus IS the voice address (consent model)
+    if (id) this.muted.delete(id) // interacting with a task ends its mute episode
+  }
+
+  /** "Don't show this again": out of the attention strip + crank until the user
+   *  interacts with it or its state changes. Still a cockpit card. */
+  private onMute(id: string): void {
+    const t = this.deps.getTask(id)
+    if (!t) return
+    this.muted.set(id, t.state)
+    this.queue = this.queue.filter((x) => x !== id)
+    if (this.focusedId === id) { this.focusedId = null; this.deps.focus(null) }
+    if (this.queue.length === 0 && this.engaged === 'task') this.engaged = 'none'
+    this.client.send({ type: 'toast', text: 'muted — back when it changes or you open it' })
+    this.reconcile()
   }
 
   private onChoose({ id, index }: { id: string; index: number }): void {

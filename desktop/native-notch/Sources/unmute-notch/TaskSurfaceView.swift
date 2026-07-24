@@ -85,10 +85,15 @@ struct TaskSurfaceView: View {
     }
 
     private func footer(_ t: TaskDetail) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 14) {
             Button(action: { model.emit(.openDashboard) }) {
                 Text("Open dashboard →").font(.system(size: 12.5)).foregroundColor(Theme.textDim)
             }.buttonStyle(.plain)
+            // Episode-mute: out of the attention strip + crank until you interact
+            // with it or its state changes again. Still on the cockpit wall.
+            Button(action: { model.emit(.mute(id: t.id)) }) {
+                Text("mute").font(.system(size: 12.5)).foregroundColor(Theme.textFaint)
+            }.buttonStyle(.plain).help("don't show again — returns when it changes or you open it")
             Spacer(minLength: 0)
             ActButton(label: "Next →", go: true) { model.emit(.next) }
         }
