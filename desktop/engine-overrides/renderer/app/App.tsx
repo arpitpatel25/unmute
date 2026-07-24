@@ -9,14 +9,15 @@ import Privacy from './Privacy'
 import Language from './Language'
 import Onboarding from './Onboarding'
 import { BalancePill } from '../paywall/BalancePill'
-// ─── Unmute Remote (ADDITIVE) ───
-import { AmbientIndicator } from '../remote/AmbientIndicator'
-import { TaskPanel } from '../remote/TaskPanel'
+// ─── Unmute Remote ───
+// Tasks NO LONGER live here. The notch is the single task/attention surface
+// (spec 2026-07-24): top-center = status output, bottom-center = voice input.
+// The main app keeps dictation + settings + dictation history only.
 import { OutOfCreditBanner } from '../paywall/OutOfCreditBanner'
 import { AuthProvider, useAuth } from '../paywall/AuthContext'
 import { SignInScreen } from '../paywall/SignInScreen'
 
-type Tab = 'history' | 'voice' | 'remote' | 'account' | 'permissions' | 'language' | 'settings' | 'privacy'
+type Tab = 'history' | 'voice' | 'account' | 'permissions' | 'language' | 'settings' | 'privacy'
 
 type AppView = 'loading' | 'onboarding' | 'main'
 
@@ -105,7 +106,6 @@ function AppInner() {
       <OutOfCreditBanner />
       <SignInOverlay />
       <div className="absolute top-2 right-3 z-30 flex items-center gap-2">
-        <AmbientIndicator />
         <BalancePill />
         <ProfileButton />
       </div>
@@ -161,13 +161,6 @@ function AppInner() {
             label="Features"
             active={activeTab === 'voice'}
             onClick={() => setActiveTab('voice')}
-          />
-          {/* Unmute Remote (ADDITIVE) */}
-          <SidebarButton
-            icon={<RemoteIcon />}
-            label="Remote"
-            active={activeTab === 'remote'}
-            onClick={() => setActiveTab('remote')}
           />
           <SidebarButton
             icon={<AccountIcon />}
@@ -232,7 +225,6 @@ function AppInner() {
         <div className="max-w-2xl mx-auto pb-8">
           {activeTab === 'history' && <History />}
           {activeTab === 'voice' && <Voice dictationKey={dictationKey} />}
-          {activeTab === 'remote' && <TaskPanel />}
           {activeTab === 'account' && <Account />}
           {activeTab === 'permissions' && <Permissions />}
           {activeTab === 'language' && <Language />}
@@ -350,20 +342,6 @@ function HistoryIcon() {
     </svg>
   )
 }
-// Walkie-talkie — handheld, you TALK into it (ties to voice), and the antenna
-// makes it unmistakable. Matches the line-icon set; says "remote control for
-// your Claude Code" and disambiguates "Remote" from remote-work.
-function RemoteIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10.5 5V1.8" />
-      <rect x="4.5" y="5" width="7" height="9.5" rx="1.8" />
-      <path d="M6.4 7.4h3.2" />
-      <circle cx="8" cy="11.4" r="1.2" />
-    </svg>
-  )
-}
-
 function VoiceIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
