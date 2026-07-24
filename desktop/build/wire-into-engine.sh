@@ -551,8 +551,12 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
 
 // patched: Wispr-style adaptive pill — live reposition while visible when the
 // Dock hides/shows or display metrics change (show-time recompute covers the rest).
-screen.on('display-metrics-changed', () => {
-  if (hudWindow?.isVisible()) hudWindow.setBounds(getHUDBounds())
+// MUST wait for app-ready: Electron's `screen` module throws if touched before
+// ready, and this module is imported at startup (dev.23 hang, 2026-07-24).
+app.whenReady().then(() => {
+  screen.on('display-metrics-changed', () => {
+    if (hudWindow?.isVisible()) hudWindow.setBounds(getHUDBounds())
+  })
 })
 EOF
     if ! grep -q 'Wispr-style adaptive pill' "$wm"; then
