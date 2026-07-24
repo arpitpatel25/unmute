@@ -202,7 +202,8 @@ enum Event {
     case tap                                       // step up (context decided by main)
     case collapsed                                 // stepped down to baseline
     case openDashboard
-    case next                                      // crank
+    case next                                      // crank forward
+    case prev                                      // crank backward
     case focusTask(id: String)                     // card clicked → voice address
     case closeStage                                // Stage esc → back to wall
     case chooseOption(id: String, index: Int)
@@ -244,6 +245,7 @@ enum Event {
         case .collapsed: return ["type": "collapsed"]
         case .openDashboard: return ["type": "openDashboard"]
         case .next: return ["type": "next"]
+        case .prev: return ["type": "prev"]
         case .focusTask(let id): return ["type": "focusTask", "id": id]
         case .closeStage: return ["type": "closeStage"]
         case .chooseOption(let id, let index): return ["type": "chooseOption", "id": id, "index": index]

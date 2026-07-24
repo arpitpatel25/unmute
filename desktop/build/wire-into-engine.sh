@@ -538,7 +538,7 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
     # pill at the top would collide with the notch — they'd fight for the same
     # strip. workArea already excludes the Dock, so anchoring to its bottom edge
     # floats the pill just above the Dock without ever interfering with it.
-    sed -i.bak 's|^  const y = workArea.y + 6.*$|  const y = workArea.y + workArea.height - HUD_HEIGHT - 10 // patched: bottom-anchored, Wispr-style — workArea adapts to Dock/fullscreen, so the pill hugs the usable bottom|' "$wm"
+    sed -i.bak 's|^  const y = workArea.y + 6.*$|  const y = workArea.y + workArea.height - HUD_HEIGHT + 16 // patched: bottom-anchored, Wispr-style — the renderer scales the pill to 0.62 top-anchored, so the window dips 16px lower to keep the pill hugging the usable bottom|' "$wm"
     rm -f "$wm.bak"
     if ! grep -q 'patched: bottom-anchored' "$wm"; then
       log "WARN: windowManager.ts HUD bottom-anchor patch did not apply — dictation pill will collide with the notch"

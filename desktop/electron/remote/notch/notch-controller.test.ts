@@ -163,6 +163,20 @@ test('next = skip requeues front to the back', () => {
   assert.equal(h.client.last('showTask')!.task.id, first) // came back around
 })
 
+test('prev cranks backward (reverse rotation of next)', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'ready', name: 'A' }))
+  put(h, makeTask({ id: 'b', state: 'needs-user', name: 'B', question: { text: 'q' } }))
+  put(h, makeTask({ id: 'c', state: 'ready', name: 'C' }))
+  h.client.fire({ type: 'tap' })
+  const first = h.client.last('showTask')!.task.id
+  h.client.fire({ type: 'next' })
+  const second = h.client.last('showTask')!.task.id
+  assert.notEqual(second, first)
+  h.client.fire({ type: 'prev' })
+  assert.equal(h.client.last('showTask')!.task.id, first) // back where we were
+})
+
 test('chooseOption answers with the choice label and advances', () => {
   const h = setup()
   put(h, makeTask({ id: 't1', state: 'needs-user', question: { text: 'q', choices: ['Yes', 'No'] } }))

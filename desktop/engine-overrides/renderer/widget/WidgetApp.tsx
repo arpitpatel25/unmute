@@ -968,7 +968,10 @@ export default function WidgetApp() {
     <div
       ref={rootRef}
       className="w-full h-full flex flex-col items-center"
-      style={{ background: 'transparent', paddingTop: '8px' }}
+      // scale(0.62): the pill family shrunk wholesale ~40% (field feedback
+      // 2026-07-24 — "too thick"). One transform keeps every element/gap in
+      // proportion; hit-testing follows the scaled rects automatically.
+      style={{ background: 'transparent', paddingTop: '8px', transform: 'scale(0.62)', transformOrigin: 'top center' }}
     >
       {/* Remote capture → circular badge to the LEFT of the pill, with a gap.
           Dictation → pill only. */}

@@ -15,23 +15,30 @@ struct TaskSurfaceView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let t {
                 header(t)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if t.status == .needsUser, let q = t.question {
-                            QuestionBlock(model: model, taskId: t.id, question: q)
-                        } else if let summary = summaryLine(t) {
-                            Text(summary)
-                                .font(.system(size: 14.5)).foregroundColor(Theme.textDim)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        if t.status == .done || t.status == .failed { DeadPanel(model: model, t: t) }
-                        if model.taskTerminalOpen && t.alive {
-                            TerminalPanel(model: model, taskId: t.id,
-                                          tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
-                                .frame(height: 300)
-                        }
-                    }
-                    .padding(.top, 12)
+                if t.status == .needsUser, let q = t.question {
+                    QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 12)
+                } else if let summary = summaryLine(t) {
+                    Text(summary)
+                        .font(.system(size: 14.5)).foregroundColor(Theme.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 12)
+                }
+                if t.status == .done || t.status == .failed {
+                    ScrollView { DeadPanel(model: model, t: t) }
+                        .frame(maxHeight: 280)
+                        .padding(.top, 12)
+                }
+                if model.taskTerminalOpen && t.alive {
+                    // The terminal owns EVERYTHING left down to the action row
+                    // (field feedback: never a fixed band with dead space below).
+                    // .id ties the PTY stream to THIS task across Next/Prev.
+                    TerminalPanel(model: model, taskId: t.id,
+                                  tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
+                        .id(t.id)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 10)
+                } else {
+                    Spacer(minLength: 0)
                 }
                 actions(t)
                 footer(t)
@@ -95,6 +102,7 @@ struct TaskSurfaceView: View {
                 Text("mute").font(.system(size: 12.5)).foregroundColor(Theme.textFaint)
             }.buttonStyle(.plain).help("don't show again — returns when it changes or you open it")
             Spacer(minLength: 0)
+            ActButton(label: "← Prev") { model.emit(.prev) }
             ActButton(label: "Next →", go: true) { model.emit(.next) }
         }
         .padding(.top, 10)

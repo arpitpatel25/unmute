@@ -209,6 +209,7 @@ export class NotchController {
     on('collapsed', () => { this.engaged = 'none'; this.setFocus(null); this.reconcile() })
     on('openDashboard', () => this.openCockpit())
     on('next', () => this.onNext())
+    on('prev', () => this.onPrev())
     on('focusTask', (e) => this.onFocusTask((e as { id: string }).id))
     on('closeStage', () => { this.setFocus(null); this.reconcile() })
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
@@ -373,8 +374,18 @@ export class NotchController {
       this.queue.push(first) // skip = requeue to the back
     }
     const front = this.front()
-    if (this.engaged === 'cockpit' && front) this.setFocus(front.id)
-    else if (front) this.setFocus(front.id)
+    if (front) this.setFocus(front.id)
+    this.reconcile()
+  }
+
+  /** Crank backward: the queue rotates the other way (last → front). */
+  private onPrev(): void {
+    if (this.queue.length > 1) {
+      const last = this.queue.pop()!
+      this.queue.unshift(last)
+    }
+    const front = this.front()
+    if (front) this.setFocus(front.id)
     this.reconcile()
   }
 

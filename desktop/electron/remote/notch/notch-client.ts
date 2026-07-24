@@ -124,6 +124,7 @@ export type NotchEvent =
   | { type: 'collapsed' }
   | { type: 'openDashboard' }
   | { type: 'next' }
+  | { type: 'prev' }
   | { type: 'focusTask'; id: string }
   | { type: 'closeStage' }
   | { type: 'chooseOption'; id: string; index: number }

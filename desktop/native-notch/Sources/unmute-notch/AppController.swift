@@ -115,7 +115,9 @@ final class AppController: NSObject {
     private func applyState(_ state: NotchState) {
         let up = rung(state) >= rung(model.state)
         if state != .cockpit { model.focusedId = nil; model.stageTask = nil }
-        if state != .task { model.taskTerminalOpen = false }
+        // Terminal is OPEN BY DEFAULT on the task surface ("hide terminal" is
+        // the choice); reset when leaving so re-entry starts open again.
+        model.taskTerminalOpen = (state == .task)
         withAnimation(up ? Theme.morph : Theme.collapse) { model.state = state }
         window.allowsKey = (state == .task || state == .cockpit)
         let f = frame(for: state)
