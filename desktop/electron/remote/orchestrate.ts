@@ -10,7 +10,7 @@
 // During build-out it's reachable via a toggle shortcut (⌘⇧O); a proper entry
 // point (menu / pill affordance) comes once the surface settles.
 
-import { BrowserWindow, globalShortcut } from 'electron'
+import { BrowserWindow, globalShortcut, screen } from 'electron'
 import { join } from 'node:path'
 import { createLogger } from './log'
 
@@ -21,9 +21,18 @@ let wallWindow: BrowserWindow | null = null
 export function createOrchestrateWindow(): BrowserWindow {
   if (wallWindow && !wallWindow.isDestroyed()) return wallWindow
 
+  // The cockpit is the notch's FULL EXPAND (spec 2026-07-24 §3 state 4): it
+  // hangs from the top-center of the active display at ~70% — big enough to
+  // survey everything, deliberately not full-screen (the user can still zoom).
+  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const width = Math.round(Math.min(Math.max(workArea.width * 0.7, 900), workArea.width - 40))
+  const height = Math.round(Math.min(Math.max(workArea.height * 0.72, 560), workArea.height - 20))
+
   wallWindow = new BrowserWindow({
-    width: 1320,
-    height: 860,
+    width,
+    height,
+    x: workArea.x + Math.round((workArea.width - width) / 2), // centered…
+    y: workArea.y,                                            // …hanging from the top
     minWidth: 720,
     minHeight: 480,
     show: false,
