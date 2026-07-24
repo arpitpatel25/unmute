@@ -14,7 +14,7 @@ const log = createLogger('notch-client')
 
 // --- Command types (main → helper) ------------------------------------------
 
-export type NotchStateName = 'idle' | 'peek' | 'panel'
+export type NotchStateName = 'dormant' | 'idle' | 'active' | 'attention' | 'task' | 'cockpit'
 export type PanelTaskState = 'needs-user' | 'stuck' | 'errored' | 'ready'
 
 export interface PanelTaskPayload {
@@ -26,9 +26,25 @@ export interface PanelTaskPayload {
   terminalHint?: 'open' | 'collapsed'
 }
 
+export interface CockpitTaskPayload {
+  id: string
+  title: string
+  subtitle?: string
+  status: string // running | blocked | needs-user | ready | done | failed
+  path?: string
+  age?: string
+}
+export interface CockpitPayload {
+  tasks: CockpitTaskPayload[]
+  queue: string[]
+  projects: string[]
+  suggestions: string[]
+}
+
 export type NotchCommand =
   | { type: 'setState'; state: NotchStateName; attention: number; working: number }
   | { type: 'showTask'; task: PanelTaskPayload }
+  | { type: 'setCockpit'; data: CockpitPayload }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
   | { type: 'collapse' }
   | { type: 'quit' }

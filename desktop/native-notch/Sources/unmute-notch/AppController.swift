@@ -28,6 +28,29 @@ final class AppController {
         ) { [weak self] _ in self?.recomputeGeometry("screen-params-changed") }
 
         NotchLog.log("presented at dormant: window=\(NotchLog.rect(window.frame)) visible=\(window.isVisible)")
+
+        // Escape steps the surface DOWN (spec 2026-07-24) — the only way out of
+        // task/cockpit, since there's no window chrome. Global monitor catches it
+        // even though the panel is non-activating; local monitor swallows it when
+        // we're key (e.g. a focused field). Only acts while engaged, so Esc in
+        // another app never disturbs the resting surface.
+        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            if e.keyCode == 53 { self?.stepDown() }
+        }
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            if e.keyCode == 53, let self, self.isEngaged { self.stepDown(); return nil }
+            return e
+        }
+    }
+
+    private var isEngaged: Bool { model.state == .task || model.state == .cockpit || model.state == .attention }
+
+    /// Esc: emit a step-down so Electron collapses the surface one level toward
+    /// its calm baseline.
+    private func stepDown() {
+        guard isEngaged else { return }
+        NotchLog.log("Esc → stepDown from \(model.state.rawValue)")
+        model.emit(.collapsed)
     }
 
     func handle(_ command: Command) {

@@ -347,6 +347,15 @@ function partitionRoutable(now: number): { targetable: RoutableTask[]; coldSessi
 let tmuxBin: string | null = null
 const tmuxConfPath = join(homedir(), '.unmute', 'remote', 'tmux.conf')
 
+/** Compact "22h" / "3m" / "0:42" age from a timestamp, for cockpit cards. */
+function relativeAge(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000))
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  if (s < 86400) return `${Math.floor(s / 3600)}h`
+  return `${Math.floor(s / 86400)}d`
+}
+
 /** Open a task's tmux session in the user's terminal app (iTerm if present, else
  *  Terminal). It ATTACHES to the running session — same claude, not a new one. */
 function openInTerminal(taskId: string): boolean {
@@ -1552,9 +1561,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       notchController = new NotchController(notchClient, mgr, {
         answer: (id, text) => { if (text != null) mgr.answer(id, text) },
         focus: (id) => { orchestrateFocusId = id },
-        showCockpit: () => {
-          try { openOrchestrateWindow() } catch (e) { log.warn('notch open cockpit failed', { error: (e as Error).message }) }
-        },
         countWorking: () => mgr.list().filter((t) => t.state === 'processing').length,
         getTask: (id) => {
           const t = mgr.get(id)
@@ -1569,6 +1575,23 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
             result: t.result?.summary,
             error: t.error?.reason,
           }
+        },
+        // The cockpit renders NATIVELY inside the notch (spec 2026-07-24) — no
+        // separate Electron window. Build its dataset from the live task set.
+        buildCockpit: () => {
+          const all = mgr.list()
+          const yourMove = new Set(['needs-user', 'ready', 'failed', 'stuck'])
+          const tasks = all.map((t) => ({
+            id: t.id,
+            title: t.name ?? t.intent.slice(0, 60),
+            subtitle: t.result?.summary ?? t.error?.reason ?? t.step,
+            status: t.state,
+            path: t.cwd?.replace(homedir(), '~'),
+            age: relativeAge(t.updatedAt),
+          }))
+          const queue = all.filter((t) => yourMove.has(t.state)).map((t) => t.name ?? t.intent.slice(0, 40))
+          const projects = Array.from(new Set(all.map((t) => t.cwd?.replace(homedir(), '~')).filter((p): p is string => !!p)))
+          return { tasks, queue, projects, suggestions: [] }
         },
       })
       log.info('notch shell started', { bin: notchBin })

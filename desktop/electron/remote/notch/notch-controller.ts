@@ -6,7 +6,7 @@
 // pure orchestration over injected deps so it unit-tests without a real
 // TaskManager, window, or child process.
 import type { EventEmitter } from 'node:events'
-import type { NotchCommand, NotchEvent, PanelTaskPayload, PanelTaskState } from './notch-client'
+import type { NotchCommand, NotchEvent, PanelTaskPayload, PanelTaskState, CockpitPayload } from './notch-client'
 import { createLogger } from '../log'
 
 const log = createLogger('notch-controller')
@@ -35,12 +35,12 @@ export interface NotchControllerDeps {
   answer(taskId: string, text?: string): void
   /** Bring the fronted task into focus so voice routes to it (consent model). */
   focus(taskId: string): void
-  /** Open the full Electron cockpit window. */
-  showCockpit(): void
-  /** Current our-move count (drives the idle glow). */
+  /** Current our-move count (drives the active state). */
   countWorking(): number
   /** Resolve a live task by id (null once removed/gone). */
   getTask(id: string): TaskLite | undefined
+  /** Build the full cockpit dataset (rendered natively inside the notch). */
+  buildCockpit(): CockpitPayload
 }
 
 /** Minimal client surface the controller drives (real NotchClient satisfies it). */
@@ -64,11 +64,15 @@ function truncate(s: string, n = 48): string {
   return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…'
 }
 
+/** How far the user has manually engaged the surface (vs. the auto baseline). */
+type Engaged = 'none' | 'task' | 'cockpit'
+
 export class NotchController {
   /** Ordered your-move queue (front = queue[0]). Skip rotates front → back. */
   private queue: string[] = []
-  /** Has the user tapped into the full panel (vs. just peeking)? */
-  private panelOpen = false
+  /** What the user has opened by gesture. Auto states (dormant/active/attention)
+   *  only show when engaged==='none'; engaging holds task/cockpit until dismissed. */
+  private engaged: Engaged = 'none'
 
   constructor(
     private client: NotchClientLike,
@@ -88,7 +92,7 @@ export class NotchController {
     this.client.on('tap',           () => this.onTap())
     this.client.on('next',          () => this.onNext())
     this.client.on('chooseOption',  (e) => this.onChoose((e as { index: number }).index))
-    this.client.on('openDashboard', () => this.deps.showCockpit())
+    this.client.on('openDashboard', () => this.onOpenDashboard())
     this.client.on('collapsed',     () => this.onCollapsed())
   }
 
@@ -106,7 +110,8 @@ export class NotchController {
   private dequeue(id: string): void {
     if (!this.queue.includes(id)) return
     this.queue = this.queue.filter((x) => x !== id)
-    if (this.queue.length === 0) this.panelOpen = false
+    // Nothing left to attend and we were in the task view → fall back to auto.
+    if (this.queue.length === 0 && this.engaged === 'task') this.engaged = 'none'
     this.reconcile()
   }
 
@@ -122,25 +127,33 @@ export class NotchController {
 
   // --- notch state derivation ------------------------------------------------
 
-  /** Recompute the notch's state + fronted task and push it to the helper. */
+  /** Recompute the notch's state + payloads and push to the helper. The rung is
+   *  the max of the auto baseline (from task data) and what the user engaged. */
   private reconcile(): void {
     const front = this.front()
     const attention = this.queue.length
     const working = this.deps.countWorking()
 
-    if (!front) {
-      this.panelOpen = false
-      this.client.send({ type: 'setState', state: 'idle', attention: 0, working })
+    // Cockpit is a deliberate, user-held state — survives task changes.
+    if (this.engaged === 'cockpit') {
+      this.client.send({ type: 'setCockpit', data: this.deps.buildCockpit() })
+      this.client.send({ type: 'setState', state: 'cockpit', attention, working })
       return
     }
 
-    this.client.send({ type: 'showTask', task: this.toPayload(front) })
-    this.client.send({
-      type: 'setState',
-      state: this.panelOpen ? 'panel' : 'peek',
-      attention,
-      working,
-    })
+    if (front) {
+      this.client.send({ type: 'showTask', task: this.toPayload(front) })
+      this.client.send({
+        type: 'setState',
+        state: this.engaged === 'task' ? 'task' : 'attention',
+        attention, working,
+      })
+      return
+    }
+
+    // No your-move task: calm baseline. Active if anything's running, else rest.
+    this.engaged = 'none'
+    this.client.send({ type: 'setState', state: working > 0 ? 'active' : 'dormant', attention: 0, working })
   }
 
   private toPayload(task: TaskLite): PanelTaskPayload {
@@ -161,10 +174,19 @@ export class NotchController {
   // --- notch → runtime -------------------------------------------------------
 
   private onTap(): void {
-    const front = this.front()
-    if (!front) return
-    this.panelOpen = true
-    this.deps.focus(front.id) // voice now routes to the fronted task
+    // Tap on attention opens the task surface; tap while idle/active opens the
+    // cockpit (nothing needs you → show everything).
+    if (this.front()) {
+      this.engaged = 'task'
+      this.deps.focus(this.front()!.id) // voice now routes to the fronted task
+    } else {
+      this.engaged = 'cockpit'
+    }
+    this.reconcile()
+  }
+
+  private onOpenDashboard(): void {
+    this.engaged = 'cockpit'
     this.reconcile()
   }
 
@@ -187,8 +209,8 @@ export class NotchController {
   }
 
   private onCollapsed(): void {
-    this.panelOpen = false
-    this.reconcile() // → peek if items remain, else idle
+    this.engaged = 'none'
+    this.reconcile() // → attention if items remain, else active/dormant
   }
 
   /** For wiring/telemetry: current queue depth. */
