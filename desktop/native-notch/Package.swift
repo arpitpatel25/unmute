@@ -1,21 +1,30 @@
 // swift-tools-version:5.9
 import PackageDescription
 
-// unmute-notch — the native macOS notch shell for Unmute.
+// unmute-notch — the native macOS notch surface for Unmute.
 //
 // A standalone SwiftUI/AppKit executable that Electron main spawns and drives
-// over line-delimited JSON on stdin/stdout (see IPC.swift). It owns a
-// non-activating NSPanel pinned at the notch and renders the 4-state shell
-// (idle / peek / attention panel), never stealing focus. The full cockpit stays
-// an Electron window — this helper only asks Electron to show it.
+// over line-delimited JSON on stdin/stdout (IPC.swift). One always-present,
+// non-activating NSPanel morphs through six states (dormant → cockpit); the
+// full cockpit renders natively inside it — no separate window.
+//
+// SwiftTerm provides the real terminal emulator (the live PTY view) — the same
+// class of component xterm.js was in the web cockpit. Pinned to a release range
+// for reproducible builds.
 let package = Package(
     name: "unmute-notch",
     platforms: [
         .macOS(.v13)
     ],
+    dependencies: [
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0")
+    ],
     targets: [
         .executableTarget(
             name: "unmute-notch",
+            dependencies: [
+                .product(name: "SwiftTerm", package: "SwiftTerm")
+            ],
             path: "Sources/unmute-notch"
         )
     ]

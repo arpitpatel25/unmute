@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import {
-  NotchController, classify,
-  type TaskLite, type NotchClientLike, type NotchControllerDeps,
+  NotchController, classify, relativeAge,
+  type TaskLite, type NotchClientLike, type NotchControllerDeps, type ProposalLite,
 } from './notch-controller'
 import type { NotchCommand, NotchEvent, CockpitPayload } from './notch-client'
 
@@ -11,8 +11,11 @@ class FakeClient extends EventEmitter implements NotchClientLike {
   sent: NotchCommand[] = []
   send(cmd: NotchCommand): void { this.sent.push(cmd) }
   fire(evt: NotchEvent): void { this.emit(evt.type, evt) }
-  last(type: NotchCommand['type']): NotchCommand | undefined {
-    return [...this.sent].reverse().find((c) => c.type === type)
+  last<T extends NotchCommand['type']>(type: T): Extract<NotchCommand, { type: T }> | undefined {
+    return [...this.sent].reverse().find((c) => c.type === type) as Extract<NotchCommand, { type: T }> | undefined
+  }
+  ofType<T extends NotchCommand['type']>(type: T): Array<Extract<NotchCommand, { type: T }>> {
+    return this.sent.filter((c) => c.type === type) as Array<Extract<NotchCommand, { type: T }>>
   }
 }
 
@@ -21,35 +24,81 @@ interface Harness {
   client: FakeClient
   controller: NotchController
   tasks: Map<string, TaskLite>
-  calls: { answer: Array<[string, string?]>; focus: string[]; cockpit: number }
-  working: { n: number }
+  calls: Record<string, unknown[][]>
+  flush(): void
 }
 
-const EMPTY_COCKPIT: CockpitPayload = { tasks: [], queue: [], projects: [], suggestions: [] }
+function makeTask(partial: Partial<TaskLite> & { id: string }): TaskLite {
+  return {
+    intent: 'do the thing', state: 'processing', kind: 'oneoff', alive: true,
+    createdAt: Date.now() - 60_000, updatedAt: Date.now(), ...partial,
+  }
+}
 
-function setup(): Harness {
+function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
   const events = new EventEmitter()
   const client = new FakeClient()
   const tasks = new Map<string, TaskLite>()
-  const calls = { answer: [] as Array<[string, string?]>, focus: [] as string[], cockpit: 0 }
-  const working = { n: 0 }
+  const calls: Record<string, unknown[][]> = {}
+  const rec = (name: string) => (...args: unknown[]) => { (calls[name] ??= []).push(args) }
+  let doorbell = true
+  let lastSeen = Date.now()
   const deps: NotchControllerDeps = {
-    answer: (id, text) => calls.answer.push([id, text]),
-    focus: (id) => calls.focus.push(id),
-    countWorking: () => working.n,
+    listTasks: () => [...tasks.values()],
     getTask: (id) => tasks.get(id),
-    buildCockpit: () => { calls.cockpit++; return EMPTY_COCKPIT },
+    answer: rec('answer'),
+    kill: rec('kill'),
+    remove: rec('remove'),
+    killAll: rec('killAll'),
+    resume: (id) => { rec('resume')(id); return true },
+    rerun: rec('rerun'),
+    setKind: rec('setKind'),
+    setName: rec('setName'),
+    setShelved: rec('setShelved'),
+    setNote: rec('setNote'),
+    focus: rec('focus'),
+    getOutput: (id) => `replay:${id}`,
+    sendInput: rec('sendInput'),
+    resizeTerm: rec('resizeTerm'),
+    openInTerminal: rec('openInTerminal'),
+    tmuxAvailable: () => true,
+    listSkills: async () => [
+      { name: 'gmail-sweep', pinned: true, runs: 4, origin: 'unmute' as const },
+      { name: 'pr-test-cases', pinned: false, runs: 12 },
+    ],
+    listProjects: async () => [{ name: 'unmute-cloud', path: '/tools/unmute-cloud' }],
+    pinSkill: rec('pinSkill'),
+    tapSkill: rec('tapSkill'),
+    openProject: rec('openProject'),
+    listProposals: async () => opts.proposals ?? [],
+    getProposal: async (id) => (opts.proposals ?? []).find((p) => p.id === id) ?? null,
+    acceptProposal: async (id) => { rec('acceptProposal')(id); return { ok: true } },
+    rejectProposal: rec('rejectProposal'),
+    converseStart: async (id, onData) => { rec('converseStart')(id); onData('hello from cc\n'); return true },
+    converseWrite: rec('converseWrite'),
+    converseStop: rec('converseStop'),
+    openArtifact: rec('openArtifact'),
+    acceptRouteOffer: (id) => { rec('acceptRouteOffer')(id); return true },
+    getDoorbell: () => doorbell,
+    setDoorbell: (on) => { doorbell = on },
+    getStagedCount: () => 2,
+    clearStaged: rec('clearStaged'),
+    getLastSeen: () => lastSeen,
+    setLastSeen: (ms) => { lastSeen = ms },
   }
   const controller = new NotchController(client, events, deps)
-  return { events, client, controller, tasks, calls, working }
+  // reconcile is debounced 80ms — tests force it synchronously by re-firing.
+  const flush = () => { (controller as unknown as { reconcile(): void }).reconcile() }
+  return { events, client, controller, tasks, calls, flush }
 }
 
 function put(h: Harness, t: TaskLite): void {
   h.tasks.set(t.id, t)
-  h.events.emit(t.state === 'needs-user' ? 'needs-user' : t.state, t)
+  h.events.emit('updated', t)
+  h.flush()
 }
-const setState = (c: FakeClient) => c.last('setState') as Extract<NotchCommand, { type: 'setState' }>
-const showTask = (c: FakeClient) => c.last('showTask') as Extract<NotchCommand, { type: 'showTask' }>
+
+// ── basics ──────────────────────────────────────────────────────────────────
 
 test('classify maps only your-move states', () => {
   assert.equal(classify('needs-user'), 'needs-user')
@@ -60,92 +109,238 @@ test('classify maps only your-move states', () => {
   assert.equal(classify('done'), null)
 })
 
-test('a your-move task surfaces as attention with its payload', () => {
-  const h = setup()
-  put(h, { id: 't1', intent: 'run the RCA on prod', state: 'needs-user', question: 'which service?' })
-  assert.equal(showTask(h.client).task.id, 't1')
-  assert.equal(showTask(h.client).task.summary, 'which service?')
-  assert.equal(setState(h.client).state, 'attention')
-  assert.equal(setState(h.client).attention, 1)
+test('relativeAge formats compactly', () => {
+  const now = 1_000_000_000_000
+  assert.equal(relativeAge(now - 5_000, now), '5s')
+  assert.equal(relativeAge(now - 120_000, now), '2m')
+  assert.equal(relativeAge(now - 7_200_000, now), '2h')
 })
 
-test('tapping attention opens the task surface and focuses the front task', () => {
+test('your-move task → attention with full TaskDetail', () => {
   const h = setup()
-  put(h, { id: 't1', intent: 'a', state: 'ready' })
-  h.client.fire({ type: 'tap' })
-  assert.deepEqual(h.calls.focus, ['t1'])
-  assert.equal(setState(h.client).state, 'task')
+  put(h, makeTask({ id: 't1', state: 'needs-user', name: 'RCA', question: { text: 'which service?', choices: ['api', 'billing'] } }))
+  const show = h.client.last('showTask')!
+  assert.equal(show.task.id, 't1')
+  assert.equal(show.task.title, 'RCA')
+  assert.equal(show.task.question?.text, 'which service?')
+  assert.equal(h.client.last('setState')!.state, 'attention')
 })
 
-test('tapping with nothing to attend opens the cockpit', () => {
+test('working baseline is active; empty is dormant', () => {
   const h = setup()
-  h.working.n = 1
-  h.tasks.set('w', { id: 'w', intent: 'x', state: 'processing' })
-  h.events.emit('updated', h.tasks.get('w')) // baseline = active
-  h.client.fire({ type: 'tap' })
-  assert.equal(setState(h.client).state, 'cockpit')
-  assert.ok(h.calls.cockpit >= 1)
+  put(h, makeTask({ id: 'w', state: 'processing' }))
+  assert.equal(h.client.last('setState')!.state, 'active')
+  h.tasks.delete('w')
+  h.events.emit('removed', { id: 'w' }); h.flush()
+  assert.equal(h.client.last('setState')!.state, 'dormant')
 })
 
-test('next requeues the front task to the back (skip)', () => {
+// ── gestures ────────────────────────────────────────────────────────────────
+
+test('tap with a front task → task surface + focus; tap idle → cockpit', () => {
   const h = setup()
-  put(h, { id: 'a', intent: 'a', state: 'ready' })
-  put(h, { id: 'b', intent: 'b', state: 'needs-user' })
+  put(h, makeTask({ id: 't1', state: 'ready' }))
   h.client.fire({ type: 'tap' })
-  assert.equal(showTask(h.client).task.id, 'a')
+  assert.equal(h.client.last('setState')!.state, 'task')
+  assert.deepEqual(h.calls.focus?.at(-1), ['t1'])
+
+  const h2 = setup()
+  h2.client.fire({ type: 'tap' })
+  assert.equal(h2.client.last('setState')!.state, 'cockpit')
+  assert.ok(h2.client.last('setCockpit'))
+})
+
+test('next = skip requeues front to the back', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'ready', name: 'A' }))
+  put(h, makeTask({ id: 'b', state: 'needs-user', name: 'B', question: { text: 'q' } }))
+  h.client.fire({ type: 'tap' })
+  const first = h.client.last('showTask')!.task.id
   h.client.fire({ type: 'next' })
-  assert.equal(showTask(h.client).task.id, 'b')
+  const second = h.client.last('showTask')!.task.id
+  assert.notEqual(first, second)
   h.client.fire({ type: 'next' })
-  assert.equal(showTask(h.client).task.id, 'a')
+  assert.equal(h.client.last('showTask')!.task.id, first) // came back around
 })
 
-test('chooseOption answers the front task with the option label', () => {
+test('chooseOption answers with the choice label and advances', () => {
   const h = setup()
-  put(h, { id: 't1', intent: 'a', state: 'needs-user', options: ['Yes', 'No'] })
-  h.client.fire({ type: 'tap' })
-  h.client.fire({ type: 'chooseOption', index: 1 })
-  assert.deepEqual(h.calls.answer, [['t1', 'No']])
+  put(h, makeTask({ id: 't1', state: 'needs-user', question: { text: 'q', choices: ['Yes', 'No'] } }))
+  h.client.fire({ type: 'chooseOption', id: 't1', index: 1 })
+  assert.deepEqual(h.calls.answer?.[0], ['t1', 'No'])
 })
 
-test('a task leaving your-move drops it; empty + idle ⇒ dormant', () => {
+test('answerText answers free-text', () => {
   const h = setup()
-  put(h, { id: 't1', intent: 'a', state: 'needs-user' })
-  h.tasks.set('t1', { id: 't1', intent: 'a', state: 'processing' })
-  h.events.emit('updated', h.tasks.get('t1'))
-  assert.equal(setState(h.client).state, 'dormant')
+  put(h, makeTask({ id: 't1', state: 'needs-user', question: { text: 'q', kind: 'free_text' } }))
+  h.client.fire({ type: 'answerText', id: 't1', text: 'use the beta env' })
+  assert.deepEqual(h.calls.answer?.[0], ['t1', 'use the beta env'])
 })
 
-test('done removes from the queue (done is not your-move)', () => {
+test('per-task actions pass through to the runtime internals', () => {
   const h = setup()
-  put(h, { id: 't1', intent: 'a', state: 'ready' })
-  h.tasks.set('t1', { id: 't1', intent: 'a', state: 'done' })
-  h.events.emit('done', h.tasks.get('t1'))
-  assert.equal(setState(h.client).state, 'dormant')
+  put(h, makeTask({ id: 't1', state: 'needs-user', question: { text: 'q' }, intent: 'orig intent' }))
+  h.client.fire({ type: 'kill', id: 't1' })
+  h.client.fire({ type: 'resume', id: 't1' })
+  h.client.fire({ type: 'rerun', id: 't1' })
+  h.client.fire({ type: 'remove', id: 't1' })
+  h.client.fire({ type: 'killAll' })
+  h.client.fire({ type: 'setKind', id: 't1', kind: 'session' })
+  h.client.fire({ type: 'shelve', id: 't1', shelved: true })
+  h.client.fire({ type: 'rename', id: 't1', name: 'better name' })
+  h.client.fire({ type: 'setNote', id: 't1', note: 'JIRA-42' })
+  assert.deepEqual(h.calls.kill?.[0], ['t1'])
+  assert.deepEqual(h.calls.resume?.[0], ['t1'])
+  assert.deepEqual(h.calls.rerun?.[0], ['orig intent'])
+  assert.deepEqual(h.calls.remove?.[0], ['t1'])
+  assert.equal(h.calls.killAll?.length, 1)
+  assert.deepEqual(h.calls.setKind?.[0], ['t1', 'session'])
+  assert.deepEqual(h.calls.setShelved?.[0], ['t1', true])
+  assert.deepEqual(h.calls.setName?.[0], ['t1', 'better name'])
+  assert.deepEqual(h.calls.setNote?.[0], ['t1', 'JIRA-42'])
 })
 
-test('openDashboard shows the cockpit with a dataset', () => {
+// ── terminal streaming ──────────────────────────────────────────────────────
+
+test('termOpen replays buffered output and streams live chunks; close stops', () => {
+  const h = setup()
+  put(h, makeTask({ id: 't1', state: 'processing' }))
+  h.client.fire({ type: 'termOpen', id: 't1' })
+  const replay = h.client.ofType('termData')[0]
+  assert.equal(Buffer.from(replay.data, 'base64').toString('utf8'), 'replay:t1')
+
+  h.events.emit('output', { taskId: 't1', chunk: 'live!' })
+  const live = h.client.ofType('termData').at(-1)!
+  assert.equal(Buffer.from(live.data, 'base64').toString('utf8'), 'live!')
+
+  h.events.emit('output', { taskId: 'other', chunk: 'noise' })
+  assert.equal(h.client.ofType('termData').length, 2) // filtered by open set
+
+  h.client.fire({ type: 'termClose', id: 't1' })
+  h.events.emit('output', { taskId: 't1', chunk: 'after-close' })
+  assert.equal(h.client.ofType('termData').length, 2)
+})
+
+test('termInput decodes base64 to PTY stdin; termResize passes through', () => {
+  const h = setup()
+  h.client.fire({ type: 'termInput', id: 't1', data: Buffer.from('ls\r').toString('base64') })
+  assert.deepEqual(h.calls.sendInput?.[0], ['t1', 'ls\r'])
+  h.client.fire({ type: 'termResize', id: 't1', cols: 120, rows: 34 })
+  assert.deepEqual(h.calls.resizeTerm?.[0], ['t1', 120, 34])
+})
+
+// ── skills / rails ──────────────────────────────────────────────────────────
+
+test('tapSkill without a focused live task → toast guard; with one → types', () => {
+  const h = setup()
+  h.client.fire({ type: 'tapSkill', name: 'gmail-sweep' })
+  assert.ok(h.client.last('toast')!.text.includes('focus a live task'))
+  put(h, makeTask({ id: 't1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'focusTask', id: 't1' })
+  h.client.fire({ type: 'tapSkill', name: 'gmail-sweep' })
+  assert.deepEqual(h.calls.tapSkill?.[0], ['t1', 'gmail-sweep'])
+})
+
+test('openDashboard builds the full cockpit payload', async () => {
+  const h = setup()
+  const old = Date.now() - 30 * 60 * 1000
+  put(h, makeTask({ id: 's1', state: 'processing', kind: 'session', name: 'Notch UI', group: 'unmute', cwd: `${process.env.HOME}/tools/x` }))
+  put(h, makeTask({ id: 'o1', state: 'done', kind: 'oneoff', name: 'Old done', updatedAt: old, alive: false }))
+  put(h, makeTask({ id: 'sh1', state: 'ready', kind: 'session', name: 'Shelved thing', shelved: true }))
+  h.client.fire({ type: 'openDashboard' })
+  await new Promise((r) => setTimeout(r, 10)) // rails are async
+  h.flush()
+  const cp: CockpitPayload = h.client.last('setCockpit')!.data
+  // groups: named first, shelved excluded, faded done excluded
+  assert.ok(cp.groups.some((g) => g.name === 'unmute' && g.cards.some((c) => c.id === 's1')))
+  assert.ok(!cp.groups.flatMap((g) => g.cards).some((c) => c.id === 'o1')) // done >15m → faded
+  assert.ok(!cp.groups.flatMap((g) => g.cards).some((c) => c.id === 'sh1'))
+  assert.deepEqual(cp.shelf, [{ id: 'sh1', name: 'Shelved thing' }])
+  // rails
+  assert.equal(cp.skills.length, 1)
+  assert.equal(cp.unmuteSkills.length, 1)
+  assert.equal(cp.projects[0].name, 'unmute-cloud')
+  assert.equal(cp.stagedCount, 2)
+  assert.equal(cp.doorbell, true)
+  assert.equal(cp.tmuxAvailable, true)
+  // queue: only your-move, unshelved
+  assert.ok(!cp.queue.some((q) => q.id === 'sh1'))
+})
+
+test('clearFinished hides settled one-offs from the rail', async () => {
+  const h = setup()
+  put(h, makeTask({ id: 'o1', state: 'done', kind: 'oneoff', name: 'Done thing', alive: false }))
+  h.client.fire({ type: 'openDashboard' })
+  await new Promise((r) => setTimeout(r, 10)); h.flush()
+  assert.ok(h.client.last('setCockpit')!.data.oneoffs.some((o) => o.id === 'o1'))
+  h.client.fire({ type: 'clearFinished' })
+  assert.ok(!h.client.last('setCockpit')!.data.oneoffs.some((o) => o.id === 'o1'))
+})
+
+test('bellToggle flips the doorbell in the payload', async () => {
   const h = setup()
   h.client.fire({ type: 'openDashboard' })
-  assert.equal(setState(h.client).state, 'cockpit')
-  assert.ok(h.client.last('setCockpit'))
-  assert.ok(h.calls.cockpit >= 1)
+  await new Promise((r) => setTimeout(r, 10)); h.flush()
+  assert.equal(h.client.last('setCockpit')!.data.doorbell, true)
+  h.client.fire({ type: 'bellToggle' })
+  assert.equal(h.client.last('setCockpit')!.data.doorbell, false)
 })
 
-test('collapsed returns to attention while items remain', () => {
-  const h = setup()
-  put(h, { id: 't1', intent: 'a', state: 'ready' })
-  h.client.fire({ type: 'tap' })
-  assert.equal(setState(h.client).state, 'task')
-  h.client.fire({ type: 'collapsed' })
-  assert.equal(setState(h.client).state, 'attention')
+// ── curator popup ───────────────────────────────────────────────────────────
+
+const PROPOSAL: ProposalLite = {
+  id: 'p1', kind: 'create',
+  draft: { name: 'morning-inbox-sweep', description: 'd', body: '---\nname: x\n---\nbody' },
+  evidence: { occurrences: 3, sessions: [{}, {}, {}], struggle: { wallClockMin: 12 } },
+  rationale: 'You sweep your inboxes every morning.',
+}
+
+test('suggestionOpen maps the proposal; accept calls through + toasts', async () => {
+  const h = setup({ proposals: [PROPOSAL] })
+  h.client.fire({ type: 'suggestionOpen', id: 'p1' })
+  await new Promise((r) => setTimeout(r, 10))
+  const p = h.client.last('proposal')!.data
+  assert.equal(p.kind, 'new')
+  assert.equal(p.name, 'morning-inbox-sweep')
+  assert.ok(p.evidence.includes('seen 3×'))
+  assert.ok(p.evidence.includes('3 sessions'))
+
+  h.client.fire({ type: 'suggestionAccept', id: 'p1' })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(h.calls.acceptProposal?.[0], ['p1'])
+  assert.equal(h.client.last('toast')!.text, 'skill saved')
 })
 
-test('active reflects the working count when nothing needs you', () => {
+test('converseWrite lazily starts the review session and streams output', async () => {
+  const h = setup({ proposals: [PROPOSAL] })
+  h.client.fire({ type: 'converseWrite', id: 'p1', text: 'only the work account' })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(h.calls.converseStart?.[0], ['p1'])
+  assert.deepEqual(h.calls.converseWrite?.[0], ['p1', 'only the work account\r'])
+  assert.equal(h.client.last('convData')!.text, 'hello from cc\n')
+  // second write reuses the session
+  h.client.fire({ type: 'converseWrite', id: 'p1', text: 'thanks' })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(h.calls.converseStart?.length, 1)
+})
+
+// ── forwarded notifications ─────────────────────────────────────────────────
+
+test('capture phase forwards with the target task name', () => {
   const h = setup()
-  h.working.n = 3
-  h.tasks.set('w', { id: 'w', intent: 'x', state: 'processing' })
-  h.events.emit('updated', h.tasks.get('w'))
-  const s = setState(h.client)
-  assert.equal(s.state, 'active')
-  assert.equal(s.working, 3)
+  put(h, makeTask({ id: 't1', state: 'processing', name: 'RCA' }))
+  h.controller.notifyCapturePhase('listening', 't1')
+  const c = h.client.last('capturePhase')!
+  assert.equal(c.phase, 'listening')
+  assert.equal(c.target, 'RCA')
+})
+
+test('route offer lands in the cockpit payload; accept calls through', async () => {
+  const h = setup()
+  h.client.fire({ type: 'openDashboard' })
+  await new Promise((r) => setTimeout(r, 10))
+  h.controller.notifyRouteOffer({ newTaskId: 'n1', altTaskId: 'a1', altName: 'Pager' })
+  assert.equal(h.client.last('setCockpit')!.data.routeOffer?.altName, 'Pager')
+  h.client.fire({ type: 'offerAccept', newTaskId: 'n1' })
+  assert.deepEqual(h.calls.acceptRouteOffer?.[0], ['n1'])
 })

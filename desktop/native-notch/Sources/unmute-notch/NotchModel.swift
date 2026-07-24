@@ -1,14 +1,52 @@
 import SwiftUI
+import Combine
 
 // Observable state the SwiftUI surface renders. AppController mutates it in
-// response to commands; the view morphs via Theme.morph on change.
+// response to commands; views emit user intents through `emit`.
 final class NotchModel: ObservableObject {
+    // Ladder + counts (pushed by main).
     @Published var state: NotchState = .dormant
-    @Published var attention: Int = 0        // your-move queue depth
-    @Published var working: Int = 0          // our-move count
-    @Published var task: PanelTask? = nil    // the fronted task (task state)
+    @Published var attention: Int = 0
+    @Published var working: Int = 0
+
+    // The fronted task (attention strip + task surface).
+    @Published var task: TaskDetail? = nil
+
+    // The wall.
     @Published var cockpit: CockpitData? = nil
 
-    /// Event sink. Defaults to the real stdout emitter; overridable for tests.
+    // Focused Stage (cockpit view-state lives HERE, on the Swift side, for
+    // snappiness; main is told via focusTask/closeStage so voice routing tracks).
+    @Published var focusedId: String? = nil
+    @Published var stageTask: TaskDetail? = nil
+    @Published var stageFull: Bool = false
+
+    // Skills UI state.
+    @Published var skillsExpanded: Bool = false
+    @Published var hoverSkill: SkillP? = nil
+    @Published var hoverSkillAnchor: CGPoint = .zero
+
+    // Skill-review popup.
+    @Published var proposal: ProposalDetail? = nil
+    @Published var proposalLoadingId: String? = nil
+    @Published var convLog: String = ""            // streamed review-conversation output
+
+    // Terminal visibility (task surface toggle; Stage shows it by default when alive).
+    @Published var taskTerminalOpen: Bool = false
+
+    // Capture / voice chip: "listening → X", "routing…", "landed → X".
+    @Published var capturePhase: String? = nil
+    @Published var captureTarget: String? = nil
+
+    // Transient toast (accept errors etc.).
+    @Published var toast: String? = nil
+
+    /// Event sink. Real emitter by default; overridable for tests/probe.
     var emit: (Event) -> Void = IPC.emit
+
+    // Terminal byte fan-out: TerminalHost subscribes; AppController publishes.
+    let termBytes = PassthroughSubject<(id: String, bytes: [UInt8]), Never>()
+
+    /// The task the Stage/task-surface currently shows (stage wins in cockpit).
+    var frontDetail: TaskDetail? { state == .cockpit ? stageTask : task }
 }

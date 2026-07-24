@@ -1,10 +1,10 @@
 // NotchClient — spawns the native `unmute-notch` helper and speaks to it over
-// line-delimited JSON on stdio (see the plan's IPC protocol).
+// line-delimited JSON on stdio. v2 protocol: full cockpit/overlay data model
+// (see native-notch/Sources/unmute-notch/IPC.swift, the Swift mirror).
 //
 // Mirrors cua/driver-client.ts's spawn discipline: the child is spawned by THIS
-// process (Unmute's signed Electron main), so its window inherits the app's
-// identity and TCC posture. Unlike the cua client this is fire-and-forget
-// (no request/response) — main pushes state, the helper pushes user intents.
+// process (Unmute's signed Electron main) so its window carries the app's
+// identity. Fire-and-forget send(); helper pushes user intents back as events.
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface, type Interface } from 'node:readline'
 import { EventEmitter } from 'node:events'
@@ -12,53 +12,150 @@ import { createLogger } from '../log'
 
 const log = createLogger('notch-client')
 
-// --- Command types (main → helper) ------------------------------------------
+// ── Shared payload types (wire = camelCase JSON) ────────────────────────────
 
 export type NotchStateName = 'dormant' | 'idle' | 'active' | 'attention' | 'task' | 'cockpit'
-export type PanelTaskState = 'needs-user' | 'stuck' | 'errored' | 'ready'
+export type TaskStatusName = 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
 
-export interface PanelTaskPayload {
+export interface ArtifactP { type: 'url' | 'path'; value: string }
+export interface QuestionP { text: string; kind?: string; choices?: string[]; irreversible?: boolean }
+export interface ResultP { summary: string; detail?: string; artifacts?: ArtifactP[] }
+export interface ErrorP { reason: string; detail?: string }
+export interface McpGapP { message: string; fixCommand: string }
+
+export interface TaskDetailP {
   id: string
   title: string
-  state: PanelTaskState
-  summary?: string
-  options?: string[]
-  terminalHint?: 'open' | 'collapsed'
-}
-
-export interface CockpitTaskPayload {
-  id: string
-  title: string
-  subtitle?: string
-  status: string // running | blocked | needs-user | ready | done | failed
-  path?: string
+  status: TaskStatusName
+  kind: 'oneoff' | 'session'
+  alive: boolean
+  shelved?: boolean
+  dir?: string
   age?: string
+  elapsed?: string
+  warmup?: string
+  note?: string
+  activity?: string
+  question?: QuestionP
+  result?: ResultP
+  error?: ErrorP
+  mcpGap?: McpGapP
 }
+
+export interface CardP {
+  id: string
+  title: string
+  activity?: string
+  status: TaskStatusName
+  kind: 'oneoff' | 'session'
+  dir?: string
+  age?: string
+  qpos?: number
+  promoted?: boolean
+  agent?: boolean
+  note?: string
+  alive: boolean
+}
+
+export interface GroupP { name: string; cards: CardP[] }
+export interface QueueItemP { id: string; name: string; status: TaskStatusName }
+export interface OneoffP { id: string; name: string; status: TaskStatusName; age?: string }
+export interface ProjectP { name: string; path: string }
+export interface SuggestionP { id: string; kind: string; name: string }
+export interface SkillItemP {
+  name: string
+  pinned: boolean
+  runs: number
+  lastUsed?: string
+  description?: string
+  origin?: 'unmute'
+}
+export interface ShelfItemP { id: string; name: string }
+export interface RouteOfferP { newTaskId: string; altTaskId: string; altName: string }
+
 export interface CockpitPayload {
-  tasks: CockpitTaskPayload[]
-  queue: string[]
-  projects: string[]
-  suggestions: string[]
+  groups: GroupP[]
+  queue: QueueItemP[]
+  oneoffs: OneoffP[]
+  projects: ProjectP[]
+  suggestions: SuggestionP[]
+  unmuteSkills: SkillItemP[]
+  skills: SkillItemP[]
+  shelf: ShelfItemP[]
+  digest: string | null
+  stagedCount: number
+  doorbell: boolean
+  routeOffer: RouteOfferP | null
+  tmuxAvailable: boolean
 }
+
+export interface ProposalDetailP {
+  id: string
+  kind: string
+  name: string
+  evidence: string
+  summary: string
+  bullets?: string[]
+  body?: string
+  diff?: string
+}
+
+// ── Commands (main → helper) ────────────────────────────────────────────────
 
 export type NotchCommand =
   | { type: 'setState'; state: NotchStateName; attention: number; working: number }
-  | { type: 'showTask'; task: PanelTaskPayload }
+  | { type: 'showTask'; task: TaskDetailP }
+  | { type: 'stageDetail'; task: TaskDetailP }
   | { type: 'setCockpit'; data: CockpitPayload }
+  | { type: 'termData'; id: string; data: string }             // base64
+  | { type: 'proposal'; data: ProposalDetailP }
+  | { type: 'convData'; id: string; text: string }
+  | { type: 'capturePhase'; phase: string; target?: string }
+  | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
   | { type: 'collapse' }
   | { type: 'quit' }
 
-// --- Event types (helper → main) ---------------------------------------------
+// ── Events (helper → main) ──────────────────────────────────────────────────
 
 export type NotchEvent =
   | { type: 'ready' }
   | { type: 'tap' }
-  | { type: 'next' }
-  | { type: 'openDashboard' }
-  | { type: 'chooseOption'; index: number }
-  | { type: 'toggleTerminal'; open: boolean }
   | { type: 'collapsed' }
+  | { type: 'openDashboard' }
+  | { type: 'next' }
+  | { type: 'focusTask'; id: string }
+  | { type: 'closeStage' }
+  | { type: 'chooseOption'; id: string; index: number }
+  | { type: 'answerText'; id: string; text: string }
+  | { type: 'kill'; id: string }
+  | { type: 'resume'; id: string }
+  | { type: 'rerun'; id: string }
+  | { type: 'remove'; id: string }
+  | { type: 'killAll' }
+  | { type: 'setKind'; id: string; kind: 'oneoff' | 'session' }
+  | { type: 'shelve'; id: string; shelved: boolean }
+  | { type: 'rename'; id: string; name: string }
+  | { type: 'setNote'; id: string; note: string }
+  | { type: 'pinSkill'; name: string; pinned: boolean }
+  | { type: 'tapSkill'; name: string }
+  | { type: 'openProject'; path: string; name: string }
+  | { type: 'clearFinished' }
+  | { type: 'digestDismiss' }
+  | { type: 'bellToggle' }
+  | { type: 'offerAccept'; newTaskId: string }
+  | { type: 'clearStaged' }
+  | { type: 'openArtifact'; artifactType: 'url' | 'path'; value: string }
+  | { type: 'openInTerminal'; id: string }
+  | { type: 'termOpen'; id: string }
+  | { type: 'termClose'; id: string }
+  | { type: 'termInput'; id: string; data: string }            // base64
+  | { type: 'termResize'; id: string; cols: number; rows: number }
+  | { type: 'suggestionOpen'; id: string }
+  | { type: 'suggestionAccept'; id: string }
+  | { type: 'suggestionReject'; id: string; reason: string }
+  | { type: 'converseWrite'; id: string; text: string }
+  | { type: 'converseStop'; id: string }
 
 export interface NotchClientOpts {
   binPath: string
@@ -68,8 +165,7 @@ export interface NotchClientOpts {
 }
 
 /**
- * Emits: 'event' (NotchEvent), plus the raw event `type` as its own channel
- * (e.g. .on('tap', ...)). Consumers use whichever is convenient.
+ * Emits: 'event' (NotchEvent), plus the raw event `type` as its own channel.
  */
 export class NotchClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams
@@ -92,7 +188,6 @@ export class NotchClient extends EventEmitter {
       log.warn('notch spawn error', { error: e.message })
       this.opts.onExit?.(null)
     })
-    // A dying child turns a stdin write into an uncaught 'error' without this.
     this.child.stdin.on('error', (e) => log.warn('notch stdin error', { error: e.message }))
   }
 

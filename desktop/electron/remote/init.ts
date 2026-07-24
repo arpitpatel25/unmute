@@ -595,6 +595,7 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
   }
+  notchController?.notifyCapturePhase(phase, taskId ?? null)
 }
 
 /** The one pending "or send it there?" route offer (only the LATEST matters —
@@ -626,6 +627,7 @@ function broadcastStaged(): void {
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length + pendingClipboardCount, paths: stagedAttachments.map((s) => s.path), pending: pendingClipboardCount })
   }
+  notchController?.notifyStagedChanged()
 }
 
 // ── Utterance-scoped screenshot capture (the pill ledger). The dictation window
@@ -1338,6 +1340,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         for (const w of BrowserWindow.getAllWindows()) {
           if (!w.isDestroyed()) w.webContents.send('remote:route-offer', { newTaskId: newId, altTaskId: decision.alternate, altName })
         }
+        notchController?.notifyRouteOffer({ newTaskId: newId, altTaskId: decision.alternate, altName })
         log.event('route-offer-surfaced', { newTaskId: newId, altTaskId: decision.alternate })
       }
       return newId
@@ -1545,54 +1548,116 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // ── Notch shell (native Swift helper) ──
   // The single task/attention surface (spec 2026-07-24). Spawned by THIS signed
   // process (like cua-driver) so its NSPanel carries the app's identity and never
-  // steals focus. Gated by UNMUTE_NOTCH_ENABLED so the legacy overlay can be
-  // toggled back during field testing (default: on).
+  // steals focus. Every dep maps 1:1 onto the SAME internals the legacy IPC
+  // handlers call — the native cockpit cannot drift from the web one. Gated by
+  // UNMUTE_NOTCH_ENABLED so the legacy overlay can be toggled back (default: on).
   if (process.env.UNMUTE_NOTCH_ENABLED !== '0' && manager) {
     const mgr = manager
+    // Digest baseline ("while you were away"): per-run memory, mirrors the old
+    // renderer-localStorage behavior closely enough (30-min threshold).
+    let notchLastSeen = Date.now()
     try {
       const notchBin = process.env.UNMUTE_NOTCH_PATH
         || (app.isPackaged
           ? join(process.resourcesPath, 'unmute-notch', 'unmute-notch')
-          : join(app.getAppPath(), 'native-notch', '.build', 'debug', 'unmute-notch'))
+          : join(app.getAppPath(), 'native-notch', '.build', 'release', 'unmute-notch'))
       notchClient = new NotchClient({
         binPath: notchBin,
         onExit: (code) => log.warn('notch helper exited', { code }),
       })
       notchController = new NotchController(notchClient, mgr, {
-        answer: (id, text) => { if (text != null) mgr.answer(id, text) },
+        // task runtime — same calls as remote:list/answer/kill/remove/resume/…
+        listTasks: () => mgr.list().map(serializeTask),
+        getTask: (id) => { const t = mgr.get(id); return t ? serializeTask(t) : undefined },
+        answer: (id, text) => mgr.answer(id, text),
+        kill: (id) => mgr.kill(id),
+        remove: (id) => mgr.remove(id),
+        killAll: () => mgr.killAll(),
+        resume: (id) => mgr.resume(id),
+        rerun: (intent) => { void dispatchFromCapture(intent) },
+        setKind: (id, kind) => mgr.setKind(id, kind),
+        setName: (id, name) => { if (name.trim()) mgr.setName(id, name.trim().slice(0, 48)) },
+        setShelved: (id, on) => mgr.setShelved(id, on),
+        setNote: (id, note) => mgr.setNote(id, note),
         focus: (id) => { orchestrateFocusId = id },
-        countWorking: () => mgr.list().filter((t) => t.state === 'processing').length,
-        getTask: (id) => {
-          const t = mgr.get(id)
-          if (!t) return undefined
-          return {
-            id: t.id,
-            name: t.name,
-            intent: t.intent,
-            state: t.state,
-            question: t.question?.text,
-            options: t.question?.choices,
-            result: t.result?.summary,
-            error: t.error?.reason,
-          }
-        },
-        // The cockpit renders NATIVELY inside the notch (spec 2026-07-24) — no
-        // separate Electron window. Build its dataset from the live task set.
-        buildCockpit: () => {
-          const all = mgr.list()
-          const yourMove = new Set(['needs-user', 'ready', 'failed', 'stuck'])
-          const tasks = all.map((t) => ({
-            id: t.id,
-            title: t.name ?? t.intent.slice(0, 60),
-            subtitle: t.result?.summary ?? t.error?.reason ?? t.step,
-            status: t.state,
-            path: t.cwd?.replace(homedir(), '~'),
-            age: relativeAge(t.updatedAt),
+        // terminal — same as remote:get-output/terminal-input/terminal-resize
+        getOutput: (id) => mgr.getOutput(id),
+        sendInput: (id, data) => mgr.sendInput(id, data),
+        resizeTerm: (id, cols, rows) => mgr.resize(id, cols, rows),
+        openInTerminal: (id) => { void openInTerminal(id) },
+        tmuxAvailable: () => tmuxBin !== null,
+        // rails — the shared implementations
+        listSkills: () => listSkillsForRail(),
+        listProjects: async () => {
+          const projects = await knownProjects(8).catch(() => [])
+          const home = homedir()
+          const kept = projects.filter((p) => p.path !== home)
+          const counts = new Map<string, number>()
+          for (const p of kept) counts.set(p.name, (counts.get(p.name) ?? 0) + 1)
+          return kept.slice(0, 6).map((p) => ({
+            name: (counts.get(p.name) ?? 0) > 1 ? `${basename(dirname(p.path))}/${p.name}` : p.name,
+            path: p.path,
           }))
-          const queue = all.filter((t) => yourMove.has(t.state)).map((t) => t.name ?? t.intent.slice(0, 40))
-          const projects = Array.from(new Set(all.map((t) => t.cwd?.replace(homedir(), '~')).filter((p): p is string => !!p)))
-          return { tasks, queue, projects, suggestions: [] }
         },
+        pinSkill: (name, on) => {
+          const cur = new Set(settings.get('pinnedSkills') ?? [])
+          if (on) cur.add(name); else cur.delete(name)
+          settings.set('pinnedSkills', [...cur])
+        },
+        tapSkill: (taskId, name) => { mgr.typeUnsubmitted(taskId, `/${name} `) },
+        openProject: (path, name) => {
+          void dispatchFromCapture(`Start a working session in the ${name} project (${path}).`)
+        },
+        // curator — the same hoisted accept/reject + conversation machinery
+        listProposals: () => listPendingProposals(curatorPathsV),
+        getProposal: (id) => readProposal(curatorPathsV, id),
+        acceptProposal: (id) => acceptProposalById(id),
+        rejectProposal: async (id, reason) => { await rejectProposalById(id, reason) },
+        converseStart: async (id, onData) => {
+          const existing = curatorConversations.get(id)
+          if (existing) { existing.stop(); curatorConversations.delete(id) }
+          const conv = new ProposalConversation({
+            executorFactory: librarianExecutorFactory,
+            paths: curatorPathsV,
+            proposalId: id,
+            onData,
+          })
+          curatorConversations.set(id, conv)
+          const ok = await conv.start()
+          if (!ok) curatorConversations.delete(id)
+          return ok
+        },
+        converseWrite: (id, text) => { curatorConversations.get(id)?.write(text) },
+        converseStop: (id) => { curatorConversations.get(id)?.stop(); curatorConversations.delete(id) },
+        // chrome
+        openArtifact: (type, value) => {
+          void (async () => {
+            try {
+              if (type === 'path') { const err = await shell.openPath(value); if (err) log.warn('open-artifact path failed', { value, err }) }
+              else await shell.openExternal(value, { activate: false })
+            } catch (e) { log.warn('open-artifact failed', { type, value, error: (e as Error).message }) }
+          })()
+        },
+        acceptRouteOffer: async (newTaskId) => {
+          const offer = pendingRouteOffer
+          if (!offer || offer.newTaskId !== newTaskId) return false
+          pendingRouteOffer = null
+          const alt = mgr.get(offer.altTaskId)
+          if (!alt) return false
+          await mgr.remove(newTaskId)
+          if (mgr.tasksAwaitingUser().some((t) => t.id === offer.altTaskId)) {
+            mgr.answer(offer.altTaskId, offer.intent)
+          } else if (!mgr.followUp(offer.altTaskId, offer.intent)) {
+            void mgr.resume(offer.altTaskId)
+          }
+          return true
+        },
+        getDoorbell: () => settings.get('voiceHeadlines') !== false,
+        setDoorbell: (on) => settings.set('voiceHeadlines', !!on),
+        getStagedCount: () => stagedAttachments.length,
+        clearStaged: () => { stagedAttachments = []; broadcastStaged() },
+        getLastSeen: () => notchLastSeen,
+        setLastSeen: (ms) => { notchLastSeen = ms },
       })
       log.info('notch shell started', { bin: notchBin })
     } catch (e) {
@@ -1833,7 +1898,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   app.on('before-quit', () => {
     try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
     try { cuaManager?.dispose(); cuaServer?.close(); void cuaArming.disposeAll() } catch (e) { log.warn('cua shutdown failed', { error: (e as Error).message }) }
-    try { notchClient?.dispose() } catch (e) { log.warn('notch shutdown failed', { error: (e as Error).message }) }
+    try { notchController?.dispose(); notchClient?.dispose() } catch (e) { log.warn('notch shutdown failed', { error: (e as Error).message }) }
     try { router?.dispose() } catch { /* best-effort */ }
   })
   // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
@@ -1929,7 +1994,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Glance vocabulary (the rails): skills + projects, read straight from disk —
   // zero tokens. Skills have no surface anywhere in Claude Code's own UX; giving
   // them a face is what makes people actually say them.
-  ipcMain.handle('remote:list-skills', async () => {
+  // Hoisted so BOTH the IPC handler and the notch controller share it (same
+  // data, one implementation).
+  const listSkillsForRail = async () => {
     // ALL skills — the rail is the full vocabulary; an unlisted skill is a skill
     // nobody says. The recipe-store reader only walks surface SUBFOLDERS, which
     // hid the older root-level skill files — so scan recursively ourselves:
@@ -2014,7 +2081,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         b.runs - a.runs ||
         (b.lastUsed || '').localeCompare(a.lastUsed || ''))
       .slice(0, 30)
-  })
+  }
+  ipcMain.handle('remote:list-skills', async () => listSkillsForRail())
   // ── Skill Curator IPC (spec §11) — thin calls into Tasks 2/6/10 ──
   // The review surface: list pending proposals, read one, accept (materialize the
   // skill on disk) or reject (record + resolve), drive the per-proposal review
@@ -2023,7 +2091,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     listPendingProposals(curatorPathsV))
   ipcMain.handle('curator:get-proposal', async (_e, id: string): Promise<Proposal | null> =>
     readProposal(curatorPathsV, id))
-  ipcMain.handle('curator:accept', async (_e, id: string): Promise<{ ok: boolean; error?: string }> => {
+  // Hoisted so the notch controller shares the exact accept/reject paths.
+  const acceptProposalById = async (id: string): Promise<{ ok: boolean; error?: string }> => {
     const proposal = await readProposal(curatorPathsV, id)
     if (!proposal) return { ok: false, error: 'proposal not found' }
 
@@ -2082,8 +2151,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     }
     // Surface the human-readable reason for the popup (collision / invalid-name / io).
     return { ok: false, error: res.detail ?? res.error ?? 'write failed' }
-  })
-  ipcMain.handle('curator:reject', async (_e, id: string, reason?: string): Promise<boolean> => {
+  }
+  ipcMain.handle('curator:accept', async (_e, id: string) => acceptProposalById(id))
+  const rejectProposalById = async (id: string, reason?: string): Promise<boolean> => {
     const proposal = await readProposal(curatorPathsV, id)
     if (!proposal) return false
     const at = new Date().toISOString()
@@ -2096,7 +2166,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       await writeCandidates(curatorPathsV, ledger)
     }
     return true
-  })
+  }
+  ipcMain.handle('curator:reject', async (_e, id: string, reason?: string) => rejectProposalById(id, reason))
   ipcMain.handle('curator:converse-start', async (_e, id: string): Promise<boolean> => {
     // Second-start-stops-first (Task 10 carry-forward): ProposalConversation does
     // NOT self-guard, so we retire any existing session for this id here.

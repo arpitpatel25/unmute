@@ -30,8 +30,8 @@ test('send() delivers commands to the helper in order', async () => {
   await waitFor(client, 'ready')
 
   const cmds: NotchCommand[] = [
-    { type: 'setState', state: 'peek', attention: 2, working: 1 },
-    { type: 'showTask', task: { id: 't1', title: 'RCA', state: 'needs-user' } },
+    { type: 'setState', state: 'attention', attention: 2, working: 1 },
+    { type: 'showTask', task: { id: 't1', title: 'RCA', status: 'needs-user', kind: 'oneoff', alive: true } },
   ]
   for (const c of cmds) client.send(c)
 
