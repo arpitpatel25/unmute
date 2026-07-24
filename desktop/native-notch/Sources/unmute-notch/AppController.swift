@@ -12,6 +12,7 @@ final class AppController {
     init() {
         geometry = NotchGeometry.current()
         applyGeometrySizes()
+        NotchLog.log("geometry: screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) menuBarH=\(Int(geometry.menuBarHeight)) notchW=\(Int(geometry.notchWidth)) | idle=\(geometry.idleSize) peek=\(geometry.peekSize) panel=\(geometry.panelSize)")
         window = NotchWindow(geometry: geometry)
         let host = NSHostingView(rootView: NotchView(model: model))
         // WE own the window size (AppController.frame(for:)); never let the
@@ -20,20 +21,27 @@ final class AppController {
         // window is authoritative; the content fills whatever size we set.
         host.sizingOptions = []
         window.contentView = host
+        // Every user gesture flows through here first so it's logged, then out.
+        model.emit = { ev in NotchLog.log("EVENT out: \(ev.json)"); IPC.emit(ev) }
         window.present()
+        NotchLog.log("presented at idle: window=\(NotchLog.rect(window.frame)) level=screenSaver visible=\(window.isVisible)")
     }
 
     func handle(_ command: Command) {
+        NotchLog.log("CMD in: \(command)")
         switch command {
         case let .setState(state, attention, working):
             model.attention = attention
             model.working = working
             withAnimation(Theme.morph) { model.state = state }
             // The window IS the shape now, so resizing it top-pinned is the morph.
-            window.applyFrame(frame(for: state), animated: true)
+            let f = frame(for: state)
+            window.applyFrame(f, animated: true)
+            NotchLog.log("state -> \(state) (attention=\(attention) working=\(working)) window=\(NotchLog.rect(f))")
 
         case let .showTask(task):
             model.task = task
+            NotchLog.log("showTask: id=\(task.id) title=\"\(task.title)\" state=\(task.state.rawValue) options=\(task.options?.count ?? 0)")
 
         case let .notchGeometry(hasNotch, x, y, w, h):
             // Trust an explicit geometry push from main (it knows the active

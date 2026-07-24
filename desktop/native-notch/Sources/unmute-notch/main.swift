@@ -5,6 +5,8 @@ import AppKit
 // a background thread; decoded commands are dispatched to AppController on the
 // main queue. Stdout carries events back to Electron main.
 
+NotchLog.log("=== unmute-notch launch === pid=\(ProcessInfo.processInfo.processIdentifier)")
+
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 

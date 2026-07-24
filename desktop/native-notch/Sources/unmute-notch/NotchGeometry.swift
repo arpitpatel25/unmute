@@ -67,10 +67,14 @@ struct NotchGeometry {
         }
     }
 
-    /// Center horizontally, pin the top edge to the physical top of the screen.
+    /// Center horizontally; hang the shape from just BELOW the menu-bar / hardware
+    /// notch so it's actually visible (pinning to the absolute top buried it in
+    /// the menu-bar strip / behind the camera notch — the "I can't see it" bug).
+    /// This also gives the "extends out of the notch" look: the surface starts at
+    /// the notch and grows downward.
     func topPinnedFrame(width: CGFloat, height: CGFloat) -> NSRect {
         let x = screenFrame.midX - width / 2
-        let y = screenFrame.maxY - height
+        let y = screenFrame.maxY - menuBarHeight - height
         return NSRect(x: x, y: y, width: width, height: height)
     }
 
