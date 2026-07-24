@@ -13,10 +13,15 @@ import Foundation
 
 // MARK: - Commands (main → helper)
 
+// The six-rung ladder (spec 2026-07-24). One surface morphs through all of them;
+// each rung is bigger than the last, growing downward + outward from the notch.
 enum NotchState: String, Codable {
-    case idle
-    case peek
-    case panel
+    case dormant    // at rest — a barely-there sliver (invisible on real-notch hw)
+    case idle       // matches the notch, on hover
+    case active     // calm "N running" — the agent's move, doesn't grab you
+    case attention  // amber, "needs you"
+    case task       // the single-task surface (~50%+ of screen)
+    case cockpit    // the full wall (~80% of screen)
 }
 
 enum TaskAttentionState: String, Codable {
@@ -26,7 +31,7 @@ enum TaskAttentionState: String, Codable {
     case ready
 }
 
-/// The one task currently fronted in the attention panel.
+/// The one task currently fronted in the task surface.
 struct PanelTask: Codable {
     let id: String
     let title: String
@@ -36,11 +41,30 @@ struct PanelTask: Codable {
     let terminalHint: String?   // "open" | "collapsed"
 }
 
+// The cockpit dataset — the full wall, pushed from Electron over the same JSON
+// channel so the cockpit renders NATIVELY inside this one panel (no separate
+// Electron window). All strings; the helper only displays them.
+struct CockpitTask: Codable {
+    let id: String
+    let title: String
+    let subtitle: String?
+    let status: String   // "running" | "blocked" | "needs-user" | "ready" | "done" | "failed"
+    let path: String?
+    let age: String?
+}
+struct CockpitData: Codable {
+    let tasks: [CockpitTask]
+    let queue: [String]
+    let projects: [String]
+    let suggestions: [String]
+}
+
 /// A decoded command. `.unknown` is a deliberate catch-all so forward-compatible
 /// commands never break the read loop.
 enum Command {
     case setState(state: NotchState, attention: Int, working: Int)
     case showTask(PanelTask)
+    case setCockpit(CockpitData)
     case notchGeometry(hasNotch: Bool, x: Double, y: Double, w: Double, h: Double)
     case collapse
     case quit
@@ -64,6 +88,12 @@ enum Command {
                   let task = try? JSONDecoder().decode(PanelTask.self, from: taskData)
             else { return .unknown }
             return .showTask(task)
+        case "setCockpit":
+            guard let dataObj = obj["data"],
+                  let d = try? JSONSerialization.data(withJSONObject: dataObj),
+                  let cockpit = try? JSONDecoder().decode(CockpitData.self, from: d)
+            else { return .unknown }
+            return .setCockpit(cockpit)
         case "notchGeometry":
             return .notchGeometry(
                 hasNotch: obj["hasNotch"] as? Bool ?? false,

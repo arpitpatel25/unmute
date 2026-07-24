@@ -1,35 +1,42 @@
 import AppKit
 
-// Computes where the notch shell sits and how big it is in each state.
+// Where the surface sits and how big it is in each state.
 //
-// Coordinates are AppKit screen coordinates (origin bottom-left). The shell
-// hangs from the top-center of the active screen. On a hardware-notch Mac we
-// straddle the physical notch; on a notch-less Mac we render a small dummy
-// notch in the same spot — identical behavior, only the resting width differs.
+// AppKit screen coordinates (origin bottom-left). The surface is ALWAYS on the
+// PRIMARY display (the one with the menu bar, frame.origin == 0,0) and pinned
+// flush to that display's top edge — never hardcoded pixels, always relative to
+// the screen frame, so plugging in an external monitor can't misplace it.
 struct NotchGeometry {
     let screenFrame: NSRect
     let hasNotch: Bool
-    /// Width of the physical notch (menu-bar gap between the two safe areas),
-    /// or the dummy-notch width when there is no hardware notch.
+    /// Physical notch width when present; a dummy width otherwise.
     let notchWidth: CGFloat
+    /// Menu-bar thickness (24pt plain, ~37pt notched).
     let menuBarHeight: CGFloat
 
+    /// The primary display = the one whose frame origin is (0,0) (System
+    /// Settings' "main display", where the menu bar lives). NSScreen.main is the
+    /// *focused* screen and moves with the cursor — wrong for a menu-bar-anchored
+    /// surface. This is the external-monitor fix.
+    static func primaryScreen() -> NSScreen {
+        NSScreen.screens.first(where: { $0.frame.origin == .zero })
+            ?? NSScreen.main
+            ?? NSScreen.screens[0]
+    }
+
     static func current() -> NotchGeometry {
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = primaryScreen()
         let frame = screen.frame
 
-        // A hardware notch shows up as a non-zero top safe-area inset.
         let topInset = screen.safeAreaInsets.top
         let hasNotch = topInset > 0
 
-        // auxiliaryTopLeftArea / auxiliaryTopRightArea bound the usable menu-bar
-        // strips beside the notch; the gap between them is the notch width.
         var notchWidth: CGFloat = Self.dummyNotchWidth
         if hasNotch,
            let left = screen.auxiliaryTopLeftArea,
            let right = screen.auxiliaryTopRightArea {
-            notchWidth = right.minX - left.maxX
-            if notchWidth <= 0 { notchWidth = Self.dummyNotchWidth }
+            let gap = right.minX - left.maxX
+            if gap > 0 { notchWidth = gap }
         }
 
         let menuBarHeight = hasNotch ? topInset : Self.dummyMenuBarHeight
@@ -37,59 +44,58 @@ struct NotchGeometry {
                              notchWidth: notchWidth, menuBarHeight: menuBarHeight)
     }
 
-    // Dummy-notch constants for Macs without a hardware notch: small and
-    // unobtrusive, hugging the top-center.
-    static let dummyNotchWidth: CGFloat = 180
+    static let dummyNotchWidth: CGFloat = 200
     static let dummyMenuBarHeight: CGFloat = 24
 
-    // Resting/expanded sizes. Width/height are the *content* footprint; the
-    // window itself is sized to the largest state and the view morphs within.
-    var idleSize: NSSize {
-        // At idle we occupy roughly the notch itself (a touch wider so a glow
-        // can bleed around the hardware cutout).
-        NSSize(width: max(notchWidth + 12, 120), height: menuBarHeight)
+    // ── Per-state content sizes ──
+    // Small rungs are notch-scale fixed sizes; task/cockpit are FRACTIONS of the
+    // screen so they scale across displays (never hardcoded).
+
+    /// Dormant: a barely-there sliver. On real-notch hardware it's invisible
+    /// (drawn behind the physical notch); on non-notch it's the faint hint.
+    var dormantSize: NSSize { NSSize(width: hasNotch ? notchWidth : 140, height: hasNotch ? menuBarHeight : 8) }
+    /// Idle: matches the notch.
+    var idleSize: NSSize { NSSize(width: hasNotch ? notchWidth : 200, height: max(menuBarHeight, 32)) }
+    /// Active/attention: a wider strip. On notched, flanks straddle the notch.
+    var stripSize: NSSize { NSSize(width: hasNotch ? notchWidth + 160 : 300, height: max(menuBarHeight, 34)) }
+    /// Task: a substantial surface — ~55% wide, height clamped so it stays a
+    /// surface not a wall; the real height is content-measured (AppController).
+    var taskSize: NSSize {
+        NSSize(width: round(min(max(screenFrame.width * 0.55, 560), 1100)),
+               height: round(screenFrame.height * 0.55))
     }
-    var peekSize: NSSize { NSSize(width: 420, height: 72) }
-    var panelSize: NSSize {
-        // A compact card, not a wall. Narrower + much shorter than before so a
-        // short task doesn't leave a big empty void. Grows later (Stage 6) when a
-        // terminal is shown.
-        let w = min(max(screenFrame.width * 0.38, 480), 760)
-        let h = min(max(screenFrame.height * 0.30, 240), 400)
-        return NSSize(width: w, height: h)
+    /// Cockpit: ~80% of the screen.
+    var cockpitSize: NSSize {
+        NSSize(width: round(screenFrame.width * 0.80), height: round(screenFrame.height * 0.80))
     }
 
     func size(for state: NotchState) -> NSSize {
         switch state {
-        case .idle:  return idleSize
-        case .peek:  return peekSize
-        case .panel: return panelSize
+        case .dormant:   return dormantSize
+        case .idle:      return idleSize
+        case .active, .attention: return stripSize
+        case .task:      return taskSize
+        case .cockpit:   return cockpitSize
         }
     }
 
-    /// Center horizontally; hang the shape from just BELOW the menu-bar / hardware
-    /// notch so it's actually visible (pinning to the absolute top buried it in
-    /// the menu-bar strip / behind the camera notch — the "I can't see it" bug).
-    /// This also gives the "extends out of the notch" look: the surface starts at
-    /// the notch and grows downward.
+    /// Center horizontally; pin the shape's TOP edge flush to the screen's top
+    /// edge (frame.maxY). Square top corners + concave shoulders (NotchShape)
+    /// then make it read as growing OUT of the notch rather than floating below.
     func topPinnedFrame(width: CGFloat, height: CGFloat) -> NSRect {
-        let x = screenFrame.midX - width / 2
-        let y = screenFrame.maxY - menuBarHeight - height
+        let x = round(screenFrame.midX - width / 2)
+        let y = round(screenFrame.maxY - height)
         return NSRect(x: x, y: y, width: width, height: height)
     }
 
-    /// The window frame for a given state: sized to the state, centered, and
-    /// TOP-PINNED so it hugs the notch. The window IS the visible shape (no giant
-    /// transparent canvas) — so it never swallows clicks meant for the app
-    /// behind it, and its position is deterministic in every state. The panel's
-    /// height is content-driven (see AppController), so callers pass it in.
     func windowFrame(for state: NotchState) -> NSRect {
         let size = size(for: state)
         return topPinnedFrame(width: size.width, height: size.height)
     }
 
-    /// Panel height clamp so content-sizing can never make it a sliver or a wall.
-    func clampPanelHeight(_ h: CGFloat) -> CGFloat {
-        min(max(h, 180), screenFrame.height * 0.7)
+    /// Clamp a content-measured task height into a sane band (never a sliver,
+    /// never taller than ~65% of the screen).
+    func clampTaskHeight(_ h: CGFloat) -> CGFloat {
+        min(max(h, screenFrame.height * 0.30), screenFrame.height * 0.65)
     }
 }
