@@ -91,7 +91,10 @@ struct NotchView: View {
 
     private func handleTap() {
         switch model.state {
-        case .idle:  break
+        // The notch is ALWAYS tappable. With nothing needing you, a tap is a
+        // request to see everything → open the cockpit. A peek is a request to
+        // handle the one task → open the attention panel.
+        case .idle:  model.emit(.openDashboard)
         case .peek:  model.emit(.tap)          // main decides → sends setState:panel
         case .panel: break                      // taps inside handled by PanelView
         }
