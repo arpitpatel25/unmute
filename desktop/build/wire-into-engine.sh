@@ -132,6 +132,30 @@ wire_paywall() {
     exit 1
   fi
 
+  # Build + vendor the native notch shell (spec 2026-07-24). Like cua-driver it
+  # is spawned as a DIRECT child of the signed .app, so its NSPanel carries the
+  # app's identity and never steals focus. Built from source here (Swift toolchain
+  # is a build-machine dependency, same as node-gyp for the native addons).
+  if [[ -d "$ROOT/native-notch" ]]; then
+    log "Building native notch shell (swift build -c release)"
+    if (cd "$ROOT/native-notch" && swift build -c release >/dev/null 2>&1); then
+      notch_bin="$ROOT/native-notch/.build/release/unmute-notch"
+      if [[ -x "$notch_bin" ]]; then
+        mkdir -p "$engine/vendor/unmute-notch"
+        cp "$notch_bin" "$engine/vendor/unmute-notch/unmute-notch"
+        log "notch shell vendored"
+      else
+        log "ERROR: swift build succeeded but $notch_bin is missing"
+        exit 1
+      fi
+    else
+      log "ERROR: swift build failed for native-notch — is the Swift toolchain installed?"
+      exit 1
+    fi
+  else
+    log "WARN: $ROOT/native-notch not found — the notch UI will be unavailable"
+  fi
+
   # Patch engine package.json:
   #   * Add @supabase/supabase-js for the paywall layer
   #   * Pin electron-store to ^8 (CJS). v11+ is ESM-only and crashes our
@@ -206,6 +230,12 @@ wire_paywall() {
     pkg.build.extraResources = pkg.build.extraResources || []
     if (!pkg.build.extraResources.some((r) => r && typeof r === 'object' && /cua-driver/.test(String(r.from)))) {
       pkg.build.extraResources.push({ from: 'vendor/cua-driver', to: 'cua-driver' })
+    }
+    // Notch UI: ship the Swift shell into Resources/unmute-notch/ so the packaged
+    // app resolves it at process.resourcesPath (init.ts). Same deep-sign path as
+    // cua-driver.
+    if (!pkg.build.extraResources.some((r) => r && typeof r === 'object' && /unmute-notch/.test(String(r.from)))) {
+      pkg.build.extraResources.push({ from: 'vendor/unmute-notch', to: 'unmute-notch' })
     }
     if (process.env.PAYWALL_APP_ID) {
       pkg.build = pkg.build || {}
