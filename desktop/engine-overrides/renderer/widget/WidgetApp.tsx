@@ -150,7 +150,7 @@ function RemoteBadge() {
         style={{
           height: 44,
           borderRadius: 9999,
-          background: '#0E0E10',
+          background: '#000',
           border: '1px solid rgba(255, 255, 255, 0.55)',
           boxShadow: 'none',
           display: 'flex',
@@ -180,7 +180,7 @@ function RemoteBadge() {
         <div
           style={{
             position: 'absolute', top: 48, left: 0, minWidth: 172, maxHeight: 300, overflowY: 'auto',
-            background: '#0E0E10', border: '1px solid rgba(255,255,255,0.35)',
+            background: '#000', border: '1px solid rgba(255,255,255,0.35)',
             borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10,
           }}
         >
@@ -288,7 +288,7 @@ function StagedImagesChip() {
         style={{
           height: 44,
           borderRadius: 9999,
-          background: '#0E0E10',
+          background: '#000',
           border: '1px solid rgba(255, 255, 255, 0.55)',
           boxShadow: 'none',
           display: 'flex',
@@ -307,7 +307,7 @@ function StagedImagesChip() {
         <div
           style={{
             position: 'absolute', top: 48, left: 0, minWidth: 168,
-            background: '#0E0E10', border: '1px solid rgba(255,255,255,0.35)',
+            background: '#000', border: '1px solid rgba(255,255,255,0.35)',
             borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 4,
             zIndex: 10,
           }}
@@ -379,7 +379,7 @@ function RawToggle() {
         style={{
           height: 44,
           borderRadius: 9999,
-          background: '#0E0E10',
+          background: '#000',
           border: '1px solid rgba(255, 255, 255, 0.55)',
           // Match the shadowless pill (see RemoteBadge note above).
           boxShadow: 'none',
@@ -547,7 +547,7 @@ function HintChip({ accent, label, detail, icon }: { accent: string; label: stri
         gap: 8,
         height: 32,
         padding: '0 14px 0 11px',
-        background: 'rgba(14, 14, 16, 0.96)',
+        background: 'rgba(0, 0, 0, 0.96)',
         border: '1px solid rgba(255, 255, 255, 0.13)',
         borderRadius: 9999,
         // No drop shadow — like every other chip in the row. Unmute occupies
@@ -596,7 +596,7 @@ function MicSourceChip({ source, warm, onTap }: { source: MicSource; warm: WarmS
           height: 44,
           width: 44,
           borderRadius: 9999,
-          background: '#0E0E10',
+          background: '#000',
           border: '1px solid rgba(255, 255, 255, 0.55)',
           boxShadow: 'none',
           display: 'flex',
