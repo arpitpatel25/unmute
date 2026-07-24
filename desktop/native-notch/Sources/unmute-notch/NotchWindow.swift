@@ -9,7 +9,7 @@ final class NotchWindow: NSPanel {
 
     init(geometry: NotchGeometry) {
         super.init(
-            contentRect: geometry.windowFrame,
+            contentRect: geometry.windowFrame(for: .idle),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -38,9 +38,22 @@ final class NotchWindow: NSPanel {
         orderFrontRegardless()
     }
 
-    /// Reposition to the current screen (used on geometry updates / display
-    /// changes). Keeps the top-anchored, horizontally-centered placement.
-    func applyGeometry(_ geometry: NotchGeometry) {
-        setFrame(geometry.windowFrame, display: true)
+    /// Resize + reposition the window to a state's frame, top-pinned. Animated
+    /// with a spring so the morph reads as "live"; the SwiftUI content animates
+    /// its corner radius / contents in lockstep.
+    func applyState(_ state: NotchState, geometry: NotchGeometry, animated: Bool) {
+        let frame = geometry.windowFrame(for: state)
+        guard animated else { setFrame(frame, display: true); return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.34
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0) // spring-ish ease-out
+            ctx.allowsImplicitAnimation = true
+            animator().setFrame(frame, display: true)
+        }
+    }
+
+    /// Reposition to the current screen (display change) without changing size.
+    func applyGeometry(_ geometry: NotchGeometry, state: NotchState) {
+        setFrame(geometry.windowFrame(for: state), display: true)
     }
 }

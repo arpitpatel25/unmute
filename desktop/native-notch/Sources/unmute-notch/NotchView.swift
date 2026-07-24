@@ -6,7 +6,6 @@ import SwiftUI
 struct NotchView: View {
     @ObservedObject var model: NotchModel
 
-    private var size: NSSize { model.size(for: model.state) }
     private var radius: CGFloat {
         switch model.state {
         case .idle:  return Theme.idleRadius
@@ -15,12 +14,12 @@ struct NotchView: View {
         }
     }
 
+    // The window is now sized to the state and top-pinned, so the shape simply
+    // FILLS the window. No floating inside a giant canvas; no safe-area inset.
     var body: some View {
-        VStack(spacing: 0) {
-            shape
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        shape
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea(.all)
     }
 
     private var shape: some View {
@@ -32,17 +31,15 @@ struct NotchView: View {
                         .strokeBorder(Theme.hairline, lineWidth: 1)
                 )
                 .overlay(glow)
-                .shadow(color: .black.opacity(model.state == .idle ? 0.25 : 0.45),
-                        radius: model.state == .idle ? 6 : 18, y: 6)
 
             content
                 .padding(.horizontal, model.state == .panel ? 20 : 14)
-                .padding(.vertical, model.state == .panel ? 16 : 8)
+                .padding(.vertical, model.state == .panel ? 16 : 6)
         }
-        .frame(width: size.width, height: size.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(Theme.morph, value: model.state)
         .animation(Theme.morph, value: model.attention)
-        .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .contentShape(Rectangle())
         .onTapGesture { handleTap() }
     }
 

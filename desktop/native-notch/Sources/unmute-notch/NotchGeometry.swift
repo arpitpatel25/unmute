@@ -57,13 +57,23 @@ struct NotchGeometry {
         return NSSize(width: w, height: h)
     }
 
-    /// The window is sized to the largest state (panel) so morphs never need an
-    /// OS-level resize; the SwiftUI content animates within this canvas.
-    var windowFrame: NSRect {
-        let size = panelSize
+    func size(for state: NotchState) -> NSSize {
+        switch state {
+        case .idle:  return idleSize
+        case .peek:  return peekSize
+        case .panel: return panelSize
+        }
+    }
+
+    /// The window frame for a given state: sized to the state, centered, and
+    /// TOP-PINNED to the physical top of the screen so it hugs the notch. The
+    /// window IS the visible shape (no giant transparent canvas) — so it never
+    /// swallows clicks meant for the app behind it, and its position is
+    /// deterministic in every state.
+    func windowFrame(for state: NotchState) -> NSRect {
+        let size = size(for: state)
         let x = screenFrame.midX - size.width / 2
-        // Hang from the very top of the screen.
-        let y = screenFrame.maxY - size.height
+        let y = screenFrame.maxY - size.height // top edge at the physical top
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 }

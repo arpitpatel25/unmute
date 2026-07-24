@@ -23,9 +23,8 @@ final class AppController {
             model.attention = attention
             model.working = working
             withAnimation(Theme.morph) { model.state = state }
-            // A panel needs pointer input; idle/peek let clicks through except on
-            // the shape (the tap gesture still fires because the shape is opaque).
-            window.ignoresMouseEvents = false
+            // The window IS the shape now, so resizing it top-pinned is the morph.
+            window.applyState(state, geometry: geometry, animated: true)
 
         case let .showTask(task):
             model.task = task
@@ -41,7 +40,7 @@ final class AppController {
             )
             _ = (x, y) // reserved for multi-display placement (Stage 7)
             applyGeometrySizes()
-            window.applyGeometry(geometry)
+            window.applyGeometry(geometry, state: model.state)
 
         case .collapse:
             withAnimation(Theme.morph) { model.state = .idle }
