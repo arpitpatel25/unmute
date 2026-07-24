@@ -36,7 +36,7 @@ import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete } from './setup-status'
-import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape } from './overlay'
+import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape, setOverlaySuppressed } from './overlay'
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask } from './router'
 import { knownProjects, projectSlug } from './projects'
@@ -1696,14 +1696,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     }
   })
 
-  // Pre-warm the floating overlay window (hidden) so the first present is instant.
-  createOverlayWindow()
-  // Orchestrate cockpit (NEW surface, handoff §3 #3): register the ⌘⇧O toggle.
+  // The notch is the single task/attention surface (spec 2026-07-24). When it's
+  // on, the legacy right-side overlay is retired: suppressed here and never even
+  // pre-warmed. UNMUTE_NOTCH_ENABLED=0 restores the old surface wholesale.
+  const notchOwnsAttention = process.env.UNMUTE_NOTCH_ENABLED !== '0'
+  setOverlaySuppressed(notchOwnsAttention)
+  if (!notchOwnsAttention) {
+    // Pre-warm the floating overlay window (hidden) so the first present is instant.
+    createOverlayWindow()
+  }
+  // Orchestrate cockpit: ⌘⇧O stays as a fallback entry point; the primary way in
+  // is now the notch's "open dashboard" (→ showCockpit → openOrchestrateWindow).
   registerOrchestrateShortcut()
-  // DEV-only convenience during build-out: auto-open the cockpit so it's
-  // discoverable without hunting for the shortcut. (ELECTRON_RENDERER_URL is set
-  // only in `electron-vite dev`.) Remove once a real entry point exists.
-  if (process.env.ELECTRON_RENDERER_URL) openOrchestrateWindow()
   // Apply the docked-mode preference (default ON).
   setDockedMode(settings.get('overlayDocked') !== false)
   // One-time: move users still on the OLD opus default to the new sonnet default

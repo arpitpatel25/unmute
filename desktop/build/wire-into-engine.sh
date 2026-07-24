@@ -501,6 +501,18 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
     if ! grep -q 'patched: click-through' "$wm"; then
       log "WARN: windowManager.ts HUD click-through patch did not apply"
     fi
+
+    # MOVE THE DICTATION PILL TO THE BOTTOM (notch UI redesign, spec 2026-07-24).
+    # The redesign splits the screen by ROLE: top-center = status OUTPUT (the
+    # notch shell owns it), bottom-center = voice INPUT (this pill). Leaving the
+    # pill at the top would collide with the notch — they'd fight for the same
+    # strip. workArea already excludes the Dock, so anchoring to its bottom edge
+    # floats the pill just above the Dock without ever interfering with it.
+    sed -i.bak 's|^  const y = workArea.y + 6.*$|  const y = workArea.y + workArea.height - HUD_HEIGHT - 12 // patched: bottom-anchored — the notch owns the top strip (spec 2026-07-24)|' "$wm"
+    rm -f "$wm.bak"
+    if ! grep -q 'patched: bottom-anchored' "$wm"; then
+      log "WARN: windowManager.ts HUD bottom-anchor patch did not apply — dictation pill will collide with the notch"
+    fi
   fi
 
   # ─── Pill white border ─────────────────────────────────────────
