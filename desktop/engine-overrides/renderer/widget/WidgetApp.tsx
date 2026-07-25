@@ -1076,6 +1076,7 @@ export default function WidgetApp() {
           onStop={handleStop}
           onUndo={handleUndo}
           agentPicker={agentPicker ?? undefined}
+          isRemote={isRemote}
           onPickAgent={handlePickAgent}
         />
       </div>

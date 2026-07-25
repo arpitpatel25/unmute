@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import type { WidgetState } from '../shared/types'
+import {
+  shouldShowAgentPicker, offeredAgents, currentAgentLabel as agentLabel,
+  currentAgentConnected as agentConnected, nextAgentId, type AgentPickerState,
+} from './agentPicker'
 
 interface WidgetProps {
   state: WidgetState
@@ -20,6 +24,11 @@ interface WidgetProps {
    *  Only supplied (and only rendered) when there is genuinely a choice — a
    *  Claude-only machine must never see a toggle with one option. */
   agentPicker?: AgentPicker
+  /** Is THIS capture a Remote one (dispatches a task)? This is the KIND axis and
+   *  the only correct gate for the picker. It is NOT derivable from `state`: a
+   *  Remote capture runs as startSession('dictation','remote'), so `state` is
+   *  'dictation-active' and any guard on 'instruction-active' is always false. */
+  isRemote?: boolean
   /** Switch the backend the NEXT task will run on. Called while the user is
    *  still speaking: no task exists yet, so this only sets the default that
    *  dispatch will read when the utterance is submitted. */
@@ -100,6 +109,7 @@ export default function Widget({
   onStop,
   onUndo,
   agentPicker,
+  isRemote = false,
   onPickAgent,
 }: WidgetProps) {
   const [elapsed, setElapsed] = useState(0)
@@ -115,26 +125,19 @@ export default function Widget({
   const isDictation = state === 'dictation-active'
   const isInstruction = state === 'instruction-active' || state === 'chained'
 
-  // Backend picker state. An option is OFFERED when the app is installed, even
-  // if it is not connected yet: hiding an installed-but-unarmed Codex left the
-  // user with no way to connect it and no hint the feature existed (field
-  // feedback 2026-07-25). Tapping an unconnected backend triggers the connect
-  // flow rather than silently doing nothing.
-  const offeredAgents = agentPicker?.options.filter((o) => o.available || o.installed) ?? []
-  const availableAgents = offeredAgents
-  const currentAgentLabel =
-    availableAgents.find((o) => o.id === agentPicker?.current)?.label
-    ?? availableAgents[0]?.label
-    ?? ''
-  const currentAgentConnected =
-    offeredAgents.find((o) => o.id === agentPicker?.current)?.available ?? true
+  // Backend picker. Visibility is decided by shouldShowAgentPicker (unit-tested
+  // in agentPicker.test.ts) so the mode-vs-kind trap that hid this chip for four
+  // builds cannot come back silently.
+  const showAgentPicker = shouldShowAgentPicker({ isRemote, picker: agentPicker as AgentPickerState | undefined })
+  const availableAgents = offeredAgents(agentPicker as AgentPickerState | undefined)
+  const currentAgentLabel = agentLabel(agentPicker as AgentPickerState | undefined)
+  const currentAgentConnected = agentConnected(agentPicker as AgentPickerState | undefined)
 
   // One tap cycles. With two backends this is the whole interaction; a menu
   // would cost a second tap for no gain, and the pill is a 44px strip.
   const cycleAgent = () => {
-    if (!onPickAgent || availableAgents.length < 2) return
-    const i = availableAgents.findIndex((o) => o.id === agentPicker?.current)
-    onPickAgent(availableAgents[(i + 1) % availableAgents.length].id)
+    const next = nextAgentId(agentPicker as AgentPickerState | undefined)
+    if (onPickAgent && next) onPickAgent(next)
   }
 
   // Entry/Exit animation
@@ -224,7 +227,7 @@ export default function Widget({
               in Settings would be too far away.
               Rendered only when there is a real choice (>1 reachable backend) —
               a Claude-only machine sees the pill exactly as it is today. */}
-          {isInstruction && agentPicker && availableAgents.length > 1 && (
+          {showAgentPicker && (
             <button
               className={`unmute-pill-agent${currentAgentConnected ? '' : ' unmute-pill-agent--off'}`}
               onClick={cycleAgent}
