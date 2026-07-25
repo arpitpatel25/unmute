@@ -29,9 +29,35 @@ import { homedir } from 'node:os'
 /** State of a Codex thread, in Unmute's vocabulary (status-file.ts TaskState). */
 export type CodexState = 'processing' | 'ready' | 'failed'
 
+/**
+ * One entry of a Codex thread, in the shape Codex itself shows it.
+ *
+ * A Claude task's transcript is a terminal — the real thing, raw. The honest
+ * equivalent for Codex is its own item stream, so this deliberately keeps the
+ * DISTINCTIONS Codex draws rather than flattening everything to text:
+ *
+ *   user        what you asked
+ *   commentary  the running "I'll do X next" line (phase: commentary)
+ *   tool        a step it ran — its own title, the code, and the output
+ *   assistant   the final answer (phase: final_answer)
+ *
+ * Flattening these was real data loss: a turn that opened a browser, searched
+ * YouTube and verified a channel rendered as a single grey sentence, because
+ * only `agent_message` survived.
+ */
 export interface CodexTurn {
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'commentary' | 'tool'
   text: string
+  /** tool: the step's own label — Codex's `title`, e.g. "Search YouTube". */
+  title?: string
+  /** tool: the exact code/command it ran. */
+  code?: string
+  /** tool: what came back (truncated). */
+  output?: string
+  /** tool: wall time Codex reported, in ms. */
+  durationMs?: number
+  /** tool: false when the step reported an error. */
+  ok?: boolean
 }
 
 export interface CodexSnapshot {
@@ -93,6 +119,10 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
   }
   let started = 0
   let completed = 0
+  // call_id → the step awaiting its output. Codex writes the call and its
+  // result as separate lines, sometimes many lines apart.
+  const pendingCalls = new Map<string, CodexTurn>()
+
   for (const line of text.split('\n')) {
     const raw = line.trim()
     if (!raw) continue
@@ -116,11 +146,60 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
         }
         break
       case 'user_message':
+        // The EVENT is the authority for what you actually said. A matching
+        // `response_item` message exists too, but so do several synthetic
+        // user-role messages Codex injects (<app-context>, <recommended_plugins>)
+        // which are not yours and must never be shown back to you.
         if (typeof p.message === 'string' && p.message) snap.turns.push({ role: 'user', text: p.message })
         break
-      case 'agent_message':
-        if (typeof p.message === 'string' && p.message) snap.turns.push({ role: 'assistant', text: p.message })
+
+      case 'message': {
+        // `agent_message` events carry the same assistant text but NOT the
+        // phase, and Codex draws a real distinction between a running
+        // commentary line and the final answer. So the response_item is the
+        // source, and the event is skipped so each answer appears once.
+        if (p.role !== 'assistant') break
+        const text = textOf(p.content)
+        if (text) snap.turns.push({ role: p.phase === 'commentary' ? 'commentary' : 'assistant', text })
         break
+      }
+
+      case 'custom_tool_call':
+      case 'function_call': {
+        // Open the step; its output arrives later under the same call_id.
+        const callId = typeof p.call_id === 'string' ? p.call_id : null
+        if (!callId) break
+        const code = typeof p.input === 'string' ? p.input
+          : typeof p.arguments === 'string' ? p.arguments : ''
+        const turn: CodexTurn = {
+          role: 'tool',
+          text: '',
+          title: stepTitle(code, typeof p.name === 'string' ? p.name : 'step'),
+          code: clip(code, 1200),
+        }
+        snap.turns.push(turn)
+        pendingCalls.set(callId, turn)
+        break
+      }
+
+      case 'custom_tool_call_output':
+      case 'function_call_output': {
+        const callId = typeof p.call_id === 'string' ? p.call_id : null
+        const turn = callId ? pendingCalls.get(callId) : undefined
+        if (!turn || !callId) break
+        pendingCalls.delete(callId)
+        const out = textOf(p.output)
+        // Codex prefixes its own status line ("Script completed / Wall time 2.9
+        // seconds / Output:"); lift the timing out of it and show the rest.
+        const wall = /Wall time ([\d.]+) seconds/.exec(out)
+        if (wall) turn.durationMs = Math.round(parseFloat(wall[1]) * 1000)
+        turn.ok = !/^\s*error/i.test(out)
+        turn.output = clip(
+          out.replace(/^Script (?:completed|running[^\n]*)\n(?:Wall time [^\n]*\n)?(?:Output:\s*)?/, '').trim(),
+          2000,
+        )
+        break
+      }
       case 'error':
       case 'stream_error':
         snap.state = 'failed'
@@ -226,4 +305,37 @@ export async function readThread(threadId: string, sessionsDir = DEFAULT_SESSION
     try { snap.updatedAt = (await fs.stat(path)).mtimeMs } catch { /* leave 0 */ }
   }
   return snap
+}
+
+/**
+ * Codex content arrives as a string, as an array of {type,text} parts, or as a
+ * single part. Flatten whichever shape without losing anything.
+ */
+function textOf(v: unknown): string {
+  if (typeof v === 'string') return v
+  if (Array.isArray(v)) return v.map(textOf).filter(Boolean).join('\n')
+  if (v && typeof v === 'object') {
+    const t = (v as { text?: unknown }).text
+    if (typeof t === 'string') return t
+  }
+  return ''
+}
+
+/**
+ * The label Codex puts on a step.
+ *
+ * Its exec payloads embed the human title it displays — {"title":"Search
+ * YouTube", …} — so prefer that over the tool's internal name: it is shorter
+ * and it is exactly what the user saw in the Codex window.
+ */
+function stepTitle(code: string, fallback: string): string {
+  for (const key of ['title', 'cmd']) {
+    const m = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(code)
+    if (m) { try { return JSON.parse(`"${m[1]}"`) as string } catch { return m[1] } }
+  }
+  return fallback
+}
+
+function clip(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}\n… (${s.length - n} more characters)` : s
 }

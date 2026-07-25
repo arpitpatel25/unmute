@@ -23,7 +23,10 @@ struct TaskSurfaceView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 12)
                 }
-                if t.status == .done || t.status == .failed {
+                // DeadPanel is a PTY concept — "the session ended, resume or
+                // re-run it". A Codex thread never ends that way, so offering
+                // it there is an invitation to revive something still alive.
+                if (t.status == .done || t.status == .failed) && t.backend != "codex-desktop" {
                     ScrollView { DeadPanel(model: model, t: t) }
                         .frame(maxHeight: 280)
                         .padding(.top, 12)
@@ -33,9 +36,16 @@ struct TaskSurfaceView: View {
                 // CLI task. Showing an empty terminal frame here is what made the
                 // panel read as a giant void.
                 if t.backend == "codex-desktop" {
-                    ConversationPanel(turns: t.conversation ?? [])
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 10)
+                    ScrollView {
+                        ConversationPanel(turns: t.conversation ?? [])
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.top, 10)
+                    // Always available: a Codex chat is continuable until you
+                    // delete it, so there is no state in which you have nothing
+                    // to say to it.
+                    CodexComposer(model: model, taskId: t.id).padding(.top, 9)
                 } else if model.taskTerminalOpen && t.alive {
                     // The terminal owns EVERYTHING left down to the action row
                     // (field feedback: never a fixed band with dead space below).

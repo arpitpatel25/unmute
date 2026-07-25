@@ -222,7 +222,20 @@ export class NotchController {
     on('closeStage', () => { this.seenThenClose() })
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
     on('mute', (e) => this.onMute((e as { id: string }).id))
-    on('answerText', (e) => { const { id, text } = e as { id: string; text: string }; this.deps.answer(id, text); this.advanceAfterAnswer(id) })
+    on('answerText', (e) => {
+      const { id, text } = e as { id: string; text: string }
+      // Advancing the crank is only right when this WAS the blocking question.
+      // The Codex composer is always available, so a plain reply must not fling
+      // the user onto whatever unrelated task happens to be queued next.
+      //
+      // Queue membership is NOT the test: a `ready` task sits in the crank too
+      // (it is "your move"), so keying on it advanced away from a Codex chat the
+      // user was mid-conversation with. Only `needs-user` is a question.
+      const wasBlocking = this.deps.getTask(id)?.state === 'needs-user'
+      this.deps.answer(id, text)
+      if (wasBlocking) this.advanceAfterAnswer(id)
+      else this.scheduleReconcile()
+    })
     on('kill', (e) => this.deps.kill((e as { id: string }).id))
     on('resume', (e) => void this.deps.resume((e as { id: string }).id))
     on('rerun', (e) => { const t = this.deps.getTask((e as { id: string }).id); if (t) this.deps.rerun(t.intent) })
@@ -641,7 +654,13 @@ export class NotchController {
       backend: t.agent === 'codex-desktop' ? 'codex-desktop' : undefined,
       project: t.agent === 'codex-desktop' ? (t.codexProject ?? undefined) : undefined,
       note: t.note ?? undefined,
-      alive: t.alive ?? false,
+      // A CODEX THREAD IS NEVER DEAD. `alive` means "has a live PTY", and every
+      // consumer reads it as "can you still talk to this?" — for which the
+      // answer here is always yes: the thread lives in Codex until the user
+      // deletes it there. Reporting false is what put a finished Codex chat
+      // behind "resume — continue with full context" / "re-run fresh", offering
+      // to revive something that had never stopped.
+      alive: t.agent === 'codex-desktop' ? true : (t.alive ?? false),
     }
   }
 
@@ -656,12 +675,14 @@ export class NotchController {
       // shown raw" — neither is a re-implementation of the other app's UI.
       ...(external ? {
         backend: 'codex-desktop' as const,
-        conversation: (t.conversation ?? []).slice(-6),
+        // Was 6 back when a "turn" was one paragraph of text. Items are now
+        // per-step, so six of them is barely one turn's work.
+        conversation: (t.conversation ?? []).slice(-40),
         ...(t.codexProject ? { project: t.codexProject } : {}),
       } : {}),
       status: t.state,
       kind: t.kind ?? 'oneoff',
-      alive: t.alive ?? false,
+      alive: external ? true : (t.alive ?? false),   // see toCard: never dead
       shelved: t.shelved ?? false,
       dir: this.dirLabel(t),
       age: relativeAge(t.updatedAt, now),

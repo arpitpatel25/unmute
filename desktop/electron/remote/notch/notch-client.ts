@@ -24,7 +24,16 @@ export interface ErrorP { reason: string; detail?: string }
 export interface McpGapP { message: string; fixCommand: string }
 
 /** One turn of a GUI-agent conversation — this backend's answer to the terminal. */
-export interface TurnP { role: 'user' | 'assistant'; text: string }
+/** One entry of a Codex thread; see codex/rollout.ts CodexTurn for the shapes. */
+export interface TurnP {
+  role: 'user' | 'assistant' | 'commentary' | 'tool'
+  text: string
+  title?: string
+  code?: string
+  output?: string
+  durationMs?: number
+  ok?: boolean
+}
 
 export interface TaskDetailP {
   id: string

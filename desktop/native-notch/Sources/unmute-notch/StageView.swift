@@ -41,7 +41,19 @@ struct StageView: View {
                 if t.status == .needsUser, let q = t.question {
                     QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 8)
                 }
-                if t.alive {
+                if t.backend == "codex-desktop" {
+                    // Wherever a Claude task shows its terminal, a Codex task
+                    // shows its messages — and can be replied to. Neither the
+                    // terminal nor DeadPanel belongs here: the first does not
+                    // exist for this backend, and the second offered to
+                    // "resume" a chat that had never stopped.
+                    ScrollView {
+                        ConversationPanel(turns: t.conversation ?? [])
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.top, 10)
+                    CodexComposer(model: model, taskId: t.id).padding(.top, 9)
+                } else if t.alive {
                     TerminalPanel(model: model, taskId: t.id, tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
                         .padding(.top, 10)
                 } else {
@@ -83,7 +95,13 @@ struct StageView: View {
             if t.alive {
                 KeyButton(label: "kill", danger: true) { model.emit(.kill(id: t.id)) }
             } else {
-                KeyButton(label: "resume") { model.emit(.resume(id: t.id)) }
+                if t.backend == "codex-desktop" {
+                    // The door into the real chat, on every surface a task
+                    // appears on — this one is the split/full stage.
+                    KeyButton(label: "open in Codex") { model.emit(.openInTerminal(id: t.id)) }
+                } else {
+                    KeyButton(label: "resume") { model.emit(.resume(id: t.id)) }
+                }
             }
             KeyButton(label: (t.shelved ?? false) ? "unshelve" : "shelve") {
                 model.emit(.shelve(id: t.id, shelved: !(t.shelved ?? false)))

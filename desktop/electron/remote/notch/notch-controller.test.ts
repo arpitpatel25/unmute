@@ -467,3 +467,71 @@ test('an attention task still wins over a working one', () => {
   assert.equal(h.client.last('setState')!.state, 'task')
   assert.equal(h.client.last('showTask')!.task.id, 'b1')
 })
+
+// ── Codex tasks on every surface ────────────────────────────────────────────
+
+test('a Codex task is never reported dead — its thread outlives every turn', () => {
+  // `alive` is read everywhere as "can you still talk to this?". Reporting
+  // false put a finished Codex chat behind "resume — continue with full
+  // context" / "re-run fresh", offering to revive something never stopped.
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th', alive: false }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const detail = h.client.last('stageDetail')!.task
+  assert.equal(detail.alive, true)
+  assert.equal(detail.backend, 'codex-desktop')
+})
+
+test('the wall carries the backend, so a card can offer "open in Codex"', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  put(h, makeTask({ id: 'k1', state: 'ready' }))
+  h.client.fire({ type: 'openDashboard' })
+  const cards = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards)
+  assert.equal(cards.find((c) => c.id === 'c1')!.backend, 'codex-desktop')
+  assert.equal(cards.find((c) => c.id === 'k1')!.backend, undefined)
+})
+
+test('the transcript reaches the surface as items, not one flattened blob', () => {
+  const h = setup()
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    conversation: [
+      { role: 'user', text: 'open the video' },
+      { role: 'tool', text: '', title: 'Search YouTube', code: 'await tab.goto(x)', output: 'found', durationMs: 99_100 },
+      { role: 'assistant', text: 'Opened it.' },
+    ],
+  }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const conv = h.client.last('stageDetail')!.task.conversation!
+  assert.deepEqual(conv.map((c) => c.role), ['user', 'tool', 'assistant'])
+  assert.equal(conv[1].title, 'Search YouTube')
+  assert.equal(conv[1].durationMs, 99_100)
+})
+
+test('replying to a Codex chat does NOT fling you onto an unrelated blocked task', () => {
+  // The composer is always available, so a plain reply is not an answer to the
+  // crank's question — advancing on it would move the user somewhere they never
+  // asked to go.
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  h.client.fire({ type: 'answerText', id: 'c1', text: 'also check the description' })
+  h.flush()
+  assert.deepEqual(h.calls.answer?.[0], ['c1', 'also check the description'])
+  assert.equal(h.client.last('stageDetail')!.task.id, 'c1', 'still on the task you were talking to')
+})
+
+test('answering the BLOCKING question still advances the crank', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  put(h, makeTask({ id: 'b2', state: 'needs-user', alive: true, question: { text: 'q2' } }))
+  h.client.fire({ type: 'tap' })
+  h.client.fire({ type: 'answerText', id: 'b1', text: 'yes' })
+  h.flush()
+  assert.equal(h.client.last('showTask')!.task.id, 'b2', 'moved on to the next blocked task')
+})

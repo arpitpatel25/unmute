@@ -97,9 +97,22 @@ struct WallView: View {
                 if let n = c.note, !n.isEmpty {
                     Text("✎ \(n)").font(.system(size: 11.5)).foregroundColor(Theme.cReady).lineLimit(1)
                 }
-                HStack {
+                HStack(spacing: 6) {
                     Text(c.kind == "session" ? (c.dir ?? "session") : "one-off")
                     Spacer(minLength: 0)
+                    if c.backend == "codex-desktop" {
+                        // The grid is the one place we deliberately do NOT show
+                        // messages — many tasks at once, so a transcript per
+                        // card would drown the wall. The door into the real
+                        // chat still belongs here.
+                        Button(action: { model.emit(.openInTerminal(id: c.id)) }) {
+                            Text("open in Codex")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(Theme.cReady)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(RoundedRectangle(cornerRadius: 5).fill(Theme.cReady.opacity(0.12)))
+                        }.buttonStyle(.plain)
+                    }
                     Text(c.age ?? "")
                 }
                 .font(.system(size: 10.5, design: .monospaced)).foregroundColor(Theme.textFaint)

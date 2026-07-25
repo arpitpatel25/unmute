@@ -150,8 +150,11 @@ final class AppController: NSObject {
     /// The Stage/wall keep the cockpit frame; the task surface is content-sized.
     private func frame(for state: NotchState) -> NSRect {
         if state == .task {
-            // No terminal ⇒ no need for terminal-sized real estate.
-            let size = geometry.taskSize(compact: model.frontDetail?.backend == "codex-desktop")
+            // Codex tasks were briefly given a compact frame, back when the
+            // panel had nothing but two buttons to show. They now carry a full
+            // transcript and a composer, so they want the same room as a
+            // terminal.
+            let size = geometry.taskSize
             return geometry.topPinnedFrame(width: size.width, height: size.height)
         }
         return geometry.windowFrame(for: state)

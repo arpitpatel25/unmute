@@ -73,8 +73,20 @@ struct TaskDetail: Codable {
 
 /// One turn of a GUI-agent conversation.
 struct TurnP: Codable {
-    let role: String           // "user" | "assistant"
+    /// "user" | "commentary" | "tool" | "assistant" — Codex's own distinctions,
+    /// kept rather than flattened (see codex/rollout.ts).
+    let role: String
     let text: String
+    /// tool: the step's label, as Codex titles it ("Search YouTube").
+    let title: String?
+    /// tool: the exact code/command it ran.
+    let code: String?
+    /// tool: what came back.
+    let output: String?
+    /// tool: wall time Codex reported, in ms.
+    let durationMs: Int?
+    /// tool: false when the step reported an error.
+    let ok: Bool?
 }
 
 /// A resting card on the wall.
@@ -91,6 +103,9 @@ struct CardP: Codable {
     let agent: Bool?           // "↳ agent" (spawnedBy)
     let note: String?
     let alive: Bool
+    /// Which backend runs this card. Absent ⇒ Claude (PTY-backed).
+    let backend: String?
+    let project: String?
 }
 
 struct GroupP: Codable { let name: String; let cards: [CardP] }   // name "" = ungrouped
