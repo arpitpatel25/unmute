@@ -16,6 +16,9 @@ import { BalancePill } from '../paywall/BalancePill'
 import { OutOfCreditBanner } from '../paywall/OutOfCreditBanner'
 import { AuthProvider, useAuth } from '../paywall/AuthContext'
 import { SignInScreen } from '../paywall/SignInScreen'
+// Remote settings live in the main window now that the floating overlay that
+// used to host them was retired (ede9966).
+import { RemoteSettings } from '../remote/RemoteSettings'
 
 type Tab = 'history' | 'voice' | 'remote' | 'account' | 'permissions' | 'language' | 'settings' | 'privacy'
 
