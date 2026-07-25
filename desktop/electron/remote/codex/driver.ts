@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, setReasoning, type ReasoningState, type ReasoningAxis } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, type CodexSnapshot } from './rollout'
 
@@ -195,13 +195,83 @@ export class CodexDesktopDriver {
   }
 
   /**
+   * What model / effort / speed does THIS device offer, and what is selected?
+   *
+   * Read live, never hardcoded: "5.6 Terra" will not exist in two releases, and
+   * a managed plan may not offer every tier. Same rule the approval levels
+   * follow, for the same reason.
+   */
+  async reasoningOptions(): Promise<ReasoningState> {
+    const cdp = await this.connect()
+    if (!cdp) return { label: null, current: {}, options: {} }
+    const state = await readReasoning(cdp, (ms) => this.sleep(ms))
+    log.event('codex-reasoning-read', { label: state.label, current: state.current })
+    return state
+  }
+
+  /** Set one axis of the reasoning control on the current composer. */
+  async setReasoningAxis(axis: ReasoningAxis, value: string): Promise<boolean> {
+    const cdp = await this.connect()
+    if (!cdp) return false
+    const ok = await setReasoning(cdp, axis, value, (ms) => this.sleep(ms))
+    log[ok ? 'event' : 'warn']('codex-reasoning-set', { axis, value, ok })
+    return ok
+  }
+
+  /**
+   * Apply the user's model choice to the FRESH composer, before the first turn.
+   *
+   * Restores whatever was selected before, because this control is the
+   * composer's sticky default: without the restore, running one unmute task on
+   * a cheaper model would silently change what the user's next MANUAL Codex
+   * chat runs on. Returns the restore thunk so the caller can run it after the
+   * turn is sent.
+   */
+  private async applyReasoning(
+    cdp: CodexCdp, want: { model?: string; effort?: string; speed?: string },
+  ): Promise<() => Promise<void>> {
+    const wanted: Array<[ReasoningAxis, string | undefined]> =
+      [['Model', want.model], ['Effort', want.effort], ['Speed', want.speed]]
+    if (!wanted.some(([, v]) => v)) return async () => {}
+    const before = await readReasoning(cdp, (ms) => this.sleep(ms))
+    const changed: Array<[ReasoningAxis, string]> = []
+    for (const [axis, value] of wanted) {
+      if (!value) continue
+      const offered = before.options[axis] ?? []
+      if (offered.length && !offered.includes(value)) {
+        log.warn('codex-reasoning-unavailable', { axis, value, offered })
+        continue
+      }
+      if (before.current[axis] === value) continue
+      if (await setReasoning(cdp, axis, value, (ms) => this.sleep(ms))) {
+        const prev = before.current[axis]
+        if (prev) changed.push([axis, prev])
+      }
+    }
+    log.event('codex-reasoning-applied', { want, restoring: changed.map(([a]) => a) })
+    return async () => {
+      for (const [axis, prev] of changed) {
+        await setReasoning(cdp, axis, prev, (ms) => this.sleep(ms))
+      }
+    }
+  }
+
+  /**
    * Create a task: open a new chat (project-scoped when asked), type the intent,
    * submit. Returns the DURABLE thread id — we deliberately wait past the
    * transient `client-new-thread:` id so the handle we persist is the real one.
    */
   async createTask(
     intent: string,
-    opts: { project?: string | null; autoArm?: boolean; permissionMode?: UnmutePermissionMode } = {},
+    opts: {
+      project?: string | null
+      autoArm?: boolean
+      permissionMode?: UnmutePermissionMode
+      /** Codex's own labels, e.g. "5.6 Luna" / "High" / "Fast". */
+      model?: string
+      effort?: string
+      speed?: string
+    } = {},
   ): Promise<CreateTaskResult> {
     const avail = await this.availability()
     if (!avail.ok && !opts.autoArm) return { ok: false, reason: avail.reason }
@@ -230,6 +300,7 @@ export class CodexDesktopDriver {
     // Set the policy on the FRESH composer — before the first turn, so it holds
     // for the whole thread rather than being changed under a running task.
     if (opts.permissionMode) await this.applyApprovalPolicy(cdp, opts.permissionMode)
+    const restoreReasoning = await this.applyReasoning(cdp, opts)
 
     if (!(await cdp.focusComposer())) { log.warn('codex-create-no-composer', {}); return { ok: false, reason: 'no-composer' } }
     await this.sleep(120)
@@ -258,6 +329,8 @@ export class CodexDesktopDriver {
       log.warn('codex-create-id-unresolved', { startedAt, note: 'thread exists in Codex but id not recovered' })
       return { ok: false, reason: 'id-unresolved' }
     }
+    // The turn is away; hand the composer back to whatever the user had.
+    await restoreReasoning().catch(() => {})
     log.event('codex-task-created', { threadId, project: opts.project ?? null })
     return { ok: true, threadId }
   }

@@ -206,6 +206,11 @@ export class CodexCdp {
     return (await this.evaluate<string>(`(() => { const ce = document.querySelector('[contenteditable=true]'); return ce ? (ce.textContent || '') : ''; })()`)) ?? ''
   }
 
+  /** Move the pointer without pressing — submenus open on hover, not click. */
+  async hover(x: number, y: number): Promise<void> {
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+  }
+
   async pressEscape(): Promise<void> {
     const base = { code: 'Escape', key: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }
     await this.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
@@ -395,6 +400,136 @@ export async function expandSidebarSections(cdp: CodexCdp, sleep: (ms: number) =
     opened++
   }
   return opened
+}
+
+// ─── Model / effort / speed (the composer's reasoning control) ──────────
+//
+// Codex puts these behind one control that reads "5.6 Terra High". Its menu has
+// three submenus — Model, Effort, Speed — each revealed by HOVERING the parent
+// row, which is why this dispatches mouseMoved rather than clicking through.
+//
+// The names are read, never hardcoded. "5.6 Terra" will not exist in two
+// releases, and a managed plan may not offer every tier; the same
+// discovery-not-assumption rule that the approval levels follow.
+
+const REASONING_BUTTON = '[data-composer-navigation-target="reasoning"]'
+
+export type ReasoningAxis = 'Model' | 'Effort' | 'Speed'
+
+export interface ReasoningState {
+  /** The control's own label, e.g. "5.6 Terra High". */
+  label: string | null
+  /** Current value per axis, as Codex words it. */
+  current: Partial<Record<ReasoningAxis, string>>
+  /** What this device offers per axis. */
+  options: Partial<Record<ReasoningAxis, string[]>>
+}
+
+async function openReasoningMenu(cdp: CodexCdp, sleep: (ms: number) => Promise<void>): Promise<boolean> {
+  const at = await centreOf(cdp, REASONING_BUTTON)
+  if (!at) return false
+  await cdp.click(at.x, at.y)
+  await sleep(800)
+  const n = await cdp.evaluate<number>(`document.querySelectorAll('[role="menuitem"]').length`)
+  return (n ?? 0) > 0
+}
+
+/** Rows of the top menu, as "Axis / value" pairs. */
+async function readAxes(cdp: CodexCdp): Promise<Partial<Record<ReasoningAxis, string>>> {
+  const raw = await cdp.evaluate<string>(`JSON.stringify(
+    [...document.querySelectorAll('[role="menuitem"]')].map((e) => (e.innerText || '').trim())
+  )`)
+  const out: Partial<Record<ReasoningAxis, string>> = {}
+  for (const line of JSON.parse(raw ?? '[]') as string[]) {
+    const m = /^(Model|Effort|Speed)\n?\s*(.*)$/.exec(line)
+    if (m && m[2]) out[m[1] as ReasoningAxis] = m[2].trim()
+  }
+  return out
+}
+
+const AXIS_ROWS = new Set(['', 'Reset to default', 'Model', 'Effort', 'Speed'])
+
+/**
+ * Open the menu, hover ONE axis, and read the submenu it reveals.
+ *
+ * Deliberately reopens the whole menu per axis. Hovering from one axis row to
+ * the next does not reliably switch the submenu — measured: Model → Effort left
+ * Model's items on screen, while Effort → Speed switched correctly, because the
+ * pointer travels across the open submenu on the way. Diffing before/after then
+ * reports the wrong list, or an empty one, which is how Effort came back empty
+ * while Model and Speed read fine. Three open/close cycles is slower and always
+ * right, and this runs once per task creation.
+ */
+async function readAxisOptions(
+  cdp: CodexCdp, axis: ReasoningAxis, sleep: (ms: number) => Promise<void>,
+): Promise<string[]> {
+  if (!(await openReasoningMenu(cdp, sleep))) return []
+  const box = await cdp.evaluate<string>(`(() => {
+    const e = [...document.querySelectorAll('[role="menuitem"]')].find((x) => new RegExp('^' + AXIS_LITERAL).test((x.innerText || '').trim()));
+    if (!e) return '';
+    const r = e.getBoundingClientRect();
+    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+  })()`.replace('AXIS_LITERAL', JSON.stringify(axis)))
+  if (!box) { await cdp.pressEscape(); return [] }
+  const at = JSON.parse(box) as { x: number; y: number }
+  await cdp.hover(at.x, at.y)
+  await sleep(800)
+  const raw = await cdp.evaluate<string>(`JSON.stringify(
+    [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')]
+      .map((e) => (e.innerText || '').trim().split(String.fromCharCode(10))[0].trim())
+  )`)
+  await cdp.pressEscape()
+  await sleep(250)
+  // Everything that is not one of the parent rows belongs to the submenu.
+  return (JSON.parse(raw ?? '[]') as string[]).filter((t) => !AXIS_ROWS.has(t))
+}
+
+/** Read the whole control: current values and what this device offers. */
+export async function readReasoning(cdp: CodexCdp, sleep: (ms: number) => Promise<void>): Promise<ReasoningState> {
+  const label = (await cdp.evaluate<string>(
+    `(() => { const b = document.querySelector('${REASONING_BUTTON}'); return b ? (b.innerText || '').trim().replace(/\\n/g, ' ') : ''; })()`,
+  )) || null
+  if (!(await openReasoningMenu(cdp, sleep))) return { label, current: {}, options: {} }
+  const current = await readAxes(cdp)
+  await cdp.pressEscape()
+  await sleep(250)
+  const options: Partial<Record<ReasoningAxis, string[]>> = {}
+  for (const axis of ['Model', 'Effort', 'Speed'] as ReasoningAxis[]) {
+    options[axis] = await readAxisOptions(cdp, axis, sleep)
+  }
+  return { label, current, options }
+}
+
+/** Choose a value on one axis. False when this device does not offer it. */
+export async function setReasoning(
+  cdp: CodexCdp, axis: ReasoningAxis, value: string, sleep: (ms: number) => Promise<void>,
+): Promise<boolean> {
+  if (!(await openReasoningMenu(cdp, sleep))) return false
+  const rowBox = await cdp.evaluate<string>(`(() => {
+    const e = [...document.querySelectorAll('[role="menuitem"]')].find((x) => new RegExp('^' + ${JSON.stringify(axis)}).test((x.innerText || '').trim()));
+    if (!e) return '';
+    const r = e.getBoundingClientRect();
+    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+  })()`)
+  if (!rowBox) { await cdp.pressEscape(); return false }
+  const row = JSON.parse(rowBox) as { x: number; y: number }
+  await cdp.hover(row.x, row.y)
+  await sleep(700)
+  const itemBox = await cdp.evaluate<string>(`(() => {
+    const want = ${JSON.stringify(value.toLowerCase())};
+    const items = [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')];
+    const el = items.find((e) => (e.innerText || '').trim().toLowerCase().startsWith(want));
+    if (!el) return '';
+    const r = el.getBoundingClientRect();
+    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+  })()`)
+  if (!itemBox) { await cdp.pressEscape(); await sleep(200); return false }
+  const at = JSON.parse(itemBox) as { x: number; y: number }
+  await cdp.click(at.x, at.y)
+  await sleep(500)
+  await cdp.pressEscape()
+  await sleep(200)
+  return true
 }
 
 /** Strip Codex's `local:` prefix so ids match rollout filenames. */

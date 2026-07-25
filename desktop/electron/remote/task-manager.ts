@@ -183,6 +183,8 @@ export interface TaskManagerOpts {
   permissionMode?: () => 'auto-approve' | 'ask'
   /** How often to look for Codex approval requests (ms). */
   approvalSweepMs?: number
+  /** The user's Codex model/effort/speed choice, read fresh per dispatch. */
+  codexReasoning?: () => { model?: string; effort?: string; speed?: string }
   /** signed-in user id, else 'local' (Remote works regardless — PRD). */
   userKey?: string
   /** base dir; default ~/.unmute/remote. */
@@ -292,8 +294,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'permissionMode'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'permissionMode'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'permissionMode' | 'codexReasoning'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'permissionMode' | 'codexReasoning'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -317,6 +319,7 @@ export class TaskManager extends EventEmitter {
       librarian: opts.librarian,
       codexDriver: opts.codexDriver,
       permissionMode: opts.permissionMode,
+      codexReasoning: opts.codexReasoning,
       reapSession: opts.reapSession,
       now: opts.now,
     }
@@ -614,9 +617,11 @@ export class TaskManager extends EventEmitter {
     const kind = opts.kind ?? 'oneoff'
 
     tlog.event('codex-dispatch-begin', { project: opts.project ?? null, kind, intentLen: intent.length })
+    const reasoning = this.opts.codexReasoning?.() ?? {}
     const created = await driver.createTask(intent, {
       project: opts.project ?? null,
       permissionMode: this.opts.permissionMode?.() ?? 'ask',
+      ...reasoning,
     })
 
     // ONE-WAY DOOR. Whatever happens from here the task stays a Codex task. It

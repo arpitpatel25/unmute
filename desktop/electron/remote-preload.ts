@@ -217,6 +217,17 @@ export const remotePreloadExtensions = {
    *  description) — the settings selector renders THIS, so new models can arrive
    *  via runtime config without an app rebuild. */
   remoteGetModelCatalog: (): Promise<Array<{ id: string; label: string; description?: string }>> => ipcRenderer.invoke('remote:get-model-catalog'),
+
+  /** Codex's OWN model / effort / speed, read from the running app. The chip
+   *  must offer what the chosen agent has — not Claude's tiers under a Codex
+   *  label, which is what made "Codex + Opus" a reachable state. */
+  remoteCodexReasoning: (): Promise<{
+    label: string | null
+    current: Partial<Record<'Model' | 'Effort' | 'Speed', string>>
+    options: Partial<Record<'Model' | 'Effort' | 'Speed', string[]>>
+  }> => ipcRenderer.invoke('remote:codex-reasoning'),
+  remoteCodexReasoningSet: (axis: 'Model' | 'Effort' | 'Speed', value: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:codex-reasoning-set', axis, value),
   /** Set the doer model; applies to the next dispatched task. Returns the
    *  validated value actually stored. */
   remoteSetModel: (m: string): Promise<string> => ipcRenderer.invoke('remote:set-model', m),

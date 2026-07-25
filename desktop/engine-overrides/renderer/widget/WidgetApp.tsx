@@ -88,14 +88,64 @@ function remoteModelApi() {
   }
 }
 
+function remoteCodexApi() {
+  return window.electronAPI as unknown as {
+    remoteAgentOptions?: () => Promise<{ current: string }>
+    remoteCodexReasoning?: () => Promise<{
+      label: string | null
+      current: Partial<Record<'Model' | 'Effort' | 'Speed', string>>
+      options: Partial<Record<'Model' | 'Effort' | 'Speed', string[]>>
+    }>
+    remoteCodexReasoningSet?: (axis: 'Model' | 'Effort' | 'Speed', value: string) => Promise<boolean>
+  }
+}
+
+/**
+ * THE CHIP MUST FOLLOW THE AGENT PICKER.
+ *
+ * It always read the Claude catalog and had no idea the picker existed, so
+ * "Codex + Opus" was a reachable state: the task ran on Codex and the model
+ * choice was written to unmute's Claude setting and silently discarded. Codex
+ * has its own tiers — and its own effort and speed axes, which for that backend
+ * are as much a part of "what am I running this on" as the model name.
+ *
+ * Names are never hardcoded; they come from the running Codex. When Codex is
+ * closed we show the last list we truly saw rather than inventing one.
+ */
 function RemoteBadge() {
   const [catalog, setCatalog] = useState<ModelChoice[]>(FALLBACK_CATALOG)
   // The saved doer-model id — ANY catalog id, not limited to haiku/sonnet/opus.
   const [model, setModel] = useState<string>('sonnet')
   const [expanded, setExpanded] = useState(false)
+  const [agent, setAgent] = useState<string>('claude')
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isCodex = agent === 'codex-desktop'
+
+  // Which agent is selected decides WHICH catalog this chip is showing.
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      const cx = remoteCodexApi()
+      const opts = await cx.remoteAgentOptions?.().catch(() => null)
+      const a = opts?.current ?? 'claude'
+      if (cancelled) return
+      setAgent(a)
+      if (a !== 'codex-desktop') return
+      const r = await cx.remoteCodexReasoning?.().catch(() => null)
+      if (cancelled || !r) return
+      const models = r.options.Model ?? []
+      if (models.length) setCatalog(models.map((id) => ({ id, label: id })))
+      if (r.current.Model) setModel(r.current.Model)
+    }
+    void load()
+    // The picker sits on the same pill; re-read while the capture is open so
+    // switching agent switches the catalog under it.
+    const t = setInterval(() => { void load() }, 1500)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [])
 
   useEffect(() => {
+    if (isCodex) return   // the Codex catalog is loaded above
     const api = remoteModelApi()
     // Reflect whatever the saved model IS — never silently downgrade an id we
     // don't recognise. (The old guard forced any non-{haiku,sonnet,opus} value
@@ -129,7 +179,8 @@ function RemoteBadge() {
 
   const pick = (m: string) => {
     setModel(m) // optimistic — reflects instantly; the next task reads the setting
-    void remoteModelApi().remoteSetModel?.(m)
+    if (isCodex) void remoteCodexApi().remoteCodexReasoningSet?.('Model', m)
+    else void remoteModelApi().remoteSetModel?.(m)
     setExpanded(false)
   }
 

@@ -1602,6 +1602,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // Claude, so the two backends behave alike (capped by what the device
     // actually offers — see codex/approval.ts).
     permissionMode: () => (settings.get('permissionMode') === 'auto-approve' ? 'auto-approve' : 'ask'),
+    // Read fresh per dispatch, and only what the user actually chose — an
+    // absent value means "leave Codex on whatever it is set to".
+    codexReasoning: () => ({
+      model: (settings.get('codexModel' as never) as string) || undefined,
+      effort: (settings.get('codexEffort' as never) as string) || undefined,
+      speed: (settings.get('codexSpeed' as never) as string) || undefined,
+    }),
     // PARKED: withholding the librarian trips the `!this.opts.librarian` gate in
     // handToLibrarian, so no session is ever spawned. (§12)
     librarian: LIBRARIAN_PARKED ? undefined : librarian,
@@ -2697,6 +2704,40 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
 
   // Live Codex project list for the picker ("create it in <project>").
+  /**
+   * The Codex model catalog, read from the app itself.
+   *
+   * The capture chip used to show haiku/sonnet/opus regardless of which agent
+   * the picker was on, so "Codex + Opus" was a reachable state — the task went
+   * to Codex and the model choice was written to unmute's CLAUDE setting and
+   * silently discarded. The chip must offer what the chosen agent actually has.
+   *
+   * Read live rather than listed here: model names change every few releases,
+   * and a managed plan may not offer every tier.
+   */
+  ipcMain.handle('remote:codex-reasoning', async () => {
+    if (!codexDriver) return { label: null, current: {}, options: {} }
+    const state = await codexDriver.reasoningOptions().catch((e) => {
+      log.warn('codex-reasoning-read-failed', { error: (e as Error).message })
+      return { label: null, current: {}, options: {} }
+    })
+    // Remember it so the chip can still show something sensible when Codex is
+    // closed — the last thing we truly saw, never an invented list.
+    if (state.options.Model?.length) settings.set('codexReasoningCache', state as never)
+    return state
+  })
+
+  ipcMain.handle('remote:codex-reasoning-set', async (_e, axis: 'Model' | 'Effort' | 'Speed', value: string) => {
+    if (!codexDriver) return false
+    // Store the CHOICE regardless of whether we could apply it now: dispatch
+    // re-applies it on the fresh composer anyway, so a closed Codex must not
+    // lose what the user picked.
+    const key = axis === 'Model' ? 'codexModel' : axis === 'Effort' ? 'codexEffort' : 'codexSpeed'
+    settings.set(key as never, value as never)
+    log.event('codex-reasoning-choice', { axis, value })
+    return await codexDriver.setReasoningAxis(axis, value).catch(() => false)
+  })
+
   ipcMain.handle('remote:codex-projects', async () => {
     if (!codexDriver) return []
     return codexDriver.projects().catch(() => [])
