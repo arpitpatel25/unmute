@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, type CodexSnapshot } from './rollout'
 
@@ -331,33 +331,57 @@ export class CodexDesktopDriver {
     // dependence on what the sidebar is showing — verified against a thread
     // inside a collapsed section.
     //
-    // `-g` switches WITHOUT raising the app, which is what the send path needs;
-    // the user-facing "open in Codex" omits it and comes forward.
-    const args = opts.background ? ['-g', `codex://threads/${bare}`] : [`codex://threads/${bare}`]
+    // ...but it ACTIVATES Codex. `open -g` suppresses `open`'s own activation,
+    // yet the app's URL handler raises the window itself — measured: Finder
+    // frontmost, deep link, ChatGPT frontmost. For a dictated follow-up that
+    // would yank the user out of whatever they were doing, which is the one
+    // thing this whole lane exists to avoid.
+    //
+    // So the deep link is the LAST rung, not the first. The ladder:
+    //   0. already there            — nothing to do (the common repeat-send case)
+    //   1. click the sidebar row    — CDP input never steals focus
+    //   2. expand collapsed sections and retry — still focus-free (8 rows → 16)
+    //   3. deep link                — always correct, and for a background
+    //      switch we put the user's app back in front afterwards
+    const cdp = existing ?? (await this.connect())
+    if (!cdp) return false
+
+    const isThere = async (): Promise<boolean> => {
+      const current = await currentConversationId(cdp)
+      return !!current && bareThreadId(current) === bare
+    }
+    const settle = async (via: string): Promise<boolean> => {
+      for (let i = 0; i < 12; i++) {
+        await this.sleep(200)
+        if (await isThere()) { log.event('codex-thread-opened', { threadId: bare, via }); return true }
+      }
+      return false
+    }
+
+    if (await isThere()) { log.event('codex-thread-already-open', { threadId: bare }); return true }
+    if (await clickThreadRow(cdp, threadId) && await settle('sidebar-row')) return true
+    if (await expandSidebarSections(cdp, (ms) => this.sleep(ms))) {
+      if (await clickThreadRow(cdp, threadId) && await settle('sidebar-row-expanded')) return true
+    }
+
+    const restore = opts.background ? await frontmostApp() : null
     try {
       await new Promise<void>((resolve, reject) => {
-        execFile('open', args, (err) => (err ? reject(err) : resolve()))
+        execFile('open', ['-g', `codex://threads/${bare}`], (err) => (err ? reject(err) : resolve()))
       })
     } catch (e) {
       log.warn('codex-deeplink-failed', { threadId: bare, error: (e as Error).message })
       return false
     }
-
-    // Confirm rather than assume. Without this a failed switch is invisible and
-    // we would type into whichever thread happened to be open — far worse than
-    // reporting failure.
-    const cdp = existing ?? (await this.connect())
-    if (!cdp) return false
-    for (let i = 0; i < 15; i++) {
-      await this.sleep(200)
-      const current = await currentConversationId(cdp)
-      if (current && bareThreadId(current) === bare) {
-        log.event('codex-thread-opened', { threadId: bare, attempts: i + 1, background: !!opts.background })
-        return true
-      }
+    const landed = await settle('deeplink')
+    if (restore) {
+      // Hand focus straight back. Not cosmetic: without it every voice
+      // follow-up to an off-screen thread steals the user's window.
+      await activateApp(restore)
+      log.event('codex-focus-restored', { app: restore })
     }
-    log.warn('codex-thread-open-unconfirmed', { threadId: bare })
-    return false
+    if (!landed) log.warn('codex-thread-open-unconfirmed', { threadId: bare })
+    return landed
   }
 
   /** Read a thread's state + recent turns from disk. Never touches the renderer. */
@@ -374,3 +398,18 @@ export async function resolveCodexCli(which: (bin: string) => Promise<string | n
 }
 
 export const codexHome = () => join(homedir(), '.codex')
+
+
+/** The app the user is actually looking at, so we can hand focus back. */
+async function frontmostApp(): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile('osascript', ['-e', 'tell application "System Events" to get name of first application process whose frontmost is true'],
+      (err, stdout) => resolve(err ? null : stdout.trim() || null))
+  })
+}
+
+async function activateApp(name: string): Promise<void> {
+  return new Promise((resolve) => {
+    execFile('osascript', ['-e', `tell application "${name.replace(/"/g, '')}" to activate`], () => resolve())
+  })
+}

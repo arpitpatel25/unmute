@@ -348,6 +348,55 @@ export async function listThreads(cdp: CodexCdp): Promise<CodexThreadRow[]> {
   try { return json ? JSON.parse(json) : [] } catch { return [] }
 }
 
+/**
+ * Click a thread's row in the sidebar. Null when the row is not rendered.
+ *
+ * This is the focus-FREE way to switch threads, so it is tried first — CDP
+ * input never brings the app forward. Its limit is that the sidebar only
+ * renders a window of the threads: sections can be collapsed (their contents
+ * are absent, not hidden) and lists are truncated.
+ */
+export async function clickThreadRow(cdp: CodexCdp, threadId: string): Promise<boolean> {
+  const domId = threadId.startsWith('local:') ? threadId : `local:${threadId}`
+  const box = await cdp.evaluate<string>(`(() => {
+    const el = document.querySelector('[data-app-action-sidebar-thread-id=' + ${JSON.stringify(JSON.stringify(domId))} + ']');
+    if (!el) return '';
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return '';
+    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+  })()`)
+  if (!box) return false
+  const { x, y } = JSON.parse(box) as { x: number; y: number }
+  await cdp.click(x, y)
+  return true
+}
+
+/**
+ * Expand every collapsed sidebar section, so more rows become reachable.
+ *
+ * Measured: expanding a collapsed Recents took the DOM from 8 rows to 16, with
+ * no focus steal. It does not reach everything — the list is still windowed —
+ * but it converts the common "it's right there, just collapsed" case into one
+ * that needs no deep link.
+ */
+export async function expandSidebarSections(cdp: CodexCdp, sleep: (ms: number) => Promise<void>): Promise<number> {
+  const boxes = await cdp.evaluate<string>(`JSON.stringify(
+    [...document.querySelectorAll('[data-app-action-sidebar-section]')]
+      .filter((e) => e.getAttribute('data-app-action-sidebar-section-collapsed') === 'true')
+      .map((e) => { const t = e.querySelector('[data-app-action-sidebar-section-toggle]') || e;
+                    const r = t.getBoundingClientRect();
+                    return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  )`)
+  let opened = 0
+  for (const b of JSON.parse(boxes ?? '[]') as Array<{ x: number; y: number }>) {
+    await cdp.click(b.x, b.y)
+    await sleep(700)
+    opened++
+  }
+  return opened
+}
+
 /** Strip Codex's `local:` prefix so ids match rollout filenames. */
 export function bareThreadId(domId: string): string {
   return domId.replace(/^local:/, '')
