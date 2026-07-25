@@ -243,6 +243,18 @@ export function setOverlayInteractive(on: boolean): void {
 
 /** Push the docked-mode setting in (init owns the settings store). Turning it
  *  off while docked hides the pill (legacy has no dock). */
+// RETIRED-BY-FLAG (spec 2026-07-24): when the notch shell owns task attention,
+// the legacy overlay must never appear. Every presentation path funnels through
+// expandOverlay() or reconcileDock(), so suppressing those two retires the whole
+// surface — one switch, fully reversible (UNMUTE_NOTCH_ENABLED=0 restores it).
+let suppressed = false
+
+export function setOverlaySuppressed(value: boolean): void {
+  suppressed = value
+  if (value) hideOverlay()
+  log.event('overlay-suppressed', { suppressed: value })
+}
+
 export function setDockedMode(enabled: boolean): void {
   dockedEnabled = enabled
   if (!enabled && mode === 'docked') hideOverlay()
@@ -254,6 +266,7 @@ export function setDockedMode(enabled: boolean): void {
  *  never disturbs an already-expanded panel. */
 export function reconcileDock(activeCount: number): void {
   lastActiveCount = activeCount
+  if (suppressed) return // notch owns attention
   if (!dockedEnabled || mode === 'expanded' || sessionDismissed) return
   if (activeCount > 0) showAs('docked', dockedBounds())
   else if (mode === 'docked') hideOverlay()
@@ -268,6 +281,7 @@ export function onNewTask(activeCount: number): void {
 /** Expand to the full panel, optionally focusing a task. Used by the dock click,
  *  the auto-present trigger (docked mode), and the manual "open" button. */
 export function expandOverlay(taskId?: string): void {
+  if (suppressed) return // notch owns attention
   const win = showAs('expanded', expandedBounds())
   if (taskId) win.webContents.send('remote:overlay-focus', { taskId })
   log.event('overlay-expanded', { taskId: taskId ?? null })

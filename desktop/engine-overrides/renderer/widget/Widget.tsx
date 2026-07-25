@@ -44,13 +44,13 @@ const PILL_CRITICAL_CSS = `
    panel. The external styles.css already sets box-shadow:none (line ~1244); this
    self-carried duplicate lagged behind and, injected later in the DOM, WON the
    cascade — so the stale shadow was what actually rendered. Kept in sync now. */
-.unmute-pill { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; background: #0E0E10; border: 1px solid rgba(255,255,255,0.55); border-radius: 9999px; box-shadow: none; max-width: 480px; }
+.unmute-pill { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; background: #000; border: 1px solid rgba(255,255,255,0.55); border-radius: 9999px; box-shadow: none; max-width: 480px; }
 .unmute-pill-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .unmute-pill-dot--white { background: rgba(255,255,255,0.88); }
 .unmute-pill-dot--red { background: rgb(255,90,90); }
 .unmute-pill-dot--processing { background: rgb(56,182,255); }
-.unmute-pill-label { font-size: 13px; font-weight: 500; letter-spacing: 0.01em; white-space: nowrap; color: rgba(255,255,255,0.55); }
-.unmute-pill-timer { font-size: 12px; font-variant-numeric: tabular-nums; color: rgba(255,255,255,0.30); white-space: nowrap; transition: color 0.3s ease; }
+.unmute-pill-label { font-size: 15px; font-weight: 500; letter-spacing: 0.01em; white-space: nowrap; color: rgba(255,255,255,0.78); }
+.unmute-pill-timer { font-size: 14px; font-variant-numeric: tabular-nums; color: rgba(255,255,255,0.55); white-space: nowrap; transition: color 0.3s ease; }
 .unmute-pill-timer--warn { color: #FFAA33; }
 .unmute-pill-waveform { flex-shrink: 0; display: flex; align-items: center; }
 .unmute-pill-stop { width: 28px; height: 28px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.15s; background: rgba(255,255,255,0.08); }

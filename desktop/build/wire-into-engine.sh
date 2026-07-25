@@ -132,6 +132,30 @@ wire_paywall() {
     exit 1
   fi
 
+  # Build + vendor the native notch shell (spec 2026-07-24). Like cua-driver it
+  # is spawned as a DIRECT child of the signed .app, so its NSPanel carries the
+  # app's identity and never steals focus. Built from source here (Swift toolchain
+  # is a build-machine dependency, same as node-gyp for the native addons).
+  if [[ -d "$ROOT/native-notch" ]]; then
+    log "Building native notch shell (swift build -c release)"
+    if (cd "$ROOT/native-notch" && swift build -c release >/dev/null 2>&1); then
+      notch_bin="$ROOT/native-notch/.build/release/unmute-notch"
+      if [[ -x "$notch_bin" ]]; then
+        mkdir -p "$engine/vendor/unmute-notch"
+        cp "$notch_bin" "$engine/vendor/unmute-notch/unmute-notch"
+        log "notch shell vendored"
+      else
+        log "ERROR: swift build succeeded but $notch_bin is missing"
+        exit 1
+      fi
+    else
+      log "ERROR: swift build failed for native-notch — is the Swift toolchain installed?"
+      exit 1
+    fi
+  else
+    log "WARN: $ROOT/native-notch not found — the notch UI will be unavailable"
+  fi
+
   # Patch engine package.json:
   #   * Add @supabase/supabase-js for the paywall layer
   #   * Pin electron-store to ^8 (CJS). v11+ is ESM-only and crashes our
@@ -206,6 +230,12 @@ wire_paywall() {
     pkg.build.extraResources = pkg.build.extraResources || []
     if (!pkg.build.extraResources.some((r) => r && typeof r === 'object' && /cua-driver/.test(String(r.from)))) {
       pkg.build.extraResources.push({ from: 'vendor/cua-driver', to: 'cua-driver' })
+    }
+    // Notch UI: ship the Swift shell into Resources/unmute-notch/ so the packaged
+    // app resolves it at process.resourcesPath (init.ts). Same deep-sign path as
+    // cua-driver.
+    if (!pkg.build.extraResources.some((r) => r && typeof r === 'object' && /unmute-notch/.test(String(r.from)))) {
+      pkg.build.extraResources.push({ from: 'vendor/unmute-notch', to: 'unmute-notch' })
     }
     if (process.env.PAYWALL_APP_ID) {
       pkg.build = pkg.build || {}
@@ -500,6 +530,37 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
     rm -f "$wm.bak"
     if ! grep -q 'patched: click-through' "$wm"; then
       log "WARN: windowManager.ts HUD click-through patch did not apply"
+    fi
+
+    # MOVE THE DICTATION PILL TO THE BOTTOM (notch UI redesign, spec 2026-07-24).
+    # The redesign splits the screen by ROLE: top-center = status OUTPUT (the
+    # notch shell owns it), bottom-center = voice INPUT (this pill). Leaving the
+    # pill at the top would collide with the notch — they'd fight for the same
+    # strip. workArea already excludes the Dock, so anchoring to its bottom edge
+    # floats the pill just above the Dock without ever interfering with it.
+    sed -i.bak 's|^  const y = workArea.y + 6.*$|  const y = workArea.y + workArea.height - HUD_HEIGHT + 16 // patched: bottom-anchored, Wispr-style — the renderer scales the pill to 0.62 top-anchored, so the window dips 16px lower to keep the pill hugging the usable bottom|' "$wm"
+    rm -f "$wm.bak"
+    if ! grep -q 'patched: bottom-anchored' "$wm"; then
+      log "WARN: windowManager.ts HUD bottom-anchor patch did not apply — dictation pill will collide with the notch"
+    fi
+
+    # LIVE reposition (Wispr parity): the show path already recomputes bounds,
+    # but if the Dock hides/shows or the display changes WHILE the pill is up,
+    # follow it. Appended at module scope (same file ⇒ sees hudWindow/getHUDBounds).
+    cat >> "$wm" <<'EOF'
+
+// patched: Wispr-style adaptive pill — live reposition while visible when the
+// Dock hides/shows or display metrics change (show-time recompute covers the rest).
+// MUST wait for app-ready: Electron's `screen` module throws if touched before
+// ready, and this module is imported at startup (dev.23 hang, 2026-07-24).
+app.whenReady().then(() => {
+  screen.on('display-metrics-changed', () => {
+    if (hudWindow?.isVisible()) hudWindow.setBounds(getHUDBounds())
+  })
+})
+EOF
+    if ! grep -q 'Wispr-style adaptive pill' "$wm"; then
+      log "WARN: windowManager.ts pill live-reposition append did not apply"
     fi
   fi
 
