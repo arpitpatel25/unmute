@@ -386,7 +386,14 @@ export class CodexDesktopDriver {
 
   /** Read a thread's state + recent turns from disk. Never touches the renderer. */
   async snapshot(threadId: string): Promise<CodexSnapshot> {
-    return readThread(threadId, this.sessionsDir)
+    // The DEFAULT limit is 6, and passing nothing meant a whole conversation
+    // was cut to its last 6 ITEMS at parse time — and items are per-step now, so
+    // six is often less than one turn. The user's own messages were sliced off,
+    // which is why the panel never read as a chat: there was no alternation left
+    // to see. 400 is "the whole thread" for any realistic session; the transport
+    // cost is handled by not re-sending an unchanged transcript (notch) rather
+    // than by throwing history away here.
+    return readThread(threadId, this.sessionsDir, 400)
   }
 }
 

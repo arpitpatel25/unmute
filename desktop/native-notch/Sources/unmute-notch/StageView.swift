@@ -30,9 +30,13 @@ struct StageView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let t {
                 header(t)
-                if let warm = t.warmup, !warm.isEmpty {
-                    Text("where you left off — \(warm)")
-                        .font(.system(size: 12.5)).foregroundColor(Theme.textDim)
+                // Same duplication as the task surface: for Codex, `warmup` is
+                // the last agent message, which the transcript already ends
+                // with. It was also drawn with plain Text, so its markdown came
+                // out as literal asterisks next to a correctly-rendered copy of
+                // itself two lines below.
+                if t.backend != "codex-desktop", let warm = t.warmup, !warm.isEmpty {
+                    RichText(text: "where you left off — \(warm)", size: 12.5)
                         .padding(.leading, 10)
                         .overlay(Rectangle().fill(Color.white.opacity(0.18)).frame(width: 2), alignment: .leading)
                         .padding(.top, 12)

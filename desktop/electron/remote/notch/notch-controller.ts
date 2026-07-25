@@ -192,6 +192,8 @@ export class NotchController {
   private projects: Array<{ name: string; path: string }> = []
   private proposals: ProposalLite[] = []
   private railsTimer: ReturnType<typeof setInterval> | null = null
+  /** (surface, task) → last payload sent, so an unchanged detail is not resent. */
+  private lastDetailJson = new Map<string, { id: string; json: string }>()
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
@@ -361,7 +363,7 @@ export class NotchController {
       this.client.send({ type: 'setCockpit', data: this.buildCockpit() })
       if (this.focusedId) {
         const t = this.deps.getTask(this.focusedId)
-        if (t) this.client.send({ type: 'stageDetail', task: this.toDetail(t) })
+        if (t) this.sendDetail('stageDetail', t)
       }
       this.client.send({ type: 'setState', state: 'cockpit', attention, working })
       return
@@ -373,7 +375,7 @@ export class NotchController {
     const opened = this.engaged === 'task' && this.focusedId ? this.deps.getTask(this.focusedId) : undefined
     const shown = front ?? opened
     if (shown) {
-      this.client.send({ type: 'showTask', task: this.toDetail(shown) })
+      this.sendDetail('showTask', shown)
       // The task surface needs rail context too (tmux gate etc.).
       if (this.engaged === 'task') this.client.send({ type: 'setCockpit', data: this.buildCockpit() })
       this.client.send({ type: 'setState', state: this.engaged === 'task' ? 'task' : 'attention', attention, working })
@@ -687,9 +689,11 @@ export class NotchController {
       // shown raw" — neither is a re-implementation of the other app's UI.
       ...(external ? {
         backend: 'codex-desktop' as const,
-        // Was 6 back when a "turn" was one paragraph of text. Items are now
-        // per-step, so six of them is barely one turn's work.
-        conversation: (t.conversation ?? []).slice(-40),
+        // The whole thread. The old windows here (6, then 40) were both
+        // downstream of a 6-item cut at the parse layer, so neither ever had
+        // anything to trim — widening this alone did nothing, which is exactly
+        // the mistake that let the truncation survive a round of "fixes".
+        conversation: t.conversation ?? [],
         ...(t.codexProject ? { project: t.codexProject } : {}),
       } : {}),
       status: t.state,
@@ -710,6 +714,25 @@ export class NotchController {
       error: t.error ?? undefined,
       mcpGap: t.mcpGap ? { message: t.mcpGap.message, fixCommand: t.mcpGap.fixCommand } : undefined,
     }
+  }
+
+  /**
+   * Push a task detail, skipping the send when nothing changed.
+   *
+   * A full Codex transcript serialises to ~32KB, and reconcile fires on every
+   * poll — so the wire carried the same thirty kilobytes over and over for a
+   * thread that had not moved. Sending history is right; re-sending it is not.
+   */
+  private sendDetail(kind: 'stageDetail' | 'showTask', task: TaskLite): void {
+    const detail = this.toDetail(task)
+    const json = JSON.stringify(detail)
+    // Dedupe only against what this surface is CURRENTLY showing. Keying by
+    // task id instead would suppress re-showing a task the crank had rotated
+    // away from and back to — the surface would keep displaying its neighbour.
+    const shown = this.lastDetailJson.get(kind)
+    if (shown && shown.id === task.id && shown.json === json) return
+    this.lastDetailJson.set(kind, { id: task.id, json })
+    this.client.send({ type: kind, task: detail } as never)
   }
 
   /** Say something transient on the surface (delivery failures, guards). */

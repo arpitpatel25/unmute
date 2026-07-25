@@ -566,3 +566,44 @@ test('a delivery error reaches the surface without settling the task', () => {
   assert.equal(d.deliveryError, 'Could not find that chat in Codex')
   assert.equal(d.status, 'ready', 'the task itself is untouched')
 })
+
+test('the WHOLE conversation reaches the surface, not a tail', () => {
+  // The parse layer used to cut to 6 items and the windows here were all
+  // downstream of that, so widening them did nothing. A 40-item thread must
+  // arrive whole — without the user's own messages there is no alternation and
+  // the panel does not read as a chat at all.
+  const conversation = Array.from({ length: 40 }, (_, i) => ({
+    role: i % 2 === 0 ? 'user' as const : 'assistant' as const, text: `m${i}`,
+  }))
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th', conversation }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const conv = h.client.last('stageDetail')!.task.conversation!
+  assert.equal(conv.length, 40)
+  assert.equal(conv[0].text, 'm0', 'the FIRST message survives, not just the tail')
+})
+
+test('an unchanged transcript is not re-sent on every poll', () => {
+  // A full transcript is ~32KB and reconcile fires on each poll; re-sending an
+  // identical payload put that on the wire over and over for a thread that had
+  // not moved.
+  const h = setup()
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    conversation: [{ role: 'assistant', text: 'done' }],
+  }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const sent = () => h.client.ofType('stageDetail').length
+  const first = sent()
+  h.flush(); h.flush()
+  assert.equal(sent(), first, 'nothing changed → nothing sent')
+
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    conversation: [{ role: 'assistant', text: 'done' }, { role: 'user', text: 'and now this' }],
+  }))
+  h.flush()
+  assert.ok(sent() > first, 'a real change still goes out')
+})

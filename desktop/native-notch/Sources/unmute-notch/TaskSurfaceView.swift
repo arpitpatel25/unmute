@@ -17,6 +17,15 @@ struct TaskSurfaceView: View {
                 header(t)
                 if t.status == .needsUser, let q = t.question {
                     QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 12)
+                } else if t.backend == "codex-desktop" {
+                    // NO HEADLINE for a backend that shows its whole
+                    // conversation. `activity` is derived from the last agent
+                    // message, which IS the last line of the transcript below —
+                    // so this printed the same sentence twice, once unstyled
+                    // (literal **asterisks**) and once properly. The headline
+                    // earns its place only where the panel shows a terminal,
+                    // because raw scrollback is not a summary.
+                    EmptyView()
                 } else if let summary = summaryLine(t) {
                     Text(summary)
                         .font(.system(size: 14.5)).foregroundColor(Theme.textDim)
