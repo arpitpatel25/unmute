@@ -101,17 +101,26 @@ struct ConversationPanel: View {
 
 private struct UserBubble: View {
     let text: String
+
     var body: some View {
-        HStack {
-            Spacer(minLength: 40)
-            Text(text)
-                .font(.system(size: 14))
-                .foregroundColor(Theme.text)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.09)))
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(text)
+                    .font(.system(size: 15))
+                    .foregroundColor(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(RoundedRectangle(cornerRadius: 20).fill(Color.white.opacity(0.09)))
+            }
+            // A BUBBLE HAS TO BE NARROWER THAN THE COLUMN or it stops reading as
+            // one. Codex caps its own at roughly two-thirds; capping by MEASURE
+            // rather than a percentage keeps that proportion honest in the
+            // notch, which is far narrower than the Codex window — a literal
+            // 65% there would be cramped.
+            .frame(maxWidth: 460, alignment: .trailing)
         }
     }
 }
@@ -119,18 +128,27 @@ private struct UserBubble: View {
 private struct AnswerBlock: View {
     let text: String
     @State private var copied = false
+    @State private var hovering = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            RichText(text: text, size: 14)
-            Button(action: copy) {
-                Text(copied ? "copied" : "copy")
-                    .font(.system(size: 11))
-                    .foregroundColor(copied ? Theme.cReady : Theme.textFaint)
+        VStack(alignment: .leading, spacing: 10) {
+            RichText(text: text, size: 15)
+            // Codex puts a quiet icon row under each answer. Ours carries the
+            // one action we can honestly offer — rating and sharing belong to
+            // Codex's account, not to a remote.
+            HStack(spacing: 12) {
+                Button(action: copy) {
+                    Text(copied ? "✓ copied" : "⧉")
+                        .font(.system(size: 12))
+                        .foregroundColor(copied ? Theme.cReady : Theme.textFaint)
+                }
+                .buttonStyle(.plain)
+                .help("copy this message")
             }
-            .buttonStyle(.plain)
+            .opacity(hovering || copied ? 1 : 0.35)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onHover { hovering = $0 }
     }
 
     private func copy() {
@@ -341,8 +359,14 @@ struct CodexComposer: View {
     let taskId: String
     /// Last message that did not get through — shown here, where the retry is.
     let deliveryError: String?
+    /// What this thread will run on ("5.6 Terra · High"), when we know.
+    var modelLabel: String? = nil
+    /// True while a send is in flight.
+    var sending: Bool = false
     @State private var text = ""
     @FocusState private var focused: Bool
+
+    private var canSend: Bool { !text.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -351,24 +375,45 @@ struct CodexComposer: View {
                     .font(.system(size: 11.5))
                     .foregroundColor(Theme.cError)
             }
-            HStack(spacing: 8) {
+            // Codex's composer is a TALL rounded box with its controls on a row
+            // beneath the text, not a one-line field with a button beside it.
+            // The shape is most of what makes it read as a place to write.
+            VStack(alignment: .leading, spacing: 10) {
                 TextField("reply to Codex — or hold right ⌥ and speak", text: $text, onCommit: send)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13))
+                    .font(.system(size: 14))
                     .foregroundColor(Theme.text)
                     .focused($focused)
-                Button(action: send) {
-                    Text("send")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(text.trimmingCharacters(in: .whitespaces).isEmpty ? Theme.textFaint : Theme.cReady)
+                HStack(spacing: 10) {
+                    if let m = modelLabel, !m.isEmpty {
+                        Text(m)
+                            .font(.system(size: 11.5))
+                            .foregroundColor(Theme.textFaint)
+                    }
+                    Spacer(minLength: 0)
+                    if sending {
+                        // Sending is a round-trip through another app's window;
+                        // silence for a second reads as "nothing happened".
+                        Text("sending…")
+                            .font(.system(size: 11))
+                            .foregroundColor(Theme.textFaint)
+                    }
+                    Button(action: send) {
+                        Text("↑")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(canSend ? Theme.text : Theme.textFaint)
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(Color.white.opacity(canSend ? 0.16 : 0.06)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
                 }
-                .buttonStyle(.plain)
-                .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(focused ? Theme.cReady.opacity(0.45) : Theme.hairline, lineWidth: 1))
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+            .background(RoundedRectangle(cornerRadius: 18).fill(Color.white.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(focused ? Theme.cReady.opacity(0.45) : Theme.hairline, lineWidth: 1))
         }
     }
 
