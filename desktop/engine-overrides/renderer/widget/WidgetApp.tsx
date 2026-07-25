@@ -636,6 +636,10 @@ export default function WidgetApp() {
   // (types text)? Drives the Remote badge next to the pill. Set on every
   // recording:start from its kind, so it's always fresh for this capture.
   const [isRemote, setIsRemote] = useState(false)
+  // Backend picker for Remote captures. Refreshed when a Remote capture STARTS
+  // rather than polled: availability changes rarely (Codex opened/closed), and
+  // the answer is only ever needed at the moment the pill appears.
+  const [agentPicker, setAgentPicker] = useState<{ current: string; options: Array<{ id: string; label: string; available: boolean }> } | null>(null)
   const stateRef = useRef<WidgetState>('hidden')
 
   const { analyserNode, maxDurationSeconds, noisyEnvironment, tooQuiet, startRecording, stopRecording } = useAudioRecorder()
@@ -791,8 +795,19 @@ export default function WidgetApp() {
     // 4th arg). Tells us whether this capture is Remote so the pill can badge it.
     const remoteApi = api as unknown as {
       remoteOnCaptureKind?: (cb: (kind: 'dictation' | 'remote') => void) => void
+      remoteAgentOptions?: () => Promise<{ current: string; options: Array<{ id: string; label: string; available: boolean }> }>
     }
-    remoteApi.remoteOnCaptureKind?.((kind) => setIsRemote(kind === 'remote'))
+    remoteApi.remoteOnCaptureKind?.((kind) => {
+      const remote = kind === 'remote'
+      setIsRemote(remote)
+      // Only Remote captures dispatch a task, so only they need the picker.
+      // Refresh on every start: whether Codex can take work is live state, and
+      // a stale "Codex" chip would offer a backend that has since gone away.
+      if (!remote) { setAgentPicker(null); return }
+      void remoteApi.remoteAgentOptions?.()
+        .then((o) => setAgentPicker(o ?? null))
+        .catch(() => setAgentPicker(null))
+    })
 
     // Zombie phone detected by the recorder (acquirable device, dead pipe):
     // re-enumerate so the chip stops advertising a corpse and flips back to
@@ -936,6 +951,15 @@ export default function WidgetApp() {
     await stopRecording()
   }, [stopRecording])
 
+  /** Switch the backend the NEXT task runs on. No task exists yet — the user is
+   *  mid-utterance — so this only persists the default that dispatch reads when
+   *  the utterance is submitted. Optimistic locally so the chip flips instantly. */
+  const handlePickAgent = useCallback((id: string) => {
+    setAgentPicker((prev) => (prev ? { ...prev, current: id } : prev))
+    const api = (window as any).electronAPI as { remoteSetAgent?: (a: string) => Promise<boolean> } | undefined
+    void api?.remoteSetAgent?.(id)
+  }, [])
+
   const handleUndo = useCallback(() => {
     setState('processing')
     window.electronAPI.undoCancel()
@@ -1028,6 +1052,8 @@ export default function WidgetApp() {
           onCancel={handleCancel}
           onStop={handleStop}
           onUndo={handleUndo}
+          agentPicker={agentPicker ?? undefined}
+          onPickAgent={handlePickAgent}
         />
       </div>
       {showAwareness && (

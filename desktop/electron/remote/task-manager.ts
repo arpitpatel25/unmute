@@ -933,6 +933,16 @@ export class TaskManager extends EventEmitter {
    */
   answer(id: string, userAnswer: string): void {
     const tlog = log.child({ taskId: id })
+    // Codex desktop: answering IS the next turn — there is no separate blocked
+    // channel to write into, and no PTY liveness to check (the thread always
+    // exists in the app). followUpCodexDesktop already does the send, the
+    // consent clock, and the optimistic transition.
+    const target = this.tasks.get(id)
+    if (target && isExternalAgent(target.agent)) {
+      tlog.ui('task-row.answer-submitted', { answer: userAnswer })
+      this.followUpCodexDesktop(id, userAnswer)
+      return
+    }
     const ex = this.executors.get(id)
     if (!ex || !ex.alive) {
       tlog.warn('answer dropped — no live session', {})
@@ -1018,9 +1028,47 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; codexThreadId?: string; codexProject?: string | null }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
+      // EXTERNAL BACKEND: a Codex thread lives in Codex, so an Unmute restart
+      // does not interrupt it — the work may well have finished while we were
+      // gone. Rebuild the record and let the poller read the true state off the
+      // rollout, instead of the 'failed / interrupted' verdict a PTY task gets.
+      if (meta.agent === 'codex-desktop' && meta.codexThreadId) {
+        const now0 = this.clock()
+        const ctask: Task = {
+          id,
+          intent: meta.intent,
+          name: meta.name,
+          sessionId: meta.codexThreadId,
+          agent: 'codex-desktop',
+          codexThreadId: meta.codexThreadId,
+          codexProject: meta.codexProject ?? null,
+          kind: meta.kind ?? 'oneoff',
+          state: 'processing',           // corrected on the first poll
+          createdAt: meta.createdAt ?? now0,
+          updatedAt: meta.createdAt ?? now0,
+          cwd: dir,
+          home: dir,
+          statusPath: join(dir, 'status.json'),
+          recipeScratchPath: join(dir, 'recipe.json'),
+          lastMtimeMs: 0,
+          lastHeartbeatMs: now0,
+          surface: meta.surface,
+          mode: meta.mode ?? 'managed',
+          injectedRecipes: [],
+          shelved: meta.shelved || undefined,
+          note: meta.note || undefined,
+          spawnedBy: meta.spawnedBy || undefined,
+          group: meta.group || undefined,
+        } as Task
+        this.tasks.set(id, ctask)
+        this.emit('created', ctask)
+        this.startPolling(id)
+        restored++
+        continue
+      }
       const statusPath = join(dir, 'status.json')
       const status = await readStatus(statusPath)
       const now = this.clock()
@@ -1163,7 +1211,10 @@ export class TaskManager extends EventEmitter {
    * history. Guarantees no Claude/tmux session is left orphaned.
    */
   killAll(): void {
-    const ids = [...this.executors.keys()]
+    // Union of PTY-backed and external-backend tasks. Keying on `executors`
+    // alone leaked the poll interval of every codex-desktop task (no executor
+    // ⇒ never visited ⇒ setInterval outlived the manager).
+    const ids = [...new Set([...this.executors.keys(), ...this.timers.keys()])]
     for (const id of ids) {
       const task = this.tasks.get(id)
       if (task && !SETTLED.includes(task.state)) {

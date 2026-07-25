@@ -16,6 +16,20 @@ interface WidgetProps {
   onCancel: () => void
   onStop: () => void
   onUndo: () => void
+  /** Backends this machine can dispatch to RIGHT NOW, for the in-pill picker.
+   *  Only supplied (and only rendered) when there is genuinely a choice — a
+   *  Claude-only machine must never see a toggle with one option. */
+  agentPicker?: AgentPicker
+  /** Switch the backend the NEXT task will run on. Called while the user is
+   *  still speaking: no task exists yet, so this only sets the default that
+   *  dispatch will read when the utterance is submitted. */
+  onPickAgent?: (id: string) => void
+}
+
+/** The task-creation backend choice, surfaced on the pill during a Remote capture. */
+export interface AgentPicker {
+  current: string
+  options: Array<{ id: string; label: string; available: boolean }>
 }
 
 
@@ -61,6 +75,12 @@ const PILL_CRITICAL_CSS = `
 .unmute-pill-processing { display: flex; align-items: center; gap: 8px; }
 .unmute-pill-draft-btn { border: 1px solid rgba(255,255,255,0.35); background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.85); font-size: 12px; border-radius: 9999px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
 .unmute-pill-draft-btn:hover { background: rgba(255,255,255,0.16); }
+/* Backend picker — a single tappable chip on the Remote pill. Deliberately the
+   same visual weight as the timer: choosing where a task runs is a normal part
+   of firing it, not a settings excursion. */
+.unmute-pill-agent { display: inline-flex; align-items: center; gap: 5px; border: 1px solid rgba(255,255,255,0.28); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.82); font-size: 12px; font-weight: 500; border-radius: 9999px; padding: 3px 9px; cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: background 0.15s, border-color 0.15s; }
+.unmute-pill-agent:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.45); }
+.unmute-pill-agent-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,0.55); flex-shrink: 0; }
 `
 
 
@@ -76,7 +96,9 @@ export default function Widget({
   mutedText = null,
   onAcceptDraft,
   onStop,
-  onUndo
+  onUndo,
+  agentPicker,
+  onPickAgent,
 }: WidgetProps) {
   const [elapsed, setElapsed] = useState(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -90,6 +112,22 @@ export default function Widget({
 
   const isDictation = state === 'dictation-active'
   const isInstruction = state === 'instruction-active' || state === 'chained'
+
+  // Backend picker state. Only backends that can actually take work are
+  // offered — an installed-but-unconnected Codex is not a choice, it's a
+  // promise we can't keep, so it stays out of the cycle.
+  const availableAgents = agentPicker?.options.filter((o) => o.available) ?? []
+  const currentAgentLabel =
+    availableAgents.find((o) => o.id === agentPicker?.current)?.label
+    ?? availableAgents[0]?.label
+    ?? ''
+  // One tap cycles. With two backends this is the whole interaction; a menu
+  // would cost a second tap for no gain, and the pill is a 44px strip.
+  const cycleAgent = () => {
+    if (!onPickAgent || availableAgents.length < 2) return
+    const i = availableAgents.findIndex((o) => o.id === agentPicker?.current)
+    onPickAgent(availableAgents[(i + 1) % availableAgents.length].id)
+  }
 
   // Entry/Exit animation
   useEffect(() => {
@@ -170,6 +208,25 @@ export default function Widget({
           <span className={`unmute-pill-timer ${isNearLimit ? 'unmute-pill-timer--warn' : ''}`}>
             {isNearLimit ? `-${formatTime(timeRemaining)}` : formatTime(elapsed)}
           </span>
+          {/* BACKEND PICKER — Remote captures only.
+              Placed here, on the capture pill, because this is the moment the
+              choice is actually live: the user is still speaking and NO task
+              exists yet, so tapping only changes where the task will go when the
+              utterance is submitted. Putting it on a card would be too late, and
+              in Settings would be too far away.
+              Rendered only when there is a real choice (>1 reachable backend) —
+              a Claude-only machine sees the pill exactly as it is today. */}
+          {isInstruction && agentPicker && availableAgents.length > 1 && (
+            <button
+              className="unmute-pill-agent"
+              onClick={cycleAgent}
+              aria-label={`Run this task on ${currentAgentLabel}. Tap to switch.`}
+              title="Where this task will run — tap to switch"
+            >
+              <span className="unmute-pill-agent-dot" />
+              {currentAgentLabel}
+            </button>
+          )}
           <button className="unmute-pill-stop" onClick={onStop} aria-label="Stop recording">
             <div className={`unmute-pill-stop-icon ${stopIconClass}`} />
           </button>

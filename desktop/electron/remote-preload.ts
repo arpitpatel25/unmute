@@ -184,8 +184,20 @@ export const remotePreloadExtensions = {
   remoteGetSettings: (): Promise<RemoteSettingsSnapshot> => ipcRenderer.invoke('remote:get-settings'),
   remoteSetPermissionMode: (mode: 'prompt' | 'auto-approve'): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-permission-mode', mode),
-  remoteSetAgent: (agent: 'claude' | 'codex'): Promise<boolean> =>
+  remoteSetAgent: (agent: 'claude' | 'codex' | 'codex-desktop'): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-agent', agent),
+  /** Backends that can take a task RIGHT NOW, for the pill's picker. Includes a
+   *  per-option reason so the UI can distinguish "not installed" (hide it) from
+   *  "not connected" (offer to connect). */
+  remoteAgentOptions: (): Promise<{
+    current: string
+    options: Array<{ id: string; label: string; available: boolean; installed?: boolean; reason?: string }>
+  }> => ipcRenderer.invoke('remote:agent-options'),
+  /** Relaunch Codex with the debug port, in the background. User-initiated only. */
+  remoteCodexConnect: (): Promise<{ ok: boolean; reason?: string }> =>
+    ipcRenderer.invoke('remote:codex-connect'),
+  remoteCodexProjects: (): Promise<Array<{ id: string; name: string }>> =>
+    ipcRenderer.invoke('remote:codex-projects'),
   remoteSetSandboxRoots: (roots: string[]): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-sandbox-roots', roots),
   remoteSetBrowserEnabled: (enabled: boolean): Promise<boolean> =>
