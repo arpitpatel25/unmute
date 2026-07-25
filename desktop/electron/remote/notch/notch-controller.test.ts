@@ -388,8 +388,32 @@ test('interacting with a muted task (focus) ends its mute episode', () => {
   h.client.fire({ type: 'focusTask', id: 't1' }) // user opened it in the cockpit
   h.flush()
   assert.equal(h.client.last('setState')!.state, 'cockpit')
-  h.client.fire({ type: 'collapsed' }) // back to baseline → it queues again
+  // ...and CLOSING it counts as having seen it, so a finished task does not
+  // come straight back to nag. Seen-is-enough applies to `ready` only.
+  h.client.fire({ type: 'collapsed' })
+  assert.equal(h.client.last('setState')!.state, 'dormant')
+})
+
+test('opening then closing a BLOCKED task leaves it in attention — it still needs you', () => {
+  // Seen-is-enough must not silently drop a task that is genuinely waiting on
+  // an answer; only an explicit mute does that.
+  const h = setup()
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'focusTask', id: 'b1' })
+  h.flush()
+  h.client.fire({ type: 'collapsed' })
   assert.equal(h.client.last('setState')!.state, 'attention')
+})
+
+test('a blocked task CAN still be hidden, but only by asking for it', () => {
+  // "even for blocked tasks there should be a way for users to hide it — even
+  // from the next queue as well."
+  const h = setup()
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'mute', id: 'b1' })
+  assert.equal(h.client.last('setState')!.state, 'dormant')
+  h.client.fire({ type: 'next' })   // the crank must skip it too
+  assert.notEqual(h.client.last('setState')!.state, 'task')
 })
 
 // ── forwarded notifications ─────────────────────────────────────────────────
@@ -411,4 +435,35 @@ test('route offer lands in the cockpit payload; accept calls through', async () 
   assert.equal(h.client.last('setCockpit')!.data.routeOffer?.altName, 'Pager')
   h.client.fire({ type: 'offerAccept', newTaskId: 'n1' })
   assert.deepEqual(h.calls.acceptRouteOffer?.[0], ['n1'])
+})
+
+// ── tapping the notch ───────────────────────────────────────────────────────
+
+test('tapping a WORKING task opens that task, not the whole cockpit', () => {
+  // Reported 2026-07-25: "when you tap it, it just directly opens the cockpit".
+  // A merely-processing task is never in the attention queue, so the old tap
+  // handler found no front task and fell through to the wall — even though the
+  // notch was, at that moment, showing exactly one task.
+  const h = setup()
+  put(h, makeTask({ id: 'w1', state: 'processing', alive: true }))
+  h.client.fire({ type: 'tap' })
+  assert.equal(h.client.last('setState')!.state, 'task')
+  assert.equal(h.client.last('showTask')!.task.id, 'w1')
+})
+
+test('tapping with SEVERAL working tasks opens the wall — the notch shows a count, not a task', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'w1', state: 'processing', alive: true }))
+  put(h, makeTask({ id: 'w2', state: 'processing', alive: true }))
+  h.client.fire({ type: 'tap' })
+  assert.equal(h.client.last('setState')!.state, 'cockpit')
+})
+
+test('an attention task still wins over a working one', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'w1', state: 'processing', alive: true }))
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'tap' })
+  assert.equal(h.client.last('setState')!.state, 'task')
+  assert.equal(h.client.last('showTask')!.task.id, 'b1')
 })

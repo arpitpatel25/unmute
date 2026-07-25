@@ -26,6 +26,7 @@ export interface TaskLite {
   kind?: 'oneoff' | 'session'
   agent?: 'claude' | 'codex' | 'codex-desktop'
   codexProject?: string | null
+  conversation?: Array<{ role: 'user' | 'assistant'; text: string }> | null
   threadContext?: string | null
   shelved?: boolean
   note?: string | null
@@ -151,8 +152,13 @@ const PROMOTED_BADGE_MS = 8 * 1000        // "↑ now a session" narration windo
  *  than this leaves the notch/crank entirely (still a cockpit card) — so a
  *  session parked ready for days can't hold the surface amber forever.
  *  Blocked states (needs-user/stuck/errored) never age out: they're stuck ON
- *  the user. (Decided 2026-07-24.) */
-const STALE_READY_MS = 6 * 60 * 60 * 1000
+ *  the user. (Decided 2026-07-24.)
+ *
+ *  Was 6h, which OUTLIVED TaskManager's readyDecayMs (1h) by five hours: the
+ *  decay valve had already settled a ready one-off to done while the notch kept
+ *  offering it in the crank. Now just past the decay window (+10m for the
+ *  hourly sweep), so the two agree. */
+const STALE_READY_MS = 70 * 60 * 1000
 
 type Engaged = 'none' | 'task' | 'cockpit'
 
@@ -208,12 +214,12 @@ export class NotchController {
     // IPC handlers call (via deps).
     const on = (type: string, fn: (e: NotchEvent) => void) => this.client.on(type, fn)
     on('tap', () => this.onTap())
-    on('collapsed', () => { this.engaged = 'none'; this.setFocus(null); this.reconcile() })
+    on('collapsed', () => { this.seenThenClose({ collapse: true }) })
     on('openDashboard', () => this.openCockpit())
     on('next', () => this.onNext())
     on('prev', () => this.onPrev())
     on('focusTask', (e) => this.onFocusTask((e as { id: string }).id))
-    on('closeStage', () => { this.setFocus(null); this.reconcile() })
+    on('closeStage', () => { this.seenThenClose() })
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
     on('mute', (e) => this.onMute((e as { id: string }).id))
     on('answerText', (e) => { const { id, text } = e as { id: string; text: string }; this.deps.answer(id, text); this.advanceAfterAnswer(id) })
@@ -336,8 +342,13 @@ export class NotchController {
       return
     }
 
-    if (front) {
-      this.client.send({ type: 'showTask', task: this.toDetail(front) })
+    // The task surface can hold a task that is NOT in the attention queue — the
+    // user tapped a merely-working one. Without this the surface would open and
+    // then immediately collapse back to `active` on the next reconcile.
+    const opened = this.engaged === 'task' && this.focusedId ? this.deps.getTask(this.focusedId) : undefined
+    const shown = front ?? opened
+    if (shown) {
+      this.client.send({ type: 'showTask', task: this.toDetail(shown) })
       // The task surface needs rail context too (tmux gate etc.).
       if (this.engaged === 'task') this.client.send({ type: 'setCockpit', data: this.buildCockpit() })
       this.client.send({ type: 'setState', state: this.engaged === 'task' ? 'task' : 'attention', attention, working })
@@ -351,15 +362,32 @@ export class NotchController {
   // ── gestures ───────────────────────────────────────────────────────────────
 
   private onTap(): void {
-    const front = this.front()
-    if (front) {
-      this.engaged = 'task'
-      this.setFocus(front.id) // voice routes to the fronted task
-    } else {
-      this.openCockpit()
-      return
-    }
+    // Tapping opens WHAT THE NOTCH IS SHOWING. When something needs you that is
+    // the fronted task; when nothing does but one task is working, the notch is
+    // showing THAT task, so a tap must open it too.
+    //
+    // Reported from the field 2026-07-25: "when you tap it, it just directly
+    // opens the cockpit". The cause was this method only considering the
+    // attention queue — a merely-working task is never in it, so every tap on a
+    // running task fell through to the whole wall. The cockpit stays the
+    // answer only when the notch is showing no single task.
+    const target = this.front() ?? this.soleWorking()
+    if (!target) { this.openCockpit(); return }
+    this.engaged = 'task'
+    this.setFocus(target.id) // voice routes to the fronted task
     this.reconcile()
+  }
+
+  /**
+   * The one task the notch is showing while it says "working".
+   *
+   * Deliberately only when there is EXACTLY one: with several running, the
+   * notch is showing a count rather than a task, and the wall is the honest
+   * destination.
+   */
+  private soleWorking(): TaskLite | undefined {
+    const working = this.deps.listTasks().filter((t) => t.state === 'processing')
+    return working.length === 1 ? working[0] : undefined
   }
 
   private openCockpit(): void {
@@ -401,6 +429,34 @@ export class NotchController {
     this.focusedId = id
     this.deps.focus(id) // focus IS the voice address (consent model)
     if (id) this.muted.delete(id) // interacting with a task ends its mute episode
+  }
+
+  /**
+   * Closing a task the user actually LOOKED AT means they've seen it.
+   *
+   * Opening used to CLEAR the mute and nothing ever set it, so the one gesture
+   * that most obviously means "I've seen this" was the only one that didn't
+   * quiet the notch — a finished one-off held the surface until STALE_READY_MS.
+   *
+   * Only `ready` is quieted. Blocked states (needs-user/stuck/errored) are stuck
+   * ON the user: looking at an approval prompt is not answering it, so they keep
+   * demanding until acted on or explicitly muted. Muting is still the deliberate
+   * "I don't care about this one" gesture and works on ANY state.
+   *
+   * This reuses the episode-mute, so "comes back the moment its state changes"
+   * is inherited rather than reimplemented.
+   */
+  private seenThenClose(opts: { collapse?: boolean } = {}): void {
+    const id = this.focusedId
+    const t = id ? this.deps.getTask(id) : undefined
+    if (t && t.state === 'ready') {
+      this.muted.set(t.id, t.state)
+      this.queue = this.queue.filter((x) => x !== t.id)
+      log.event('seen-on-close', { taskId: t.id, state: t.state })
+    }
+    if (opts.collapse) this.engaged = 'none'
+    this.setFocus(null)
+    this.reconcile()
   }
 
   /** "Don't show this again": out of the attention strip + crank until the user
@@ -591,9 +647,18 @@ export class NotchController {
 
   private toDetail(t: TaskLite): TaskDetailP {
     const now = Date.now()
+    const external = t.agent === 'codex-desktop'
     return {
       id: t.id,
       title: t.name ?? truncate(t.intent),
+      // An external backend has no PTY, so the panel renders the CONVERSATION
+      // where a Claude task renders its terminal. Both are "the real thing,
+      // shown raw" — neither is a re-implementation of the other app's UI.
+      ...(external ? {
+        backend: 'codex-desktop' as const,
+        conversation: (t.conversation ?? []).slice(-6),
+        ...(t.codexProject ? { project: t.codexProject } : {}),
+      } : {}),
       status: t.state,
       kind: t.kind ?? 'oneoff',
       alive: t.alive ?? false,

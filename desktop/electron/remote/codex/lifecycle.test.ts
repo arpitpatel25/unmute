@@ -54,8 +54,13 @@ test('a codex-desktop dispatch never touches the executor factory', async () => 
   assert.equal(t.codexThreadId, 'thread-123')
   assert.equal(t.codexProject, 'unmute')
   assert.equal(t.state, 'processing')
-  // created project-scoped, with the user's words verbatim
-  assert.deepEqual(d.calls[0], { fn: 'createTask', args: ['fix the login bug', { project: 'unmute' }] })
+  // Created project-scoped, with the user's words verbatim — and carrying the
+  // user's permission setting, so the Codex composer is raised to the same
+  // level --dangerously-skip-permissions would give a Claude task.
+  assert.deepEqual(d.calls[0], {
+    fn: 'createTask',
+    args: ['fix the login bug', { project: 'unmute', permissionMode: 'ask' }],
+  })
   m.killAll(); m.stopMaintenance()
 })
 

@@ -205,6 +205,72 @@ export class CodexCdp {
   async composerText(): Promise<string> {
     return (await this.evaluate<string>(`(() => { const ce = document.querySelector('[contenteditable=true]'); return ce ? (ce.textContent || '') : ''; })()`)) ?? ''
   }
+
+  async pressEscape(): Promise<void> {
+    const base = { code: 'Escape', key: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }
+    await this.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
+    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+  }
+}
+
+// ─── Approval level (the composer's permissions control) ────────────────
+//
+// Codex renders the current level as the TEXT of one button and the offered
+// levels as that button's menu. Both matter, and the menu especially: a level
+// missing from it cannot be selected on this device no matter what any API
+// reports, which is exactly the company/managed-plan case where "Full access"
+// simply does not exist. Reading it is how we ask for the most we are ALLOWED
+// rather than the most that exists.
+
+const PERMISSIONS_BUTTON = '[data-composer-navigation-target="permissions"]'
+
+/** The level Codex is currently set to, as its own button labels it. */
+export async function readApprovalLabel(cdp: CodexCdp): Promise<string | null> {
+  const t = await cdp.evaluate<string>(
+    `(() => { const b = document.querySelector('${PERMISSIONS_BUTTON}'); return b ? (b.innerText || '').trim() : ''; })()`,
+  )
+  return t ? t : null
+}
+
+/** Open the menu, read what this device offers, close it again. */
+export async function readApprovalMenu(cdp: CodexCdp, sleep: (ms: number) => Promise<void>): Promise<string[]> {
+  const opened = await cdp.evaluate<boolean>(
+    `(() => { const b = document.querySelector('${PERMISSIONS_BUTTON}'); if (!b) return false; b.click(); return true; })()`,
+  )
+  if (!opened) return []
+  await sleep(600)
+  const raw = await cdp.evaluate<string>(`JSON.stringify(
+    [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')].map((e) => (e.innerText || '').trim())
+  )`)
+  // ALWAYS close it. Leaving the user's composer menu hanging open would be a
+  // visible, confusing side effect of a background capability probe.
+  await cdp.pressEscape()
+  await sleep(250)
+  try { return JSON.parse(raw ?? '[]') as string[] } catch { return [] }
+}
+
+/** Select a level by its menu label. False when the device does not offer it. */
+export async function selectApprovalLevel(
+  cdp: CodexCdp,
+  label: string,
+  sleep: (ms: number) => Promise<void>,
+): Promise<boolean> {
+  const opened = await cdp.evaluate<boolean>(
+    `(() => { const b = document.querySelector('${PERMISSIONS_BUTTON}'); if (!b) return false; b.click(); return true; })()`,
+  )
+  if (!opened) return false
+  await sleep(600)
+  const hit = await cdp.evaluate<boolean>(`(() => {
+    const want = ${JSON.stringify(label)}.toLowerCase();
+    const items = [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')];
+    const el = items.find((e) => (e.innerText || '').trim().toLowerCase().startsWith(want));
+    if (!el) return false;
+    el.click();
+    return true;
+  })()`)
+  if (!hit) { await cdp.pressEscape() }
+  await sleep(350)
+  return !!hit
 }
 
 // ─── DOM readers (shape of Codex's automation hooks) ───────────────────

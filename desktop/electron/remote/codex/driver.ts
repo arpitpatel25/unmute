@@ -22,7 +22,8 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel } from './cdp'
+import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, type CodexSnapshot } from './rollout'
 
 const log = createLogger('codex-driver')
@@ -144,11 +145,64 @@ export class CodexDesktopDriver {
   }
 
   /**
+   * What approval levels does THIS device offer, and which is selected?
+   *
+   * The composer's own menu is the authority — not a hardcoded list and not the
+   * app-server. A user on a company/managed plan is not offered "Full access" at
+   * all, so a fixed maximum would either fail or be silently downgraded.
+   */
+  async approvalOptions(): Promise<{ available: CodexApprovalLevel[]; current: CodexApprovalLevel | null }> {
+    const cdp = await this.connect()
+    if (!cdp) return { available: [], current: null }
+    const current = levelFromLabel(await readApprovalLabel(cdp))
+    const available = levelsFromMenu(await readApprovalMenu(cdp, (ms) => this.sleep(ms)))
+    log.event('codex-approval-options', { available, current })
+    return { available, current }
+  }
+
+  /**
+   * Raise the approval level as far as the DEVICE and the USER'S OWN SETTING
+   * both allow, before the thread starts.
+   *
+   * This is the Codex half of what the Claude adapter already does when it
+   * passes --dangerously-skip-permissions for an auto-approve user: same
+   * intent, same user setting, one behaviour across both backends. It is capped
+   * twice on purpose (see approval.ts) and it NEVER escalates past what the
+   * composer menu actually lists.
+   *
+   * Note what this cannot do: on a capped device the ceiling still blocks, so
+   * tasks will still stop for approval. That is why the hooks channel exists.
+   */
+  private async applyApprovalPolicy(cdp: CodexCdp, userMode: UnmutePermissionMode): Promise<void> {
+    try {
+      const current = levelFromLabel(await readApprovalLabel(cdp))
+      const available = levelsFromMenu(await readApprovalMenu(cdp, (ms) => this.sleep(ms)))
+      if (!available.length) { log.warn('codex-approval-menu-empty', {}); return }
+      const policy = choosePolicy(available, userMode)
+      if (policy.level === current) {
+        log.event('codex-approval-unchanged', { level: policy.level, available, userMode })
+        return
+      }
+      const ok = await selectApprovalLevel(cdp, LEVEL_LABEL[policy.level], (ms) => this.sleep(ms))
+      log[ok ? 'event' : 'warn']('codex-approval-set', {
+        from: current, to: policy.level, available, userMode, canBlock: policy.canBlock, ok,
+      })
+    } catch (e) {
+      // Never fail task creation over this — a task at the user's existing level
+      // is far better than no task.
+      log.warn('codex-approval-error', { error: (e as Error).message })
+    }
+  }
+
+  /**
    * Create a task: open a new chat (project-scoped when asked), type the intent,
    * submit. Returns the DURABLE thread id — we deliberately wait past the
    * transient `client-new-thread:` id so the handle we persist is the real one.
    */
-  async createTask(intent: string, opts: { project?: string | null; autoArm?: boolean } = {}): Promise<CreateTaskResult> {
+  async createTask(
+    intent: string,
+    opts: { project?: string | null; autoArm?: boolean; permissionMode?: UnmutePermissionMode } = {},
+  ): Promise<CreateTaskResult> {
     const avail = await this.availability()
     if (!avail.ok && !opts.autoArm) return { ok: false, reason: avail.reason }
     const cdp = await this.connect({ autoArm: opts.autoArm })
@@ -172,6 +226,10 @@ export class CodexDesktopDriver {
     if (!opened) { log.warn('codex-create-no-newchat-button', { project: opts.project ?? null }); return { ok: false, reason: 'no-project' } }
     log.event('codex-create-newchat-clicked', { projectScoped: !!opts.project })
     await this.sleep(700)
+
+    // Set the policy on the FRESH composer — before the first turn, so it holds
+    // for the whole thread rather than being changed under a running task.
+    if (opts.permissionMode) await this.applyApprovalPolicy(cdp, opts.permissionMode)
 
     if (!(await cdp.focusComposer())) { log.warn('codex-create-no-composer', {}); return { ok: false, reason: 'no-composer' } }
     await this.sleep(120)

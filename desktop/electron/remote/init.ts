@@ -30,6 +30,7 @@ import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor'
 import { CodexDesktopDriver } from './codex/driver'
+import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
 import { initRuntimeConfig, getModels, getKnobs, getModelCatalog, isSelectableModel } from './runtime-config'
@@ -579,6 +580,8 @@ function serializeTask(t: Task) {
     // the work actually lives.
     agent: t.agent ?? 'claude',
     codexProject: t.codexProject ?? null,
+    // The GUI-agent equivalent of the terminal (see Task.conversation).
+    conversation: t.conversation ?? null,
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,
@@ -1584,6 +1587,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   manager = new TaskManager({
     executorFactory,
     codexDriver,
+    // Read fresh per dispatch: the Codex composer's permission level is set from
+    // the SAME user setting that decides --dangerously-skip-permissions for
+    // Claude, so the two backends behave alike (capped by what the device
+    // actually offers — see codex/approval.ts).
+    permissionMode: () => (settings.get('permissionMode') === 'auto-approve' ? 'auto-approve' : 'ask'),
     // PARKED: withholding the librarian trips the `!this.opts.librarian` gate in
     // handToLibrarian, so no session is ever spawned. (§12)
     librarian: LIBRARIAN_PARKED ? undefined : librarian,
@@ -2659,7 +2667,23 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const cdp = await codexDriver.connect({ autoArm: true }).catch(() => null)
     const ok = !!cdp
     log.event('codex-connect-requested', { ok })
-    return ok ? { ok: true } : { ok: false, reason: 'arm-failed' }
+    if (!ok) return { ok: false, reason: 'arm-failed' }
+
+    // CONNECTING IS ALSO WHEN THE APPROVAL CHANNEL GETS INSTALLED.
+    //
+    // Without it, a Codex task that stops for permission is invisible to unmute
+    // and the crank silently skips it. Doing it here — rather than at every
+    // launch — keeps it tied to an explicit user action, and re-running it is
+    // free: the files are rewritten and re-trusted from the hash Codex reports,
+    // so a moved or updated app repairs itself on the next connect.
+    const hook = await installApprovalHook({ runtime: process.execPath }).catch((e) => {
+      log.warn('codex-hook-install-threw', { error: (e as Error).message })
+      return { ok: false, reason: 'threw' as const }
+    })
+    log[hook.ok ? 'event' : 'warn']('codex-hook-install', hook)
+    // A failed hook install does NOT fail the connect: everything else about
+    // Codex still works, the user just gets Codex's own approval dialog.
+    return { ok: true, approvals: hook.ok, approvalsReason: hook.ok ? undefined : hook.reason }
   })
 
   // Live Codex project list for the picker ("create it in <project>").

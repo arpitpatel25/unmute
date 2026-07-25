@@ -28,7 +28,15 @@ struct TaskSurfaceView: View {
                         .frame(maxHeight: 280)
                         .padding(.top, 12)
                 }
-                if model.taskTerminalOpen && t.alive {
+                // EXTERNAL BACKEND (Codex): no PTY exists, so the CONVERSATION is
+                // what this panel carries — the same role the terminal plays for a
+                // CLI task. Showing an empty terminal frame here is what made the
+                // panel read as a giant void.
+                if t.backend == "codex-desktop" {
+                    ConversationPanel(turns: t.conversation ?? [])
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 10)
+                } else if model.taskTerminalOpen && t.alive {
                     // The terminal owns EVERYTHING left down to the action row
                     // (field feedback: never a fixed band with dead space below).
                     // .id ties the PTY stream to THIS task across Next/Prev.
@@ -75,7 +83,13 @@ struct TaskSurfaceView: View {
 
     private func actions(_ t: TaskDetail) -> some View {
         HStack(spacing: 7) {
-            if t.alive {
+            if t.backend == "codex-desktop" {
+                // "resume" / "re-run" / "terminal" are PTY concepts and mean
+                // nothing for a thread living in another app. The one thing that
+                // does make sense is a door into it — the Codex equivalent of
+                // "show me the terminal".
+                ActButton(label: "open in Codex") { model.emit(.openInTerminal(id: t.id)) }
+            } else if t.alive {
                 ActButton(label: "stop") { model.emit(.kill(id: t.id)) }
                 ActButton(label: model.taskTerminalOpen ? "hide terminal" : "terminal") {
                     model.taskTerminalOpen.toggle()

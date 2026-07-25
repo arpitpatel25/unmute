@@ -23,6 +23,9 @@ export interface ResultP { summary: string; detail?: string; artifacts?: Artifac
 export interface ErrorP { reason: string; detail?: string }
 export interface McpGapP { message: string; fixCommand: string }
 
+/** One turn of a GUI-agent conversation — this backend's answer to the terminal. */
+export interface TurnP { role: 'user' | 'assistant'; text: string }
+
 export interface TaskDetailP {
   id: string
   title: string
@@ -40,6 +43,13 @@ export interface TaskDetailP {
   result?: ResultP
   error?: ErrorP
   mcpGap?: McpGapP
+  /** Which backend runs this task; drives whether the panel shows a terminal
+   *  (Claude, PTY) or the conversation (Codex, no PTY). */
+  backend?: 'claude' | 'codex-desktop'
+  /** Last few turns — rendered INSTEAD of the terminal for external backends. */
+  conversation?: TurnP[]
+  /** Codex project name, for the header. */
+  project?: string
 }
 
 export interface CardP {

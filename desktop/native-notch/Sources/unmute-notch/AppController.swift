@@ -150,7 +150,8 @@ final class AppController: NSObject {
     /// The Stage/wall keep the cockpit frame; the task surface is content-sized.
     private func frame(for state: NotchState) -> NSRect {
         if state == .task {
-            let size = geometry.taskSize
+            // No terminal ⇒ no need for terminal-sized real estate.
+            let size = geometry.taskSize(compact: model.frontDetail?.backend == "codex-desktop")
             return geometry.topPinnedFrame(width: size.width, height: size.height)
         }
         return geometry.windowFrame(for: state)

@@ -437,8 +437,15 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
   if ! grep -q 'BalancePill' "$app_tsx"; then
     log "WARN: App.tsx missing BalancePill — engine-overrides may have failed to apply"
   fi
-  if ! grep -q 'EngineSettings' "$engine/renderer/app/Settings.tsx"; then
-    log "WARN: Settings.tsx missing EngineSettings — engine-overrides may have failed to apply"
+  # Settings was split into Account/Permissions/Settings tabs (abd38ed), so the
+  # old EngineSettings marker no longer exists anywhere. Check a marker that is
+  # actually present, or this warns on every healthy build and trains everyone
+  # to ignore it (it did — it masked a real missing-import bug for a day).
+  if ! grep -q 'onDictationKeyChange' "$engine/renderer/app/Settings.tsx"; then
+    log "WARN: Settings.tsx missing onDictationKeyChange — engine-overrides may have failed to apply"
+  fi
+  if ! grep -q 'RemoteSettings' "$engine/renderer/app/App.tsx"; then
+    log "WARN: App.tsx missing the Remote tab — engine-overrides may have failed to apply"
   fi
   if ! grep -q 'paywallStreamChunk' "$engine/renderer/widget/useAudioRecorder.ts"; then
     log "WARN: useAudioRecorder.ts missing paywallStreamChunk — engine-overrides may have failed to apply"
@@ -453,8 +460,10 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
   if ! grep -q 'remote-start' "$engine/electron/keyboard.ts"; then
     log "WARN: keyboard.ts missing Remote-key seam — engine-overrides may have failed to apply"
   fi
-  if ! grep -q 'remoteCaptureActive' "$engine/electron/sessionManager.ts"; then
-    log "WARN: sessionManager.ts missing Remote capture branch — engine-overrides may have failed to apply"
+  # `remoteCaptureActive` was renamed away; the load-bearing marker is the
+  # capture KIND that startSession threads through to the widget.
+  if ! grep -q "startSession('dictation', 'remote')" "$engine/electron/sessionManager.ts"; then
+    log "WARN: sessionManager.ts missing the Remote capture branch — engine-overrides may have failed to apply"
   fi
   if [[ ! -f "$engine/electron/paywall/remote/init.ts" ]]; then
     log "WARN: remote/init.ts not copied into engine — Remote will not initialise"

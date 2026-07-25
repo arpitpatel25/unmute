@@ -62,6 +62,19 @@ struct TaskDetail: Codable {
     let result: ResultP?
     let error: ErrorP?
     let mcpGap: McpGapP?
+    /// Which backend runs this task. Absent ⇒ Claude (PTY-backed).
+    let backend: String?       // "codex-desktop"
+    /// Last few turns — the GUI-agent equivalent of the live terminal. A Codex
+    /// thread has no PTY, so the conversation itself is what this panel shows.
+    let conversation: [TurnP]?
+    /// Codex project name, for the header.
+    let project: String?
+}
+
+/// One turn of a GUI-agent conversation.
+struct TurnP: Codable {
+    let role: String           // "user" | "assistant"
+    let text: String
 }
 
 /// A resting card on the wall.
