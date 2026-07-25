@@ -28,7 +28,7 @@ import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
-import { CodexExecutor, type AgentKind } from './codex-executor'
+import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor'
 import { CodexDesktopDriver } from './codex/driver'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
@@ -616,6 +616,16 @@ function executorFactory(resume = false) {
   const model = settings.get('model') || getModels().doerDefault
   const browser = settings.get('browserEnabled') !== false
   log.event('executor-factory', { agent, permissionMode: mode, sandboxed, sandboxRoots, model, browser, resume })
+  // HARD SEPARATION (invariant). Everything below builds a PTY-backed CLI
+  // session — i.e. Claude Code. An external backend must never reach here: if
+  // it did, the fall-through would hand the user a Claude session for a task
+  // they explicitly chose Codex for. That is exactly the crossing that produced
+  // a duplicate Claude task on 2026-07-25, so it now throws LOUDLY instead of
+  // silently doing the wrong thing.
+  if (isExternalAgent(agent)) {
+    log.error('executor-factory called for an external backend — this is a bug', { agent })
+    throw new Error(`AGENT_SEPARATION_VIOLATION: ${agent} has no PTY executor; dispatch must route it to its driver`)
+  }
   if (agent === 'codex') {
     return new CodexExecutor({}) // NOTE: Codex resume isn't wired yet (different mechanism)
   }
@@ -1445,7 +1455,19 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       }
       return newId
     } catch (e) {
-      log.warn('router error — dispatching new', { error: (e as Error).message })
+      const msg = (e as Error).message
+      // HARD SEPARATION. This failsafe exists for ROUTING failures (timeout,
+      // unparseable decision) where starting a plain task is the safe move. It
+      // must NEVER re-dispatch a task whose backend was already chosen: doing so
+      // silently moved a Codex task onto Claude Code and ran the user's work
+      // twice, on an agent they did not pick (2026-07-25). A backend failure is
+      // a FAILED TASK on that backend, never a task somewhere else.
+      if (msg.startsWith('CODEX_UNAVAILABLE') || msg.startsWith('AGENT_SEPARATION_VIOLATION')) {
+        log.error('backend failure — NOT falling back to another agent', { error: msg })
+        speakLine('Codex could not take that task.')
+        return null
+      }
+      log.warn('router error — dispatching new', { error: msg })
       return manager.dispatch(raw, { mode: injectionDisabled() ? 'raw' : undefined })
     }
   }

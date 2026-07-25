@@ -23,7 +23,7 @@ import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
 import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject } from './cdp'
-import { readThread, type CodexSnapshot } from './rollout'
+import { readThread, newestThreadIdSince, type CodexSnapshot } from './rollout'
 
 const log = createLogger('codex-driver')
 
@@ -45,7 +45,7 @@ export interface CodexAvailability {
 export interface CreateTaskResult {
   ok: boolean
   threadId?: string
-  reason?: CodexUnavailableReason | 'no-composer' | 'no-project' | 'send-failed'
+  reason?: CodexUnavailableReason | 'no-composer' | 'no-project' | 'send-failed' | 'id-unresolved'
 }
 
 export interface CodexDriverDeps {
@@ -154,7 +154,12 @@ export class CodexDesktopDriver {
     const cdp = await this.connect({ autoArm: opts.autoArm })
     if (!cdp) return { ok: false, reason: avail.reason ?? 'not-armed' }
 
+    // Stamp BEFORE touching the app: the durable thread id is recovered by
+    // finding the rollout file created after this instant (see rollout.ts —
+    // the DOM never reveals it).
+    const startedAt = Date.now() - 2000 // small slack for clock/fs granularity
     const before = new Set((await listThreads(cdp)).map((t) => t.id))
+    log.event('codex-create-begin', { project: opts.project ?? null, threadsBefore: before.size })
 
     // Project-scoped creation. Codex exposes a per-project button, so a task
     // lands INSIDE the project rather than being created then moved.
@@ -164,15 +169,17 @@ export class CodexDesktopDriver {
       if (!opened) log.warn('codex-project-button-missing', { project: opts.project })
     }
     if (!opened) opened = await cdp.clickAriaLabel('New chat')
-    if (!opened) return { ok: false, reason: 'no-project' }
+    if (!opened) { log.warn('codex-create-no-newchat-button', { project: opts.project ?? null }); return { ok: false, reason: 'no-project' } }
+    log.event('codex-create-newchat-clicked', { projectScoped: !!opts.project })
     await this.sleep(700)
 
-    if (!(await cdp.focusComposer())) return { ok: false, reason: 'no-composer' }
+    if (!(await cdp.focusComposer())) { log.warn('codex-create-no-composer', {}); return { ok: false, reason: 'no-composer' } }
     await this.sleep(120)
     await cdp.typeText(intent)
     await this.sleep(180)
     const typed = await cdp.composerText()
-    if (!typed.trim()) return { ok: false, reason: 'no-composer' }
+    if (!typed.trim()) { log.warn('codex-create-type-failed', { intentLen: intent.length }); return { ok: false, reason: 'no-composer' } }
+    log.event('codex-create-typed', { chars: typed.length })
     await cdp.pressEnter()
 
     // Submission is confirmed by the composer emptying — the same observable
@@ -182,10 +189,17 @@ export class CodexDesktopDriver {
       await this.sleep(200)
       if (!(await cdp.composerText()).trim()) { sent = true; break }
     }
-    if (!sent) return { ok: false, reason: 'send-failed' }
+    if (!sent) { log.warn('codex-create-send-unconfirmed', {}); return { ok: false, reason: 'send-failed' } }
+    log.event('codex-create-sent', {})
 
-    const threadId = await this.resolveNewThreadId(cdp, before)
-    if (!threadId) return { ok: false, reason: 'send-failed' }
+    const threadId = await this.resolveNewThreadId(startedAt)
+    if (!threadId) {
+      // The message IS in Codex at this point — the send was confirmed above.
+      // Report the id failure distinctly so it is never mistaken for "the task
+      // did not start", which is what caused a duplicate run on another agent.
+      log.warn('codex-create-id-unresolved', { startedAt, note: 'thread exists in Codex but id not recovered' })
+      return { ok: false, reason: 'id-unresolved' }
+    }
     log.event('codex-task-created', { threadId, project: opts.project ?? null })
     return { ok: true, threadId }
   }
@@ -195,20 +209,19 @@ export class CodexDesktopDriver {
    * immediately with a transient `local:client-new-thread:<uuid>` id; the real
    * `local:019f…` id lands once Codex persists it.
    */
-  private async resolveNewThreadId(cdp: CodexCdp, before: Set<string>, tries = 25): Promise<string | null> {
-    let transientSeen = false
+  /**
+   * Recover the durable thread id from the FILE SYSTEM.
+   *
+   * Never from the DOM: a freshly created row carries a transient
+   * `client-new-thread:` id and the durable one is never written there, so the
+   * old DOM poll could only ever time out.
+   */
+  private async resolveNewThreadId(startedAt: number, tries = 20): Promise<string | null> {
     for (let i = 0; i < tries; i++) {
-      const rows = await listThreads(cdp)
-      const fresh = rows.filter((r) => !before.has(r.id))
-      const durable = fresh.find((r) => !isTransientThreadId(r.id))
-      if (durable) return bareThreadId(durable.id)
-      // The active row is the new chat even when its id is still transient.
-      const active = rows.find((r) => r.active && !isTransientThreadId(r.id))
-      if (active && !before.has(active.id)) return bareThreadId(active.id)
-      if (fresh.some((r) => isTransientThreadId(r.id))) transientSeen = true
+      const id = await newestThreadIdSince(startedAt, this.sessionsDir)
+      if (id) { log.event('codex-id-resolved', { threadId: id, attempts: i + 1 }); return id }
       await this.sleep(400)
     }
-    log.warn('codex-thread-id-unresolved', { transientSeen })
     return null
   }
 

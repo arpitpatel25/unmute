@@ -585,13 +585,23 @@ export class TaskManager extends EventEmitter {
     const surface = opts.surface ?? detectSurface(intent)
     const kind = opts.kind ?? 'oneoff'
 
-    // Create in the app FIRST: if Codex can't take the task (not installed, not
-    // armed) we must not leave a card claiming work that never started.
+    tlog.event('codex-dispatch-begin', { project: opts.project ?? null, kind, intentLen: intent.length })
     const created = await driver.createTask(intent, { project: opts.project ?? null })
+
+    // ONE-WAY DOOR. Whatever happens from here the task stays a Codex task. It
+    // may end up FAILED, but it is never handed to another agent — the user
+    // chose this backend, and silently running their work somewhere else (which
+    // is what happened on 2026-07-25) is worse than failing honestly.
+    //
+    // `id-unresolved` is called out separately because the work DID start in
+    // Codex; only our handle on it is missing. Treating that as "nothing
+    // happened" is what produced a duplicate run.
     if (!created.ok || !created.threadId) {
-      tlog.warn('codex-dispatch-failed', { reason: created.reason })
+      const startedAnyway = created.reason === 'id-unresolved'
+      tlog.warn('codex-dispatch-failed', { reason: created.reason, startedInCodexAnyway: startedAnyway })
       throw new Error(`CODEX_UNAVAILABLE: ${created.reason ?? 'unknown'}`)
     }
+    tlog.event('codex-dispatch-created', { threadId: created.threadId })
 
     await fs.mkdir(dir, { recursive: true }).catch(() => {})
     const task: Task = {
@@ -653,6 +663,11 @@ export class TaskManager extends EventEmitter {
     }
 
     if (snap.state === 'failed') { this.transition(id, 'failed', { state: 'failed', error: { reason: 'Codex reported an error' } } as StatusPayload); return }
+
+    tlog.debug('codex-poll', {
+      state: snap.state, turnsStarted: snap.turnsStarted, everCompleted: snap.everCompleted,
+      hasHeadline: !!snap.lastAgentMessage, taskState: task.state,
+    })
 
     if (snap.state === 'ready' && snap.everCompleted) {
       // A completed Codex turn is `ready`, never `done`: the step is over but the

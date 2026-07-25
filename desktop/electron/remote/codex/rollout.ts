@@ -156,6 +156,63 @@ function numericMs(v: unknown): number {
   return 0
 }
 
+/**
+ * The durable thread id of the newest thread created since `sinceMs`.
+ *
+ * THIS EXISTS BECAUSE OF A REAL FAILURE. The driver used to wait for the
+ * durable id to appear in Codex's sidebar DOM after creating a thread. It never
+ * does: the row keeps a transient `local:client-new-thread:<uuid>` id, and the
+ * durable id only ever lands in Codex's own store. The wait therefore always
+ * timed out ("codex-thread-id-unresolved"), the dispatch reported failure for
+ * work that had actually SUCCEEDED, and the task was silently re-run on another
+ * agent.
+ *
+ * The rollout FILENAME carries the durable id, so the file system is the
+ * authority. No sqlite, no DOM, no polling a value that will never arrive.
+ * Filenames look like:
+ *   rollout-2026-07-25T02-40-24-019f95f7-1127-7792-9a96-e1148ed6d954.jsonl
+ */
+export async function newestThreadIdSince(
+  sinceMs: number,
+  sessionsDir = DEFAULT_SESSIONS_DIR,
+): Promise<string | null> {
+  const candidates: Array<{ id: string; mtime: number }> = []
+  const years = (await safeDirs(sessionsDir)).sort().reverse()
+  // Only the newest date partitions can hold a thread we just created; scanning
+  // newest-first and stopping at the first day with a hit keeps this cheap.
+  outer: for (const y of years) {
+    const months = (await safeDirs(join(sessionsDir, y))).sort().reverse()
+    for (const m of months) {
+      const days = (await safeDirs(join(sessionsDir, y, m))).sort().reverse().slice(0, 2)
+      for (const d of days) {
+        const dir = join(sessionsDir, y, m, d)
+        let names: string[] = []
+        try { names = await fs.readdir(dir) } catch { continue }
+        for (const n of names) {
+          const id = threadIdFromRolloutName(n)
+          if (!id) continue
+          try {
+            const mtime = (await fs.stat(join(dir, n))).mtimeMs
+            if (mtime >= sinceMs) candidates.push({ id, mtime })
+          } catch { /* file vanished mid-scan — ignore */ }
+        }
+        if (candidates.length) break outer
+      }
+    }
+  }
+  if (!candidates.length) return null
+  candidates.sort((a, b) => b.mtime - a.mtime)
+  return candidates[0].id
+}
+
+/** Extract the durable thread id from a rollout filename (null if not one). */
+export function threadIdFromRolloutName(name: string): string | null {
+  if (!name.startsWith('rollout-') || !name.endsWith('.jsonl')) return null
+  // Trailing UUID: 8-4-4-4-12 hex.
+  const m = name.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i)
+  return m ? m[1] : null
+}
+
 /** Read + parse a thread's rollout. Missing file ⇒ a fresh `processing` snapshot. */
 export async function readThread(threadId: string, sessionsDir = DEFAULT_SESSIONS_DIR, turnLimit = 6): Promise<CodexSnapshot> {
   const path = await findRolloutPath(threadId, sessionsDir)
