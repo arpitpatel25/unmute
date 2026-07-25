@@ -222,6 +222,22 @@ export class CodexCdp {
 // simply does not exist. Reading it is how we ask for the most we are ALLOWED
 // rather than the most that exists.
 
+/**
+ * Which conversation the composer is currently attached to.
+ *
+ * This is the only trustworthy "where am I" signal. The sidebar cannot answer
+ * it: rows exist in the DOM only while their section is expanded and within the
+ * rendered window, so a thread can be open and on screen while having no row at
+ * all (measured — a collapsed Recents hides every recent thread).
+ */
+export async function currentConversationId(cdp: CodexCdp): Promise<string | null> {
+  const id = await cdp.evaluate<string>(
+    `(() => { const el = document.querySelector('[data-above-composer-conversation-id]');
+              return el ? (el.getAttribute('data-above-composer-conversation-id') || '') : ''; })()`,
+  )
+  return id ? id : null
+}
+
 const PERMISSIONS_BUTTON = '[data-composer-navigation-target="permissions"]'
 
 /** Centre of an element, or null when it isn't on screen. */

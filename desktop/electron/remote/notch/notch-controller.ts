@@ -26,7 +26,9 @@ export interface TaskLite {
   kind?: 'oneoff' | 'session'
   agent?: 'claude' | 'codex' | 'codex-desktop'
   codexProject?: string | null
-  conversation?: Array<{ role: 'user' | 'assistant'; text: string }> | null
+  conversation?: TurnP[] | null
+  /** Last message that did not reach the agent (NOT a task failure). */
+  deliveryError?: string
   threadContext?: string | null
   shelved?: boolean
   note?: string | null
@@ -160,6 +162,10 @@ const PROMOTED_BADGE_MS = 8 * 1000        // "↑ now a session" narration windo
  *  hourly sweep), so the two agree. */
 const STALE_READY_MS = 70 * 60 * 1000
 
+/** How long an errored task keeps the surface. Longer than `ready` — a failure
+ *  deserves more of your attention than a finished step — but still finite. */
+const STALE_ERROR_MS = 3 * 60 * 60 * 1000
+
 type Engaged = 'none' | 'task' | 'cockpit'
 
 export class NotchController {
@@ -282,6 +288,12 @@ export class NotchController {
   private crankEligible(t: TaskLite, now = Date.now()): boolean {
     if (classify(t.state) === null || t.shelved) return false
     if (t.state === 'ready' && now - (t.updatedAt ?? 0) > STALE_READY_MS) return false
+    // An errored task nagged FOREVER: only `ready` had a cut-off, and nothing
+    // else ever removed one from the queue. A failure you have already seen is
+    // not more urgent for being older — it stays a card on the wall, it just
+    // stops being in your face. (Field report: a task that errored once kept
+    // occupying the notch for hours.)
+    if (t.state === 'failed' && now - (t.updatedAt ?? 0) > STALE_ERROR_MS) return false
     if (this.muted.get(t.id) === t.state) return false
     return true
   }
@@ -689,12 +701,20 @@ export class NotchController {
       elapsed: relativeAge(t.createdAt, now),
       warmup: t.threadContext ?? undefined,
       note: t.note ?? undefined,
+      // A delivery problem belongs next to the composer, where the retry is —
+      // and unlike `error` it must never be read as "the work failed".
+      deliveryError: t.deliveryError ?? undefined,
       activity: t.question?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined,
       question: t.question ?? undefined,
       result: t.result ?? undefined,
       error: t.error ?? undefined,
       mcpGap: t.mcpGap ? { message: t.mcpGap.message, fixCommand: t.mcpGap.fixCommand } : undefined,
     }
+  }
+
+  /** Say something transient on the surface (delivery failures, guards). */
+  toast(text: string): void {
+    this.client.send({ type: 'toast', text })
   }
 
   buildCockpit(): CockpitPayload {

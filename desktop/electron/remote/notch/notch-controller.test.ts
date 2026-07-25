@@ -535,3 +535,34 @@ test('answering the BLOCKING question still advances the crank', () => {
   h.flush()
   assert.equal(h.client.last('showTask')!.task.id, 'b2', 'moved on to the next blocked task')
 })
+
+test('an errored task eventually stops occupying the notch', () => {
+  // Nothing ever aged out a failure: only `ready` had a cut-off. One error and
+  // the notch was held indefinitely (observed for hours in the field). It stays
+  // a card on the wall — it just stops being in your face.
+  const h = setup()
+  const old = Date.now() - 4 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'e1', state: 'failed', updatedAt: old, error: { reason: 'boom' } }))
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'dormant')
+})
+
+test('a FRESH error still demands attention', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'e1', state: 'failed', error: { reason: 'boom' } }))
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'attention')
+})
+
+test('a delivery error reaches the surface without settling the task', () => {
+  const h = setup()
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    deliveryError: 'Could not find that chat in Codex',
+  }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const d = h.client.last('stageDetail')!.task
+  assert.equal(d.deliveryError, 'Could not find that chat in Codex')
+  assert.equal(d.status, 'ready', 'the task itself is untouched')
+})

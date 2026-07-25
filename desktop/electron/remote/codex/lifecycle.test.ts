@@ -16,9 +16,11 @@ function fakeDriver(script: { states?: Array<{ state: string; lastAgentMessage?:
       calls.push({ fn: 'createTask', args: [intent, opts] })
       return { ok: true as const, threadId: 'thread-123' }
     },
-    send: async (threadId: string, text: string) => {
+    /** Overridable so a test can make a delivery fail without failing the task. */
+    sendResult: { ok: true } as { ok: boolean; reason?: string },
+    send: async function (this: { sendResult: { ok: boolean; reason?: string } }, threadId: string, text: string) {
       calls.push({ fn: 'send', args: [threadId, text] })
-      return { ok: true as const }
+      return this.sendResult as { ok: true } | { ok: false; reason: string }
     },
     openThread: async () => true,
     snapshot: async () => {
@@ -133,4 +135,43 @@ test('meta.json records the backend so the task survives a restart', async () =>
   assert.equal(restored!.codexThreadId, 'thread-123')
   assert.notEqual(restored!.state, 'failed')
   m2.killAll(); m2.stopMaintenance()
+})
+
+test('a failed SEND does not become a failed task', async () => {
+  // Field report: one missed delivery marked the task failed, and it then sat in
+  // the attention queue for hours. The Codex thread was untouched and healthy —
+  // only our attempt to type into it missed. Marking the work failed was wrong,
+  // and polling stops on `failed`, so it could never correct itself.
+  const base = await tmp()
+  const d = fakeDriver()
+  d.sendResult = { ok: false, reason: 'thread-not-found' }
+  const m = await makeManager(d, base)
+  const id = await m.dispatch('open the video', { agent: 'codex-desktop' })
+  const before = m.get(id)!.state
+
+  m.answer(id, 'also check the description')
+  await new Promise((r) => setTimeout(r, 30))
+
+  const t = m.get(id)!
+  assert.notEqual(t.state, 'failed', 'the task must not be settled by a delivery miss')
+  assert.equal(t.state, before, 'it goes back exactly where it was')
+  assert.match(t.deliveryError ?? '', /Could not find that chat/, 'and says what went wrong')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a later successful send clears the delivery error', async () => {
+  const base = await tmp()
+  const d = fakeDriver()
+  d.sendResult = { ok: false, reason: 'thread-not-found' }
+  const m = await makeManager(d, base)
+  const id = await m.dispatch('open the video', { agent: 'codex-desktop' })
+  m.answer(id, 'first try')
+  await new Promise((r) => setTimeout(r, 30))
+  assert.ok(m.get(id)!.deliveryError)
+
+  d.sendResult = { ok: true }
+  m.answer(id, 'second try')
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(m.get(id)!.deliveryError, undefined)
+  m.killAll(); m.stopMaintenance()
 })

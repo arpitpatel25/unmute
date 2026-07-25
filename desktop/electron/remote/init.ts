@@ -422,14 +422,20 @@ function openInCodex(taskId: string): boolean {
   if (!task?.codexThreadId || !codexDriver) { log.warn('open-in-codex: not a codex task', { taskId }); return false }
   const threadId = task.codexThreadId
   void (async () => {
-    // Select the thread first (background, via CDP) so the window is already on
-    // the right conversation when it comes forward — no visible flicker through
-    // whatever was last open.
+    // The deep link BOTH selects the thread and brings Codex forward, so there
+    // is no window to activate separately and no flicker through whatever was
+    // last open.
+    //
+    // Previously this activated Codex unconditionally and merely logged whether
+    // the switch worked — so a failed lookup silently dumped the user into some
+    // other conversation while reporting success. If we cannot land on the right
+    // thread, say so and leave their window alone.
     const switched = await codexDriver!.openThread(threadId).catch(() => false)
-    execFile('osascript', ['-e', 'tell application "ChatGPT" to activate'], (err) => {
-      if (err) log.warn('open-in-codex activate failed', { error: err.message })
-    })
     log.event('open-in-codex', { taskId, threadId, switched })
+    if (!switched) {
+      notchController?.toast('could not open that Codex chat')
+      log.warn('open-in-codex-failed', { taskId, threadId })
+    }
   })()
   dismissOverlay()
   return true

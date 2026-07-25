@@ -140,7 +140,7 @@ test('a step titles itself from the command when there is no title', () => {
     type: 'custom_tool_call', call_id: 'c1', name: 'exec',
     input: 'const r = await tools.exec_command({"cmd":"sed -n 1,240p SKILL.md"});',
   }))
-  assert.equal(snap.turns[0].title, 'sed -n 1,240p SKILL.md')
+  assert.equal(snap.turns.find((t) => t.role === 'tool')!.title, 'sed -n 1,240p SKILL.md')
 })
 
 test('an output with no matching call is dropped, not attached to the wrong step', () => {
@@ -148,8 +148,9 @@ test('an output with no matching call is dropped, not attached to the wrong step
     item({ type: 'custom_tool_call', call_id: 'mine', name: 'exec', input: '{"title":"Mine"}' }),
     item({ type: 'custom_tool_call_output', call_id: 'someone-elses', output: 'not mine' }),
   ].join('\n'))
-  assert.equal(snap.turns.length, 1)
-  assert.equal(snap.turns[0].output, undefined)
+  const steps = snap.turns.filter((t) => t.role === 'tool')
+  assert.equal(steps.length, 1)
+  assert.equal(steps[0].output, undefined)
 })
 
 test('commentary and the final answer stay distinguishable', () => {
@@ -159,7 +160,8 @@ test('commentary and the final answer stay distinguishable', () => {
     item({ type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'I will look it up.' }] }),
     item({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Opened it.' }] }),
   ].join('\n'))
-  assert.deepEqual(snap.turns.map((t) => t.role), ['commentary', 'assistant'])
+  // A `work` marker heads the run — that is what Codex's "Worked for …" line is.
+  assert.deepEqual(snap.turns.map((t) => t.role), ['work', 'commentary', 'assistant'])
 })
 
 test("Codex's injected context is NEVER shown back to the user", () => {
@@ -189,8 +191,9 @@ test('a huge tool output is clipped rather than shipped whole to the notch', () 
     item({ type: 'custom_tool_call', call_id: 'c', name: 'exec', input: '{"title":"Snapshot"}' }),
     item({ type: 'custom_tool_call_output', call_id: 'c', output: 'x'.repeat(50_000) }),
   ].join('\n'))
-  assert.ok(snap.turns[0].output!.length < 2_200, 'clipped')
-  assert.match(snap.turns[0].output!, /more characters/, 'and says so')
+  const step = snap.turns.find((t) => t.role === 'tool')!
+  assert.ok(step.output!.length < 2_200, 'clipped')
+  assert.match(step.output!, /more characters/, 'and says so')
 })
 
 test('the headline is still the final answer, not the last tool step', () => {
@@ -203,4 +206,38 @@ test('the headline is still the final answer, not the last tool step', () => {
     line('task_complete', { last_agent_message: 'Opened MrBeast’s latest video.' }),
   ].join('\n'))
   assert.equal(snap.lastAgentMessage, 'Opened MrBeast’s latest video.')
+})
+
+test('the work run is headed by Codex\'s own reported duration', () => {
+  // Codex shows the turn's WALL time, which includes model thinking. Measured
+  // on one real turn: reported 167s vs 107s of step time — deriving it from the
+  // steps would read visibly wrong next to the real Codex window. `duration_ms`
+  // is already milliseconds, so it must NOT go through the epoch-seconds helper.
+  const snap = parseRollout([
+    line('task_started', { started_at: 1784990760 }),
+    item({ type: 'custom_tool_call', call_id: 'c', name: 'exec', input: '{"title":"Search"}' }),
+    item({ type: 'custom_tool_call_output', call_id: 'c', output: 'Script completed\nWall time 99.1 seconds\nOutput:\nx' }),
+    item({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'done' }] }),
+    line('task_complete', { last_agent_message: 'done', duration_ms: 166877 }),
+  ].join('\n'))
+  const work = snap.turns.find((t) => t.role === 'work')!
+  assert.equal(work.durationMs, 166_877)
+})
+
+test('a work run with no reported duration falls back to the steps, never to nothing', () => {
+  const snap = parseRollout([
+    item({ type: 'custom_tool_call', call_id: 'c', name: 'exec', input: '{"title":"Search"}' }),
+    item({ type: 'custom_tool_call_output', call_id: 'c', output: 'Script completed\nWall time 2.0 seconds\nOutput:\nx' }),
+  ].join('\n'))
+  assert.equal(snap.turns.find((t) => t.role === 'work')!.durationMs, 2000)
+})
+
+test("Codex's own plumbing steps are not shown as work", () => {
+  // `wait` is how the model polls a still-running cell. Codex never shows it;
+  // listing it is like reporting "checked whether it was done yet" as a step.
+  const snap = parseRollout([
+    item({ type: 'function_call', call_id: 'w', name: 'wait', arguments: '{"cell_id":"7"}' }),
+    item({ type: 'function_call_output', call_id: 'w', output: 'still going' }),
+  ].join('\n'))
+  assert.equal(snap.turns.filter((t) => t.role === 'tool').length, 0)
 })

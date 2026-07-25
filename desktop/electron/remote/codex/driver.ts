@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, type CodexSnapshot } from './rollout'
 
@@ -287,7 +287,8 @@ export class CodexDesktopDriver {
   async send(threadId: string, text: string): Promise<{ ok: boolean; reason?: string }> {
     const cdp = await this.connect()
     if (!cdp) return { ok: false, reason: 'not-armed' }
-    if (!(await this.openThread(threadId, cdp))) return { ok: false, reason: 'thread-not-found' }
+    // Background: sending must never yank the user's window to the front.
+    if (!(await this.openThread(threadId, cdp, { background: true }))) return { ok: false, reason: 'thread-not-found' }
     await this.sleep(500)
     if (!(await cdp.focusComposer())) return { ok: false, reason: 'no-composer' }
     await this.sleep(120)
@@ -307,21 +308,56 @@ export class CodexDesktopDriver {
    * the user the real chat instead of re-rendering it (ORCHESTRATE-VISION §3:
    * no chat-bubble transcript re-rendering).
    */
-  async openThread(threadId: string, existing?: CodexCdp): Promise<boolean> {
+  async openThread(
+    threadId: string,
+    existing?: CodexCdp,
+    opts: { background?: boolean } = {},
+  ): Promise<boolean> {
+    const bare = bareThreadId(threadId)
+
+    // THE DEEP LINK, NOT THE SIDEBAR.
+    //
+    // This used to click the thread's row in the sidebar, which fails for any
+    // thread not currently rendered there — and that is most of them. Measured
+    // on a live machine: 8 rows in the DOM against 20+ threads, because the
+    // Recents section was collapsed; the section's contents are not merely
+    // hidden, they are absent. Lists are truncated too (`show-all` buttons).
+    // So the DOM route could only ever reach whatever happened to be on screen,
+    // which is why "open in Codex" landed on the wrong chat and every send
+    // failed with thread-not-found.
+    //
+    // Codex registers a `codex://` scheme and uses `codex://threads/<id>` for
+    // its own "Open in app" menu item. It resolves the thread properly, with no
+    // dependence on what the sidebar is showing — verified against a thread
+    // inside a collapsed section.
+    //
+    // `-g` switches WITHOUT raising the app, which is what the send path needs;
+    // the user-facing "open in Codex" omits it and comes forward.
+    const args = opts.background ? ['-g', `codex://threads/${bare}`] : [`codex://threads/${bare}`]
+    try {
+      await new Promise<void>((resolve, reject) => {
+        execFile('open', args, (err) => (err ? reject(err) : resolve()))
+      })
+    } catch (e) {
+      log.warn('codex-deeplink-failed', { threadId: bare, error: (e as Error).message })
+      return false
+    }
+
+    // Confirm rather than assume. Without this a failed switch is invisible and
+    // we would type into whichever thread happened to be open — far worse than
+    // reporting failure.
     const cdp = existing ?? (await this.connect())
     if (!cdp) return false
-    const domId = threadId.startsWith('local:') ? threadId : `local:${threadId}`
-    const box = await cdp.evaluate<string>(`(() => {
-      const el = document.querySelector('[data-app-action-sidebar-thread-id=' + ${JSON.stringify(JSON.stringify(domId))} + ']');
-      if (!el) return '';
-      el.scrollIntoView({ block: 'center' });
-      const r = el.getBoundingClientRect();
-      return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-    })()`)
-    if (!box) return false
-    const { x, y } = JSON.parse(box)
-    await cdp.click(x, y)
-    return true
+    for (let i = 0; i < 15; i++) {
+      await this.sleep(200)
+      const current = await currentConversationId(cdp)
+      if (current && bareThreadId(current) === bare) {
+        log.event('codex-thread-opened', { threadId: bare, attempts: i + 1, background: !!opts.background })
+        return true
+      }
+    }
+    log.warn('codex-thread-open-unconfirmed', { threadId: bare })
+    return false
   }
 
   /** Read a thread's state + recent turns from disk. Never touches the renderer. */

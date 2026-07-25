@@ -52,7 +52,7 @@ struct StageView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.top, 10)
-                    CodexComposer(model: model, taskId: t.id).padding(.top, 9)
+                    CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError).padding(.top, 9)
                 } else if t.alive {
                     TerminalPanel(model: model, taskId: t.id, tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
                         .padding(.top, 10)
@@ -92,16 +92,18 @@ struct StageView: View {
             KeyButton(label: t.kind == "session" ? "unpin" : "pin") {
                 model.emit(.setKind(id: t.id, kind: t.kind == "session" ? "oneoff" : "session"))
             }
-            if t.alive {
+            // BACKEND FIRST, then liveness.
+            //
+            // This branched on `alive` first and put "open in Codex" in the
+            // dead-session arm — while the same change made Codex tasks report
+            // alive, so the button could never render on this surface at all.
+            // Two edits that cancelled out; the Stage showed `kill` instead.
+            if t.backend == "codex-desktop" {
+                KeyButton(label: "open in Codex") { model.emit(.openInTerminal(id: t.id)) }
+            } else if t.alive {
                 KeyButton(label: "kill", danger: true) { model.emit(.kill(id: t.id)) }
             } else {
-                if t.backend == "codex-desktop" {
-                    // The door into the real chat, on every surface a task
-                    // appears on — this one is the split/full stage.
-                    KeyButton(label: "open in Codex") { model.emit(.openInTerminal(id: t.id)) }
-                } else {
-                    KeyButton(label: "resume") { model.emit(.resume(id: t.id)) }
-                }
+                KeyButton(label: "resume") { model.emit(.resume(id: t.id)) }
             }
             KeyButton(label: (t.shelved ?? false) ? "unshelve" : "shelve") {
                 model.emit(.shelve(id: t.id, shelved: !(t.shelved ?? false)))

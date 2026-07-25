@@ -46,7 +46,8 @@ export type CodexState = 'processing' | 'ready' | 'failed'
  * only `agent_message` survived.
  */
 export interface CodexTurn {
-  role: 'user' | 'assistant' | 'commentary' | 'tool'
+  /** `work` heads a run of commentary+tool items — Codex's "Worked for 2m 46s". */
+  role: 'user' | 'assistant' | 'commentary' | 'tool' | 'work'
   text: string
   /** tool: the step's own label — Codex's `title`, e.g. "Search YouTube". */
   title?: string
@@ -122,6 +123,9 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
   // call_id → the step awaiting its output. Codex writes the call and its
   // result as separate lines, sometimes many lines apart.
   const pendingCalls = new Map<string, CodexTurn>()
+  // Wall time per completed turn, in order — used to head each work block.
+  const turnDurations: number[] = []
+  let turnStartedAt = 0
 
   for (const line of text.split('\n')) {
     const raw = line.trim()
@@ -138,9 +142,22 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
     switch (t) {
       case 'task_started':
         started++
+        turnStartedAt = stamp || turnStartedAt
         break
       case 'task_complete':
         completed++
+        // Codex's own header is the WALL time of the turn ("Worked for 2m 46s"),
+        // which includes model thinking — always longer than the steps add up
+        // to. `task_complete` reports it directly; measured 167s against the
+        // steps' 107s on the same turn, so deriving it from the steps would
+        // have been visibly wrong next to the real Codex window.
+        // NOT numericMs(): that one reads EPOCH stamps and scales seconds→ms,
+        // which turns a 166877ms duration into 166877 seconds.
+        const reported = typeof p.duration_ms === 'number' && Number.isFinite(p.duration_ms) ? p.duration_ms : 0
+        if (reported > 0) turnDurations.push(reported)
+        else if (turnStartedAt && stamp > turnStartedAt) turnDurations.push(stamp - turnStartedAt)
+        else turnDurations.push(0)
+        turnStartedAt = 0
         if (typeof p.last_agent_message === 'string' && p.last_agent_message) {
           snap.lastAgentMessage = p.last_agent_message
         }
@@ -169,6 +186,10 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
         // Open the step; its output arrives later under the same call_id.
         const callId = typeof p.call_id === 'string' ? p.call_id : null
         if (!callId) break
+        // Plumbing the user never sees in Codex either. `wait` is how the model
+        // polls a still-running cell — showing it as a step of the work is like
+        // listing "checked whether it was done yet" as an achievement.
+        if (typeof p.name === 'string' && INTERNAL_STEPS.has(p.name)) break
         const code = typeof p.input === 'string' ? p.input
           : typeof p.arguments === 'string' ? p.arguments : ''
         const turn: CodexTurn = {
@@ -222,9 +243,44 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
   if (snap.state !== 'failed') {
     snap.state = started === 0 || started > completed ? 'processing' : 'ready'
   }
+  snap.turns = withWorkBlocks(snap.turns, turnDurations)
   if (snap.turns.length > turnLimit) snap.turns = snap.turns.slice(-turnLimit)
   return snap
 }
+
+/**
+ * Head each run of commentary/tool items with a `work` marker.
+ *
+ * Codex collapses everything it did into ONE line — "Worked for 2m 46s ›" —
+ * and shows the answer underneath. Rendering a dozen step rows inline, which is
+ * what we did, buries the one thing the user came for.
+ *
+ * The duration is the turn's real wall time where the rollout recorded it;
+ * otherwise the steps' own times, which under-counts (it excludes model
+ * thinking) but never invents a number.
+ */
+function withWorkBlocks(items: CodexTurn[], durations: number[]): CodexTurn[] {
+  const out: CodexTurn[] = []
+  let block = 0
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]
+    const isWork = it.role === 'tool' || it.role === 'commentary'
+    const startsRun = isWork && (i === 0 || !(items[i - 1].role === 'tool' || items[i - 1].role === 'commentary'))
+    if (startsRun) {
+      let summed = 0
+      for (let j = i; j < items.length && (items[j].role === 'tool' || items[j].role === 'commentary'); j++) {
+        summed += items[j].durationMs ?? 0
+      }
+      out.push({ role: 'work', text: '', durationMs: durations[block] || summed })
+      block++
+    }
+    out.push(it)
+  }
+  return out
+}
+
+/** Steps that are Codex's plumbing, not the user's work. */
+const INTERNAL_STEPS = new Set(['wait'])
 
 function numericMs(v: unknown): number {
   if (typeof v === 'number' && Number.isFinite(v)) return v < 1e12 ? v * 1000 : v // seconds → ms
@@ -293,17 +349,37 @@ export function threadIdFromRolloutName(name: string): string | null {
 }
 
 /** Read + parse a thread's rollout. Missing file ⇒ a fresh `processing` snapshot. */
+/**
+ * Reparsing is skipped while the file is byte-for-byte unchanged.
+ *
+ * Every poll re-read and re-parsed the whole JSONL — and the parse is no longer
+ * cheap now that it reconstructs the item stream. A long thread is megabytes,
+ * and the common case by far is "nothing happened since last time", where the
+ * work is entirely wasted. Keyed on (size, mtime), which is exactly what
+ * changes when Codex appends.
+ */
+const parseCache = new Map<string, { size: number; mtimeMs: number; limit: number; snap: CodexSnapshot }>()
+
+const EMPTY = (): CodexSnapshot =>
+  ({ state: 'processing', lastAgentMessage: null, turns: [], updatedAt: 0, turnsStarted: 0, everCompleted: false })
+
 export async function readThread(threadId: string, sessionsDir = DEFAULT_SESSIONS_DIR, turnLimit = 6): Promise<CodexSnapshot> {
   const path = await findRolloutPath(threadId, sessionsDir)
-  if (!path) return { state: 'processing', lastAgentMessage: null, turns: [], updatedAt: 0, turnsStarted: 0, everCompleted: false }
+  if (!path) return EMPTY()
+
+  let stat: { size: number; mtimeMs: number } | null = null
+  try { stat = await fs.stat(path) } catch { return EMPTY() }
+
+  const hit = parseCache.get(path)
+  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs && hit.limit === turnLimit) return hit.snap
+
   let text = ''
-  try { text = await fs.readFile(path, 'utf8') } catch {
-    return { state: 'processing', lastAgentMessage: null, turns: [], updatedAt: 0, turnsStarted: 0, everCompleted: false }
-  }
+  try { text = await fs.readFile(path, 'utf8') } catch { return EMPTY() }
   const snap = parseRollout(text, turnLimit)
-  if (!snap.updatedAt) {
-    try { snap.updatedAt = (await fs.stat(path)).mtimeMs } catch { /* leave 0 */ }
-  }
+  if (!snap.updatedAt) snap.updatedAt = stat.mtimeMs
+  parseCache.set(path, { size: stat.size, mtimeMs: stat.mtimeMs, limit: turnLimit, snap })
+  // Bounded: one entry per thread we have ever polled, dropped oldest-first.
+  if (parseCache.size > 64) parseCache.delete(parseCache.keys().next().value as string)
   return snap
 }
 

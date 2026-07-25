@@ -45,7 +45,7 @@ struct TaskSurfaceView: View {
                     // Always available: a Codex chat is continuable until you
                     // delete it, so there is no state in which you have nothing
                     // to say to it.
-                    CodexComposer(model: model, taskId: t.id).padding(.top, 9)
+                    CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError).padding(.top, 9)
                 } else if model.taskTerminalOpen && t.alive {
                     // The terminal owns EVERYTHING left down to the action row
                     // (field feedback: never a fixed band with dead space below).

@@ -62,6 +62,9 @@ struct TaskDetail: Codable {
     let result: ResultP?
     let error: ErrorP?
     let mcpGap: McpGapP?
+    /// Last message that did not reach the agent. NOT a task failure — the
+    /// thread is fine, our delivery missed.
+    let deliveryError: String?
     /// Which backend runs this task. Absent ⇒ Claude (PTY-backed).
     let backend: String?       // "codex-desktop"
     /// Last few turns — the GUI-agent equivalent of the live terminal. A Codex

@@ -82,6 +82,9 @@ export interface Task {
    *  `local:` prefix). This is the whole handle — it addresses the rollout file
    *  for reads and the sidebar row for open/send. */
   codexThreadId?: string
+  /** Last delivery problem — the message did not reach the agent. Distinct from
+   *  `error`, which means the WORK failed; this one never settles the task. */
+  deliveryError?: string
   /** For 'codex-desktop': the Codex project the thread was created in, so the
    *  card can show it and follow-ups can re-scope. */
   codexProject?: string | null
@@ -771,16 +774,37 @@ export class TaskManager extends EventEmitter {
     // from the rollout either way, so a failed send self-heals rather than
     // leaving the card lying about progress.
     this.transition(id, 'processing')
+    const before = task.state
     void driver.send(task.codexThreadId, text).then((r) => {
       if (!r.ok) {
         tlog.warn('codex-followup-failed', { reason: r.reason })
-        // Surface it honestly instead of letting the card spin forever.
-        this.transition(id, 'failed', {
-          state: 'failed',
-          error: { reason: r.reason === 'not-armed' ? 'Codex is not connected to Unmute' : `Could not send to Codex (${r.reason})` },
-        } as StatusPayload)
+        // A FAILED DELIVERY IS NOT A FAILED TASK.
+        //
+        // This used to mark the task `failed`, which was wrong in every way
+        // that matters: the Codex thread is untouched and still perfectly
+        // healthy — only OUR attempt to type into it missed. The card then
+        // claimed the user's work had failed, sat in the attention queue
+        // forever (nothing ages out an errored task), and could never
+        // self-correct because polling stops on `failed`. One missed click and
+        // a finished piece of work nagged indefinitely.
+        //
+        // So: put the task back where it was, and report the delivery problem
+        // as what it is — a message that did not get through.
+        this.transition(id, before)
+        const live = this.tasks.get(id)
+        if (live) {
+          live.deliveryError = r.reason === 'not-armed'
+            ? 'Codex is not connected to Unmute'
+            : r.reason === 'thread-not-found'
+              ? 'Could not find that chat in Codex'
+              : `Could not send to Codex (${r.reason})`
+          live.updatedAt = this.clock()
+          this.emit('updated', live)
+        }
       } else {
         tlog.event('codex-followup-sent', {})
+        const live = this.tasks.get(id)
+        if (live?.deliveryError) { delete live.deliveryError; this.emit('updated', live) }
       }
     }).catch((e) => tlog.error('codex-followup-error', { error: (e as Error).message }))
     this.startPolling(id)

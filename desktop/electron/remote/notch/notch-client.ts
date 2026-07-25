@@ -55,6 +55,8 @@ export interface TaskDetailP {
   /** Which backend runs this task; drives whether the panel shows a terminal
    *  (Claude, PTY) or the conversation (Codex, no PTY). */
   backend?: 'claude' | 'codex-desktop'
+  /** Last message that did not reach the agent (NOT a task failure). */
+  deliveryError?: string
   /** Last few turns — rendered INSTEAD of the terminal for external backends. */
   conversation?: TurnP[]
   /** Codex project name, for the header. */
