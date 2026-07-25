@@ -21,11 +21,13 @@ final class AppController: NSObject {
         let host = NSHostingView(rootView: NotchView(model: model, topInset: topInset))
         host.sizingOptions = []   // WE own the window size
         window.contentView = host
+        model.hasNotch = geometry.hasNotch
         model.emit = { [weak self] ev in
             NotchLog.log("EVENT out: \(ev.json)")
             IPC.emit(ev)
             self?.afterEmit(ev)
         }
+        model.onHover = { [weak self] entering in self?.handleHover(entering) }
         window.applyFrame(frame(for: .dormant), animated: false)
         window.present()
         installTracking()
@@ -177,22 +179,30 @@ final class AppController: NSObject {
                                   owner: self, userInfo: nil)
         cv.addTrackingArea(area)
     }
-    @objc func mouseEntered(with event: NSEvent) {
-        hoverTimer?.invalidate()
-        if model.state == .dormant && commandedState == .dormant {
-            withAnimation(Theme.morph) { model.state = .idle }
-            window.applyFrame(frame(for: .idle), animated: true)
+    /// Shared, idempotent hover-wake (fed by BOTH the SwiftUI .onHover relay and
+    /// the AppKit tracking area — SwiftUI's own tracking can miss a never-key
+    /// panel, which is exactly the dormant window; two paths, one behavior).
+    func handleHover(_ entering: Bool) {
+        if entering {
+            hoverTimer?.invalidate()
+            if model.state == .dormant && commandedState == .dormant {
+                NotchLog.log("hover-wake: dormant → idle")
+                withAnimation(Theme.morph) { model.state = .idle }
+                window.applyFrame(frame(for: .idle), animated: true)
+            }
+        } else {
+            guard model.state == .idle, commandedState == .dormant else { return }
+            hoverTimer?.invalidate()
+            hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+                guard let self, self.model.state == .idle, self.commandedState == .dormant else { return }
+                NotchLog.log("hover-sleep: idle → dormant")
+                withAnimation(Theme.collapse) { self.model.state = .dormant }
+                self.window.applyFrame(self.frame(for: .dormant), animated: true)
+            }
         }
     }
-    @objc func mouseExited(with event: NSEvent) {
-        guard model.state == .idle, commandedState == .dormant else { return }
-        hoverTimer?.invalidate()
-        hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
-            guard let self, self.model.state == .idle, self.commandedState == .dormant else { return }
-            withAnimation(Theme.collapse) { self.model.state = .dormant }
-            self.window.applyFrame(self.frame(for: .dormant), animated: true)
-        }
-    }
+    @objc func mouseEntered(with event: NSEvent) { handleHover(true) }
+    @objc func mouseExited(with event: NSEvent) { handleHover(false) }
 
     // MARK: - Keyboard (Esc ladder · Tab crank · F full · 1-9 answers)
 
@@ -258,6 +268,7 @@ final class AppController: NSObject {
     }
     private func recomputeGeometry(_ reason: String) {
         geometry = NotchGeometry.current()
+        model.hasNotch = geometry.hasNotch
         // topInset feeds the view tree — rebuild the root so it picks it up.
         if let host = window.contentView as? NSHostingView<NotchView> {
             host.rootView = NotchView(model: model, topInset: topInset)

@@ -33,6 +33,12 @@ struct NotchView: View {
         .ignoresSafeArea(.all)
         .contentShape(sh)
         .onTapGesture { if !expanded { model.emit(.tap) } }
+        // Hover: wake dormant → idle (AppController owns the ladder) and show a
+        // pointing hand on the small states so the surface reads as clickable.
+        .onHover { hovering in
+            model.onHover(hovering)
+            if hovering && !expanded { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+        }
         .animation(Theme.morph, value: model.state)
     }
 
@@ -40,14 +46,28 @@ struct NotchView: View {
 
     private var borderColor: Color {
         if model.state == .attention { return Theme.accent }
-        if model.state == .dormant { return .clear }
+        // The dummy notch must be FINDABLE (field feedback: pure black on dark
+        // wallpaper was invisible). A real hardware notch needs no outline.
+        if model.state == .dormant { return model.hasNotch ? .clear : Color.white.opacity(0.30) }
+        if model.state == .idle { return Color.white.opacity(0.55) } // pill-family border
         return Theme.hairline
     }
 
     @ViewBuilder private var content: some View {
         switch model.state {
-        case .dormant, .idle:
+        case .dormant:
             EmptyView()
+        case .idle:
+            // The invitation: hovering woke it, so say who it is. (Suppressed on
+            // hardware notches — text would sit under the camera housing.)
+            if !model.hasNotch {
+                HStack(spacing: 8) {
+                    Text("unmute").font(.system(size: 12.5, weight: .semibold)).foregroundColor(Color(white: 0.88))
+                    if model.working > 0 {
+                        Text("· \(model.working) running").font(.system(size: 11.5)).foregroundColor(Theme.textDim)
+                    }
+                }
+            }
         case .active:
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small).frame(width: 12, height: 12)

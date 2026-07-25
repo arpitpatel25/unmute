@@ -43,8 +43,14 @@ final class NotchModel: ObservableObject {
     // Transient toast (accept errors etc.).
     @Published var toast: String? = nil
 
+    /// Whether the primary display has a hardware notch (drives idle content:
+    /// text on a dummy notch would sit under the camera housing on real ones).
+    @Published var hasNotch: Bool = false
+
     /// Event sink. Real emitter by default; overridable for tests/probe.
     var emit: (Event) -> Void = IPC.emit
+    /// Hover relay → AppController (dormant ⇄ idle wake lives there).
+    var onHover: (Bool) -> Void = { _ in }
 
     // Terminal byte fan-out: TerminalHost subscribes; AppController publishes.
     let termBytes = PassthroughSubject<(id: String, bytes: [UInt8]), Never>()

@@ -53,9 +53,10 @@ struct NotchGeometry {
 
     /// Dormant: a barely-there sliver. On real-notch hardware it's invisible
     /// (drawn behind the physical notch); on non-notch it's the faint hint.
-    var dormantSize: NSSize { NSSize(width: hasNotch ? notchWidth : 140, height: hasNotch ? menuBarHeight : 8) }
-    /// Idle: matches the notch.
-    var idleSize: NSSize { NSSize(width: hasNotch ? notchWidth : 200, height: max(menuBarHeight, 32)) }
+    var dormantSize: NSSize { NSSize(width: hasNotch ? notchWidth : 150, height: hasNotch ? menuBarHeight : 10) }
+    /// Idle: matches the hardware notch; on a dummy notch it's a touch wider so
+    /// the hover "unmute" label breathes.
+    var idleSize: NSSize { NSSize(width: hasNotch ? notchWidth : 216, height: max(menuBarHeight, 34)) }
     /// Active/attention: a wider strip. On notched, flanks straddle the notch.
     var stripSize: NSSize { NSSize(width: hasNotch ? notchWidth + 160 : 300, height: max(menuBarHeight, 34)) }
     /// Task: a substantial surface — ~55% wide, height clamped so it stays a
