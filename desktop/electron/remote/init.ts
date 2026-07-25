@@ -432,7 +432,11 @@ function openInCodex(taskId: string): boolean {
     // thread, say so and leave their window alone.
     const switched = await codexDriver!.openThread(threadId).catch(() => false)
     log.event('open-in-codex', { taskId, threadId, switched })
-    if (!switched) {
+    if (switched) {
+      // Get out of the way. We just sent the user to another window; staying
+      // pinned in front of it is the opposite of handing off.
+      notchController?.collapse()
+    } else {
       notchController?.toast('could not open that Codex chat')
       log.warn('open-in-codex-failed', { taskId, threadId })
     }

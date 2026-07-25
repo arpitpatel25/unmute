@@ -25,6 +25,9 @@ struct WallView: View {
         .overlay(alignment: .bottomLeading) { bottomLeftChrome }
         .overlay(alignment: .bottomTrailing) { bottomRightChrome }
         .overlay(alignment: .topLeading) { hoverCard }
+        .overlay(alignment: .topTrailing) {
+            CloseButton { model.emit(.collapsed) }.padding(.top, 10).padding(.trailing, 12)
+        }
     }
 
     // MARK: main column

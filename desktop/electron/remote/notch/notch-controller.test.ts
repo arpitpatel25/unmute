@@ -607,3 +607,15 @@ test('an unchanged transcript is not re-sent on every poll', () => {
   h.flush()
   assert.ok(sent() > first, 'a real change still goes out')
 })
+
+test('handing off to Codex collapses the notch instead of sitting on top of it', () => {
+  // "open in Codex" used to call dismissOverlay(), which is the RETIRED overlay
+  // window — a different surface. The notch was never told anything, so it
+  // stayed pinned above the Codex window the user had just been sent to.
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  h.client.fire({ type: 'openDashboard' })
+  assert.equal(h.client.last('setState')!.state, 'cockpit')
+  h.controller.collapse()
+  assert.ok(h.client.last('collapse'), 'the surface is told to step down')
+})

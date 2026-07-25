@@ -1,6 +1,9 @@
 import SwiftUI
 import AppKit
 
+/// Scroll anchor: a zero-height marker at the end of the transcript.
+private let BOTTOM = "conversation-bottom"
+
 /// A Codex thread, rendered the way Codex renders it.
 ///
 /// This is the GUI-agent equivalent of the live terminal: a Claude task shows a
@@ -26,16 +29,32 @@ struct ConversationPanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 6)
         } else {
-            VStack(alignment: .leading, spacing: 18) {
-                ForEach(Array(blocks.enumerated()), id: \.offset) { _, b in
-                    switch b {
-                    case let .user(text):     UserBubble(text: text)
-                    case let .answer(text):   AnswerBlock(text: text)
-                    case let .work(ms, body): WorkBlock(durationMs: ms, items: body)
+            // SCROLLS, rather than growing the panel. The latest exchange is
+            // what you want in view on open, and a new message should follow —
+            // so the scroller is anchored to the bottom and re-anchored when
+            // the item count changes.
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 26) {
+                        ForEach(Array(blocks.enumerated()), id: \.offset) { _, b in
+                            switch b {
+                            case let .user(text):     UserBubble(text: text)
+                            case let .answer(text):   AnswerBlock(text: text)
+                            case let .work(ms, body): WorkBlock(durationMs: ms, items: body)
+                            }
+                        }
+                        // Anchor: scrolling to a zero-height marker puts the
+                        // real last message flush with the bottom edge.
+                        Color.clear.frame(height: 1).id(BOTTOM)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 2)
+                }
+                .onAppear { proxy.scrollTo(BOTTOM, anchor: .bottom) }
+                .onChange(of: turns.count) { _ in
+                    withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(BOTTOM, anchor: .bottom) }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

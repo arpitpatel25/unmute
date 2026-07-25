@@ -740,6 +740,20 @@ export class NotchController {
     this.client.send({ type: 'toast', text })
   }
 
+  /**
+   * Step the surface all the way down — used when we hand the user off to
+   * another app.
+   *
+   * "Open in Codex" called dismissOverlay(), which is the RETIRED overlay
+   * window, a different surface entirely. The notch was never told anything, so
+   * it stayed pinned above the Codex window the user had just been sent to.
+   */
+  collapse(): void {
+    this.engaged = 'none'
+    this.setFocus(null)
+    this.client.send({ type: 'collapse' })
+  }
+
   buildCockpit(): CockpitPayload {
     const now = Date.now()
     const tasks = this.deps.listTasks()

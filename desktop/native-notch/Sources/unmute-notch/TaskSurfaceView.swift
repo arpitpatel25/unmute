@@ -92,6 +92,8 @@ struct TaskSurfaceView: View {
             Text(Theme.statusLabel(t.status))
                 .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.status(t.status))
             if let e = t.elapsed { Text(e).font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textFaint) }
+            Spacer(minLength: 8)
+            CloseButton { model.emit(.collapsed) }
             Spacer(minLength: 0)
             if model.attention > 0 {
                 Text("1 of \(model.attention)")

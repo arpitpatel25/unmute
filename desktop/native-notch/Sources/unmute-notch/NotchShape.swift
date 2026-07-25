@@ -90,6 +90,30 @@ struct ActButton: View {
 }
 
 /// Rendered markdown (result detail); graceful plain-text fallback.
+/// Close the expanded surface.
+///
+/// Escape was the ONLY way out of the cockpit and the task surface — fine once
+/// you know it, invisible until then, and unavailable to anyone driving by
+/// mouse. The Stage already had an `esc` button; this gives the other two the
+/// same affordance in the same place.
+struct CloseButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("✕")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(hovering ? Theme.text : Theme.textFaint)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(hovering ? 0.10 : 0.05)))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("close (esc)")
+    }
+}
+
 struct MarkdownText: View {
     let text: String
     var body: some View {
