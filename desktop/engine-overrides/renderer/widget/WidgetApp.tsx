@@ -956,8 +956,25 @@ export default function WidgetApp() {
    *  the utterance is submitted. Optimistic locally so the chip flips instantly. */
   const handlePickAgent = useCallback((id: string) => {
     setAgentPicker((prev) => (prev ? { ...prev, current: id } : prev))
-    const api = (window as any).electronAPI as { remoteSetAgent?: (a: string) => Promise<boolean> } | undefined
+    const api = (window as any).electronAPI as {
+      remoteSetAgent?: (a: string) => Promise<boolean>
+      remoteCodexConnect?: () => Promise<{ ok: boolean }>
+      remoteAgentOptions?: () => Promise<any>
+    } | undefined
     void api?.remoteSetAgent?.(id)
+    // If the chosen backend is installed but not connected, connect it now. This
+    // is the only place the arming relaunch is triggered — always a deliberate
+    // user tap, never mid-utterance on our own initiative.
+    setAgentPicker((prev) => {
+      const opt = prev?.options.find((o) => o.id === id)
+      if (prev && opt && !opt.available && id === 'codex-desktop') {
+        void api?.remoteCodexConnect?.()
+          .then(() => api?.remoteAgentOptions?.())
+          .then((fresh) => { if (fresh) setAgentPicker(fresh) })
+          .catch(() => {})
+      }
+      return prev
+    })
   }, [])
 
   const handleUndo = useCallback(() => {

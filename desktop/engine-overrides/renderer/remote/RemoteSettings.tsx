@@ -138,33 +138,11 @@ export function RemoteSettings() {
         />
       </label>
 
-      {/* Overlay auto-present — the floating task window pops up on done/needs-you */}
-      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
-        <span>Pop up task overlay <span className="text-ink/40">(shows results/questions where you’re working)</span></span>
-        <input
-          type="checkbox"
-          checked={s.overlayAutoPresent}
-          onChange={(e) => {
-            const on = e.target.checked
-            update({ overlayAutoPresent: on })
-            void api().remoteSetOverlayAutoPresent?.(on)
-          }}
-        />
-      </label>
-
-      {/* Docked overlay — a small bottom-right pill that expands on activity */}
-      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
-        <span>Dock the overlay <span className="text-ink/40">(small bottom-right pill with task counts; expands on done/needs-you, esc collapses)</span></span>
-        <input
-          type="checkbox"
-          checked={s.overlayDocked}
-          onChange={(e) => {
-            const on = e.target.checked
-            update({ overlayDocked: on })
-            void api().remoteSetOverlayDocked?.(on)
-          }}
-        />
-      </label>
+      {/* The two overlay toggles that used to sit here (auto-present, dock) are
+          gone on purpose: the floating overlay was retired when the notch became
+          the attention surface (ede9966). Leaving switches that drive a window
+          which is never created would be worse than not offering them — the IPC
+          still exists for older builds, we simply no longer surface it. */}
 
       {/* macOS notifications — off by default (the overlay is the surface) */}
       <label className="flex items-center justify-between py-1.5 border-t border-black/5">

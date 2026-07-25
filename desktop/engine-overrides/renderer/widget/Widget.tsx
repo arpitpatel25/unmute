@@ -29,7 +29,7 @@ interface WidgetProps {
 /** The task-creation backend choice, surfaced on the pill during a Remote capture. */
 export interface AgentPicker {
   current: string
-  options: Array<{ id: string; label: string; available: boolean }>
+  options: Array<{ id: string; label: string; available: boolean; installed?: boolean }>
 }
 
 
@@ -81,6 +81,8 @@ const PILL_CRITICAL_CSS = `
 .unmute-pill-agent { display: inline-flex; align-items: center; gap: 5px; border: 1px solid rgba(255,255,255,0.28); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.82); font-size: 12px; font-weight: 500; border-radius: 9999px; padding: 3px 9px; cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: background 0.15s, border-color 0.15s; }
 .unmute-pill-agent:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.45); }
 .unmute-pill-agent-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,0.55); flex-shrink: 0; }
+.unmute-pill-agent--off { color: rgba(255,255,255,0.52); border-style: dashed; }
+.unmute-pill-agent--off .unmute-pill-agent-dot { background: rgba(255,255,255,0.28); }
 `
 
 
@@ -113,14 +115,20 @@ export default function Widget({
   const isDictation = state === 'dictation-active'
   const isInstruction = state === 'instruction-active' || state === 'chained'
 
-  // Backend picker state. Only backends that can actually take work are
-  // offered — an installed-but-unconnected Codex is not a choice, it's a
-  // promise we can't keep, so it stays out of the cycle.
-  const availableAgents = agentPicker?.options.filter((o) => o.available) ?? []
+  // Backend picker state. An option is OFFERED when the app is installed, even
+  // if it is not connected yet: hiding an installed-but-unarmed Codex left the
+  // user with no way to connect it and no hint the feature existed (field
+  // feedback 2026-07-25). Tapping an unconnected backend triggers the connect
+  // flow rather than silently doing nothing.
+  const offeredAgents = agentPicker?.options.filter((o) => o.available || o.installed) ?? []
+  const availableAgents = offeredAgents
   const currentAgentLabel =
     availableAgents.find((o) => o.id === agentPicker?.current)?.label
     ?? availableAgents[0]?.label
     ?? ''
+  const currentAgentConnected =
+    offeredAgents.find((o) => o.id === agentPicker?.current)?.available ?? true
+
   // One tap cycles. With two backends this is the whole interaction; a menu
   // would cost a second tap for no gain, and the pill is a 44px strip.
   const cycleAgent = () => {
@@ -218,13 +226,13 @@ export default function Widget({
               a Claude-only machine sees the pill exactly as it is today. */}
           {isInstruction && agentPicker && availableAgents.length > 1 && (
             <button
-              className="unmute-pill-agent"
+              className={`unmute-pill-agent${currentAgentConnected ? '' : ' unmute-pill-agent--off'}`}
               onClick={cycleAgent}
-              aria-label={`Run this task on ${currentAgentLabel}. Tap to switch.`}
-              title="Where this task will run — tap to switch"
+              aria-label={`Run this task on ${currentAgentLabel}${currentAgentConnected ? '' : ' — not connected, tap to connect'}. Tap to switch.`}
+              title={currentAgentConnected ? 'Where this task will run — tap to switch' : 'Not connected — tap to connect'}
             >
               <span className="unmute-pill-agent-dot" />
-              {currentAgentLabel}
+              {currentAgentLabel}{currentAgentConnected ? '' : ' · connect'}
             </button>
           )}
           <button className="unmute-pill-stop" onClick={onStop} aria-label="Stop recording">
