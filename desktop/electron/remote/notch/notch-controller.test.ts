@@ -619,3 +619,63 @@ test('handing off to Codex collapses the notch instead of sitting on top of it',
   h.controller.collapse()
   assert.ok(h.client.last('collapse'), 'the surface is told to step down')
 })
+
+// ── the wall: order and pile-up ─────────────────────────────────────────────
+
+test('cards inside a group sort by LAST ACTIVITY, the same key as the groups', () => {
+  // The mismatch was the whole problem: groups ranked on updatedAt, cards on
+  // createdAt. A task touched five minutes ago but created weeks ago promoted
+  // its group to the top and then sat at the bottom of it.
+  const h = setup()
+  const hour = 60 * 60 * 1000
+  put(h, makeTask({ id: 'old-made-fresh-touch', state: 'processing', group: 'g',
+    createdAt: Date.now() - 500 * hour, updatedAt: Date.now() - 1 }))
+  put(h, makeTask({ id: 'new-made-stale-touch', state: 'processing', group: 'g',
+    createdAt: Date.now() - 1, updatedAt: Date.now() - 5 * hour }))
+  h.client.fire({ type: 'openDashboard' })
+  const cards = h.client.last('setCockpit')!.data.groups[0].cards
+  assert.equal(cards[0].id, 'old-made-fresh-touch', 'most recently touched first')
+})
+
+test('settled cards older than 48h fold away, and the group SAYS so', () => {
+  // Sessions never faded at all, so a wall accumulated every session ever
+  // created — DONE cards from weeks ago beside this morning's work.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'fresh', state: 'done', kind: 'session', group: 'g', updatedAt: Date.now() }))
+  put(h, makeTask({ id: 'ancient', state: 'done', kind: 'session', group: 'g', updatedAt: Date.now() - 5 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  const g = h.client.last('setCockpit')!.data.groups[0]
+  assert.deepEqual(g.cards.map((c) => c.id), ['fresh'])
+  assert.equal(g.hidden, 1, 'a group silently missing cards reads as one that lost them')
+})
+
+test('an UNSETTLED task is never folded away, however old', () => {
+  // Hiding a blocked task behind a disclosure means work silently waiting on
+  // you that you cannot see — the exact failure the cockpit exists to prevent.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'blocked', state: 'needs-user', kind: 'session', group: 'g',
+    alive: true, question: { text: 'q' }, updatedAt: Date.now() - 30 * day }))
+  put(h, makeTask({ id: 'busy', state: 'processing', kind: 'session', group: 'g', updatedAt: Date.now() - 30 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  const g = h.client.last('setCockpit')!.data.groups[0]
+  assert.deepEqual(g.cards.map((c) => c.id).sort(), ['blocked', 'busy'])
+  assert.equal(g.hidden, 0)
+})
+
+test('show all reveals the folded cards, and reopening the cockpit forgets it', () => {
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'ancient', state: 'done', kind: 'session', group: 'g', updatedAt: Date.now() - 5 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  assert.equal(h.client.last('setCockpit')!.data.groups[0].cards.length, 0)
+
+  h.client.fire({ type: 'showAll', on: true })
+  assert.equal(h.client.last('setCockpit')!.data.groups[0].cards.length, 1)
+
+  // Each visit starts on the live view — the wall is about now.
+  h.client.fire({ type: 'collapsed' })
+  h.client.fire({ type: 'openDashboard' })
+  assert.equal(h.client.last('setCockpit')!.data.groups[0].cards.length, 0)
+})

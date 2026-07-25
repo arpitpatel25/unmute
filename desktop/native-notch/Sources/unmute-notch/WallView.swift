@@ -72,6 +72,15 @@ struct WallView: View {
                 HStack(spacing: 8) {
                     Text(g.name).font(.system(size: 14, weight: .semibold)).foregroundColor(Theme.text)
                     Badge(text: "group")
+                    // SAY that cards are folded away. A group silently missing
+                    // half its tasks reads as a group that lost them.
+                    if let n = g.hidden, n > 0 {
+                        Button(action: { model.emit(.showAll(on: true)) }) {
+                            Text("show all · \(n)")
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.cReady)
+                        }.buttonStyle(.plain)
+                    }
                 }
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 236), spacing: 10)], alignment: .leading, spacing: 10) {

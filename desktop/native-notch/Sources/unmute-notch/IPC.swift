@@ -111,7 +111,12 @@ struct CardP: Codable {
     let project: String?
 }
 
-struct GroupP: Codable { let name: String; let cards: [CardP] }   // name "" = ungrouped
+struct GroupP: Codable {
+    let name: String
+    let cards: [CardP]
+    /// Settled cards folded away by the 48h rule; nil/0 when nothing is hidden.
+    let hidden: Int?
+}   // name "" = ungrouped
 struct QueueItemP: Codable { let id: String; let name: String; let status: TaskStatus }
 struct OneoffP: Codable { let id: String; let name: String; let status: TaskStatus; let age: String? }
 struct ProjectP: Codable { let name: String; let path: String }
@@ -236,6 +241,7 @@ enum Event {
     case next                                      // crank forward
     case prev                                      // crank backward
     case focusTask(id: String)                     // card clicked → voice address
+    case showAll(on: Bool)                         // temporarily reveal folded cards
     case closeStage                                // Stage esc → back to wall
     case chooseOption(id: String, index: Int)
     case answerText(id: String, text: String)      // free-text / confirm answer
@@ -278,6 +284,7 @@ enum Event {
         case .next: return ["type": "next"]
         case .prev: return ["type": "prev"]
         case .focusTask(let id): return ["type": "focusTask", "id": id]
+        case .showAll(let on): return ["type": "showAll", "on": on]
         case .closeStage: return ["type": "closeStage"]
         case .chooseOption(let id, let index): return ["type": "chooseOption", "id": id, "index": index]
         case .answerText(let id, let text): return ["type": "answerText", "id": id, "text": text]

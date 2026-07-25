@@ -166,6 +166,11 @@ const STALE_READY_MS = 70 * 60 * 1000
  *  deserves more of your attention than a finished step — but still finite. */
 const STALE_ERROR_MS = 3 * 60 * 60 * 1000
 
+/** How long a SETTLED card stays on the wall before folding into "show all".
+ *  48h, not 24: a one-day cutoff hides Friday's work on Monday morning, which
+ *  is exactly when you want it. */
+const STALE_CARD_MS = 48 * 60 * 60 * 1000
+
 type Engaged = 'none' | 'task' | 'cockpit'
 
 export class NotchController {
@@ -194,6 +199,8 @@ export class NotchController {
   private railsTimer: ReturnType<typeof setInterval> | null = null
   /** (surface, task) → last payload sent, so an unchanged detail is not resent. */
   private lastDetailJson = new Map<string, { id: string; json: string }>()
+  /** Session-scoped 'show all' — reset whenever the cockpit is reopened. */
+  private showAllGroups = false
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
@@ -257,6 +264,9 @@ export class NotchController {
     on('tapSkill', (e) => this.onTapSkill((e as { name: string }).name))
     on('openProject', (e) => { const { path, name } = e as { path: string; name: string }; this.deps.openProject(path, name) })
     on('clearFinished', () => { this.clearedAt = Date.now(); this.reconcile() })
+    // Temporary, and deliberately not persisted: "show all" lasts as long as
+    // this look at the cockpit, then the wall goes back to being about now.
+    on('showAll', (e) => { this.showAllGroups = !!(e as { on?: boolean }).on; this.reconcile() })
     on('digestDismiss', () => { this.digestDismissed = true; this.digestText = null; this.reconcile() })
     on('bellToggle', () => { this.deps.setDoorbell(!this.deps.getDoorbell()); this.reconcile() })
     on('offerAccept', (e) => void this.onOfferAccept((e as { newTaskId: string }).newTaskId))
@@ -419,6 +429,7 @@ export class NotchController {
 
   private openCockpit(): void {
     this.engaged = 'cockpit'
+    this.showAllGroups = false   // each visit starts on the live view
     this.computeDigest()
     this.deps.setLastSeen(Date.now())
     void this.refreshRails(true)
@@ -761,8 +772,13 @@ export class NotchController {
     this.queue.forEach((id, i) => qpos.set(id, i + 1))
 
     // Groups: named groups sorted by most-recently-touched member; ungrouped last.
+    // BY LAST ACTIVITY, the same key the groups are ranked on. Sorting cards by
+    // createdAt while ranking groups by updatedAt is why the wall read as
+    // arbitrary: a task touched five minutes ago but created three weeks ago
+    // promoted its whole group to the top and then sat at the BOTTOM of it, so
+    // the group said "something here is fresh" and the cards never showed which.
     const wall = tasks.filter((t) => this.visibleOnWall(t, now))
-      .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)) // newest-left
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     const byGroup = new Map<string, TaskLite[]>()
     for (const t of wall) {
       const g = (t.group ?? '').trim()
@@ -771,9 +787,30 @@ export class NotchController {
     }
     const named = [...byGroup.entries()].filter(([g]) => g !== '')
       .sort((a, b) => Math.max(...b[1].map((t) => t.updatedAt ?? 0)) - Math.max(...a[1].map((t) => t.updatedAt ?? 0)))
-    const groups = named.map(([name, ts]) => ({ name, cards: ts.map((t) => this.toCard(t, now, qpos)) }))
+
+    /**
+     * Collapse the stale tail of a group behind "show all".
+     *
+     * Sessions never faded from the wall at all (visibleOnWall returns true for
+     * them unconditionally), so a wall accumulates every session ever created —
+     * DONE cards from three weeks ago sitting beside this morning's work.
+     *
+     * TWO RULES, both load-bearing. Staleness is measured by LAST ACTIVITY, so
+     * a three-week-old session you spoke to this morning stays put. And nothing
+     * unsettled is ever hidden, at any age: hiding a blocked task behind a
+     * disclosure means work silently waiting on you that you cannot see, which
+     * is the exact failure the cockpit exists to prevent.
+     */
+    const collapse = (ts: TaskLite[]): { cards: CardP[]; hidden: number } => {
+      if (this.showAllGroups) return { cards: ts.map((t) => this.toCard(t, now, qpos)), hidden: 0 }
+      const kept = ts.filter((t) => classify(t.state) !== null || t.state === 'processing'
+        || now - (t.updatedAt ?? 0) < STALE_CARD_MS)
+      return { cards: kept.map((t) => this.toCard(t, now, qpos)), hidden: ts.length - kept.length }
+    }
+
+    const groups = named.map(([name, ts]) => ({ name, ...collapse(ts) }))
     const ungrouped = byGroup.get('') ?? []
-    if (ungrouped.length) groups.push({ name: '', cards: ungrouped.map((t) => this.toCard(t, now, qpos)) })
+    if (ungrouped.length) groups.push({ name: '', ...collapse(ungrouped) })
 
     // Queue rail.
     const queue = this.queue

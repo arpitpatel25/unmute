@@ -83,7 +83,12 @@ export interface CardP {
   alive: boolean
 }
 
-export interface GroupP { name: string; cards: CardP[] }
+export interface GroupP {
+  name: string
+  cards: CardP[]
+  /** Settled cards folded away by the 48h rule; 0 when nothing is hidden. */
+  hidden?: number
+}
 export interface QueueItemP { id: string; name: string; status: TaskStatusName }
 export interface OneoffP { id: string; name: string; status: TaskStatusName; age?: string }
 export interface ProjectP { name: string; path: string }
@@ -169,6 +174,7 @@ export type NotchEvent =
   | { type: 'tapSkill'; name: string }
   | { type: 'openProject'; path: string; name: string }
   | { type: 'clearFinished' }
+  | { type: 'showAll'; on: boolean }
   | { type: 'digestDismiss' }
   | { type: 'bellToggle' }
   | { type: 'offerAccept'; newTaskId: string }
