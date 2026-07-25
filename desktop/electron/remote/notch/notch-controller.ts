@@ -24,6 +24,8 @@ export interface TaskLite {
   name?: string | null
   cwd?: string
   kind?: 'oneoff' | 'session'
+  agent?: 'claude' | 'codex' | 'codex-desktop'
+  codexProject?: string | null
   threadContext?: string | null
   shelved?: boolean
   note?: string | null
@@ -580,6 +582,8 @@ export class NotchController {
       qpos: qpos.get(t.id),
       promoted: (this.promotedUntil.get(t.id) ?? 0) > now || undefined,
       agent: t.spawnedBy ? true : undefined,
+      backend: t.agent === 'codex-desktop' ? 'codex-desktop' : undefined,
+      project: t.agent === 'codex-desktop' ? (t.codexProject ?? undefined) : undefined,
       note: t.note ?? undefined,
       alive: t.alive ?? false,
     }

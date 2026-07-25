@@ -32,5 +32,18 @@ export class CodexExecutor extends CliAgentExecutor {
   }
 }
 
-/** The agent the executor factory should build (PRD §11 selector). */
-export type AgentKind = 'claude' | 'codex'
+/** The agent the executor factory should build (PRD §11 selector).
+ *
+ *  'claude'        — Claude Code CLI in an Unmute-owned PTY (the default).
+ *  'codex'         — Codex CLI in an Unmute-owned PTY (same mechanism).
+ *  'codex-desktop' — the Codex DESKTOP app. Not an executor at all: Unmute owns
+ *    no process, so there is no PTY to build. It is handled by the Codex driver
+ *    (codex/driver.ts) — writes via CDP into the app the user actually sees,
+ *    state read from the rollout files on disk. `executorFactory` is never
+ *    called for it; `TaskManager.dispatch` branches before that point. */
+export type AgentKind = 'claude' | 'codex' | 'codex-desktop'
+
+/** True for backends Unmute drives as an external app rather than an owned PTY. */
+export function isExternalAgent(agent: AgentKind | undefined): boolean {
+  return agent === 'codex-desktop'
+}

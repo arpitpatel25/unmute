@@ -17,6 +17,12 @@ export interface RemoteTask {
   /** Species: 'session' = persistent working session (never idle-killed/purged);
    *  'oneoff' = fire-and-forget errand (default). */
   kind?: 'oneoff' | 'session'
+  /** Which backend runs this task. 'codex-desktop' tasks live in the Codex app:
+   *  their work is not a PTY we can show, so the card offers "open in Codex"
+   *  instead of the live terminal. */
+  agent?: 'claude' | 'codex' | 'codex-desktop'
+  /** Codex project the thread was created in (codex-desktop only). */
+  codexProject?: string | null
   /** Rolling "where you left off" (2-3 sentences from the session itself,
    *  refreshed every turn) — re-entry warm-up, never authoritative. */
   threadContext?: string | null

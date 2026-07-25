@@ -53,6 +53,11 @@ export interface CardP {
   qpos?: number
   promoted?: boolean
   agent?: boolean
+  /** WHICH backend runs this task — 'claude' (owned PTY) or 'codex-desktop'
+   *  (the Codex app). Rendered as a small tag so a mixed wall is unambiguous. */
+  backend?: 'claude' | 'codex-desktop'
+  /** Codex project name, when backend is 'codex-desktop'. */
+  project?: string
   note?: string
   alive: boolean
 }

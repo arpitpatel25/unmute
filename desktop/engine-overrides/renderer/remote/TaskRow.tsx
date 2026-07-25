@@ -59,10 +59,23 @@ export function TaskRow({
       {/* #1 cleaned intent — NOT the raw transcript */}
       <div className="text-sm text-ink font-medium leading-snug">{task.intent}</div>
 
-      {/* #2 status + duration */}
+      {/* #2 status + duration + WHICH BACKEND.
+          The wall mixes Claude Code and Codex tasks freely, so a card must say
+          where its work actually lives — otherwise "open it" is ambiguous and
+          the user can't tell why one card has a terminal and another doesn't.
+          Only non-default backends are tagged: labelling every Claude card
+          would be noise on the common case. */}
       <div className="flex items-center gap-2 mt-1 text-[11px]" style={{ color: STATE_COLOR[task.state] }}>
         <span className="inline-block w-[6px] h-[6px] rounded-full" style={{ background: STATE_COLOR[task.state] }} />
         {STATE_LABEL[task.state]} · {durationLabel(task)}
+        {task.agent === 'codex-desktop' && (
+          <span
+            className="ml-1 px-1.5 py-[1px] rounded text-[10px] font-medium border border-black/10 bg-black/5 text-ink/70"
+            title={task.codexProject ? `Runs in Codex · project ${task.codexProject}` : 'Runs in the Codex desktop app'}
+          >
+            Codex{task.codexProject ? ` · ${task.codexProject}` : ''}
+          </span>
+        )}
       </div>
 
       {/* #3 inline result on done */}

@@ -29,6 +29,7 @@ import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, type AgentKind } from './codex-executor'
+import { CodexDesktopDriver } from './codex/driver'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
 import { initRuntimeConfig, getModels, getKnobs, getModelCatalog, isSelectableModel } from './runtime-config'
@@ -38,7 +39,7 @@ import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape, setOverlaySuppressed } from './overlay'
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
-import { Router, type RoutableTask } from './router'
+import { Router, type RoutableTask, type AgentAvailability } from './router'
 import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
@@ -265,6 +266,51 @@ async function getSetupStatus() {
 }
 
 let manager: TaskManager | null = null
+/** Codex desktop backend — inert until a task targets it (see codex/driver.ts). */
+let codexDriver: CodexDesktopDriver | null = null
+
+/**
+ * Which backends can take a task this instant, plus the user's default.
+ *
+ * Claude Code is always listed: it is Unmute's own owned-PTY lane and needs no
+ * external app. Codex desktop is listed only when it is installed AND armed —
+ * an installed-but-unarmed Codex would accept the routing decision and then
+ * fail at dispatch, which is precisely the "promised it went somewhere it
+ * didn't" failure this guards against. The Codex project list rides along so
+ * "put it in the unmute project" can be resolved by name.
+ */
+async function agentAvailability(): Promise<AgentAvailability> {
+  const agents: Array<'claude' | 'codex-desktop'> = ['claude']
+  let codexProjects: string[] | undefined
+  if (codexDriver) {
+    try {
+      const a = await codexDriver.availability()
+      if (a.ok) {
+        agents.push('codex-desktop')
+        codexProjects = (await codexDriver.projects()).map((p) => p.name)
+      }
+    } catch { /* availability is best-effort; absence just means "not offered" */ }
+  }
+  const stored = settings.get('agent')
+  const preferred: 'claude' | 'codex-desktop' =
+    stored === 'codex-desktop' && agents.includes('codex-desktop') ? 'codex-desktop' : 'claude'
+  return { agents, preferred, ...(codexProjects?.length ? { codexProjects } : {}) }
+}
+
+/**
+ * Final backend for a dispatch. Voice wins over the picker; the picker wins
+ * over the default. Never returns a backend that isn't reachable — a stale
+ * preference silently degrades to Claude (logged) instead of throwing, because
+ * losing the task is worse than running it in the other agent.
+ */
+async function resolveAgent(spoken: 'claude' | 'codex-desktop' | undefined, avail: AgentAvailability): Promise<AgentKind> {
+  const want = spoken ?? avail.preferred
+  if (want === 'codex-desktop' && !avail.agents.includes('codex-desktop')) {
+    log.warn('agent-unavailable-fallback', { want, to: 'claude' })
+    return 'claude'
+  }
+  return want
+}
 let completeFn: CompleteFn | null = null
 // The warm routing classifier (lazy — spawns on first routed utterance).
 let router: Router | null = null
@@ -358,7 +404,42 @@ function relativeAge(ts: number): string {
 
 /** Open a task's tmux session in the user's terminal app (iTerm if present, else
  *  Terminal). It ATTACHES to the running session — same claude, not a new one. */
+/**
+ * Tap-through for a Codex desktop task: put the user in the REAL Codex chat.
+ *
+ * This is the Codex analogue of "show me the terminal". A Claude task can show
+ * its raw PTY because Unmute owns it; a Codex thread lives in someone else's
+ * app, and re-rendering the conversation inside Unmute is the exact thing
+ * ORCHESTRATE-VISION §3 forbids ("no chat-bubble transcript re-rendering" — the
+ * delete-the-wall test). So we hand them the app itself, focused on that thread.
+ *
+ * Foreground IS correct here: the user asked to go there. This is the one place
+ * in the Codex lane where stealing focus is the feature, not the bug.
+ */
+function openInCodex(taskId: string): boolean {
+  const task = manager?.get(taskId)
+  if (!task?.codexThreadId || !codexDriver) { log.warn('open-in-codex: not a codex task', { taskId }); return false }
+  const threadId = task.codexThreadId
+  void (async () => {
+    // Select the thread first (background, via CDP) so the window is already on
+    // the right conversation when it comes forward — no visible flicker through
+    // whatever was last open.
+    const switched = await codexDriver!.openThread(threadId).catch(() => false)
+    execFile('osascript', ['-e', 'tell application "ChatGPT" to activate'], (err) => {
+      if (err) log.warn('open-in-codex activate failed', { error: err.message })
+    })
+    log.event('open-in-codex', { taskId, threadId, switched })
+  })()
+  dismissOverlay()
+  return true
+}
+
 function openInTerminal(taskId: string): boolean {
+  // A Codex task has no PTY — route it to the real Codex chat instead. Keeping
+  // ONE command from the UI's perspective means the notch/cockpit doesn't need
+  // to branch on backend to offer "take me there".
+  const t = manager?.get(taskId)
+  if (t && t.agent === 'codex-desktop') return openInCodex(taskId)
   if (!tmuxBin) { log.warn('open-in-terminal: tmux unavailable'); return false }
   const session = sessionNameFor(taskId)
   const attachCmd = [tmuxBin, ...tmuxAttachArgs(session)].join(' ')
@@ -493,6 +574,11 @@ function serializeTask(t: Task) {
     note: t.note ?? null,
     spawnedBy: t.spawnedBy ?? null,
     group: t.group ?? null,
+    // WHICH backend runs this task. The cockpit tags every card with it so a
+    // wall mixing Claude Code and Codex tasks is never ambiguous about where
+    // the work actually lives.
+    agent: t.agent ?? 'claude',
+    codexProject: t.codexProject ?? null,
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,
@@ -1192,7 +1278,12 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // The user's skills (names only) — lets the router honor an explicit
       // "use my X skill" (prefixes the intent below) and record skill_feedback.
       const skillNames = await listClaudeSkillNames()
-      const decision = await router.route(raw, targetable, projects, finished, coldSessions, wall, skillNames)
+      // What can actually run a task RIGHT NOW. Availability is dynamic (Codex
+      // may be closed or unarmed), and the router may only ever name a backend
+      // that appears here — so a task can never be promised to an app the user
+      // doesn't have. Probing is cheap: a HEAD on the CDP port plus a DOM read.
+      const avail = await agentAvailability()
+      const decision = await router.route(raw, targetable, projects, finished, coldSessions, wall, skillNames, avail)
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       // Explicit-skill prefix: when the user named a skill, prefix the
@@ -1323,7 +1414,16 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
           log.event('recall-pointer-attached', { contextTaskId: decision.contextTaskId, transcript: existsSync(transcript) })
         }
       }
-      const newId = await manager.dispatch(intentWithStaged(intentText, staged), { surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir })
+      // Backend selection: the user's spoken choice wins, else their picker
+      // default. `resolveAgent` also degrades gracefully — if Codex went away
+      // between the probe and the dispatch, the task lands on Claude with a log
+      // rather than throwing in the user's face mid-sentence.
+      const chosenAgent = await resolveAgent(decision.agent, avail)
+      const newId = await manager.dispatch(intentWithStaged(intentText, staged), {
+        surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir,
+        agent: chosenAgent,
+        ...(chosenAgent === 'codex-desktop' ? { project: decision.codexProject ?? null } : {}),
+      })
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
       if (decision.name) manager.setName(newId, decision.name)
@@ -1455,8 +1555,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     })
   }
   const librarian = new Librarian({ executorFactory: librarianExecutorFactory, writeEnabled: settings.get('librarianWriteEnabled') === true })
+  // The Codex desktop backend. Constructed unconditionally (it is inert until a
+  // task actually targets it) so availability can be probed for the picker even
+  // when the user has never used Codex.
+  codexDriver = new CodexDesktopDriver({})
   manager = new TaskManager({
     executorFactory,
+    codexDriver,
     // PARKED: withholding the librarian trips the `!this.opts.librarian` gate in
     // handToLibrarian, so no session is ever spawned. (§12)
     librarian: LIBRARIAN_PARKED ? undefined : librarian,
@@ -1807,6 +1912,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   }
   // Codex isn't wired yet (shown as "coming soon"). If a past build stored it as
   // the agent, reset to claude so Remote works instead of failing every task.
+  // Only the unwired CLI adapter is reset; 'codex-desktop' is a supported choice.
   if (settings.get('agent') === 'codex') { settings.set('agent', 'claude'); log.event('agent-reset-codex-to-claude', {}) }
 
   // Fan task lifecycle out to renderers (PRD §13). Terminal/attention states
@@ -2488,9 +2594,52 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('permission-mode-set', { mode }) // PRD §10.1
     return true
   })
+  // What the picker should offer, and why an option is disabled. The UI needs
+  // the REASON (not just a boolean) so it can show "Connect Codex" for an
+  // installed-but-unarmed app versus hiding the option entirely when Codex
+  // isn't installed at all.
+  ipcMain.handle('remote:agent-options', async () => {
+    const installed = codexDriver ? await codexDriver.isInstalled().catch(() => false) : false
+    const avail = codexDriver ? await codexDriver.availability().catch(() => ({ ok: false, reason: 'not-installed' as const })) : { ok: false, reason: 'not-installed' as const }
+    return {
+      current: (settings.get('agent') as AgentKind) ?? 'claude',
+      options: [
+        { id: 'claude', label: 'Claude Code', available: true },
+        {
+          id: 'codex-desktop',
+          label: 'Codex',
+          // Only offered when it can actually take work right now.
+          available: avail.ok,
+          installed,
+          // 'not-armed' is the actionable one — the app is there, it just wasn't
+          // launched with the debug port, so we can't drive it until it relaunches.
+          reason: avail.ok ? undefined : ('reason' in avail ? avail.reason : 'not-installed'),
+        },
+      ],
+    }
+  })
+
+  // Explicit "Connect Codex": quits and relaunches Codex WITH the debug port,
+  // in the background (`open -g`). This is the one interruption in the Codex
+  // lane, so it is always user-initiated and never happens mid-utterance.
+  ipcMain.handle('remote:codex-connect', async () => {
+    if (!codexDriver) return { ok: false, reason: 'not-configured' }
+    const cdp = await codexDriver.connect({ autoArm: true }).catch(() => null)
+    const ok = !!cdp
+    log.event('codex-connect-requested', { ok })
+    return ok ? { ok: true } : { ok: false, reason: 'arm-failed' }
+  })
+
+  // Live Codex project list for the picker ("create it in <project>").
+  ipcMain.handle('remote:codex-projects', async () => {
+    if (!codexDriver) return []
+    return codexDriver.projects().catch(() => [])
+  })
+
   ipcMain.handle('remote:set-agent', async (_e, agent: AgentKind) => {
-    // Codex isn't wired yet (shown as "coming soon", not selectable). Coerce any
-    // non-claude request to claude so Remote can't be put into a broken state.
+    // 'codex' (the CLI adapter) is still unwired, so it is coerced away. But
+    // 'codex-desktop' IS wired (codex/driver.ts) and must pass through — it is
+    // the whole point of the per-task picker.
     const a: AgentKind = agent === 'codex' ? 'claude' : agent
     settings.set('agent', a)
     log.event('agent-set', { agent: a, requested: agent }) // PRD §11
