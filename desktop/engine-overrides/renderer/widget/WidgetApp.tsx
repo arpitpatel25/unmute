@@ -797,6 +797,12 @@ export default function WidgetApp() {
       remoteOnCaptureKind?: (cb: (kind: 'dictation' | 'remote') => void) => void
       remoteAgentOptions?: () => Promise<{ current: string; options: Array<{ id: string; label: string; available: boolean }> }>
     }
+    // Warm the picker at mount. The capture-start refresh below keeps it honest,
+    // but this guarantees the chip has data the first time a Remote capture
+    // opens, instead of depending on one event arriving before first paint.
+    void remoteApi.remoteAgentOptions?.()
+      .then((o) => { if (o) setAgentPicker(o) })
+      .catch(() => {})
     remoteApi.remoteOnCaptureKind?.((kind) => {
       const remote = kind === 'remote'
       setIsRemote(remote)

@@ -2599,9 +2599,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // installed-but-unarmed app versus hiding the option entirely when Codex
   // isn't installed at all.
   ipcMain.handle('remote:agent-options', async () => {
+    // Logged because this decides whether the picker is visible AT ALL, and a
+    // silent empty result is indistinguishable from "feature missing" (field
+    // report 2026-07-25: chip never appeared, nothing in any log to say why).
     const installed = codexDriver ? await codexDriver.isInstalled().catch(() => false) : false
     const avail = codexDriver ? await codexDriver.availability().catch(() => ({ ok: false, reason: 'not-installed' as const })) : { ok: false, reason: 'not-installed' as const }
-    return {
+    const result = {
       current: (settings.get('agent') as AgentKind) ?? 'claude',
       options: [
         { id: 'claude', label: 'Claude Code', available: true },
@@ -2617,6 +2620,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         },
       ],
     }
+    log.event('agent-options', {
+      current: result.current,
+      installed,
+      codexAvailable: avail.ok,
+      offered: result.options.filter((o) => o.available || o.installed).length,
+    })
+    return result
   })
 
   // Explicit "Connect Codex": quits and relaunches Codex WITH the debug port,
