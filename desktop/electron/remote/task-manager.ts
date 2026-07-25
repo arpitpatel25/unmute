@@ -279,6 +279,8 @@ export class TaskManager extends EventEmitter {
   private approvalTimer: ReturnType<typeof setInterval> | null = null
   /** threadId → the request we have already surfaced, so we transition once. */
   private surfacedApprovals = new Map<string, number>()
+  /** Poll decimation for settled Codex tasks (see pollCodexDesktop). */
+  private codexIdleTicks = new Map<string, number>()
   // Per-task chain serializing meta.json read-modify-writes. Two concurrent
   // merges (e.g. setShelved + setNote in one tick) would otherwise race the
   // read and the last write would silently drop the other's field.
@@ -681,6 +683,19 @@ export class TaskManager extends EventEmitter {
     const driver = this.opts.codexDriver
     if (!driver) return
     const tlog = log.child({ taskId: id })
+
+    // A `ready` Codex task is watched only in case the user CONTINUES it inside
+    // Codex — a rare, human-paced event. Polling that at the live cadence meant
+    // reading the rollout off disk once a second, forever, for every finished
+    // task on the wall (seen in the field on dev.34). Back off hard; a task that
+    // is actually working still polls at full rate.
+    if (task.state === 'ready') {
+      const n = (this.codexIdleTicks.get(id) ?? 0) + 1
+      this.codexIdleTicks.set(id, n)
+      if (n % 10 !== 0) return
+    } else {
+      this.codexIdleTicks.delete(id)
+    }
 
     const snap = await driver.snapshot(task.codexThreadId)
     if (snap.updatedAt > task.lastHeartbeatMs) task.lastHeartbeatMs = snap.updatedAt
