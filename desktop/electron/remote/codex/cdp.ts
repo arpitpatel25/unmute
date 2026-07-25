@@ -224,6 +224,37 @@ export class CodexCdp {
 
 const PERMISSIONS_BUTTON = '[data-composer-navigation-target="permissions"]'
 
+/** Centre of an element, or null when it isn't on screen. */
+async function centreOf(cdp: CodexCdp, selector: string): Promise<{ x: number; y: number } | null> {
+  const box = await cdp.evaluate<string>(`(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return '';
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return '';
+    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+  })()`)
+  if (!box) return null
+  try { return JSON.parse(box) } catch { return null }
+}
+
+/**
+ * Open the permissions menu with a TRUSTED click.
+ *
+ * `el.click()` opened it once and then stopped working — this dropdown only
+ * responds reliably to a real pointer event, the same reason focusComposer()
+ * clicks rather than calling .focus(). A silent no-op here would mean the level
+ * is never raised and nobody finds out.
+ */
+async function openPermissionsMenu(cdp: CodexCdp, sleep: (ms: number) => Promise<void>): Promise<boolean> {
+  const at = await centreOf(cdp, PERMISSIONS_BUTTON)
+  if (!at) return false
+  await cdp.click(at.x, at.y)
+  await sleep(900)
+  const n = await cdp.evaluate<number>(`document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]').length`)
+  return (n ?? 0) > 0
+}
+
 /** The level Codex is currently set to, as its own button labels it. */
 export async function readApprovalLabel(cdp: CodexCdp): Promise<string | null> {
   const t = await cdp.evaluate<string>(
@@ -234,11 +265,7 @@ export async function readApprovalLabel(cdp: CodexCdp): Promise<string | null> {
 
 /** Open the menu, read what this device offers, close it again. */
 export async function readApprovalMenu(cdp: CodexCdp, sleep: (ms: number) => Promise<void>): Promise<string[]> {
-  const opened = await cdp.evaluate<boolean>(
-    `(() => { const b = document.querySelector('${PERMISSIONS_BUTTON}'); if (!b) return false; b.click(); return true; })()`,
-  )
-  if (!opened) return []
-  await sleep(600)
+  if (!(await openPermissionsMenu(cdp, sleep))) return []
   const raw = await cdp.evaluate<string>(`JSON.stringify(
     [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')].map((e) => (e.innerText || '').trim())
   )`)
@@ -255,22 +282,25 @@ export async function selectApprovalLevel(
   label: string,
   sleep: (ms: number) => Promise<void>,
 ): Promise<boolean> {
-  const opened = await cdp.evaluate<boolean>(
-    `(() => { const b = document.querySelector('${PERMISSIONS_BUTTON}'); if (!b) return false; b.click(); return true; })()`,
-  )
-  if (!opened) return false
-  await sleep(600)
-  const hit = await cdp.evaluate<boolean>(`(() => {
-    const want = ${JSON.stringify(label)}.toLowerCase();
+  if (!(await openPermissionsMenu(cdp, sleep))) return false
+  const box = await cdp.evaluate<string>(`(() => {
+    const want = ${JSON.stringify(label.toLowerCase())};
     const items = [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')];
     const el = items.find((e) => (e.innerText || '').trim().toLowerCase().startsWith(want));
-    if (!el) return false;
-    el.click();
-    return true;
+    if (!el) return '';
+    const r = el.getBoundingClientRect();
+    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
   })()`)
-  if (!hit) { await cdp.pressEscape() }
-  await sleep(350)
-  return !!hit
+  if (!box) { await cdp.pressEscape(); await sleep(250); return false }
+  const at = JSON.parse(box) as { x: number; y: number }
+  await cdp.click(at.x, at.y)
+  await sleep(500)
+  // Confirm from the button itself rather than trusting the click: this is the
+  // difference between "we set the level" and "we think we set the level".
+  const now = (await readApprovalLabel(cdp)) ?? ''
+  const ok = now.trim().toLowerCase().startsWith(label.toLowerCase())
+  if (!ok) { await cdp.pressEscape() }
+  return ok
 }
 
 // ─── DOM readers (shape of Codex's automation hooks) ───────────────────
