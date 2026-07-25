@@ -54,7 +54,8 @@ struct TaskSurfaceView: View {
                     // Always available: a Codex chat is continuable until you
                     // delete it, so there is no state in which you have nothing
                     // to say to it.
-                    CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError).padding(.top, 9)
+                    CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
+                                  modelLabel: t.modelLabel, sending: t.sending ?? false).padding(.top, 9)
                 } else if model.taskTerminalOpen && t.alive {
                     // The terminal owns EVERYTHING left down to the action row
                     // (field feedback: never a fixed band with dead space below).
@@ -121,7 +122,11 @@ struct TaskSurfaceView: View {
                 ActButton(label: "resume") { model.emit(.resume(id: t.id)) }
             }
             Spacer(minLength: 0)
-            ActButton(label: "kill", danger: true) { model.emit(.remove(id: t.id)) }
+            // This drops OUR card; it has never touched the agent's session. For
+            // a Codex thread — which lives on until you delete it in Codex —
+            // "kill" claims something we do not do and would not want to.
+            ActButton(label: t.backend == "codex-desktop" ? "remove" : "kill",
+                      danger: true) { model.emit(.remove(id: t.id)) }
         }
         .padding(.top, 10)
     }

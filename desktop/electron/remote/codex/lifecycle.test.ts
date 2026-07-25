@@ -31,8 +31,9 @@ function fakeDriver(script: { states?: Array<{ state: string; lastAgentMessage?:
   }
 }
 
-async function makeManager(driver: unknown, baseDir: string) {
+async function makeManager(driver: unknown, baseDir: string, extra: Record<string, unknown> = {}) {
   return new TaskManager({
+    ...extra,
     executorFactory: () => { throw new Error('executorFactory must NOT be called for a codex-desktop task') },
     codexDriver: driver as never,
     baseDir,
@@ -173,5 +174,40 @@ test('a later successful send clears the delivery error', async () => {
   m.answer(id, 'second try')
   await new Promise((r) => setTimeout(r, 30))
   assert.equal(m.get(id)!.deliveryError, undefined)
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a send shows as in flight, then stops when it lands', async () => {
+  // Sending is a round-trip through another app's window. Silence for a second
+  // reads as nothing having happened.
+  const base = await tmp()
+  const d = fakeDriver()
+  let release: (() => void) | null = null
+  d.send = async function () {
+    await new Promise<void>((r) => { release = r })
+    return { ok: true as const }
+  } as never
+  const m = await makeManager(d, base)
+  const id = await m.dispatch('open the video', { agent: 'codex-desktop' })
+  m.answer(id, 'and the description')
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(m.get(id)!.sending, true)
+  release!()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(m.get(id)!.sending, false)
+  m.killAll(); m.stopMaintenance()
+})
+
+test('the model choice reaches Codex, and is recorded on the task', async () => {
+  const base = await tmp()
+  const d = fakeDriver()
+  const m = await makeManager(d, base, {
+    codexReasoning: () => ({ model: '5.6 Luna', effort: 'Ultra' }),
+  })
+  const id = await m.dispatch('do it', { agent: 'codex-desktop' })
+  const args = d.calls[0].args[1] as Record<string, unknown>
+  assert.equal(args.model, '5.6 Luna')
+  assert.equal(args.effort, 'Ultra')
+  assert.equal(m.get(id)!.codexModelLabel, '5.6 Luna Ultra', 'so the composer can say what it runs on')
   m.killAll(); m.stopMaintenance()
 })

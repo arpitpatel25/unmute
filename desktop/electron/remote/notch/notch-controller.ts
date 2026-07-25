@@ -29,6 +29,10 @@ export interface TaskLite {
   conversation?: TurnP[] | null
   /** Last message that did not reach the agent (NOT a task failure). */
   deliveryError?: string
+  /** A message is in flight to the agent. */
+  sending?: boolean
+  /** Codex's label for this thread's model/effort, e.g. "5.6 Terra High". */
+  codexModelLabel?: string
   threadContext?: string | null
   shelved?: boolean
   note?: string | null
@@ -719,6 +723,10 @@ export class NotchController {
       // A delivery problem belongs next to the composer, where the retry is —
       // and unlike `error` it must never be read as "the work failed".
       deliveryError: t.deliveryError ?? undefined,
+      sending: t.sending ?? undefined,
+      // What this thread runs on, in Codex's own words. Shown in the composer
+      // because "which model is this" is part of writing the next message.
+      modelLabel: t.codexModelLabel ?? undefined,
       activity: t.question?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined,
       question: t.question ?? undefined,
       result: t.result ?? undefined,

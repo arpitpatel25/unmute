@@ -85,6 +85,13 @@ export interface Task {
   /** Last delivery problem — the message did not reach the agent. Distinct from
    *  `error`, which means the WORK failed; this one never settles the task. */
   deliveryError?: string
+  /** True while a message is travelling to the agent. Sending is a round-trip
+   *  through another app's window; silence for a second reads as nothing
+   *  having happened. */
+  sending?: boolean
+  /** Codex's own label for what this thread runs on ("5.6 Terra High"), as it
+   *  was when the task was created. */
+  codexModelLabel?: string
   /** For 'codex-desktop': the Codex project the thread was created in, so the
    *  card can show it and follow-ups can re-scope. */
   codexProject?: string | null
@@ -618,6 +625,7 @@ export class TaskManager extends EventEmitter {
 
     tlog.event('codex-dispatch-begin', { project: opts.project ?? null, kind, intentLen: intent.length })
     const reasoning = this.opts.codexReasoning?.() ?? {}
+    const modelLabel = [reasoning.model, reasoning.effort].filter(Boolean).join(' ') || undefined
     const created = await driver.createTask(intent, {
       project: opts.project ?? null,
       permissionMode: this.opts.permissionMode?.() ?? 'ask',
@@ -647,6 +655,7 @@ export class TaskManager extends EventEmitter {
       agent: 'codex-desktop',
       codexThreadId: created.threadId,
       codexProject: opts.project ?? null,
+      ...(modelLabel ? { codexModelLabel: modelLabel } : {}),
       kind,
       state: 'processing',
       createdAt: now,
@@ -780,7 +789,11 @@ export class TaskManager extends EventEmitter {
     // leaving the card lying about progress.
     this.transition(id, 'processing')
     const before = task.state
+    task.sending = true
+    this.emit('updated', task)
     void driver.send(task.codexThreadId, text).then((r) => {
+      const inFlight = this.tasks.get(id)
+      if (inFlight) inFlight.sending = false
       if (!r.ok) {
         tlog.warn('codex-followup-failed', { reason: r.reason })
         // A FAILED DELIVERY IS NOT A FAILED TASK.

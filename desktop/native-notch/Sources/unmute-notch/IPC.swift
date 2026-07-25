@@ -65,6 +65,10 @@ struct TaskDetail: Codable {
     /// Last message that did not reach the agent. NOT a task failure — the
     /// thread is fine, our delivery missed.
     let deliveryError: String?
+    /// A message is in flight to the agent.
+    let sending: Bool?
+    /// What this thread runs on, as Codex labels it ("5.6 Terra High").
+    let modelLabel: String?
     /// Which backend runs this task. Absent ⇒ Claude (PTY-backed).
     let backend: String?       // "codex-desktop"
     /// Last few turns — the GUI-agent equivalent of the live terminal. A Codex

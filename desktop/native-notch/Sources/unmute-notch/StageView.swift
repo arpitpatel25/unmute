@@ -56,7 +56,8 @@ struct StageView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.top, 10)
-                    CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError).padding(.top, 9)
+                    CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
+                                  modelLabel: t.modelLabel, sending: t.sending ?? false).padding(.top, 9)
                 } else if t.alive {
                     TerminalPanel(model: model, taskId: t.id, tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
                         .padding(.top, 10)
