@@ -37,46 +37,26 @@ final class NotchWindow: NSPanel {
 
     override var canBecomeKey: Bool { allowsKey }
 
-    /// Drag anywhere in the outer border to resize. Routed to the controller,
-    /// which scales BOTH axes from one gesture.
-    weak var resizer: NotchResizing?
-    /// How wide the grab border is. Generous, because it is invisible.
-    private let grabInset: CGFloat = 10
-    private var resizing = false
+    /// Drag anywhere in the outer border to resize.
+    ///
+    /// Owned by an OVERLAY VIEW, not by the window. `contentView` is a
+    /// full-bleed NSHostingView and SwiftUI consumes the mouse, so
+    /// NSWindow.mouseDown is never called for a click that lands on it —
+    /// overriding it here looked correct and ran never.
+    weak var resizer: NotchResizing? { didSet { installResizeBorder() } }
+    private var resizeBorder: ResizeBorderView?
 
-    private func onBorder(_ p: NSPoint) -> Bool {
-        guard allowsKey else { return false }          // only the expanded surfaces
-        let b = bounds(ofContent: true)
-        return !b.insetBy(dx: grabInset, dy: grabInset).contains(p) && b.contains(p)
+    private func installResizeBorder() {
+        guard resizeBorder == nil, let content = contentView else { return }
+        let v = ResizeBorderView(frame: content.bounds)
+        v.autoresizingMask = [.width, .height]
+        v.resizer = resizer
+        v.isEnabled = { [weak self] in self?.allowsKey ?? false }
+        // ABOVE the hosting view, as its sibling — so it gets first refusal on
+        // the mouse without SwiftUI being able to reorder it away.
+        content.addSubview(v, positioned: .above, relativeTo: content.subviews.last)
+        resizeBorder = v
     }
-
-    private func bounds(ofContent: Bool) -> NSRect {
-        NSRect(origin: .zero, size: frame.size)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        if onBorder(event.locationInWindow) {
-            resizing = true
-            resizer?.beginResize(at: event.locationInWindow)
-            return
-        }
-        super.mouseDown(with: event)
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        if resizing { resizer?.continueResize(); return }
-        super.mouseDragged(with: event)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if resizing { resizing = false; resizer?.endResize(); return }
-        super.mouseUp(with: event)
-    }
-
-    override func cursorUpdate(with event: NSEvent) {
-        if onBorder(event.locationInWindow) { NSCursor.crosshair.set() } else { super.cursorUpdate(with: event) }
-    }
-    override var canBecomeMain: Bool { false }
 
     func present() { orderFrontRegardless() }
 
@@ -88,6 +68,55 @@ final class NotchWindow: NSPanel {
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
             ctx.allowsImplicitAnimation = true
             animator().setFrame(frame, display: true)
+        }
+    }
+}
+
+
+/// The grab band around an expanded surface.
+///
+/// Sits ABOVE the SwiftUI hosting view but is transparent to every click except
+/// those in the outer margin: `hitTest` returns nil elsewhere, so buttons,
+/// fields and the terminal underneath behave exactly as before.
+final class ResizeBorderView: NSView {
+    weak var resizer: NotchResizing?
+    var isEnabled: () -> Bool = { true }
+    /// Generous, because it is invisible — found by feel, not by sight.
+    private let grab: CGFloat = 14
+    private var dragging = false
+
+    private func inBand(_ p: NSPoint) -> Bool {
+        guard isEnabled() else { return false }
+        return bounds.contains(p) && !bounds.insetBy(dx: grab, dy: grab).contains(p)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // `point` arrives in the SUPERVIEW's coordinate space.
+        inBand(convert(point, from: superview)) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dragging = true
+        resizer?.beginResize(at: event.locationInWindow)
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard dragging else { return }
+        resizer?.continueResize()
+    }
+    override func mouseUp(with event: NSEvent) {
+        dragging = false
+        resizer?.endResize()
+    }
+
+    override func resetCursorRects() {
+        discardCursorRects()
+        guard isEnabled() else { return }
+        let w = bounds.width, h = bounds.height
+        for r in [NSRect(x: 0, y: 0, width: w, height: grab),
+                  NSRect(x: 0, y: h - grab, width: w, height: grab),
+                  NSRect(x: 0, y: 0, width: grab, height: h),
+                  NSRect(x: w - grab, y: 0, width: grab, height: h)] {
+            addCursorRect(r, cursor: .crosshair)
         }
     }
 }

@@ -8,6 +8,8 @@ final class AppController: NSObject, NotchResizing {
     private let model = NotchModel()
     private var window: NotchWindow!
     private var geometry: NotchGeometry
+    /// Kept because contentView is now a container, not the hosting view.
+    private var hostView: NSHostingView<NotchView>!
     /// The last state MAIN commanded (hover-wake is local and never fights it).
     private var commandedState: NotchState = .dormant
     private var hoverTimer: Timer?
@@ -18,9 +20,18 @@ final class AppController: NSObject, NotchResizing {
         super.init()
         NotchLog.log("geometry: screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) menuBarH=\(Int(geometry.menuBarHeight)) notchW=\(Int(geometry.notchWidth))")
         window = NotchWindow(geometry: geometry)
+        // A plain container holds the SwiftUI view and the resize border as
+        // SIBLINGS. The border cannot live inside the hosting view — SwiftUI
+        // owns that view's subviews and is free to reorder or drop them.
         let host = NSHostingView(rootView: NotchView(model: model, topInset: topInset))
         host.sizingOptions = []   // WE own the window size
-        window.contentView = host
+        hostView = host
+        let container = NSView(frame: .zero)
+        container.autoresizingMask = [.width, .height]
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        window.contentView = container
+        host.frame = container.bounds
         window.resizer = self
         model.hasNotch = geometry.hasNotch
         model.emit = { [weak self] ev in
@@ -395,9 +406,7 @@ final class AppController: NSObject, NotchResizing {
         geometry = NotchGeometry.current()
         model.hasNotch = geometry.hasNotch
         // topInset feeds the view tree — rebuild the root so it picks it up.
-        if let host = window.contentView as? NSHostingView<NotchView> {
-            host.rootView = NotchView(model: model, topInset: topInset)
-        }
+        hostView?.rootView = NotchView(model: model, topInset: topInset)
         let f = frame(for: model.state)
         window.applyFrame(f, animated: false)
         NotchLog.log("geometry recomputed (\(reason)): screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) → window=\(NotchLog.rect(f))")
