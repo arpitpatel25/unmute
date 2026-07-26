@@ -20,6 +20,8 @@ private let BOTTOM = "conversation-bottom"
 ///   * an action row under the answer (copy)
 struct ConversationPanel: View {
     let turns: [TurnP]
+    /// The task this transcript belongs to — switching tasks re-anchors.
+    var id: String = ""
 
     var body: some View {
         if turns.isEmpty {
@@ -50,11 +52,28 @@ struct ConversationPanel: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.bottom, 2)
                 }
-                .onAppear { proxy.scrollTo(BOTTOM, anchor: .bottom) }
-                .onChange(of: turns.count) { _ in
-                    withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(BOTTOM, anchor: .bottom) }
-                }
+                // ANCHOR AFTER LAYOUT, NOT DURING IT.
+                //
+                // `onAppear` fires before SwiftUI has laid the content out, so
+                // scrolling there is a no-op — the transcript opened at the very
+                // TOP every time. And `onChange(of: turns.count)` was the only
+                // other trigger, which never fires when you open a conversation
+                // that already has all its messages. Hopping to the next runloop
+                // pass puts this after layout, where scrollTo actually lands.
+                .onAppear { jump(proxy, animated: false) }
+                // `id` changes when the panel switches to a different task, so
+                // each task opens at its own latest message rather than
+                // inheriting the previous one's scroll position.
+                .onChange(of: id) { _ in jump(proxy, animated: false) }
+                .onChange(of: turns.count) { _ in jump(proxy, animated: true) }
             }
+        }
+    }
+
+    private func jump(_ proxy: ScrollViewProxy, animated: Bool) {
+        DispatchQueue.main.async {
+            if animated { withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(BOTTOM, anchor: .bottom) } }
+            else { proxy.scrollTo(BOTTOM, anchor: .bottom) }
         }
     }
 

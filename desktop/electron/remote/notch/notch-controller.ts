@@ -215,8 +215,15 @@ export class NotchController {
   private railsTimer: ReturnType<typeof setInterval> | null = null
   /** (surface, task) → last payload sent, so an unchanged detail is not resent. */
   private lastDetailJson = new Map<string, { id: string; json: string }>()
-  /** Session-scoped 'show all' — reset whenever the cockpit is reopened. */
-  private showAllGroups = false
+  /**
+   * Which groups are expanded, by name (''  = the ungrouped bucket).
+   *
+   * Was a single boolean, so a button rendered INSIDE a group header expanded
+   * every group on the wall — and once on, every `hidden` count went to zero,
+   * the per-group buttons vanished, and there was no way to collapse one again.
+   * A control in a group header must act on that group.
+   */
+  private expandedGroups = new Set<string>()
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
@@ -282,7 +289,16 @@ export class NotchController {
     on('clearFinished', () => { this.clearedAt = Date.now(); this.reconcile() })
     // Temporary, and deliberately not persisted: "show all" lasts as long as
     // this look at the cockpit, then the wall goes back to being about now.
-    on('showAll', (e) => { this.showAllGroups = !!(e as { on?: boolean }).on; this.reconcile() })
+    on('showAll', (e) => {
+      const { group, on } = e as { group?: string; on?: boolean }
+      // No group named ⇒ the wall-level control: everything, or nothing.
+      if (group === undefined) {
+        if (on) for (const g of this.allGroupNames()) this.expandedGroups.add(g)
+        else this.expandedGroups.clear()
+      } else if (on) this.expandedGroups.add(group)
+      else this.expandedGroups.delete(group)
+      this.reconcile()
+    })
     on('digestDismiss', () => { this.digestDismissed = true; this.digestText = null; this.reconcile() })
     on('bellToggle', () => { this.deps.setDoorbell(!this.deps.getDoorbell()); this.reconcile() })
     on('offerAccept', (e) => void this.onOfferAccept((e as { newTaskId: string }).newTaskId))
@@ -445,7 +461,7 @@ export class NotchController {
 
   private openCockpit(): void {
     this.engaged = 'cockpit'
-    this.showAllGroups = false   // each visit starts on the live view
+    this.expandedGroups.clear()   // each visit starts on the live view
     this.computeDigest()
     this.deps.setLastSeen(Date.now())
     void this.refreshRails(true)
@@ -785,6 +801,14 @@ export class NotchController {
     this.client.send({ type: 'collapse' })
   }
 
+  /** Every group name currently on the wall, including '' for ungrouped. */
+  private allGroupNames(): string[] {
+    const now = Date.now()
+    return [...new Set(this.deps.listTasks()
+      .filter((t) => this.visibleOnWall(t, now))
+      .map((t) => (t.group ?? '').trim()))]
+  }
+
   buildCockpit(): CockpitPayload {
     const now = Date.now()
     const tasks = this.deps.listTasks()
@@ -805,7 +829,11 @@ export class NotchController {
       if (!byGroup.has(g)) byGroup.set(g, [])
       byGroup.get(g)!.push(t)
     }
-    const named = [...byGroup.entries()].filter(([g]) => g !== '')
+    // THE UNGROUPED BUCKET RANKS LIKE ANY OTHER. It used to be appended last
+    // whatever it held, and it renders without a heading, so the newest task on
+    // the wall sat at the bottom under someone else's group title — which made
+    // a correctly-sorted wall look scrambled.
+    const ranked = [...byGroup.entries()]
       .sort((a, b) => Math.max(...b[1].map((t) => t.updatedAt ?? 0)) - Math.max(...a[1].map((t) => t.updatedAt ?? 0)))
 
     /**
@@ -821,15 +849,14 @@ export class NotchController {
      * disclosure means work silently waiting on you that you cannot see, which
      * is the exact failure the cockpit exists to prevent.
      */
-    const collapse = (ts: TaskLite[]): { cards: CardP[]; hidden: number } => {
-      if (this.showAllGroups) return { cards: ts.map((t) => this.toCard(t, now, qpos)), hidden: 0 }
+    const collapse = (name: string, ts: TaskLite[]): { cards: CardP[]; hidden: number; expanded: boolean } => {
+      const expanded = this.expandedGroups.has(name)
+      if (expanded) return { cards: ts.map((t) => this.toCard(t, now, qpos)), hidden: 0, expanded }
       const kept = ts.filter((t) => UNFOLDABLE.has(t.state) || now - (t.updatedAt ?? 0) < STALE_CARD_MS)
-      return { cards: kept.map((t) => this.toCard(t, now, qpos)), hidden: ts.length - kept.length }
+      return { cards: kept.map((t) => this.toCard(t, now, qpos)), hidden: ts.length - kept.length, expanded }
     }
 
-    const groups = named.map(([name, ts]) => ({ name, ...collapse(ts) }))
-    const ungrouped = byGroup.get('') ?? []
-    if (ungrouped.length) groups.push({ name: '', ...collapse(ungrouped) })
+    const groups = ranked.map(([name, ts]) => ({ name, ...collapse(name, ts) }))
     // A WALL-LEVEL total, so the way back never depends on one particular group
     // rendering its header. Without this, folding every card in every group
     // left the reveal control nowhere on screen and the tasks unreachable.
@@ -857,7 +884,7 @@ export class NotchController {
     return {
       groups,
       hiddenTotal,
-      showingAll: this.showAllGroups,
+      showingAll: groups.length > 0 && groups.every((x) => x.expanded),
       queue,
       oneoffs,
       projects: this.projects,

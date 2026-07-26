@@ -228,6 +228,7 @@ export const remotePreloadExtensions = {
   }> => ipcRenderer.invoke('remote:codex-reasoning'),
   remoteCodexReasoningSet: (axis: 'Model' | 'Effort' | 'Speed', value: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:codex-reasoning-set', axis, value),
+  remoteCodexReasoningRefresh: (): Promise<unknown> => ipcRenderer.invoke('remote:codex-reasoning-refresh'),
   /** Set the doer model; applies to the next dispatched task. Returns the
    *  validated value actually stored. */
   remoteSetModel: (m: string): Promise<string> => ipcRenderer.invoke('remote:set-model', m),

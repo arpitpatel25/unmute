@@ -2715,17 +2715,32 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
    * Read live rather than listed here: model names change every few releases,
    * and a managed plan may not offer every tier.
    */
+  /**
+   * INSTANT, from cache. Reading it live walks Codex's menus over CDP three
+   * times (~3s measured) — far too slow for a chip that has to be correct
+   * within a two-second capture, and it was being polled every 1.5s, which
+   * re-entered before the previous walk finished and hammered menus in the
+   * user's Codex window.
+   */
   ipcMain.handle('remote:codex-reasoning', async () => {
+    const cached = settings.get('codexReasoningCache' as never) as unknown
+    if (cached) return cached
+    return await refreshCodexReasoning()
+  })
+
+  /** Walk the menus and cache the result. Called on connect and on agent switch. */
+  const refreshCodexReasoning = async () => {
     if (!codexDriver) return { label: null, current: {}, options: {} }
     const state = await codexDriver.reasoningOptions().catch((e) => {
       log.warn('codex-reasoning-read-failed', { error: (e as Error).message })
       return { label: null, current: {}, options: {} }
     })
-    // Remember it so the chip can still show something sensible when Codex is
-    // closed — the last thing we truly saw, never an invented list.
-    if (state.options.Model?.length) settings.set('codexReasoningCache', state as never)
+    // Only overwrite the cache with a REAL reading — a failed walk must not
+    // erase what we last genuinely saw.
+    if (state.options.Model?.length) settings.set('codexReasoningCache' as never, state as never)
     return state
-  })
+  }
+  ipcMain.handle('remote:codex-reasoning-refresh', async () => await refreshCodexReasoning())
 
   ipcMain.handle('remote:codex-reasoning-set', async (_e, axis: 'Model' | 'Effort' | 'Speed', value: string) => {
     if (!codexDriver) return false
@@ -2734,6 +2749,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // lose what the user picked.
     const key = axis === 'Model' ? 'codexModel' : axis === 'Effort' ? 'codexEffort' : 'codexSpeed'
     settings.set(key as never, value as never)
+    // Keep the cache honest so the chip reflects the pick immediately, without
+    // another menu walk.
+    const cached = settings.get('codexReasoningCache' as never) as { current?: Record<string, string> } | undefined
+    if (cached?.current) settings.set('codexReasoningCache' as never, { ...cached, current: { ...cached.current, [axis]: value } } as never)
     log.event('codex-reasoning-choice', { axis, value })
     return await codexDriver.setReasoningAxis(axis, value).catch(() => false)
   })
@@ -2749,6 +2768,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // the whole point of the per-task picker.
     const a: AgentKind = agent === 'codex' ? 'claude' : agent
     settings.set('agent', a)
+    // Warm the catalog in the background so the chip has real values ready the
+    // moment the user looks at it, instead of on a 3s delay mid-capture.
+    if (a === 'codex-desktop') void refreshCodexReasoning()
     log.event('agent-set', { agent: a, requested: agent }) // PRD §11
     return true
   })

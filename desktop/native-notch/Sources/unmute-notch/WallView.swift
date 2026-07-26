@@ -45,12 +45,12 @@ struct WallView: View {
                     // group rendering its own header — that dependency is what
                     // made folded work unreachable.
                     if data.showingAll == true {
-                        Button(action: { model.emit(.showAll(on: false)) }) {
-                            Text("showing everything · hide older")
+                        Button(action: { model.emit(.showAll(group: nil, on: false)) }) {
+                            Text("hide older everywhere")
                                 .font(.system(size: 11)).foregroundColor(Theme.textFaint)
                         }.buttonStyle(.plain)
                     } else if let n = data.hiddenTotal, n > 0 {
-                        Button(action: { model.emit(.showAll(on: true)) }) {
+                        Button(action: { model.emit(.showAll(group: nil, on: true)) }) {
                             Text("show all · \(n) older")
                                 .font(.system(size: 11)).foregroundColor(Theme.cReady)
                         }.buttonStyle(.plain)
@@ -96,17 +96,28 @@ struct WallView: View {
 
     private func groupSection(_ g: GroupP) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            if !g.name.isEmpty {
+            // ALWAYS a heading, including for the ungrouped bucket. Without one
+            // its cards rendered under the previous group's title — so the
+            // newest task on the wall looked like it belonged to someone else's
+            // group, and a correctly-sorted wall looked scrambled.
+            do {
                 HStack(spacing: 8) {
-                    Text(g.name).font(.system(size: 14, weight: .semibold)).foregroundColor(Theme.text)
-                    Badge(text: "group")
+                    Text(g.name.isEmpty ? "Ungrouped" : g.name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(g.name.isEmpty ? Theme.textDim : Theme.text)
+                    if !g.name.isEmpty { Badge(text: "group") }
                     // SAY that cards are folded away. A group silently missing
                     // half its tasks reads as a group that lost them.
-                    if let n = g.hidden, n > 0 {
-                        Button(action: { model.emit(.showAll(on: true)) }) {
-                            Text("show all · \(n)")
-                                .font(.system(size: 11))
-                                .foregroundColor(Theme.cReady)
+                    // Acts on THIS group. A control in a group header that
+                    // expanded the whole wall — and then offered no way to
+                    // collapse — was the complaint.
+                    if g.expanded == true {
+                        Button(action: { model.emit(.showAll(group: g.name, on: false)) }) {
+                            Text("show less").font(.system(size: 11)).foregroundColor(Theme.textFaint)
+                        }.buttonStyle(.plain)
+                    } else if let n = g.hidden, n > 0 {
+                        Button(action: { model.emit(.showAll(group: g.name, on: true)) }) {
+                            Text("show all · \(n)").font(.system(size: 11)).foregroundColor(Theme.cReady)
                         }.buttonStyle(.plain)
                     }
                 }

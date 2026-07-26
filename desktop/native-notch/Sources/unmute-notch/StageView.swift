@@ -52,7 +52,7 @@ struct StageView: View {
                     // exist for this backend, and the second offered to
                     // "resume" a chat that had never stopped.
                     ScrollView {
-                        ConversationPanel(turns: t.conversation ?? [])
+                        ConversationPanel(turns: t.conversation ?? [], id: t.id)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.top, 10)

@@ -741,3 +741,51 @@ test('needs-user, stuck, failed and processing never fold, at any age', () => {
   assert.deepEqual(g.cards.map((c) => c.id).sort(), ['f', 'p', 'q', 's'])
   assert.equal(g.hidden, 0)
 })
+
+test('show all expands ONLY the group whose button was pressed', () => {
+  // A control in a group header that expanded the whole wall — and then left no
+  // way to collapse — was the complaint. One group at a time.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  const old = Date.now() - 9 * day
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', group: 'One', updatedAt: old }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', group: 'Two', updatedAt: old }))
+  h.client.fire({ type: 'openDashboard' })
+
+  h.client.fire({ type: 'showAll', group: 'One', on: true })
+  const g = (name: string) => h.client.last('setCockpit')!.data.groups.find((x) => x.name === name)!
+  assert.equal(g('One').cards.length, 1)
+  assert.equal(g('Two').cards.length, 0, 'the other group is untouched')
+
+  // ...and it collapses again from the same place.
+  h.client.fire({ type: 'showAll', group: 'One', on: false })
+  assert.equal(g('One').cards.length, 0)
+  assert.equal(g('One').hidden, 1)
+})
+
+test('the wall-level control still expands and collapses everything', () => {
+  const h = setup()
+  const old = Date.now() - 9 * 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', group: 'One', updatedAt: old }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', group: 'Two', updatedAt: old }))
+  h.client.fire({ type: 'openDashboard' })
+  h.client.fire({ type: 'showAll', on: true })
+  assert.equal(h.client.last('setCockpit')!.data.groups.flatMap((x) => x.cards).length, 2)
+  assert.equal(h.client.last('setCockpit')!.data.showingAll, true)
+  h.client.fire({ type: 'showAll', on: false })
+  assert.equal(h.client.last('setCockpit')!.data.groups.flatMap((x) => x.cards).length, 0)
+})
+
+test('the UNGROUPED bucket ranks by recency like any other group', () => {
+  // It used to be appended last whatever it held, and it renders without a
+  // heading — so the newest task on the wall sat at the bottom under someone
+  // else's group title, and a correctly-sorted wall looked scrambled.
+  const h = setup()
+  const hour = 60 * 60 * 1000
+  put(h, makeTask({ id: 'grouped', state: 'ready', kind: 'session', group: 'Unmute', updatedAt: Date.now() - 40 * hour }))
+  put(h, makeTask({ id: 'loose', state: 'ready', kind: 'session', updatedAt: Date.now() - 1 * hour }))
+  h.client.fire({ type: 'openDashboard' })
+  const groups = h.client.last('setCockpit')!.data.groups
+  assert.equal(groups[0].name, '', 'the ungrouped bucket holds the newest task, so it leads')
+  assert.equal(groups[1].name, 'Unmute')
+})

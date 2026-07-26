@@ -46,7 +46,7 @@ struct TaskSurfaceView: View {
                 // panel read as a giant void.
                 if t.backend == "codex-desktop" {
                     ScrollView {
-                        ConversationPanel(turns: t.conversation ?? [])
+                        ConversationPanel(turns: t.conversation ?? [], id: t.id)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

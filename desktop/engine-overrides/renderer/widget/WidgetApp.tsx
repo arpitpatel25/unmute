@@ -118,34 +118,45 @@ function RemoteBadge() {
   const [model, setModel] = useState<string>('sonnet')
   const [expanded, setExpanded] = useState(false)
   const [agent, setAgent] = useState<string>('claude')
+  const [codex, setCodex] = useState<{
+    label: string | null
+    current: Partial<Record<'Model' | 'Effort' | 'Speed', string>>
+    options: Partial<Record<'Model' | 'Effort' | 'Speed', string[]>>
+  } | null>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isCodex = agent === 'codex-desktop'
 
-  // Which agent is selected decides WHICH catalog this chip is showing.
+  // Which agent is selected decides WHICH catalog this chip shows. Cheap poll —
+  // this is a settings read, not a menu walk.
   useEffect(() => {
     let cancelled = false
     const load = async () => {
-      const cx = remoteCodexApi()
-      const opts = await cx.remoteAgentOptions?.().catch(() => null)
-      const a = opts?.current ?? 'claude'
-      if (cancelled) return
-      setAgent(a)
-      if (a !== 'codex-desktop') return
-      const r = await cx.remoteCodexReasoning?.().catch(() => null)
-      if (cancelled || !r) return
-      const models = r.options.Model ?? []
-      if (models.length) setCatalog(models.map((id) => ({ id, label: id })))
-      if (r.current.Model) setModel(r.current.Model)
+      const opts = await remoteCodexApi().remoteAgentOptions?.().catch(() => null)
+      if (!cancelled) setAgent(opts?.current ?? 'claude')
     }
     void load()
-    // The picker sits on the same pill; re-read while the capture is open so
-    // switching agent switches the catalog under it.
     const t = setInterval(() => { void load() }, 1500)
     return () => { cancelled = true; clearInterval(t) }
   }, [])
 
+  // Codex's own axes, served from cache so they are there IMMEDIATELY. Reading
+  // them live walks Codex's menus (~3s) — a capture is often over before that
+  // returns, which is exactly why this chip kept showing a Claude model.
   useEffect(() => {
-    if (isCodex) return   // the Codex catalog is loaded above
+    if (!isCodex) { setCodex(null); return }
+    let cancelled = false
+    void remoteCodexApi().remoteCodexReasoning?.().then((r) => {
+      if (!cancelled && r) setCodex(r)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [isCodex])
+
+  useEffect(() => {
+    // DEPS MATTER HERE. With `[]` this read `isCodex` from the first render,
+    // where it is always false — so the guard never fired, the Claude catalog
+    // always loaded, and its model-changed listener kept overwriting the Codex
+    // value. That is why the chip said "Opus" with Codex selected.
+    if (isCodex) return
     const api = remoteModelApi()
     // Reflect whatever the saved model IS — never silently downgrade an id we
     // don't recognise. (The old guard forced any non-{haiku,sonnet,opus} value
@@ -155,8 +166,15 @@ function RemoteBadge() {
     void api.remoteGetModelCatalog?.().then((c) => { if (c && c.length) setCatalog(c) })
     const off = api.remoteOnModelChanged?.((m) => { if (typeof m === 'string' && m) setModel(m) })
     return () => off?.()
-  }, [])
+  }, [isCodex])
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
+
+  /** The rows the dropdown shows: one flat list for Claude, three axes for Codex. */
+  const axes: Array<{ axis: 'Model' | 'Effort' | 'Speed'; values: string[]; current?: string }> = isCodex
+    ? (['Model', 'Effort', 'Speed'] as const)
+        .map((axis) => ({ axis, values: codex?.options[axis] ?? [], current: codex?.current[axis] }))
+        .filter((a) => a.values.length)
+    : []
 
   // The selector opens DOWNWARD (a dropdown below the pill row) so it scales to
   // ANY number of catalog models — a horizontal reveal can't. Same seam the
@@ -164,10 +182,14 @@ function RemoteBadge() {
   // isn't clipped, restore the 72px default on close/unmount.
   useEffect(() => {
     const api = remoteModelApi()
-    if (expanded) void api.paywallSetHUDHeight?.(Math.min(320, 64 + catalog.length * 38 + 12))
+    // Three axes with headers is a much taller list than one flat catalog.
+    const rows = isCodex
+      ? axes.reduce((n, a) => n + a.values.length, 0) + axes.length * 0.8
+      : catalog.length
+    if (expanded) void api.paywallSetHUDHeight?.(Math.min(420, 64 + rows * 36 + 12))
     else void api.paywallSetHUDHeight?.(72)
     return () => { void remoteModelApi().paywallSetHUDHeight?.(72) }
-  }, [expanded, catalog.length])
+  }, [expanded, catalog.length, isCodex, axes])
 
   const open = () => {
     if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null }
@@ -179,15 +201,26 @@ function RemoteBadge() {
 
   const pick = (m: string) => {
     setModel(m) // optimistic — reflects instantly; the next task reads the setting
-    if (isCodex) void remoteCodexApi().remoteCodexReasoningSet?.('Model', m)
-    else void remoteModelApi().remoteSetModel?.(m)
+    if (isCodex) pickAxis('Model', m)
+    else { void remoteModelApi().remoteSetModel?.(m); setExpanded(false) }
+  }
+
+  /** Codex has three axes, not one — model alone is half the setting. */
+  const pickAxis = (axis: 'Model' | 'Effort' | 'Speed', value: string) => {
+    setCodex((prev) => (prev ? { ...prev, current: { ...prev.current, [axis]: value } } : prev))
+    void remoteCodexApi().remoteCodexReasoningSet?.(axis, value)
     setExpanded(false)
   }
 
   const active = catalog.find((c) => c.id === model)
   // If the saved id isn't in the catalog, still show its raw id rather than
   // masquerading as another model — the anti-downgrade rule, applied to display.
-  const activeLabel = active?.label ?? model
+  // For Codex the chip carries model AND effort, the way Codex's own control
+  // does ("5.6 Terra High") — effort is half of what the run will cost.
+  const activeLabel = isCodex
+    ? [codex?.current.Model, codex?.current.Effort].filter(Boolean).join(' ') || 'Codex'
+    : (active?.label ?? model)
+
 
   return (
     <div
@@ -235,7 +268,44 @@ function RemoteBadge() {
             borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10,
           }}
         >
-          {catalog.map((c) => {
+          {/* Codex is not one axis. Model alone leaves effort and speed —
+              which decide what a run costs and how long it takes — unreachable,
+              and reaching them was the whole point of not being a restricted
+              remote. */}
+          {isCodex && axes.map(({ axis, values, current }) => (
+            <div key={axis} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{
+                fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase',
+                color: 'rgba(255,255,255,0.35)', padding: '6px 10px 2px',
+              }}>{axis}</div>
+              {values.map((v) => {
+                const on = v === current
+                return (
+                  <button
+                    key={axis + v}
+                    onClick={() => pickAxis(axis, v)}
+                    style={{
+                      textAlign: 'left', width: '100%', height: 32, padding: '0 10px',
+                      borderRadius: 8, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+                      fontSize: 12.5, fontWeight: 600,
+                      background: on ? 'rgba(217,119,87,0.18)' : 'transparent',
+                      color: on ? CLAUDE_ORANGE : 'rgba(255,255,255,0.7)',
+                    }}
+                    onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
+                    onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = 'transparent' }}
+                  >
+                    {v}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+          {isCodex && axes.length === 0 && (
+            <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.45)', padding: '8px 10px' }}>
+              connect Codex to choose a model
+            </div>
+          )}
+          {!isCodex && catalog.map((c) => {
             const isActive = c.id === model
             return (
               <button
