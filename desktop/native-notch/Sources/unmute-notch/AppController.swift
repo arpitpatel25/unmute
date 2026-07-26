@@ -4,7 +4,7 @@ import SwiftTerm
 
 // Owns the ONE panel + view model; translates commands into observable state,
 // user gestures into events, and keeps the surface on the PRIMARY display.
-final class AppController: NSObject {
+final class AppController: NSObject, NotchResizing {
     private let model = NotchModel()
     private var window: NotchWindow!
     private var geometry: NotchGeometry
@@ -21,6 +21,7 @@ final class AppController: NSObject {
         let host = NSHostingView(rootView: NotchView(model: model, topInset: topInset))
         host.sizingOptions = []   // WE own the window size
         window.contentView = host
+        window.resizer = self
         model.hasNotch = geometry.hasNotch
         model.emit = { [weak self] ev in
             NotchLog.log("EVENT out: \(ev.json)")
@@ -115,6 +116,10 @@ final class AppController: NSObject {
     // MARK: - State / frames
 
     private func applyState(_ state: NotchState) {
+        // Each visit starts at the hard-coded size. A size dragged out for one
+        // look at a task is not a preference — carrying it across would make the
+        // surface's size a hidden setting the user never chose to persist.
+        if state != .task && state != .cockpit { userScale = 1 }
         let up = rung(state) >= rung(model.state)
         if state != .cockpit { model.focusedId = nil; model.stageTask = nil }
         // Terminal is OPEN BY DEFAULT on the task surface ("hide terminal" is
@@ -149,15 +154,72 @@ final class AppController: NSObject {
 
     /// The Stage/wall keep the cockpit frame; the task surface is content-sized.
     private func frame(for state: NotchState) -> NSRect {
+        var size: NSSize
         if state == .task {
             // Codex tasks were briefly given a compact frame, back when the
             // panel had nothing but two buttons to show. They now carry a full
             // transcript and a composer, so they want the same room as a
             // terminal.
-            let size = geometry.taskSize
-            return geometry.topPinnedFrame(width: size.width, height: size.height)
+            size = geometry.taskSize
+        } else {
+            size = geometry.size(for: state)
         }
-        return geometry.windowFrame(for: state)
+
+        // USER SCALE — one factor on BOTH axes, so any drag from any edge makes
+        // the whole surface bigger rather than stretching it one way. Only the
+        // expanded surfaces are resizable; the resting states are fixed.
+        if userScale != 1, state == .task || state == .cockpit {
+            var w = size.width * userScale
+            var h = size.height * userScale
+            // The cockpit NEVER goes below its own default. Carrying a smaller
+            // task-view scale into it would shrink the wall, and the wall's
+            // default is deliberately the larger of the two.
+            if state == .cockpit {
+                w = max(w, geometry.cockpitSize.width)
+                h = max(h, geometry.cockpitSize.height)
+            }
+            size = NSSize(width: round(w), height: round(h))
+        }
+        return geometry.topPinnedFrame(width: size.width, height: size.height)
+    }
+
+    // MARK: - Drag to resize (session-scoped)
+
+    /// How much bigger the user has dragged the current surface. Reset to 1 on
+    /// every collapse, so each visit opens at the hard-coded size and growing it
+    /// again is a fresh, deliberate choice.
+    private var userScale: CGFloat = 1
+    private var dragAnchor: (mouse: NSPoint, scale: CGFloat)?
+
+    /// A drag anywhere on the resize border scales BOTH axes together — there is
+    /// no separate width handle and height handle, just "make it bigger".
+    /// Distance is measured from the panel's centre, so pulling outward from any
+    /// edge or corner grows it and pushing inward shrinks it.
+    func beginResize(at pointInWindow: NSPoint) {
+        dragAnchor = (mouse: NSEvent.mouseLocation, scale: userScale)
+    }
+
+    func continueResize() {
+        guard let anchor = dragAnchor else { return }
+        let f = window.frame
+        let centre = NSPoint(x: f.midX, y: f.maxY)          // top-pinned: grow from the top centre
+        let start = hypot(anchor.mouse.x - centre.x, anchor.mouse.y - centre.y)
+        let now = NSEvent.mouseLocation
+        let current = hypot(now.x - centre.x, now.y - centre.y)
+        guard start > 8 else { return }
+        let raw = anchor.scale * (current / start)
+        userScale = min(max(raw, 0.6), maxScale())
+        window.applyFrame(frame(for: model.state), animated: false)
+    }
+
+    func endResize() { dragAnchor = nil }
+
+    /// Never larger than the screen it lives on.
+    private func maxScale() -> CGFloat {
+        let base = model.state == .cockpit ? geometry.cockpitSize : geometry.taskSize
+        let sw = geometry.screenFrame.width * 0.98 / max(base.width, 1)
+        let sh = (geometry.screenFrame.height - geometry.menuBarHeight) * 0.98 / max(base.height, 1)
+        return max(1, min(sw, sh))
     }
     private func refit() {
         window.applyFrame(frame(for: model.state), animated: false)
@@ -242,6 +304,45 @@ final class AppController: NSObject {
             let fr = self.window.firstResponder
             let typing = fr is NSTextView || fr is TerminalView
             if e.keyCode == 53 { self.stepDown(); return nil }
+
+            // ⌘V AND FRIENDS, BECAUSE NOTHING ELSE WILL DELIVER THEM.
+            //
+            // On macOS the editing commands are MENU commands: AppKit receives
+            // ⌘V, asks the main menu who claims it, and drops it if nobody does.
+            // This app is `.accessory` and builds no menu, so ⌘V/⌘C/⌘X/⌘A were
+            // discarded everywhere in the notch — the rename field, the note
+            // field, the Codex composer, the terminal. Typing worked because raw
+            // characters go straight to the first responder without consulting
+            // any menu; that asymmetry is what made this look terminal-specific
+            // when it never was.
+            //
+            // It also broke DICTATION into the notch, which is the same thing
+            // wearing a different hat: unmute pastes by posting a synthetic ⌘V,
+            // and a synthetic ⌘V is indistinguishable from a real one — so it
+            // died at the same missing menu.
+            //
+            // sendAction(to: nil) walks the responder chain, so each of these
+            // lands on whatever is focused. Every target already implements the
+            // selector (NSTextView, NSTextField, and SwiftTerm's TerminalView);
+            // SwiftTerm does NOT claim key equivalents itself, so there is no
+            // double-handling.
+            if e.modifierFlags.contains(.command), !e.modifierFlags.contains(.control),
+               let ch = e.charactersIgnoringModifiers?.lowercased() {
+                let action: Selector? = {
+                    switch ch {
+                    case "v": return #selector(NSText.paste(_:))
+                    case "c": return #selector(NSText.copy(_:))
+                    case "x": return #selector(NSText.cut(_:))
+                    case "a": return #selector(NSText.selectAll(_:))
+                    default:  return nil
+                    }
+                }()
+                if let action, NSApp.sendAction(action, to: nil, from: nil) {
+                    NotchLog.log("edit command handled: ⌘\(ch)")
+                    return nil
+                }
+            }
+
             if typing { return e }
             guard self.model.state == .cockpit || self.model.state == .task else { return e }
             if e.keyCode == 48 { self.model.emit(.next); return nil }            // Tab → crank

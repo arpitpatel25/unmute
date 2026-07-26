@@ -146,6 +146,17 @@ function sendToWidget(channel: string, ...args: unknown[]): void {
   }
 }
 
+/**
+ * Remote dispatches run one at a time, in the order they were spoken.
+ *
+ * Detaching them from the pill means a second utterance can arrive while the
+ * first is still being delivered — previously impossible, because the pill held
+ * the session open. The router is a single resident REPL, so overlapping calls
+ * would interleave; chaining preserves the old ordering guarantee without
+ * putting it back on the user's screen.
+ */
+let remoteDispatchQueue: Promise<void> = Promise.resolve()
+
 class SessionManager {
   private currentSession: SessionState | null = null
   private authToken: string | null = null
@@ -920,6 +931,17 @@ class SessionManager {
    * session ends cleanly, then clears the flag so the NEXT capture is normal
    * dictation again (the flag can never leak across captures).
    */
+  /**
+   * Dispatches run one at a time, in the order they were spoken.
+   *
+   * Detaching them from the pill means a second utterance can arrive while the
+   * first is still being delivered — previously impossible, because the pill
+   * held the session open. The router is a single resident REPL, so overlapping
+   * calls would interleave; chaining keeps the old ordering guarantee without
+   * putting it back on the user's screen.
+   */
+
+
   private async dispatchRemoteAndFinish(
     command: string,
     session: SessionState,
@@ -928,11 +950,22 @@ class SessionManager {
     const cmd = (command || '').trim()
     console.log('[session] 🛰  REMOTE dispatch:', JSON.stringify(cmd))
     if (cmd && cmd !== '[BLANK_AUDIO]') {
-      try {
-        await dispatchFromCapture(cmd)
-      } catch (e) {
-        console.error('[session] 🛰  REMOTE dispatch failed:', e instanceof Error ? e.message : e)
-      }
+      // DETACHED ON PURPOSE — the pill must not wait for the agent.
+      //
+      // This used to `await` the whole dispatch, so the capture pill sat in
+      // `processing` for as long as it took to drive the other app: measured at
+      // up to ~36s for a Codex task, most of it walking Codex's own menus. None
+      // of that is the user's utterance — that was understood seconds earlier —
+      // and a pill reporting someone else's latency is just noise the user
+      // cannot act on. The task's own card carries the rest of the story.
+      //
+      // Nothing about the dispatch itself changes: same work, same order (see
+      // the queue below), only the UI stops blocking on it.
+      remoteDispatchQueue = remoteDispatchQueue
+        .then(() => dispatchFromCapture(cmd))
+        .catch((e) => {
+          console.error('[session] 🛰  REMOTE dispatch failed:', e instanceof Error ? e.message : e)
+        })
     } else {
       console.log('[session] 🛰  REMOTE: empty transcript — nothing to dispatch')
     }

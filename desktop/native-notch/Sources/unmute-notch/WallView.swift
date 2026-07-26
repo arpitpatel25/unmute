@@ -148,6 +148,10 @@ struct WallView: View {
                 if let n = c.note, !n.isEmpty {
                     Text("✎ \(n)").font(.system(size: 11.5)).foregroundColor(Theme.cReady).lineLimit(1)
                 }
+                // Footer sits at the bottom of the tile, not straight under the
+                // body — otherwise a card with no activity line puts its footer
+                // halfway up while its neighbour's sits at the base.
+                Spacer(minLength: 0)
                 HStack(spacing: 6) {
                     Text(c.kind == "session" ? (c.dir ?? "session") : "one-off")
                     Spacer(minLength: 0)
@@ -169,8 +173,16 @@ struct WallView: View {
                 .font(.system(size: 10.5, design: .monospaced)).foregroundColor(Theme.textFaint)
                 .padding(.top, 3)
             }
+            // A UNIFORM TILE, whatever the card happens to carry.
+            //
+            // The body is optional — a Claude task usually has an activity line,
+            // a Codex one often does not — so cards in the same row came out
+            // different heights and the wall read as ragged. The spacer pushes
+            // the footer down so every card fills its row, and a floor keeps a
+            // lone short card from collapsing. Sized UP to the tallest, never
+            // shrinking the ones that have something to say.
             .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 116, maxHeight: .infinity, alignment: .topLeading)
             .background(RoundedRectangle(cornerRadius: 10).fill(Theme.cardBg))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hairline, lineWidth: 1))
         }.buttonStyle(.plain)
