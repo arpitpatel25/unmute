@@ -110,6 +110,11 @@ export interface RouteOfferP { newTaskId: string; altTaskId: string; altName: st
 
 export interface CockpitPayload {
   groups: GroupP[]
+  /** Cards folded away across the whole wall — the reveal control keys off this
+   *  so it never depends on one group happening to render. */
+  hiddenTotal?: number
+  /** True while "show all" is on for this visit to the cockpit. */
+  showingAll?: boolean
   queue: QueueItemP[]
   oneoffs: OneoffP[]
   projects: ProjectP[]

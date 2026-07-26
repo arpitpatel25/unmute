@@ -10,7 +10,8 @@ struct WallView: View {
     let topInset: CGFloat
 
     private var data: CockpitData {
-        model.cockpit ?? CockpitData(groups: [], queue: [], oneoffs: [], projects: [],
+        model.cockpit ?? CockpitData(groups: [], hiddenTotal: 0, showingAll: false,
+                                     queue: [], oneoffs: [], projects: [],
                                      suggestions: [], unmuteSkills: [], skills: [], shelf: [],
                                      digest: nil, stagedCount: 0, doorbell: true,
                                      routeOffer: nil, tmuxAvailable: false)
@@ -35,9 +36,26 @@ struct WallView: View {
     private var main: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("UNMUTE · COCKPIT")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .tracking(1.6).foregroundColor(Theme.textFaint)
+                HStack(spacing: 10) {
+                    Text("UNMUTE · COCKPIT")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .tracking(1.6).foregroundColor(Theme.textFaint)
+                    Spacer(minLength: 0)
+                    // The wall-level way back. Deliberately not dependent on any
+                    // group rendering its own header — that dependency is what
+                    // made folded work unreachable.
+                    if data.showingAll == true {
+                        Button(action: { model.emit(.showAll(on: false)) }) {
+                            Text("showing everything · hide older")
+                                .font(.system(size: 11)).foregroundColor(Theme.textFaint)
+                        }.buttonStyle(.plain)
+                    } else if let n = data.hiddenTotal, n > 0 {
+                        Button(action: { model.emit(.showAll(on: true)) }) {
+                            Text("show all · \(n) older")
+                                .font(.system(size: 11)).foregroundColor(Theme.cReady)
+                        }.buttonStyle(.plain)
+                    }
+                }
 
                 if let digest = data.digest {
                     Button(action: { model.emit(.digestDismiss) }) {
@@ -50,14 +68,24 @@ struct WallView: View {
                     }.buttonStyle(.plain)
                 }
 
-                if data.groups.allSatisfy({ $0.cards.isEmpty }) {
+                // "Nothing here" means nothing EXISTS — not "everything is
+                // folded", which is a different thing with a way out.
+                if data.groups.allSatisfy({ $0.cards.isEmpty }) && (data.hiddenTotal ?? 0) == 0 {
                     Text("no sessions — speak to spawn one")
                         .font(.system(size: 13)).foregroundColor(Theme.textFaint)
                         .padding(.top, 30).frame(maxWidth: .infinity, alignment: .center)
                 }
 
+                // A GROUP KEEPS ITS HEADER WHEN EVERYTHING IN IT IS FOLDED.
+                //
+                // This used to skip any group with no visible cards, which was
+                // harmless while nothing was ever folded — a group only existed
+                // if it had cards. Once folding arrived it silently deleted
+                // whole groups from the wall, taking their "show all" with them,
+                // so those tasks became unreachable by any gesture. A folded
+                // group must still say it is there.
                 ForEach(Array(data.groups.enumerated()), id: \.offset) { _, group in
-                    if !group.cards.isEmpty { groupSection(group) }
+                    if !group.cards.isEmpty || (group.hidden ?? 0) > 0 { groupSection(group) }
                 }
             }
             .padding(.horizontal, 20)

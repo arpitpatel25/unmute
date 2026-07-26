@@ -139,6 +139,10 @@ struct RouteOfferP: Codable { let newTaskId: String; let altTaskId: String; let 
 /// The whole wall.
 struct CockpitData: Codable {
     let groups: [GroupP]
+    /// Cards folded away across the whole wall.
+    let hiddenTotal: Int?
+    /// True while "show all" is on for this visit.
+    let showingAll: Bool?
     let queue: [QueueItemP]
     let oneoffs: [OneoffP]
     let projects: [ProjectP]

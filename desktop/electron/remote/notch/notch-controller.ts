@@ -175,6 +175,18 @@ const STALE_ERROR_MS = 3 * 60 * 60 * 1000
  *  is exactly when you want it. */
 const STALE_CARD_MS = 48 * 60 * 60 * 1000
 
+/**
+ * States that are never folded away, at any age — work that is genuinely
+ * waiting on you or still running.
+ *
+ * `ready` is deliberately NOT here, though classify() counts it as attention.
+ * A `ready` task from two weeks ago is a finished step, not something waiting;
+ * the crank has its own decay for it, and exempting it here meant a group of
+ * stale `ready` cards never folded at all while its neighbours vanished
+ * entirely — the wall showed 15-day-old work and hid last week's.
+ */
+const UNFOLDABLE = new Set<TaskStatusName>(['needs-user', 'stuck', 'failed', 'processing'])
+
 type Engaged = 'none' | 'task' | 'cockpit'
 
 export class NotchController {
@@ -811,14 +823,17 @@ export class NotchController {
      */
     const collapse = (ts: TaskLite[]): { cards: CardP[]; hidden: number } => {
       if (this.showAllGroups) return { cards: ts.map((t) => this.toCard(t, now, qpos)), hidden: 0 }
-      const kept = ts.filter((t) => classify(t.state) !== null || t.state === 'processing'
-        || now - (t.updatedAt ?? 0) < STALE_CARD_MS)
+      const kept = ts.filter((t) => UNFOLDABLE.has(t.state) || now - (t.updatedAt ?? 0) < STALE_CARD_MS)
       return { cards: kept.map((t) => this.toCard(t, now, qpos)), hidden: ts.length - kept.length }
     }
 
     const groups = named.map(([name, ts]) => ({ name, ...collapse(ts) }))
     const ungrouped = byGroup.get('') ?? []
     if (ungrouped.length) groups.push({ name: '', ...collapse(ungrouped) })
+    // A WALL-LEVEL total, so the way back never depends on one particular group
+    // rendering its header. Without this, folding every card in every group
+    // left the reveal control nowhere on screen and the tasks unreachable.
+    const hiddenTotal = groups.reduce((n, g) => n + (g.hidden ?? 0), 0)
 
     // Queue rail.
     const queue = this.queue
@@ -841,6 +856,8 @@ export class NotchController {
 
     return {
       groups,
+      hiddenTotal,
+      showingAll: this.showAllGroups,
       queue,
       oneoffs,
       projects: this.projects,

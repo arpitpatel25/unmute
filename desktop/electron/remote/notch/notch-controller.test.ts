@@ -679,3 +679,65 @@ test('show all reveals the folded cards, and reopening the cockpit forgets it', 
   h.client.fire({ type: 'openDashboard' })
   assert.equal(h.client.last('setCockpit')!.data.groups[0].cards.length, 0)
 })
+
+test('a group whose cards ALL fold still reports itself, and is never lost', () => {
+  // THE FAILURE FROM THE FIELD. Folding removed every card in a group; the wall
+  // then skipped the group entirely, taking its "show all" with it, so those
+  // tasks were unreachable by any gesture. A folded group must still say it is
+  // there and how much it is holding.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', group: 'Unmute', updatedAt: Date.now() - 10 * day }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', group: 'Unmute', updatedAt: Date.now() - 20 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  const data = h.client.last('setCockpit')!.data
+  const g = data.groups.find((x) => x.name === 'Unmute')!
+  assert.equal(g.cards.length, 0)
+  assert.equal(g.hidden, 2, 'the group is still in the payload, holding its count')
+  assert.equal(data.hiddenTotal, 2, 'and the wall carries a total of its own')
+})
+
+test('the wall-level total exists so the way back never depends on one group', () => {
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', group: 'One', updatedAt: Date.now() - 9 * day }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', group: 'Two', updatedAt: Date.now() - 9 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  assert.equal(h.client.last('setCockpit')!.data.hiddenTotal, 2)
+  h.client.fire({ type: 'showAll', on: true })
+  const after = h.client.last('setCockpit')!.data
+  assert.equal(after.hiddenTotal, 0)
+  assert.equal(after.showingAll, true)
+  assert.equal(after.groups.flatMap((g) => g.cards).length, 2, 'everything comes back')
+})
+
+test('a stale READY task folds like any other finished step', () => {
+  // `ready` was exempt because classify() counts it as attention — so a group
+  // of two-week-old ready cards never folded while its neighbours vanished
+  // completely. The wall showed 15-day-old work and hid last week's.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'stale-ready', state: 'ready', kind: 'session', group: 'g', updatedAt: Date.now() - 15 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  const g = h.client.last('setCockpit')!.data.groups[0]
+  assert.equal(g.cards.length, 0)
+  assert.equal(g.hidden, 1)
+})
+
+test('needs-user, stuck, failed and processing never fold, at any age', () => {
+  // SESSIONS, deliberately: an errored ONE-OFF is already removed earlier by
+  // visibleOnWall's present-tense fade (60m), which is a different mechanism
+  // from folding and not what this pins.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  const old = Date.now() - 60 * day
+  const base = { kind: 'session' as const, group: 'g', updatedAt: old }
+  put(h, makeTask({ ...base, id: 'q', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  put(h, makeTask({ ...base, id: 's', state: 'stuck' }))
+  put(h, makeTask({ ...base, id: 'f', state: 'failed', error: { reason: 'x' } }))
+  put(h, makeTask({ ...base, id: 'p', state: 'processing' }))
+  h.client.fire({ type: 'openDashboard' })
+  const g = h.client.last('setCockpit')!.data.groups[0]
+  assert.deepEqual(g.cards.map((c) => c.id).sort(), ['f', 'p', 'q', 's'])
+  assert.equal(g.hidden, 0)
+})
