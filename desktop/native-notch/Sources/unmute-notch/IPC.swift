@@ -188,6 +188,10 @@ enum Command {
     /// honours System Settings → Accessibility → Reduce Transparency; "glass"
     /// and "solid" are explicit user overrides. See SurfaceAppearance.
     case appearance(SurfaceAppearance)
+    /// Full state of the bottom-centre input surface. Pushed on every change,
+    /// including the per-frame level during a capture — one float, which is the
+    /// only new traffic the capture path gains.
+    case pill(PillState)
     case collapse
     case quit
     case unknown
@@ -221,6 +225,9 @@ enum Command {
         case "termData":
             guard let id = obj["id"] as? String, let b64 = obj["data"] as? String else { return .unknown }
             return .termData(id: id, dataB64: b64)
+        case "pill":
+            guard let p = sub("state", PillState.self) else { return .unknown }
+            return .pill(p)
         case "appearance":
             // An unknown value falls back to `.system` rather than being
             // dropped: a malformed preference must never leave the surface
@@ -351,8 +358,16 @@ enum IPC {
     private static let lock = NSLock()
 
     /// Write one JSON line to stdout and flush. Thread-safe.
-    static func emit(_ event: Event) {
-        guard let data = try? JSONSerialization.data(withJSONObject: event.json) else { return }
+    static func emit(_ event: Event) { emitRaw(event.json) }
+
+    /// The input surface's events carry their own JSON (see PillEvent) rather
+    /// than being folded into the notch's Event enum — they are a separate
+    /// surface with a separate vocabulary, and mixing them would let a pill
+    /// gesture reach a task handler.
+    static func emit(_ event: PillEvent) { emitRaw(event.json) }
+
+    static func emitRaw(_ obj: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
         var line = data
         line.append(0x0A)
         lock.lock(); defer { lock.unlock() }

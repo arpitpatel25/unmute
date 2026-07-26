@@ -7,6 +7,13 @@ import SwiftTerm
 final class AppController: NSObject, NotchResizing {
     private let model = NotchModel()
     private var window: NotchWindow!
+    // The INPUT surface — bottom-centre, same process, same material system.
+    // One helper owning both panels is what makes "one design system" true in
+    // code rather than by discipline, and it means the ⌘V responder-chain fix
+    // already covers the pill.
+    private let pillModel = PillModel()
+    private var pillWindow: PillWindow!
+    private var pillHost: NSHostingView<AnyView>!
     private var geometry: NotchGeometry
     /// Kept because contentView is now a container, not the hosting view.
     private var hostView: NSHostingView<NotchView>!
@@ -40,6 +47,7 @@ final class AppController: NSObject, NotchResizing {
             self?.afterEmit(ev)
         }
         model.onHover = { [weak self] entering in self?.handleHover(entering) }
+        installPill()
         window.applyFrame(frame(for: .dormant), animated: false)
         window.present()
         installTracking()
@@ -51,6 +59,42 @@ final class AppController: NSObject, NotchResizing {
     /// Content inset that clears the physical notch (notched ≈ menu bar height
     /// + breathing room) or just the surface's own chrome on plain displays.
     private var topInset: CGFloat { geometry.hasNotch ? geometry.menuBarHeight + 10 : 14 }
+
+    // MARK: - The input surface
+
+    private func installPill() {
+        pillWindow = PillWindow()
+        pillModel.emit = { ev in
+            NotchLog.log("PILL EVENT out: \(ev.json)")
+            IPC.emit(ev)
+        }
+        // The size preference travels up from the cluster; the window fits
+        // itself to it and re-centres. Sizing to content is what lets the panel
+        // stay click-transparent everywhere it isn't drawing.
+        let root = AnyView(
+            PillHost(model: pillModel)
+                .onPreferenceChange(PillSizeKey.self) { [weak self] size in
+                    guard let self, size.width > 0 else { return }
+                    self.pillWindow.fit(size, geometry: self.geometry)
+                }
+        )
+        let host = NSHostingView(rootView: root)
+        host.sizingOptions = []
+        pillHost = host
+        pillWindow.contentView = host
+        reconcilePillVisibility()
+    }
+
+    /// The pill exists only while a capture does. Hidden means ORDERED OUT, not
+    /// zero-alpha: an invisible always-on panel still sits in the window server
+    /// and still competes for clicks.
+    private func reconcilePillVisibility() {
+        if pillModel.visible {
+            if !pillWindow.isVisible { pillWindow.present() }
+        } else if pillWindow.isVisible {
+            pillWindow.orderOut(nil)
+        }
+    }
 
     // MARK: - Commands in
 
@@ -112,6 +156,15 @@ final class AppController: NSObject, NotchResizing {
         case let .appearance(pref):
             NotchLog.log("CMD appearance \(pref.rawValue)")
             Appearance.shared.preference = pref
+
+        case let .pill(state):
+            // Logged at phase granularity only — the level field changes every
+            // frame during a capture and would drown the log.
+            if state.phase != pillModel.state.phase {
+                NotchLog.log("CMD pill phase=\(state.phase.rawValue) kind=\(state.kind.rawValue)")
+            }
+            pillModel.state = state
+            reconcilePillVisibility()
 
         case .collapse:
             model.focusedId = nil
@@ -413,6 +466,13 @@ final class AppController: NSObject, NotchResizing {
         hostView?.rootView = NotchView(model: model, topInset: topInset)
         let f = frame(for: model.state)
         window.applyFrame(f, animated: false)
+        // The pill is bottom-anchored to the PRIMARY display's visible frame, so
+        // it has to move too — plugging in a monitor, or moving the menu bar to
+        // one, relocates both surfaces together. Its size preference does not
+        // re-fire on a screen change, so refit explicitly from the current frame.
+        if pillWindow != nil, pillModel.visible {
+            pillWindow.fit(pillWindow.frame.size, geometry: geometry)
+        }
         NotchLog.log("geometry recomputed (\(reason)): screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) → window=\(NotchLog.rect(f))")
     }
 }
