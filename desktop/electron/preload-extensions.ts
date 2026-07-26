@@ -46,6 +46,7 @@ export const paywallPreloadExtensions = {
     ok: boolean
     checkoutUrl?: string
     alreadySubscribed?: boolean
+    subscriptionStatus?: string
     code?: string
     message?: string
   }> => ipcRenderer.invoke('paywall:create-subscription', plan, interval),
@@ -209,7 +210,13 @@ export const paywallPreloadExtensions = {
   // do without actually consuming an STT slot.
   paywallEnginePeekStatus: (): Promise<{
     provider: 'managed' | 'local' | null
-    reason: 'not_signed_in' | 'no_subscription' | 'cloud_unreachable' | 'chose_on_device' | null
+    reason:
+      | 'not_signed_in'
+      | 'no_subscription'
+      | 'payment_failed'
+      | 'cloud_unreachable'
+      | 'chose_on_device'
+      | null
   }> => ipcRenderer.invoke('engine:peek-status'),
 
   // Runtime fallback signal — fires when a managed call fell through

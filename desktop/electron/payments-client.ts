@@ -25,6 +25,9 @@ interface Envelope<T> {
   error?: string
   code?: string
   message?: string
+  // Dodo subscription status accompanying a 409 already_subscribed. Named to
+  // avoid `status`, which callPayments overwrites with the HTTP status below.
+  subscription_status?: string
 }
 
 async function callPayments<T>(
@@ -61,6 +64,8 @@ export interface CreateSubscriptionResult {
   ok: boolean
   checkoutUrl?: string
   alreadySubscribed?: boolean
+  /** Dodo status of the subscription they already hold, when known. */
+  subscriptionStatus?: string
   code?: string
   message?: string
 }
@@ -80,11 +85,17 @@ export async function createSubscriptionCheckout(
     token,
   )
   // Worker returns 409 { error: 'already_subscribed' } when the caller already
-  // has an active subscription — creating a second checkout would double-charge.
-  // Surface as a friendly flag so the UI can refresh + note rather than open
-  // a duplicate checkout.
+  // holds a LIVE subscription — creating a second checkout would double-charge.
+  // subscription_status says which kind, so an on_hold subscriber gets pointed
+  // at their card rather than told they're fine.
   if (env.status === 409 || env.error === 'already_subscribed') {
-    return { ok: false, alreadySubscribed: true, code: env.code, message: env.message ?? env.error }
+    return {
+      ok: false,
+      alreadySubscribed: true,
+      subscriptionStatus: env.subscription_status,
+      code: env.code,
+      message: env.message ?? env.error,
+    }
   }
   return {
     ok: !!env.ok,

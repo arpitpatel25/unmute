@@ -206,6 +206,13 @@ export async function fetchMe(token: string): Promise<{
 export type SubscriptionStatus = {
   active: boolean
   plan: 'dictation' | 'unmute' | null
+  /**
+   * Raw Dodo status: pending | active | on_hold | cancelled | failed | expired
+   * (or '' when the user has never subscribed). Carried separately from
+   * `active` so the UI can tell "you never subscribed" apart from "your card
+   * was declined" — those deserve very different words.
+   */
+  status: string | null
 }
 
 export async function fetchSubscription(token: string): Promise<SubscriptionStatus | null> {
@@ -228,7 +235,7 @@ export async function fetchSubscription(token: string): Promise<SubscriptionStat
     )
     const rawPlan = body.subscription_plan ?? sub?.plan ?? null
     const plan = rawPlan === 'unmute' || rawPlan === 'dictation' ? rawPlan : null
-    return { active, plan }
+    return { active, plan, status: sub?.status ?? null }
   } catch {
     return null
   }
