@@ -15,8 +15,94 @@
 import { verifyJWT, extractBearer } from '../../shared/auth'
 import type { PaymentsEnv } from '../../shared/types'
 import { rpc } from '../../shared/supabase'
-import { getPayment, createSubscriptionCheckout, createPortalSession, changePlan } from '../../shared/dodo'
+import {
+  getPayment,
+  createSubscriptionCheckout,
+  createPortalSession,
+  changePlan,
+  cancelSubscription,
+} from '../../shared/dodo'
 import { verifyDodoWebhook } from '../../shared/dodoWebhook'
+
+// ─── Subscription liveness ──────────────────────────────────────
+//
+// Dodo's status enum, confirmed against the live API (a PATCH with an invalid
+// status echoes the variants back):
+//
+//   pending | active | on_hold | cancelled | failed | expired
+//
+// A user "holds" a subscription unless it is in one of the terminal states.
+// This distinction matters more than it looks: every guard in this worker used
+// to ask `status = 'active'`, which meant a subscription that had merely
+// stumbled — on_hold after a failed renewal — was invisible. The user then
+// looked like a brand-new customer to the double-subscribe guard AND like a
+// non-subscriber to the upgrade path, so their only route forward was to buy a
+// second subscription. Ask about liveness, not activity.
+const DEAD_STATUSES = ['cancelled', 'expired', 'failed'] as const
+const LIVE_STATUS_FILTER = `status=not.in.(${DEAD_STATUSES.join(',')})`
+
+// How long a created checkout url is replayed to repeat requests. Long enough
+// to cover someone tabbing away to fetch their card, short enough that a genuine
+// later purchase isn't served a stale session.
+const CHECKOUT_SESSION_TTL_SECONDS = 1800
+
+interface LiveSubscription {
+  dodo_subscription_id: string
+  plan: string
+  interval: string
+  status: string
+  current_period_end: string | null
+}
+
+/**
+ * Every subscription the user still holds, best-first (active before on_hold,
+ * richer plan first, longest runway first). Throws on a read failure so callers
+ * can decide their own fail-open / fail-closed policy — they differ.
+ */
+async function readLiveSubscriptions(
+  env: PaymentsEnv,
+  userId: string,
+): Promise<LiveSubscription[]> {
+  const url =
+    `${env.SUPABASE_URL}/rest/v1/subscriptions` +
+    `?user_id=eq.${userId}&${LIVE_STATUS_FILTER}` +
+    `&select=dodo_subscription_id,plan,interval,status,current_period_end` +
+    `&order=status.asc,current_period_end.desc&limit=20`
+  const res = await fetch(url, {
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      Accept: 'application/json',
+    },
+  })
+  if (!res.ok) throw new Error(`SUPABASE_READ_FAILED:${res.status}`)
+  const rows = (await res.json()) as LiveSubscription[]
+  // PostgREST can't express our precedence directly, so rank in code: active
+  // outranks everything, then the richer plan, then the longest runway.
+  return rows.sort((a, b) => {
+    if ((a.status === 'active') !== (b.status === 'active')) return a.status === 'active' ? -1 : 1
+    if ((a.plan === 'unmute') !== (b.plan === 'unmute')) return a.plan === 'unmute' ? -1 : 1
+    return Date.parse(b.current_period_end ?? '0') - Date.parse(a.current_period_end ?? '0')
+  })
+}
+
+/**
+ * Is this deployment pointed at Dodo's test host?
+ *
+ * The test worker shares a Supabase project and a KV namespace with production
+ * (identical namespace id in wrangler.toml). On 2026-07-24 a test-mode
+ * subscription going on_hold overwrote a live customer's profile and dropped
+ * them to the offline model. Test mode must therefore never write entitlement
+ * state unless someone deliberately opts in via ALLOW_TEST_MODE_WRITES — which
+ * is only safe once the test deployment points at its own Supabase project.
+ */
+function isTestMode(env: PaymentsEnv): boolean {
+  return /(^|\/\/)test\./.test(env.DODO_API_BASE ?? '')
+}
+
+function testModeWritesAllowed(env: PaymentsEnv): boolean {
+  return !isTestMode(env) || env.ALLOW_TEST_MODE_WRITES === 'true'
+}
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -254,35 +340,50 @@ async function handleSubscriptionCheckout(
     )
   }
 
-  // Double-subscribe guard: if the caller already has an active subscription,
-  // creating a second Dodo checkout would charge them twice. Read their active
-  // sub from Supabase via PostgREST (same query handleChangePlan uses) and
-  // refuse with 409 { already_subscribed } so the UI can surface it gently.
+  // Idempotency. A pre-flight read can never be a lock — it races, and it
+  // fails — so correctness must not depend on the guard below. Instead we
+  // remember the checkout session we just created and hand the SAME url back
+  // for repeat requests. A double-click, a retry after a flaky response, or a
+  // user who closed the tab and clicked again all collapse onto one Dodo
+  // session, which is also the better experience: they land back on the
+  // payment page they were already on rather than on an error.
+  //
+  // Keyed per mode so the test deployment can't serve a live url (the two share
+  // one KV namespace).
+  const checkoutKey = `checkout:${isTestMode(env) ? 'test' : 'live'}:${userId}:${plan}:${interval}`
   try {
-    const subUrl =
-      `${env.SUPABASE_URL}/rest/v1/subscriptions` +
-      `?user_id=eq.${userId}&status=eq.active` +
-      `&select=dodo_subscription_id&order=updated_at.desc&limit=1`
-    const res = await fetch(subUrl, {
-      headers: {
-        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-        Accept: 'application/json',
-      },
-    })
-    if (res.ok) {
-      const rows = (await res.json()) as Array<{ dodo_subscription_id: string | null }>
-      if (rows[0]?.dodo_subscription_id) {
-        return json({ ok: false, error: 'already_subscribed' }, 409)
-      }
-    } else {
-      // A read failure here shouldn't hard-block checkout — log and proceed.
-      // The worst case is a rare double-sub, which the portal can refund; a
-      // false 500 here would block a legitimate first subscription.
-      console.warn('[checkout:sub] active-sub guard read failed:', res.status)
+    const cached = await env.USER_BALANCE.get(checkoutKey)
+    if (cached) return json({ ok: true, checkoutUrl: cached })
+  } catch (e) {
+    // A KV read failure just means we create a fresh session — no worse than
+    // the previous behaviour.
+    console.warn('[checkout:sub] session cache read failed:', (e as Error).message)
+  }
+
+  // Double-subscribe guard. Advisory, not authoritative: it exists so a
+  // subscriber gets a clear "you already have this" instead of a payment page.
+  // It asks about LIVE subscriptions, not active ones — an on_hold customer
+  // already holds a subscription, and treating them as a new one is exactly
+  // how a user ends up paying twice.
+  try {
+    const live = await readLiveSubscriptions(env, userId)
+    if (live.length > 0) {
+      // Named subscription_status, NOT status: the desktop client's envelope
+      // helper spreads the HTTP status over the body as `status`, so a field by
+      // that name would be silently overwritten before any UI saw it.
+      // It lets the client distinguish "you're already subscribed" from "your
+      // payment failed — fix your card" instead of one blunt message.
+      return json(
+        { ok: false, error: 'already_subscribed', subscription_status: live[0].status },
+        409,
+      )
     }
   } catch (e) {
-    console.warn('[checkout:sub] active-sub guard threw:', (e as Error).message)
+    // Deliberately fail OPEN. Blocking checkout on our own read failure would
+    // turn a Supabase blip into "this app won't take my money", which is worse
+    // for the user and for us than the duplicate it prevents — and duplicates
+    // are now caught and cancelled by reconcileDuplicates() on the webhook.
+    console.warn('[checkout:sub] live-sub guard read failed (proceeding):', (e as Error).message)
   }
 
   try {
@@ -294,6 +395,15 @@ async function handleSubscriptionCheckout(
       email: userEmail,
       returnUrl: `${env.PUBLIC_API_BASE}/checkout/return`,
     })
+    try {
+      await env.USER_BALANCE.put(checkoutKey, session.checkoutUrl, {
+        expirationTtl: CHECKOUT_SESSION_TTL_SECONDS,
+      })
+    } catch (e) {
+      // Losing the cache only costs us idempotency on a retry; the webhook
+      // reconciler still catches any duplicate that results.
+      console.warn('[checkout:sub] session cache write failed:', (e as Error).message)
+    }
     return json({ ok: true, checkoutUrl: session.checkoutUrl })
   } catch (e) {
     const msg = (e as Error).message
@@ -364,33 +474,17 @@ async function handlePortal(env: PaymentsEnv, userId: string): Promise<Response>
 //   anything else          → { ok: false, error: 'upgrade_failed', message }
 
 async function handleChangePlan(env: PaymentsEnv, userId: string): Promise<Response> {
-  // Read the caller's CURRENT active subscription from Supabase via PostgREST
-  // (mirrors how /portal reads profiles).
-  const subUrl =
-    `${env.SUPABASE_URL}/rest/v1/subscriptions` +
-    `?user_id=eq.${userId}&status=eq.active` +
-    `&select=dodo_subscription_id,plan,interval&order=updated_at.desc&limit=1`
-  let sub: { dodo_subscription_id: string; plan: string; interval: string } | null = null
+  // Read the caller's current subscription. LIVE, not active: an on_hold
+  // subscriber must be able to upgrade in place. When this asked for 'active'
+  // it returned no_active_subscription to anyone mid-dunning, and the only
+  // path left open to them was buying a second subscription — the app pushing
+  // a user into a double charge at the exact moment their billing was fragile.
+  let sub: LiveSubscription | null = null
   try {
-    const res = await fetch(subUrl, {
-      headers: {
-        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-        Accept: 'application/json',
-      },
-    })
-    if (!res.ok) {
-      console.error('[change-plan] subscription read failed:', res.status)
-      return json({ ok: false, code: 'INTERNAL_ERROR', message: 'subscription lookup failed' }, 500)
-    }
-    const rows = (await res.json()) as Array<{
-      dodo_subscription_id: string
-      plan: string
-      interval: string
-    }>
-    sub = rows[0] ?? null
+    const live = await readLiveSubscriptions(env, userId)
+    sub = live[0] ?? null
   } catch (e) {
-    console.error('[change-plan] subscription read threw:', (e as Error).message)
+    console.error('[change-plan] subscription read failed:', (e as Error).message)
     return json({ ok: false, code: 'INTERNAL_ERROR', message: 'subscription lookup failed' }, 500)
   }
 
@@ -498,6 +592,19 @@ async function handleDodoWebhook(req: Request, env: PaymentsEnv): Promise<Respon
     return ack()
   }
 
+  // Mode gate. A test-mode deployment shares this Supabase project and this KV
+  // namespace with production, so a fake subscription's lifecycle would write
+  // real people's entitlement — which is precisely how a live subscriber was
+  // dropped to the offline model on 2026-07-24 by a test 'dictation' plan going
+  // on_hold. ACK (never 5xx) so Dodo stops retrying an event we will never process.
+  if (!testModeWritesAllowed(env)) {
+    console.warn(
+      '[webhook:dodo] test-mode write refused (set ALLOW_TEST_MODE_WRITES=true only when this deployment has its OWN Supabase project); type:',
+      eventType,
+    )
+    return ack()
+  }
+
   try {
     if (eventType.startsWith('subscription.')) {
       // The only crediting/entitlement path now: upsert the subscription and
@@ -563,6 +670,69 @@ async function onSubscriptionEvent(env: PaymentsEnv, eventId: string, evt: DodoE
     p_period_end: d.next_billing_date ?? null,
     p_product_id: productId,
   })
+
+  // A subscription only becomes billable at 'active', so that is the moment to
+  // check whether the user now holds more than one. Best-effort: a failure here
+  // must not 500 the webhook, because Dodo would retry an event we have already
+  // persisted.
+  if (d.status === 'active') {
+    try {
+      await reconcileDuplicates(env, userId, subscriptionId)
+    } catch (e) {
+      console.error('[webhook:dodo] duplicate reconcile failed:', (e as Error).message)
+    }
+  }
+}
+
+/**
+ * Cancel any redundant subscription so a user is never billed twice.
+ *
+ * Holding two live subscriptions is never intentional in this product: there is
+ * one plan family, and upgrades happen in place via /change-plan. So if we see
+ * more than one, one of them is a mistake — ours or a race — and the user is
+ * being charged for it.
+ *
+ * Which one survives: readLiveSubscriptions already ranks them (active first,
+ * then the richer plan, then the longest runway), so we keep the head and
+ * cancel the tail. Cancellation is immediate rather than at-period-end because
+ * the whole point is to stop a charge the user never agreed to; the log line
+ * carries what a refund needs, since Dodo does not document an automatic one.
+ */
+async function reconcileDuplicates(
+  env: PaymentsEnv,
+  userId: string,
+  triggeringSubscriptionId: string,
+): Promise<void> {
+  const live = await readLiveSubscriptions(env, userId)
+  if (live.length < 2) return
+
+  const [keep, ...redundant] = live
+  console.error(
+    '[duplicate-subscription] user:', userId,
+    'holds', live.length, 'live subscriptions; keeping', keep.dodo_subscription_id,
+    `(${keep.plan}/${keep.status})`,
+    'cancelling', redundant.map((r) => `${r.dodo_subscription_id}(${r.plan}/${r.status})`).join(','),
+    'triggered by:', triggeringSubscriptionId,
+    '— REFUND REVIEW REQUIRED',
+  )
+
+  for (const dup of redundant) {
+    try {
+      await cancelSubscription({
+        apiBase: env.DODO_API_BASE,
+        apiKey: env.DODO_API_KEY,
+        subscriptionId: dup.dodo_subscription_id,
+        immediate: true,
+        comment: `Duplicate of ${keep.dodo_subscription_id}; cancelled automatically to prevent double billing.`,
+      })
+    } catch (e) {
+      // Keep going: one un-cancellable duplicate shouldn't strand the others.
+      console.error(
+        '[duplicate-subscription] cancel failed for', dup.dodo_subscription_id, ':', (e as Error).message,
+      )
+    }
+  }
+  // Dodo fires subscription.cancelled for each, which re-derives the profile.
 }
 
 // ─── GET /v1/payment/:id ────────────────────────────────────────

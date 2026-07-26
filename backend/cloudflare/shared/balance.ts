@@ -162,9 +162,24 @@ export type Entitlement = {
   overFairUse: boolean
 }
 
-/** entitled = active subscription that hasn't lapsed. */
+/**
+ * entitled = a subscription that still covers right now.
+ *
+ * 'active' is the ordinary case. 'on_hold' also counts, but ONLY while the
+ * paid-for period still covers now(): Dodo sets on_hold when a renewal charge
+ * fails, keeps retrying for up to 30 days, does not advance the billing date on
+ * failure, and — per their docs — never auto-cancels. So an unbounded on_hold
+ * grant would be a permanent free tier. Bounding it on periodEnd gives the
+ * customer exactly what they paid for and nothing more, which is why on_hold
+ * requires a non-null periodEnd while 'active' may be open-ended.
+ *
+ * Mirrors public.entitlement() in migration 014 — keep the two in step.
+ */
 export function isEntitled(ent: Entitlement): boolean {
-  return ent.status === 'active' && (ent.periodEnd == null || ent.periodEnd > Date.now())
+  const now = Date.now()
+  if (ent.status === 'active') return ent.periodEnd == null || ent.periodEnd > now
+  if (ent.status === 'on_hold') return ent.periodEnd != null && ent.periodEnd > now
+  return false
 }
 
 /**
