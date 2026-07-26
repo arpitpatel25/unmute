@@ -5,7 +5,8 @@
 // telling the user *why* (not signed in / no balance / cloud unreachable /
 // chose-on-device). Dismissible per app session; reappears on next launch.
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { panelRows, hudHeight, contentOffset, HUD_BASE } from './hudSizing'
 import Widget from './Widget'
 import { useAudioRecorder } from './useAudioRecorder'
 import {
@@ -129,7 +130,6 @@ function RemoteBadge({ picker, onPickAgent }: {
   // The saved doer-model id — ANY catalog id, not limited to haiku/sonnet/opus.
   const [model, setModel] = useState<string>('sonnet')
   const [expanded, setExpanded] = useState(false)
-  const [agent, setAgent] = useState<string>('claude')
   // Agent side of the joined control. `picker` is the same state the pill used
   // to own — only the rendering moved, so this reuses the SAME tested helpers
   // rather than re-deriving the rules. They exist because a hand-written
@@ -149,27 +149,28 @@ function RemoteBadge({ picker, onPickAgent }: {
     options: Partial<Record<'Model' | 'Effort' | 'Speed', string[]>>
   } | null>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const isCodex = agent === 'codex-desktop'
 
-  // Which agent is selected decides WHICH catalog this chip shows. Cheap poll —
-  // this is a settings read, not a menu walk.
-  useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      const opts = await remoteCodexApi().remoteAgentOptions?.().catch(() => null)
-      if (!cancelled) setAgent(opts?.current ?? 'claude')
-    }
-    void load()
-    const t = setInterval(() => { void load() }, 1500)
-    return () => { cancelled = true; clearInterval(t) }
-  }, [])
+  // ONE SOURCE OF TRUTH for which agent is selected.
+  //
+  // This used to keep its own copy, refreshed by a 1500ms poll, while the chip's
+  // LABEL came from `picker` — which WidgetApp updates optimistically the
+  // instant you tap. Two clocks for one fact: the chip flipped immediately and
+  // the list below it kept showing the other agent's models for up to a second
+  // and a half before snapping over. `picker` is already kept fresh by
+  // WidgetApp (loaded on capture, updated on tap, refreshed after connect), so
+  // the second copy was redundant as well as wrong.
+  const isCodex = (picker?.current ?? 'claude') === 'codex-desktop'
 
   // Codex's own axes, served from cache so they are there IMMEDIATELY. Reading
   // them live walks Codex's menus (~3s) — a capture is often over before that
   // returns, which is exactly why this chip kept showing a Claude model.
   useEffect(() => {
-    if (!isCodex) { setCodex(null); return }
+    if (!isCodex) return
     let cancelled = false
+    // Deliberately NOT clearing first. Blanking on the way in meant the panel
+    // rendered its empty state — and asked for a near-collapsed window — for as
+    // long as the fetch took, so switching to Codex flashed "connect Codex" and
+    // the window snapped down and back up.
     void remoteCodexApi().remoteCodexReasoning?.().then((r) => {
       if (!cancelled && r) setCodex(r)
     }).catch(() => {})
@@ -194,12 +195,23 @@ function RemoteBadge({ picker, onPickAgent }: {
   }, [isCodex])
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
 
-  /** The rows the dropdown shows: one flat list for Claude, three axes for Codex. */
-  const axes: Array<{ axis: 'Model' | 'Effort' | 'Speed'; values: string[]; current?: string }> = isCodex
-    ? (['Model', 'Effort', 'Speed'] as const)
-        .map((axis) => ({ axis, values: codex?.options[axis] ?? [], current: codex?.current[axis] }))
-        .filter((a) => a.values.length)
-    : []
+  /**
+   * The rows the dropdown shows: one flat list for Claude, three axes for Codex.
+   *
+   * MEMOISED because it is a dependency of the resize effect below. Rebuilt
+   * every render it had a fresh identity every render, so that effect — and its
+   * CLEANUP, which collapses the window back to 72px — ran on every single
+   * render. The window was shrinking and re-expanding continuously while the
+   * list was open. That was the bulk of the stutter.
+   */
+  const axes = useMemo(
+    () => (isCodex
+      ? (['Model', 'Effort', 'Speed'] as const)
+          .map((axis) => ({ axis, values: codex?.options[axis] ?? [], current: codex?.current[axis] }))
+          .filter((a) => a.values.length)
+      : []),
+    [isCodex, codex],
+  )
 
   // The selector opens DOWNWARD (a dropdown below the pill row) so it scales to
   // ANY number of catalog models — a horizontal reveal can't. Same seam the
@@ -207,10 +219,7 @@ function RemoteBadge({ picker, onPickAgent }: {
   // isn't clipped, restore the 72px default on close/unmount.
   useEffect(() => {
     const api = remoteModelApi()
-    // Three axes with headers is a much taller list than one flat catalog.
-    const rows = isCodex
-      ? axes.reduce((n, a) => n + a.values.length, 0) + axes.length * 0.8
-      : catalog.length
+    const rows = panelRows(isCodex, axes, catalog.length)
     // UPWARD, WITH THE PILL PINNED.
     //
     // Growing the window upward alone is not enough — that is what shipped in
@@ -219,15 +228,32 @@ function RemoteBadge({ picker, onPickAgent }: {
     // ABOVE the old top edge, so the content must be pushed down by exactly
     // that much to stay where it was. `--hud-extra` carries it to the root,
     // which divides by the 0.75 scale the whole pill family is drawn at.
-    const BASE = 72
-    const height = expanded ? Math.min(440, 64 + rows * 36 + 12) : BASE
-    void api.paywallSetHUDHeight?.(height, { upward: true })
-    document.documentElement.style.setProperty('--hud-extra', `${(height - BASE) / 0.75}px`)
+    const BASE = HUD_BASE
+    const height = hudHeight(expanded, rows)
+    const pad = (h: number) =>
+      document.documentElement.style.setProperty('--hud-extra', `${contentOffset(h)}px`)
+
+    // ORDER MATTERS, because the resize is an IPC round-trip while the padding
+    // lands on the next paint. Whichever is applied first must be the one that
+    // cannot clip:
+    //   growing  — resize first. Padding first would push content down inside a
+    //              window that is still short, cutting it off at the bottom.
+    //   shrinking — pad first. Content moves up while the window is still tall;
+    //              shrinking first would strand it below the new top edge.
+    let cancelled = false
+    void (async () => {
+      const grow = height > BASE
+      if (!grow) pad(height)
+      await api.paywallSetHUDHeight?.(height, { upward: true })
+      if (!cancelled && grow) pad(height)
+    })()
+
     return () => {
+      cancelled = true
+      pad(BASE)
       void remoteModelApi().paywallSetHUDHeight?.(BASE, { upward: true })
-      document.documentElement.style.setProperty('--hud-extra', '0px')
     }
-  }, [expanded, catalog.length, isCodex, axes])
+  }, [expanded, catalog.length, isCodex, axes])   // `axes` is memoised above
 
   const open = () => {
     if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null }
