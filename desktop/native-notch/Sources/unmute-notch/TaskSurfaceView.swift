@@ -45,12 +45,15 @@ struct TaskSurfaceView: View {
                 // CLI task. Showing an empty terminal frame here is what made the
                 // panel read as a giant void.
                 if t.backend == "codex-desktop" {
-                    ScrollView {
-                        ConversationPanel(turns: t.conversation ?? [], id: t.id)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.top, 10)
+                    // NOT wrapped in a ScrollView — the panel owns one. Nesting
+                    // them gave the inner scroller unbounded height, so it had
+                    // no overflow to scroll and the outer one did the scrolling
+                    // instead. scrollTo then addressed a view that could not
+                    // move, and the transcript opened at the top however many
+                    // times the anchoring was "fixed".
+                    ConversationPanel(turns: t.conversation ?? [], id: t.id)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 10)
                     // Always available: a Codex chat is continuable until you
                     // delete it, so there is no state in which you have nothing
                     // to say to it.

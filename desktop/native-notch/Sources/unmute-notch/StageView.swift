@@ -51,11 +51,11 @@ struct StageView: View {
                     // terminal nor DeadPanel belongs here: the first does not
                     // exist for this backend, and the second offered to
                     // "resume" a chat that had never stopped.
-                    ScrollView {
-                        ConversationPanel(turns: t.conversation ?? [], id: t.id)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.top, 10)
+                    // See TaskSurfaceView: the panel scrolls itself, and a second
+                    // ScrollView around it disables that.
+                    ConversationPanel(turns: t.conversation ?? [], id: t.id)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 10)
                     CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
                                   modelLabel: t.modelLabel, sending: t.sending ?? false).padding(.top, 9)
                 } else if t.alive {

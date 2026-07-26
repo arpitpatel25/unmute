@@ -396,6 +396,9 @@ export class NotchController {
   }
 
   private reconcile(): void {
+    // Mirror the surface's own teardown rule: it discards the staged task on
+    // leaving cockpit, so our record of having sent it must go at the same time.
+    if (this.engaged !== 'cockpit') this.lastDetailJson.delete('stageDetail')
     this.rebuildQueue()
     const front = this.front()
     const attention = this.queue.length
@@ -776,6 +779,12 @@ export class NotchController {
     // Dedupe only against what this surface is CURRENTLY showing. Keying by
     // task id instead would suppress re-showing a task the crank had rotated
     // away from and back to — the surface would keep displaying its neighbour.
+    // The cache is only valid while the SURFACE still holds that payload. It
+    // clears its own copy on teardown (AppController drops stageTask whenever
+    // the state leaves cockpit), so forgetting to invalidate here left the
+    // controller certain it had already sent something the surface no longer
+    // had — and it drew a spinner until an unrelated change happened to alter
+    // the payload. Measured at 25s in the field.
     const shown = this.lastDetailJson.get(kind)
     if (shown && shown.id === task.id && shown.json === json) return
     this.lastDetailJson.set(kind, { id: task.id, json })
@@ -798,6 +807,8 @@ export class NotchController {
   collapse(): void {
     this.engaged = 'none'
     this.setFocus(null)
+    // `collapse` clears BOTH task and stageTask on the surface.
+    this.lastDetailJson.clear()
     this.client.send({ type: 'collapse' })
   }
 

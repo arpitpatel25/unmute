@@ -789,3 +789,54 @@ test('the UNGROUPED bucket ranks by recency like any other group', () => {
   assert.equal(groups[0].name, '', 'the ungrouped bucket holds the newest task, so it leads')
   assert.equal(groups[1].name, 'Unmute')
 })
+
+test('reopening a task RE-SENDS its detail, even when nothing changed', () => {
+  // THE SPINNER. The surface discards its staged task on leaving cockpit
+  // (AppController drops stageTask whenever state != cockpit), but the dedupe
+  // cache still said "already sent" — so on reopen nothing arrived and the
+  // panel drew a spinner until some unrelated change altered the payload.
+  // Measured at 25 SECONDS in the field log.
+  const h = setup()
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    conversation: [{ role: 'assistant', text: 'done' }],
+  }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const first = h.client.ofType('stageDetail').length
+  assert.ok(first > 0)
+
+  // Leave, come back — with the task completely unchanged.
+  h.client.fire({ type: 'collapsed' })
+  h.flush()
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  assert.ok(h.client.ofType('stageDetail').length > first, 'the surface needs it again')
+})
+
+test('a programmatic collapse also invalidates what the surface holds', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const before = h.client.ofType('stageDetail').length
+  h.controller.collapse()            // e.g. handing off to Codex
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  assert.ok(h.client.ofType('stageDetail').length > before)
+})
+
+test('the dedupe still holds while the surface keeps showing the same task', () => {
+  // The optimisation itself is right — 32KB per poll for a thread that has not
+  // moved is real. It just must not outlive the receiver's copy.
+  const h = setup()
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    conversation: [{ role: 'assistant', text: 'done' }],
+  }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const n = h.client.ofType('stageDetail').length
+  h.flush(); h.flush()
+  assert.equal(h.client.ofType('stageDetail').length, n)
+})
