@@ -135,7 +135,11 @@ export function Billing() {
     // the card flips to the ACTIVE view) and note why.
     if (result?.alreadySubscribed) {
       setPhase({ kind: 'idle' })
-      setPortalNote('You already have an active subscription.')
+      setPortalNote(
+        result.subscriptionStatus === 'on_hold'
+          ? 'Your subscription is on hold — a renewal payment failed. Use Manage subscription to update your card; you will not be charged twice.'
+          : 'You already have an active subscription.',
+      )
       await refresh()
       return
     }

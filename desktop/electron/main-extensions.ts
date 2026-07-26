@@ -18,7 +18,8 @@ import { getWidgetWindow } from '../windowManager'
 // (managed is active, or no provider is available at all).
 export type OnDeviceReason =
   | 'not_signed_in'      // anonymous → local is the only option
-  | 'no_subscription'    // signed in but no active subscription → managed unavailable
+  | 'no_subscription'    // signed in, never subscribed → managed unavailable
+  | 'payment_failed'     // subscriber whose renewal failed AND whose paid period has lapsed
   | 'cloud_unreachable'  // managed was first choice, fell back due to error
   | 'chose_on_device'    // user set Engine = Local explicitly
 
@@ -87,7 +88,13 @@ function localReason(state: ProviderState, mode: EngineMode): OnDeviceReason {
   // In auto mode the priority chain is managed → local.
   // Local is picked only when nothing higher qualifies.
   if (!state.signedIn) return 'not_signed_in'
-  if (state.signedIn && !state.subActive) return 'no_subscription'
+  if (state.signedIn && !state.subActive) {
+    // A paying customer whose card was declined is not a stranger. The backend
+    // keeps them entitled for the whole period they paid for, so reaching here
+    // with on_hold means that period has also lapsed — they need to fix their
+    // card, not be sold the product they already bought.
+    return state.subStatus === 'on_hold' ? 'payment_failed' : 'no_subscription'
+  }
   return 'chose_on_device' // catch-all for unusual configs
 }
 
@@ -130,19 +137,19 @@ export function initPaywall(appHandle: App, oss: OSSAdapter): ProviderRouter {
   routerState = async (): Promise<ProviderState> => {
     const user = await oss.getCurrentUser()
     const token = await oss.getAccessToken()
-    const subActive = await (async () => {
+    const sub = await (async () => {
       try {
-        if (!token) return false
+        if (!token) return null
         const { fetchSubscription } = await import('./managed-client')
-        const sub = await fetchSubscription(token)
-        return !!sub?.active
+        return await fetchSubscription(token)
       } catch {
-        return false
+        return null
       }
     })()
     return {
       signedIn: !!user,
-      subActive,
+      subActive: !!sub?.active,
+      subStatus: sub?.status ?? null,
       localReady: true, // OSS engine surfaces this — wire after submodule integration
     }
   }

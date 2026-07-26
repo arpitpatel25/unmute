@@ -24,6 +24,13 @@ export interface ProviderState {
   signedIn: boolean
   subActive: boolean
   localReady: boolean
+  /**
+   * Raw subscription status behind `subActive`, when known. Routing ignores it
+   * — only `subActive` decides where a request goes — but the awareness card
+   * needs it to say "your payment failed" instead of "subscribe" to someone
+   * who is already a customer.
+   */
+  subStatus?: string | null
 }
 
 export interface STTOptions {

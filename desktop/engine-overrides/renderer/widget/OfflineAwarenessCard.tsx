@@ -9,12 +9,18 @@ import { useEffect } from 'react'
 export type OfflineReason =
   | 'not_signed_in'
   | 'no_subscription'
+  | 'payment_failed'
   | 'cloud_unreachable'
   | 'chose_on_device'
 
 const REASON_TEXT: Record<OfflineReason, string> = {
   not_signed_in: 'Sign in for faster cloud transcription',
   no_subscription: 'Subscribe for cloud transcription',
+  // Deliberately not "Subscribe": this person already did. They kept cloud
+  // access for the entire period they paid for, and are seeing this only now
+  // that it has lapsed with the renewal still unpaid. Say what went wrong and
+  // give them the one control that fixes it.
+  payment_failed: 'Payment failed — update your card to restore cloud',
   cloud_unreachable: 'Cloud unreachable — using on-device model',
   chose_on_device: 'On-device mode is selected in Settings',
 }
@@ -25,6 +31,22 @@ const COMPACT_HEIGHT = 72
 interface Props {
   reason: OfflineReason
   onDismiss: () => void
+}
+
+/**
+ * Open the Dodo customer portal so a lapsed subscriber can re-enter their card.
+ * Silent on failure — this is a recovery affordance on a transient HUD, and an
+ * error toast here would be more alarming than the missing button.
+ */
+async function openBillingPortal(): Promise<void> {
+  try {
+    const result = await window.electronAPI.paywallOpenPortal?.()
+    if (result?.ok && result.portalUrl) {
+      await window.electronAPI.paywallOpenExternal(result.portalUrl)
+    }
+  } catch {
+    /* no-op */
+  }
 }
 
 export default function OfflineAwarenessCard({ reason, onDismiss }: Props) {
@@ -78,6 +100,27 @@ export default function OfflineAwarenessCard({ reason, onDismiss }: Props) {
           {REASON_TEXT[reason]}
         </div>
       </div>
+      {reason === 'payment_failed' && (
+        <button
+          onClick={openBillingPortal}
+          style={{
+            flexShrink: 0,
+            height: 24,
+            padding: '0 10px',
+            borderRadius: 7,
+            border: '1px solid rgba(0,0,0,0.10)',
+            background: '#1a1612',
+            color: '#FAF6F1',
+            fontSize: 11,
+            fontWeight: 600,
+            fontFamily: 'inherit',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Update card
+        </button>
+      )}
       <button
         onClick={onDismiss}
         aria-label="Dismiss"
