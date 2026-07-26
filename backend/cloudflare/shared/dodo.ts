@@ -185,6 +185,57 @@ export async function changePlan(
   return { ok: true }
 }
 
+// ─── Cancel a subscription ──────────────────────────────────────
+//
+// Used by the duplicate-subscription reconciler: if a user ends up billed on
+// two live subscriptions at once, we cancel the redundant one rather than
+// leaving them double-charged.
+//
+// Endpoint shape verified against the live API (2026-07-26): a PATCH with an
+// invalid status returns
+//   "status: unknown variant `__probe__`, expected one of `pending`, `active`,
+//    `on_hold`, `cancelled`, `failed`, `expired`"
+// so `status: 'cancelled'` cancels immediately. `cancel_at_next_billing_date`
+// is the softer alternative (stops renewing, keeps the paid period) and is
+// what we use when the duplicate has already been consumed.
+
+export interface CancelSubscriptionInput {
+  apiBase: string
+  apiKey: string
+  subscriptionId: string
+  /**
+   * true  → cancel now (the redundant-charge case; pair with a refund).
+   * false → stop renewing but honour the period already paid for.
+   */
+  immediate?: boolean
+  reason?: string
+  comment?: string
+}
+
+export async function cancelSubscription(
+  { apiBase, apiKey, subscriptionId, immediate = true, reason = 'cancelled_by_merchant', comment }: CancelSubscriptionInput,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ok: true }> {
+  const reqBody: Record<string, unknown> = immediate
+    ? { status: 'cancelled', cancel_reason: reason }
+    : { cancel_at_next_billing_date: true, cancel_reason: reason }
+  if (comment) reqBody.cancellation_comment = comment
+
+  const res = await fetchImpl(`${apiBase}/subscriptions/${encodeURIComponent(subscriptionId)}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(reqBody),
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '<no body>')
+    throw new Error(`DODO_API_ERROR:${res.status}:${detail.slice(0, 200)}`)
+  }
+  return { ok: true }
+}
+
 /** Minimal shape of a Dodo payment — we only read what we need. */
 export interface DodoPayment {
   id: string

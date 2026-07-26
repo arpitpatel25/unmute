@@ -35,6 +35,13 @@ export interface PaymentsEnv {
   //   e.g. https://api.unmute.app  (then /checkout/return is appended)
   PUBLIC_API_BASE: string
 
+  // Escape hatch for the test-mode deployment. When DODO_API_BASE points at
+  // test.dodopayments.com this worker REFUSES to write entitlement state unless
+  // this is the string 'true'. Both deployments share one Supabase project and
+  // one KV namespace, and a test-mode subscription going on_hold once revoked a
+  // live customer's access. See isTestMode() in payments/src/index.ts.
+  ALLOW_TEST_MODE_WRITES?: string
+
   USER_BALANCE: KVNamespace
 }
 
