@@ -93,3 +93,31 @@ describe('backend picker labels + cycling', () => {
     assert.deepEqual(offeredAgents(CLAUDE_ONLY).map((o) => o.id), ['claude'])
   })
 })
+
+describe('the picker moved to the model control, and the rules moved with it', () => {
+  // The chip now renders inside RemoteBadge, joined to the model selector,
+  // instead of on the recording side of the pill. The VISIBILITY RULES did not
+  // change — RemoteBadge calls these same helpers rather than re-deriving them,
+  // because a hand-written guard is exactly what hid this chip for four builds.
+  it('is shown whenever there is a real choice of backend', () => {
+    assert.equal(shouldShowAgentPicker({ isRemote: true, picker: BOTH }), true)
+    assert.equal(shouldShowAgentPicker({ isRemote: true, picker: CODEX_UNARMED }), true)
+  })
+
+  it('stays hidden when only one backend exists — a pair with nothing to pair', () => {
+    // With no second agent the control must collapse to the model chip alone,
+    // not render a dead half-pill.
+    assert.equal(shouldShowAgentPicker({ isRemote: true, picker: CLAUDE_ONLY }), false)
+    assert.equal(currentAgentLabel(CLAUDE_ONLY), 'Claude Code')
+  })
+
+  it('reports connectedness, which drives the dot and the "· connect" tail', () => {
+    assert.equal(currentAgentConnected(BOTH), true)
+    assert.equal(currentAgentConnected({ ...CODEX_UNARMED, current: 'codex-desktop' }), false)
+  })
+
+  it('cycling from the joined chip is the same one-tap cycle as before', () => {
+    assert.equal(nextAgentId(BOTH), 'codex-desktop')
+    assert.equal(nextAgentId({ ...BOTH, current: 'codex-desktop' }), 'claude')
+  })
+})

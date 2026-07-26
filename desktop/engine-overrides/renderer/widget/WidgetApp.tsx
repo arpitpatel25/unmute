@@ -8,6 +8,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Widget from './Widget'
 import { useAudioRecorder } from './useAudioRecorder'
+import {
+  shouldShowAgentPicker, currentAgentLabel as agentLabelOf,
+  currentAgentConnected as agentConnectedOf, nextAgentId, type AgentPickerState,
+} from './agentPicker'
 import type { WidgetState } from '../shared/types'
 import OfflineAwarenessCard, { type OfflineReason } from './OfflineAwarenessCard'
 import {
@@ -112,12 +116,33 @@ function remoteCodexApi() {
  * Names are never hardcoded; they come from the running Codex. When Codex is
  * closed we show the last list we truly saw rather than inventing one.
  */
-function RemoteBadge() {
+interface AgentPickerLite {
+  current: string
+  options: Array<{ id: string; label: string; available: boolean; installed?: boolean }>
+}
+
+function RemoteBadge({ picker, onPickAgent }: {
+  picker?: AgentPickerLite | null
+  onPickAgent?: (id: string) => void
+}) {
   const [catalog, setCatalog] = useState<ModelChoice[]>(FALLBACK_CATALOG)
   // The saved doer-model id — ANY catalog id, not limited to haiku/sonnet/opus.
   const [model, setModel] = useState<string>('sonnet')
   const [expanded, setExpanded] = useState(false)
   const [agent, setAgent] = useState<string>('claude')
+  // Agent side of the joined control. `picker` is the same state the pill used
+  // to own — only the rendering moved, so this reuses the SAME tested helpers
+  // rather than re-deriving the rules. They exist because a hand-written
+  // visibility guard hid this chip for four builds; duplicating that logic here
+  // would be the same mistake with a new home.
+  const showAgent = shouldShowAgentPicker({ isRemote: true, picker: picker as AgentPickerState | undefined })
+  const agentLabel = showAgent ? agentLabelOf(picker as AgentPickerState | undefined) : null
+  const agentConnected = agentConnectedOf(picker as AgentPickerState | undefined)
+  const cycleAgent = () => {
+    const next = nextAgentId(picker as AgentPickerState | undefined)
+    if (onPickAgent && next) onPickAgent(next)
+  }
+
   const [codex, setCodex] = useState<{
     label: string | null
     current: Partial<Record<'Model' | 'Effort' | 'Speed', string>>
@@ -186,11 +211,22 @@ function RemoteBadge() {
     const rows = isCodex
       ? axes.reduce((n, a) => n + a.values.length, 0) + axes.length * 0.8
       : catalog.length
-    // UPWARD. The pill sits near the bottom of the screen, so a list that grows
-    // downward runs straight off the edge — which is what the model list did.
-    if (expanded) void api.paywallSetHUDHeight?.(Math.min(440, 64 + rows * 36 + 12), { upward: true })
-    else void api.paywallSetHUDHeight?.(72, { upward: true })
-    return () => { void remoteModelApi().paywallSetHUDHeight?.(72, { upward: true }) }
+    // UPWARD, WITH THE PILL PINNED.
+    //
+    // Growing the window upward alone is not enough — that is what shipped in
+    // dev.43 and it dragged the pill up the screen with the window's top edge,
+    // away from the cursor that opened it. The window's extra height appears
+    // ABOVE the old top edge, so the content must be pushed down by exactly
+    // that much to stay where it was. `--hud-extra` carries it to the root,
+    // which divides by the 0.75 scale the whole pill family is drawn at.
+    const BASE = 72
+    const height = expanded ? Math.min(440, 64 + rows * 36 + 12) : BASE
+    void api.paywallSetHUDHeight?.(height, { upward: true })
+    document.documentElement.style.setProperty('--hud-extra', `${(height - BASE) / 0.75}px`)
+    return () => {
+      void remoteModelApi().paywallSetHUDHeight?.(BASE, { upward: true })
+      document.documentElement.style.setProperty('--hud-extra', '0px')
+    }
   }, [expanded, catalog.length, isCodex, axes])
 
   const open = () => {
@@ -230,18 +266,49 @@ function RemoteBadge() {
       onMouseEnter={open}
       onMouseLeave={scheduleClose}
     >
+      {/* AGENT + MODEL AS ONE CONTROL. The agent chip used to live on the
+          recording side of the pill, beside the timer and the stop button —
+          nothing there has anything to do with where the task runs. Joined to
+          the model selector it reads as the single decision it is: the agent
+          determines which models exist, so "Codex → 5.6 Terra High" is one
+          sentence, left to right. */}
+      {agentLabel && (
+        <button
+          onClick={cycleAgent}
+          title={agentConnected ? 'Where this task runs — tap to switch' : 'Not connected — tap to connect'}
+          style={{
+            height: 44, borderRadius: '9999px 0 0 9999px', background: '#000',
+            border: '1px solid rgba(255,255,255,0.55)', borderRight: 'none',
+            display: 'flex', alignItems: 'center', gap: 7,
+            padding: '0 12px 0 15px', cursor: 'pointer',
+            fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap',
+            color: agentConnected ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.5)',
+          }}
+        >
+          <span style={{
+            width: 7, height: 7, borderRadius: '50%', flex: 'none',
+            background: agentConnected ? '#6fbf9a' : 'rgba(255,255,255,0.35)',
+          }} />
+          {agentLabel}{agentConnected ? '' : ' · connect'}
+        </button>
+      )}
+      {agentLabel && (
+        <div style={{ width: 1, height: 44, background: 'rgba(255,255,255,0.28)', flex: 'none' }} />
+      )}
       {/* Collapsed: a single pill showing the active model. Same family as the
           RAW toggle / mic chip — dark fill, whitish border, NO shadow. */}
       <div
         style={{
           height: 44,
-          borderRadius: 9999,
+          // Square off the joined edge so the pair reads as one control.
+          borderRadius: agentLabel ? '0 9999px 9999px 0' : 9999,
           background: '#000',
           border: '1px solid rgba(255, 255, 255, 0.55)',
+          borderLeft: agentLabel ? 'none' : undefined,
           boxShadow: 'none',
           display: 'flex',
           alignItems: 'center',
-          padding: '0 14px',
+          padding: agentLabel ? '0 14px 0 12px' : '0 14px',
           gap: 7,
           cursor: 'pointer',
           fontSize: 12.5,
@@ -269,7 +336,12 @@ function RemoteBadge() {
             // the window growth above.
             position: 'absolute', bottom: 48, left: 0, minWidth: 172, maxHeight: 360, overflowY: 'auto',
             background: '#000', border: '1px solid rgba(255,255,255,0.35)',
-            borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10,
+            // SIDE BY SIDE. Stacked, Codex's three axes are 13 rows — taller than
+            // the space above a pill that already sits near the bottom edge, so
+            // it scrolled. In columns everything is visible at once and the
+            // panel is about a third the height.
+            borderRadius: 13, padding: 7, display: 'flex',
+            flexDirection: isCodex ? 'row' : 'column', gap: isCodex ? 14 : 2, zIndex: 10,
           }}
         >
           {/* Codex is not one axis. Model alone leaves effort and speed —
@@ -277,7 +349,7 @@ function RemoteBadge() {
               and reaching them was the whole point of not being a restricted
               remote. */}
           {isCodex && axes.map(({ axis, values, current }) => (
-            <div key={axis} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div key={axis} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 116 }}>
               <div style={{
                 fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase',
                 color: 'rgba(255,255,255,0.35)', padding: '6px 10px 2px',
@@ -1145,12 +1217,19 @@ export default function WidgetApp() {
       // transform keeps every element/gap in proportion; hit-testing follows
       // the scaled rects automatically. Label/timer fonts are bumped in
       // Widget.tsx so the text stays legible at this scale.
-      style={{ background: 'transparent', paddingTop: '8px', transform: 'scale(0.75)', transformOrigin: 'top center' }}
+      // paddingTop absorbs the window's upward growth (see --hud-extra in
+      // RemoteBadge) so the pill row does not move when a list opens above it.
+      style={{
+        background: 'transparent',
+        paddingTop: 'calc(8px + var(--hud-extra, 0px))',
+        transform: 'scale(0.75)',
+        transformOrigin: 'top center',
+      }}
     >
       {/* Remote capture → circular badge to the LEFT of the pill, with a gap.
           Dictation → pill only. */}
       <div className="flex items-center justify-center" style={{ gap: '16px' }}>
-        {isRemote && pillShowing && <RemoteBadge />}
+        {isRemote && pillShowing && <RemoteBadge picker={agentPicker} onPickAgent={handlePickAgent} />}
         {isRemote && pillShowing && <RawToggle />}
         {/* the screenshot ledger shows for BOTH capture kinds — dictation pastes
             the images into the target app after the text; Remote attaches them

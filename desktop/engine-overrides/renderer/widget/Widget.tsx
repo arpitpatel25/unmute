@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import type { WidgetState } from '../shared/types'
 import {
-  shouldShowAgentPicker, offeredAgents, currentAgentLabel as agentLabel,
-  currentAgentConnected as agentConnected, nextAgentId, type AgentPickerState,
 } from './agentPicker'
 
 interface WidgetProps {
@@ -87,11 +85,6 @@ const PILL_CRITICAL_CSS = `
 /* Backend picker — a single tappable chip on the Remote pill. Deliberately the
    same visual weight as the timer: choosing where a task runs is a normal part
    of firing it, not a settings excursion. */
-.unmute-pill-agent { display: inline-flex; align-items: center; gap: 5px; border: 1px solid rgba(255,255,255,0.28); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.82); font-size: 12px; font-weight: 500; border-radius: 9999px; padding: 3px 9px; cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: background 0.15s, border-color 0.15s; }
-.unmute-pill-agent:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.45); }
-.unmute-pill-agent-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,0.55); flex-shrink: 0; }
-.unmute-pill-agent--off { color: rgba(255,255,255,0.52); border-style: dashed; }
-.unmute-pill-agent--off .unmute-pill-agent-dot { background: rgba(255,255,255,0.28); }
 `
 
 
@@ -124,21 +117,6 @@ export default function Widget({
 
   const isDictation = state === 'dictation-active'
   const isInstruction = state === 'instruction-active' || state === 'chained'
-
-  // Backend picker. Visibility is decided by shouldShowAgentPicker (unit-tested
-  // in agentPicker.test.ts) so the mode-vs-kind trap that hid this chip for four
-  // builds cannot come back silently.
-  const showAgentPicker = shouldShowAgentPicker({ isRemote, picker: agentPicker as AgentPickerState | undefined })
-  const availableAgents = offeredAgents(agentPicker as AgentPickerState | undefined)
-  const currentAgentLabel = agentLabel(agentPicker as AgentPickerState | undefined)
-  const currentAgentConnected = agentConnected(agentPicker as AgentPickerState | undefined)
-
-  // One tap cycles. With two backends this is the whole interaction; a menu
-  // would cost a second tap for no gain, and the pill is a 44px strip.
-  const cycleAgent = () => {
-    const next = nextAgentId(agentPicker as AgentPickerState | undefined)
-    if (onPickAgent && next) onPickAgent(next)
-  }
 
   // Entry/Exit animation
   useEffect(() => {
@@ -227,17 +205,11 @@ export default function Widget({
               in Settings would be too far away.
               Rendered only when there is a real choice (>1 reachable backend) —
               a Claude-only machine sees the pill exactly as it is today. */}
-          {showAgentPicker && (
-            <button
-              className={`unmute-pill-agent${currentAgentConnected ? '' : ' unmute-pill-agent--off'}`}
-              onClick={cycleAgent}
-              aria-label={`Run this task on ${currentAgentLabel}${currentAgentConnected ? '' : ' — not connected, tap to connect'}. Tap to switch.`}
-              title={currentAgentConnected ? 'Where this task will run — tap to switch' : 'Not connected — tap to connect'}
-            >
-              <span className="unmute-pill-agent-dot" />
-              {currentAgentLabel}{currentAgentConnected ? '' : ' · connect'}
-            </button>
-          )}
+          {/* THE AGENT CHIP MOVED. It lived here, on the recording side of the
+              pill, next to the timer and the stop button — none of which have
+              anything to do with where the task runs. It now sits joined to the
+              model selector, because "which agent" and "which model" are one
+              decision: the agent decides which models exist. See RemoteBadge. */}
           <button className="unmute-pill-stop" onClick={onStop} aria-label="Stop recording">
             <div className={`unmute-pill-stop-icon ${stopIconClass}`} />
           </button>
