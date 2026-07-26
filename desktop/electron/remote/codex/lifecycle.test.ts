@@ -211,3 +211,45 @@ test('the model choice reaches Codex, and is recorded on the task', async () => 
   assert.equal(m.get(id)!.codexModelLabel, '5.6 Luna Ultra', 'so the composer can say what it runs on')
   m.killAll(); m.stopMaintenance()
 })
+
+test('a relaunch does NOT replay an old completion as if it just happened', async () => {
+  // THE BUG: rehydrate restored `processing`, the first poll re-derived `ready`
+  // and transition() stamped updatedAt = now — so a thread finished yesterday
+  // looked zero seconds old, sailed past the staleness guard, and the notch
+  // announced "Ready: …" on every single launch, forever.
+  const base = await tmp()
+  const finishedAt = Date.now() - 14 * 60 * 60 * 1000   // 14h ago
+  const d = fakeDriver()
+  d.snapshot = async () => ({
+    state: 'ready', lastAgentMessage: 'done', turns: [],
+    updatedAt: finishedAt, turnsStarted: 1, everCompleted: true,
+  }) as never
+
+  const m = await makeManager(d, base)
+  const id = await m.dispatch('open the video', { agent: 'codex-desktop' })
+  await (m as unknown as { pollCodexDesktop(id: string): Promise<void> }).pollCodexDesktop(id)
+
+  const t = m.get(id)!
+  assert.equal(t.state, 'ready')
+  assert.ok(Date.now() - t.updatedAt > 13 * 60 * 60 * 1000,
+    'the task carries WHEN IT FINISHED, not when we noticed')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('the observed state is written to meta.json, so a restart restores it', async () => {
+  const base = await tmp()
+  const d = fakeDriver()
+  d.snapshot = async () => ({
+    state: 'ready', lastAgentMessage: 'done', turns: [],
+    updatedAt: Date.now() - 9 * 60 * 60 * 1000, turnsStarted: 1, everCompleted: true,
+  }) as never
+  const m = await makeManager(d, base)
+  const id = await m.dispatch('open the video', { agent: 'codex-desktop' })
+  await (m as unknown as { pollCodexDesktop(id: string): Promise<void> }).pollCodexDesktop(id)
+  await new Promise((r) => setTimeout(r, 30))
+
+  const meta = JSON.parse(await fs.readFile(join(base, 'test', id, 'meta.json'), 'utf8'))
+  assert.equal(meta.state, 'ready', 'rehydrate has something real to restore')
+  assert.ok(meta.updatedAt < Date.now() - 8 * 60 * 60 * 1000, 'and the honest timestamp with it')
+  m.killAll(); m.stopMaintenance()
+})

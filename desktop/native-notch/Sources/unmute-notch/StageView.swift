@@ -69,9 +69,9 @@ struct StageView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, topInset)
-        .padding(.bottom, 16)
+        .padding(.horizontal, 30)
+        .padding(.top, topInset + 6)
+        .padding(.bottom, 22)
     }
 
     private func header(_ t: TaskDetail) -> some View {

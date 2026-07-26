@@ -84,7 +84,7 @@ function remoteModelApi() {
     remoteSetModel?: (m: string) => Promise<string>
     remoteOnModelChanged?: (cb: (model: string) => void) => () => void
     remoteGetModelCatalog?: () => Promise<ModelChoice[]>
-    paywallSetHUDHeight?: (height: number) => Promise<boolean>
+    paywallSetHUDHeight?: (height: number, opts?: { upward?: boolean }) => Promise<boolean>
   }
 }
 
@@ -186,9 +186,11 @@ function RemoteBadge() {
     const rows = isCodex
       ? axes.reduce((n, a) => n + a.values.length, 0) + axes.length * 0.8
       : catalog.length
-    if (expanded) void api.paywallSetHUDHeight?.(Math.min(420, 64 + rows * 36 + 12))
-    else void api.paywallSetHUDHeight?.(72)
-    return () => { void remoteModelApi().paywallSetHUDHeight?.(72) }
+    // UPWARD. The pill sits near the bottom of the screen, so a list that grows
+    // downward runs straight off the edge — which is what the model list did.
+    if (expanded) void api.paywallSetHUDHeight?.(Math.min(440, 64 + rows * 36 + 12), { upward: true })
+    else void api.paywallSetHUDHeight?.(72, { upward: true })
+    return () => { void remoteModelApi().paywallSetHUDHeight?.(72, { upward: true }) }
   }, [expanded, catalog.length, isCodex, axes])
 
   const open = () => {
@@ -263,7 +265,9 @@ function RemoteBadge() {
       {expanded && (
         <div
           style={{
-            position: 'absolute', top: 48, left: 0, minWidth: 172, maxHeight: 300, overflowY: 'auto',
+            // Anchored to the BOTTOM of the chip so it opens upward, matching
+            // the window growth above.
+            position: 'absolute', bottom: 48, left: 0, minWidth: 172, maxHeight: 360, overflowY: 'auto',
             background: '#000', border: '1px solid rgba(255,255,255,0.35)',
             borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10,
           }}

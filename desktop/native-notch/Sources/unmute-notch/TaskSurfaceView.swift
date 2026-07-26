@@ -79,9 +79,9 @@ struct TaskSurfaceView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(.horizontal, 26)
-        .padding(.top, topInset)
-        .padding(.bottom, 18)
+        .padding(.horizontal, 30)
+        .padding(.top, topInset + 6)
+        .padding(.bottom, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -97,12 +97,15 @@ struct TaskSurfaceView: View {
                 .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.status(t.status))
             if let e = t.elapsed { Text(e).font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textFaint) }
             Spacer(minLength: 8)
-            CloseButton { model.emit(.collapsed) }
-            Spacer(minLength: 0)
             if model.attention > 0 {
                 Text("1 of \(model.attention)")
                     .font(.system(size: 13)).foregroundColor(Theme.textDim)
             }
+            // LAST in the row, so it lands in the corner. It was sitting between
+            // two Spacers with the counter to its right, which floated it into
+            // the middle of the header — nowhere near where a close control
+            // belongs.
+            CloseButton { model.emit(.collapsed) }
         }
     }
 

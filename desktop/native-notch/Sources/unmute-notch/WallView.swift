@@ -88,8 +88,8 @@ struct WallView: View {
                     if !group.cards.isEmpty || (group.hidden ?? 0) > 0 { groupSection(group) }
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, topInset)
+            .padding(.horizontal, 30)
+            .padding(.top, topInset + 6)
             .padding(.bottom, 56)
         }
     }

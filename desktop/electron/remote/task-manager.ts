@@ -677,6 +677,7 @@ export class TaskManager extends EventEmitter {
     await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
       id, intent, sessionId: created.threadId, kind, createdAt: now, surface, mode: 'managed',
       agent: 'codex-desktop', codexThreadId: created.threadId, codexProject: opts.project ?? null,
+      state: 'processing', updatedAt: now,
       ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
     })).catch(() => {})
 
@@ -748,10 +749,13 @@ export class TaskManager extends EventEmitter {
       // (ORCHESTRATE-VISION §3, three kinds of done). The existing ready decay
       // valve then settles an ignored one-off to done on its own.
       if (task.state !== 'ready') {
+        // snap.updatedAt is the newest event in the rollout — i.e. when the turn
+        // actually finished. Passing it is what stops a relaunch replaying
+        // yesterday's completion as if it were new.
         this.transition(id, 'ready', {
           state: 'ready',
           result: { summary: snap.lastAgentMessage ?? 'Codex finished this turn.' },
-        } as StatusPayload)
+        } as StatusPayload, snap.updatedAt || undefined)
       }
       return
     }
@@ -953,7 +957,7 @@ export class TaskManager extends EventEmitter {
   /** Apply a status payload to a task + emit the right events.
    *  Payload is Partial: callers (kill/dispatch-failure) supply only the fields
    *  they know; poll() supplies a full status read. */
-  private transition(id: string, next: UiTaskState, payload?: Partial<StatusPayload>): void {
+  private transition(id: string, next: UiTaskState, payload?: Partial<StatusPayload>, at?: number): void {
     // Entering `ready` starts its decay clock immediately (see armReadyDecay);
     // leaving it cancels. Previously only the hourly sweep noticed.
     if (next === 'ready') queueMicrotask(() => this.armReadyDecay(id))
@@ -962,7 +966,13 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     const prev = task.state
     task.state = next
-    task.updatedAt = this.clock()
+    // WHEN IT HAPPENED, not when we noticed. Stamping the clock made every
+    // relaunch look like a fresh completion: rehydrate re-derived `ready` from
+    // the rollout, transition() stamped now, and the staleness guard — which
+    // compares against updatedAt — saw a zero-second-old finish and announced a
+    // task that had completed the previous day. `at` comes from the source of
+    // truth (the rollout's own completion time) wherever we have one.
+    task.updatedAt = at ?? this.clock()
     if (payload?.category) task.category = payload.category
     if (payload?.step) task.step = payload.step
     if (payload?.result) task.result = payload.result
@@ -1015,6 +1025,11 @@ export class TaskManager extends EventEmitter {
         // (the thread isn't over — curation happens at the final done).
         tlog.ui('task-row.ready', { summary: task.result?.summary })
         this.emit('updated', task)
+
+    // Keep the on-disk record current, so a relaunch restores the history
+    // instead of re-deriving it. Best-effort: a task whose meta cannot be
+    // written still works for this run, it just forgets across a restart.
+    if (isExternalAgent(task.agent)) void this.persistState(task)
         if (task.category === 'consume' || task.category === 'watch') {
           this.detachAndKill(id)
         } else {
@@ -1117,6 +1132,17 @@ export class TaskManager extends EventEmitter {
     }
   }
 
+  /** Merge the observed state + its timestamp into the task's meta.json. */
+  private async persistState(task: Task): Promise<void> {
+    const path = join(task.home, 'meta.json')
+    try {
+      const raw = await fs.readFile(path, 'utf8')
+      const meta = JSON.parse(raw) as Record<string, unknown>
+      if (meta.state === task.state && meta.updatedAt === task.updatedAt) return
+      await fs.writeFile(path, JSON.stringify({ ...meta, state: task.state, updatedAt: task.updatedAt }))
+    } catch { /* absent or unreadable — nothing to keep in sync */ }
+  }
+
   /** Instant kill (PRD §10.4). Closes the session; marks failed if not terminal. */
   /** Explicit user stop (PRD §10.4). Hard-kills the session immediately. */
   kill(id: string): void {
@@ -1183,7 +1209,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; codexThreadId?: string; codexProject?: string | null }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; codexThreadId?: string; codexProject?: string | null }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       // EXTERNAL BACKEND: a Codex thread lives in Codex, so an Unmute restart
@@ -1201,9 +1227,12 @@ export class TaskManager extends EventEmitter {
           codexThreadId: meta.codexThreadId,
           codexProject: meta.codexProject ?? null,
           kind: meta.kind ?? 'oneoff',
-          state: 'processing',           // corrected on the first poll
+          // RESTORE what we last observed. Defaulting to 'processing' meant the
+          // first poll always "discovered" completion afresh and re-stamped it,
+          // so a finished thread announced itself on every single launch.
+          state: (meta.state as UiTaskState | undefined) ?? 'processing',
           createdAt: meta.createdAt ?? now0,
-          updatedAt: meta.createdAt ?? now0,
+          updatedAt: meta.updatedAt ?? meta.createdAt ?? now0,
           cwd: dir,
           home: dir,
           statusPath: join(dir, 'status.json'),
