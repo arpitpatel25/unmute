@@ -184,6 +184,10 @@ enum Command {
     case capturePhase(phase: String, target: String?)
     case toast(String)                         // transient message (e.g. accept error)
     case notchGeometry(hasNotch: Bool, x: Double, y: Double, w: Double, h: Double)
+    /// Surface material preference, from unmute Settings. "system" (default)
+    /// honours System Settings → Accessibility → Reduce Transparency; "glass"
+    /// and "solid" are explicit user overrides. See SurfaceAppearance.
+    case appearance(SurfaceAppearance)
     case collapse
     case quit
     case unknown
@@ -217,6 +221,12 @@ enum Command {
         case "termData":
             guard let id = obj["id"] as? String, let b64 = obj["data"] as? String else { return .unknown }
             return .termData(id: id, dataB64: b64)
+        case "appearance":
+            // An unknown value falls back to `.system` rather than being
+            // dropped: a malformed preference must never leave the surface
+            // ignoring the user's accessibility setting.
+            let raw = obj["value"] as? String ?? "system"
+            return .appearance(SurfaceAppearance(rawValue: raw) ?? .system)
         case "proposal":
             guard let p = sub("data", ProposalDetail.self) else { return .unknown }
             return .proposal(p)

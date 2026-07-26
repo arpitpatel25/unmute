@@ -109,6 +109,10 @@ final class AppController: NSObject, NotchResizing {
         case .notchGeometry:
             recomputeGeometry("explicit-push")
 
+        case let .appearance(pref):
+            NotchLog.log("CMD appearance \(pref.rawValue)")
+            Appearance.shared.preference = pref
+
         case .collapse:
             model.focusedId = nil
             model.stageTask = nil

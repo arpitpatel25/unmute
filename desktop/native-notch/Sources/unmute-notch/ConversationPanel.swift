@@ -126,13 +126,15 @@ private struct UserBubble: View {
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 4) {
                 Text(text)
-                    .font(.system(size: 15))
+                    .font(.system(size: 14))
                     .foregroundColor(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(RoundedRectangle(cornerRadius: 20).fill(Color.white.opacity(0.09)))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(Theme.raised))
+                    .overlay(RoundedRectangle(cornerRadius: 16)
+                        .stroke(Theme.hairline, lineWidth: 0.5))
             }
             // A BUBBLE HAS TO BE NARROWER THAN THE COLUMN or it stops reading as
             // one. Codex caps its own at roughly two-thirds; capping by MEASURE
@@ -151,18 +153,21 @@ private struct AnswerBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            RichText(text: text, size: 15)
+            RichText(text: text, size: 14)
             // Codex puts a quiet icon row under each answer. Ours carries the
             // one action we can honestly offer — rating and sharing belong to
             // Codex's account, not to a remote.
             HStack(spacing: 12) {
                 Button(action: copy) {
-                    Text(copied ? "✓ copied" : "⧉")
-                        .font(.system(size: 12))
-                        .foregroundColor(copied ? Theme.cReady : Theme.textFaint)
+                    HStack(spacing: 4) {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 10.5))
+                        Text(copied ? "Copied" : "Copy").font(.system(size: 11.5))
+                    }
+                    .foregroundColor(copied ? Theme.cReady : Theme.textFaint)
                 }
                 .buttonStyle(.plain)
-                .help("copy this message")
+                .help("Copy this message")
             }
             .opacity(hovering || copied ? 1 : 0.35)
         }
@@ -188,18 +193,22 @@ private struct WorkBlock: View {
         VStack(alignment: .leading, spacing: 10) {
             Button(action: { open.toggle() }) {
                 HStack(spacing: 6) {
-                    Text(label)
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.textDim)
-                    Text(open ? "⌄" : "›")
-                        .font(.system(size: 11))
+                    Image(systemName: open ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(Theme.textFaint)
+                    Text(label)
+                        .font(Theme.fSub)
+                        .foregroundColor(Theme.textDim)
                     Spacer(minLength: 0)
+                    if !items.isEmpty {
+                        NumText(text: "\(items.count) step\(items.count == 1 ? "" : "s")")
+                    }
                 }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            Rectangle().fill(Theme.hairline).frame(height: 1)
+            Rectangle().fill(Theme.hairlineSoft).frame(height: 1)
 
             if open {
                 VStack(alignment: .leading, spacing: 10) {
@@ -240,20 +249,17 @@ private struct StepRow: View {
         VStack(alignment: .leading, spacing: 6) {
             Button(action: { if hasBody { open.toggle() } }) {
                 HStack(spacing: 7) {
-                    Text(turn.ok == false ? "✗" : "›")
-                        .font(.system(size: 10))
+                    Image(systemName: turn.ok == false ? "xmark" : "chevron.right")
+                        .font(.system(size: 8.5, weight: .semibold))
                         .foregroundColor(turn.ok == false ? Theme.cError : Theme.textFaint)
-                    Text(turn.title ?? "step")
-                        .font(.system(size: 12.5))
+                    Text(turn.title ?? "Step")
+                        .font(Theme.fSub)
                         .foregroundColor(Theme.textDim)
                         .lineLimit(1)
                     Spacer(minLength: 8)
-                    if let ms = turn.durationMs, ms > 0 {
-                        Text(short(ms))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(Theme.textFaint)
-                    }
+                    if let ms = turn.durationMs, ms > 0 { NumText(text: short(ms)) }
                 }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
@@ -298,6 +304,10 @@ private struct StepRow: View {
 struct RichText: View {
     let text: String
     var size: CGFloat = 14
+    /// Callers that render SECONDARY prose (the warm-up strip) dim this; the
+    /// transcript's own answers keep the default. Previously hardcoded, which
+    /// silently overrode every caller.
+    var color: Color = Theme.text
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -329,7 +339,7 @@ struct RichText: View {
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
         return Text(attr)
             .font(.system(size: size * scale, weight: weight))
-            .foregroundColor(Theme.text)
+            .foregroundColor(color)
     }
 
     private enum Line {
@@ -390,49 +400,53 @@ struct CodexComposer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let e = deliveryError, !e.isEmpty {
-                Text("⚠ \(e)")
-                    .font(.system(size: 11.5))
-                    .foregroundColor(Theme.cError)
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                    Text(e).font(.system(size: 11.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundColor(Theme.cError)
             }
             // Codex's composer is a TALL rounded box with its controls on a row
             // beneath the text, not a one-line field with a button beside it.
             // The shape is most of what makes it read as a place to write.
             VStack(alignment: .leading, spacing: 10) {
-                TextField("reply to Codex — or hold right ⌥ and speak", text: $text, onCommit: send)
+                TextField("Reply to Codex — or hold right ⌥ and speak", text: $text, onCommit: send)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 14))
+                    .font(.system(size: 13.5))
                     .foregroundColor(Theme.text)
                     .focused($focused)
                 HStack(spacing: 10) {
                     if let m = modelLabel, !m.isEmpty {
-                        Text(m)
-                            .font(.system(size: 11.5))
-                            .foregroundColor(Theme.textFaint)
+                        Text(m).font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
                     }
                     Spacer(minLength: 0)
                     if sending {
                         // Sending is a round-trip through another app's window;
                         // silence for a second reads as "nothing happened".
-                        Text("sending…")
-                            .font(.system(size: 11))
-                            .foregroundColor(Theme.textFaint)
+                        Text("Sending…").font(.system(size: 11)).foregroundColor(Theme.textFaint)
                     }
+                    // The composer's ONE primary action, and the only tinted
+                    // thing on this surface.
                     Button(action: send) {
-                        Text("↑")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(canSend ? Theme.text : Theme.textFaint)
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(canSend ? .white : Theme.textFaint)
                             .frame(width: 24, height: 24)
-                            .background(Circle().fill(Color.white.opacity(canSend ? 0.16 : 0.06)))
+                            .background(Circle().fill(canSend ? Theme.accent : Theme.raised))
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSend)
+                    .animation(Theme.hover, value: canSend)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 10)
-            .background(RoundedRectangle(cornerRadius: 18).fill(Color.white.opacity(0.06)))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(focused ? Theme.cReady.opacity(0.45) : Theme.hairline, lineWidth: 1))
+            .padding(.horizontal, 13)
+            .padding(.top, 11)
+            .padding(.bottom, 9)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Theme.sunken))
+            .overlay(RoundedRectangle(cornerRadius: 14)
+                .stroke(focused ? Theme.accent.opacity(0.55) : Theme.hairline, lineWidth: focused ? 1 : 0.5))
+            .animation(Theme.hover, value: focused)
         }
     }
 

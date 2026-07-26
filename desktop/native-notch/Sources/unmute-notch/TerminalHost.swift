@@ -17,27 +17,40 @@ struct TerminalPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // A pinned header over scrolling content is exactly where the HARD
+            // scroll-edge style belongs — an opaque boundary, not a soft fade,
+            // because scrollback is dense and a gradient would smear it.
             HStack(spacing: 8) {
-                Dot(status: .processing, size: 6)
-                Text("live terminal · type to take over")
-                    .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textFaint)
+                Dot(status: .processing, size: 6, breathing: true)
+                Text("Live terminal · type to take over")
+                    .font(Theme.fCap).foregroundColor(Theme.textFaint)
                 Spacer(minLength: 0)
                 if tmuxAvailable {
                     Button(action: { model.emit(.openInTerminal(id: taskId)) }) {
-                        Text("open in terminal ↗")
-                            .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textDim)
-                    }.buttonStyle(.plain).help("pop out — same tmux session, same live process")
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.forward.app").font(.system(size: 10))
+                            Text("Open in Terminal").font(.system(size: 11))
+                        }
+                        .foregroundColor(Theme.textDim)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Pop out — same tmux session, same live process")
                 }
             }
             .padding(.horizontal, 11).padding(.vertical, 6)
-            .background(Color.black.opacity(0.5))
+            .background(Color.black.opacity(0.55))
+            .overlay(Rectangle().fill(Theme.hairlineSoft).frame(height: 1), alignment: .bottom)
 
             TerminalHost(model: model, taskId: taskId)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The terminal is CONTENT, not chrome: opaque, flat, and never glass.
+        // SwiftTerm renders into an NSView that cannot meaningfully sit on a
+        // translucent material anyway.
         .background(Color(red: 0.03, green: 0.035, blue: 0.043))
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius))
+        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
+            .stroke(Theme.hairline, lineWidth: 0.5))
         .onAppear { model.emit(.termOpen(id: taskId)) }
         .onDisappear { model.emit(.termClose(id: taskId)) }
     }

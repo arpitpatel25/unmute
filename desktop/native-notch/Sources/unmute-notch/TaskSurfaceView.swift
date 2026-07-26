@@ -1,10 +1,13 @@
 import SwiftUI
 
-// The single-task surface (~55% of the screen) — full parity with the old
-// right-overlay's expanded task row: status + duration, the pending question
-// (chips or free-text), done result + detail + artifacts, failed reason /
-// mcpGap fix, stop / re-run / resume / kill, an on-demand live terminal —
-// plus the crank (Next + "1 of N") and Open dashboard.
+// The single-task surface — status + duration, the pending question (chips or
+// free-text), done result + detail + artifacts, failed reason / mcpGap fix,
+// stop / re-run / resume / kill, an on-demand live terminal — plus the crank
+// (Next + "1 of N") and Open dashboard.
+//
+// This is the ATTENTION panel: exactly one task, sized to itself, and it never
+// balloons into the dashboard. The boundary — one task vs. all — is what keeps
+// this state distinct from the cockpit.
 struct TaskSurfaceView: View {
     @ObservedObject var model: NotchModel
     let topInset: CGFloat
@@ -15,6 +18,7 @@ struct TaskSurfaceView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let t {
                 header(t)
+
                 if t.status == .needsUser, let q = t.question {
                     QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 12)
                 } else if t.backend == "codex-desktop" {
@@ -28,29 +32,29 @@ struct TaskSurfaceView: View {
                     EmptyView()
                 } else if let summary = summaryLine(t) {
                     Text(summary)
-                        .font(.system(size: 14.5)).foregroundColor(Theme.textDim)
+                        .font(.system(size: 14)).foregroundColor(Theme.textDim)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 12)
                 }
+
                 // DeadPanel is a PTY concept — "the session ended, resume or
-                // re-run it". A Codex thread never ends that way, so offering
-                // it there is an invitation to revive something still alive.
+                // re-run it". A Codex thread never ends that way, so offering it
+                // there is an invitation to revive something still alive.
                 if (t.status == .done || t.status == .failed) && t.backend != "codex-desktop" {
                     ScrollView { DeadPanel(model: model, t: t) }
                         .frame(maxHeight: 280)
                         .padding(.top, 12)
                 }
+
                 // EXTERNAL BACKEND (Codex): no PTY exists, so the CONVERSATION is
                 // what this panel carries — the same role the terminal plays for a
                 // CLI task. Showing an empty terminal frame here is what made the
                 // panel read as a giant void.
                 if t.backend == "codex-desktop" {
                     // NOT wrapped in a ScrollView — the panel owns one. Nesting
-                    // them gave the inner scroller unbounded height, so it had
-                    // no overflow to scroll and the outer one did the scrolling
-                    // instead. scrollTo then addressed a view that could not
-                    // move, and the transcript opened at the top however many
-                    // times the anchoring was "fixed".
+                    // them gave the inner scroller unbounded height, so it had no
+                    // overflow to scroll and the outer one scrolled instead;
+                    // scrollTo then addressed a view that could not move.
                     ConversationPanel(turns: t.conversation ?? [], id: t.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 10)
@@ -58,7 +62,8 @@ struct TaskSurfaceView: View {
                     // delete it, so there is no state in which you have nothing
                     // to say to it.
                     CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
-                                  modelLabel: t.modelLabel, sending: t.sending ?? false).padding(.top, 9)
+                                  modelLabel: t.modelLabel, sending: t.sending ?? false)
+                        .padding(.top, 9)
                 } else if model.taskTerminalOpen && t.alive {
                     // The terminal owns EVERYTHING left down to the action row
                     // (field feedback: never a fixed band with dead space below).
@@ -71,18 +76,29 @@ struct TaskSurfaceView: View {
                 } else {
                     Spacer(minLength: 0)
                 }
+
                 actions(t)
                 footer(t)
             } else {
-                Text("All clear — nothing needs you.")
-                    .font(.system(size: 14)).foregroundColor(Theme.textDim)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                allClear
             }
         }
-        .padding(.horizontal, 30)
-        .padding(.top, topInset + 6)
-        .padding(.bottom, 22)
+        .padding(.horizontal, Theme.gutter)
+        .padding(.top, topInset + 4)
+        .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// The honest end state — the moment you're free.
+    private var allClear: some View {
+        VStack(spacing: 7) {
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 22, weight: .light))
+                .foregroundColor(Theme.cWorking)
+            Text("All clear").font(Theme.fHead).foregroundColor(Theme.text)
+            Text("Nothing needs you.").font(Theme.fSub).foregroundColor(Theme.textDim)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func summaryLine(_ t: TaskDetail) -> String? {
@@ -91,65 +107,66 @@ struct TaskSurfaceView: View {
 
     private func header(_ t: TaskDetail) -> some View {
         HStack(spacing: 9) {
-            Dot(status: t.status, size: 9)
-            Text(t.title).font(.system(size: 19, weight: .semibold)).foregroundColor(Theme.text).lineLimit(1)
-            Text(Theme.statusLabel(t.status))
-                .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.status(t.status))
-            if let e = t.elapsed { Text(e).font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textFaint) }
+            Dot(status: t.status, size: 9, breathing: t.status == .processing)
+            Text(t.title).font(Theme.fTitle).foregroundColor(Theme.text).lineLimit(1)
+            StatusLabel(status: t.status)
+            if let e = t.elapsed { NumText(text: e) }
             Spacer(minLength: 8)
             if model.attention > 0 {
-                Text("1 of \(model.attention)")
-                    .font(.system(size: 13)).foregroundColor(Theme.textDim)
+                Text("1 of \(model.attention)").font(Theme.fSub).foregroundColor(Theme.textDim)
             }
-            // LAST in the row, so it lands in the corner. It was sitting between
-            // two Spacers with the counter to its right, which floated it into
-            // the middle of the header — nowhere near where a close control
-            // belongs.
+            // LAST in the row, so it lands in the corner. It once sat between two
+            // Spacers with the counter to its right, which floated it into the
+            // middle of the header — nowhere near where a close control belongs.
             CloseButton { model.emit(.collapsed) }
         }
     }
 
     private func actions(_ t: TaskDetail) -> some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 6) {
             if t.backend == "codex-desktop" {
                 // "resume" / "re-run" / "terminal" are PTY concepts and mean
                 // nothing for a thread living in another app. The one thing that
-                // does make sense is a door into it — the Codex equivalent of
-                // "show me the terminal".
-                ActButton(label: "open in Codex") { model.emit(.openInTerminal(id: t.id)) }
+                // does make sense is a door into it.
+                KeyButton(label: "Open in Codex", symbol: "arrow.up.forward.app") {
+                    model.emit(.openInTerminal(id: t.id))
+                }
             } else if t.alive {
-                ActButton(label: "stop") { model.emit(.kill(id: t.id)) }
-                ActButton(label: model.taskTerminalOpen ? "hide terminal" : "terminal") {
+                KeyButton(label: "Stop", symbol: "stop.circle") { model.emit(.kill(id: t.id)) }
+                KeyButton(label: model.taskTerminalOpen ? "Hide terminal" : "Terminal",
+                          symbol: "terminal") {
                     model.taskTerminalOpen.toggle()
                     model.emit(model.taskTerminalOpen ? .termOpen(id: t.id) : .termClose(id: t.id))
                 }
             } else {
-                ActButton(label: "re-run") { model.emit(.rerun(id: t.id)) }
-                ActButton(label: "resume") { model.emit(.resume(id: t.id)) }
+                KeyButton(label: "Re-run", symbol: "arrow.clockwise") { model.emit(.rerun(id: t.id)) }
+                KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
             }
             Spacer(minLength: 0)
             // This drops OUR card; it has never touched the agent's session. For
             // a Codex thread — which lives on until you delete it in Codex —
             // "kill" claims something we do not do and would not want to.
-            ActButton(label: t.backend == "codex-desktop" ? "remove" : "kill",
-                      danger: true) { model.emit(.remove(id: t.id)) }
+            KeyButton(label: t.backend == "codex-desktop" ? "Remove" : "Kill",
+                      danger: true, symbol: "trash") { model.emit(.remove(id: t.id)) }
         }
-        .padding(.top, 10)
+        .padding(.top, 11)
     }
 
     private func footer(_ t: TaskDetail) -> some View {
-        HStack(spacing: 14) {
-            Button(action: { model.emit(.openDashboard) }) {
-                Text("Open dashboard →").font(.system(size: 12.5)).foregroundColor(Theme.textDim)
-            }.buttonStyle(.plain)
+        HStack(spacing: 10) {
+            QuietButton(label: "Open dashboard", symbol: "square.grid.2x2") {
+                model.emit(.openDashboard)
+            }
             // Episode-mute: out of the attention strip + crank until you interact
             // with it or its state changes again. Still on the cockpit wall.
-            Button(action: { model.emit(.mute(id: t.id)) }) {
-                Text("mute").font(.system(size: 12.5)).foregroundColor(Theme.textFaint)
-            }.buttonStyle(.plain).help("don't show again — returns when it changes or you open it")
+            QuietButton(label: "Mute", symbol: "bell.slash", color: Theme.textFaint) {
+                model.emit(.mute(id: t.id))
+            }
+            .help("Don't show again — returns when it changes or you open it")
             Spacer(minLength: 0)
-            ActButton(label: "← Prev") { model.emit(.prev) }
-            ActButton(label: "Next →", go: true) { model.emit(.next) }
+            KeyButton(label: "Prev", symbol: "arrow.left") { model.emit(.prev) }
+            // THE ONE TINTED PRIMARY — the crank.
+            ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
         }
         .padding(.top, 10)
     }

@@ -6,6 +6,18 @@ import AppKit
 // PRIMARY display (the one with the menu bar, frame.origin == 0,0) and pinned
 // flush to that display's top edge — never hardcoded pixels, always relative to
 // the screen frame, so plugging in an external monitor can't misplace it.
+//
+// DISPLAY MATRIX (all resolved by the two rules above):
+//   * No hardware notch anywhere      → dummy notch on the primary display
+//   * Notched built-in is primary     → hugs the real notch; dormant is invisible
+//   * Notched built-in, EXTERNAL is primary (menu bar moved) → renders on the
+//     external with a dummy notch. This works only because the primary display
+//     is resolved by origin == .zero rather than NSScreen.main, which follows
+//     the CURSOR and would shuffle the surface between displays as the mouse
+//     moved. Do not "simplify" primaryScreen().
+//   * Clamshell                       → external is primary; dummy notch
+//   * Hot-plug / rearrange            → didChangeScreenParametersNotification
+//     re-runs current() (see AppController.observeScreens)
 struct NotchGeometry {
     let screenFrame: NSRect
     let hasNotch: Bool
@@ -44,53 +56,73 @@ struct NotchGeometry {
                              notchWidth: notchWidth, menuBarHeight: menuBarHeight)
     }
 
-    static let dummyNotchWidth: CGFloat = 200
+    static let dummyNotchWidth: CGFloat = 190
     static let dummyMenuBarHeight: CGFloat = 24
 
     // ── Per-state content sizes ──
     // Small rungs are notch-scale fixed sizes; task/cockpit are FRACTIONS of the
     // screen so they scale across displays (never hardcoded).
 
-    /// Dormant: a barely-there sliver. On real-notch hardware it's invisible
-    /// (drawn behind the physical notch); on non-notch it's the faint hint.
-    var dormantSize: NSSize { NSSize(width: hasNotch ? notchWidth : 150, height: hasNotch ? menuBarHeight : 10) }
-    /// Idle: matches the hardware notch; on a dummy notch it's a touch wider so
-    /// the hover "unmute" label breathes.
-    var idleSize: NSSize { NSSize(width: hasNotch ? notchWidth : 216, height: max(menuBarHeight, 34)) }
-    /// Active/attention: a wider strip. On notched, flanks straddle the notch.
-    var stripSize: NSSize { NSSize(width: hasNotch ? notchWidth + 160 : 300, height: max(menuBarHeight, 34)) }
-    /// Task: a substantial surface — ~55% wide, height clamped so it stays a
-    /// surface not a wall; the real height is content-measured (AppController).
+    /// Dormant.
+    ///
+    /// On real-notch hardware this is EXACTLY the notch: drawn behind it, so at
+    /// rest unmute costs zero pixels and the hardware never looks broken.
+    ///
+    /// On a notch-less display it is a slim capsule. It cannot be nothing —
+    /// field feedback recorded that a fully invisible dummy notch was
+    /// unfindable — but 9pt is barely over half the old 10pt tab's presence and
+    /// reads as a hairline rather than a black flag hanging into content.
+    var dormantSize: NSSize {
+        NSSize(width: hasNotch ? notchWidth : 190,
+               height: hasNotch ? menuBarHeight : 9)
+    }
+    /// Idle: matches the hardware notch; on a dummy notch a touch wider so the
+    /// "unmute" label breathes.
+    var idleSize: NSSize {
+        NSSize(width: hasNotch ? notchWidth : 230, height: max(menuBarHeight, 34))
+    }
+    /// Active: a wider strip carrying the breathing dot, the count and elapsed.
+    var activeSize: NSSize {
+        NSSize(width: hasNotch ? notchWidth + 150 : 330, height: max(menuBarHeight, 36))
+    }
+    /// Attention: wider still — it carries a headline, so it needs the measure.
+    var attentionSize: NSSize {
+        NSSize(width: hasNotch ? notchWidth + 220 : 400, height: max(menuBarHeight, 40))
+    }
+    /// Kept for callers that don't distinguish the two strip states.
+    var stripSize: NSSize { activeSize }
+
+    /// Task: a substantial surface. Slightly shorter than it was — the content
+    /// gutter dropped from 30pt to 16pt, so the same content needs less frame.
     var taskSize: NSSize { taskSize(compact: false) }
 
     /// `compact` is for backends with NO TERMINAL (Codex desktop). The full
     /// height exists to give a live PTY room; a task whose panel shows a short
-    /// conversation instead got the same 55% frame and rendered as a large black
-    /// void with two buttons floating in it (field feedback 2026-07-25). The
-    /// comment here used to claim the height was content-measured — it never
-    /// was, so this at least stops sizing a conversation like a terminal.
+    /// conversation instead got the same frame and rendered as a large void with
+    /// two buttons floating in it (field feedback 2026-07-25).
     func taskSize(compact: Bool) -> NSSize {
         NSSize(width: round(min(max(screenFrame.width * 0.55, 560), 1100)),
-               height: round(screenFrame.height * (compact ? 0.30 : 0.55)))
+               height: round(screenFrame.height * (compact ? 0.30 : 0.52)))
     }
-    /// Cockpit: ~80% of the screen.
+    /// Cockpit: the survey surface.
     var cockpitSize: NSSize {
-        NSSize(width: round(screenFrame.width * 0.80), height: round(screenFrame.height * 0.80))
+        NSSize(width: round(screenFrame.width * 0.78), height: round(screenFrame.height * 0.76))
     }
 
     func size(for state: NotchState) -> NSSize {
         switch state {
         case .dormant:   return dormantSize
         case .idle:      return idleSize
-        case .active, .attention: return stripSize
+        case .active:    return activeSize
+        case .attention: return attentionSize
         case .task:      return taskSize
         case .cockpit:   return cockpitSize
         }
     }
 
     /// Center horizontally; pin the shape's TOP edge flush to the screen's top
-    /// edge (frame.maxY). Square top corners + concave shoulders (NotchShape)
-    /// then make it read as growing OUT of the notch rather than floating below.
+    /// edge (frame.maxY). Square top corners then make it read as growing OUT of
+    /// the notch rather than floating below it.
     func topPinnedFrame(width: CGFloat, height: CGFloat) -> NSRect {
         let x = round(screenFrame.midX - width / 2)
         let y = round(screenFrame.maxY - height)
@@ -106,5 +138,30 @@ struct NotchGeometry {
     /// never taller than ~65% of the screen).
     func clampTaskHeight(_ h: CGFloat) -> CGFloat {
         min(max(h, screenFrame.height * 0.30), screenFrame.height * 0.65)
+    }
+
+    // ── The input surface (pill cluster) ──
+    //
+    // Bottom-centre = INPUT, top-centre = OUTPUT (spec 2026-07-24). The cluster
+    // floats clear of the Dock rather than sitting on it, and is sized to its
+    // content — the window is a canvas the cluster centres itself in, so chips
+    // joining and leaving never move the pill.
+
+    /// Height of the pill window canvas. Tall enough for the pill (44) plus the
+    /// awareness card below it (36) plus breathing room.
+    static let pillCanvasHeight: CGFloat = 132
+    /// Distance from the bottom of the screen's visible frame.
+    static let pillBottomInset: CGFloat = 26
+
+    /// The pill window's frame — full usable width so the cluster can grow in
+    /// both directions from centre without the window ever being resized
+    /// mid-capture.
+    func pillFrame() -> NSRect {
+        let screen = Self.primaryScreen()
+        let visible = screen.visibleFrame
+        let width = min(screenFrame.width * 0.9, 1200)
+        let x = round(screenFrame.midX - width / 2)
+        let y = round(visible.minY + Self.pillBottomInset)
+        return NSRect(x: x, y: y, width: width, height: Self.pillCanvasHeight)
     }
 }
