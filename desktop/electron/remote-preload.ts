@@ -184,8 +184,20 @@ export const remotePreloadExtensions = {
   remoteGetSettings: (): Promise<RemoteSettingsSnapshot> => ipcRenderer.invoke('remote:get-settings'),
   remoteSetPermissionMode: (mode: 'prompt' | 'auto-approve'): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-permission-mode', mode),
-  remoteSetAgent: (agent: 'claude' | 'codex'): Promise<boolean> =>
+  remoteSetAgent: (agent: 'claude' | 'codex' | 'codex-desktop'): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-agent', agent),
+  /** Backends that can take a task RIGHT NOW, for the pill's picker. Includes a
+   *  per-option reason so the UI can distinguish "not installed" (hide it) from
+   *  "not connected" (offer to connect). */
+  remoteAgentOptions: (): Promise<{
+    current: string
+    options: Array<{ id: string; label: string; available: boolean; installed?: boolean; reason?: string }>
+  }> => ipcRenderer.invoke('remote:agent-options'),
+  /** Relaunch Codex with the debug port, in the background. User-initiated only. */
+  remoteCodexConnect: (): Promise<{ ok: boolean; reason?: string }> =>
+    ipcRenderer.invoke('remote:codex-connect'),
+  remoteCodexProjects: (): Promise<Array<{ id: string; name: string }>> =>
+    ipcRenderer.invoke('remote:codex-projects'),
   remoteSetSandboxRoots: (roots: string[]): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-sandbox-roots', roots),
   remoteSetBrowserEnabled: (enabled: boolean): Promise<boolean> =>
@@ -205,6 +217,18 @@ export const remotePreloadExtensions = {
    *  description) — the settings selector renders THIS, so new models can arrive
    *  via runtime config without an app rebuild. */
   remoteGetModelCatalog: (): Promise<Array<{ id: string; label: string; description?: string }>> => ipcRenderer.invoke('remote:get-model-catalog'),
+
+  /** Codex's OWN model / effort / speed, read from the running app. The chip
+   *  must offer what the chosen agent has — not Claude's tiers under a Codex
+   *  label, which is what made "Codex + Opus" a reachable state. */
+  remoteCodexReasoning: (): Promise<{
+    label: string | null
+    current: Partial<Record<'Model' | 'Effort' | 'Speed', string>>
+    options: Partial<Record<'Model' | 'Effort' | 'Speed', string[]>>
+  }> => ipcRenderer.invoke('remote:codex-reasoning'),
+  remoteCodexReasoningSet: (axis: 'Model' | 'Effort' | 'Speed', value: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:codex-reasoning-set', axis, value),
+  remoteCodexReasoningRefresh: (): Promise<unknown> => ipcRenderer.invoke('remote:codex-reasoning-refresh'),
   /** Set the doer model; applies to the next dispatched task. Returns the
    *  validated value actually stored. */
   remoteSetModel: (m: string): Promise<string> => ipcRenderer.invoke('remote:set-model', m),

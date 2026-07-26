@@ -61,9 +61,17 @@ struct NotchGeometry {
     var stripSize: NSSize { NSSize(width: hasNotch ? notchWidth + 160 : 300, height: max(menuBarHeight, 34)) }
     /// Task: a substantial surface — ~55% wide, height clamped so it stays a
     /// surface not a wall; the real height is content-measured (AppController).
-    var taskSize: NSSize {
+    var taskSize: NSSize { taskSize(compact: false) }
+
+    /// `compact` is for backends with NO TERMINAL (Codex desktop). The full
+    /// height exists to give a live PTY room; a task whose panel shows a short
+    /// conversation instead got the same 55% frame and rendered as a large black
+    /// void with two buttons floating in it (field feedback 2026-07-25). The
+    /// comment here used to claim the height was content-measured — it never
+    /// was, so this at least stops sizing a conversation like a terminal.
+    func taskSize(compact: Bool) -> NSSize {
         NSSize(width: round(min(max(screenFrame.width * 0.55, 560), 1100)),
-               height: round(screenFrame.height * 0.55))
+               height: round(screenFrame.height * (compact ? 0.30 : 0.55)))
     }
     /// Cockpit: ~80% of the screen.
     var cockpitSize: NSSize {

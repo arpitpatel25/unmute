@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import type { WidgetState } from '../shared/types'
+import {
+} from './agentPicker'
 
 interface WidgetProps {
   state: WidgetState
@@ -16,6 +18,25 @@ interface WidgetProps {
   onCancel: () => void
   onStop: () => void
   onUndo: () => void
+  /** Backends this machine can dispatch to RIGHT NOW, for the in-pill picker.
+   *  Only supplied (and only rendered) when there is genuinely a choice — a
+   *  Claude-only machine must never see a toggle with one option. */
+  agentPicker?: AgentPicker
+  /** Is THIS capture a Remote one (dispatches a task)? This is the KIND axis and
+   *  the only correct gate for the picker. It is NOT derivable from `state`: a
+   *  Remote capture runs as startSession('dictation','remote'), so `state` is
+   *  'dictation-active' and any guard on 'instruction-active' is always false. */
+  isRemote?: boolean
+  /** Switch the backend the NEXT task will run on. Called while the user is
+   *  still speaking: no task exists yet, so this only sets the default that
+   *  dispatch will read when the utterance is submitted. */
+  onPickAgent?: (id: string) => void
+}
+
+/** The task-creation backend choice, surfaced on the pill during a Remote capture. */
+export interface AgentPicker {
+  current: string
+  options: Array<{ id: string; label: string; available: boolean; installed?: boolean }>
 }
 
 
@@ -61,6 +82,9 @@ const PILL_CRITICAL_CSS = `
 .unmute-pill-processing { display: flex; align-items: center; gap: 8px; }
 .unmute-pill-draft-btn { border: 1px solid rgba(255,255,255,0.35); background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.85); font-size: 12px; border-radius: 9999px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
 .unmute-pill-draft-btn:hover { background: rgba(255,255,255,0.16); }
+/* Backend picker — a single tappable chip on the Remote pill. Deliberately the
+   same visual weight as the timer: choosing where a task runs is a normal part
+   of firing it, not a settings excursion. */
 `
 
 
@@ -76,7 +100,10 @@ export default function Widget({
   mutedText = null,
   onAcceptDraft,
   onStop,
-  onUndo
+  onUndo,
+  agentPicker,
+  isRemote = false,
+  onPickAgent,
 }: WidgetProps) {
   const [elapsed, setElapsed] = useState(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -170,6 +197,19 @@ export default function Widget({
           <span className={`unmute-pill-timer ${isNearLimit ? 'unmute-pill-timer--warn' : ''}`}>
             {isNearLimit ? `-${formatTime(timeRemaining)}` : formatTime(elapsed)}
           </span>
+          {/* BACKEND PICKER — Remote captures only.
+              Placed here, on the capture pill, because this is the moment the
+              choice is actually live: the user is still speaking and NO task
+              exists yet, so tapping only changes where the task will go when the
+              utterance is submitted. Putting it on a card would be too late, and
+              in Settings would be too far away.
+              Rendered only when there is a real choice (>1 reachable backend) —
+              a Claude-only machine sees the pill exactly as it is today. */}
+          {/* THE AGENT CHIP MOVED. It lived here, on the recording side of the
+              pill, next to the timer and the stop button — none of which have
+              anything to do with where the task runs. It now sits joined to the
+              model selector, because "which agent" and "which model" are one
+              decision: the agent decides which models exist. See RemoteBadge. */}
           <button className="unmute-pill-stop" onClick={onStop} aria-label="Stop recording">
             <div className={`unmute-pill-stop-icon ${stopIconClass}`} />
           </button>

@@ -5,9 +5,14 @@
 // telling the user *why* (not signed in / no balance / cloud unreachable /
 // chose-on-device). Dismissible per app session; reappears on next launch.
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { panelRows, hudHeight, contentOffset, HUD_BASE } from './hudSizing'
 import Widget from './Widget'
 import { useAudioRecorder } from './useAudioRecorder'
+import {
+  shouldShowAgentPicker, currentAgentLabel as agentLabelOf,
+  currentAgentConnected as agentConnectedOf, nextAgentId, type AgentPickerState,
+} from './agentPicker'
 import type { WidgetState } from '../shared/types'
 import OfflineAwarenessCard, { type OfflineReason } from './OfflineAwarenessCard'
 import {
@@ -84,18 +89,100 @@ function remoteModelApi() {
     remoteSetModel?: (m: string) => Promise<string>
     remoteOnModelChanged?: (cb: (model: string) => void) => () => void
     remoteGetModelCatalog?: () => Promise<ModelChoice[]>
-    paywallSetHUDHeight?: (height: number) => Promise<boolean>
+    paywallSetHUDHeight?: (height: number, opts?: { upward?: boolean }) => Promise<boolean>
   }
 }
 
-function RemoteBadge() {
+function remoteCodexApi() {
+  return window.electronAPI as unknown as {
+    remoteAgentOptions?: () => Promise<{ current: string }>
+    remoteCodexReasoning?: () => Promise<{
+      label: string | null
+      current: Partial<Record<'Model' | 'Effort' | 'Speed', string>>
+      options: Partial<Record<'Model' | 'Effort' | 'Speed', string[]>>
+    }>
+    remoteCodexReasoningSet?: (axis: 'Model' | 'Effort' | 'Speed', value: string) => Promise<boolean>
+  }
+}
+
+/**
+ * THE CHIP MUST FOLLOW THE AGENT PICKER.
+ *
+ * It always read the Claude catalog and had no idea the picker existed, so
+ * "Codex + Opus" was a reachable state: the task ran on Codex and the model
+ * choice was written to unmute's Claude setting and silently discarded. Codex
+ * has its own tiers — and its own effort and speed axes, which for that backend
+ * are as much a part of "what am I running this on" as the model name.
+ *
+ * Names are never hardcoded; they come from the running Codex. When Codex is
+ * closed we show the last list we truly saw rather than inventing one.
+ */
+interface AgentPickerLite {
+  current: string
+  options: Array<{ id: string; label: string; available: boolean; installed?: boolean }>
+}
+
+function RemoteBadge({ picker, onPickAgent }: {
+  picker?: AgentPickerLite | null
+  onPickAgent?: (id: string) => void
+}) {
   const [catalog, setCatalog] = useState<ModelChoice[]>(FALLBACK_CATALOG)
   // The saved doer-model id — ANY catalog id, not limited to haiku/sonnet/opus.
   const [model, setModel] = useState<string>('sonnet')
   const [expanded, setExpanded] = useState(false)
+  // Agent side of the joined control. `picker` is the same state the pill used
+  // to own — only the rendering moved, so this reuses the SAME tested helpers
+  // rather than re-deriving the rules. They exist because a hand-written
+  // visibility guard hid this chip for four builds; duplicating that logic here
+  // would be the same mistake with a new home.
+  const showAgent = shouldShowAgentPicker({ isRemote: true, picker: picker as AgentPickerState | undefined })
+  const agentLabel = showAgent ? agentLabelOf(picker as AgentPickerState | undefined) : null
+  const agentConnected = agentConnectedOf(picker as AgentPickerState | undefined)
+  const cycleAgent = () => {
+    const next = nextAgentId(picker as AgentPickerState | undefined)
+    if (onPickAgent && next) onPickAgent(next)
+  }
+
+  const [codex, setCodex] = useState<{
+    label: string | null
+    current: Partial<Record<'Model' | 'Effort' | 'Speed', string>>
+    options: Partial<Record<'Model' | 'Effort' | 'Speed', string[]>>
+  } | null>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // ONE SOURCE OF TRUTH for which agent is selected.
+  //
+  // This used to keep its own copy, refreshed by a 1500ms poll, while the chip's
+  // LABEL came from `picker` — which WidgetApp updates optimistically the
+  // instant you tap. Two clocks for one fact: the chip flipped immediately and
+  // the list below it kept showing the other agent's models for up to a second
+  // and a half before snapping over. `picker` is already kept fresh by
+  // WidgetApp (loaded on capture, updated on tap, refreshed after connect), so
+  // the second copy was redundant as well as wrong.
+  const isCodex = (picker?.current ?? 'claude') === 'codex-desktop'
+
+  // Codex's own axes, served from cache so they are there IMMEDIATELY. Reading
+  // them live walks Codex's menus (~3s) — a capture is often over before that
+  // returns, which is exactly why this chip kept showing a Claude model.
   useEffect(() => {
+    if (!isCodex) return
+    let cancelled = false
+    // Deliberately NOT clearing first. Blanking on the way in meant the panel
+    // rendered its empty state — and asked for a near-collapsed window — for as
+    // long as the fetch took, so switching to Codex flashed "connect Codex" and
+    // the window snapped down and back up.
+    void remoteCodexApi().remoteCodexReasoning?.().then((r) => {
+      if (!cancelled && r) setCodex(r)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [isCodex])
+
+  useEffect(() => {
+    // DEPS MATTER HERE. With `[]` this read `isCodex` from the first render,
+    // where it is always false — so the guard never fired, the Claude catalog
+    // always loaded, and its model-changed listener kept overwriting the Codex
+    // value. That is why the chip said "Opus" with Codex selected.
+    if (isCodex) return
     const api = remoteModelApi()
     // Reflect whatever the saved model IS — never silently downgrade an id we
     // don't recognise. (The old guard forced any non-{haiku,sonnet,opus} value
@@ -105,8 +192,26 @@ function RemoteBadge() {
     void api.remoteGetModelCatalog?.().then((c) => { if (c && c.length) setCatalog(c) })
     const off = api.remoteOnModelChanged?.((m) => { if (typeof m === 'string' && m) setModel(m) })
     return () => off?.()
-  }, [])
+  }, [isCodex])
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
+
+  /**
+   * The rows the dropdown shows: one flat list for Claude, three axes for Codex.
+   *
+   * MEMOISED because it is a dependency of the resize effect below. Rebuilt
+   * every render it had a fresh identity every render, so that effect — and its
+   * CLEANUP, which collapses the window back to 72px — ran on every single
+   * render. The window was shrinking and re-expanding continuously while the
+   * list was open. That was the bulk of the stutter.
+   */
+  const axes = useMemo(
+    () => (isCodex
+      ? (['Model', 'Effort', 'Speed'] as const)
+          .map((axis) => ({ axis, values: codex?.options[axis] ?? [], current: codex?.current[axis] }))
+          .filter((a) => a.values.length)
+      : []),
+    [isCodex, codex],
+  )
 
   // The selector opens DOWNWARD (a dropdown below the pill row) so it scales to
   // ANY number of catalog models — a horizontal reveal can't. Same seam the
@@ -114,10 +219,41 @@ function RemoteBadge() {
   // isn't clipped, restore the 72px default on close/unmount.
   useEffect(() => {
     const api = remoteModelApi()
-    if (expanded) void api.paywallSetHUDHeight?.(Math.min(320, 64 + catalog.length * 38 + 12))
-    else void api.paywallSetHUDHeight?.(72)
-    return () => { void remoteModelApi().paywallSetHUDHeight?.(72) }
-  }, [expanded, catalog.length])
+    const rows = panelRows(isCodex, axes, catalog.length)
+    // UPWARD, WITH THE PILL PINNED.
+    //
+    // Growing the window upward alone is not enough — that is what shipped in
+    // dev.43 and it dragged the pill up the screen with the window's top edge,
+    // away from the cursor that opened it. The window's extra height appears
+    // ABOVE the old top edge, so the content must be pushed down by exactly
+    // that much to stay where it was. `--hud-extra` carries it to the root,
+    // which divides by the 0.75 scale the whole pill family is drawn at.
+    const BASE = HUD_BASE
+    const height = hudHeight(expanded, rows)
+    const pad = (h: number) =>
+      document.documentElement.style.setProperty('--hud-extra', `${contentOffset(h)}px`)
+
+    // ORDER MATTERS, because the resize is an IPC round-trip while the padding
+    // lands on the next paint. Whichever is applied first must be the one that
+    // cannot clip:
+    //   growing  — resize first. Padding first would push content down inside a
+    //              window that is still short, cutting it off at the bottom.
+    //   shrinking — pad first. Content moves up while the window is still tall;
+    //              shrinking first would strand it below the new top edge.
+    let cancelled = false
+    void (async () => {
+      const grow = height > BASE
+      if (!grow) pad(height)
+      await api.paywallSetHUDHeight?.(height, { upward: true })
+      if (!cancelled && grow) pad(height)
+    })()
+
+    return () => {
+      cancelled = true
+      pad(BASE)
+      void remoteModelApi().paywallSetHUDHeight?.(BASE, { upward: true })
+    }
+  }, [expanded, catalog.length, isCodex, axes])   // `axes` is memoised above
 
   const open = () => {
     if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null }
@@ -129,14 +265,26 @@ function RemoteBadge() {
 
   const pick = (m: string) => {
     setModel(m) // optimistic — reflects instantly; the next task reads the setting
-    void remoteModelApi().remoteSetModel?.(m)
+    if (isCodex) pickAxis('Model', m)
+    else { void remoteModelApi().remoteSetModel?.(m); setExpanded(false) }
+  }
+
+  /** Codex has three axes, not one — model alone is half the setting. */
+  const pickAxis = (axis: 'Model' | 'Effort' | 'Speed', value: string) => {
+    setCodex((prev) => (prev ? { ...prev, current: { ...prev.current, [axis]: value } } : prev))
+    void remoteCodexApi().remoteCodexReasoningSet?.(axis, value)
     setExpanded(false)
   }
 
   const active = catalog.find((c) => c.id === model)
   // If the saved id isn't in the catalog, still show its raw id rather than
   // masquerading as another model — the anti-downgrade rule, applied to display.
-  const activeLabel = active?.label ?? model
+  // For Codex the chip carries model AND effort, the way Codex's own control
+  // does ("5.6 Terra High") — effort is half of what the run will cost.
+  const activeLabel = isCodex
+    ? [codex?.current.Model, codex?.current.Effort].filter(Boolean).join(' ') || 'Codex'
+    : (active?.label ?? model)
+
 
   return (
     <div
@@ -144,18 +292,49 @@ function RemoteBadge() {
       onMouseEnter={open}
       onMouseLeave={scheduleClose}
     >
+      {/* AGENT + MODEL AS ONE CONTROL. The agent chip used to live on the
+          recording side of the pill, beside the timer and the stop button —
+          nothing there has anything to do with where the task runs. Joined to
+          the model selector it reads as the single decision it is: the agent
+          determines which models exist, so "Codex → 5.6 Terra High" is one
+          sentence, left to right. */}
+      {agentLabel && (
+        <button
+          onClick={cycleAgent}
+          title={agentConnected ? 'Where this task runs — tap to switch' : 'Not connected — tap to connect'}
+          style={{
+            height: 44, borderRadius: '9999px 0 0 9999px', background: '#000',
+            border: '1px solid rgba(255,255,255,0.55)', borderRight: 'none',
+            display: 'flex', alignItems: 'center', gap: 7,
+            padding: '0 12px 0 15px', cursor: 'pointer',
+            fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap',
+            color: agentConnected ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.5)',
+          }}
+        >
+          <span style={{
+            width: 7, height: 7, borderRadius: '50%', flex: 'none',
+            background: agentConnected ? '#6fbf9a' : 'rgba(255,255,255,0.35)',
+          }} />
+          {agentLabel}{agentConnected ? '' : ' · connect'}
+        </button>
+      )}
+      {agentLabel && (
+        <div style={{ width: 1, height: 44, background: 'rgba(255,255,255,0.28)', flex: 'none' }} />
+      )}
       {/* Collapsed: a single pill showing the active model. Same family as the
           RAW toggle / mic chip — dark fill, whitish border, NO shadow. */}
       <div
         style={{
           height: 44,
-          borderRadius: 9999,
+          // Square off the joined edge so the pair reads as one control.
+          borderRadius: agentLabel ? '0 9999px 9999px 0' : 9999,
           background: '#000',
           border: '1px solid rgba(255, 255, 255, 0.55)',
+          borderLeft: agentLabel ? 'none' : undefined,
           boxShadow: 'none',
           display: 'flex',
           alignItems: 'center',
-          padding: '0 14px',
+          padding: agentLabel ? '0 14px 0 12px' : '0 14px',
           gap: 7,
           cursor: 'pointer',
           fontSize: 12.5,
@@ -179,12 +358,56 @@ function RemoteBadge() {
       {expanded && (
         <div
           style={{
-            position: 'absolute', top: 48, left: 0, minWidth: 172, maxHeight: 300, overflowY: 'auto',
+            // Anchored to the BOTTOM of the chip so it opens upward, matching
+            // the window growth above.
+            position: 'absolute', bottom: 48, left: 0, minWidth: 172, maxHeight: 360, overflowY: 'auto',
             background: '#000', border: '1px solid rgba(255,255,255,0.35)',
-            borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10,
+            // SIDE BY SIDE. Stacked, Codex's three axes are 13 rows — taller than
+            // the space above a pill that already sits near the bottom edge, so
+            // it scrolled. In columns everything is visible at once and the
+            // panel is about a third the height.
+            borderRadius: 13, padding: 7, display: 'flex',
+            flexDirection: isCodex ? 'row' : 'column', gap: isCodex ? 14 : 2, zIndex: 10,
           }}
         >
-          {catalog.map((c) => {
+          {/* Codex is not one axis. Model alone leaves effort and speed —
+              which decide what a run costs and how long it takes — unreachable,
+              and reaching them was the whole point of not being a restricted
+              remote. */}
+          {isCodex && axes.map(({ axis, values, current }) => (
+            <div key={axis} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 116 }}>
+              <div style={{
+                fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase',
+                color: 'rgba(255,255,255,0.35)', padding: '6px 10px 2px',
+              }}>{axis}</div>
+              {values.map((v) => {
+                const on = v === current
+                return (
+                  <button
+                    key={axis + v}
+                    onClick={() => pickAxis(axis, v)}
+                    style={{
+                      textAlign: 'left', width: '100%', height: 32, padding: '0 10px',
+                      borderRadius: 8, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+                      fontSize: 12.5, fontWeight: 600,
+                      background: on ? 'rgba(217,119,87,0.18)' : 'transparent',
+                      color: on ? CLAUDE_ORANGE : 'rgba(255,255,255,0.7)',
+                    }}
+                    onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
+                    onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = 'transparent' }}
+                  >
+                    {v}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+          {isCodex && axes.length === 0 && (
+            <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.45)', padding: '8px 10px' }}>
+              connect Codex to choose a model
+            </div>
+          )}
+          {!isCodex && catalog.map((c) => {
             const isActive = c.id === model
             return (
               <button
@@ -636,6 +859,10 @@ export default function WidgetApp() {
   // (types text)? Drives the Remote badge next to the pill. Set on every
   // recording:start from its kind, so it's always fresh for this capture.
   const [isRemote, setIsRemote] = useState(false)
+  // Backend picker for Remote captures. Refreshed when a Remote capture STARTS
+  // rather than polled: availability changes rarely (Codex opened/closed), and
+  // the answer is only ever needed at the moment the pill appears.
+  const [agentPicker, setAgentPicker] = useState<{ current: string; options: Array<{ id: string; label: string; available: boolean }> } | null>(null)
   const stateRef = useRef<WidgetState>('hidden')
 
   const { analyserNode, maxDurationSeconds, noisyEnvironment, tooQuiet, startRecording, stopRecording } = useAudioRecorder()
@@ -791,8 +1018,25 @@ export default function WidgetApp() {
     // 4th arg). Tells us whether this capture is Remote so the pill can badge it.
     const remoteApi = api as unknown as {
       remoteOnCaptureKind?: (cb: (kind: 'dictation' | 'remote') => void) => void
+      remoteAgentOptions?: () => Promise<{ current: string; options: Array<{ id: string; label: string; available: boolean }> }>
     }
-    remoteApi.remoteOnCaptureKind?.((kind) => setIsRemote(kind === 'remote'))
+    // Warm the picker at mount. The capture-start refresh below keeps it honest,
+    // but this guarantees the chip has data the first time a Remote capture
+    // opens, instead of depending on one event arriving before first paint.
+    void remoteApi.remoteAgentOptions?.()
+      .then((o) => { if (o) setAgentPicker(o) })
+      .catch(() => {})
+    remoteApi.remoteOnCaptureKind?.((kind) => {
+      const remote = kind === 'remote'
+      setIsRemote(remote)
+      // Only Remote captures dispatch a task, so only they need the picker.
+      // Refresh on every start: whether Codex can take work is live state, and
+      // a stale "Codex" chip would offer a backend that has since gone away.
+      if (!remote) { setAgentPicker(null); return }
+      void remoteApi.remoteAgentOptions?.()
+        .then((o) => setAgentPicker(o ?? null))
+        .catch(() => setAgentPicker(null))
+    })
 
     // Zombie phone detected by the recorder (acquirable device, dead pipe):
     // re-enumerate so the chip stops advertising a corpse and flips back to
@@ -936,6 +1180,32 @@ export default function WidgetApp() {
     await stopRecording()
   }, [stopRecording])
 
+  /** Switch the backend the NEXT task runs on. No task exists yet — the user is
+   *  mid-utterance — so this only persists the default that dispatch reads when
+   *  the utterance is submitted. Optimistic locally so the chip flips instantly. */
+  const handlePickAgent = useCallback((id: string) => {
+    setAgentPicker((prev) => (prev ? { ...prev, current: id } : prev))
+    const api = (window as any).electronAPI as {
+      remoteSetAgent?: (a: string) => Promise<boolean>
+      remoteCodexConnect?: () => Promise<{ ok: boolean }>
+      remoteAgentOptions?: () => Promise<any>
+    } | undefined
+    void api?.remoteSetAgent?.(id)
+    // If the chosen backend is installed but not connected, connect it now. This
+    // is the only place the arming relaunch is triggered — always a deliberate
+    // user tap, never mid-utterance on our own initiative.
+    setAgentPicker((prev) => {
+      const opt = prev?.options.find((o) => o.id === id)
+      if (prev && opt && !opt.available && id === 'codex-desktop') {
+        void api?.remoteCodexConnect?.()
+          .then(() => api?.remoteAgentOptions?.())
+          .then((fresh) => { if (fresh) setAgentPicker(fresh) })
+          .catch(() => {})
+      }
+      return prev
+    })
+  }, [])
+
   const handleUndo = useCallback(() => {
     setState('processing')
     window.electronAPI.undoCancel()
@@ -973,12 +1243,19 @@ export default function WidgetApp() {
       // transform keeps every element/gap in proportion; hit-testing follows
       // the scaled rects automatically. Label/timer fonts are bumped in
       // Widget.tsx so the text stays legible at this scale.
-      style={{ background: 'transparent', paddingTop: '8px', transform: 'scale(0.75)', transformOrigin: 'top center' }}
+      // paddingTop absorbs the window's upward growth (see --hud-extra in
+      // RemoteBadge) so the pill row does not move when a list opens above it.
+      style={{
+        background: 'transparent',
+        paddingTop: 'calc(8px + var(--hud-extra, 0px))',
+        transform: 'scale(0.75)',
+        transformOrigin: 'top center',
+      }}
     >
       {/* Remote capture → circular badge to the LEFT of the pill, with a gap.
           Dictation → pill only. */}
       <div className="flex items-center justify-center" style={{ gap: '16px' }}>
-        {isRemote && pillShowing && <RemoteBadge />}
+        {isRemote && pillShowing && <RemoteBadge picker={agentPicker} onPickAgent={handlePickAgent} />}
         {isRemote && pillShowing && <RawToggle />}
         {/* the screenshot ledger shows for BOTH capture kinds — dictation pastes
             the images into the target app after the text; Remote attaches them
@@ -1028,6 +1305,9 @@ export default function WidgetApp() {
           onCancel={handleCancel}
           onStop={handleStop}
           onUndo={handleUndo}
+          agentPicker={agentPicker ?? undefined}
+          isRemote={isRemote}
+          onPickAgent={handlePickAgent}
         />
       </div>
       {showAwareness && (

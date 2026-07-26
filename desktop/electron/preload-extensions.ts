@@ -224,8 +224,8 @@ export const paywallPreloadExtensions = {
   // HUD window dynamic resize — grow when the awareness card mounts,
   // shrink back when it dismisses. Width and top-left position stay; only
   // height changes. Clamped in main to [72, 220].
-  paywallSetHUDHeight: (height: number): Promise<boolean> =>
-    ipcRenderer.invoke('hud:set-height', height),
+  paywallSetHUDHeight: (height: number, opts?: { upward?: boolean }): Promise<boolean> =>
+    ipcRenderer.invoke('hud:set-height', height, opts),
   /** iPhone-mic feature gate (Settings): chip + Continuity path hidden until enabled. */
   getIphoneMicEnabled: (): Promise<boolean> => ipcRenderer.invoke('settings:get-iphone-mic'),
   setIphoneMicEnabled: (on: boolean): Promise<boolean> => ipcRenderer.invoke('settings:set-iphone-mic', on),

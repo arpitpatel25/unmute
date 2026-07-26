@@ -62,6 +62,38 @@ struct TaskDetail: Codable {
     let result: ResultP?
     let error: ErrorP?
     let mcpGap: McpGapP?
+    /// Last message that did not reach the agent. NOT a task failure — the
+    /// thread is fine, our delivery missed.
+    let deliveryError: String?
+    /// A message is in flight to the agent.
+    let sending: Bool?
+    /// What this thread runs on, as Codex labels it ("5.6 Terra High").
+    let modelLabel: String?
+    /// Which backend runs this task. Absent ⇒ Claude (PTY-backed).
+    let backend: String?       // "codex-desktop"
+    /// Last few turns — the GUI-agent equivalent of the live terminal. A Codex
+    /// thread has no PTY, so the conversation itself is what this panel shows.
+    let conversation: [TurnP]?
+    /// Codex project name, for the header.
+    let project: String?
+}
+
+/// One turn of a GUI-agent conversation.
+struct TurnP: Codable {
+    /// "user" | "commentary" | "tool" | "assistant" — Codex's own distinctions,
+    /// kept rather than flattened (see codex/rollout.ts).
+    let role: String
+    let text: String
+    /// tool: the step's label, as Codex titles it ("Search YouTube").
+    let title: String?
+    /// tool: the exact code/command it ran.
+    let code: String?
+    /// tool: what came back.
+    let output: String?
+    /// tool: wall time Codex reported, in ms.
+    let durationMs: Int?
+    /// tool: false when the step reported an error.
+    let ok: Bool?
 }
 
 /// A resting card on the wall.
@@ -78,9 +110,19 @@ struct CardP: Codable {
     let agent: Bool?           // "↳ agent" (spawnedBy)
     let note: String?
     let alive: Bool
+    /// Which backend runs this card. Absent ⇒ Claude (PTY-backed).
+    let backend: String?
+    let project: String?
 }
 
-struct GroupP: Codable { let name: String; let cards: [CardP] }   // name "" = ungrouped
+struct GroupP: Codable {
+    let name: String
+    let cards: [CardP]
+    /// Settled cards folded away by the 48h rule; nil/0 when nothing is hidden.
+    let hidden: Int?
+    /// True while this group is showing everything it holds.
+    let expanded: Bool?
+}   // name "" = ungrouped
 struct QueueItemP: Codable { let id: String; let name: String; let status: TaskStatus }
 struct OneoffP: Codable { let id: String; let name: String; let status: TaskStatus; let age: String? }
 struct ProjectP: Codable { let name: String; let path: String }
@@ -99,6 +141,10 @@ struct RouteOfferP: Codable { let newTaskId: String; let altTaskId: String; let 
 /// The whole wall.
 struct CockpitData: Codable {
     let groups: [GroupP]
+    /// Cards folded away across the whole wall.
+    let hiddenTotal: Int?
+    /// True while "show all" is on for this visit.
+    let showingAll: Bool?
     let queue: [QueueItemP]
     let oneoffs: [OneoffP]
     let projects: [ProjectP]
@@ -205,6 +251,7 @@ enum Event {
     case next                                      // crank forward
     case prev                                      // crank backward
     case focusTask(id: String)                     // card clicked → voice address
+    case showAll(group: String?, on: Bool)         // reveal folded cards (nil = whole wall)
     case closeStage                                // Stage esc → back to wall
     case chooseOption(id: String, index: Int)
     case answerText(id: String, text: String)      // free-text / confirm answer
@@ -247,6 +294,10 @@ enum Event {
         case .next: return ["type": "next"]
         case .prev: return ["type": "prev"]
         case .focusTask(let id): return ["type": "focusTask", "id": id]
+        case .showAll(let group, let on):
+            var d: [String: Any] = ["type": "showAll", "on": on]
+            if let g = group { d["group"] = g }
+            return d
         case .closeStage: return ["type": "closeStage"]
         case .chooseOption(let id, let index): return ["type": "chooseOption", "id": id, "index": index]
         case .answerText(let id, let text): return ["type": "answerText", "id": id, "text": text]

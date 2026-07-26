@@ -21,7 +21,11 @@
   },
   "include": [
     "engine-overrides/renderer/remote/**/*.tsx",
-    "engine-overrides/renderer/remote/**/*.ts"
+    "engine-overrides/renderer/remote/**/*.ts",
+    "engine-overrides/renderer/widget/**/*.tsx",
+    "engine-overrides/renderer/widget/**/*.ts",
+    "engine-overrides/renderer/app/**/*.tsx",
+    "engine-overrides/renderer/app/**/*.ts"
   ],
   "exclude": [
     "engine-overrides/renderer/remote/**/*.test.ts"

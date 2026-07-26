@@ -56,6 +56,19 @@ export interface RoutableTask {
   group?: string | null
 }
 
+/** What the host can actually run a task on RIGHT NOW. Passed in per-utterance
+ *  because availability is dynamic (Codex may be closed or unarmed). The router
+ *  may only ever name a backend that appears here — everything else is dropped
+ *  at parse, so the user can never be told their task went somewhere it didn't. */
+export interface AgentAvailability {
+  /** Backends the host can dispatch to this instant. */
+  agents: Array<'claude' | 'codex-desktop'>
+  /** The user's current picker default — used when they don't name one. */
+  preferred: 'claude' | 'codex-desktop'
+  /** Live Codex project names, for "put it in the unmute project". */
+  codexProjects?: string[]
+}
+
 /** A known project a NEW session can be bound to (curated by projects.ts). */
 export interface RoutableProject {
   name: string
@@ -96,6 +109,15 @@ export interface RouteDecision {
    *  project paths offered in the prompt (validated at parse; anything else is
    *  dropped). The task then runs IN that directory. */
   dir?: string
+  /** WHICH BACKEND a NEW task should run on, when the user named one out loud
+   *  ("do it in Codex"). Omitted ⇒ the host uses the user's picker default.
+   *  Only ever a backend the host said is available; anything else is dropped
+   *  at parse, so a hallucinated agent can never strand a task in an app the
+   *  user doesn't have. */
+  agent?: 'claude' | 'codex-desktop'
+  /** For 'codex-desktop': the Codex PROJECT to create the task inside, when the
+   *  user named one. Validated against the live project list. */
+  codexProject?: string
   /** For action 'new' only: the open task the router NEARLY chose instead (a
    *  plausible continue-target that lost). Powers the declinable offer — "started
    *  new — or send to X?" — never a silent reroute. Validated against the
@@ -134,7 +156,7 @@ export function fmtAge(ageSec: number): string {
 
 /** The instruction we type into the warm REPL each call. Self-contained: the
  *  router relies on THIS snapshot, not on accumulated memory (keeps it thin). */
-export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = []): string {
+export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): string {
   const lines = tasks.map((t) =>
     `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — ${t.state}` +
     `${t.kind === 'session' ? ' · PERSISTENT SESSION' : ''}${t.project ? ` · project: ${t.project}` : ''}` +
@@ -312,6 +334,12 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
     `surface: the app/tool the task operates on. Use EXACTLY one of these canonical labels (never invent a new one): ${SURFACES.join(', ')}. Omit if none applies. (e.g. a tweet/X task = "x"; a Mac app/system task = "macos"; streaming on Hotstar = "jiohotstar".)`,
     `mode: use "raw" for "open me a session to work in" / open-ended coding where injected memory hints would pollute long reasoning; use "managed" for short, surface-operating dictated tasks. If ambiguous, choose "raw".`,
     `kind (only for action "new"): "session" for a working session the user will keep coming back to — coding, a project (anything with "dir"), open-ended "work on X" — it stays alive until they end it. "oneoff" for a quick errand they fire and forget (open/check/find something). If ambiguous, "oneoff".`,
+    ...(avail && avail.agents.length > 1 ? [
+      `agent (only for action "new"): WHICH backend runs it. Available: ${avail.agents.join(', ')}. Use "codex-desktop" ONLY when the user says so ("in Codex", "on Codex", "the Codex app"); use "claude" when they say Claude/Claude Code. If they name neither, OMIT it — the host applies their default (${avail.preferred}).`,
+      ...(avail.codexProjects?.length ? [
+        `codexProject (only with agent "codex-desktop", optional): the Codex project to create it inside, EXACTLY one of: ${avail.codexProjects.join(', ')}. Omit when the user names none.`,
+      ] : []),
+    ] : []),
     `group: the workspace group for the task this command creates or continues — the answer to "what is this work ABOUT" (a project, artifact, or stream: a repo name, "launch video", "on-call"), NEVER an activity type ("coding", "research", "media"). Every PERSISTENT SESSION deserves a group — being a session already proves the stream is ongoing. Decide DELIBERATELY, in this order: (1) if the user names a group in the command, use exactly their words; (2) check the LIVE GROUPS list above — JOIN one when this task belongs to that same stream of work (not merely when it mentions the same product/word: a group that swallows everything is no group); (3) otherwise CREATE one — 2-3 words, the subject in the user's own words ("videos", "launch video", "on-call") — this is the NORMAL case for a new session, not an exception; (4) omit ONLY when the work is genuinely subject-less, or for a one-off errand. A group is the stream, not the deliverable: name what the user will still call this work next week.`,
   ].join('\n')
 }
@@ -337,7 +365,7 @@ export function failsafeDecision(tasks: RoutableTask[], intent: string, maxAgeSe
 /** Parse the decision file. EXPLICIT router decisions (new, or continue→known id)
  *  are honored. Everything else — null/malformed/unknown-action/unknown-id —
  *  routes through failsafeDecision (continue-latest-if-single). */
-export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = [], coldSessions: RoutableTask[] = [], finished: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = []): RouteDecision {
+export function parseDecision(raw: string | null, fallbackIntent: string, tasks: RoutableTask[], projects: RoutableProject[] = [], coldSessions: RoutableTask[] = [], finished: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): RouteDecision {
   // CONSENT ENFORCEMENT (layer 2): continue-targets are ONLY the targetable
   // tasks; a cold session id in targetTaskId is rejected here no matter what
   // the model wrote (falls through to a safe NEW). Cold ids ARE valid for
@@ -352,7 +380,7 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
   // and an off-list name (or a hallucinated one) is dropped at this boundary.
   const knownSkills = new Set(skillNames)
   if (!raw) return failsafeDecision(tasks, fallbackIntent)
-  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string; contextTaskId?: string; group?: string; ops?: unknown; skill?: string }
+  let obj: { action?: string; targetTaskId?: string; intent?: string; surface?: string; mode?: string; kind?: string; dir?: string; alternate?: string; name?: string; contextTaskId?: string; group?: string; ops?: unknown; skill?: string; agent?: string; codexProject?: string }
   try { obj = JSON.parse(raw) } catch { return failsafeDecision(tasks, fallbackIntent) }
   const intent = (obj.intent && obj.intent.trim()) || fallbackIntent
   const mode = obj.mode === 'raw' ? 'raw' : 'managed'
@@ -432,7 +460,16 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
     // falls back to a truncated intent, never breaks).
     const rawName = (obj.name ?? '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim()
     const name = rawName && rawName.length <= 48 ? rawName : undefined
-    return { action: 'new', intent, mode, surface, kind, dir, alternate, name, contextTaskId, ...(group ? { group } : {}), ...(skill ? { skill } : {}) }
+    // agent: only ever a backend the host said is reachable. A hallucinated or
+    // unavailable value is dropped so the host falls back to the user's default
+    // rather than stranding the task in an app they don't have.
+    const agent = avail && typeof obj.agent === 'string' && (avail.agents as string[]).includes(obj.agent)
+      ? (obj.agent as 'claude' | 'codex-desktop') : undefined
+    // codexProject is meaningless without the Codex backend, and must name a
+    // project that actually exists right now.
+    const codexProject = agent === 'codex-desktop' && typeof obj.codexProject === 'string'
+      && avail?.codexProjects?.includes(obj.codexProject) ? obj.codexProject : undefined
+    return { action: 'new', intent, mode, surface, kind, dir, alternate, name, contextTaskId, ...(agent ? { agent } : {}), ...(codexProject ? { codexProject } : {}), ...(group ? { group } : {}), ...(skill ? { skill } : {}) }
   }
   return failsafeDecision(tasks, intent)
 }
@@ -488,8 +525,8 @@ export class Router {
 
   /** Classify one utterance against the current task snapshot. Single-flighted;
    *  always resolves (fail-safe to a new task). */
-  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = []): Promise<RouteDecision> {
-    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects, finished, coldSessions, wall, skillNames))
+  route(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): Promise<RouteDecision> {
+    const run = this.chain.then(() => this.routeOnce(utterance, tasks, projects, finished, coldSessions, wall, skillNames, avail))
     // After the decision resolves to the caller, keep the chain alive with
     // housekeeping (/clear + maybe-recycle) — off the hot path, but serialized
     // so it can never overlap the next route.
@@ -506,13 +543,13 @@ export class Router {
     return run
   }
 
-  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = []): Promise<RouteDecision> {
+  private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): Promise<RouteDecision> {
     const fallback = (utterance || '').trim()
     try {
       await this.ensureSession()
       await fs.mkdir(this.dir, { recursive: true })
       await fs.rm(this.decisionPath, { force: true }).catch(() => {})
-      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished, coldSessions, wall, skillNames)
+      const prompt = buildRoutingPrompt(utterance, tasks, this.decisionPath, projects, finished, coldSessions, wall, skillNames, avail)
       this.ex!.writeStdin(prompt)
       // The multi-line prompt is captured by Claude's TUI as a paste that lands
       // one Enter short of submitting — so it sits as "[Pasted text]" and the
@@ -521,7 +558,7 @@ export class Router {
       await this.sleep(this.o.submitConfirmMs)
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
       const raw = await this.waitForDecision(prompt)
-      const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames)
+      const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail)
       // TEMP(memory-debug)
       log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, group: decision.group ?? null, ops: decision.ops?.length ?? 0, MEMORY_DEBUG: true })
       return decision

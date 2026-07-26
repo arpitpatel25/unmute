@@ -388,8 +388,32 @@ test('interacting with a muted task (focus) ends its mute episode', () => {
   h.client.fire({ type: 'focusTask', id: 't1' }) // user opened it in the cockpit
   h.flush()
   assert.equal(h.client.last('setState')!.state, 'cockpit')
-  h.client.fire({ type: 'collapsed' }) // back to baseline → it queues again
+  // ...and CLOSING it counts as having seen it, so a finished task does not
+  // come straight back to nag. Seen-is-enough applies to `ready` only.
+  h.client.fire({ type: 'collapsed' })
+  assert.equal(h.client.last('setState')!.state, 'dormant')
+})
+
+test('opening then closing a BLOCKED task leaves it in attention — it still needs you', () => {
+  // Seen-is-enough must not silently drop a task that is genuinely waiting on
+  // an answer; only an explicit mute does that.
+  const h = setup()
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'focusTask', id: 'b1' })
+  h.flush()
+  h.client.fire({ type: 'collapsed' })
   assert.equal(h.client.last('setState')!.state, 'attention')
+})
+
+test('a blocked task CAN still be hidden, but only by asking for it', () => {
+  // "even for blocked tasks there should be a way for users to hide it — even
+  // from the next queue as well."
+  const h = setup()
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'mute', id: 'b1' })
+  assert.equal(h.client.last('setState')!.state, 'dormant')
+  h.client.fire({ type: 'next' })   // the crank must skip it too
+  assert.notEqual(h.client.last('setState')!.state, 'task')
 })
 
 // ── forwarded notifications ─────────────────────────────────────────────────
@@ -411,4 +435,408 @@ test('route offer lands in the cockpit payload; accept calls through', async () 
   assert.equal(h.client.last('setCockpit')!.data.routeOffer?.altName, 'Pager')
   h.client.fire({ type: 'offerAccept', newTaskId: 'n1' })
   assert.deepEqual(h.calls.acceptRouteOffer?.[0], ['n1'])
+})
+
+// ── tapping the notch ───────────────────────────────────────────────────────
+
+test('tapping a WORKING task opens that task, not the whole cockpit', () => {
+  // Reported 2026-07-25: "when you tap it, it just directly opens the cockpit".
+  // A merely-processing task is never in the attention queue, so the old tap
+  // handler found no front task and fell through to the wall — even though the
+  // notch was, at that moment, showing exactly one task.
+  const h = setup()
+  put(h, makeTask({ id: 'w1', state: 'processing', alive: true }))
+  h.client.fire({ type: 'tap' })
+  assert.equal(h.client.last('setState')!.state, 'task')
+  assert.equal(h.client.last('showTask')!.task.id, 'w1')
+})
+
+test('tapping with SEVERAL working tasks opens the wall — the notch shows a count, not a task', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'w1', state: 'processing', alive: true }))
+  put(h, makeTask({ id: 'w2', state: 'processing', alive: true }))
+  h.client.fire({ type: 'tap' })
+  assert.equal(h.client.last('setState')!.state, 'cockpit')
+})
+
+test('an attention task still wins over a working one', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'w1', state: 'processing', alive: true }))
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'tap' })
+  assert.equal(h.client.last('setState')!.state, 'task')
+  assert.equal(h.client.last('showTask')!.task.id, 'b1')
+})
+
+// ── Codex tasks on every surface ────────────────────────────────────────────
+
+test('a Codex task is never reported dead — its thread outlives every turn', () => {
+  // `alive` is read everywhere as "can you still talk to this?". Reporting
+  // false put a finished Codex chat behind "resume — continue with full
+  // context" / "re-run fresh", offering to revive something never stopped.
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th', alive: false }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const detail = h.client.last('stageDetail')!.task
+  assert.equal(detail.alive, true)
+  assert.equal(detail.backend, 'codex-desktop')
+})
+
+test('the wall carries the backend, so a card can offer "open in Codex"', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  put(h, makeTask({ id: 'k1', state: 'ready' }))
+  h.client.fire({ type: 'openDashboard' })
+  const cards = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards)
+  assert.equal(cards.find((c) => c.id === 'c1')!.backend, 'codex-desktop')
+  assert.equal(cards.find((c) => c.id === 'k1')!.backend, undefined)
+})
+
+test('the transcript reaches the surface as items, not one flattened blob', () => {
+  const h = setup()
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    conversation: [
+      { role: 'user', text: 'open the video' },
+      { role: 'tool', text: '', title: 'Search YouTube', code: 'await tab.goto(x)', output: 'found', durationMs: 99_100 },
+      { role: 'assistant', text: 'Opened it.' },
+    ],
+  }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const conv = h.client.last('stageDetail')!.task.conversation!
+  assert.deepEqual(conv.map((c) => c.role), ['user', 'tool', 'assistant'])
+  assert.equal(conv[1].title, 'Search YouTube')
+  assert.equal(conv[1].durationMs, 99_100)
+})
+
+test('replying to a Codex chat does NOT fling you onto an unrelated blocked task', () => {
+  // The composer is always available, so a plain reply is not an answer to the
+  // crank's question — advancing on it would move the user somewhere they never
+  // asked to go.
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  h.client.fire({ type: 'answerText', id: 'c1', text: 'also check the description' })
+  h.flush()
+  assert.deepEqual(h.calls.answer?.[0], ['c1', 'also check the description'])
+  assert.equal(h.client.last('stageDetail')!.task.id, 'c1', 'still on the task you were talking to')
+})
+
+test('answering the BLOCKING question still advances the crank', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  put(h, makeTask({ id: 'b2', state: 'needs-user', alive: true, question: { text: 'q2' } }))
+  h.client.fire({ type: 'tap' })
+  h.client.fire({ type: 'answerText', id: 'b1', text: 'yes' })
+  h.flush()
+  assert.equal(h.client.last('showTask')!.task.id, 'b2', 'moved on to the next blocked task')
+})
+
+test('an errored task eventually stops occupying the notch', () => {
+  // Nothing ever aged out a failure: only `ready` had a cut-off. One error and
+  // the notch was held indefinitely (observed for hours in the field). It stays
+  // a card on the wall — it just stops being in your face.
+  const h = setup()
+  const old = Date.now() - 4 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'e1', state: 'failed', updatedAt: old, error: { reason: 'boom' } }))
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'dormant')
+})
+
+test('a FRESH error still demands attention', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'e1', state: 'failed', error: { reason: 'boom' } }))
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'attention')
+})
+
+test('a delivery error reaches the surface without settling the task', () => {
+  const h = setup()
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    deliveryError: 'Could not find that chat in Codex',
+  }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const d = h.client.last('stageDetail')!.task
+  assert.equal(d.deliveryError, 'Could not find that chat in Codex')
+  assert.equal(d.status, 'ready', 'the task itself is untouched')
+})
+
+test('the WHOLE conversation reaches the surface, not a tail', () => {
+  // The parse layer used to cut to 6 items and the windows here were all
+  // downstream of that, so widening them did nothing. A 40-item thread must
+  // arrive whole — without the user's own messages there is no alternation and
+  // the panel does not read as a chat at all.
+  const conversation = Array.from({ length: 40 }, (_, i) => ({
+    role: i % 2 === 0 ? 'user' as const : 'assistant' as const, text: `m${i}`,
+  }))
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th', conversation }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const conv = h.client.last('stageDetail')!.task.conversation!
+  assert.equal(conv.length, 40)
+  assert.equal(conv[0].text, 'm0', 'the FIRST message survives, not just the tail')
+})
+
+test('an unchanged transcript is not re-sent on every poll', () => {
+  // A full transcript is ~32KB and reconcile fires on each poll; re-sending an
+  // identical payload put that on the wire over and over for a thread that had
+  // not moved.
+  const h = setup()
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    conversation: [{ role: 'assistant', text: 'done' }],
+  }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const sent = () => h.client.ofType('stageDetail').length
+  const first = sent()
+  h.flush(); h.flush()
+  assert.equal(sent(), first, 'nothing changed → nothing sent')
+
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    conversation: [{ role: 'assistant', text: 'done' }, { role: 'user', text: 'and now this' }],
+  }))
+  h.flush()
+  assert.ok(sent() > first, 'a real change still goes out')
+})
+
+test('handing off to Codex collapses the notch instead of sitting on top of it', () => {
+  // "open in Codex" used to call dismissOverlay(), which is the RETIRED overlay
+  // window — a different surface. The notch was never told anything, so it
+  // stayed pinned above the Codex window the user had just been sent to.
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  h.client.fire({ type: 'openDashboard' })
+  assert.equal(h.client.last('setState')!.state, 'cockpit')
+  h.controller.collapse()
+  assert.ok(h.client.last('collapse'), 'the surface is told to step down')
+})
+
+// ── the wall: order and pile-up ─────────────────────────────────────────────
+
+test('cards inside a group sort by LAST ACTIVITY, the same key as the groups', () => {
+  // The mismatch was the whole problem: groups ranked on updatedAt, cards on
+  // createdAt. A task touched five minutes ago but created weeks ago promoted
+  // its group to the top and then sat at the bottom of it.
+  const h = setup()
+  const hour = 60 * 60 * 1000
+  put(h, makeTask({ id: 'old-made-fresh-touch', state: 'processing', group: 'g',
+    createdAt: Date.now() - 500 * hour, updatedAt: Date.now() - 1 }))
+  put(h, makeTask({ id: 'new-made-stale-touch', state: 'processing', group: 'g',
+    createdAt: Date.now() - 1, updatedAt: Date.now() - 5 * hour }))
+  h.client.fire({ type: 'openDashboard' })
+  const cards = h.client.last('setCockpit')!.data.groups[0].cards
+  assert.equal(cards[0].id, 'old-made-fresh-touch', 'most recently touched first')
+})
+
+test('settled cards older than 48h fold away, and the group SAYS so', () => {
+  // Sessions never faded at all, so a wall accumulated every session ever
+  // created — DONE cards from weeks ago beside this morning's work.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'fresh', state: 'done', kind: 'session', group: 'g', updatedAt: Date.now() }))
+  put(h, makeTask({ id: 'ancient', state: 'done', kind: 'session', group: 'g', updatedAt: Date.now() - 5 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  const g = h.client.last('setCockpit')!.data.groups[0]
+  assert.deepEqual(g.cards.map((c) => c.id), ['fresh'])
+  assert.equal(g.hidden, 1, 'a group silently missing cards reads as one that lost them')
+})
+
+test('an UNSETTLED task is never folded away, however old', () => {
+  // Hiding a blocked task behind a disclosure means work silently waiting on
+  // you that you cannot see — the exact failure the cockpit exists to prevent.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'blocked', state: 'needs-user', kind: 'session', group: 'g',
+    alive: true, question: { text: 'q' }, updatedAt: Date.now() - 30 * day }))
+  put(h, makeTask({ id: 'busy', state: 'processing', kind: 'session', group: 'g', updatedAt: Date.now() - 30 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  const g = h.client.last('setCockpit')!.data.groups[0]
+  assert.deepEqual(g.cards.map((c) => c.id).sort(), ['blocked', 'busy'])
+  assert.equal(g.hidden, 0)
+})
+
+test('show all reveals the folded cards, and reopening the cockpit forgets it', () => {
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'ancient', state: 'done', kind: 'session', group: 'g', updatedAt: Date.now() - 5 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  assert.equal(h.client.last('setCockpit')!.data.groups[0].cards.length, 0)
+
+  h.client.fire({ type: 'showAll', on: true })
+  assert.equal(h.client.last('setCockpit')!.data.groups[0].cards.length, 1)
+
+  // Each visit starts on the live view — the wall is about now.
+  h.client.fire({ type: 'collapsed' })
+  h.client.fire({ type: 'openDashboard' })
+  assert.equal(h.client.last('setCockpit')!.data.groups[0].cards.length, 0)
+})
+
+test('a group whose cards ALL fold still reports itself, and is never lost', () => {
+  // THE FAILURE FROM THE FIELD. Folding removed every card in a group; the wall
+  // then skipped the group entirely, taking its "show all" with it, so those
+  // tasks were unreachable by any gesture. A folded group must still say it is
+  // there and how much it is holding.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', group: 'Unmute', updatedAt: Date.now() - 10 * day }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', group: 'Unmute', updatedAt: Date.now() - 20 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  const data = h.client.last('setCockpit')!.data
+  const g = data.groups.find((x) => x.name === 'Unmute')!
+  assert.equal(g.cards.length, 0)
+  assert.equal(g.hidden, 2, 'the group is still in the payload, holding its count')
+  assert.equal(data.hiddenTotal, 2, 'and the wall carries a total of its own')
+})
+
+test('the wall-level total exists so the way back never depends on one group', () => {
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', group: 'One', updatedAt: Date.now() - 9 * day }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', group: 'Two', updatedAt: Date.now() - 9 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  assert.equal(h.client.last('setCockpit')!.data.hiddenTotal, 2)
+  h.client.fire({ type: 'showAll', on: true })
+  const after = h.client.last('setCockpit')!.data
+  assert.equal(after.hiddenTotal, 0)
+  assert.equal(after.showingAll, true)
+  assert.equal(after.groups.flatMap((g) => g.cards).length, 2, 'everything comes back')
+})
+
+test('a stale READY task folds like any other finished step', () => {
+  // `ready` was exempt because classify() counts it as attention — so a group
+  // of two-week-old ready cards never folded while its neighbours vanished
+  // completely. The wall showed 15-day-old work and hid last week's.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'stale-ready', state: 'ready', kind: 'session', group: 'g', updatedAt: Date.now() - 15 * day }))
+  h.client.fire({ type: 'openDashboard' })
+  const g = h.client.last('setCockpit')!.data.groups[0]
+  assert.equal(g.cards.length, 0)
+  assert.equal(g.hidden, 1)
+})
+
+test('needs-user, stuck, failed and processing never fold, at any age', () => {
+  // SESSIONS, deliberately: an errored ONE-OFF is already removed earlier by
+  // visibleOnWall's present-tense fade (60m), which is a different mechanism
+  // from folding and not what this pins.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  const old = Date.now() - 60 * day
+  const base = { kind: 'session' as const, group: 'g', updatedAt: old }
+  put(h, makeTask({ ...base, id: 'q', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  put(h, makeTask({ ...base, id: 's', state: 'stuck' }))
+  put(h, makeTask({ ...base, id: 'f', state: 'failed', error: { reason: 'x' } }))
+  put(h, makeTask({ ...base, id: 'p', state: 'processing' }))
+  h.client.fire({ type: 'openDashboard' })
+  const g = h.client.last('setCockpit')!.data.groups[0]
+  assert.deepEqual(g.cards.map((c) => c.id).sort(), ['f', 'p', 'q', 's'])
+  assert.equal(g.hidden, 0)
+})
+
+test('show all expands ONLY the group whose button was pressed', () => {
+  // A control in a group header that expanded the whole wall — and then left no
+  // way to collapse — was the complaint. One group at a time.
+  const h = setup()
+  const day = 24 * 60 * 60 * 1000
+  const old = Date.now() - 9 * day
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', group: 'One', updatedAt: old }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', group: 'Two', updatedAt: old }))
+  h.client.fire({ type: 'openDashboard' })
+
+  h.client.fire({ type: 'showAll', group: 'One', on: true })
+  const g = (name: string) => h.client.last('setCockpit')!.data.groups.find((x) => x.name === name)!
+  assert.equal(g('One').cards.length, 1)
+  assert.equal(g('Two').cards.length, 0, 'the other group is untouched')
+
+  // ...and it collapses again from the same place.
+  h.client.fire({ type: 'showAll', group: 'One', on: false })
+  assert.equal(g('One').cards.length, 0)
+  assert.equal(g('One').hidden, 1)
+})
+
+test('the wall-level control still expands and collapses everything', () => {
+  const h = setup()
+  const old = Date.now() - 9 * 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', group: 'One', updatedAt: old }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', group: 'Two', updatedAt: old }))
+  h.client.fire({ type: 'openDashboard' })
+  h.client.fire({ type: 'showAll', on: true })
+  assert.equal(h.client.last('setCockpit')!.data.groups.flatMap((x) => x.cards).length, 2)
+  assert.equal(h.client.last('setCockpit')!.data.showingAll, true)
+  h.client.fire({ type: 'showAll', on: false })
+  assert.equal(h.client.last('setCockpit')!.data.groups.flatMap((x) => x.cards).length, 0)
+})
+
+test('the UNGROUPED bucket ranks by recency like any other group', () => {
+  // It used to be appended last whatever it held, and it renders without a
+  // heading — so the newest task on the wall sat at the bottom under someone
+  // else's group title, and a correctly-sorted wall looked scrambled.
+  const h = setup()
+  const hour = 60 * 60 * 1000
+  put(h, makeTask({ id: 'grouped', state: 'ready', kind: 'session', group: 'Unmute', updatedAt: Date.now() - 40 * hour }))
+  put(h, makeTask({ id: 'loose', state: 'ready', kind: 'session', updatedAt: Date.now() - 1 * hour }))
+  h.client.fire({ type: 'openDashboard' })
+  const groups = h.client.last('setCockpit')!.data.groups
+  assert.equal(groups[0].name, '', 'the ungrouped bucket holds the newest task, so it leads')
+  assert.equal(groups[1].name, 'Unmute')
+})
+
+test('reopening a task RE-SENDS its detail, even when nothing changed', () => {
+  // THE SPINNER. The surface discards its staged task on leaving cockpit
+  // (AppController drops stageTask whenever state != cockpit), but the dedupe
+  // cache still said "already sent" — so on reopen nothing arrived and the
+  // panel drew a spinner until some unrelated change altered the payload.
+  // Measured at 25 SECONDS in the field log.
+  const h = setup()
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    conversation: [{ role: 'assistant', text: 'done' }],
+  }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const first = h.client.ofType('stageDetail').length
+  assert.ok(first > 0)
+
+  // Leave, come back — with the task completely unchanged.
+  h.client.fire({ type: 'collapsed' })
+  h.flush()
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  assert.ok(h.client.ofType('stageDetail').length > first, 'the surface needs it again')
+})
+
+test('a programmatic collapse also invalidates what the surface holds', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const before = h.client.ofType('stageDetail').length
+  h.controller.collapse()            // e.g. handing off to Codex
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  assert.ok(h.client.ofType('stageDetail').length > before)
+})
+
+test('the dedupe still holds while the surface keeps showing the same task', () => {
+  // The optimisation itself is right — 32KB per poll for a thread that has not
+  // moved is real. It just must not outlive the receiver's copy.
+  const h = setup()
+  put(h, makeTask({
+    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    conversation: [{ role: 'assistant', text: 'done' }],
+  }))
+  h.client.fire({ type: 'focusTask', id: 'c1' })
+  h.flush()
+  const n = h.client.ofType('stageDetail').length
+  h.flush(); h.flush()
+  assert.equal(h.client.ofType('stageDetail').length, n)
 })

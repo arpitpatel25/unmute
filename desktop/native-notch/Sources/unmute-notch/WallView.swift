@@ -10,7 +10,8 @@ struct WallView: View {
     let topInset: CGFloat
 
     private var data: CockpitData {
-        model.cockpit ?? CockpitData(groups: [], queue: [], oneoffs: [], projects: [],
+        model.cockpit ?? CockpitData(groups: [], hiddenTotal: 0, showingAll: false,
+                                     queue: [], oneoffs: [], projects: [],
                                      suggestions: [], unmuteSkills: [], skills: [], shelf: [],
                                      digest: nil, stagedCount: 0, doorbell: true,
                                      routeOffer: nil, tmuxAvailable: false)
@@ -25,6 +26,9 @@ struct WallView: View {
         .overlay(alignment: .bottomLeading) { bottomLeftChrome }
         .overlay(alignment: .bottomTrailing) { bottomRightChrome }
         .overlay(alignment: .topLeading) { hoverCard }
+        .overlay(alignment: .topTrailing) {
+            CloseButton { model.emit(.collapsed) }.padding(.top, 10).padding(.trailing, 12)
+        }
     }
 
     // MARK: main column
@@ -32,9 +36,26 @@ struct WallView: View {
     private var main: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("UNMUTE · COCKPIT")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .tracking(1.6).foregroundColor(Theme.textFaint)
+                HStack(spacing: 10) {
+                    Text("UNMUTE · COCKPIT")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .tracking(1.6).foregroundColor(Theme.textFaint)
+                    Spacer(minLength: 0)
+                    // The wall-level way back. Deliberately not dependent on any
+                    // group rendering its own header — that dependency is what
+                    // made folded work unreachable.
+                    if data.showingAll == true {
+                        Button(action: { model.emit(.showAll(group: nil, on: false)) }) {
+                            Text("hide older everywhere")
+                                .font(.system(size: 11)).foregroundColor(Theme.textFaint)
+                        }.buttonStyle(.plain)
+                    } else if let n = data.hiddenTotal, n > 0 {
+                        Button(action: { model.emit(.showAll(group: nil, on: true)) }) {
+                            Text("show all · \(n) older")
+                                .font(.system(size: 11)).foregroundColor(Theme.cReady)
+                        }.buttonStyle(.plain)
+                    }
+                }
 
                 if let digest = data.digest {
                     Button(action: { model.emit(.digestDismiss) }) {
@@ -47,28 +68,58 @@ struct WallView: View {
                     }.buttonStyle(.plain)
                 }
 
-                if data.groups.allSatisfy({ $0.cards.isEmpty }) {
+                // "Nothing here" means nothing EXISTS — not "everything is
+                // folded", which is a different thing with a way out.
+                if data.groups.allSatisfy({ $0.cards.isEmpty }) && (data.hiddenTotal ?? 0) == 0 {
                     Text("no sessions — speak to spawn one")
                         .font(.system(size: 13)).foregroundColor(Theme.textFaint)
                         .padding(.top, 30).frame(maxWidth: .infinity, alignment: .center)
                 }
 
+                // A GROUP KEEPS ITS HEADER WHEN EVERYTHING IN IT IS FOLDED.
+                //
+                // This used to skip any group with no visible cards, which was
+                // harmless while nothing was ever folded — a group only existed
+                // if it had cards. Once folding arrived it silently deleted
+                // whole groups from the wall, taking their "show all" with them,
+                // so those tasks became unreachable by any gesture. A folded
+                // group must still say it is there.
                 ForEach(Array(data.groups.enumerated()), id: \.offset) { _, group in
-                    if !group.cards.isEmpty { groupSection(group) }
+                    if !group.cards.isEmpty || (group.hidden ?? 0) > 0 { groupSection(group) }
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, topInset)
+            .padding(.horizontal, 30)
+            .padding(.top, topInset + 6)
             .padding(.bottom, 56)
         }
     }
 
     private func groupSection(_ g: GroupP) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            if !g.name.isEmpty {
+            // ALWAYS a heading, including for the ungrouped bucket. Without one
+            // its cards rendered under the previous group's title — so the
+            // newest task on the wall looked like it belonged to someone else's
+            // group, and a correctly-sorted wall looked scrambled.
+            do {
                 HStack(spacing: 8) {
-                    Text(g.name).font(.system(size: 14, weight: .semibold)).foregroundColor(Theme.text)
-                    Badge(text: "group")
+                    Text(g.name.isEmpty ? "Ungrouped" : g.name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(g.name.isEmpty ? Theme.textDim : Theme.text)
+                    if !g.name.isEmpty { Badge(text: "group") }
+                    // SAY that cards are folded away. A group silently missing
+                    // half its tasks reads as a group that lost them.
+                    // Acts on THIS group. A control in a group header that
+                    // expanded the whole wall — and then offered no way to
+                    // collapse — was the complaint.
+                    if g.expanded == true {
+                        Button(action: { model.emit(.showAll(group: g.name, on: false)) }) {
+                            Text("show less").font(.system(size: 11)).foregroundColor(Theme.textFaint)
+                        }.buttonStyle(.plain)
+                    } else if let n = g.hidden, n > 0 {
+                        Button(action: { model.emit(.showAll(group: g.name, on: true)) }) {
+                            Text("show all · \(n)").font(.system(size: 11)).foregroundColor(Theme.cReady)
+                        }.buttonStyle(.plain)
+                    }
                 }
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 236), spacing: 10)], alignment: .leading, spacing: 10) {
@@ -97,9 +148,22 @@ struct WallView: View {
                 if let n = c.note, !n.isEmpty {
                     Text("✎ \(n)").font(.system(size: 11.5)).foregroundColor(Theme.cReady).lineLimit(1)
                 }
-                HStack {
+                HStack(spacing: 6) {
                     Text(c.kind == "session" ? (c.dir ?? "session") : "one-off")
                     Spacer(minLength: 0)
+                    if c.backend == "codex-desktop" {
+                        // The grid is the one place we deliberately do NOT show
+                        // messages — many tasks at once, so a transcript per
+                        // card would drown the wall. The door into the real
+                        // chat still belongs here.
+                        Button(action: { model.emit(.openInTerminal(id: c.id)) }) {
+                            Text("open in Codex")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(Theme.cReady)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(RoundedRectangle(cornerRadius: 5).fill(Theme.cReady.opacity(0.12)))
+                        }.buttonStyle(.plain)
+                    }
                     Text(c.age ?? "")
                 }
                 .font(.system(size: 10.5, design: .monospaced)).foregroundColor(Theme.textFaint)

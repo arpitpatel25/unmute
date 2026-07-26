@@ -23,6 +23,18 @@ export interface ResultP { summary: string; detail?: string; artifacts?: Artifac
 export interface ErrorP { reason: string; detail?: string }
 export interface McpGapP { message: string; fixCommand: string }
 
+/** One turn of a GUI-agent conversation — this backend's answer to the terminal. */
+/** One entry of a Codex thread; see codex/rollout.ts CodexTurn for the shapes. */
+export interface TurnP {
+  role: 'user' | 'assistant' | 'commentary' | 'tool'
+  text: string
+  title?: string
+  code?: string
+  output?: string
+  durationMs?: number
+  ok?: boolean
+}
+
 export interface TaskDetailP {
   id: string
   title: string
@@ -40,6 +52,19 @@ export interface TaskDetailP {
   result?: ResultP
   error?: ErrorP
   mcpGap?: McpGapP
+  /** Which backend runs this task; drives whether the panel shows a terminal
+   *  (Claude, PTY) or the conversation (Codex, no PTY). */
+  backend?: 'claude' | 'codex-desktop'
+  /** Last message that did not reach the agent (NOT a task failure). */
+  deliveryError?: string
+  /** A message is in flight to the agent. */
+  sending?: boolean
+  /** Codex's label for the model/effort this thread runs on. */
+  modelLabel?: string
+  /** Last few turns — rendered INSTEAD of the terminal for external backends. */
+  conversation?: TurnP[]
+  /** Codex project name, for the header. */
+  project?: string
 }
 
 export interface CardP {
@@ -53,11 +78,23 @@ export interface CardP {
   qpos?: number
   promoted?: boolean
   agent?: boolean
+  /** WHICH backend runs this task — 'claude' (owned PTY) or 'codex-desktop'
+   *  (the Codex app). Rendered as a small tag so a mixed wall is unambiguous. */
+  backend?: 'claude' | 'codex-desktop'
+  /** Codex project name, when backend is 'codex-desktop'. */
+  project?: string
   note?: string
   alive: boolean
 }
 
-export interface GroupP { name: string; cards: CardP[] }
+export interface GroupP {
+  name: string
+  cards: CardP[]
+  /** Settled cards folded away by the 48h rule; 0 when nothing is hidden. */
+  hidden?: number
+  /** True while this group is showing everything it holds. */
+  expanded?: boolean
+}
 export interface QueueItemP { id: string; name: string; status: TaskStatusName }
 export interface OneoffP { id: string; name: string; status: TaskStatusName; age?: string }
 export interface ProjectP { name: string; path: string }
@@ -75,6 +112,11 @@ export interface RouteOfferP { newTaskId: string; altTaskId: string; altName: st
 
 export interface CockpitPayload {
   groups: GroupP[]
+  /** Cards folded away across the whole wall — the reveal control keys off this
+   *  so it never depends on one group happening to render. */
+  hiddenTotal?: number
+  /** True while "show all" is on for this visit to the cockpit. */
+  showingAll?: boolean
   queue: QueueItemP[]
   oneoffs: OneoffP[]
   projects: ProjectP[]
@@ -143,6 +185,7 @@ export type NotchEvent =
   | { type: 'tapSkill'; name: string }
   | { type: 'openProject'; path: string; name: string }
   | { type: 'clearFinished' }
+  | { type: 'showAll'; group?: string; on: boolean }
   | { type: 'digestDismiss' }
   | { type: 'bellToggle' }
   | { type: 'offerAccept'; newTaskId: string }

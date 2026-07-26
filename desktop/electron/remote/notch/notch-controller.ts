@@ -24,6 +24,15 @@ export interface TaskLite {
   name?: string | null
   cwd?: string
   kind?: 'oneoff' | 'session'
+  agent?: 'claude' | 'codex' | 'codex-desktop'
+  codexProject?: string | null
+  conversation?: TurnP[] | null
+  /** Last message that did not reach the agent (NOT a task failure). */
+  deliveryError?: string
+  /** A message is in flight to the agent. */
+  sending?: boolean
+  /** Codex's label for this thread's model/effort, e.g. "5.6 Terra High". */
+  codexModelLabel?: string
   threadContext?: string | null
   shelved?: boolean
   note?: string | null
@@ -149,8 +158,34 @@ const PROMOTED_BADGE_MS = 8 * 1000        // "↑ now a session" narration windo
  *  than this leaves the notch/crank entirely (still a cockpit card) — so a
  *  session parked ready for days can't hold the surface amber forever.
  *  Blocked states (needs-user/stuck/errored) never age out: they're stuck ON
- *  the user. (Decided 2026-07-24.) */
-const STALE_READY_MS = 6 * 60 * 60 * 1000
+ *  the user. (Decided 2026-07-24.)
+ *
+ *  Was 6h, which OUTLIVED TaskManager's readyDecayMs (1h) by five hours: the
+ *  decay valve had already settled a ready one-off to done while the notch kept
+ *  offering it in the crank. Now just past the decay window (+10m for the
+ *  hourly sweep), so the two agree. */
+const STALE_READY_MS = 70 * 60 * 1000
+
+/** How long an errored task keeps the surface. Longer than `ready` — a failure
+ *  deserves more of your attention than a finished step — but still finite. */
+const STALE_ERROR_MS = 3 * 60 * 60 * 1000
+
+/** How long a SETTLED card stays on the wall before folding into "show all".
+ *  48h, not 24: a one-day cutoff hides Friday's work on Monday morning, which
+ *  is exactly when you want it. */
+const STALE_CARD_MS = 48 * 60 * 60 * 1000
+
+/**
+ * States that are never folded away, at any age — work that is genuinely
+ * waiting on you or still running.
+ *
+ * `ready` is deliberately NOT here, though classify() counts it as attention.
+ * A `ready` task from two weeks ago is a finished step, not something waiting;
+ * the crank has its own decay for it, and exempting it here meant a group of
+ * stale `ready` cards never folded at all while its neighbours vanished
+ * entirely — the wall showed 15-day-old work and hid last week's.
+ */
+const UNFOLDABLE = new Set<TaskStatusName>(['needs-user', 'stuck', 'failed', 'processing'])
 
 type Engaged = 'none' | 'task' | 'cockpit'
 
@@ -178,6 +213,17 @@ export class NotchController {
   private projects: Array<{ name: string; path: string }> = []
   private proposals: ProposalLite[] = []
   private railsTimer: ReturnType<typeof setInterval> | null = null
+  /** (surface, task) → last payload sent, so an unchanged detail is not resent. */
+  private lastDetailJson = new Map<string, { id: string; json: string }>()
+  /**
+   * Which groups are expanded, by name (''  = the ungrouped bucket).
+   *
+   * Was a single boolean, so a button rendered INSIDE a group header expanded
+   * every group on the wall — and once on, every `hidden` count went to zero,
+   * the per-group buttons vanished, and there was no way to collapse one again.
+   * A control in a group header must act on that group.
+   */
+  private expandedGroups = new Set<string>()
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
@@ -206,15 +252,28 @@ export class NotchController {
     // IPC handlers call (via deps).
     const on = (type: string, fn: (e: NotchEvent) => void) => this.client.on(type, fn)
     on('tap', () => this.onTap())
-    on('collapsed', () => { this.engaged = 'none'; this.setFocus(null); this.reconcile() })
+    on('collapsed', () => { this.seenThenClose({ collapse: true }) })
     on('openDashboard', () => this.openCockpit())
     on('next', () => this.onNext())
     on('prev', () => this.onPrev())
     on('focusTask', (e) => this.onFocusTask((e as { id: string }).id))
-    on('closeStage', () => { this.setFocus(null); this.reconcile() })
+    on('closeStage', () => { this.seenThenClose() })
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
     on('mute', (e) => this.onMute((e as { id: string }).id))
-    on('answerText', (e) => { const { id, text } = e as { id: string; text: string }; this.deps.answer(id, text); this.advanceAfterAnswer(id) })
+    on('answerText', (e) => {
+      const { id, text } = e as { id: string; text: string }
+      // Advancing the crank is only right when this WAS the blocking question.
+      // The Codex composer is always available, so a plain reply must not fling
+      // the user onto whatever unrelated task happens to be queued next.
+      //
+      // Queue membership is NOT the test: a `ready` task sits in the crank too
+      // (it is "your move"), so keying on it advanced away from a Codex chat the
+      // user was mid-conversation with. Only `needs-user` is a question.
+      const wasBlocking = this.deps.getTask(id)?.state === 'needs-user'
+      this.deps.answer(id, text)
+      if (wasBlocking) this.advanceAfterAnswer(id)
+      else this.scheduleReconcile()
+    })
     on('kill', (e) => this.deps.kill((e as { id: string }).id))
     on('resume', (e) => void this.deps.resume((e as { id: string }).id))
     on('rerun', (e) => { const t = this.deps.getTask((e as { id: string }).id); if (t) this.deps.rerun(t.intent) })
@@ -228,6 +287,18 @@ export class NotchController {
     on('tapSkill', (e) => this.onTapSkill((e as { name: string }).name))
     on('openProject', (e) => { const { path, name } = e as { path: string; name: string }; this.deps.openProject(path, name) })
     on('clearFinished', () => { this.clearedAt = Date.now(); this.reconcile() })
+    // Temporary, and deliberately not persisted: "show all" lasts as long as
+    // this look at the cockpit, then the wall goes back to being about now.
+    on('showAll', (e) => {
+      const { group, on } = e as { group?: string; on?: boolean }
+      // No group named ⇒ the wall-level control: everything, or nothing.
+      if (group === undefined) {
+        if (on) for (const g of this.allGroupNames()) this.expandedGroups.add(g)
+        else this.expandedGroups.clear()
+      } else if (on) this.expandedGroups.add(group)
+      else this.expandedGroups.delete(group)
+      this.reconcile()
+    })
     on('digestDismiss', () => { this.digestDismissed = true; this.digestText = null; this.reconcile() })
     on('bellToggle', () => { this.deps.setDoorbell(!this.deps.getDoorbell()); this.reconcile() })
     on('offerAccept', (e) => void this.onOfferAccept((e as { newTaskId: string }).newTaskId))
@@ -261,6 +332,12 @@ export class NotchController {
   private crankEligible(t: TaskLite, now = Date.now()): boolean {
     if (classify(t.state) === null || t.shelved) return false
     if (t.state === 'ready' && now - (t.updatedAt ?? 0) > STALE_READY_MS) return false
+    // An errored task nagged FOREVER: only `ready` had a cut-off, and nothing
+    // else ever removed one from the queue. A failure you have already seen is
+    // not more urgent for being older — it stays a card on the wall, it just
+    // stops being in your face. (Field report: a task that errored once kept
+    // occupying the notch for hours.)
+    if (t.state === 'failed' && now - (t.updatedAt ?? 0) > STALE_ERROR_MS) return false
     if (this.muted.get(t.id) === t.state) return false
     return true
   }
@@ -319,6 +396,9 @@ export class NotchController {
   }
 
   private reconcile(): void {
+    // Mirror the surface's own teardown rule: it discards the staged task on
+    // leaving cockpit, so our record of having sent it must go at the same time.
+    if (this.engaged !== 'cockpit') this.lastDetailJson.delete('stageDetail')
     this.rebuildQueue()
     const front = this.front()
     const attention = this.queue.length
@@ -328,14 +408,19 @@ export class NotchController {
       this.client.send({ type: 'setCockpit', data: this.buildCockpit() })
       if (this.focusedId) {
         const t = this.deps.getTask(this.focusedId)
-        if (t) this.client.send({ type: 'stageDetail', task: this.toDetail(t) })
+        if (t) this.sendDetail('stageDetail', t)
       }
       this.client.send({ type: 'setState', state: 'cockpit', attention, working })
       return
     }
 
-    if (front) {
-      this.client.send({ type: 'showTask', task: this.toDetail(front) })
+    // The task surface can hold a task that is NOT in the attention queue — the
+    // user tapped a merely-working one. Without this the surface would open and
+    // then immediately collapse back to `active` on the next reconcile.
+    const opened = this.engaged === 'task' && this.focusedId ? this.deps.getTask(this.focusedId) : undefined
+    const shown = front ?? opened
+    if (shown) {
+      this.sendDetail('showTask', shown)
       // The task surface needs rail context too (tmux gate etc.).
       if (this.engaged === 'task') this.client.send({ type: 'setCockpit', data: this.buildCockpit() })
       this.client.send({ type: 'setState', state: this.engaged === 'task' ? 'task' : 'attention', attention, working })
@@ -349,19 +434,37 @@ export class NotchController {
   // ── gestures ───────────────────────────────────────────────────────────────
 
   private onTap(): void {
-    const front = this.front()
-    if (front) {
-      this.engaged = 'task'
-      this.setFocus(front.id) // voice routes to the fronted task
-    } else {
-      this.openCockpit()
-      return
-    }
+    // Tapping opens WHAT THE NOTCH IS SHOWING. When something needs you that is
+    // the fronted task; when nothing does but one task is working, the notch is
+    // showing THAT task, so a tap must open it too.
+    //
+    // Reported from the field 2026-07-25: "when you tap it, it just directly
+    // opens the cockpit". The cause was this method only considering the
+    // attention queue — a merely-working task is never in it, so every tap on a
+    // running task fell through to the whole wall. The cockpit stays the
+    // answer only when the notch is showing no single task.
+    const target = this.front() ?? this.soleWorking()
+    if (!target) { this.openCockpit(); return }
+    this.engaged = 'task'
+    this.setFocus(target.id) // voice routes to the fronted task
     this.reconcile()
+  }
+
+  /**
+   * The one task the notch is showing while it says "working".
+   *
+   * Deliberately only when there is EXACTLY one: with several running, the
+   * notch is showing a count rather than a task, and the wall is the honest
+   * destination.
+   */
+  private soleWorking(): TaskLite | undefined {
+    const working = this.deps.listTasks().filter((t) => t.state === 'processing')
+    return working.length === 1 ? working[0] : undefined
   }
 
   private openCockpit(): void {
     this.engaged = 'cockpit'
+    this.expandedGroups.clear()   // each visit starts on the live view
     this.computeDigest()
     this.deps.setLastSeen(Date.now())
     void this.refreshRails(true)
@@ -399,6 +502,34 @@ export class NotchController {
     this.focusedId = id
     this.deps.focus(id) // focus IS the voice address (consent model)
     if (id) this.muted.delete(id) // interacting with a task ends its mute episode
+  }
+
+  /**
+   * Closing a task the user actually LOOKED AT means they've seen it.
+   *
+   * Opening used to CLEAR the mute and nothing ever set it, so the one gesture
+   * that most obviously means "I've seen this" was the only one that didn't
+   * quiet the notch — a finished one-off held the surface until STALE_READY_MS.
+   *
+   * Only `ready` is quieted. Blocked states (needs-user/stuck/errored) are stuck
+   * ON the user: looking at an approval prompt is not answering it, so they keep
+   * demanding until acted on or explicitly muted. Muting is still the deliberate
+   * "I don't care about this one" gesture and works on ANY state.
+   *
+   * This reuses the episode-mute, so "comes back the moment its state changes"
+   * is inherited rather than reimplemented.
+   */
+  private seenThenClose(opts: { collapse?: boolean } = {}): void {
+    const id = this.focusedId
+    const t = id ? this.deps.getTask(id) : undefined
+    if (t && t.state === 'ready') {
+      this.muted.set(t.id, t.state)
+      this.queue = this.queue.filter((x) => x !== t.id)
+      log.event('seen-on-close', { taskId: t.id, state: t.state })
+    }
+    if (opts.collapse) this.engaged = 'none'
+    this.setFocus(null)
+    this.reconcile()
   }
 
   /** "Don't show this again": out of the attention strip + crank until the user
@@ -580,31 +711,113 @@ export class NotchController {
       qpos: qpos.get(t.id),
       promoted: (this.promotedUntil.get(t.id) ?? 0) > now || undefined,
       agent: t.spawnedBy ? true : undefined,
+      backend: t.agent === 'codex-desktop' ? 'codex-desktop' : undefined,
+      project: t.agent === 'codex-desktop' ? (t.codexProject ?? undefined) : undefined,
       note: t.note ?? undefined,
-      alive: t.alive ?? false,
+      // A CODEX THREAD IS NEVER DEAD. `alive` means "has a live PTY", and every
+      // consumer reads it as "can you still talk to this?" — for which the
+      // answer here is always yes: the thread lives in Codex until the user
+      // deletes it there. Reporting false is what put a finished Codex chat
+      // behind "resume — continue with full context" / "re-run fresh", offering
+      // to revive something that had never stopped.
+      alive: t.agent === 'codex-desktop' ? true : (t.alive ?? false),
     }
   }
 
   private toDetail(t: TaskLite): TaskDetailP {
     const now = Date.now()
+    const external = t.agent === 'codex-desktop'
     return {
       id: t.id,
       title: t.name ?? truncate(t.intent),
+      // An external backend has no PTY, so the panel renders the CONVERSATION
+      // where a Claude task renders its terminal. Both are "the real thing,
+      // shown raw" — neither is a re-implementation of the other app's UI.
+      ...(external ? {
+        backend: 'codex-desktop' as const,
+        // The whole thread. The old windows here (6, then 40) were both
+        // downstream of a 6-item cut at the parse layer, so neither ever had
+        // anything to trim — widening this alone did nothing, which is exactly
+        // the mistake that let the truncation survive a round of "fixes".
+        conversation: t.conversation ?? [],
+        ...(t.codexProject ? { project: t.codexProject } : {}),
+      } : {}),
       status: t.state,
       kind: t.kind ?? 'oneoff',
-      alive: t.alive ?? false,
+      alive: external ? true : (t.alive ?? false),   // see toCard: never dead
       shelved: t.shelved ?? false,
       dir: this.dirLabel(t),
       age: relativeAge(t.updatedAt, now),
       elapsed: relativeAge(t.createdAt, now),
       warmup: t.threadContext ?? undefined,
       note: t.note ?? undefined,
+      // A delivery problem belongs next to the composer, where the retry is —
+      // and unlike `error` it must never be read as "the work failed".
+      deliveryError: t.deliveryError ?? undefined,
+      sending: t.sending ?? undefined,
+      // What this thread runs on, in Codex's own words. Shown in the composer
+      // because "which model is this" is part of writing the next message.
+      modelLabel: t.codexModelLabel ?? undefined,
       activity: t.question?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined,
       question: t.question ?? undefined,
       result: t.result ?? undefined,
       error: t.error ?? undefined,
       mcpGap: t.mcpGap ? { message: t.mcpGap.message, fixCommand: t.mcpGap.fixCommand } : undefined,
     }
+  }
+
+  /**
+   * Push a task detail, skipping the send when nothing changed.
+   *
+   * A full Codex transcript serialises to ~32KB, and reconcile fires on every
+   * poll — so the wire carried the same thirty kilobytes over and over for a
+   * thread that had not moved. Sending history is right; re-sending it is not.
+   */
+  private sendDetail(kind: 'stageDetail' | 'showTask', task: TaskLite): void {
+    const detail = this.toDetail(task)
+    const json = JSON.stringify(detail)
+    // Dedupe only against what this surface is CURRENTLY showing. Keying by
+    // task id instead would suppress re-showing a task the crank had rotated
+    // away from and back to — the surface would keep displaying its neighbour.
+    // The cache is only valid while the SURFACE still holds that payload. It
+    // clears its own copy on teardown (AppController drops stageTask whenever
+    // the state leaves cockpit), so forgetting to invalidate here left the
+    // controller certain it had already sent something the surface no longer
+    // had — and it drew a spinner until an unrelated change happened to alter
+    // the payload. Measured at 25s in the field.
+    const shown = this.lastDetailJson.get(kind)
+    if (shown && shown.id === task.id && shown.json === json) return
+    this.lastDetailJson.set(kind, { id: task.id, json })
+    this.client.send({ type: kind, task: detail } as never)
+  }
+
+  /** Say something transient on the surface (delivery failures, guards). */
+  toast(text: string): void {
+    this.client.send({ type: 'toast', text })
+  }
+
+  /**
+   * Step the surface all the way down — used when we hand the user off to
+   * another app.
+   *
+   * "Open in Codex" called dismissOverlay(), which is the RETIRED overlay
+   * window, a different surface entirely. The notch was never told anything, so
+   * it stayed pinned above the Codex window the user had just been sent to.
+   */
+  collapse(): void {
+    this.engaged = 'none'
+    this.setFocus(null)
+    // `collapse` clears BOTH task and stageTask on the surface.
+    this.lastDetailJson.clear()
+    this.client.send({ type: 'collapse' })
+  }
+
+  /** Every group name currently on the wall, including '' for ungrouped. */
+  private allGroupNames(): string[] {
+    const now = Date.now()
+    return [...new Set(this.deps.listTasks()
+      .filter((t) => this.visibleOnWall(t, now))
+      .map((t) => (t.group ?? '').trim()))]
   }
 
   buildCockpit(): CockpitPayload {
@@ -614,19 +827,51 @@ export class NotchController {
     this.queue.forEach((id, i) => qpos.set(id, i + 1))
 
     // Groups: named groups sorted by most-recently-touched member; ungrouped last.
+    // BY LAST ACTIVITY, the same key the groups are ranked on. Sorting cards by
+    // createdAt while ranking groups by updatedAt is why the wall read as
+    // arbitrary: a task touched five minutes ago but created three weeks ago
+    // promoted its whole group to the top and then sat at the BOTTOM of it, so
+    // the group said "something here is fresh" and the cards never showed which.
     const wall = tasks.filter((t) => this.visibleOnWall(t, now))
-      .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)) // newest-left
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     const byGroup = new Map<string, TaskLite[]>()
     for (const t of wall) {
       const g = (t.group ?? '').trim()
       if (!byGroup.has(g)) byGroup.set(g, [])
       byGroup.get(g)!.push(t)
     }
-    const named = [...byGroup.entries()].filter(([g]) => g !== '')
+    // THE UNGROUPED BUCKET RANKS LIKE ANY OTHER. It used to be appended last
+    // whatever it held, and it renders without a heading, so the newest task on
+    // the wall sat at the bottom under someone else's group title — which made
+    // a correctly-sorted wall look scrambled.
+    const ranked = [...byGroup.entries()]
       .sort((a, b) => Math.max(...b[1].map((t) => t.updatedAt ?? 0)) - Math.max(...a[1].map((t) => t.updatedAt ?? 0)))
-    const groups = named.map(([name, ts]) => ({ name, cards: ts.map((t) => this.toCard(t, now, qpos)) }))
-    const ungrouped = byGroup.get('') ?? []
-    if (ungrouped.length) groups.push({ name: '', cards: ungrouped.map((t) => this.toCard(t, now, qpos)) })
+
+    /**
+     * Collapse the stale tail of a group behind "show all".
+     *
+     * Sessions never faded from the wall at all (visibleOnWall returns true for
+     * them unconditionally), so a wall accumulates every session ever created —
+     * DONE cards from three weeks ago sitting beside this morning's work.
+     *
+     * TWO RULES, both load-bearing. Staleness is measured by LAST ACTIVITY, so
+     * a three-week-old session you spoke to this morning stays put. And nothing
+     * unsettled is ever hidden, at any age: hiding a blocked task behind a
+     * disclosure means work silently waiting on you that you cannot see, which
+     * is the exact failure the cockpit exists to prevent.
+     */
+    const collapse = (name: string, ts: TaskLite[]): { cards: CardP[]; hidden: number; expanded: boolean } => {
+      const expanded = this.expandedGroups.has(name)
+      if (expanded) return { cards: ts.map((t) => this.toCard(t, now, qpos)), hidden: 0, expanded }
+      const kept = ts.filter((t) => UNFOLDABLE.has(t.state) || now - (t.updatedAt ?? 0) < STALE_CARD_MS)
+      return { cards: kept.map((t) => this.toCard(t, now, qpos)), hidden: ts.length - kept.length, expanded }
+    }
+
+    const groups = ranked.map(([name, ts]) => ({ name, ...collapse(name, ts) }))
+    // A WALL-LEVEL total, so the way back never depends on one particular group
+    // rendering its header. Without this, folding every card in every group
+    // left the reveal control nowhere on screen and the tasks unreachable.
+    const hiddenTotal = groups.reduce((n, g) => n + (g.hidden ?? 0), 0)
 
     // Queue rail.
     const queue = this.queue
@@ -649,6 +894,8 @@ export class NotchController {
 
     return {
       groups,
+      hiddenTotal,
+      showingAll: groups.length > 0 && groups.every((x) => x.expanded),
       queue,
       oneoffs,
       projects: this.projects,

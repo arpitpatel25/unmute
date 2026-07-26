@@ -211,14 +211,21 @@ export function initPaywall(appHandle: App, oss: OSSAdapter): ProviderRouter {
     return true
   })
 
-  ipcMain.handle('hud:set-height', (_e, height: number) => {
+  ipcMain.handle('hud:set-height', (_e, height: number, opts?: { upward?: boolean }) => {
     const w = getWidgetWindow()
     if (!w) return false
     const bounds = w.getBounds()
-    const clamped = Math.max(72, Math.min(220, Math.round(height)))
-    // Re-anchor: keep top-left corner where it is — the HUD is anchored to
-    // the top of the screen, not the center, so growth happens downward.
-    w.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: clamped })
+    // 220 was enough for one flat list of models. Codex has three axes with
+    // headings, and the cap silently truncated it — the list simply ended.
+    const clamped = Math.max(72, Math.min(460, Math.round(height)))
+    // GROW UPWARD when asked. The comment here used to say the HUD is anchored
+    // to the TOP of the screen; the pill now sits near the BOTTOM, so keeping
+    // the top-left corner fixed grew the panel off the bottom edge and the
+    // dropdown opened downward into nothing. Holding the BOTTOM edge instead
+    // makes it open up over the screen, which is the only direction with room.
+    const bottom = bounds.y + bounds.height
+    const y = opts?.upward ? bottom - clamped : bounds.y
+    w.setBounds({ x: bounds.x, y, width: bounds.width, height: clamped })
     return true
   })
 

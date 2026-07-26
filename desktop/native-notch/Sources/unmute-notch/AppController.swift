@@ -121,7 +121,27 @@ final class AppController: NSObject {
         // the choice); reset when leaving so re-entry starts open again.
         model.taskTerminalOpen = (state == .task)
         withAnimation(up ? Theme.morph : Theme.collapse) { model.state = state }
-        window.allowsKey = (state == .task || state == .cockpit)
+        let engaged = (state == .task || state == .cockpit)
+        window.allowsKey = engaged
+        // ESC MUST NOT LEAK TO THE APP UNDERNEATH.
+        //
+        // `allowsKey` alone only makes the panel key-ABLE; with
+        // becomesKeyOnlyIfNeeded the panel stays non-key until something that
+        // needs keys (a field, the terminal) is clicked. So opening the cockpit
+        // over, say, a terminal left key focus with the terminal — Escape then
+        // reached only the GLOBAL monitor, which macOS defines as observe-only.
+        // The result: the cockpit collapsed AND the Escape also landed in the
+        // user's Claude Code session underneath, cancelling whatever it was
+        // doing. (Reported from the field 2026-07-25.)
+        //
+        // Taking key while engaged routes Escape through the LOCAL monitor
+        // instead, which returns nil and genuinely swallows it. This is a
+        // nonactivating panel, so we take the KEYBOARD without activating our
+        // app or disturbing the user's frontmost window; on step-down
+        // `allowsKey = false` resigns key and the keyboard goes straight back.
+        if engaged {
+            if !window.isKeyWindow { window.makeKey() }
+        }
         let f = frame(for: state)
         window.applyFrame(f, animated: true)
         NotchLog.log("state -> \(state.rawValue) window=\(NotchLog.rect(f))")
@@ -130,6 +150,10 @@ final class AppController: NSObject {
     /// The Stage/wall keep the cockpit frame; the task surface is content-sized.
     private func frame(for state: NotchState) -> NSRect {
         if state == .task {
+            // Codex tasks were briefly given a compact frame, back when the
+            // panel had nothing but two buttons to show. They now carry a full
+            // transcript and a composer, so they want the same room as a
+            // terminal.
             let size = geometry.taskSize
             return geometry.topPinnedFrame(width: size.width, height: size.height)
         }

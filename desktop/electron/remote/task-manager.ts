@@ -43,6 +43,9 @@ import { projectSlug } from './projects'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
 import { settleRepl } from './repl-settle'
+import { type AgentKind, isExternalAgent } from './codex-executor'
+import type { CodexDesktopDriver } from './codex/driver'
+import { beat, pendingApprovals, decideApproval, clearApproval, describeApproval } from './codex/hooks'
 
 const log = createLogger('task-manager')
 
@@ -67,6 +70,39 @@ export interface Task {
    *  survives app restarts as interrupted-but-resumable (`--continue` restores
    *  full context). Default 'oneoff' (status quo). */
   kind?: 'oneoff' | 'session'
+  /** WHICH BACKEND runs this task. Per-task, not a global setting: a user with
+   *  both installed can fire one task at Claude Code and the next at Codex, and
+   *  the cockpit shows both side by side. Absent ⇒ 'claude' (status quo).
+   *
+   *  'codex-desktop' is not an executor — Unmute owns no process for it. Its
+   *  writes go through the Codex app via CDP and its state is polled from the
+   *  rollout files; see codex/driver.ts. */
+  agent?: AgentKind
+  /** For 'codex-desktop': the Codex thread this task drives (durable id, no
+   *  `local:` prefix). This is the whole handle — it addresses the rollout file
+   *  for reads and the sidebar row for open/send. */
+  codexThreadId?: string
+  /** Last delivery problem — the message did not reach the agent. Distinct from
+   *  `error`, which means the WORK failed; this one never settles the task. */
+  deliveryError?: string
+  /** True while a message is travelling to the agent. Sending is a round-trip
+   *  through another app's window; silence for a second reads as nothing
+   *  having happened. */
+  sending?: boolean
+  /** Codex's own label for what this thread runs on ("5.6 Terra High"), as it
+   *  was when the task was created. */
+  codexModelLabel?: string
+  /** For 'codex-desktop': the Codex project the thread was created in, so the
+   *  card can show it and follow-ups can re-scope. */
+  codexProject?: string | null
+  /** For external backends: the last few turns of the real conversation.
+   *
+   *  This is the GUI-agent equivalent of the live terminal. A CLI task shows a
+   *  raw PTY because that IS its conversation; a Codex thread has no terminal,
+   *  so the conversation itself has to be what the panel carries. Kept to the
+   *  last few turns deliberately — enough to re-enter, never a re-implementation
+   *  of the other app's chat (ORCHESTRATE-VISION §3, the delete-the-wall test). */
+  conversation?: Array<{ role: 'user' | 'assistant'; text: string }>
   /** Workspace group — "what is this work about" ("unmute", "launch video",
    *  "on-call"). Assigned ONCE by the router (user's own words win), mutated
    *  only by user curation. Live groups = distinct values across live tasks;
@@ -144,6 +180,18 @@ export interface Task {
 export interface TaskManagerOpts {
   /** Creates a fresh executor per task (default: ClaudeCodeExecutor). */
   executorFactory: ExecutorFactory
+  /** Backend for `agent: 'codex-desktop'` tasks. Absent ⇒ those dispatches fail
+   *  fast with a typed reason instead of silently falling back to Claude, which
+   *  would put the task in an app the user never asked for. */
+  codexDriver?: CodexDesktopDriver
+  /** The user's approval setting, read fresh so a settings change takes effect
+   *  on the NEXT task rather than needing a restart. Feeds the Codex composer's
+   *  permission level exactly as it feeds --dangerously-skip-permissions. */
+  permissionMode?: () => 'auto-approve' | 'ask'
+  /** How often to look for Codex approval requests (ms). */
+  approvalSweepMs?: number
+  /** The user's Codex model/effort/speed choice, read fresh per dispatch. */
+  codexReasoning?: () => { model?: string; effort?: string; speed?: string }
   /** signed-in user id, else 'local' (Remote works regardless — PRD). */
   userKey?: string
   /** base dir; default ~/.unmute/remote. */
@@ -233,10 +281,18 @@ export class TaskManager extends EventEmitter {
   private tasks = new Map<string, Task>()
   private executors = new Map<string, AgentExecutor>()
   private timers = new Map<string, ReturnType<typeof setInterval>>()
+  /** Per-task ready→done decay timers (see armReadyDecay). */
+  private readyDecayTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Idle-kill timers for WARM sessions (kept alive after done for follow-ups).
   private warmTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Background auto-purge sweep (null until startMaintenance()).
   private purgeTimer: ReturnType<typeof setInterval> | null = null
+  // Codex approval inbox sweep (null until startMaintenance()).
+  private approvalTimer: ReturnType<typeof setInterval> | null = null
+  /** threadId → the request we have already surfaced, so we transition once. */
+  private surfacedApprovals = new Map<string, number>()
+  /** Poll decimation for settled Codex tasks (see pollCodexDesktop). */
+  private codexIdleTicks = new Map<string, number>()
   // Per-task chain serializing meta.json read-modify-writes. Two concurrent
   // merges (e.g. setShelved + setNote in one tick) would otherwise race the
   // read and the last write would silently drop the other's field.
@@ -245,8 +301,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'permissionMode' | 'codexReasoning'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'permissionMode' | 'codexReasoning'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -264,9 +320,13 @@ export class TaskManager extends EventEmitter {
       detachGraceMs: opts.detachGraceMs ?? 1500,
       purgeAgeMs: opts.purgeAgeMs ?? 24 * 60 * 60_000, // 24h — "gone by end of day"
       purgeSweepMs: opts.purgeSweepMs ?? 60 * 60_000,  // hourly
+      approvalSweepMs: opts.approvalSweepMs ?? 1500,
       readyDecayMs: opts.readyDecayMs ?? 60 * 60_000,  // 1h ready-inflation valve
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
+      codexDriver: opts.codexDriver,
+      permissionMode: opts.permissionMode,
+      codexReasoning: opts.codexReasoning,
       reapSession: opts.reapSession,
       now: opts.now,
     }
@@ -305,7 +365,13 @@ export class TaskManager extends EventEmitter {
    * Dispatch a new task. Returns the taskId immediately; execution + polling
    * proceed asynchronously (PRD §4.4 — dispatch and forget).
    */
-  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string } = {}): Promise<string> {
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null } = {}): Promise<string> {
+    // EXTERNAL BACKEND FORK (codex-desktop). Everything below this point — the
+    // status file, the CLAUDE.md contract, the owned PTY, the trust prompt, the
+    // dispatch payload — presumes Unmute spawns and owns the process. Codex
+    // desktop is an app we drive, so it takes a different path entirely rather
+    // than threading conditionals through 200 lines of PTY setup.
+    if (isExternalAgent(opts.agent)) return this.dispatchCodexDesktop(intent, opts)
     const id = randomUUID()
     // Mint the Claude session id up front so we own a stable handle to the
     // session this task will spawn (passed as --session-id below).
@@ -537,6 +603,263 @@ export class TaskManager extends EventEmitter {
   }
 
   /** Poll the status file + run the staleness backstop until terminal. */
+  // ─── Codex desktop backend ────────────────────────────────────────
+  //
+  // A Codex task is a Task record whose work lives in someone else's app. We
+  // own the record, the name, the group, the queue position — the same things
+  // we own for a Claude task — but not the process. So: no status file, no
+  // contract, no PTY, and `home` exists only to hold meta.json for rehydrate.
+
+  private async dispatchCodexDesktop(
+    intent: string,
+    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; project?: string | null; agent?: AgentKind },
+  ): Promise<string> {
+    const driver = this.opts.codexDriver
+    if (!driver) throw new Error('CODEX_UNAVAILABLE: not-configured')
+    const id = randomUUID()
+    const tlog = log.child({ taskId: id })
+    const dir = join(this.opts.baseDir, this.opts.userKey!, id)
+    const now = this.clock()
+    const surface = opts.surface ?? detectSurface(intent)
+    const kind = opts.kind ?? 'oneoff'
+
+    tlog.event('codex-dispatch-begin', { project: opts.project ?? null, kind, intentLen: intent.length })
+    const reasoning = this.opts.codexReasoning?.() ?? {}
+    const modelLabel = [reasoning.model, reasoning.effort].filter(Boolean).join(' ') || undefined
+    const created = await driver.createTask(intent, {
+      project: opts.project ?? null,
+      permissionMode: this.opts.permissionMode?.() ?? 'ask',
+      ...reasoning,
+    })
+
+    // ONE-WAY DOOR. Whatever happens from here the task stays a Codex task. It
+    // may end up FAILED, but it is never handed to another agent — the user
+    // chose this backend, and silently running their work somewhere else (which
+    // is what happened on 2026-07-25) is worse than failing honestly.
+    //
+    // `id-unresolved` is called out separately because the work DID start in
+    // Codex; only our handle on it is missing. Treating that as "nothing
+    // happened" is what produced a duplicate run.
+    if (!created.ok || !created.threadId) {
+      const startedAnyway = created.reason === 'id-unresolved'
+      tlog.warn('codex-dispatch-failed', { reason: created.reason, startedInCodexAnyway: startedAnyway })
+      throw new Error(`CODEX_UNAVAILABLE: ${created.reason ?? 'unknown'}`)
+    }
+    tlog.event('codex-dispatch-created', { threadId: created.threadId })
+
+    await fs.mkdir(dir, { recursive: true }).catch(() => {})
+    const task: Task = {
+      id,
+      intent,
+      sessionId: created.threadId,   // the Codex thread IS this task's session handle
+      agent: 'codex-desktop',
+      codexThreadId: created.threadId,
+      codexProject: opts.project ?? null,
+      ...(modelLabel ? { codexModelLabel: modelLabel } : {}),
+      kind,
+      state: 'processing',
+      createdAt: now,
+      updatedAt: now,
+      cwd: dir,
+      home: dir,
+      // Unused by this backend; kept non-null so every consumer that reads a
+      // path (purge, attachments, rehydrate) keeps working unchanged.
+      statusPath: join(dir, 'status.json'),
+      recipeScratchPath: join(dir, 'recipe.json'),
+      lastMtimeMs: 0,
+      lastHeartbeatMs: now,
+      surface,
+      mode: 'managed',
+      ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
+    } as Task
+    this.tasks.set(id, task)
+
+    await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
+      id, intent, sessionId: created.threadId, kind, createdAt: now, surface, mode: 'managed',
+      agent: 'codex-desktop', codexThreadId: created.threadId, codexProject: opts.project ?? null,
+      state: 'processing', updatedAt: now,
+      ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
+    })).catch(() => {})
+
+    this.emit('created', task)
+    tlog.event('codex-task-dispatched', { threadId: created.threadId, project: opts.project ?? null })
+    this.startPolling(id)
+    return id
+  }
+
+  /**
+   * The Codex analogue of poll(): derive state from the rollout file instead of
+   * a status file the agent writes. Same cadence, same transitions, same stuck
+   * backstop — only the source differs.
+   */
+  private async pollCodexDesktop(id: string): Promise<void> {
+    const task = this.tasks.get(id)
+    // NOTE: `ready` is deliberately NOT terminal for this backend — the Codex
+    // thread outlives our card and the user can continue it inside Codex, so we
+    // keep watching. Only done/failed stop the watch.
+    if (!task || !task.codexThreadId || task.state === 'done' || task.state === 'failed') return
+    const driver = this.opts.codexDriver
+    if (!driver) return
+    const tlog = log.child({ taskId: id })
+
+    // A `ready` Codex task is watched only in case the user CONTINUES it inside
+    // Codex — a rare, human-paced event. Polling that at the live cadence meant
+    // reading the rollout off disk once a second, forever, for every finished
+    // task on the wall (seen in the field on dev.34). Back off hard; a task that
+    // is actually working still polls at full rate.
+    if (task.state === 'ready') {
+      const n = (this.codexIdleTicks.get(id) ?? 0) + 1
+      this.codexIdleTicks.set(id, n)
+      if (n % 10 !== 0) return
+    } else {
+      this.codexIdleTicks.delete(id)
+    }
+
+    const snap = await driver.snapshot(task.codexThreadId)
+    if (snap.updatedAt > task.lastHeartbeatMs) task.lastHeartbeatMs = snap.updatedAt
+
+    // Rolling "where you left off" comes free: the last agent message is exactly
+    // the re-entry warm-up the cards already render for Claude sessions.
+    if (snap.lastAgentMessage && snap.lastAgentMessage !== task.threadContext) {
+      task.threadContext = snap.lastAgentMessage
+    }
+    // The conversation IS this backend's terminal — keep it current every poll.
+    if (snap.turns.length) task.conversation = snap.turns
+
+    if (snap.state === 'failed') { this.transition(id, 'failed', { state: 'failed', error: { reason: 'Codex reported an error' } } as StatusPayload); return }
+
+    tlog.debug('codex-poll', {
+      state: snap.state, turnsStarted: snap.turnsStarted, everCompleted: snap.everCompleted,
+      hasHeadline: !!snap.lastAgentMessage, taskState: task.state,
+    })
+
+    // A Codex thread OUTLIVES our card: the user can keep talking to it inside
+    // Codex, and a new turn there must re-open the task here rather than being
+    // invisible. So `ready` is a resting state, not a terminal one — if the
+    // rollout shows another turn started, come back to processing.
+    if (snap.state === 'processing' && task.state === 'ready') {
+      tlog.event('codex-reopened', { turnsStarted: snap.turnsStarted, note: 'continued inside Codex' })
+      this.transition(id, 'processing')
+      return
+    }
+
+    if (snap.state === 'ready' && snap.everCompleted) {
+      // A completed Codex turn is `ready`, never `done`: the step is over but the
+      // ball is with the user and the thread is always continuable
+      // (ORCHESTRATE-VISION §3, three kinds of done). The existing ready decay
+      // valve then settles an ignored one-off to done on its own.
+      if (task.state !== 'ready') {
+        // snap.updatedAt is the newest event in the rollout — i.e. when the turn
+        // actually finished. Passing it is what stops a relaunch replaying
+        // yesterday's completion as if it were new.
+        this.transition(id, 'ready', {
+          state: 'ready',
+          result: { summary: snap.lastAgentMessage ?? 'Codex finished this turn.' },
+        } as StatusPayload, snap.updatedAt || undefined)
+      }
+      return
+    }
+
+    if (snap.state === 'processing' && task.state === 'stuck') {
+      tlog.event('stuck-recovered', { via: 'codex-rollout' })
+      this.transition(id, 'processing')
+      return
+    }
+
+    if (
+      task.state !== 'stuck' &&
+      isStale({ state: task.state as TaskState }, task.lastHeartbeatMs, this.clock(), this.opts.staleMs)
+    ) {
+      tlog.event('task-stuck', { lastHeartbeatMs: task.lastHeartbeatMs, via: 'codex' })
+      this.transition(id, 'stuck')
+    }
+  }
+
+  /** Follow-up / unblock for a Codex desktop task: type into its thread. */
+  private followUpCodexDesktop(id: string, text: string): boolean {
+    const task = this.tasks.get(id)
+    const driver = this.opts.codexDriver
+    if (!task?.codexThreadId || !driver) return false
+    const tlog = log.child({ taskId: id })
+    task.lastUserInputAt = this.clock()
+    task.followUps = (task.followUps ?? 0) + 1
+    if (task.kind !== 'session' && task.followUps >= 2) {
+      tlog.event('graduated-to-session', { followUps: task.followUps })
+      this.setKind(id, 'session')
+    }
+    tlog.ui('task-row.follow-up', { text })
+    // Optimistic: the command was accepted. The poller will correct the state
+    // from the rollout either way, so a failed send self-heals rather than
+    // leaving the card lying about progress.
+    this.transition(id, 'processing')
+    const before = task.state
+    task.sending = true
+    this.emit('updated', task)
+    void driver.send(task.codexThreadId, text).then((r) => {
+      const inFlight = this.tasks.get(id)
+      if (inFlight) inFlight.sending = false
+      if (!r.ok) {
+        tlog.warn('codex-followup-failed', { reason: r.reason })
+        // A FAILED DELIVERY IS NOT A FAILED TASK.
+        //
+        // This used to mark the task `failed`, which was wrong in every way
+        // that matters: the Codex thread is untouched and still perfectly
+        // healthy — only OUR attempt to type into it missed. The card then
+        // claimed the user's work had failed, sat in the attention queue
+        // forever (nothing ages out an errored task), and could never
+        // self-correct because polling stops on `failed`. One missed click and
+        // a finished piece of work nagged indefinitely.
+        //
+        // So: put the task back where it was, and report the delivery problem
+        // as what it is — a message that did not get through.
+        this.transition(id, before)
+        const live = this.tasks.get(id)
+        if (live) {
+          live.deliveryError = r.reason === 'not-armed'
+            ? 'Codex is not connected to Unmute'
+            : r.reason === 'thread-not-found'
+              ? 'Could not find that chat in Codex'
+              : `Could not send to Codex (${r.reason})`
+          live.updatedAt = this.clock()
+          this.emit('updated', live)
+        }
+      } else {
+        tlog.event('codex-followup-sent', {})
+        const live = this.tasks.get(id)
+        if (live?.deliveryError) { delete live.deliveryError; this.emit('updated', live) }
+      }
+    }).catch((e) => tlog.error('codex-followup-error', { error: (e as Error).message }))
+    this.startPolling(id)
+    return true
+  }
+
+  /**
+   * Arm the ready-decay for ONE task instead of waiting for the hourly sweep.
+   *
+   * purgeStale() still runs the sweep (it also reaps disk orphans), but relying
+   * on it alone meant a ready one-off could sit up to an hour PAST its decay
+   * window before settling — it looked stuck when it was only waiting on a
+   * coarse timer. Sessions never decay: a thread's open loop is real until the
+   * user closes it.
+   */
+  private armReadyDecay(id: string): void {
+    const prev = this.readyDecayTimers.get(id)
+    if (prev) clearTimeout(prev)
+    const t = this.tasks.get(id)
+    if (!t || (t.kind ?? 'oneoff') === 'session') return
+    const timer = setTimeout(() => {
+      this.readyDecayTimers.delete(id)
+      const task = this.tasks.get(id)
+      if (!task || task.state !== 'ready') return
+      task.state = 'done'
+      task.updatedAt = this.clock()
+      this.emit('updated', task)
+      log.child({ taskId: id }).event('ready-decayed-to-done', { via: 'timer' })
+    }, this.opts.readyDecayMs)
+    if (typeof timer.unref === 'function') timer.unref()
+    this.readyDecayTimers.set(id, timer)
+  }
+
   private startPolling(id: string): void {
     const tlog = log.child({ taskId: id })
     // Idempotent: a follow-up into a still-processing task calls this while a
@@ -554,6 +877,11 @@ export class TaskManager extends EventEmitter {
 
   private async poll(id: string): Promise<void> {
     const task = this.tasks.get(id)
+    // External backends have no status file — their state comes from elsewhere,
+    // and (unlike a PTY task) a `ready` one is still worth watching because the
+    // user can continue the thread in the other app. pollCodexDesktop owns its
+    // own stop condition.
+    if (task && isExternalAgent(task.agent)) return this.pollCodexDesktop(id)
     if (!task || TERMINAL.includes(task.state)) return
     const tlog = log.child({ taskId: id })
 
@@ -629,13 +957,22 @@ export class TaskManager extends EventEmitter {
   /** Apply a status payload to a task + emit the right events.
    *  Payload is Partial: callers (kill/dispatch-failure) supply only the fields
    *  they know; poll() supplies a full status read. */
-  private transition(id: string, next: UiTaskState, payload?: Partial<StatusPayload>): void {
+  private transition(id: string, next: UiTaskState, payload?: Partial<StatusPayload>, at?: number): void {
+    // Entering `ready` starts its decay clock immediately (see armReadyDecay);
+    // leaving it cancels. Previously only the hourly sweep noticed.
+    if (next === 'ready') queueMicrotask(() => this.armReadyDecay(id))
     const task = this.tasks.get(id)
     if (!task) return
     const tlog = log.child({ taskId: id })
     const prev = task.state
     task.state = next
-    task.updatedAt = this.clock()
+    // WHEN IT HAPPENED, not when we noticed. Stamping the clock made every
+    // relaunch look like a fresh completion: rehydrate re-derived `ready` from
+    // the rollout, transition() stamped now, and the staleness guard — which
+    // compares against updatedAt — saw a zero-second-old finish and announced a
+    // task that had completed the previous day. `at` comes from the source of
+    // truth (the rollout's own completion time) wherever we have one.
+    task.updatedAt = at ?? this.clock()
     if (payload?.category) task.category = payload.category
     if (payload?.step) task.step = payload.step
     if (payload?.result) task.result = payload.result
@@ -688,6 +1025,11 @@ export class TaskManager extends EventEmitter {
         // (the thread isn't over — curation happens at the final done).
         tlog.ui('task-row.ready', { summary: task.result?.summary })
         this.emit('updated', task)
+
+    // Keep the on-disk record current, so a relaunch restores the history
+    // instead of re-deriving it. Best-effort: a task whose meta cannot be
+    // written still works for this run, it just forgets across a restart.
+    if (isExternalAgent(task.agent)) void this.persistState(task)
         if (task.category === 'consume' || task.category === 'watch') {
           this.detachAndKill(id)
         } else {
@@ -752,6 +1094,20 @@ export class TaskManager extends EventEmitter {
    */
   answer(id: string, userAnswer: string): void {
     const tlog = log.child({ taskId: id })
+    // Codex desktop: answering IS the next turn — there is no separate blocked
+    // channel to write into, and no PTY liveness to check (the thread always
+    // exists in the app). followUpCodexDesktop already does the send, the
+    // consent clock, and the optimistic transition.
+    const target = this.tasks.get(id)
+    if (target && isExternalAgent(target.agent)) {
+      tlog.ui('task-row.answer-submitted', { answer: userAnswer })
+      // An outstanding APPROVAL is answered through the hook, not the composer:
+      // typing "Approve" into the chat would leave the permission dialog still
+      // waiting and add a stray message to the user's thread.
+      if (this.answerCodexApproval(target, userAnswer)) return
+      this.followUpCodexDesktop(id, userAnswer)
+      return
+    }
     const ex = this.executors.get(id)
     if (!ex || !ex.alive) {
       tlog.warn('answer dropped — no live session', {})
@@ -776,12 +1132,27 @@ export class TaskManager extends EventEmitter {
     }
   }
 
+  /** Merge the observed state + its timestamp into the task's meta.json. */
+  private async persistState(task: Task): Promise<void> {
+    const path = join(task.home, 'meta.json')
+    try {
+      const raw = await fs.readFile(path, 'utf8')
+      const meta = JSON.parse(raw) as Record<string, unknown>
+      if (meta.state === task.state && meta.updatedAt === task.updatedAt) return
+      await fs.writeFile(path, JSON.stringify({ ...meta, state: task.state, updatedAt: task.updatedAt }))
+    } catch { /* absent or unreadable — nothing to keep in sync */ }
+  }
+
   /** Instant kill (PRD §10.4). Closes the session; marks failed if not terminal. */
   /** Explicit user stop (PRD §10.4). Hard-kills the session immediately. */
   kill(id: string): void {
     const tlog = log.child({ taskId: id })
     tlog.ui('task-row.killed', {})
     const task = this.tasks.get(id)
+    // A stopped task must stop asking. Leaving the request on disk would keep
+    // re-blocking a card the user just killed, and would hold the Codex hook
+    // waiting for an answer that is never coming.
+    if (task?.codexThreadId) { this.surfacedApprovals.delete(task.codexThreadId); void clearApproval(task.codexThreadId) }
     if (task && !SETTLED.includes(task.state)) {
       task.state = 'failed'
       task.error = { reason: 'Stopped by you' }
@@ -803,6 +1174,7 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     tlog.ui('task-row.removed', {})
     const task = this.tasks.get(id)
+    if (task?.codexThreadId) { this.surfacedApprovals.delete(task.codexThreadId); void clearApproval(task.codexThreadId) }
     this.hardKill(id) // terminate session (PTY + tmux kill-session)
     this.tasks.delete(id)
     this.outputBuffers.delete(id)
@@ -837,9 +1209,50 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; codexThreadId?: string; codexProject?: string | null }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
+      // EXTERNAL BACKEND: a Codex thread lives in Codex, so an Unmute restart
+      // does not interrupt it — the work may well have finished while we were
+      // gone. Rebuild the record and let the poller read the true state off the
+      // rollout, instead of the 'failed / interrupted' verdict a PTY task gets.
+      if (meta.agent === 'codex-desktop' && meta.codexThreadId) {
+        const now0 = this.clock()
+        const ctask: Task = {
+          id,
+          intent: meta.intent,
+          name: meta.name,
+          sessionId: meta.codexThreadId,
+          agent: 'codex-desktop',
+          codexThreadId: meta.codexThreadId,
+          codexProject: meta.codexProject ?? null,
+          kind: meta.kind ?? 'oneoff',
+          // RESTORE what we last observed. Defaulting to 'processing' meant the
+          // first poll always "discovered" completion afresh and re-stamped it,
+          // so a finished thread announced itself on every single launch.
+          state: (meta.state as UiTaskState | undefined) ?? 'processing',
+          createdAt: meta.createdAt ?? now0,
+          updatedAt: meta.updatedAt ?? meta.createdAt ?? now0,
+          cwd: dir,
+          home: dir,
+          statusPath: join(dir, 'status.json'),
+          recipeScratchPath: join(dir, 'recipe.json'),
+          lastMtimeMs: 0,
+          lastHeartbeatMs: now0,
+          surface: meta.surface,
+          mode: meta.mode ?? 'managed',
+          injectedRecipes: [],
+          shelved: meta.shelved || undefined,
+          note: meta.note || undefined,
+          spawnedBy: meta.spawnedBy || undefined,
+          group: meta.group || undefined,
+        } as Task
+        this.tasks.set(id, ctask)
+        this.emit('created', ctask)
+        this.startPolling(id)
+        restored++
+        continue
+      }
       const statusPath = join(dir, 'status.json')
       const status = await readStatus(statusPath)
       const now = this.clock()
@@ -899,12 +1312,95 @@ export class TaskManager extends EventEmitter {
     this.purgeTimer = setInterval(() => { void this.purgeStale() }, this.opts.purgeSweepMs)
     // Don't keep the process alive just for the sweep.
     ;(this.purgeTimer as { unref?: () => void }).unref?.()
+    // The Codex approval channel only works while we are heartbeating: the hook
+    // refuses to wait on a dead unmute, by design (see codex/hooks.ts).
+    void beat()
+    void this.sweepApprovals()
+    // The sweep is cheap (one readdir of a near-empty dir) and wants to be
+    // responsive; the heartbeat only has to stay inside the handler's 90s
+    // freshness window, so it does not need the same cadence.
+    let ticks = 0
+    this.approvalTimer = setInterval(() => {
+      if (ticks++ % 20 === 0) void beat()
+      void this.sweepApprovals()
+    }, this.opts.approvalSweepMs)
+    ;(this.approvalTimer as { unref?: () => void }).unref?.()
     log.event('maintenance-started', { purgeAgeMs: this.opts.purgeAgeMs, purgeSweepMs: this.opts.purgeSweepMs })
   }
 
   /** Stop the maintenance sweep (shutdown / tests). */
   stopMaintenance(): void {
     if (this.purgeTimer) { clearInterval(this.purgeTimer); this.purgeTimer = null }
+    if (this.approvalTimer) { clearInterval(this.approvalTimer); this.approvalTimer = null }
+  }
+
+  /**
+   * Surface Codex approval requests as blocked tasks — ALL of them, not just
+   * the thread Codex happens to be showing.
+   *
+   * This is what makes the crank work for this backend. A Codex task that stops
+   * for permission is otherwise completely invisible here: nothing is written to
+   * the rollout, and the sidebar exposes no status (both checked). The hook
+   * (codex/hooks.ts) pushes each request into a directory; this reads it and
+   * turns it into the same `needs-user` state a blocked Claude task reaches, so
+   * the queue, the notch and next/answer all work unchanged.
+   */
+  private async sweepApprovals(): Promise<void> {
+    let requests: Awaited<ReturnType<typeof pendingApprovals>> = []
+    try { requests = await pendingApprovals() } catch { return }
+
+    const live = new Set<string>()
+    for (const req of requests) {
+      live.add(req.threadId)
+      const task = [...this.tasks.values()].find((t) => t.codexThreadId === req.threadId)
+      if (!task) {
+        // A thread the user started inside Codex, not through us. Not ours to
+        // answer — leave it for Codex's own dialog rather than inventing a card.
+        continue
+      }
+      if (this.surfacedApprovals.get(req.threadId) === req.at) continue
+      this.surfacedApprovals.set(req.threadId, req.at)
+      const tlog = log.child({ taskId: task.id })
+      tlog.event('codex-approval-received', { threadId: req.threadId, tool: req.toolName, turnId: req.turnId })
+      this.transition(task.id, 'needs-user', {
+        state: 'needs-user',
+        question: {
+          text: `Codex wants to run: ${describeApproval(req)}`,
+          choices: ['Approve', 'Deny'],
+        },
+      } as StatusPayload)
+    }
+
+    // A request that vanished was answered elsewhere (Codex's own dialog, or a
+    // hook timeout the user resolved in-app). Let the poller take the task back.
+    for (const threadId of [...this.surfacedApprovals.keys()]) {
+      if (live.has(threadId)) continue
+      this.surfacedApprovals.delete(threadId)
+      const task = [...this.tasks.values()].find((t) => t.codexThreadId === threadId)
+      if (task && task.state === 'needs-user') {
+        log.child({ taskId: task.id }).event('codex-approval-resolved-elsewhere', { threadId })
+        this.transition(task.id, 'processing')
+      }
+    }
+  }
+
+  /**
+   * Answer a Codex approval from unmute. True when this WAS an approval (so the
+   * caller must not also send the text as a chat message — doing both would put
+   * a stray "Approve" into the user's thread).
+   */
+  private answerCodexApproval(task: Task, userAnswer: string): boolean {
+    const threadId = task.codexThreadId
+    if (!threadId || !this.surfacedApprovals.has(threadId)) return false
+    const yes = /^\s*(approve|allow|yes|y|ok|okay|sure|go ahead|do it|1)\b/i.test(userAnswer)
+    const no = /^\s*(deny|reject|no|n|stop|don'?t|cancel|2)\b/i.test(userAnswer)
+    if (!yes && !no) return false   // a real message; let it through as a follow-up
+    this.surfacedApprovals.delete(threadId)
+    log.child({ taskId: task.id }).event('codex-approval-answered', { threadId, behavior: yes ? 'allow' : 'deny' })
+    void decideApproval(threadId, yes ? 'allow' : 'deny')
+    task.lastUserInputAt = this.clock()
+    this.transition(task.id, 'processing')
+    return true
   }
 
   /**
@@ -982,7 +1478,10 @@ export class TaskManager extends EventEmitter {
    * history. Guarantees no Claude/tmux session is left orphaned.
    */
   killAll(): void {
-    const ids = [...this.executors.keys()]
+    // Union of PTY-backed and external-backend tasks. Keying on `executors`
+    // alone leaked the poll interval of every codex-desktop task (no executor
+    // ⇒ never visited ⇒ setInterval outlived the manager).
+    const ids = [...new Set([...this.executors.keys(), ...this.timers.keys()])]
     for (const id of ids) {
       const task = this.tasks.get(id)
       if (task && !SETTLED.includes(task.state)) {
@@ -1144,6 +1643,10 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     const ex = this.executors.get(id)
     const task = this.tasks.get(id)
+    // Codex desktop: "warm" has no meaning — the thread always exists in the app,
+    // so a follow-up is simply a send. This is also the UNBLOCK path: answering a
+    // Codex task that is `ready` is just its next turn.
+    if (task && isExternalAgent(task.agent)) return this.followUpCodexDesktop(id, text)
     if (!ex?.alive || !task) {
       tlog.warn('followUp: session no longer warm — caller should dispatch new', {})
       return false
@@ -1453,6 +1956,8 @@ export class TaskManager extends EventEmitter {
   private stopPolling(id: string): void {
     const timer = this.timers.get(id)
     if (timer) { clearInterval(timer); this.timers.delete(id) }
+    const decay = this.readyDecayTimers.get(id)
+    if (decay) { clearTimeout(decay); this.readyDecayTimers.delete(id) }
   }
 
   /** Warm window for a task, by category. navigate gets a shorter window
@@ -1467,6 +1972,15 @@ export class TaskManager extends EventEmitter {
    *  with no follow-up, hard-kill. Status file (result/error) stays on disk for
    *  history regardless (§10.2). */
   private parkWarm(id: string): void {
+    // EXTERNAL BACKEND: there is no PTY to keep warm and no idle-kill to arm —
+    // the thread lives in the other app. Crucially we must NOT stop polling: the
+    // user can continue that thread inside Codex and the task has to re-open
+    // here rather than going quiet forever.
+    const parked = this.tasks.get(id)
+    if (parked && isExternalAgent(parked.agent)) {
+      log.child({ taskId: id }).event('parked-external', { backend: parked.agent, note: 'still watching the thread' })
+      return
+    }
     this.stopPolling(id)
     const ex = this.executors.get(id)
     const tlog = log.child({ taskId: id })

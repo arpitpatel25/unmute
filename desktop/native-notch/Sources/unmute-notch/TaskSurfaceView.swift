@@ -17,18 +17,49 @@ struct TaskSurfaceView: View {
                 header(t)
                 if t.status == .needsUser, let q = t.question {
                     QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 12)
+                } else if t.backend == "codex-desktop" {
+                    // NO HEADLINE for a backend that shows its whole
+                    // conversation. `activity` is derived from the last agent
+                    // message, which IS the last line of the transcript below —
+                    // so this printed the same sentence twice, once unstyled
+                    // (literal **asterisks**) and once properly. The headline
+                    // earns its place only where the panel shows a terminal,
+                    // because raw scrollback is not a summary.
+                    EmptyView()
                 } else if let summary = summaryLine(t) {
                     Text(summary)
                         .font(.system(size: 14.5)).foregroundColor(Theme.textDim)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 12)
                 }
-                if t.status == .done || t.status == .failed {
+                // DeadPanel is a PTY concept — "the session ended, resume or
+                // re-run it". A Codex thread never ends that way, so offering
+                // it there is an invitation to revive something still alive.
+                if (t.status == .done || t.status == .failed) && t.backend != "codex-desktop" {
                     ScrollView { DeadPanel(model: model, t: t) }
                         .frame(maxHeight: 280)
                         .padding(.top, 12)
                 }
-                if model.taskTerminalOpen && t.alive {
+                // EXTERNAL BACKEND (Codex): no PTY exists, so the CONVERSATION is
+                // what this panel carries — the same role the terminal plays for a
+                // CLI task. Showing an empty terminal frame here is what made the
+                // panel read as a giant void.
+                if t.backend == "codex-desktop" {
+                    // NOT wrapped in a ScrollView — the panel owns one. Nesting
+                    // them gave the inner scroller unbounded height, so it had
+                    // no overflow to scroll and the outer one did the scrolling
+                    // instead. scrollTo then addressed a view that could not
+                    // move, and the transcript opened at the top however many
+                    // times the anchoring was "fixed".
+                    ConversationPanel(turns: t.conversation ?? [], id: t.id)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 10)
+                    // Always available: a Codex chat is continuable until you
+                    // delete it, so there is no state in which you have nothing
+                    // to say to it.
+                    CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
+                                  modelLabel: t.modelLabel, sending: t.sending ?? false).padding(.top, 9)
+                } else if model.taskTerminalOpen && t.alive {
                     // The terminal owns EVERYTHING left down to the action row
                     // (field feedback: never a fixed band with dead space below).
                     // .id ties the PTY stream to THIS task across Next/Prev.
@@ -48,9 +79,9 @@ struct TaskSurfaceView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(.horizontal, 26)
-        .padding(.top, topInset)
-        .padding(.bottom, 18)
+        .padding(.horizontal, 30)
+        .padding(.top, topInset + 6)
+        .padding(.bottom, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -65,17 +96,28 @@ struct TaskSurfaceView: View {
             Text(Theme.statusLabel(t.status))
                 .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.status(t.status))
             if let e = t.elapsed { Text(e).font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textFaint) }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
             if model.attention > 0 {
                 Text("1 of \(model.attention)")
                     .font(.system(size: 13)).foregroundColor(Theme.textDim)
             }
+            // LAST in the row, so it lands in the corner. It was sitting between
+            // two Spacers with the counter to its right, which floated it into
+            // the middle of the header — nowhere near where a close control
+            // belongs.
+            CloseButton { model.emit(.collapsed) }
         }
     }
 
     private func actions(_ t: TaskDetail) -> some View {
         HStack(spacing: 7) {
-            if t.alive {
+            if t.backend == "codex-desktop" {
+                // "resume" / "re-run" / "terminal" are PTY concepts and mean
+                // nothing for a thread living in another app. The one thing that
+                // does make sense is a door into it — the Codex equivalent of
+                // "show me the terminal".
+                ActButton(label: "open in Codex") { model.emit(.openInTerminal(id: t.id)) }
+            } else if t.alive {
                 ActButton(label: "stop") { model.emit(.kill(id: t.id)) }
                 ActButton(label: model.taskTerminalOpen ? "hide terminal" : "terminal") {
                     model.taskTerminalOpen.toggle()
@@ -86,7 +128,11 @@ struct TaskSurfaceView: View {
                 ActButton(label: "resume") { model.emit(.resume(id: t.id)) }
             }
             Spacer(minLength: 0)
-            ActButton(label: "kill", danger: true) { model.emit(.remove(id: t.id)) }
+            // This drops OUR card; it has never touched the agent's session. For
+            // a Codex thread — which lives on until you delete it in Codex —
+            // "kill" claims something we do not do and would not want to.
+            ActButton(label: t.backend == "codex-desktop" ? "remove" : "kill",
+                      danger: true) { model.emit(.remove(id: t.id)) }
         }
         .padding(.top, 10)
     }

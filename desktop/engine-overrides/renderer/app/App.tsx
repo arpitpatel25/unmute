@@ -16,8 +16,11 @@ import { BalancePill } from '../paywall/BalancePill'
 import { OutOfCreditBanner } from '../paywall/OutOfCreditBanner'
 import { AuthProvider, useAuth } from '../paywall/AuthContext'
 import { SignInScreen } from '../paywall/SignInScreen'
+// Remote settings live in the main window now that the floating overlay that
+// used to host them was retired (ede9966).
+import { RemoteSettings } from '../remote/RemoteSettings'
 
-type Tab = 'history' | 'voice' | 'account' | 'permissions' | 'language' | 'settings' | 'privacy'
+type Tab = 'history' | 'voice' | 'remote' | 'account' | 'permissions' | 'language' | 'settings' | 'privacy'
 
 type AppView = 'loading' | 'onboarding' | 'main'
 
@@ -163,6 +166,12 @@ function AppInner() {
             onClick={() => setActiveTab('voice')}
           />
           <SidebarButton
+            icon={<VoiceIcon />}
+            label="Remote"
+            active={activeTab === 'remote'}
+            onClick={() => setActiveTab('remote')}
+          />
+          <SidebarButton
             icon={<AccountIcon />}
             label="Account"
             active={activeTab === 'account'}
@@ -225,6 +234,7 @@ function AppInner() {
         <div className="max-w-2xl mx-auto pb-8">
           {activeTab === 'history' && <History />}
           {activeTab === 'voice' && <Voice dictationKey={dictationKey} />}
+          {activeTab === 'remote' && <RemoteSettings />}
           {activeTab === 'account' && <Account />}
           {activeTab === 'permissions' && <Permissions />}
           {activeTab === 'language' && <Language />}

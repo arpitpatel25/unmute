@@ -12,9 +12,20 @@ struct NotchView: View {
     var body: some View {
         let sh = NotchShape(bottomRadius: Theme.radius(for: model.state))
         ZStack {
-            sh.fill(expanded ? Theme.fillElevated : Theme.fill)
-            sh.stroke(borderColor, lineWidth: model.state == .attention ? 1.5 : 1)
+            // The surface: pitch black where content lives, real glass in the last
+            // few points where the corner curves away (see GlassLip.swift). The old
+            // flat fill + uniform white ring lived here.
+            GlassSurface(
+                shape: sh,
+                state: model.state,
+                rimHighlight: rimHighlight,
+                rimWidth: model.state == .attention ? 1.5 : 1
+            )
+            // Keep content clear of the glass band — nothing legible should ever
+            // render over the see-through part, so legibility is guaranteed by
+            // layout rather than by tuning alphas.
             content
+                .padding(.bottom, Glass.lip(for: model.state))
             if model.proposal != nil || model.proposalLoadingId != nil {
                 SkillPopupView(model: model)
             }
@@ -44,13 +55,16 @@ struct NotchView: View {
 
     private var expanded: Bool { model.state == .task || model.state == .cockpit }
 
-    private var borderColor: Color {
+    /// Tint for the specular rim. The rim's SHAPE (bright top, dead sides, bright
+    /// lip) is fixed in Glass.rim — this only chooses its hue, so attention still
+    /// reads amber without reintroducing a uniform ring.
+    private var rimHighlight: Color {
         if model.state == .attention { return Theme.accent }
         // The dummy notch must be FINDABLE (field feedback: pure black on dark
-        // wallpaper was invisible). A real hardware notch needs no outline.
-        if model.state == .dormant { return model.hasNotch ? .clear : Color.white.opacity(0.30) }
-        if model.state == .idle { return Color.white.opacity(0.55) } // pill-family border
-        return Theme.hairline
+        // wallpaper was invisible). A real hardware notch needs no outline, and
+        // with no lip there is no glass to give it away either.
+        if model.state == .dormant && model.hasNotch { return .clear }
+        return .white
     }
 
     @ViewBuilder private var content: some View {

@@ -30,9 +30,13 @@ struct StageView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let t {
                 header(t)
-                if let warm = t.warmup, !warm.isEmpty {
-                    Text("where you left off — \(warm)")
-                        .font(.system(size: 12.5)).foregroundColor(Theme.textDim)
+                // Same duplication as the task surface: for Codex, `warmup` is
+                // the last agent message, which the transcript already ends
+                // with. It was also drawn with plain Text, so its markdown came
+                // out as literal asterisks next to a correctly-rendered copy of
+                // itself two lines below.
+                if t.backend != "codex-desktop", let warm = t.warmup, !warm.isEmpty {
+                    RichText(text: "where you left off — \(warm)", size: 12.5)
                         .padding(.leading, 10)
                         .overlay(Rectangle().fill(Color.white.opacity(0.18)).frame(width: 2), alignment: .leading)
                         .padding(.top, 12)
@@ -41,7 +45,20 @@ struct StageView: View {
                 if t.status == .needsUser, let q = t.question {
                     QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 8)
                 }
-                if t.alive {
+                if t.backend == "codex-desktop" {
+                    // Wherever a Claude task shows its terminal, a Codex task
+                    // shows its messages — and can be replied to. Neither the
+                    // terminal nor DeadPanel belongs here: the first does not
+                    // exist for this backend, and the second offered to
+                    // "resume" a chat that had never stopped.
+                    // See TaskSurfaceView: the panel scrolls itself, and a second
+                    // ScrollView around it disables that.
+                    ConversationPanel(turns: t.conversation ?? [], id: t.id)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 10)
+                    CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
+                                  modelLabel: t.modelLabel, sending: t.sending ?? false).padding(.top, 9)
+                } else if t.alive {
                     TerminalPanel(model: model, taskId: t.id, tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
                         .padding(.top, 10)
                 } else {
@@ -52,9 +69,9 @@ struct StageView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, topInset)
-        .padding(.bottom, 16)
+        .padding(.horizontal, 30)
+        .padding(.top, topInset + 6)
+        .padding(.bottom, 22)
     }
 
     private func header(_ t: TaskDetail) -> some View {
@@ -80,7 +97,15 @@ struct StageView: View {
             KeyButton(label: t.kind == "session" ? "unpin" : "pin") {
                 model.emit(.setKind(id: t.id, kind: t.kind == "session" ? "oneoff" : "session"))
             }
-            if t.alive {
+            // BACKEND FIRST, then liveness.
+            //
+            // This branched on `alive` first and put "open in Codex" in the
+            // dead-session arm — while the same change made Codex tasks report
+            // alive, so the button could never render on this surface at all.
+            // Two edits that cancelled out; the Stage showed `kill` instead.
+            if t.backend == "codex-desktop" {
+                KeyButton(label: "open in Codex") { model.emit(.openInTerminal(id: t.id)) }
+            } else if t.alive {
                 KeyButton(label: "kill", danger: true) { model.emit(.kill(id: t.id)) }
             } else {
                 KeyButton(label: "resume") { model.emit(.resume(id: t.id)) }
