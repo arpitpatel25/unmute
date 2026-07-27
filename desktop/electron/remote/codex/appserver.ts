@@ -108,6 +108,11 @@ export async function listCodexModels(deps: ListModelsDeps = {}): Promise<CodexM
       done([])
     }, timeoutMs)
 
+    // A write to a child we already killed surfaces EPIPE ASYNCHRONOUSLY, past
+    // the try/catch below, and an unhandled stream error takes the process
+    // down. Timing out is a normal outcome here, so it must be silent.
+    child.stdin?.on('error', () => { /* the child is gone; nothing to say */ })
+
     const send = (o: unknown) => {
       try { child.stdin?.write(JSON.stringify(o) + '\n') } catch { done([]) }
     }

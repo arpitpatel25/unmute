@@ -99,7 +99,41 @@ struct PillView: View {
         s.phase == .recording || s.phase == .processing
     }
 
+    /// The ONE condition, so the panel and its dismiss scrim cannot drift apart.
+    /// A scrim armed without a panel on screen would be an invisible sheet
+    /// eating clicks with nothing to dismiss.
+    private var selectorShowing: Bool {
+        chipsVisible && selectorOpen && s.kind == .remote
+    }
+
     var body: some View {
+        ZStack {
+            // LIGHT-DISMISS SCRIM, present ONLY while the panel is open.
+            //
+            // The panel is a hand-drawn view, not an NSMenu, so it inherits none
+            // of AppKit's outside-click dismissal — and it cannot borrow it: the
+            // window is deliberately non-key (canBecomeKey == false) so dictation
+            // never moves the user's caret, which means no resignKey to hang it
+            // on and no local event monitor either.
+            //
+            // So the canvas itself catches the click. It must exist only while
+            // the panel is open: the pill window is a 400pt-tall canvas whose
+            // empty area is click-through BY DESIGN (see PillWindow), and a
+            // permanent scrim would silently eat every click at the bottom of
+            // the screen. Gated on `selectorOpen`, the first outside click
+            // closes the panel and is swallowed — exactly how a macOS menu
+            // behaves, rather than also landing in the app behind.
+            if selectorShowing {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { selectorOpen = false }
+                    .accessibilityHidden(true)
+            }
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 9) {
             Spacer(minLength: 0)
             // ONE CHIP AT A TIME, with strict precedence: mic narration first,
@@ -107,7 +141,7 @@ struct PillView: View {
             // can't hear themselves." Mic narration outranks both because it is
             // the only one describing something that just CHANGED.
             if chipsVisible { hint }
-            if chipsVisible && selectorOpen && s.kind == .remote {
+            if selectorShowing {
                 SelectorPanel(state: s, model: model, open: $selectorOpen)
             }
             cluster

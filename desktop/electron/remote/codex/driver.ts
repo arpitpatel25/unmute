@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, setReasoning, type ReasoningState, type ReasoningAxis } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, setReasoning, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, type CodexSnapshot } from './rollout'
 
@@ -202,20 +202,60 @@ export class CodexDesktopDriver {
    * follow, for the same reason.
    */
   async reasoningOptions(): Promise<ReasoningState> {
-    const cdp = await this.connect()
-    if (!cdp) return { label: null, current: {}, options: {} }
-    const state = await readReasoning(cdp, (ms) => this.sleep(ms))
-    log.event('codex-reasoning-read', { label: state.label, current: state.current })
-    return state
+    return await this.serialize('read', async () => {
+      const cdp = await this.connect()
+      if (!cdp) {
+        log.warn('codex-reasoning-read', { ok: false, reason: 'no-cdp' })
+        return { label: null, current: {}, options: {} }
+      }
+      const state = await readReasoning(cdp, (ms) => this.sleep(ms))
+      log.event('codex-reasoning-read', { label: state.label, current: state.current })
+      return state
+    })
   }
 
-  /** Set one axis of the reasoning control on the current composer. */
-  async setReasoningAxis(axis: ReasoningAxis, value: string): Promise<boolean> {
-    const cdp = await this.connect()
-    if (!cdp) return false
-    const ok = await setReasoning(cdp, axis, value, (ms) => this.sleep(ms))
-    log[ok ? 'event' : 'warn']('codex-reasoning-set', { axis, value, ok })
-    return ok
+  /**
+   * Set one axis of the reasoning control on the current composer.
+   *
+   * The returned trace is the whole point: `ok` alone was what let three builds
+   * ship with every pick dead. Callers log it verbatim.
+   */
+  async setReasoningAxis(axis: ReasoningAxis, value: string): Promise<SetReasoningTrace> {
+    return await this.serialize('set', async () => {
+      const cdp = await this.connect()
+      if (!cdp) {
+        const t: SetReasoningTrace = { axis, want: value, stage: 'menu-closed', ok: false, ms: 0 }
+        log.warn('codex-reasoning-set', { ...t, reason: 'no-cdp' })
+        return t
+      }
+      const trace = await setReasoning(cdp, axis, value, (ms) => this.sleep(ms))
+      // A click that changed nothing is a FAILURE, however cleanly it ran.
+      log[trace.ok && trace.changed ? 'event' : 'warn']('codex-reasoning-set', { ...trace })
+      return trace
+    })
+  }
+
+  /**
+   * One reasoning operation at a time, app-wide.
+   *
+   * Each pick used to fire a multi-second refresh walk that opens, reads and
+   * ESCAPES the same menu the next pick needs. Five clicks in twelve seconds
+   * meant pick N+1 opened into pick N's teardown, and the log showed a submenu
+   * read of `[]` — nothing was open at all. These operations share one piece of
+   * global state (the open menu), so they cannot overlap.
+   */
+  private reasoningChain: Promise<unknown> = Promise.resolve()
+  private async serialize<T>(kind: string, fn: () => Promise<T>): Promise<T> {
+    const queuedAt = Date.now()
+    const run = this.reasoningChain.then(async () => {
+      const waited = Date.now() - queuedAt
+      if (waited > 250) log.info('codex-reasoning-queued', { kind, waitedMs: waited })
+      return await fn()
+    })
+    // Keep the chain alive even when this link rejects, or one thrown error
+    // would wedge every later pick.
+    this.reasoningChain = run.catch(() => undefined)
+    return await run
   }
 
   /**
@@ -243,7 +283,9 @@ export class CodexDesktopDriver {
         continue
       }
       if (before.current[axis] === value) continue
-      if (await setReasoning(cdp, axis, value, (ms) => this.sleep(ms))) {
+      const trace = await setReasoning(cdp, axis, value, (ms) => this.sleep(ms))
+      log[trace.ok && trace.changed ? 'event' : 'warn']('codex-reasoning-dispatch-set', { ...trace })
+      if (trace.ok) {
         const prev = before.current[axis]
         if (prev) changed.push([axis, prev])
       }

@@ -211,10 +211,37 @@ export class CodexCdp {
     await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
   }
 
-  async pressEscape(): Promise<void> {
-    const base = { code: 'Escape', key: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }
+  /**
+   * Hover as a MOVEMENT, not a teleport.
+   *
+   * One `mouseMoved` is a pointer that was never anywhere else, and menu
+   * libraries do not treat that as intent: Radix-style submenus arm on a
+   * sequence of pointer events (and a "safe triangle" that reasons about where
+   * the pointer came from). A single event at the row's centre left the submenu
+   * shut, which is why every pick found only the parent menu's rows.
+   *
+   * Approaching from the row's left edge also matters — it is the direction a
+   * real pointer travels to reach a submenu trigger.
+   */
+  async hoverPath(x: number, y: number, steps = 4): Promise<void> {
+    const fromX = Math.max(0, x - 90)
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps
+      await this.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: Math.round(fromX + (x - fromX) * t), y,
+      })
+    }
+  }
+
+  /** One key, by code — for menu navigation (ArrowRight opens a submenu). */
+  async pressKey(code: string, key: string, vk: number): Promise<void> {
+    const base = { code, key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk }
     await this.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
     await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+  }
+
+  async pressEscape(): Promise<void> {
+    await this.pressKey('Escape', 'Escape', 27)
   }
 }
 
@@ -429,9 +456,19 @@ async function openReasoningMenu(cdp: CodexCdp, sleep: (ms: number) => Promise<v
   const at = await centreOf(cdp, REASONING_BUTTON)
   if (!at) return false
   await cdp.click(at.x, at.y)
-  await sleep(800)
-  const n = await cdp.evaluate<number>(`document.querySelectorAll('[role="menuitem"]').length`)
-  return (n ?? 0) > 0
+  // POLL, don't sleep. The menu's rows mount progressively — measured taking
+  // past 800ms, and a fixed sleep that expired early made the axis rows look
+  // absent, so the caller escalated against a menu that was merely still
+  // arriving. Waiting for the axis rows specifically (not just any menuitem)
+  // is what makes "the menu is open" mean something.
+  const deadline = Date.now() + 2000
+  while (Date.now() < deadline) {
+    const n = await cdp.evaluate<number>(
+      `document.querySelectorAll('[aria-haspopup="menu"][aria-label^="Model"],[aria-haspopup="menu"][aria-label^="Effort"]').length`)
+    if ((n ?? 0) > 0) return true
+    await sleep(80)
+  }
+  return (await cdp.evaluate<number>(`document.querySelectorAll('[role="menuitem"]').length`) ?? 0) > 0
 }
 
 /** Rows of the top menu, as "Axis / value" pairs. */
@@ -449,6 +486,146 @@ async function readAxes(cdp: CodexCdp): Promise<Partial<Record<ReasoningAxis, st
 
 const AXIS_ROWS = new Set(['', 'Reset to default', 'Model', 'Effort', 'Speed'])
 
+/** Every menu row currently in the document, first line only. */
+async function readItemTexts(cdp: CodexCdp): Promise<string[]> {
+  return JSON.parse(await cdp.evaluate<string>(`JSON.stringify(
+    [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')]
+      .map((e) => (e.innerText || '').trim().split(String.fromCharCode(10))[0].trim())
+      .filter(Boolean)
+  )`) ?? '[]') as string[]
+}
+
+/** How the submenu came open — recorded so a regression names itself. */
+export type OpenStrategy = 'pointer-events' | 'hover' | 'failed'
+
+/**
+ * Open a Radix submenu by dispatching pointer events AT the trigger element.
+ *
+ * MEASURED, not assumed. The axis rows are Radix `MenuSubTrigger`s — the DOM
+ * says so: `aria-haspopup="menu"`, `data-state="closed"`. Radix opens them from
+ * `onPointerMove`, and React's synthetic event system does not require
+ * `isTrusted`, so an event constructed in the page reaches the handler.
+ *
+ * What does NOT work, each verified against the live app:
+ *   * `Input.dispatchMouseEvent` mouseMoved — three hovers, still "closed".
+ *     CDP's synthetic mouse never satisfies the pointer-intent logic.
+ *   * the same with `pointerType: 'mouse'` — still "closed".
+ *   * a trusted click on the trigger — CLOSES THE WHOLE MENU, which is how an
+ *     escalation ladder ended up reading an empty document.
+ *   * ArrowDown/ArrowRight — roving focus never reaches the axis rows.
+ *
+ * The one that works dispatches pointerover/pointerenter/pointermove with
+ * `pointerType: 'mouse'` and real client coordinates.
+ */
+async function dispatchPointerAt(cdp: CodexCdp, ariaPrefix: string): Promise<boolean> {
+  const ok = await cdp.evaluate<boolean>(`(() => {
+    const el = [...document.querySelectorAll('[aria-haspopup="menu"]')]
+      .find((x) => (x.getAttribute('aria-label') || '').startsWith(${JSON.stringify(ariaPrefix)}));
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const o = { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse',
+                isPrimary: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    for (const t of ['pointerover', 'pointerenter', 'pointermove']) {
+      el.dispatchEvent(new PointerEvent(t, o));
+    }
+    return true;
+  })()`)
+  return ok === true
+}
+
+/** Is this axis's submenu open, per Radix's own state attribute? */
+async function submenuIsOpen(cdp: CodexCdp, ariaPrefix: string): Promise<boolean> {
+  return (await cdp.evaluate<boolean>(`(() => {
+    const el = [...document.querySelectorAll('[aria-haspopup="menu"]')]
+      .find((x) => (x.getAttribute('aria-label') || '').startsWith(${JSON.stringify(ariaPrefix)}));
+    return !!el && el.getAttribute('data-state') === 'open';
+  })()`)) === true
+}
+
+export interface SubmenuResult {
+  strategy: OpenStrategy
+  /** Rows that appeared and were NOT already in the parent menu. */
+  items: string[]
+  /** Everything on screen when we gave up — only set on failure. */
+  sawInstead?: string[]
+  ms: number
+}
+
+/**
+ * Open one axis's submenu and return what it offers.
+ *
+ * ESCALATES rather than trusting any single gesture, because the previous
+ * single-hover-plus-800ms-sleep failed silently and took every model pick with
+ * it. Each strategy is tried and VERIFIED by polling for rows the parent menu
+ * did not already have; a set difference cannot mistake the parent's "Advanced"
+ * row for a submenu item, which is the bug that shipped a catalogue of one.
+ *
+ *   1. hover along a path  — what a real pointer does, and cheapest
+ *   2. trusted click       — a Radix SubTrigger opens on click too
+ *   3. ArrowRight          — the keyboard contract, immune to pointer heuristics
+ *
+ * Returns which one worked so the log can show the gesture degrading over a
+ * Codex release instead of one day just breaking.
+ */
+async function openSubmenu(
+  cdp: CodexCdp, axis: ReasoningAxis, at: { x: number; y: number },
+  sleep: (ms: number) => Promise<void>, startedAt: number,
+): Promise<SubmenuResult> {
+  const before = new Set(await readItemTexts(cdp))
+  const fresh = (rows: string[]) => rows.filter((t) => !before.has(t) && !AXIS_ROWS.has(t))
+
+  // Poll instead of sleeping a fixed budget: a submenu that opens in 90ms
+  // should not cost 800, and one that needs 1.2s should not be declared dead.
+  const settle = async (budgetMs: number): Promise<string[]> => {
+    const deadline = Date.now() + budgetMs
+    let last: string[] = []
+    while (Date.now() < deadline) {
+      last = fresh(await readItemTexts(cdp))
+      if (last.length) return last
+      await sleep(80)
+    }
+    return last
+  }
+
+  // The gesture that works. Confirmed by data-state AND by new rows appearing:
+  // either alone can lie — Radix flips state a frame before the items mount.
+  if (await dispatchPointerAt(cdp, axis)) {
+    const items = await settle(1200)
+    if (items.length) return { strategy: 'pointer-events', items, ms: Date.now() - startedAt }
+    if (await submenuIsOpen(cdp, axis)) {
+      // Open but empty: give the portal one more beat rather than declaring
+      // failure and tearing the menu down.
+      const late = await settle(600)
+      if (late.length) return { strategy: 'pointer-events', items: late, ms: Date.now() - startedAt }
+    }
+  }
+
+  // Kept as a fallback ONLY because it costs one gesture: if a future Codex
+  // moves off Radix, a plain hover may be all that is needed, and this fails
+  // over silently instead of regressing to nothing.
+  await cdp.hoverPath(at.x, at.y)
+  const viaHover = await settle(700)
+  if (viaHover.length) return { strategy: 'hover', items: viaHover, ms: Date.now() - startedAt }
+
+  return {
+    strategy: 'failed', items: [],
+    sawInstead: await readItemTexts(cdp),
+    ms: Date.now() - startedAt,
+  }
+}
+
+/** Locate an axis row in the open parent menu. */
+async function axisRowBox(cdp: CodexCdp, axis: ReasoningAxis): Promise<{ x: number; y: number } | null> {
+  const box = await cdp.evaluate<string>(`(() => {
+    const e = [...document.querySelectorAll('[role="menuitem"]')].find((x) => new RegExp('^' + ${JSON.stringify(axis)}).test((x.innerText || '').trim()));
+    if (!e) return '';
+    const r = e.getBoundingClientRect();
+    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+  })()`)
+  if (!box) return null
+  return JSON.parse(box) as { x: number; y: number }
+}
+
 /**
  * Open the menu, hover ONE axis, and read the submenu it reveals.
  *
@@ -463,46 +640,25 @@ const AXIS_ROWS = new Set(['', 'Reset to default', 'Model', 'Effort', 'Speed'])
 async function readAxisOptions(
   cdp: CodexCdp, axis: ReasoningAxis, sleep: (ms: number) => Promise<void>,
 ): Promise<string[]> {
+  const t0 = Date.now()
   if (!(await openReasoningMenu(cdp, sleep))) return []
-  const box = await cdp.evaluate<string>(`(() => {
-    const e = [...document.querySelectorAll('[role="menuitem"]')].find((x) => new RegExp('^' + AXIS_LITERAL).test((x.innerText || '').trim()));
-    if (!e) return '';
-    const r = e.getBoundingClientRect();
-    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-  })()`.replace('AXIS_LITERAL', JSON.stringify(axis)))
-  if (!box) { await cdp.pressEscape(); return [] }
-  const at = JSON.parse(box) as { x: number; y: number }
+  const at = await axisRowBox(cdp, axis)
+  if (!at) { await cdp.pressEscape(); return [] }
 
-  // SNAPSHOT THE PARENT MENU FIRST, then diff after the hover.
+  // A SET DIFFERENCE, never "everything minus the axis names".
   //
   // This used to scrape everything after hovering and subtract the three axis
   // names, on the assumption that whatever remained belonged to the submenu.
-  // When the submenu had NOT opened yet — an 800ms hover is not a guarantee —
-  // what remained was simply the parent menu's other rows, and Codex has one
-  // called "Advanced". That is why every axis came back offering exactly one
-  // value, "Advanced", and why a correct-looking cache could still be garbage.
-  //
-  // A set difference cannot make that mistake: if the submenu never opened,
-  // nothing is new and we return empty, which the UI can say honestly.
-  const readItems = async (): Promise<string[]> => JSON.parse(await cdp.evaluate<string>(`JSON.stringify(
-    [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')]
-      .map((e) => (e.innerText || '').trim().split(String.fromCharCode(10))[0].trim())
-      .filter(Boolean)
-  )`) ?? '[]') as string[]
-
-  const before = new Set(await readItems())
-  await cdp.hover(at.x, at.y)
-  await sleep(800)
-  let after = await readItems()
-  // One retry: the submenu is the slowest thing in this walk, and a thin read
-  // poisons the cache for the rest of the session.
-  if (after.every((t) => before.has(t))) {
-    await sleep(600)
-    after = await readItems()
-  }
+  // When the submenu had NOT opened, what remained was the parent menu's other
+  // rows — and Codex has one called "Advanced". That is why every axis came
+  // back offering exactly one value, and why a correct-looking cache could
+  // still be garbage. openSubmenu keeps that discipline and adds escalation.
+  const r = await openSubmenu(cdp, axis, at, sleep, t0)
+  if (r.strategy === 'failed') log.warn('submenu never opened', { axis, sawInstead: r.sawInstead, ms: r.ms })
+  else log.info('submenu opened', { axis, via: r.strategy, count: r.items.length, ms: r.ms })
   await cdp.pressEscape()
   await sleep(250)
-  return after.filter((t) => !before.has(t) && !AXIS_ROWS.has(t))
+  return r.items
 }
 
 /** Read the whole control: current values and what this device offers. */
@@ -547,24 +703,70 @@ export function pickMenuItem(items: MenuItem[], value: string): MenuItem | null 
     ?? null
 }
 
-/** Choose a value on one axis. False when this device does not offer it. */
+/**
+ * The whole story of one attempt to set an axis.
+ *
+ * Every field exists because its absence once cost a build. Three releases
+ * shipped with every Codex pick dead, and the log said only that a choice had
+ * been made — never what we clicked, what the menu contained, or whether
+ * anything changed. `stage` alone answers "why didn't it work".
+ */
+export interface SetReasoningTrace {
+  axis: ReasoningAxis
+  /** What the pill asked for, in the menu's own vocabulary. */
+  want: string
+  /** How far we got. The first stage that fails is the cause. */
+  stage: 'menu-closed' | 'axis-row-missing' | 'submenu-closed' | 'value-absent' | 'clicked'
+  ok: boolean
+  /** Which gesture opened the submenu (or that none did). */
+  via?: OpenStrategy
+  /** Exactly what the submenu offered — the vocabulary check, in the log. */
+  offered?: string[]
+  /** The row text we actually clicked, so a near-miss match is visible. */
+  matched?: string
+  /** The reasoning button's label before and after. */
+  labelBefore?: string
+  labelAfter?: string
+  /** Did the button's label actually move? The only real proof. */
+  changed?: boolean
+  ms: number
+}
+
+const buttonLabel = async (cdp: CodexCdp): Promise<string> =>
+  (await cdp.evaluate<string>(
+    `(() => { const b = document.querySelector('${REASONING_BUTTON}'); return b ? (b.innerText || '').trim().replace(/\\n/g, ' ') : ''; })()`,
+  )) ?? ''
+
+/**
+ * Choose a value on one axis, and report exactly what happened.
+ *
+ * VERIFIES rather than assumes. The old version returned true the moment it
+ * dispatched a click, so "the pick worked" meant "we clicked somewhere". It now
+ * re-reads the button label and reports whether it moved — which is the only
+ * evidence that Codex agreed with us.
+ */
 export async function setReasoning(
   cdp: CodexCdp, axis: ReasoningAxis, value: string, sleep: (ms: number) => Promise<void>,
-): Promise<boolean> {
-  if (!(await openReasoningMenu(cdp, sleep))) return false
-  const rowBox = await cdp.evaluate<string>(`(() => {
-    const e = [...document.querySelectorAll('[role="menuitem"]')].find((x) => new RegExp('^' + ${JSON.stringify(axis)}).test((x.innerText || '').trim()));
-    if (!e) return '';
-    const r = e.getBoundingClientRect();
-    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-  })()`)
-  if (!rowBox) { await cdp.pressEscape(); return false }
-  const row = JSON.parse(rowBox) as { x: number; y: number }
-  await cdp.hover(row.x, row.y)
-  await sleep(700)
-  // Harvest every row, then choose in TypeScript — see pickMenuItem. Doing the
-  // choosing in the page put the one rule that decides whether a pick lands
-  // beyond the reach of any test.
+): Promise<SetReasoningTrace> {
+  const t0 = Date.now()
+  const done = (t: Omit<SetReasoningTrace, 'axis' | 'want' | 'ms'>): SetReasoningTrace =>
+    ({ axis, want: value, ms: Date.now() - t0, ...t })
+
+  const labelBefore = await buttonLabel(cdp)
+  if (!(await openReasoningMenu(cdp, sleep))) return done({ stage: 'menu-closed', ok: false, labelBefore })
+
+  const row = await axisRowBox(cdp, axis)
+  if (!row) { await cdp.pressEscape(); return done({ stage: 'axis-row-missing', ok: false, labelBefore }) }
+
+  const sub = await openSubmenu(cdp, axis, row, sleep, t0)
+  if (sub.strategy === 'failed') {
+    await cdp.pressEscape(); await sleep(200)
+    return done({ stage: 'submenu-closed', ok: false, via: 'failed', offered: sub.sawInstead, labelBefore })
+  }
+
+  // Harvest every row WITH its box, then choose in TypeScript — see
+  // pickMenuItem. Doing the choosing in the page put the one rule that decides
+  // whether a pick lands beyond the reach of any test.
   const itemsJson = await cdp.evaluate<string>(`(() => {
     const items = [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')];
     return JSON.stringify(items.map((e) => {
@@ -574,18 +776,23 @@ export async function setReasoning(
   })()`)
   let rows: MenuItem[] = []
   try { rows = JSON.parse(itemsJson || '[]') as MenuItem[] } catch { rows = [] }
+
   const at = pickMenuItem(rows, value)
   if (!at) {
-    // Name what was on offer: a silent false here is exactly how the last
-    // vocabulary mismatch hid for a whole build.
-    log.warn('reasoning value not in menu', { axis, value, offered: rows.map((r) => r.text.split('\n')[0]) })
-    await cdp.pressEscape(); await sleep(200); return false
+    await cdp.pressEscape(); await sleep(200)
+    return done({ stage: 'value-absent', ok: false, via: sub.strategy, offered: sub.items, labelBefore })
   }
+
   await cdp.click(at.x, at.y)
   await sleep(500)
   await cdp.pressEscape()
   await sleep(200)
-  return true
+  const labelAfter = await buttonLabel(cdp)
+  return done({
+    stage: 'clicked', ok: true, via: sub.strategy, offered: sub.items,
+    matched: at.text.split('\n')[0], labelBefore, labelAfter,
+    changed: labelAfter !== labelBefore,
+  })
 }
 
 /** Strip Codex's `local:` prefix so ids match rollout filenames. */

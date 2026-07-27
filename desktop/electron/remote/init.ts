@@ -2005,12 +2005,37 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         pickAxis: (axis, value) => {
           // Speed is gone — it was never a model axis, only a scraped row.
           if (axis !== 'Model' && axis !== 'Effort') return
-          if (!codexDriver) return
+          log.event('codex-pick-start', { axis, value, from: 'pill', hasDriver: !!codexDriver })
+          if (!codexDriver) {
+            // Say so. This returned silently, and a pick that never left the
+            // building looked identical to one the menu rejected.
+            log.warn('codex-pick-done', { axis, value, ok: false, stage: 'no-driver' })
+            return
+          }
+          // Remember the CHOICE even if the live write misses, so dispatch can
+          // still apply it — the same contract the IPC path already honours.
+          settings.set((axis === 'Model' ? 'codexModel' : 'codexEffort') as never, value as never)
           void codexDriver.setReasoningAxis(axis, value)
-            .then(() => refreshCodexReasoningForPill())
-            .then(() => { void pushPillChips() })
-            .catch((e) => log.warn('codex axis set failed', { error: (e as Error).message }))
-          log.event('codex-reasoning-choice', { axis, value, from: 'pill' })
+            .then((trace) => {
+              // ONE LINE WITH THE WHOLE STORY: what was clicked, how the menu
+              // opened, what it offered, what we matched, and whether Codex's
+              // own label actually moved.
+              log[trace.ok && trace.changed ? 'event' : 'warn']('codex-pick-done', {
+                axis, value, from: 'pill', ok: trace.ok, changed: trace.changed,
+                stage: trace.stage, via: trace.via, matched: trace.matched,
+                offered: trace.offered, label: `${trace.labelBefore ?? '?'} -> ${trace.labelAfter ?? '?'}`,
+                ms: trace.ms,
+              })
+              // The trace already carries the new label, so the chip updates
+              // from it directly. This used to trigger a FULL menu walk per
+              // pick — seconds long, over the very menu the next pick needs.
+              if (trace.labelAfter) {
+                const cached = settings.get('codexReasoningCache' as never) as Record<string, unknown> | undefined
+                settings.set('codexReasoningCache' as never, { ...(cached ?? {}), label: trace.labelAfter } as never)
+              }
+              void pushPillChips()
+            })
+            .catch((e) => log.warn('codex-pick-done', { axis, value, ok: false, stage: 'threw', error: (e as Error).message }))
         },
         pickAgent: (a) => {
           // Only ever a backend this host can actually dispatch to — the same
@@ -3008,8 +3033,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // another menu walk.
     const cached = settings.get('codexReasoningCache' as never) as { current?: Record<string, string> } | undefined
     if (cached?.current) settings.set('codexReasoningCache' as never, { ...cached, current: { ...cached.current, [axis]: value } } as never)
-    log.event('codex-reasoning-choice', { axis, value })
-    return await codexDriver.setReasoningAxis(axis, value).catch(() => false)
+    log.event('codex-reasoning-choice', { axis, value, from: 'settings' })
+    const trace = await codexDriver.setReasoningAxis(axis, value).catch((e) => ({
+      axis, want: value, stage: 'threw' as const, ok: false, ms: 0, error: (e as Error).message,
+    }))
+    return trace.ok
   })
 
   ipcMain.handle('remote:codex-projects', async () => {
