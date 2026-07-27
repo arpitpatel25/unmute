@@ -176,6 +176,25 @@ export class CodexDesktopDriver {
   private async applyApprovalPolicy(cdp: CodexCdp, userMode: UnmutePermissionMode): Promise<void> {
     try {
       const current = levelFromLabel(await readApprovalLabel(cdp))
+
+      // CHEAP PRE-CHECK, and it has to come BEFORE readApprovalMenu.
+      //
+      // readApprovalMenu OPENS the permissions menu to enumerate levels, and it
+      // ran on every dispatch — the `policy.level === current` early-return
+      // below fires only AFTER the menu has already been opened. So every Codex
+      // task touched a menu before typing, which is the thing that leaves the
+      // composer unable to submit. Reading the button's own label costs one
+      // evaluate and opens nothing.
+      //
+      // The ceiling logic is choosePolicy's, mirrored: auto-approve wants
+      // full-access, anything else wants approve-for-me. If we are already
+      // there, nothing about opening the menu could change the outcome.
+      const ceiling: CodexApprovalLevel = userMode === 'auto-approve' ? 'full-access' : 'approve-for-me'
+      if (current === ceiling) {
+        log.event('codex-approval-unchanged', { level: current, userMode, viaLabel: true })
+        return
+      }
+
       const available = levelsFromMenu(await readApprovalMenu(cdp, (ms) => this.sleep(ms)))
       if (!available.length) { log.warn('codex-approval-menu-empty', {}); return }
       const policy = choosePolicy(available, userMode)
