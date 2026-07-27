@@ -353,6 +353,33 @@ export async function selectApprovalLevel(
   }
   await cdp.click(at.x, at.y)
   await sleep(500)
+
+  // CODEX GUARDS AN ESCALATION WITH A CONFIRMATION DIALOG.
+  //
+  // Selecting "Full access" does not apply it — it opens "Turn on Full Access?"
+  // with Cancel / Confirm, and the level only changes when Confirm is clicked.
+  // Nothing here answered it, so every attempt read back the OLD level and
+  // reported ok:false, and the next pressEscape cancelled the dialog outright.
+  // That is why auto-approve never applied on any dispatch, and why the failure
+  // looked like a click that missed: the click had always landed.
+  //
+  // Scoped to a dialog that is actually asking about THIS change — a blind
+  // "click Confirm" would answer whatever modal happened to be on screen.
+  const confirmable = await cdp.evaluate<boolean>(`(() => {
+    const d = document.querySelector('[role="dialog"],[role="alertdialog"]');
+    if (!d) return false;
+    const t = (d.innerText || '').toLowerCase();
+    const wants = ${JSON.stringify(label.toLowerCase())};
+    const asksAboutThis = wants.split(/\s+/).every((w) => t.includes(w));
+    return asksAboutThis && [...d.querySelectorAll('button,[role=button]')]
+      .some((b) => (b.innerText || '').trim().toLowerCase() === 'confirm');
+  })()`)
+  if (confirmable) {
+    const confirmed = await cdp.clickText('Confirm')
+    log.event('codex-approval-confirmed', { label, clicked: confirmed })
+    await sleep(800)
+  }
+
   // Confirm from the button itself rather than trusting the click: this is the
   // difference between "we set the level" and "we think we set the level".
   const now = (await readApprovalLabel(cdp)) ?? ''
