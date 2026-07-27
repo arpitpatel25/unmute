@@ -23,6 +23,17 @@ import {
   type AudioInputDeviceInfo,
 } from './micSource'
 import { connectWarmMic, disconnectWarmMic, onWarmState, warmState, type WarmState } from './micWarm'
+import {
+  nativePillActive, toPhase, usePillState, usePillLevel, usePillEvents,
+} from './pillBridge'
+
+/** Dodo customer portal, for the payment-failed recovery on the pill. */
+function portalApi() {
+  return window.electronAPI as unknown as {
+    paywallOpenPortal?: () => Promise<{ ok: boolean; portalUrl?: string }>
+    paywallOpenExternal?: (url: string) => Promise<unknown>
+  }
+}
 
 // ─── Sound Feedback (Web Audio API) ───
 let soundEnabled = true
@@ -1217,6 +1228,69 @@ export default function WidgetApp() {
     api.paywallAcceptDraft?.()
   }, [])
 
+  // ── The native input surface ──
+  //
+  // When the Swift helper is drawing the pill, this renderer stops drawing one
+  // and becomes a pure source of state + a sink for gestures. It keeps the
+  // audio, the recorder, the mic devices and the VAD — everything that must not
+  // move — and its window stays exactly as it was, so nothing about the capture
+  // path's lifecycle or throttling changes.
+  const nativePill = nativePillActive()
+  const recordingNow =
+    state === 'dictation-active' || state === 'instruction-active' || state === 'chained'
+  const startedAt = useRef(0)
+  useEffect(() => { if (recordingNow && !startedAt.current) startedAt.current = Date.now() }, [recordingNow])
+  useEffect(() => { if (!recordingNow) startedAt.current = 0 }, [recordingNow])
+  const elapsedSec = useCallback(
+    () => (startedAt.current ? Math.floor((Date.now() - startedAt.current) / 1000) : 0),
+    [],
+  )
+
+  // NOTE: the model and agent chips are NOT pushed from here. Main already owns
+  // the settings and the config-driven catalog, and PillController merges
+  // partial pushes — so it supplies them directly rather than this renderer
+  // keeping a second copy that could disagree.
+  const pillState = useMemo(() => ({
+    phase: toPhase(state, draftOffer),
+    kind: isRemote ? 'remote' : 'dictation',
+    maxSeconds: maxDurationSeconds,
+    message: errorMessage || fallbackMessage || undefined,
+    coaching: recordingNow && noisyEnvironment
+      ? { condition: 'Noisy spot', remedy: captureSource === 'iphone' ? 'speak up' : 'lean in & speak up', level: 'warn' as const }
+      : recordingNow && tooQuiet
+        ? { condition: 'Too quiet', remedy: captureSource === 'iphone' ? 'speak up a little' : 'bring the mic closer', level: 'warn' as const }
+        : null,
+    // The awareness card's own visibility rule, evaluated here rather than
+    // recomputed on the Swift side: offlineReason is only meaningful while the
+    // pill is up and the user hasn't dismissed it this session.
+    offline: (recordingNow || state === 'processing') && offlineReason !== null && !sessionDismissed
+      ? offlineReason
+      : null,
+    canUndo: state === 'output' || state === 'output-fallback',
+  }), [state, draftOffer, isRemote, maxDurationSeconds, errorMessage, fallbackMessage,
+       recordingNow, noisyEnvironment, tooQuiet, captureSource, offlineReason,
+       dismissedTick])
+
+  usePillState(pillState, nativePill)
+  usePillLevel(analyserNode, recordingNow, elapsedSec, nativePill)
+  usePillEvents({
+    stop: () => { void handleStop() },
+    cancel: () => { void handleCancel() },
+    undo: handleUndo,
+    acceptDraft: handleAcceptDraft,
+    // The mic chip has always been a one-tap flip between the Mac and the
+    // phone, never a picker — keep that exactly.
+    pickMic: () => mic.toggle(),
+    // Session-scoped override, same call the DOM toggle makes.
+    toggleRaw: (v) => { void rawApi().remoteSetSessionRaw?.(v === true) },
+    dismissOffline: () => { sessionDismissed = true; setDismissedTick((t) => t + 1) },
+    openBillingPortal: () => {
+      void portalApi().paywallOpenPortal?.().then((r) => {
+        if (r?.ok && r.portalUrl) void portalApi().paywallOpenExternal?.(r.portalUrl)
+      })
+    },
+  }, nativePill)
+
   const handleAwarenessDismiss = useCallback(() => {
     sessionDismissed = true
     setDismissedTick((n) => n + 1)
@@ -1233,6 +1307,14 @@ export default function WidgetApp() {
     pillShowing && offlineReason !== null && !sessionDismissed
   // `dismissedTick` is read here just to trigger re-render on dismiss
   void dismissedTick
+
+  // THE NATIVE SURFACE DRAWS THE PILL — this renderer draws nothing.
+  //
+  // The window itself is untouched: same size, same position, same lifecycle,
+  // so nothing about background throttling or the audio graph changes. Only the
+  // pixels move. Every hook above still runs, which is the point — this
+  // renderer remains the source of capture state and the sink for gestures.
+  if (nativePill) return <div ref={rootRef} style={{ background: 'transparent' }} />
 
   return (
     <div

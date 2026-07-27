@@ -47,6 +47,7 @@ import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
 import { startCuaServer, type CuaServer } from './cua/server'
 import { NotchClient } from './notch/notch-client'
 import { NotchController } from './notch/notch-controller'
+import { PillController, type PillStateP } from './notch/pill-controller'
 import { DriverManager } from './cua/driver-manager'
 import { CdpLane } from './cua/lanes/cdp'
 import { Arming } from './cua/lanes/arming'
@@ -140,6 +141,12 @@ interface RemoteSettings {
   // Skills the user pinned to the top of the cockpit rail (manual override of
   // the earned-trust ranking).
   pinnedSkills: string[]
+  // How the notch and the pill render their material.
+  //   'system' — follow Accessibility → Reduce Transparency (the default, and
+  //              the only value that respects an accessibility preference)
+  //   'glass'  — always translucent
+  //   'solid'  — always opaque
+  surfaceAppearance: 'system' | 'glass' | 'solid'
   // The Unmute MCP (agent intercom): may sessions create peer tasks? ON by
   // default — the guardrails (provenance, depth-1, rate caps) carry the
   // safety; this is the master off-switch.
@@ -174,6 +181,7 @@ const settings = new Store<RemoteSettings>({
     voiceHeadlines: true,
     screenshotCapture: true,
     pinnedSkills: [],
+    surfaceAppearance: 'system',
     agentTasksEnabled: true,
     computerUse: { enabled: false, screenshotEnabled: true, allowAll: true, allowed: [] },
   },
@@ -187,6 +195,11 @@ let cuaServer: CuaServer | null = null
 let cuaManager: DriverManager | null = null
 let notchClient: NotchClient | null = null
 let notchController: NotchController | null = null
+/** The bottom-centre input surface. Shares the notch's helper process and its
+ *  stdio channel — one process owning both panels is what keeps the two
+ *  surfaces on literally the same material system rather than on two
+ *  implementations that agree by discipline. */
+let pillController: PillController | null = null
 function broadcastAxActivity(ev: { app?: string; tool: string; ok: boolean }): void {
   try {
     for (const w of BrowserWindow.getAllWindows()) {
@@ -695,6 +708,12 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
   // this broadcast never fires for plain dictation). The clipboard sweep runs at
   // 'transcribing' (key just lifted, recording stopped) so a mid-hold
   // ⌃-screenshot rides with THIS utterance, before routing delivers it.
+  // The pill's model/agent chips come from HERE, not from the capture renderer:
+  // main owns the setting and the config-driven catalog, so a second copy in the
+  // renderer could only ever disagree. Resolved once as the capture opens —
+  // availability changes rarely (Codex opened or closed), and the answer is only
+  // needed at the moment the chips appear.
+  if (phase === 'listening') void pushPillChips()
   if (phase === 'listening') startCaptureWatch()
   else if (phase === 'transcribing') secureAndClearClipboard() // key just lifted — secure, then clear if consumed
   // idle = the remote capture RESOLVED. Delivery already emptied the tray via
@@ -712,6 +731,35 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
  *  mis-spawn and reroutes the SAME intent into the alternate; ignoring it costs
  *  nothing and it simply expires in the UI. */
 let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; at: number } | null = null
+
+/** Push the model / agent / raw chips to the native pill.
+ *
+ *  Best-effort by design: a chip that cannot be resolved simply does not
+ *  render, and a failure here must never surface on the capture path. */
+async function pushPillChips(): Promise<void> {
+  if (!pillController) return
+  try {
+    const catalog = getModelCatalog()
+    const current = settings.get('model') || getModels().doerDefault
+    const agent = (settings.get('agent') as AgentKind) ?? 'claude'
+    const codexOk = codexDriver
+      ? await codexDriver.availability().then((a) => a.ok).catch(() => false)
+      : false
+    pillController.push({
+      model: catalog.find((c) => c.id === current)?.label ?? current,
+      modelOptions: catalog.map((c) => ({ id: c.id, label: c.label, detail: c.description ?? '' })),
+      agent: agent === 'codex-desktop' ? 'Codex' : 'Claude Code',
+      agentOptions: [
+        { id: 'claude', label: 'Claude Code', available: true },
+        // Only offered when it can actually take work right now.
+        { id: 'codex-desktop', label: 'Codex', available: codexOk },
+      ],
+      raw: injectionDisabled(),
+    })
+  } catch (e) {
+    log.warn('pill chips push failed', { error: (e as Error).message })
+  }
+}
 
 // ── Staging tray (multimodal, capture-first): images pasted/dropped with NO
 // target stage here, then ride with the NEXT utterance to wherever it lands —
@@ -1810,7 +1858,58 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         clearStaged: () => { stagedAttachments = []; broadcastStaged() },
         getLastSeen: () => notchLastSeen,
         setLastSeen: (ms) => { notchLastSeen = ms },
+        // (pill deps are wired separately, below — see PillController)
       })
+
+      // ── The input surface ──
+      //
+      // Same helper, same channel — the pill is a second NSPanel in the process
+      // the notch already owns. Every dep here is a RELAY: the capture renderer
+      // still owns the behaviour (it owns the audio), main only forwards the
+      // gesture back to it. The two exceptions are model and agent, which are
+      // real settings and are set here exactly as remote:set-model does.
+      const toWidget = (type: string, value?: unknown) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+          if (!w.isDestroyed()) w.webContents.send('pill:event', { type, value })
+        }
+      }
+      pillController = new PillController(notchClient, {
+        stop:        () => toWidget('stop'),
+        cancel:      () => toWidget('cancel'),
+        undo:        () => toWidget('undo'),
+        acceptDraft: () => toWidget('acceptDraft'),
+        pickMic:     (id) => toWidget('pickMic', id),
+        toggleRaw:   (on) => toWidget('toggleRaw', on),
+        dismissOffline:    () => toWidget('dismissOffline'),
+        openBillingPortal: () => toWidget('openBillingPortal'),
+        pickModel: (m) => {
+          const model = isSelectableModel(m) ? m : (settings.get('model') || getModels().doerDefault)
+          settings.set('model', model)
+          settings.set('modelUserSet', true) // explicit choice — never auto-migrate it
+          for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed()) w.webContents.send('remote:model-changed', model)
+          }
+          log.event('model-set', { model, from: 'pill' })
+        },
+        pickAgent: (a) => {
+          // Only ever a backend this host can actually dispatch to — the same
+          // guard the picker itself applies, repeated here because an event can
+          // arrive from a surface whose options are a moment stale.
+          if (a !== 'claude' && a !== 'codex-desktop') return
+          settings.set('agent', a)
+          for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed()) w.webContents.send('remote:agent-changed', a)
+          }
+          log.event('agent-set', { agent: a, from: 'pill' })
+        },
+        clearStaged: () => { stagedAttachments = []; broadcastStaged() },
+      })
+
+      // Push the stored preference immediately: the helper starts on 'system',
+      // so without this a user who chose Solid would see one glassy frame on
+      // every launch.
+      notchClient.send({ type: 'appearance', value: settings.get('surfaceAppearance') || 'system' } as never)
+
       log.info('notch shell started', { bin: notchBin })
     } catch (e) {
       log.warn('notch shell not started', { error: (e as Error).message })
@@ -2051,6 +2150,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   app.on('before-quit', () => {
     try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
     try { cuaManager?.dispose(); cuaServer?.close(); void cuaArming.disposeAll() } catch (e) { log.warn('cua shutdown failed', { error: (e as Error).message }) }
+    try { pillController?.hide() } catch { /* best-effort */ }
     try { notchController?.dispose(); notchClient?.dispose() } catch (e) { log.warn('notch shutdown failed', { error: (e as Error).message }) }
     try { router?.dispose() } catch { /* best-effort */ }
   })
@@ -2536,6 +2636,39 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('model-set', { model })
     return model
   })
+  // ── The input surface: renderer → native pill ──
+  //
+  // `send`, not `invoke`. These are fire-and-forget on the CAPTURE PATH and a
+  // round-trip per animation frame is exactly the kind of main-process work
+  // that corrupts audio. The controller drops unchanged payloads, and
+  // pill:level is a no-op unless a capture is actually running.
+  ipcMain.on('pill:state', (_e, state: PillStateP) => {
+    try { pillController?.push(state ?? {}) } catch { /* never break a capture */ }
+  })
+  ipcMain.on('pill:level', (_e, level: number, elapsed?: number) => {
+    try { pillController?.level(level, elapsed) } catch { /* never break a capture */ }
+  })
+  ipcMain.on('pill:hide', () => {
+    try { pillController?.hide() } catch { /* best-effort */ }
+  })
+
+  // ── Surface appearance (Glass / Solid / Follow system) ──
+  //
+  // macOS already owns this preference twice — Accessibility → Reduce
+  // Transparency, and the global Liquid Glass opacity slider on 26+. So
+  // 'system' is the default and the helper honours it. The explicit options
+  // exist because a hand-built pre-26 surface cannot follow the system slider
+  // at all, and because a persistent always-on-top panel over someone else's
+  // work is a reasonable thing to want solid regardless.
+  ipcMain.handle('remote:get-surface-appearance', async () => settings.get('surfaceAppearance') || 'system')
+  ipcMain.handle('remote:set-surface-appearance', async (_e, v: string) => {
+    const value = v === 'glass' || v === 'solid' ? v : 'system'
+    settings.set('surfaceAppearance', value)
+    notchClient?.send({ type: 'appearance', value } as never)
+    log.event('surface-appearance-set', { value })
+    return value
+  })
+
   ipcMain.handle('remote:set-overlay-docked', async (_e, on: boolean) => {
     settings.set('overlayDocked', !!on)
     setDockedMode(!!on)
