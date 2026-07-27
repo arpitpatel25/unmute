@@ -151,11 +151,25 @@ while (Date.now() < deadline) {
     try { behavior = JSON.parse(raw).behavior } catch {}
     try { fs.unlinkSync(decision) } catch {}
     try { fs.unlinkSync(pending) } catch {}
-    if (behavior === 'allow' || behavior === 'deny') {
-      done(JSON.stringify({
-        suppressOutput: true,
-        hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior } },
-      }))
+    // CODEX'S CONTRACT, NOT CLAUDE'S.
+    //
+    // This used to emit Claude Code's shape —
+    //   { suppressOutput, hookSpecificOutput: { hookEventName, decision: { behavior } } }
+    // — and Codex recognises NONE of those keys (verified against the binary:
+    // hookSpecificOutput 0 matches, hookEventName 0, suppressOutput 0). So a
+    // DENY was silently ignored, Codex fell through to its own auto_review
+    // reviewer, and the command ran anyway. A user tapped Deny in the notch and
+    // the file was created on their Desktop.
+    //
+    // Codex's own strings give the contract: "hook returned decision:block
+    // without a non-empty reason" and "Command blocked by PreToolUse hook: ".
+    // The accepted values are 'allow' and 'block', and a block REQUIRES a
+    // non-empty reason or it is discarded.
+    if (behavior === 'deny') {
+      done(JSON.stringify({ decision: 'block', reason: 'Denied in unmute' }))
+    }
+    if (behavior === 'allow') {
+      done(JSON.stringify({ decision: 'allow' }))
     }
     done(NO_OPINION)
   }

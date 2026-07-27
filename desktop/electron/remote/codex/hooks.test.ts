@@ -137,10 +137,12 @@ describe('the generated handler (run for real)', () => {
     await new Promise((r) => setTimeout(r, 600))
     await decideApproval('019f9a12-b931-7591-98ef-e1fae9f90b1f', 'allow', dir)
 
-    assert.deepEqual(JSON.parse(await done), {
-      suppressOutput: true,
-      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } },
-    })
+    // CODEX'S contract — `{decision}` — not Claude Code's hookSpecificOutput.
+    // This test asserted the Claude shape and passed for months while every
+    // real denial was silently ignored by Codex, which recognises none of
+    // those keys. A test that encodes our misunderstanding is worse than no
+    // test: it certifies the bug.
+    assert.deepEqual(JSON.parse(await done), { decision: 'allow' })
     // Answered ⇒ nothing left blocking.
     assert.deepEqual(await pendingApprovals(dir), [])
     process.env.HOME = REAL_HOME
@@ -152,10 +154,11 @@ describe('the generated handler (run for real)', () => {
     const done = run(script, EVENT)
     await new Promise((r) => setTimeout(r, 600))
     await decideApproval('019f9a12-b931-7591-98ef-e1fae9f90b1f', 'deny', dir)
-    assert.equal(
-      JSON.parse(await done).hookSpecificOutput.decision.behavior,
-      'deny',
-    )
+    // A block MUST carry a non-empty reason — Codex discards it otherwise
+    // ("hook returned decision:block without a non-empty reason").
+    const out = JSON.parse(await done)
+    assert.equal(out.decision, 'block')
+    assert.ok(out.reason && out.reason.length > 0, 'a block needs a reason or Codex drops it')
     process.env.HOME = REAL_HOME
   })
 
