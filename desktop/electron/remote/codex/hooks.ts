@@ -50,7 +50,7 @@
 // agent when unmute is closed would be worse than no channel at all.
 
 import { spawn } from 'node:child_process'
-import { promises as fs } from 'node:fs'
+import { existsSync, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createLogger } from '../log'
@@ -213,6 +213,39 @@ export interface InstallResult {
  * clobbers the user's other hooks, and re-trusts the new hash. Idempotent by
  * construction — the hash only changes when we change the script.
  */
+/**
+ * Repair the approval channel if it has gone missing.
+ *
+ * Installation is tied to an explicit "connect Codex" — reasonable for the
+ * FIRST install, but it cannot be the only check. These files live outside the
+ * app bundle, so a Codex update, an app move, or a cleaned home directory takes
+ * them away and nothing notices: Codex is left holding a trusted hash for a
+ * file that no longer exists, every approval goes to Codex's own dialog, and a
+ * task blocked on permission sits at "Working" forever with no way to answer it
+ * from the notch. Observed in the field exactly that way — config.toml still
+ * trusted hooks.json days after hooks.json had ceased to exist.
+ *
+ * The check is two stat calls, so it is free to run before every dispatch. The
+ * REPAIR costs an app-server round trip, so it only happens when something is
+ * actually gone — and reinstalling is already idempotent by design.
+ */
+export async function ensureApprovalHook(opts: {
+  runtime: string
+  codexCli?: string
+  home?: string
+}): Promise<InstallResult | { ok: true; reason: 'present' }> {
+  const shim = join(hookDir(), 'permission-request.sh')
+  const handler = join(hookDir(), 'permission-request.cjs')
+  const hooksJson = join(opts.home ?? codexHome(), 'hooks.json')
+  if (existsSync(shim) && existsSync(handler) && existsSync(hooksJson)) {
+    return { ok: true, reason: 'present' }
+  }
+  log.warn('codex-hook-missing', {
+    shim: existsSync(shim), handler: existsSync(handler), hooksJson: existsSync(hooksJson),
+  })
+  return await installApprovalHook(opts)
+}
+
 export async function installApprovalHook(opts: {
   /** Absolute path to the Electron binary that will run the handler. */
   runtime: string

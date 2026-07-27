@@ -45,7 +45,7 @@ import type { AgentExecutor, ExecutorFactory } from './executor'
 import { settleRepl } from './repl-settle'
 import { type AgentKind, isExternalAgent } from './codex-executor'
 import type { CodexDesktopDriver } from './codex/driver'
-import { beat, pendingApprovals, decideApproval, clearApproval, describeApproval } from './codex/hooks'
+import { beat, pendingApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
 
 const log = createLogger('task-manager')
 
@@ -624,6 +624,19 @@ export class TaskManager extends EventEmitter {
     const kind = opts.kind ?? 'oneoff'
 
     tlog.event('codex-dispatch-begin', { project: opts.project ?? null, kind, intentLen: intent.length })
+
+    // REPAIR THE APPROVAL CHANNEL BEFORE DISPATCHING, not only on connect.
+    //
+    // Two stat calls when it is healthy, which is always. When it is not, a
+    // Codex task that stops for permission is invisible to unmute — it sits at
+    // "Working" while Codex shows its own dialog somewhere the user is not
+    // looking, and there is no way to answer from the notch. Field-observed:
+    // config.toml still trusted a hooks.json that had ceased to exist.
+    //
+    // Never fatal. A task at the user's existing approval level beats no task.
+    await ensureApprovalHook({ runtime: process.execPath })
+      .then((r) => { if (!('reason' in r) || r.reason !== 'present') log.event('codex-hook-repaired', { ...r }) })
+      .catch((e) => log.warn('codex-hook-repair-failed', { error: (e as Error).message }))
     const reasoning = this.opts.codexReasoning?.() ?? {}
     const modelLabel = [reasoning.model, reasoning.effort].filter(Boolean).join(' ') || undefined
     const created = await driver.createTask(intent, {
