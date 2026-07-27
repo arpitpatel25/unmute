@@ -480,6 +480,54 @@ final class AppController: NSObject, NotchResizing {
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
         ) { [weak self] _ in self?.recomputeGeometry("screen-params-changed") }
+
+        // THE BACKDROP GOES STALE ON A SPACE SWITCH.
+        //
+        // Both materials sample what is BEHIND the window — Tier B through
+        // `blendingMode = .behindWindow`, Tier A through `.glassEffect` — and
+        // that sample is composited and cached by the WindowServer, not drawn
+        // by us. Our collectionBehavior contains `.stationary`, which means the
+        // surface deliberately does NOT take part in the Space transition: it
+        // stays put while everything behind it slides away. Nothing marks it
+        // dirty, so it keeps compositing the desktop it captured on the Space
+        // the user just left, and the notch wears the previous Space's colour
+        // until something forces a redraw. Moving the cursor over it was doing
+        // exactly that, which is why hovering "fixed" it.
+        //
+        // Sleep/wake strands it the same way and for the same reason.
+        let ws = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didWakeNotification] {
+            ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.refreshBackdrop(name == NSWorkspace.didWakeNotification ? "woke" : "space-changed")
+            }
+        }
+    }
+
+    /// Force the WindowServer to re-sample what is behind our surfaces.
+    ///
+    /// A `setFrame` to the SAME rect is a no-op, so this displaces by a point
+    /// and puts it back. Both calls land in one runloop turn and the first does
+    /// not draw, so nothing is visible — but the window is genuinely
+    /// re-composited, which is the only thing that invalidates the cached
+    /// backdrop. Deliberately BELOW SwiftUI so it covers both material tiers;
+    /// a token that only rebuilt the view tree would miss `.glassEffect`, whose
+    /// sampling is not ours to invalidate.
+    /// EVERY window, not a named list. The staleness is a property of the
+    /// material, so it afflicts every surface that uses one — the notch, the
+    /// dictation pill and the remote task pill were all observed wearing the
+    /// previous Space's colour. Enumerating windows means a surface added later
+    /// is covered the day it is added, rather than the day someone remembers
+    /// this function exists.
+    private func refreshBackdrop(_ reason: String) {
+        var touched = 0
+        for w in NSApp.windows where w.isVisible {
+            let f = w.frame
+            w.setFrame(f.offsetBy(dx: 0, dy: -1), display: false)
+            w.setFrame(f, display: true)
+            w.contentView?.needsDisplay = true
+            touched += 1
+        }
+        NotchLog.log("backdrop refreshed (\(reason)): windows=\(touched)")
     }
     private func recomputeGeometry(_ reason: String) {
         geometry = NotchGeometry.current()
