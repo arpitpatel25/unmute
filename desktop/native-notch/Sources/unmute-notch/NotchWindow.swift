@@ -26,7 +26,27 @@ final class NotchWindow: NSPanel {
         )
         isFloatingPanel = true
         level = .screenSaver
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        // NO `.stationary` — IT STRANDS THE GLASS.
+        //
+        // `.stationary` means "do not take part in Space transitions". A window
+        // that sits out the transition never has its behind-window backdrop
+        // re-bound to the newly active Space, so the material goes on
+        // compositing the desktop it last sampled: swipe to a new Space and the
+        // surface wears the OLD one's colour until something forces a redraw
+        // (moving the cursor over it did, which is what made it look random).
+        //
+        // Proven by A/B, not reasoned: two identical vibrant panels differing
+        // only in this flag, photographed in the same frame on the same Space —
+        // the `.stationary` one stayed dark from a Space three swipes back while
+        // the other correctly sampled the wallpaper under it. `.canJoinAllSpaces`
+        // is NOT the culprit and is kept; the panel without `.stationary` still
+        // appears on every Space and still tracks the backdrop.
+        //
+        // The cost is that these surfaces now travel with the desktop during a
+        // swipe rather than staying welded to the screen edge. That is the
+        // trade, and it was taken deliberately: correct glass everywhere beats
+        // a pinned position during the half-second of a transition.
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false                  // the shape draws its own
