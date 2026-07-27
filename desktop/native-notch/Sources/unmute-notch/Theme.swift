@@ -56,10 +56,22 @@ enum Theme {
         }
     }
 
-    // MARK: - Tint (primary action only)
-
-    static let accent    = Color(nsColor: .controlAccentColor)
-    static let accentDim = Color(nsColor: .controlAccentColor).opacity(0.32)
+    // MARK: - The primary action (MONOCHROME, deliberately)
+    //
+    // Status already owns all four useful hues — green working, orange needs-you,
+    // teal ready, red errored. Any accent that is not one of those is blue or
+    // violet, and a blue primary sat next to an amber card competed with the one
+    // signal this whole surface exists to convey.
+    //
+    // So the primary action carries NO hue at all: near-white on the dark plane.
+    // Colour is 100% reserved for status, which is the R1 rule stated honestly
+    // rather than stated and then undercut by the system accent.
+    static let accent    = Color.white.opacity(0.93)
+    /// Ink ON a primary control — the fill is near-white, so its label is dark.
+    static let accentInk = Color(red: 0.06, green: 0.065, blue: 0.08)
+    static let accentDim = Color.white.opacity(0.14)
+    /// The one exception, and it is not an accent: a pinned star is gold because
+    /// that is what a star is.
     static let pinGold   = Color(nsColor: .systemYellow)
 
     // MARK: - Content layer (opaque; never glass)

@@ -31,18 +31,18 @@ function harness() {
 describe('PillController.push', () => {
   test('sends the merged state, not just the delta', () => {
     const h = harness()
-    h.c.push({ phase: 'listening', kind: 'remote', model: 'Sonnet' })
+    h.c.push({ phase: 'recording', kind: 'remote', model: 'Sonnet' })
     h.c.push({ elapsed: 3 })
     assert.deepEqual(h.state(), {
-      phase: 'listening', kind: 'remote', model: 'Sonnet', elapsed: 3,
+      phase: 'recording', kind: 'remote', model: 'Sonnet', elapsed: 3,
     })
   })
 
   test('drops an unchanged payload — a renderer that re-renders every tick cannot flood the helper', () => {
     const h = harness()
-    h.c.push({ phase: 'listening', level: 0.5 })
+    h.c.push({ phase: 'recording', level: 0.5 })
     const n = h.sent.length
-    h.c.push({ phase: 'listening', level: 0.5 })
+    h.c.push({ phase: 'recording', level: 0.5 })
     h.c.push({ level: 0.5 })
     assert.equal(h.sent.length, n)
   })
@@ -67,7 +67,7 @@ describe('PillController.level', () => {
 
   test('sends while listening, and carries elapsed when given', () => {
     const h = harness()
-    h.c.push({ phase: 'listening' })
+    h.c.push({ phase: 'recording' })
     h.c.level(0.8, 4)
     assert.equal(h.state()?.level, 0.8)
     assert.equal(h.state()?.elapsed, 4)
@@ -75,7 +75,7 @@ describe('PillController.level', () => {
 
   test('repeated identical levels still send — the meter must not stall on a plateau', () => {
     const h = harness()
-    h.c.push({ phase: 'listening' })
+    h.c.push({ phase: 'recording' })
     h.c.level(0.5)
     const n = h.sent.length
     h.c.level(0.5)
@@ -128,10 +128,10 @@ describe('PillController events', () => {
 describe('PillController.hide', () => {
   test('clears prior state so a stale chip cannot survive into the next capture', () => {
     const h = harness()
-    h.c.push({ phase: 'listening', stagedCount: 3, model: 'Opus' })
+    h.c.push({ phase: 'recording', stagedCount: 3, model: 'Opus' })
     h.c.hide()
     assert.deepEqual(h.state(), { phase: 'hidden' })
-    h.c.push({ phase: 'listening' })
+    h.c.push({ phase: 'recording' })
     assert.equal(h.state()?.stagedCount, undefined)
     assert.equal(h.state()?.model, undefined)
   })

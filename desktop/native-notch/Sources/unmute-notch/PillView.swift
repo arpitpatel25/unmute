@@ -2,47 +2,57 @@ import SwiftUI
 
 // THE PILL CLUSTER — one glass system, not six chips.
 //
-// The web widget drew the pill and every satellite as separate views, each
-// carrying its own fill, border and shadow. The moment the pill becomes glass
-// that is glass-on-glass: Apple prohibits it, and it literally cannot render
-// correctly because glass cannot sample glass.
+// ANATOMY IS THE ORIGINAL WIDGET'S, VERBATIM. The first build invented a set of
+// labels the pill never carried — "Listening", "New task", "Transcribing…",
+// "Pasted" — and lost three states entirely. Checked against Widget.tsx on main,
+// the pill says:
 //
-// Here the whole cluster lives in ONE GlassEffectContainer, so the elements
-// share a single adaptive appearance, sample the backdrop in one pass, and
-// fluidly join and separate as chips come and go. That is the single biggest
-// structural gain of moving this surface to Swift — CSS backdrop-filter blurs
-// but never lenses, and two adjacent blurred elements can never merge.
+//   recording        dot (or the Remote glyph) + timer + stop.  NO LABEL, NO
+//                    WAVEFORM. `analyserNode` is a prop the original never
+//                    renders; the .unmute-pill-waveform class is vestigial.
+//   processing       dot + "Processing" / "Taking longer…" / "On-device",
+//                    three bouncing dots, and one optional trailing affordance
+//   output           a green tick and NOTHING else — "silent success ack (text
+//                    is already at the cursor)"
+//   output-fallback  warning glyph + why + what was pasted
+//   too-short        "Didn't catch that"
+//   cancelled        "Cancelled" + Undo        ← Undo lives HERE, not on success
+//   error            ✗ + the message + how to retry
+//
+// Text appears only where something needs explaining. The two states you look at
+// most are wordless.
+//
+// MATERIAL: one path, behind-window. SwiftUI's .glassEffect samples content
+// WITHIN the window; this panel is transparent and floats over other apps, so
+// it had nothing to refract and rendered flat grey. See GlassLip.swift.
 
-/// Applies the tier-appropriate material to one element of the cluster.
+/// Applies the cluster's material to one element.
 private struct PillGlass<S: Shape>: ViewModifier {
     let shape: S
     var tint: Color? = nil
     @ObservedObject private var appearance = Appearance.shared
 
     func body(content: Content) -> some View {
-        Group {
-            if appearance.translucent {
-                if #available(macOS 26.0, *) {
-                    content.glassEffect(tint.map { Glass26Style.regular.tint($0) } ?? .regular,
-                                        in: shape)
-                } else {
-                    content
-                        .background(shape.fill(Color(red: 0.055, green: 0.06, blue: 0.07).opacity(0.90)))
-                        .background(
-                            VisualEffectBackdrop(material: .hudWindow).clipShape(shape)
-                        )
-                        .overlay(shape.stroke(Glass.rim(highlight: tint ?? .white), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.34), radius: 14, y: 5)
+        content
+            .background {
+                ZStack {
+                    if appearance.translucent {
+                        // The sampler — the desktop behind this window.
+                        VisualEffectBackdrop(material: .hudWindow)
+                        // Black glass: dark enough to own its shape on a white
+                        // page, transparent enough that the wallpaper moves.
+                        Color(red: 0.016, green: 0.020, blue: 0.030).opacity(0.58)
+                        if let tint { tint.opacity(0.20) }
+                    } else {
+                        Color(red: 0.055, green: 0.06, blue: 0.075)
+                        if let tint { tint.opacity(0.14) }
+                    }
                 }
-            } else {
-                content
-                    .background(shape.fill(tint.map { $0.opacity(0.20) }
-                                           ?? Color(red: 0.07, green: 0.075, blue: 0.09)))
-                    .overlay(shape.stroke(Color.white.opacity(0.22), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.30), radius: 10, y: 4)
+                .clipShape(shape)
+                .overlay(shape.stroke(Glass.rim(highlight: tint ?? .white), lineWidth: 1))
+                .shadow(color: .black.opacity(0.34), radius: 14, y: 5)
             }
-        }
-        .animation(Theme.flip, value: appearance.translucent)
+            .animation(Theme.flip, value: appearance.translucent)
     }
 }
 
@@ -54,16 +64,21 @@ private extension View {
 
 struct PillView: View {
     @ObservedObject var model: PillModel
-    @Namespace private var ns
 
     private var s: PillState { model.state }
+
+    /// Chips ride with the pill only while a capture is live — the same rule the
+    /// original used (`pillShowing`): recording or processing, nothing else.
+    private var chipsVisible: Bool {
+        s.phase == .recording || s.phase == .processing
+    }
 
     var body: some View {
         VStack(spacing: 9) {
             Spacer(minLength: 0)
-            if let c = s.coaching { CoachingChip(coaching: c) }
+            if chipsVisible, let c = s.coaching { CoachingChip(coaching: c) }
             cluster
-            if let reason = s.offline {
+            if chipsVisible, let reason = s.offline {
                 OfflineCard(reason: reason,
                             onFix: { model.emit(.openBillingPortal) },
                             onDismiss: { model.emit(.dismissOffline) })
@@ -73,215 +88,253 @@ struct PillView: View {
         .padding(.bottom, 4)
         .animation(Theme.morph, value: s.phase)
         .animation(Theme.morph, value: s.stagedCount)
-        .animation(Theme.morph, value: s.offline)
     }
 
-    /// The cluster is ALWAYS a single horizontal row. Chips flank the pill; the
-    /// pill is the anchor and never moves as they come and go.
-    @ViewBuilder private var cluster: some View {
-        if #available(macOS 26.0, *), Appearance.shared.translucent {
-            GlassEffectContainer(spacing: 12) { row }
-        } else {
-            row
-        }
-    }
-
-    private var row: some View {
+    /// Always a single horizontal row. Chips flank the pill; the pill is the
+    /// anchor and never moves as they come and go.
+    private var cluster: some View {
         HStack(spacing: 8) {
-            // LEFT of the pill: what the task will RUN ON.
-            if s.kind == .remote {
+            if chipsVisible && s.kind == .remote {
                 if let m = s.model {
-                    MenuChip(id: "model", label: m, symbol: "sparkles", symbolColor: Theme.cNeeds,
-                             options: s.modelOptions ?? [], model: model) { model.emit(.pickModel($0)) }
+                    MenuChip(label: m, symbol: "sparkles", symbolColor: Theme.cNeeds,
+                             options: s.modelOptions ?? []) { model.emit(.pickModel($0)) }
                         .pillGlass(Capsule())
-                        .glassID("model", ns)
                 }
                 if let a = s.agent {
-                    MenuChip(id: "agent", label: a, symbol: "chevron.left.forwardslash.chevron.right",
+                    MenuChip(label: a, symbol: "chevron.left.forwardslash.chevron.right",
                              symbolColor: Theme.textDim,
-                             options: s.agentOptions ?? [], model: model) { model.emit(.pickAgent($0)) }
+                             options: s.agentOptions ?? []) { model.emit(.pickAgent($0)) }
                         .pillGlass(Capsule())
-                        .glassID("agent", ns)
                 }
                 if let raw = s.raw {
-                    RawChip(on: raw) { model.emit(.toggleRaw(!raw)) }
-                        .pillGlass(Capsule())
-                        .glassID("raw", ns)
+                    RawChip(on: raw) { model.emit(.toggleRaw(!raw)) }.pillGlass(Capsule())
                 }
             }
 
-            capturePill
-                .pillGlass(Capsule(), tint: pillTint)
-                .glassID("pill", ns)
+            pill.pillGlass(Capsule(), tint: pillTint)
 
-            // RIGHT of the pill: what RIDES ALONG with the utterance.
-            if s.stagedCount > 0 {
-                StagedChip(count: s.stagedCount) { model.emit(.clearStaged) }
-                    .pillGlass(Capsule())
-                    .glassID("staged", ns)
-            }
-            if let opts = s.micOptions, opts.count > 1 {
-                MicChip(current: s.mic, options: opts, model: model) { model.emit(.pickMic($0)) }
-                    .pillGlass(Capsule())
-                    .glassID("mic", ns)
+            if chipsVisible {
+                if s.stagedCount > 0 {
+                    StagedChip(count: s.stagedCount) { model.emit(.clearStaged) }
+                        .pillGlass(Capsule())
+                }
+                if let opts = s.micOptions, opts.count > 1 {
+                    MicChip(current: s.mic, options: opts) { model.emit(.pickMic($0)) }
+                        .pillGlass(Capsule())
+                }
             }
         }
     }
 
-    /// Only an ERROR tints the pill — the one state that is telling you
-    /// something you must act on.
+    /// Only the two states that are telling you something wrong carry a wash.
     private var pillTint: Color? {
-        s.phase == .error ? Theme.cError : nil
+        switch s.phase {
+        case .error:          return Theme.cError
+        case .outputFallback: return Theme.cNeeds
+        default:              return nil
+        }
     }
 
-    // MARK: the pill itself
+    // MARK: - The pill, per state
 
-    private var capturePill: some View {
-        HStack(spacing: 11) {
-            statusDot
-            Text(headline)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundColor(Theme.text)
-                .lineLimit(1)
+    @ViewBuilder private var pill: some View {
+        switch s.phase {
+        case .hidden:
+            EmptyView()
 
-            if s.phase == .listening {
-                Waveform(level: s.level)
-                    .frame(width: 42, height: 16)
-                    .foregroundColor(Theme.textDim)
+        case .recording:
+            // dot (or the Remote glyph) + timer + stop. Nothing else, ever.
+            HStack(spacing: 11) {
+                if s.kind == .remote {
+                    // A Remote capture reads as Remote AT A GLANCE, from the
+                    // glyph — which is why the original swapped the dot rather
+                    // than adding a word.
+                    RemoteGlyph()
+                } else {
+                    RecordDot()
+                }
                 TimerText(elapsed: s.elapsed, max: s.maxSeconds)
-                IconButton(symbol: "stop.fill") { model.emit(.stop) }
-                    .help("Finish and transcribe")
+                StopButton { model.emit(.stop) }
             }
-            if s.phase == .landed, s.canUndo {
+            .padding(.leading, 15).padding(.trailing, 7)
+            .frame(height: 44)
+
+        case .processing:
+            HStack(spacing: 10) {
+                Circle().fill(Theme.text.opacity(0.85)).frame(width: 8, height: 8)
+                    .modifier(Breathing())
+                Text(processingLabel)
+                    .font(.system(size: 15, weight: .medium)).foregroundColor(Theme.text)
+                BouncingDots()
+                if s.draftOffer {
+                    CapsuleButton(label: "Use quick draft") { model.emit(.acceptDraft) }
+                } else if s.engineNotice {
+                    Text("offline model").font(.system(size: 12)).foregroundColor(Theme.textFaint)
+                } else if s.showDiscardHint {
+                    Text("Esc to discard").font(.system(size: 12)).foregroundColor(Theme.textFaint)
+                }
+            }
+            .padding(.horizontal, 15)
+            .frame(height: 44)
+
+        case .output:
+            // SILENT SUCCESS. The text is already at the cursor; anything more
+            // is the pill talking about itself.
+            Image(systemName: "checkmark")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(Theme.cWorking)
+                .frame(width: 44, height: 44)
+
+        case .outputFallback:
+            HStack(spacing: 9) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12)).foregroundColor(Theme.cNeeds)
+                Text(s.fallbackMessage ?? "Formatting unavailable — pasted raw")
+                    .font(.system(size: 13)).foregroundColor(Theme.text).lineLimit(1)
+                if let p = s.outputPreview, !p.isEmpty {
+                    Text(p).font(.system(size: 13)).foregroundColor(Theme.textDim).lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 15)
+            .frame(height: 44)
+
+        case .tooShort:
+            Text(s.mutedText ?? "Didn't catch that")
+                .font(.system(size: 14)).foregroundColor(Theme.textDim)
+                .padding(.horizontal, 18)
+                .frame(height: 44)
+
+        case .cancelled:
+            // UNDO BELONGS HERE — not on success, where the first build put it.
+            HStack(spacing: 10) {
+                Text("Cancelled")
+                    .font(.system(size: 14)).foregroundColor(Theme.textDim)
                 CapsuleButton(label: "Undo") { model.emit(.undo) }
             }
-            if s.phase == .draft {
-                CapsuleButton(label: "Insert", prominent: true) { model.emit(.acceptDraft) }
+            .padding(.leading, 18).padding(.trailing, 8)
+            .frame(height: 44)
+
+        case .error:
+            HStack(spacing: 9) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold)).foregroundColor(Theme.cError)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(s.message ?? "Something went wrong")
+                        .font(.system(size: 13)).foregroundColor(Theme.text).lineLimit(1)
+                    if !(s.message ?? "").contains("limit reached") {
+                        Text("Retry from History to regenerate")
+                            .font(.system(size: 11)).foregroundColor(Theme.textFaint)
+                    }
+                }
             }
-            if s.phase == .error {
-                CapsuleButton(label: "Retry") { model.emit(.stop) }
-            }
-        }
-        .padding(.leading, 15)
-        .padding(.trailing, s.phase == .listening ? 7 : 15)
-        .frame(height: 44)
-    }
-
-    private var headline: String {
-        if let l = s.label, !l.isEmpty { return l }
-        switch s.phase {
-        case .listening:     return s.kind == .remote ? "New task" : "Listening"
-        case .transcribing:  return "Transcribing…"
-        case .landed:        return s.kind == .remote ? "Sent" : "Pasted"
-        case .draft:         return "Draft ready"
-        case .error:         return s.message ?? "Couldn't reach the cloud"
-        case .hidden:        return ""
+            .padding(.horizontal, 15)
+            .frame(height: 44)
         }
     }
 
-    private var statusDot: some View {
-        Circle()
-            .fill(dotColor)
-            .frame(width: 8, height: 8)
-            .modifier(BreathingDot(active: s.phase == .listening || s.phase == .transcribing))
-    }
-
-    private var dotColor: Color {
-        switch s.phase {
-        case .listening:    return Theme.cError      // recording — the universal red
-        case .transcribing: return Theme.accent
-        case .landed:       return Theme.cWorking
-        case .draft:        return Theme.cNeeds
-        case .error:        return Theme.cError
-        case .hidden:       return .clear
-        }
-    }
-}
-
-// MARK: - Glass identity
-
-private extension View {
-    /// Ties an element to the container so it MORPHS rather than pops when it
-    /// joins or leaves the cluster. No-op below macOS 26.
-    @ViewBuilder func glassID(_ id: String, _ ns: Namespace.ID) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffectID(id, in: ns)
-        } else {
-            self
-        }
+    private var processingLabel: String {
+        if s.draftOffer { return "Taking longer…" }
+        if s.engineNotice { return "On-device" }
+        return "Processing"
     }
 }
 
 // MARK: - Pieces
 
-private struct BreathingDot: ViewModifier {
-    let active: Bool
-    @State private var dim = false
-    func body(content: Content) -> some View {
-        content
-            .opacity(dim ? 0.45 : 1)
+/// The recording indicator. Red and pulsing for Remote, white for dictation —
+/// matching the original's dot classes.
+private struct RecordDot: View {
+    @State private var small = false
+    var body: some View {
+        Circle()
+            .fill(Color.white.opacity(0.88))
+            .frame(width: 8, height: 8)
+            .scaleEffect(small ? 0.83 : 1)
             .onAppear {
-                guard active else { return }
                 withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
-                    dim = true
+                    small = true
                 }
             }
     }
 }
 
-/// Live level meter. Bars are driven by ONE amplitude value pushed from the
-/// renderer — the capture path itself is untouched.
-private struct Waveform: View {
-    let level: Double
-    private let bars = 7
-
+/// A Remote capture swaps the dot for a small remote-control glyph, so the pill
+/// reads as "remote" without a word of explanation.
+private struct RemoteGlyph: View {
+    @State private var small = false
     var body: some View {
-        HStack(alignment: .center, spacing: 2.5) {
-            ForEach(0..<bars, id: \.self) { i in
-                Capsule()
-                    .frame(width: 2.5, height: height(i))
+        Image(systemName: "av.remote")
+            .font(.system(size: 12, weight: .regular))
+            .foregroundColor(Color.white.opacity(0.92))
+            .scaleEffect(small ? 0.86 : 1)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
+                    small = true
+                }
             }
-        }
-        .animation(.easeOut(duration: 0.09), value: level)
-    }
-
-    /// A fixed envelope shaped by the live level, so the meter reads as one
-    /// waveform rather than seven independent bars.
-    private func height(_ i: Int) -> CGFloat {
-        let mid = Double(bars - 1) / 2
-        let falloff = 1 - abs(Double(i) - mid) / (mid + 1.1)
-        let v = max(0.12, min(1, level)) * falloff
-        return CGFloat(3 + v * 13)
     }
 }
 
+private struct Breathing: ViewModifier {
+    @State private var dim = false
+    func body(content: Content) -> some View {
+        content.opacity(dim ? 0.45 : 1).onAppear {
+            withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) { dim = true }
+        }
+    }
+}
+
+/// Three bouncing dots — the original's processing motion.
+private struct BouncingDots: View {
+    @State private var phase = false
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(Theme.textDim)
+                    .frame(width: 3.5, height: 3.5)
+                    .offset(y: phase ? -2.5 : 2.5)
+                    .animation(.easeInOut(duration: 0.42).repeatForever(autoreverses: true)
+                        .delay(Double(i) * 0.12), value: phase)
+            }
+        }
+        .onAppear { phase = true }
+    }
+}
+
+/// Counts up; flips to a countdown in the last 30s, as the original does.
 private struct TimerText: View {
     let elapsed: Int
     let max: Int
+    private var remaining: Int { max - elapsed }
+    private var near: Bool { remaining <= 30 }
+
     var body: some View {
-        Text(String(format: "%d:%02d", elapsed / 60, elapsed % 60))
-            .font(.system(size: 13))
+        Text(near ? "-\(fmt(remaining))" : fmt(elapsed))
+            .font(.system(size: 14))
             .monospacedDigit()
-            .foregroundColor(elapsed >= max - 30 ? Theme.cNeeds : Theme.textDim)
+            .foregroundColor(near ? Theme.cNeeds : Theme.textDim)
+    }
+    private func fmt(_ s: Int) -> String {
+        String(format: "%d:%02d", Swift.max(s, 0) / 60, Swift.max(s, 0) % 60)
     }
 }
 
-private struct IconButton: View {
-    let symbol: String
+private struct StopButton: View {
     let action: () -> Void
     @State private var hovering = false
-
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(Theme.text)
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.white.opacity(0.85))
+                .frame(width: 9, height: 9)
                 .frame(width: 30, height: 30)
-                .background(Circle().fill(hovering ? Theme.raisedHover : Theme.raised))
+                .background(Circle().fill(Color.white.opacity(hovering ? 0.14 : 0.08)))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(Theme.hover, value: hovering)
+        .help("Stop recording")
     }
 }
 
@@ -294,12 +347,14 @@ private struct CapsuleButton: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 12.5, weight: prominent ? .semibold : .regular))
-                .foregroundColor(prominent ? .white : Theme.text)
-                .padding(.horizontal, 12).padding(.vertical, 5)
+                .font(.system(size: 12, weight: prominent ? .semibold : .regular))
+                .foregroundColor(prominent ? Theme.accentInk : Theme.text)
+                .padding(.horizontal, 11).padding(.vertical, 4)
                 .background(Capsule().fill(prominent
                                            ? Theme.accent.opacity(hovering ? 0.86 : 1)
-                                           : (hovering ? Theme.raisedHover : Theme.raised)))
+                                           : Color.white.opacity(hovering ? 0.18 : 0.10)))
+                .overlay(Capsule().stroke(prominent ? Color.clear : Color.white.opacity(0.30),
+                                          lineWidth: 0.5))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -308,10 +363,11 @@ private struct CapsuleButton: View {
 }
 
 // MARK: - Chips
+//
+// 32pt capsules carrying NO border or shadow of their own beyond the shared
+// material — adding per-chip chrome is what makes a cluster read as six
+// stickers instead of one object.
 
-/// A 32pt capsule chip carrying NO border or shadow of its own — the shared
-/// container provides both. Adding them here is what makes a cluster read as
-/// six stickers instead of one object.
 private struct ChipBody<Content: View>: View {
     @ViewBuilder let content: () -> Content
     var body: some View {
@@ -321,26 +377,20 @@ private struct ChipBody<Content: View>: View {
     }
 }
 
-/// A chip that opens a real macOS menu — single column, icons prominent, which
-/// is how menus read in the new design system.
+/// A real macOS menu — single column, icons prominent.
 private struct MenuChip: View {
-    let id: String
     let label: String
     let symbol: String
     var symbolColor: Color = Theme.textDim
     let options: [PillOption]
-    @ObservedObject var model: PillModel
     let onPick: (String) -> Void
 
     var body: some View {
         Menu {
             ForEach(options) { o in
                 Button(action: { onPick(o.id) }) {
-                    if let d = o.detail, !d.isEmpty {
-                        Text("\(o.label)   \(d)")
-                    } else {
-                        Text(o.label)
-                    }
+                    if let d = o.detail, !d.isEmpty { Text("\(o.label)   \(d)") }
+                    else { Text(o.label) }
                 }
                 .disabled(!o.isAvailable)
             }
@@ -365,8 +415,7 @@ private struct RawChip: View {
         Button(action: action) {
             ChipBody {
                 Text("RAW")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .tracking(0.6)
+                    .font(.system(size: 10.5, weight: .semibold)).tracking(0.6)
                     .foregroundColor(on ? Theme.cNeeds : Theme.textFaint)
             }
         }
@@ -401,35 +450,27 @@ private struct StagedChip: View {
 private struct MicChip: View {
     let current: String?
     let options: [PillOption]
-    @ObservedObject var model: PillModel
     let onPick: (String) -> Void
 
     private var isPhone: Bool { (current ?? "").contains("iphone") }
 
     var body: some View {
-        Menu {
-            ForEach(options) { o in
-                Button(o.label) { onPick(o.id) }.disabled(!o.isAvailable)
-            }
-        } label: {
+        Button(action: { onPick(isPhone ? "mac" : "iphone") }) {
             ChipBody {
                 Image(systemName: isPhone ? "iphone" : "laptopcomputer")
                     .font(.system(size: 11))
                     .foregroundColor(isPhone ? Theme.cReady : Theme.textDim)
             }
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Capture source")
+        .buttonStyle(.plain)
+        .help(isPhone ? "Capturing from iPhone — tap for the Mac mic"
+                      : "Capturing from the Mac — tap for iPhone")
     }
 }
 
 /// Live capture coaching. Two-tier copy: the bold condition, then the remedy.
 private struct CoachingChip: View {
     let coaching: PillCoaching
-    @ObservedObject private var appearance = Appearance.shared
-
     private var tint: Color { coaching.level == "good" ? Theme.cReady : Theme.cNeeds }
 
     var body: some View {

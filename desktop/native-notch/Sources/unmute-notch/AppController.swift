@@ -18,7 +18,11 @@ final class AppController: NSObject, NotchResizing {
     /// Kept because contentView is now a container, not the hosting view.
     private var hostView: NSHostingView<NotchView>!
     /// The last state MAIN commanded (hover-wake is local and never fights it).
-    private var commandedState: NotchState = .dormant
+    /// Mirrored onto the model so the view can gate anything that must not
+    /// survive a morph — see NotchModel.commandedState.
+    private var commandedState: NotchState = .dormant {
+        didSet { model.commandedState = commandedState }
+    }
     private var hoverTimer: Timer?
     private var toastTimer: Timer?
 
@@ -216,7 +220,9 @@ final class AppController: NSObject, NotchResizing {
             if !window.isKeyWindow { window.makeKey() }
         }
         let f = frame(for: state)
-        window.applyFrame(f, animated: true)
+        // Same duration as the content's own animation, so the frame and what is
+        // drawn inside it arrive together.
+        window.applyFrame(f, animated: true, duration: up ? 0.42 : 0.30)
         NotchLog.log("state -> \(state.rawValue) window=\(NotchLog.rect(f))")
     }
 

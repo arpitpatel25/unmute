@@ -15,25 +15,25 @@
 
 import { useEffect, useRef } from 'react'
 
+/** One-for-one with the widget's own state machine — see toPhase. */
 export type PillPhase =
-  | 'hidden' | 'listening' | 'transcribing' | 'landed' | 'error' | 'draft'
+  | 'hidden' | 'recording' | 'processing' | 'output'
+  | 'output-fallback' | 'too-short' | 'cancelled' | 'error'
 
-/** Frames per second for the amplitude push. 20 is smooth to the eye once the
- *  receiving view eases between samples, and is 3× cheaper than matching the
- *  display refresh.
- *
- *  MEASURED, not assumed (2026-07-27, M-series, release build of the real
- *  PillController writing to a real fd):
- *
- *      120s capture · 2400 frames · 4.7ms total · ~2µs/frame · 0.004% duty
- *      idle: 20000 calls while hidden → 0.4ms (the no-op path, ~20ns/call)
- *
- *  So the level push costs the main process about five milliseconds across a
- *  two-minute capture, and nothing at all when no capture is running. That is
- *  comfortably clear of the constraint this was gated on — heavy main-process
- *  work while recording corrupts audio — with three orders of magnitude spare.
- *  Re-measure before raising this; there is no reason to. */
-const LEVEL_HZ = 20
+// THE AMPLITUDE PUSH IS GONE.
+//
+// It existed to drive a waveform — which the original pill does not have. The
+// `analyserNode` prop is passed into Widget.tsx and never rendered; the
+// `.unmute-pill-waveform` class is vestigial. Having rebuilt the pill to the
+// original anatomy (dot/glyph + timer + stop), there is nothing for a per-frame
+// value to drive.
+//
+// So the capture path now carries ONE push per second, for the timer, instead
+// of twenty. The measured cost of the 20Hz version was already negligible
+// (~2µs/frame, 0.004% main-thread duty over a two-minute capture) — this is
+// simply 20× less of an already-safe thing, and no longer touches the audio
+// graph at all.
+const TICK_MS = 1000
 
 export interface PillBridgeApi {
   pillPushState?: (state: Record<string, unknown>) => void
@@ -53,41 +53,28 @@ export function nativePillActive(): boolean {
   return typeof api().pillPushState === 'function'
 }
 
-/** Map the widget's state machine onto the surface's phases. */
-export function toPhase(state: string, draftOffer: boolean): PillPhase {
-  if (draftOffer) return 'draft'
+/** Map the widget's state machine onto the surface's phases.
+ *
+ *  ONE-FOR-ONE, deliberately. The first version collapsed eight states into
+ *  five: `too-short` was folded into `error` (so "Didn't catch that" became
+ *  "something went wrong"), `cancelled` was dropped to `hidden` (taking the
+ *  Undo affordance with it), and `output-fallback` was merged into plain
+ *  success (so a raw paste stopped saying formatting had failed). A draft offer
+ *  is a flag ON processing, not a state of its own. */
+export function toPhase(state: string): PillPhase {
   switch (state) {
     case 'dictation-active':
     case 'instruction-active':
     case 'chained':
-      return 'listening'
-    case 'processing':
-      return 'transcribing'
-    case 'output':
-    case 'output-fallback':
-      return 'landed'
-    case 'error':
-    case 'too-short':
-      return 'error'
-    // 'cancelled' and 'hidden' both mean the surface is gone. Cancelled is
-    // deliberately NOT an error — the user meant to discard it.
-    default:
-      return 'hidden'
+      return 'recording'
+    case 'processing':       return 'processing'
+    case 'output':           return 'output'
+    case 'output-fallback':  return 'output-fallback'
+    case 'too-short':        return 'too-short'
+    case 'cancelled':        return 'cancelled'
+    case 'error':            return 'error'
+    default:                 return 'hidden'
   }
-}
-
-/** RMS of the analyser's time-domain data, 0…1. The same read the DOM waveform
- *  already did — this does not add a second tap on the audio graph. */
-export function levelOf(analyser: AnalyserNode | null, buf: Uint8Array): number {
-  if (!analyser) return 0
-  analyser.getByteTimeDomainData(buf as never)
-  let sum = 0
-  for (let i = 0; i < buf.length; i++) {
-    const v = (buf[i] - 128) / 128
-    sum += v * v
-  }
-  // sqrt of mean square, lifted a little so quiet speech still moves the meter.
-  return Math.min(1, Math.sqrt(sum / buf.length) * 2.6)
 }
 
 /** Push the descriptive state whenever it changes. */
@@ -102,27 +89,18 @@ export function usePillState(state: Record<string, unknown>, enabled: boolean): 
   }, [state, enabled])
 }
 
-/** Drive the amplitude while — and ONLY while — a capture is running. */
-export function usePillLevel(
-  analyser: AnalyserNode | null,
+/** Tick the recording timer — one push per second, and ONLY while recording. */
+export function usePillTicker(
   recording: boolean,
   elapsed: () => number,
   enabled: boolean,
 ): void {
   useEffect(() => {
-    if (!enabled || !recording || !analyser) return
-    const buf = new Uint8Array(analyser.fftSize)
-    let raf = 0
-    let last = 0
-    const tick = (t: number) => {
-      raf = requestAnimationFrame(tick)
-      if (t - last < 1000 / LEVEL_HZ) return
-      last = t
-      api().pillPushLevel?.(levelOf(analyser, buf), elapsed())
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [analyser, recording, enabled, elapsed])
+    if (!enabled || !recording) return
+    api().pillPushLevel?.(0, elapsed())     // land 0:00 immediately
+    const id = setInterval(() => api().pillPushLevel?.(0, elapsed()), TICK_MS)
+    return () => clearInterval(id)
+  }, [recording, enabled, elapsed])
 }
 
 /** Route gestures from the native surface back into this renderer. */

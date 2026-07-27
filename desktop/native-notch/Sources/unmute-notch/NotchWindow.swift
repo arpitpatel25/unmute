@@ -61,10 +61,15 @@ final class NotchWindow: NSPanel {
     func present() { orderFrontRegardless() }
 
     /// Resize + reposition to an explicit top-pinned frame, spring-eased.
-    func applyFrame(_ frame: NSRect, animated: Bool) {
+    ///
+    /// `duration` should MATCH the SwiftUI animation driving the content. They
+    /// were 0.34s and 0.48s respectively, so the window finished resizing while
+    /// the content was still mid-transition — the frame reached task size while
+    /// the material still carried attention's wash.
+    func applyFrame(_ frame: NSRect, animated: Bool, duration: TimeInterval = 0.42) {
         guard animated else { setFrame(frame, display: true); return }
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.34
+            ctx.duration = duration
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
             ctx.allowsImplicitAnimation = true
             animator().setFrame(frame, display: true)

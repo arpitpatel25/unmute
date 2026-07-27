@@ -14,13 +14,27 @@ import Combine
 // during a capture is one amplitude float per frame.
 
 /// What the capture pill is doing right now.
+///
+/// These mirror the ORIGINAL widget's state machine one-for-one. The first
+/// build invented its own smaller set — and with it a lot of words the pill
+/// never said. Two states in particular are wordless by design: while you are
+/// speaking it shows a timer and a stop button, and on success it shows a
+/// checkmark and nothing else, because the text is already at your cursor.
 enum PillPhase: String, Codable {
     case hidden
-    case listening      // recording
-    case transcribing   // audio done, text pending
-    case landed         // pasted / dispatched
+    /// Speaking. dot (or the Remote glyph) + timer + stop. NO label.
+    case recording
+    /// Audio done, text pending. The one resting state that does carry a word.
+    case processing
+    /// Silent success acknowledgement — a green tick, nothing else.
+    case output
+    /// Pasted, but formatting was unavailable.
+    case outputFallback = "output-fallback"
+    /// Nothing captured — too short or silent. No API call was made.
+    case tooShort = "too-short"
+    /// Discarded by the user. Carries the Undo.
+    case cancelled
     case error
-    case draft          // a draft is offered for insertion
 }
 
 /// Which KIND of capture this is. Not derivable from phase: a Remote capture
@@ -100,10 +114,20 @@ struct PillState: Codable, Equatable {
     var elapsed: Int = 0
     /// Cap, for the timer's warning colour.
     var maxSeconds: Int = 300
-    /// Headline on the pill ("Listening", "Transcribing…", "Pasted").
-    var label: String? = nil
-    /// Error / fallback copy, when phase is .error.
+    /// Error copy, when phase is .error.
     var message: String? = nil
+    /// A quick draft is available while the real result is still coming.
+    var draftOffer: Bool = false
+    /// The on-device engine is handling this one ("On-device" / "offline model").
+    var engineNotice: Bool = false
+    /// "Esc to discard" — shown only when the hint is earned.
+    var showDiscardHint: Bool = false
+    /// What was pasted, echoed on the fallback pill.
+    var outputPreview: String? = nil
+    /// Why formatting was unavailable.
+    var fallbackMessage: String? = nil
+    /// "Didn't catch that" and its variants.
+    var mutedText: String? = nil
 
     // Chips — each nil when it should not render at all.
     var model: String? = nil
@@ -140,8 +164,13 @@ struct PillState: Codable, Equatable {
         level        = v(.level, 0)
         elapsed      = v(.elapsed, 0)
         maxSeconds   = v(.maxSeconds, 300)
-        label        = try? c.decodeIfPresent(String.self, forKey: .label)
         message      = try? c.decodeIfPresent(String.self, forKey: .message)
+        draftOffer      = v(.draftOffer, false)
+        engineNotice    = v(.engineNotice, false)
+        showDiscardHint = v(.showDiscardHint, false)
+        outputPreview   = try? c.decodeIfPresent(String.self, forKey: .outputPreview)
+        fallbackMessage = try? c.decodeIfPresent(String.self, forKey: .fallbackMessage)
+        mutedText       = try? c.decodeIfPresent(String.self, forKey: .mutedText)
         model        = try? c.decodeIfPresent(String.self, forKey: .model)
         modelOptions = try? c.decodeIfPresent([PillOption].self, forKey: .modelOptions)
         agent        = try? c.decodeIfPresent(String.self, forKey: .agent)

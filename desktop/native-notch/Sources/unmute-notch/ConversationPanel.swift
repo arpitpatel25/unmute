@@ -431,7 +431,7 @@ struct CodexComposer: View {
                     Button(action: send) {
                         Image(systemName: "arrow.up")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(canSend ? .white : Theme.textFaint)
+                            .foregroundColor(canSend ? Theme.accentInk : Theme.textFaint)
                             .frame(width: 24, height: 24)
                             .background(Circle().fill(canSend ? Theme.accent : Theme.raised))
                     }

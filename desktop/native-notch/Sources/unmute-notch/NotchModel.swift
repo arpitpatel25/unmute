@@ -6,6 +6,11 @@ import Combine
 final class NotchModel: ObservableObject {
     // Ladder + counts (pushed by main).
     @Published var state: NotchState = .dormant
+    /// The rung MAIN last asked for. `state` is what is rendered and flips
+    /// instantly; the window frame animates behind it, so during a morph the two
+    /// disagree. Anything whose appearance must not survive into the next state
+    /// — the attention colour wash above all — gates on BOTH.
+    @Published var commandedState: NotchState = .dormant
     @Published var attention: Int = 0
     @Published var working: Int = 0
 

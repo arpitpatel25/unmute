@@ -13,8 +13,8 @@
 //
 // Nothing here touches the capture path. That is deliberate and load-bearing:
 // heavy main-process work while recording corrupts audio, so the only traffic
-// this adds during a capture is one small JSON line per animation frame
-// carrying the amplitude. Everything else is pushed on change, not on a timer.
+// this adds during a capture is one small JSON line PER SECOND for the timer.
+// Everything else is pushed on change.
 //
 // Pure orchestration over injected deps — unit-testable without a window, a
 // child process or an audio device.
@@ -23,7 +23,7 @@ import { createLogger } from '../log'
 const log = createLogger('pill-controller')
 
 export type PillPhase =
-  | 'hidden' | 'listening' | 'transcribing' | 'landed' | 'error' | 'draft'
+  | 'hidden' | 'recording' | 'processing' | 'output' | 'output-fallback' | 'too-short' | 'cancelled' | 'error'
 export type PillKind = 'dictation' | 'remote'
 export type PillOfflineReason =
   | 'not_signed_in' | 'no_subscription' | 'payment_failed'
@@ -50,8 +50,15 @@ export interface PillStateP {
   level?: number
   elapsed?: number
   maxSeconds?: number
-  label?: string
   message?: string
+  /** Each state keeps its OWN copy — funnelling these through one `message`
+   *  is how "Didn't catch that" turned into "something went wrong". */
+  fallbackMessage?: string
+  outputPreview?: string
+  mutedText?: string
+  draftOffer?: boolean
+  engineNotice?: boolean
+  showDiscardHint?: boolean
   model?: string
   modelOptions?: PillOptionP[]
   agent?: string
@@ -115,13 +122,14 @@ export class PillController {
     this.client.send({ type: 'pill', state: merged })
   }
 
-  /** The hot path during a capture: amplitude + elapsed only.
+  /** The recording timer — one tick per second while a capture is running.
    *
-   *  Deliberately NOT routed through push(): it skips the merge/compare so a
-   *  60fps level update stays a couple of hundred bytes and a shallow write,
-   *  never a diff over the whole state object. */
+   *  Deliberately NOT routed through push(): it skips the merge/compare, so a
+   *  tick is a shallow write rather than a diff over the whole state object.
+   *  Identical consecutive values must still send, or a paused clock would look
+   *  like a stalled capture. */
   level(level: number, elapsed?: number): void {
-    if (this.last.phase !== 'listening') return
+    if (this.last.phase !== 'recording') return
     this.last.level = level
     if (elapsed !== undefined) this.last.elapsed = elapsed
     this.client.send({

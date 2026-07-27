@@ -24,7 +24,7 @@ import {
 } from './micSource'
 import { connectWarmMic, disconnectWarmMic, onWarmState, warmState, type WarmState } from './micWarm'
 import {
-  nativePillActive, toPhase, usePillState, usePillLevel, usePillEvents,
+  nativePillActive, toPhase, usePillState, usePillTicker, usePillEvents,
 } from './pillBridge'
 
 /** Dodo customer portal, for the payment-failed recovery on the pill. */
@@ -1251,10 +1251,18 @@ export default function WidgetApp() {
   // partial pushes — so it supplies them directly rather than this renderer
   // keeping a second copy that could disagree.
   const pillState = useMemo(() => ({
-    phase: toPhase(state, draftOffer),
+    phase: toPhase(state),
     kind: isRemote ? 'remote' : 'dictation',
     maxSeconds: maxDurationSeconds,
-    message: errorMessage || fallbackMessage || undefined,
+    // Each state's own copy, kept distinct — the first build funnelled all of
+    // these through one `message` and lost the differences.
+    message: errorMessage || undefined,
+    fallbackMessage: fallbackMessage || undefined,
+    outputPreview: outputPreview || undefined,
+    mutedText: mutedText || undefined,
+    draftOffer,
+    engineNotice: !!engineNotice,
+    showDiscardHint,
     coaching: recordingNow && noisyEnvironment
       ? { condition: 'Noisy spot', remedy: captureSource === 'iphone' ? 'speak up' : 'lean in & speak up', level: 'warn' as const }
       : recordingNow && tooQuiet
@@ -1266,13 +1274,13 @@ export default function WidgetApp() {
     offline: (recordingNow || state === 'processing') && offlineReason !== null && !sessionDismissed
       ? offlineReason
       : null,
-    canUndo: state === 'output' || state === 'output-fallback',
   }), [state, draftOffer, isRemote, maxDurationSeconds, errorMessage, fallbackMessage,
+       outputPreview, mutedText, engineNotice, showDiscardHint,
        recordingNow, noisyEnvironment, tooQuiet, captureSource, offlineReason,
        dismissedTick])
 
   usePillState(pillState, nativePill)
-  usePillLevel(analyserNode, recordingNow, elapsedSec, nativePill)
+  usePillTicker(recordingNow, elapsedSec, nativePill)
   usePillEvents({
     stop: () => { void handleStop() },
     cancel: () => { void handleCancel() },

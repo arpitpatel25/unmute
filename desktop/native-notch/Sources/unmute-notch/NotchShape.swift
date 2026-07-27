@@ -156,7 +156,8 @@ struct ActButton: View {
                 if let symbol { Image(systemName: symbol).font(.system(size: 11, weight: .semibold)) }
                 Text(label).font(.system(size: 13, weight: go ? .semibold : .regular))
             }
-            .foregroundColor(go ? .white : (danger ? Theme.cError : Theme.text))
+            // The primary's fill is near-white, so its label is dark.
+            .foregroundColor(go ? Theme.accentInk : (danger ? Theme.cError : Theme.text))
             .padding(.horizontal, 16).padding(.vertical, 6)
             .background(
                 Capsule().fill(go ? Theme.accent.opacity(hovering ? 0.86 : 1)

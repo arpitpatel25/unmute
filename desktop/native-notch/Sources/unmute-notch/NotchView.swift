@@ -47,12 +47,19 @@ struct NotchView: View {
 
     private var expanded: Bool { model.state == .task || model.state == .cockpit }
 
-    /// The sanctioned use of tint: a state that genuinely needs the user tints
+    /// The sanctioned use of tint: a state that genuinely needs the user washes
     /// the WHOLE material, so it reads as one object rather than a black bar
-    /// with a coloured pip on it. Apple's tinting maps a tone range to the
-    /// brightness underneath, so it stays legible on any wallpaper.
+    /// with a coloured pip on it.
+    ///
+    /// Gated on BOTH the rendered state and the commanded one. The rendered
+    /// state flips instantly but the window frame animates, so for a few frames
+    /// after tapping an attention strip the surface is already task-sized while
+    /// still carrying attention's wash — which is what turned a 400×40 amber
+    /// strip into a 792×468 orange rectangle. If either says we have left
+    /// attention, the wash is gone.
     private var materialTint: Color? {
-        model.state == .attention ? Theme.cNeeds : nil
+        guard model.state == .attention, model.commandedState == .attention else { return nil }
+        return Theme.status(model.task?.status ?? .needsUser)
     }
 
     /// Tint for the specular rim. The rim's SHAPE (bright top, dead sides,
@@ -89,25 +96,31 @@ struct NotchView: View {
             // the moment the philosophy says to leave the user alone. The dot
             // breathes instead — informative, never a pull.
             HStack(spacing: 9) {
+                Spacer(minLength: 12)
                 Dot(status: .processing, size: 7, breathing: true)
                 Text(model.working == 1 ? "1 running" : "\(model.working) running")
                     .font(Theme.fCap).foregroundColor(Theme.text)
-                Spacer(minLength: 0)
                 if let e = model.task?.elapsed { NumText(text: e) }
+                Spacer(minLength: 12)
             }
-            .padding(.horizontal, 15)
 
         case .attention:
+            // CENTRED. This was left-aligned with a Spacer pushing the count to
+            // the right edge — which looks deliberate only when there IS a
+            // count. With a single waiting task the badge is absent and the row
+            // sat against the left edge with ~150pt of dead space beside it.
+            // The group centres; the badge travels with the text.
             HStack(spacing: 9) {
+                Spacer(minLength: 12)
                 Dot(status: model.task?.status ?? .needsUser, size: 7)
                 Text(attentionLabel)
                     .font(Theme.fSub).foregroundColor(Theme.text).lineLimit(1)
-                Spacer(minLength: 0)
                 if model.attention > 1 {
-                    Badge(text: "\(model.attention)", color: Theme.cNeeds)
+                    Badge(text: "\(model.attention)",
+                          color: Theme.status(model.task?.status ?? .needsUser))
                 }
+                Spacer(minLength: 12)
             }
-            .padding(.leading, 15).padding(.trailing, 10)
 
         case .task:
             plane { TaskSurfaceView(model: model, topInset: topInset) }
