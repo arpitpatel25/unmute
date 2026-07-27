@@ -82,8 +82,20 @@ struct NotchView: View {
             // The invitation: hovering woke it, so say who it is. (Suppressed on
             // hardware notches — text would sit under the camera housing.)
             if !model.hasNotch {
-                HStack(spacing: 8) {
-                    Text("unmute").font(Theme.fCap).fontWeight(.semibold).foregroundColor(Theme.text)
+                // A WORDMARK, NOT A MESSAGE. It was 11pt semibold at near-full
+                // white — the heaviest thing on a surface whose entire job is to
+                // be quiet, and lowercase in a slot where lowercase reads as a
+                // label. Tracked-out light caps at half opacity reads as an
+                // identity and stops competing with the status dot; it is the
+                // same treatment the rail's section labels already use.
+                //
+                // When something IS running, the count is the information and
+                // the mark recedes further behind it.
+                HStack(spacing: 9) {
+                    Text("UNMUTE")
+                        .font(.system(size: 9.5, weight: .light))
+                        .tracking(2.1)
+                        .foregroundColor(Color.white.opacity(model.working > 0 ? 0.38 : 0.52))
                     if model.working > 0 {
                         Text(model.working == 1 ? "1 running" : "\(model.working) running")
                             .font(.system(size: 11.5)).foregroundColor(Theme.textDim)

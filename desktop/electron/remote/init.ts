@@ -732,6 +732,21 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
  *  nothing and it simply expires in the UI. */
 let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; at: number } | null = null
 
+/** Re-read Codex's reasoning axes and cache them, so the pill's model half can
+ *  be served instantly on the next push. Best-effort: a failed walk must never
+ *  erase what we last genuinely saw. */
+async function refreshCodexReasoningForPill(): Promise<void> {
+  if (!codexDriver) return
+  try {
+    const state = await codexDriver.reasoningOptions()
+    if (state?.options?.Model?.length) {
+      settings.set('codexReasoningCache' as never, state as never)
+    }
+  } catch (e) {
+    log.warn('codex reasoning refresh failed', { error: (e as Error).message })
+  }
+}
+
 /** Push the model / agent / raw chips to the native pill.
  *
  *  Best-effort by design: a chip that cannot be resolved simply does not
@@ -739,24 +754,58 @@ let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; a
 async function pushPillChips(): Promise<void> {
   if (!pillController) return
   try {
-    const catalog = getModelCatalog()
-    const current = settings.get('model') || getModels().doerDefault
     const agent = (settings.get('agent') as AgentKind) ?? 'claude'
+    const isCodex = agent === 'codex-desktop'
     const codexOk = codexDriver
       ? await codexDriver.availability().then((a) => a.ok).catch(() => false)
       : false
-    pillController.push({
-      model: catalog.find((c) => c.id === current)?.label ?? current,
-      modelOptions: catalog.map((c) => ({ id: c.id, label: c.label, detail: c.description ?? '' })),
-      agent: agent === 'codex-desktop' ? 'Codex' : 'Claude Code',
+
+    // THE MODEL CONTROL FOLLOWS THE PLATFORM.
+    //
+    // Claude Code and Codex do not share a model list and never can — Claude has
+    // a flat catalog, Codex has its own Model / Effort / Speed axes read out of
+    // its menus. Serving one list regardless of agent is how the chip ended up
+    // offering Claude models while Codex was selected. The renderer already
+    // solved this with an `isCodex` gate; this is the same gate, on the side
+    // that now owns the data.
+    const chips: PillStateP = {
+      agent: isCodex ? 'Codex' : 'Claude Code',
+      agentConnected: isCodex ? codexOk : true,
       agentOptions: [
         { id: 'claude', label: 'Claude Code', available: true },
-        // Only offered when it can actually take work right now.
         { id: 'codex-desktop', label: 'Codex', available: codexOk },
       ],
       raw: injectionDisabled(),
       stagedCount: stagedAttachments.length + pendingClipboardCount,
-    })
+    }
+
+    if (isCodex) {
+      // Served from CACHE so the axes are there immediately — reading them live
+      // walks Codex's menus (~3s) and a capture is often over before that
+      // returns, which is exactly why the chip used to keep showing a Claude
+      // model after the switch.
+      const cached = settings.get('codexReasoningCache' as never) as
+        { label?: string | null; current?: Record<string, string>; options?: Record<string, string[]> } | undefined
+      chips.model = cached?.label || 'Codex'
+      chips.modelAxes = (['Model', 'Effort', 'Speed'] as const)
+        .map((axis) => ({
+          axis,
+          values: cached?.options?.[axis] ?? [],
+          current: cached?.current?.[axis],
+        }))
+        .filter((a) => a.values.length > 0)
+      // modelOptions stays undefined — the axes REPLACE the flat list.
+    } else {
+      const catalog = getModelCatalog()
+      const current = settings.get('model') || getModels().doerDefault
+      chips.model = catalog.find((c) => c.id === current)?.label ?? current
+      chips.modelOptions = catalog.map((c) => ({
+        id: c.id, label: c.label, detail: c.description ?? '',
+      }))
+      chips.modelAxes = undefined
+    }
+
+    pillController.push(chips)
   } catch (e) {
     log.warn('pill chips push failed', { error: (e as Error).message })
   }
@@ -1898,6 +1947,33 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // capture. The setting changed correctly and the surface said
           // otherwise, which reads exactly like a dead control.
           void pushPillChips()
+        },
+        // The agent control CYCLES — there are only ever two, and the original
+        // made it a tap rather than a list.
+        cycleAgent: () => {
+          const now = (settings.get('agent') as AgentKind) ?? 'claude'
+          const next: AgentKind = now === 'codex-desktop' ? 'claude' : 'codex-desktop'
+          settings.set('agent', next)
+          for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed()) w.webContents.send('remote:agent-changed', next)
+          }
+          log.event('agent-set', { agent: next, from: 'pill-cycle' })
+          // Refresh Codex's axes on the way IN, then re-push — otherwise the
+          // model half keeps the other platform's list.
+          if (next === 'codex-desktop') {
+            void refreshCodexReasoningForPill().finally(() => { void pushPillChips() })
+          } else {
+            void pushPillChips()
+          }
+        },
+        pickAxis: (axis, value) => {
+          if (axis !== 'Model' && axis !== 'Effort' && axis !== 'Speed') return
+          if (!codexDriver) return
+          void codexDriver.setReasoningAxis(axis, value)
+            .then(() => refreshCodexReasoningForPill())
+            .then(() => { void pushPillChips() })
+            .catch((e) => log.warn('codex axis set failed', { error: (e as Error).message }))
+          log.event('codex-reasoning-choice', { axis, value, from: 'pill' })
         },
         pickAgent: (a) => {
           // Only ever a backend this host can actually dispatch to — the same

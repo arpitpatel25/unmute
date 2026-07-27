@@ -32,7 +32,23 @@ final class NotchWindow: NSPanel {
         hasShadow = false                  // the shape draws its own
         hidesOnDeactivate = false
         isMovableByWindowBackground = false
-        becomesKeyOnlyIfNeeded = true      // fields/terminal claim key on click; body clicks don't
+        // MUST BE FALSE, or Escape leaks to the app underneath.
+        //
+        // `true` means "only take key when something that genuinely needs keys
+        // is clicked" — which quietly undoes the explicit makeKey() in
+        // applyState. The panel then became key only after you clicked INTO a
+        // field, so opening the cockpit by voice, or by clicking the notch
+        // body, left key focus with the app below: Escape reached only the
+        // GLOBAL monitor, which macOS defines as observe-only and therefore
+        // cannot consume. The surface collapsed AND the Escape also landed in
+        // the user's Codex/Terminal session.
+        //
+        // `canBecomeKey` is already the correct gate — it returns `allowsKey`,
+        // which is false for every small state. So the resting states still
+        // never take key and never disturb focus; only task/cockpit do, which
+        // is exactly when Escape belongs to us. This is a nonactivating panel,
+        // so taking key does NOT activate the app or move the frontmost window.
+        becomesKeyOnlyIfNeeded = false
     }
 
     override var canBecomeKey: Bool { allowsKey }

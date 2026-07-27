@@ -45,6 +45,14 @@ enum PillKind: String, Codable {
     case remote
 }
 
+/// One of Codex's reasoning axes — Model, Effort or Speed.
+struct PillAxis: Codable, Identifiable, Equatable {
+    let axis: String
+    let values: [String]
+    let current: String?
+    var id: String { axis }
+}
+
 /// One selectable option in a chip's menu (model, agent, mic).
 struct PillOption: Codable, Identifiable, Equatable {
     let id: String
@@ -132,8 +140,22 @@ struct PillState: Codable, Equatable {
     // Chips — each nil when it should not render at all.
     var model: String? = nil
     var modelOptions: [PillOption]? = nil
+    /// CODEX'S OWN AXES, when the agent is Codex.
+    ///
+    /// The two platforms do not share a model list — Claude Code has a flat
+    /// catalog, Codex has Model / Effort / Speed — so switching platform must
+    /// change what the model control offers. When this is present it REPLACES
+    /// modelOptions; a Claude catalog shown under Codex is how the chip ended up
+    /// reading "Opus" with Codex selected.
+    var modelAxes: [PillAxis]? = nil
     var agent: String? = nil
     var agentOptions: [PillOption]? = nil
+    /// Is the selected backend reachable right now? Drives the dot on the agent
+    /// chip and the "· connect" suffix — a functional indicator, not decoration.
+    var agentConnected: Bool = true
+    /// One line of mic narration, shown for a few seconds and then dropped.
+    /// "chip colours are ambience, WORDS are communication."
+    var micStatus: String? = nil
     var stagedCount: Int = 0
     var raw: Bool? = nil
     var micOptions: [PillOption]? = nil
@@ -173,8 +195,11 @@ struct PillState: Codable, Equatable {
         mutedText       = try? c.decodeIfPresent(String.self, forKey: .mutedText)
         model        = try? c.decodeIfPresent(String.self, forKey: .model)
         modelOptions = try? c.decodeIfPresent([PillOption].self, forKey: .modelOptions)
+        modelAxes    = try? c.decodeIfPresent([PillAxis].self, forKey: .modelAxes)
         agent        = try? c.decodeIfPresent(String.self, forKey: .agent)
         agentOptions = try? c.decodeIfPresent([PillOption].self, forKey: .agentOptions)
+        agentConnected = v(.agentConnected, true)
+        micStatus    = try? c.decodeIfPresent(String.self, forKey: .micStatus)
         stagedCount  = v(.stagedCount, 0)
         raw          = try? c.decodeIfPresent(Bool.self, forKey: .raw)
         micOptions   = try? c.decodeIfPresent([PillOption].self, forKey: .micOptions)
@@ -192,6 +217,11 @@ enum PillEvent {
     case undo
     case acceptDraft
     case pickModel(String)
+    /// Codex only: set one reasoning axis (Model / Effort / Speed).
+    case pickAxis(axis: String, value: String)
+    /// The agent control CYCLES rather than opening a list — the original's
+    /// behaviour, and there are only ever two.
+    case cycleAgent
     case pickAgent(String)
     case pickMic(String)
     case toggleRaw(Bool)
@@ -206,6 +236,8 @@ enum PillEvent {
         case .undo:                 return ["type": "pillUndo"]
         case .acceptDraft:          return ["type": "pillAcceptDraft"]
         case let .pickModel(v):     return ["type": "pillPickModel", "value": v]
+        case let .pickAxis(a, v):   return ["type": "pillPickAxis", "axis": a, "value": v]
+        case .cycleAgent:           return ["type": "pillCycleAgent"]
         case let .pickAgent(v):     return ["type": "pillPickAgent", "value": v]
         case let .pickMic(v):       return ["type": "pillPickMic", "value": v]
         case let .toggleRaw(v):     return ["type": "pillToggleRaw", "value": v]

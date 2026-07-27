@@ -1284,10 +1284,18 @@ export default function WidgetApp() {
           { id: 'iphone', label: findIphoneMic(mic.devices)?.label || 'iPhone' },
         ]
       : undefined,
+    // MIC NARRATION — the line that was missing entirely, so the user had no
+    // way to know a source switch had been deferred to the next dictation.
+    // It already auto-clears after 4s via micStatusTimer, so the surface
+    // inherits that lifetime for free.
+    micStatus: micStatus || null,
+    // Coaching is SECOND in precedence, and its level distinguishes the two so
+    // each keeps its own accent and glyph rather than collapsing to one warn
+    // colour. "noise wins: it's the condition the user can't hear themselves."
     coaching: recordingNow && noisyEnvironment
-      ? { condition: 'Noisy spot', remedy: captureSource === 'iphone' ? 'speak up' : 'lean in & speak up', level: 'warn' as const }
+      ? { condition: 'Noisy spot', remedy: captureSource === 'iphone' ? 'speak up' : 'lean in & speak up', level: 'noisy' as const }
       : recordingNow && tooQuiet
-        ? { condition: 'Too quiet', remedy: captureSource === 'iphone' ? 'speak up a little' : 'bring the mic closer', level: 'warn' as const }
+        ? { condition: 'Too quiet', remedy: captureSource === 'iphone' ? 'speak up a little' : 'bring the mic closer', level: 'quiet' as const }
         : null,
     // The awareness card's own visibility rule, evaluated here rather than
     // recomputed on the Swift side: offlineReason is only meaningful while the
@@ -1298,7 +1306,7 @@ export default function WidgetApp() {
   }), [state, draftOffer, isRemote, maxDurationSeconds, errorMessage, fallbackMessage,
        outputPreview, mutedText, engineNotice, showDiscardHint,
        recordingNow, noisyEnvironment, tooQuiet, captureSource, offlineReason,
-       dismissedTick, mic.preference, mic.devices, mic.featureEnabled])
+       dismissedTick, mic.preference, mic.devices, mic.featureEnabled, micStatus])
 
   usePillState(pillState, nativePill)
   usePillTicker(recordingNow, elapsedSec, nativePill)

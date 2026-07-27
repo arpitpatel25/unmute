@@ -247,9 +247,14 @@ struct GlassSurface: View {
         //     which reads as a sticker rather than an edge.
         .overlay(shape.stroke(Glass.rim(highlight: rimHighlight),
                               lineWidth: appearance.translucent ? rimWidth : max(rimWidth, 1)))
-        .shadow(color: .black.opacity(Glass.shadowOpacity(for: state)),
-                radius: Glass.shadowRadius(for: state),
-                y: Glass.shadowY(for: state))
+        // NO DROP SHADOW — the same box that was removed from the pill.
+        //
+        // SwiftUI cannot derive a shadow silhouette from an NSViewRepresentable
+        // (the behind-window sampler), so it falls back to the layer's
+        // RECTANGULAR bounds: a square halo around a round shape, with hard
+        // vertical edges either side of the notch. The rim already does the
+        // separation work, and the original's stance is explicit — "Unmute must
+        // occupy ONLY the widget itself."
         .animation(Theme.flip, value: appearance.translucent)
     }
 }

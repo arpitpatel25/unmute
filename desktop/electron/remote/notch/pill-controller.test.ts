@@ -17,6 +17,8 @@ function harness() {
     acceptDraft: () => calls.push('acceptDraft'),
     pickModel: (id: string) => calls.push(`pickModel:${id}`),
     pickAgent: (id: string) => calls.push(`pickAgent:${id}`),
+    cycleAgent: () => calls.push('cycleAgent'),
+    pickAxis: (axis: string, value: string) => calls.push(`pickAxis:${axis}=${value}`),
     pickMic: (id: string) => calls.push(`pickMic:${id}`),
     toggleRaw: (on: boolean) => calls.push(`toggleRaw:${on}`),
     clearStaged: () => calls.push('clearStaged'),
@@ -92,6 +94,8 @@ describe('PillController events', () => {
     h.fire({ type: 'pillAcceptDraft' })
     h.fire({ type: 'pillPickModel', value: 'opus' })
     h.fire({ type: 'pillPickAgent', value: 'codex-desktop' })
+    h.fire({ type: 'pillCycleAgent' })
+    h.fire({ type: 'pillPickAxis', axis: 'Effort', value: 'High' })
     h.fire({ type: 'pillPickMic', value: 'iphone' })
     h.fire({ type: 'pillToggleRaw', value: true })
     h.fire({ type: 'pillClearStaged' })
@@ -99,7 +103,7 @@ describe('PillController events', () => {
     h.fire({ type: 'pillDismissOffline' })
     assert.deepEqual(h.calls, [
       'stop', 'cancel', 'undo', 'acceptDraft',
-      'pickModel:opus', 'pickAgent:codex-desktop', 'pickMic:iphone',
+      'pickModel:opus', 'pickAgent:codex-desktop', 'cycleAgent', 'pickAxis:Effort=High', 'pickMic:iphone',
       'toggleRaw:true', 'clearStaged', 'openBillingPortal', 'dismissOffline',
     ])
   })
@@ -116,6 +120,22 @@ describe('PillController events', () => {
     h.fire({ type: 'pillPickModel' })
     h.fire({ type: 'pillPickAgent', value: 3 })
     assert.deepEqual(h.calls, [])
+  })
+
+  test('an axis pick needs BOTH an axis and a value — a half-formed one is dropped', () => {
+    const h = harness()
+    h.fire({ type: 'pillPickAxis', value: 'High' })            // no axis
+    h.fire({ type: 'pillPickAxis', axis: 'Effort' })           // no value
+    h.fire({ type: 'pillPickAxis', axis: 7, value: 'High' })   // axis not a string
+    assert.deepEqual(h.calls, [])
+  })
+
+  test('modelAxes and modelOptions are both carried — the platform gate lives upstream', () => {
+    const h = harness()
+    h.c.push({ agent: 'Codex', modelAxes: [{ axis: 'Effort', values: ['Low', 'High'], current: 'High' }] })
+    assert.equal(h.state()?.modelAxes?.[0].axis, 'Effort')
+    h.c.push({ agent: 'Claude Code', modelAxes: undefined, modelOptions: [{ id: 'opus', label: 'Opus' }] })
+    assert.equal(h.state()?.modelOptions?.[0].id, 'opus')
   })
 
   test('toggleRaw only reads a real boolean true as on', () => {

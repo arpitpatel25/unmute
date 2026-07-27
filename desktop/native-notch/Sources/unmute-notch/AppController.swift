@@ -361,14 +361,27 @@ final class AppController: NSObject, NotchResizing {
         // Global Esc: collapse even when we're not key (never required to
         // dismiss the resting state — only steps ENGAGED states down).
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            if e.keyCode == 53 { self?.stepDown() }
+            guard let self, e.keyCode == 53 else { return }
+            // A global monitor is OBSERVE-ONLY — it cannot consume the event, so
+            // reaching here while expanded means the Escape ALSO landed in the
+            // app underneath. That is the leak, and this line names it.
+            if self.model.state == .task || self.model.state == .cockpit {
+                NotchLog.log("esc: GLOBAL monitor while expanded — LEAKED to the app below (key=\(self.window.isKeyWindow))")
+            }
+            self.stepDown()
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self else { return e }
             // Never steal keys from a text field or the terminal.
             let fr = self.window.firstResponder
             let typing = fr is NSTextView || fr is TerminalView
-            if e.keyCode == 53 { self.stepDown(); return nil }
+            if e.keyCode == 53 {
+                // Logged so a leak is DIAGNOSABLE rather than inferred: if this
+                // line is absent when Escape leaks, the local monitor never
+                // fired and the panel was not key (see NotchWindow).
+                NotchLog.log("esc: LOCAL monitor (swallowed) state=\(self.model.state.rawValue) key=\(self.window.isKeyWindow)")
+                self.stepDown(); return nil
+            }
 
             // ⌘V AND FRIENDS, BECAUSE NOTHING ELSE WILL DELIVER THEM.
             //
@@ -393,12 +406,24 @@ final class AppController: NSObject, NotchResizing {
             // double-handling.
             if e.modifierFlags.contains(.command), !e.modifierFlags.contains(.control),
                let ch = e.charactersIgnoringModifiers?.lowercased() {
+                let shift = e.modifierFlags.contains(.shift)
                 let action: Selector? = {
                     switch ch {
                     case "v": return #selector(NSText.paste(_:))
                     case "c": return #selector(NSText.copy(_:))
                     case "x": return #selector(NSText.cut(_:))
                     case "a": return #selector(NSText.selectAll(_:))
+                    // UNDO / REDO — the same bug as ⌘V, and it was simply not on
+                    // the list. ⌘Z and ⌘⇧Z are menu commands too, so with no
+                    // main menu they were discarded everywhere: the rename
+                    // field, the note field, the Codex composer, the terminal.
+                    // Renaming a task and being unable to undo it is this, not a
+                    // clipboard problem and not a one-off.
+                    //
+                    // These selectors are informal (NSResponder forwards them to
+                    // the first responder's undoManager), so they are named
+                    // rather than #selector'd.
+                    case "z": return Selector((shift ? "redo:" : "undo:"))
                     default:  return nil
                     }
                 }()

@@ -88,7 +88,11 @@ struct PillView: View {
     var body: some View {
         VStack(spacing: 9) {
             Spacer(minLength: 0)
-            if chipsVisible, let c = s.coaching { CoachingChip(coaching: c) }
+            // ONE CHIP AT A TIME, with strict precedence: mic narration first,
+            // then noise, then quiet — "noise wins: it's the condition the user
+            // can't hear themselves." Mic narration outranks both because it is
+            // the only one describing something that just CHANGED.
+            if chipsVisible { hint }
             cluster
             if chipsVisible, let reason = s.offline {
                 OfflineCard(reason: reason,
@@ -112,23 +116,17 @@ struct PillView: View {
     private var cluster: some View {
         HStack(spacing: 8) {
             if chipsVisible && s.kind == .remote {
-                // TWO SEPARATE CAPSULES. Joining them behind one hairline made
-                // the divider the loudest thing in the row, and it broke the
-                // padding: each half kept its own 14pt inset, so the gap around
-                // the rule was 28pt against 14pt at the outer edges. Every
-                // element in the cluster is now the same capsule with the same
-                // inset, and the row reads evenly.
-                if let m = s.model {
-                    MenuChip(label: m, symbol: "sparkles", symbolColor: Theme.cNeeds,
-                             options: s.modelOptions ?? []) { model.emit(.pickModel($0)) }
-                        .pillGlass(Capsule())
-                }
-                if let a = s.agent {
-                    MenuChip(label: a, symbol: "chevron.left.forwardslash.chevron.right",
-                             symbolColor: Theme.textDim,
-                             options: s.agentOptions ?? []) { model.emit(.pickAgent($0)) }
-                        .pillGlass(Capsule())
-                }
+                // AGENT + MODEL AS ONE CONTROL, exactly as the original builds
+                // it: the agent determines which models exist, so
+                // "Codex → 5.6 Terra High" is one sentence, left to right.
+                //
+                // The join is what my earlier attempt got wrong, not the idea.
+                // Each half kept a symmetric 14pt inset, so the gap around the
+                // divider was 28pt against 14pt at the outer edges. The original
+                // tightens the INNER sides — 15/12 and 12/14 — which is why it
+                // reads evenly. And there are no icons on either half: the dot
+                // is the connection indicator, the chevron belongs to the model.
+                AgentModelControl(state: s, model: model)
                 if let raw = s.raw {
                     RawChip(on: raw) { model.emit(.toggleRaw(!raw)) }.pillGlass(Capsule())
                 }
@@ -146,6 +144,25 @@ struct PillView: View {
                         .pillGlass(Capsule())
                 }
             }
+        }
+    }
+
+    @ViewBuilder private var hint: some View {
+        if let m = s.micStatus, !m.isEmpty {
+            // The mic line arrives as "Condition — remedy"; split it so the
+            // condition reads bold and the remedy stays quiet.
+            let parts = m.components(separatedBy: " — ")
+            HintChip(accent: Color(red: 0.976, green: 0.451, blue: 0.086),   // #f97316
+                     label: parts.first ?? m,
+                     detail: parts.count > 1 ? parts.dropFirst().joined(separator: " — ") : "",
+                     symbol: "mic")
+        } else if let c = s.coaching {
+            HintChip(accent: c.level == "quiet"
+                     ? Color(red: 0.220, green: 0.741, blue: 0.973)          // #38bdf8
+                     : Color(red: 0.984, green: 0.749, blue: 0.141),         // #fbbf24
+                     label: c.condition,
+                     detail: c.remedy ?? "",
+                     symbol: c.level == "quiet" ? "mic" : "waveform")
         }
     }
 
@@ -407,30 +424,109 @@ private struct ChipBody<Content: View>: View {
     }
 }
 
-/// A real macOS menu — single column, icons prominent.
-private struct MenuChip: View {
+/// The joined agent + model control.
+///
+/// Agent is a CYCLE (tap → the other platform), because there are only ever two
+/// and the original made it a tap. Model is a menu whose CONTENTS depend on the
+/// agent: Claude's flat catalog, or Codex's three axes.
+private struct AgentModelControl: View {
+    let state: PillState
+    @ObservedObject var model: PillModel
+
+    /// Claude's brand orange, as the original colours the model label.
+    private let modelInk = Color(red: 0.851, green: 0.467, blue: 0.341)
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if let agent = state.agent {
+                Button(action: { model.emit(.cycleAgent) }) {
+                    HStack(spacing: 7) {
+                        // THE CONNECTION DOT — functional, not decorative. Green
+                        // when the backend can take work right now, dim when it
+                        // cannot, and the label then says so.
+                        Circle()
+                            .fill(state.agentConnected
+                                  ? Color(red: 0.436, green: 0.749, blue: 0.604)
+                                  : Color.white.opacity(0.35))
+                            .frame(width: 7, height: 7)
+                        Text(agent + (state.agentConnected ? "" : " · connect"))
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundColor(Color.white.opacity(state.agentConnected ? 0.92 : 0.5))
+                            .lineLimit(1)
+                    }
+                    // ASYMMETRIC: 15 outer, 12 inner. This is the fix for the
+                    // uneven margins — not splitting the control.
+                    .padding(.leading, 15).padding(.trailing, 12)
+                    .frame(height: PillMetrics.height)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(state.agentConnected ? "Where this task runs — tap to switch"
+                                           : "Not connected — tap to connect")
+
+                Rectangle().fill(Color.white.opacity(0.28))
+                    .frame(width: 1, height: PillMetrics.height)
+            }
+
+            if let label = state.model {
+                ModelMenu(label: label, ink: modelInk, state: state, model: model,
+                          leadingInset: state.agent == nil ? 14 : 12)
+            }
+        }
+        .fixedSize()
+        .frame(height: PillMetrics.height)
+        .pillGlass(Capsule())
+    }
+}
+
+/// The model control. Its CONTENTS follow the platform — a flat catalog for
+/// Claude, Codex's Model/Effort/Speed axes for Codex. The two never share a
+/// list, which is the whole reason switching platform has to change this.
+private struct ModelMenu: View {
     let label: String
-    let symbol: String
-    var symbolColor: Color = Theme.textDim
-    let options: [PillOption]
-    let onPick: (String) -> Void
+    let ink: Color
+    let state: PillState
+    @ObservedObject var model: PillModel
+    var leadingInset: CGFloat = 12
 
     var body: some View {
         Menu {
-            ForEach(options) { o in
-                Button(action: { onPick(o.id) }) {
-                    if let d = o.detail, !d.isEmpty { Text("\(o.label)   \(d)") }
-                    else { Text(o.label) }
+            if let axes = state.modelAxes, !axes.isEmpty {
+                ForEach(axes) { axis in
+                    Section(axis.axis) {
+                        ForEach(axis.values, id: \.self) { v in
+                            Button(action: { model.emit(.pickAxis(axis: axis.axis, value: v)) }) {
+                                // A tick marks the live value, since these are
+                                // three independent axes rather than one choice.
+                                Text(axis.current == v ? "✓ \(v)" : v)
+                            }
+                        }
+                    }
                 }
-                .disabled(!o.isAvailable)
+            } else {
+                ForEach(state.modelOptions ?? []) { o in
+                    Button(action: { model.emit(.pickModel(o.id)) }) {
+                        if let d = o.detail, !d.isEmpty { Text("\(o.label)   \(d)") }
+                        else { Text(o.label) }
+                    }
+                    .disabled(!o.isAvailable)
+                }
             }
         } label: {
-            ChipBody {
-                Image(systemName: symbol).font(.system(size: 11)).foregroundColor(symbolColor)
-                Text(label).font(.system(size: 12.5, weight: .medium)).foregroundColor(Theme.text)
+            HStack(spacing: 7) {
+                Text(label)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundColor(ink)
+                    .lineLimit(1)
+                // The only glyph either half carries, and it earns its place —
+                // it says this opens.
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold)).foregroundColor(Theme.textFaint)
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(ink.opacity(0.7))
             }
+            .padding(.leading, leadingInset).padding(.trailing, 14)
+            .frame(height: PillMetrics.height)
+            .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -498,22 +594,30 @@ private struct MicChip: View {
     }
 }
 
-/// Live capture coaching. Two-tier copy: the bold condition, then the remedy.
-private struct CoachingChip: View {
-    let coaching: PillCoaching
-    private var tint: Color { coaching.level == "good" ? Theme.cReady : Theme.cNeeds }
+/// One line of narration beside the pill. Two-tier copy: the bold condition,
+/// then the dim remedy — the original's rule that "chip colours are ambience,
+/// WORDS are communication". Each message carries its own accent and glyph.
+private struct HintChip: View {
+    let accent: Color
+    let label: String
+    let detail: String
+    /// "mic" or "waveform" — the original's two icons.
+    let symbol: String
 
     var body: some View {
         HStack(spacing: 7) {
-            Circle().fill(tint).frame(width: 6, height: 6)
-            Text(coaching.condition)
+            Image(systemName: symbol == "waveform" ? "waveform" : "mic")
+                .font(.system(size: 11)).foregroundColor(accent)
+            Text(label)
                 .font(.system(size: 12, weight: .semibold)).foregroundColor(Theme.text)
-            if let r = coaching.remedy, !r.isEmpty {
-                Text(r).font(.system(size: 12)).foregroundColor(Theme.textDim)
+                .lineLimit(1)
+            if !detail.isEmpty {
+                Text(detail).font(.system(size: 12)).foregroundColor(Theme.textDim).lineLimit(1)
             }
         }
-        .padding(.horizontal, 14).frame(height: PillMetrics.height)
-        .pillGlass(Capsule(), tint: tint)
+        .padding(.horizontal, 14).frame(height: 34)
+        .pillGlass(Capsule(), tint: accent)
+        .transition(.opacity)
     }
 }
 
