@@ -1109,6 +1109,27 @@ function stopCaptureWatch(opts: { purgeAuto?: boolean } = {}): void {
 /** Dictation delivery seam (clipboard.ts calls this after pasting the text):
  *  hand over everything staged and close the watch window. The ledger's contract
  *  holds across BOTH capture kinds — what the pill showed is what got delivered. */
+/**
+ * Hide the native input surface, whatever the renderer thinks its state is.
+ *
+ * THE DOM PILL NEVER NEEDED THIS. It lived inside the HUD window, so
+ * hideHUD() removed it from the screen regardless of the React state machine —
+ * and that state machine does NOT reach a terminal state on every path. The
+ * remote one is the clearest case: sessionManager sends 'remote:dispatched'
+ * and schedules the hide, and NOTHING in the widget handles that event, so the
+ * renderer sits on 'processing' forever. Invisible while the window was doing
+ * the hiding; permanent once the pill moved into its own Swift window.
+ *
+ * So the pill is hidden by the same authority that hides the window, at the
+ * same moments. Every scheduleAutoHide and every direct hideHUD in
+ * sessionManager funnels through here — which matters, because there are more
+ * than twenty of them (timeouts, cancels, undo expiry, quiet-miss, engine
+ * failures) and the renderer only models a subset.
+ */
+export function hideNativePill(): void {
+  pillController?.hide()
+}
+
 export function consumeStagedForDictation(): string[] {
   stopCaptureWatch({ purgeAuto: false }) // delivery: takeStaged() takes it all
   return takeStaged()

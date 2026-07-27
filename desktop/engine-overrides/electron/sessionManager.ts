@@ -18,7 +18,7 @@ import { hasApiKey } from './keyStore'
 import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
 import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 // Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
-import { dispatchFromCapture } from './paywall/remote/init'
+import { dispatchFromCapture, hideNativePill } from './paywall/remote/init'
 import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
 import { buildCorrectionMessages, shouldAttemptCleanup, CORRECTION_TIMEOUT_MS, CLEANUP_MODEL } from './cleanupPass'
 import { applyGatedCorrection } from './correctionGate'
@@ -2211,6 +2211,7 @@ class SessionManager {
     setTrayIdle()
     this.onRecordingStopped?.()
     this.onSessionEnded?.()
+    hideNativePill()
     hideHUD()
   }
 
@@ -2248,7 +2249,8 @@ class SessionManager {
       console.log('[session] Undo window expired')
       this.cancelledSession = null
       this.undoTimer = null
-      hideHUD()
+      hideNativePill()
+    hideHUD()
     }, 3000)
   }
 
@@ -2299,6 +2301,11 @@ class SessionManager {
     this.autoHideTimer = setTimeout(() => {
       this.autoHideTimer = null
       setTrayIdle()
+      // The native pill lives in its OWN window, which hideHUD() cannot reach.
+      // It must be dismissed by the same authority, at the same moment, or it
+      // outlives the capture — see hideNativePill for why the renderer's state
+      // is not a sufficient signal.
+      hideNativePill()
       hideHUD()
     }, delayMs)
   }

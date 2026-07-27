@@ -183,6 +183,12 @@ final class AppController: NSObject, NotchResizing {
 
     // MARK: - State / frames
 
+    /// ONE pair of numbers for the frame AND the content, so they cannot drift.
+    /// Expansion is slower than collapse — the surface should feel like it is
+    /// arriving, and like it is getting out of the way.
+    private static let growS: Double = 0.42
+    private static let shrinkS: Double = 0.30
+
     private func applyState(_ state: NotchState) {
         // Each visit starts at the hard-coded size. A size dragged out for one
         // look at a task is not a preference — carrying it across would make the
@@ -193,7 +199,15 @@ final class AppController: NSObject, NotchResizing {
         // Terminal is OPEN BY DEFAULT on the task surface ("hide terminal" is
         // the choice); reset when leaving so re-entry starts open again.
         model.taskTerminalOpen = (state == .task)
-        withAnimation(up ? Theme.morph : Theme.collapse) { model.state = state }
+        // MATCHED TO THE WINDOW, and it must be a DURATION curve to be matched
+        // at all. This used to animate the content with Theme.morph — a spring
+        // whose `response: 0.48` is not a duration: it settles nearer 0.8s,
+        // while the frame finished in 0.42. For the difference you saw the OLD
+        // content inside the NEW frame — the "1 running" strip floating in a
+        // full-size task panel on the way up, and task chrome squeezed into the
+        // notch on the way down. Same numbers on both sides, so the surface and
+        // what it contains arrive together.
+        withAnimation(.easeOut(duration: up ? Self.growS : Self.shrinkS)) { model.state = state }
         let engaged = (state == .task || state == .cockpit)
         window.allowsKey = engaged
         // ESC MUST NOT LEAK TO THE APP UNDERNEATH.
@@ -218,7 +232,7 @@ final class AppController: NSObject, NotchResizing {
         let f = frame(for: state)
         // Same duration as the content's own animation, so the frame and what is
         // drawn inside it arrive together.
-        window.applyFrame(f, animated: true, duration: up ? 0.42 : 0.30)
+        window.applyFrame(f, animated: true, duration: up ? Self.growS : Self.shrinkS)
         NotchLog.log("state -> \(state.rawValue) window=\(NotchLog.rect(f))")
     }
 

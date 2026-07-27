@@ -331,16 +331,26 @@ export async function selectApprovalLevel(
   sleep: (ms: number) => Promise<void>,
 ): Promise<boolean> {
   if (!(await openPermissionsMenu(cdp, sleep))) return false
-  const box = await cdp.evaluate<string>(`(() => {
-    const want = ${JSON.stringify(label.toLowerCase())};
+  // Harvest, then choose in TypeScript — see pickMenuItem. The old inline
+  // `startsWith` is the same trap that killed every model pick: we ask for
+  // "full-access" and the row reads "Full Access", so it matched nothing,
+  // returned false, and auto-approve silently never applied
+  // (codex-approval-set ok:false in the field logs). pickMenuItem normalises
+  // separators and prefers an exact first-line match.
+  const rowsJson = await cdp.evaluate<string>(`(() => {
     const items = [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')];
-    const el = items.find((e) => (e.innerText || '').trim().toLowerCase().startsWith(want));
-    if (!el) return '';
-    const r = el.getBoundingClientRect();
-    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+    return JSON.stringify(items.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { text: (e.innerText || '').trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }));
   })()`)
-  if (!box) { await cdp.pressEscape(); await sleep(250); return false }
-  const at = JSON.parse(box) as { x: number; y: number }
+  let rows: MenuItem[] = []
+  try { rows = JSON.parse(rowsJson || '[]') as MenuItem[] } catch { rows = [] }
+  const at = pickMenuItem(rows, label) ?? pickMenuItem(rows, label.replace(/[-_]+/g, ' '))
+  if (!at) {
+    log.warn('approval value not in menu', { want: label, offered: rows.map((r) => r.text.split('\n')[0]) })
+    await cdp.pressEscape(); await sleep(250); return false
+  }
   await cdp.click(at.x, at.y)
   await sleep(500)
   // Confirm from the button itself rather than trusting the click: this is the
