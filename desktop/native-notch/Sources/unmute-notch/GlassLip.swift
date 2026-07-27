@@ -152,28 +152,27 @@ enum Glass {
 
 // MARK: - The composed surface
 
-/// The notch's background — ONE material path, macOS 13 through 27.
+/// The notch's background.
 ///
-/// WHY NOT SwiftUI's `.glassEffect`, ON A MACHINE THAT HAS IT.
+/// TIER A (macOS 26+) IS APPLE'S REAL LIQUID GLASS. An earlier build claimed
+/// `.glassEffect` "samples content within the window" and therefore could not
+/// work in a floating panel. THAT WAS WRONG, and a standalone probe against
+/// this exact window configuration disproved it: the desktop is genuinely
+/// visible through it and it lenses at its own edge.
 ///
-/// Measured on macOS 26.2 with Reduce Transparency off, in this exact window:
-/// `.glassEffect` renders a FLAT NEUTRAL GREY with no transparency and no
-/// lensing. The reason is structural, not a bug — it samples content *within
-/// the window*. This panel is `isOpaque = false`, `backgroundColor = .clear`,
-/// floating at `.screenSaver` level over other applications, so there is
-/// nothing inside it to refract. It is the Six Colors criticism of Tahoe
-/// toolbars ("content sits within windows rather than behind them") applied to
-/// our own surface.
+/// What actually produced the flat grey was wrapping the glass in `.shadow()`.
+/// A shadow forces offscreen rasterisation, and a rasterised layer has no
+/// backdrop left to sample. One misread observation became a commit message
+/// stated as fact, and an entire hand-built material was built on top of it.
 ///
-/// `NSVisualEffectView` with `blendingMode = .behindWindow` is the only API
-/// that samples the DESKTOP behind a window — the window server composites it.
-/// That is what every menu-bar and notch app uses, and it is what makes this
-/// read as glass over both a dark terminal and a white page.
+/// The rim is an OVERLAY STROKE, not a second material — Apple's prohibition is
+/// on stacking glass ON glass, and a stroke is explicitly the correct way to
+/// put something on top of it. Apple's own rim is subtle over a dark backdrop;
+/// ours restores the definition the surface is designed around.
 ///
-/// A second consequence, and the one that actually broke: `Color.clear` is not
-/// a hit-testable surface. With the fill gone, only the dot and the label were
-/// clickable and the rest of the strip passed clicks through to the app
-/// underneath. The material must always FILL its shape.
+/// TIER B (macOS 13–15) composes the material by hand and remains a genuine
+/// floor. It blurs but cannot lens, and cannot follow the user's system Liquid
+/// Glass opacity slider.
 struct GlassSurface: View {
     let shape: NotchShape
     let state: NotchState
@@ -188,12 +187,60 @@ struct GlassSurface: View {
     @ObservedObject private var appearance = Appearance.shared
 
     var body: some View {
-        ZStack {
+        Group {
             if appearance.translucent {
-                // 1 · SAMPLER — the desktop behind this window, blurred.
-                //     `.hudWindow` is the darkest stock material, which is what
-                //     keeps the surface reading BLACK rather than pale grey over
-                //     a bright page.
+                if #available(macOS 26.0, *) {
+                    // REAL LIQUID GLASS. Verified against this exact window
+                    // configuration — a non-activating borderless panel over
+                    // other apps — with a standalone probe: the desktop is
+                    // genuinely visible through it, and it lenses at its own
+                    // edge rather than merely blurring.
+                    //
+                    // NEVER WRAP THIS IN .shadow(). A shadow forces offscreen
+                    // rasterisation, and a rasterised layer has no backdrop to
+                    // sample — which is why the first attempt rendered a flat
+                    // neutral grey and why I wrongly concluded the API could not
+                    // work here at all. The rim below is an OVERLAY STROKE, not
+                    // a second material, so it composes legally: Apple's
+                    // prohibition is on stacking glass ON glass.
+                    Color.clear.glassEffect(glassStyle, in: shape)
+                } else {
+                    tierB
+                }
+            } else {
+                // Reduce Transparency, or the user chose Solid.
+                ZStack {
+                    Color(red: 0.055, green: 0.06, blue: 0.075)
+                    if let tint { tint.opacity(0.14) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipShape(shape)
+        .contentShape(shape)
+        // The specular rim: bright top edge, almost nothing down the sides,
+        // bright again at the lip. Apple's own rim is subtle on a dark backdrop;
+        // this restores the definition the surface is designed around.
+        .overlay(shape.stroke(Glass.rim(highlight: rimHighlight),
+                              lineWidth: appearance.translucent ? rimWidth : max(rimWidth, 1)))
+        .animation(Theme.flip, value: appearance.translucent)
+    }
+
+    @available(macOS 26.0, *)
+    private var glassStyle: Glass26Style {
+        // `.regular` — all adaptive effects, legibility guaranteed in any
+        // context. Attention passes its status hue through Apple's tinting,
+        // which maps a tone range against the backdrop instead of pasting a
+        // flat wash on top.
+        if let tint { return .regular.tint(tint.opacity(0.55)) }
+        return .regular
+    }
+
+    /// macOS 13–15: no Liquid Glass, so the material is composed by hand —
+    /// behind-window sampler, near-black wash, thickness. This is a genuine
+    /// floor, not the design.
+    private var tierB: some View {
+        ZStack {
                 VisualEffectBackdrop(material: .hudWindow)
 
                 // 2 · TINT — a near-black wash that carries the "black glass"
@@ -229,32 +276,11 @@ struct GlassSurface: View {
                     .blur(radius: 0.5)
                     .blendMode(.plusLighter)
                     .opacity(0.9)
-            } else {
-                // Reduce Transparency, or the user chose Solid. Apple's own
-                // treatment: near-opaque, rim brought UP so the shape survives
-                // with no material behind it to define it.
-                Color(red: 0.055, green: 0.06, blue: 0.075)
-                if let tint { tint.opacity(0.14) }
-            }
         }
-        // FILLS, in every branch — this is what makes the whole surface
-        // clickable, not just the glyphs drawn on it.
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(shape)
-        .contentShape(shape)
-        // 5 · RIM — a gradient hairline: bright on the top edge, almost nothing
-        //     down the sides, bright again at the lip. Replaces a uniform ring,
-        //     which reads as a sticker rather than an edge.
-        .overlay(shape.stroke(Glass.rim(highlight: rimHighlight),
-                              lineWidth: appearance.translucent ? rimWidth : max(rimWidth, 1)))
-        // NO DROP SHADOW — the same box that was removed from the pill.
-        //
-        // SwiftUI cannot derive a shadow silhouette from an NSViewRepresentable
-        // (the behind-window sampler), so it falls back to the layer's
-        // RECTANGULAR bounds: a square halo around a round shape, with hard
-        // vertical edges either side of the notch. The rim already does the
-        // separation work, and the original's stance is explicit — "Unmute must
-        // occupy ONLY the widget itself."
-        .animation(Theme.flip, value: appearance.translucent)
     }
 }
+
+// The system glass style type. `Glass` is a namespace enum in this file, so the
+// SwiftUI type is aliased rather than referenced bare.
+@available(macOS 26.0, *)
+typealias Glass26Style = SwiftUI.Glass
