@@ -239,6 +239,12 @@ describe('installing into the user\'s hooks.json', () => {
     const entry = after.hooks.PermissionRequest[0].hooks[0]
     assert.equal(entry.type, 'command')
     assert.ok(entry.command.endsWith('permission-request.sh'))
-    assert.ok(entry.timeout > 0, 'Codex kills the hook at `timeout`; it must outlast our own wait')
+    // `async: false` is REQUIRED and is what makes the decision enforceable —
+    // without it Codex fires the hook and runs the command without waiting, so
+    // a Deny arrives after the fact. This assertion is the difference between
+    // an approval prompt and an approval GATE.
+    assert.equal(entry.async, false, 'async:false — otherwise Codex does not wait for our decision')
+    // The key is `timeoutSec`, not `timeout`; the latter is silently ignored.
+    assert.ok(entry.timeoutSec > 0, 'Codex kills the hook at timeoutSec; it must outlast our own wait')
   })
 })

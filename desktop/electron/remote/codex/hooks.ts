@@ -299,9 +299,19 @@ export async function installApprovalHook(opts: {
   const others = Array.isArray(events.PermissionRequest) ? events.PermissionRequest.filter((e) => !MINE(e)) : []
   events.PermissionRequest = [
     ...others,
-    // No `matcher` would default the timeout to 600s; we set both explicitly so
-    // Codex's kill deadline is always comfortably past our own wait.
-    { matcher: '*', hooks: [{ type: 'command', command: shim, timeout: waitSec + 30 }] },
+    // ASYNC:FALSE IS THE WHOLE POINT, AND IT IS A REQUIRED FIELD WE OMITTED.
+    //
+    // ConfiguredHookHandler requires ['async','command','type']. Without
+    // `async: false` Codex runs the hook FIRE-AND-FORGET: it starts our handler,
+    // does not wait, and executes the command anyway. Measured — the hook fired
+    // at :06, the command completed at :15, and the user's Deny arrived at :51
+    // into a process nobody was listening to. A denial cannot be enforced by a
+    // hook that the agent is not waiting on.
+    //
+    // The timeout key is `timeoutSec`, not `timeout`. Ours was silently ignored
+    // and Codex used its 600s default — harmless, but it meant the number we
+    // thought we were setting had never applied.
+    { matcher: '*', hooks: [{ type: 'command', command: shim, async: false, timeoutSec: waitSec + 30 }] },
   ]
   file.hooks = events
   if (!file.description) file.description = 'Hooks configured by unmute and by you.'
