@@ -388,9 +388,23 @@ export class CodexDesktopDriver {
     // done and the task stranded on the last inch.
     if (!sent) {
       log.warn('codex-create-enter-ignored', { retrying: 'send-button' })
-      const clicked = await cdp.evaluate<boolean>(`(() => {
-        const el = document.querySelector('[data-app-action-id="composer-send"],[aria-label="Send"],[data-testid="send-button"]');
-        if (!el) return false;
+      // FOUND BY EXCLUSION, because Codex's send control has no identity of its
+      // own: no aria-label, no data-app-action-id, no data-testid. The composer
+      // chrome holds exactly three buttons — the reasoning picker (which carries
+      // data-composer-navigation-target), "Dictate" (aria-label), and the submit
+      // arrow, which is the one with neither. Guessing at [aria-label="Send"]
+      // matched nothing and made this whole fallback dead code.
+      const clicked = await cdp.evaluate<string>(`(() => {
+        const anchor = document.querySelector('[data-composer-navigation-target="reasoning"]');
+        if (!anchor) return '';
+        let root = anchor;
+        for (let i = 0; i < 6 && root.parentElement; i++) root = root.parentElement;
+        const btns = [...root.querySelectorAll('button')].filter((b) =>
+          !b.getAttribute('data-composer-navigation-target') && !b.getAttribute('aria-label'));
+        // Rightmost wins if more than one survives — submit sits at the end.
+        const el = btns.sort((a, b) =>
+          a.getBoundingClientRect().left - b.getBoundingClientRect().left).pop();
+        if (!el) return '';
         const r = el.getBoundingClientRect();
         return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
       })()`)

@@ -805,8 +805,24 @@ async function pushPillChips(): Promise<void> {
       const live = matchCurrent(cached?.label ?? null, models)   // returns UI spellings
       chips.model = cached?.label || (models.length ? 'Codex' : 'Codex')
       // LABELS, not wire values — the pick is handed straight to a menu search.
-      const effortsForCurrent =
+      //
+      // THE PROTOCOL IS A SUPERSET OF WHAT CAN BE CLICKED. `model/list` reports
+      // Max for 5.6 Sol; the menu offers Light / Medium / High / Extra High /
+      // Ultra and no Max at all (verified live). Since the write path is a menu
+      // click, anything the menu does not show is unpickable however true the
+      // protocol is about the model's capabilities — offering it just produces
+      // a pick that logs `value-absent` and changes nothing.
+      //
+      // So the menu wins WHEN WE HAVE SEEN IT. The cached options come from a
+      // real submenu read; before we have one, the protocol list stands, which
+      // is better than an empty column. Learned rather than hardcoded, so a
+      // future tier appears the day Codex offers it.
+      const seen = cached?.options?.Effort ?? []
+      const fromProtocol =
         models.find((m) => m.uiLabel === live.model)?.effortLabels ?? models[0]?.effortLabels ?? []
+      const effortsForCurrent = seen.length
+        ? fromProtocol.filter((e) => seen.some((o) => o.toLowerCase() === e.toLowerCase()))
+        : fromProtocol
       // Values carry the UI spelling — they are what the CDP writer looks for
       // in Codex's menu, and what the button label already shows.
       chips.modelAxes = [
