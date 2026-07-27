@@ -735,6 +735,17 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
  *  nothing and it simply expires in the UI. */
 let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; at: number } | null = null
 
+/** At most one background repair in flight, and never a storm of them. */
+let reasoningRepairAt = 0
+function scheduleReasoningRepair(): void {
+  const now = Date.now()
+  if (now - reasoningRepairAt < 60_000) return
+  reasoningRepairAt = now
+  void refreshCodexReasoningForPill()
+    .then(() => { void pushPillChips() })
+    .catch(() => { /* best-effort; the fallback list still renders */ })
+}
+
 /** Re-read Codex's reasoning axes and cache them, so the pill's model half can
  *  be served instantly on the next push. Best-effort: a failed walk must never
  *  erase what we last genuinely saw. */
@@ -742,8 +753,18 @@ async function refreshCodexReasoningForPill(): Promise<void> {
   if (!codexDriver) return
   try {
     const state = await codexDriver.reasoningOptions()
-    if (state?.options?.Model?.length) {
+    // Only overwrite with a REAL reading — a failed walk must not erase what we
+    // last genuinely saw. "Advanced" is a PARENT-menu row, so an axis reporting
+    // it is not reporting options at all; treating it as real is what left a
+    // poisoned cache on disk and emptied the Effort column.
+    const real = (state?.options?.Model ?? []).filter((v) => v && v.toLowerCase() !== 'advanced')
+    if (real.length) {
       settings.set('codexReasoningCache' as never, state as never)
+      log.event('codex-reasoning-cached', {
+        model: state.options.Model?.length, effort: state.options.Effort?.length, speed: state.options.Speed?.length,
+      })
+    } else {
+      log.warn('codex-reasoning-read-unusable', { options: state?.options })
     }
   } catch (e) {
     log.warn('codex reasoning refresh failed', { error: (e as Error).message })
@@ -788,46 +809,60 @@ async function pushPillChips(): Promise<void> {
       // model after the switch.
       const cached = settings.get('codexReasoningCache' as never) as
         { label?: string | null; current?: Record<string, string>; options?: Record<string, string[]> } | undefined
-      // OPTIONS COME FROM THE PROTOCOL, NOT THE DOM.
+      // THE LIVE MENU IS THE AUTHORITY ON WHAT CAN BE PICKED.
       //
-      // `model/list` over the app-server answers in ~1ms, headless, with no
-      // arming and no selectors — against a CDP menu walk that took seconds,
-      // needed the debug port, and returned "Advanced" as the only value for
-      // every axis whenever a submenu was slow. It also carries what the DOM
-      // never exposed: efforts are a property OF a model (Sol offers six, Luna
-      // five), so the Effort column follows the Model selection.
+      // Every value here has to be clickable, because the write path IS a menu
+      // click. So the menu decides — and it can now be read reliably: the
+      // pointer-event opener returns all three axes in ~1.5s
+      // (Model 6, Effort 5, Speed 2, measured). Before that opener existed the
+      // scrape returned "Advanced" as the only value for every axis, and two
+      // decisions were made on top of that garbage:
       //
-      // SPEED IS GONE. It is not a model axis in Codex's own catalogue — it was
-      // an artefact of scraping a menu and treating every row as an axis.
+      //   * Effort was taken from the PROTOCOL instead. But `model/list` is a
+      //     SUPERSET of what is offerable — it reports Max for 5.6 Sol, which
+      //     the menu does not offer at all. Picking it changed nothing.
+      //   * Speed was DELETED, on the reasoning that it "was an artefact of
+      //     scraping a menu and treating every row as an axis". It is not. The
+      //     menu genuinely offers Standard and Fast. A real control was removed
+      //     because the reader was broken.
+      //
+      // The protocol still earns its place: it is the model CATALOGUE, read
+      // headless in ~1ms with no arming, and it is the fallback when no menu
+      // read has happened yet — better than an empty column on first launch.
       const models = await listCodexModels().catch(() => [] as CodexModel[])
-      // The button label is the one part of the CDP read that never failed, so
-      // it stays the source of the CURRENT values.
+
+      // Reject a cache written by the OLD reader. Its signature is unmistakable:
+      // "Advanced" is a row of the PARENT menu, so an axis offering it is not
+      // reporting options at all. Version-stamping the cache would not have
+      // helped here — the poison was already on disk — but a shape check does,
+      // and it keeps working if a future read degrades the same way.
+      const sane = (vals: string[] | undefined): string[] =>
+        (vals ?? []).filter((v) => v && v.toLowerCase() !== 'advanced')
+      const menu = {
+        Model: sane(cached?.options?.Model),
+        Effort: sane(cached?.options?.Effort),
+        Speed: sane(cached?.options?.Speed),
+      }
+
       const live = matchCurrent(cached?.label ?? null, models)   // returns UI spellings
-      chips.model = cached?.label || (models.length ? 'Codex' : 'Codex')
-      // LABELS, not wire values — the pick is handed straight to a menu search.
-      //
-      // THE PROTOCOL IS A SUPERSET OF WHAT CAN BE CLICKED. `model/list` reports
-      // Max for 5.6 Sol; the menu offers Light / Medium / High / Extra High /
-      // Ultra and no Max at all (verified live). Since the write path is a menu
-      // click, anything the menu does not show is unpickable however true the
-      // protocol is about the model's capabilities — offering it just produces
-      // a pick that logs `value-absent` and changes nothing.
-      //
-      // So the menu wins WHEN WE HAVE SEEN IT. The cached options come from a
-      // real submenu read; before we have one, the protocol list stands, which
-      // is better than an empty column. Learned rather than hardcoded, so a
-      // future tier appears the day Codex offers it.
-      const seen = cached?.options?.Effort ?? []
-      const fromProtocol =
-        models.find((m) => m.uiLabel === live.model)?.effortLabels ?? models[0]?.effortLabels ?? []
-      const effortsForCurrent = seen.length
-        ? fromProtocol.filter((e) => seen.some((o) => o.toLowerCase() === e.toLowerCase()))
-        : fromProtocol
-      // Values carry the UI spelling — they are what the CDP writer looks for
-      // in Codex's menu, and what the button label already shows.
+      chips.model = cached?.label || 'Codex'
+      const cur = cached?.current ?? {}
+      // Menu first, protocol second. Values carry the UI spelling either way —
+      // it is what the writer searches for and what the button already shows.
+      // SELF-HEAL. A cache that offers nothing usable — never read, or written
+      // by the old scraper — is repaired in the BACKGROUND so this push stays
+      // instant. The capture path must never wait on a menu walk; that is the
+      // whole reason these values are cached in the first place.
+      if (!menu.Model.length || !menu.Effort.length) scheduleReasoningRepair()
+
+      const modelValues = menu.Model.length ? menu.Model : models.map((m) => m.uiLabel)
+      const effortValues = menu.Effort.length
+        ? menu.Effort
+        : (models.find((m) => m.uiLabel === live.model)?.effortLabels ?? models[0]?.effortLabels ?? [])
       chips.modelAxes = [
-        { axis: 'Model', values: models.map((m) => m.uiLabel), current: live.model },
-        { axis: 'Effort', values: effortsForCurrent, current: live.effort },
+        { axis: 'Model', values: modelValues, current: cur.Model ?? live.model },
+        { axis: 'Effort', values: effortValues, current: cur.Effort ?? live.effort },
+        { axis: 'Speed', values: menu.Speed, current: cur.Speed },
       ].filter((a) => a.values.length > 0)
       // AN EMPTY ARRAY, NOT `undefined` — this is the bug that caused the hang.
       // push() merges, so an ABSENT key KEEPS the previous value: the Claude
@@ -2042,8 +2077,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           }
         },
         pickAxis: (axis, value) => {
-          // Speed is gone — it was never a model axis, only a scraped row.
-          if (axis !== 'Model' && axis !== 'Effort') return
+          // Speed IS a real axis (the menu offers Standard / Fast); it was
+          // dropped only because the old reader could not see it.
+          if (axis !== 'Model' && axis !== 'Effort' && axis !== 'Speed') return
           log.event('codex-pick-start', { axis, value, from: 'pill', hasDriver: !!codexDriver })
           if (!codexDriver) {
             // Say so. This returned silently, and a pick that never left the
@@ -2053,7 +2089,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           }
           // Remember the CHOICE even if the live write misses, so dispatch can
           // still apply it — the same contract the IPC path already honours.
-          settings.set((axis === 'Model' ? 'codexModel' : 'codexEffort') as never, value as never)
+          settings.set(
+            (axis === 'Model' ? 'codexModel' : axis === 'Effort' ? 'codexEffort' : 'codexSpeed') as never,
+            value as never)
           void codexDriver.setReasoningAxis(axis, value)
             .then((trace) => {
               // ONE LINE WITH THE WHOLE STORY: what was clicked, how the menu
@@ -2068,9 +2106,21 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
               // The trace already carries the new label, so the chip updates
               // from it directly. This used to trigger a FULL menu walk per
               // pick — seconds long, over the very menu the next pick needs.
-              if (trace.labelAfter) {
-                const cached = settings.get('codexReasoningCache' as never) as Record<string, unknown> | undefined
-                settings.set('codexReasoningCache' as never, { ...(cached ?? {}), label: trace.labelAfter } as never)
+              if (trace.labelAfter || trace.offered?.length) {
+                const cached = (settings.get('codexReasoningCache' as never) ?? {}) as
+                  { label?: string | null; current?: Record<string, string>; options?: Record<string, string[]> }
+                // The trace carries what the submenu ACTUALLY offered. That is a
+                // first-hand reading of the one authority that matters, so it
+                // replaces whatever the cache held — including the "Advanced"
+                // garbage the retired scraper left behind.
+                settings.set('codexReasoningCache' as never, {
+                  ...cached,
+                  label: trace.labelAfter || cached.label,
+                  current: { ...(cached.current ?? {}), ...(trace.changed ? { [axis]: value } : {}) },
+                  options: trace.offered?.length
+                    ? { ...(cached.options ?? {}), [axis]: trace.offered }
+                    : cached.options,
+                } as never)
               }
               void pushPillChips()
             })
