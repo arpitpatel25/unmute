@@ -1125,6 +1125,13 @@ export default function WidgetApp() {
       console.log(`[widget:ux] EVENT session:cancelled (state was ${stateRef.current})`)
       setState('cancelled')
       setShowDiscardHint(false)
+      // THE ONLY TERMINAL STATE THAT NEVER SCHEDULED ITS OWN DISMISSAL.
+      // error gets 5000, too-short 2500, output 3000 — cancelled got nothing,
+      // and got away with it because the HUD window was hidden out from under
+      // it by main. The native pill is a separate window with no such rescue,
+      // so a cancelled capture left its pill on screen forever. Same 2500 as
+      // the rest of the family, and the Undo lives for exactly that long.
+      scheduleAutoHide(2500)
     })
 
     api.onProcessingDiscardHint(() => {

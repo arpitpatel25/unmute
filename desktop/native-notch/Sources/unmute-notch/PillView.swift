@@ -39,10 +39,13 @@ private struct PillGlass<S: Shape>: ViewModifier {
                     if appearance.translucent {
                         // The sampler — the desktop behind this window.
                         VisualEffectBackdrop(material: .hudWindow)
-                        // Black glass: dark enough to own its shape on a white
-                        // page, transparent enough that the wallpaper moves.
-                        Color(red: 0.016, green: 0.020, blue: 0.030).opacity(0.58)
-                        if let tint { tint.opacity(0.20) }
+                        // Black glass. The wash was 0.58 on top of an already
+                        // dark material, which totalled nearly opaque — the
+                        // wallpaper was technically there and invisible. At 0.30
+                        // the surface still reads black on a white page and you
+                        // can genuinely see colour move behind it.
+                        Color(red: 0.016, green: 0.020, blue: 0.030).opacity(0.30)
+                        if let tint { tint.opacity(0.18) }
                     } else {
                         Color(red: 0.055, green: 0.06, blue: 0.075)
                         if let tint { tint.opacity(0.14) }
@@ -90,21 +93,38 @@ struct PillView: View {
         .animation(Theme.morph, value: s.stagedCount)
     }
 
-    /// Always a single horizontal row. Chips flank the pill; the pill is the
-    /// anchor and never moves as they come and go.
+    /// Always a single horizontal row, and EVERY element is 44pt tall.
+    ///
+    /// The chips were 32pt beside a 44pt pill, which is what made the row read
+    /// as mismatched parts rather than one instrument. The original sets
+    /// `height: 44, borderRadius: 9999` on the pill, the model badge, the agent,
+    /// the raw toggle, the staged chip and the mic chip alike — one height, one
+    /// radius, no exceptions. Restored.
     private var cluster: some View {
         HStack(spacing: 8) {
             if chipsVisible && s.kind == .remote {
-                if let m = s.model {
-                    MenuChip(label: m, symbol: "sparkles", symbolColor: Theme.cNeeds,
-                             options: s.modelOptions ?? []) { model.emit(.pickModel($0)) }
-                        .pillGlass(Capsule())
-                }
-                if let a = s.agent {
-                    MenuChip(label: a, symbol: "chevron.left.forwardslash.chevron.right",
-                             symbolColor: Theme.textDim,
-                             options: s.agentOptions ?? []) { model.emit(.pickAgent($0)) }
-                        .pillGlass(Capsule())
+                // MODEL + AGENT ARE ONE CAPSULE, split by a hairline — "which
+                // agent" and "which model" are a single decision, because the
+                // agent decides which models exist. They were two separate
+                // floating chips, which said the opposite.
+                if s.model != nil || s.agent != nil {
+                    HStack(spacing: 0) {
+                        if let m = s.model {
+                            MenuChip(label: m, symbol: "sparkles", symbolColor: Theme.cNeeds,
+                                     options: s.modelOptions ?? []) { model.emit(.pickModel($0)) }
+                        }
+                        if s.model != nil && s.agent != nil {
+                            Rectangle().fill(Color.white.opacity(0.24))
+                                .frame(width: 1, height: PillMetrics.height)
+                        }
+                        if let a = s.agent {
+                            MenuChip(label: a, symbol: "chevron.left.forwardslash.chevron.right",
+                                     symbolColor: Theme.textDim,
+                                     options: s.agentOptions ?? []) { model.emit(.pickAgent($0)) }
+                        }
+                    }
+                    .frame(height: PillMetrics.height)
+                    .pillGlass(Capsule())
                 }
                 if let raw = s.raw {
                     RawChip(on: raw) { model.emit(.toggleRaw(!raw)) }.pillGlass(Capsule())
@@ -157,7 +177,7 @@ struct PillView: View {
                 StopButton { model.emit(.stop) }
             }
             .padding(.leading, 15).padding(.trailing, 7)
-            .frame(height: 44)
+            .frame(height: PillMetrics.height)
 
         case .processing:
             HStack(spacing: 10) {
@@ -175,7 +195,7 @@ struct PillView: View {
                 }
             }
             .padding(.horizontal, 15)
-            .frame(height: 44)
+            .frame(height: PillMetrics.height)
 
         case .output:
             // SILENT SUCCESS. The text is already at the cursor; anything more
@@ -183,7 +203,7 @@ struct PillView: View {
             Image(systemName: "checkmark")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundColor(Theme.cWorking)
-                .frame(width: 44, height: 44)
+                .frame(width: PillMetrics.height, height: PillMetrics.height)
 
         case .outputFallback:
             HStack(spacing: 9) {
@@ -196,13 +216,13 @@ struct PillView: View {
                 }
             }
             .padding(.horizontal, 15)
-            .frame(height: 44)
+            .frame(height: PillMetrics.height)
 
         case .tooShort:
             Text(s.mutedText ?? "Didn't catch that")
                 .font(.system(size: 14)).foregroundColor(Theme.textDim)
                 .padding(.horizontal, 18)
-                .frame(height: 44)
+                .frame(height: PillMetrics.height)
 
         case .cancelled:
             // UNDO BELONGS HERE — not on success, where the first build put it.
@@ -212,7 +232,7 @@ struct PillView: View {
                 CapsuleButton(label: "Undo") { model.emit(.undo) }
             }
             .padding(.leading, 18).padding(.trailing, 8)
-            .frame(height: 44)
+            .frame(height: PillMetrics.height)
 
         case .error:
             HStack(spacing: 9) {
@@ -228,7 +248,7 @@ struct PillView: View {
                 }
             }
             .padding(.horizontal, 15)
-            .frame(height: 44)
+            .frame(height: PillMetrics.height)
         }
     }
 
@@ -368,12 +388,19 @@ private struct CapsuleButton: View {
 // material — adding per-chip chrome is what makes a cluster read as six
 // stickers instead of one object.
 
+/// ONE height and ONE radius for every element in the cluster. The original
+/// sets `height: 44, borderRadius: 9999` on all of them; deviating is what made
+/// the row look assembled from spare parts.
+enum PillMetrics {
+    static let height: CGFloat = 44
+}
+
 private struct ChipBody<Content: View>: View {
     @ViewBuilder let content: () -> Content
     var body: some View {
         HStack(spacing: 6) { content() }
-            .padding(.horizontal, 12)
-            .frame(height: 32)
+            .padding(.horizontal, 14)
+            .frame(height: PillMetrics.height)
     }
 }
 
@@ -482,7 +509,7 @@ private struct CoachingChip: View {
                 Text(r).font(.system(size: 12)).foregroundColor(Theme.textDim)
             }
         }
-        .padding(.horizontal, 12).frame(height: 30)
+        .padding(.horizontal, 14).frame(height: PillMetrics.height)
         .pillGlass(Capsule(), tint: tint)
     }
 }
@@ -512,7 +539,7 @@ private struct OfflineCard: View {
             }.buttonStyle(.plain)
         }
         .padding(.leading, 13).padding(.trailing, 11)
-        .frame(height: 36)
+        .frame(height: PillMetrics.height)
         .pillGlass(Capsule(), tint: reason.isRecoverable ? Theme.cNeeds : nil)
     }
 }

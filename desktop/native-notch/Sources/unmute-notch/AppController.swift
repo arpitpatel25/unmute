@@ -72,17 +72,8 @@ final class AppController: NSObject, NotchResizing {
             NotchLog.log("PILL EVENT out: \(ev.json)")
             IPC.emit(ev)
         }
-        // The size preference travels up from the cluster; the window fits
-        // itself to it and re-centres. Sizing to content is what lets the panel
-        // stay click-transparent everywhere it isn't drawing.
-        let root = AnyView(
-            PillHost(model: pillModel)
-                .onPreferenceChange(PillSizeKey.self) { [weak self] size in
-                    guard let self, size.width > 0 else { return }
-                    self.pillWindow.fit(size, geometry: self.geometry)
-                }
-        )
-        let host = NSHostingView(rootView: root)
+        pillWindow.fit(geometry: geometry)
+        let host = NSHostingView(rootView: AnyView(PillHost(model: pillModel)))
         host.sizingOptions = []
         pillHost = host
         pillWindow.contentView = host
@@ -476,9 +467,7 @@ final class AppController: NSObject, NotchResizing {
         // it has to move too — plugging in a monitor, or moving the menu bar to
         // one, relocates both surfaces together. Its size preference does not
         // re-fire on a screen change, so refit explicitly from the current frame.
-        if pillWindow != nil, pillModel.visible {
-            pillWindow.fit(pillWindow.frame.size, geometry: geometry)
-        }
+        pillWindow?.fit(geometry: geometry)
         NotchLog.log("geometry recomputed (\(reason)): screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) → window=\(NotchLog.rect(f))")
     }
 }
