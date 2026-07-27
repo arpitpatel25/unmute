@@ -41,6 +41,7 @@ import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape, setOverlaySuppressed } from './overlay'
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask, type AgentAvailability } from './router'
+import { CodexRouterEngine } from './codex-router-engine'
 import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
@@ -296,8 +297,35 @@ let codexDriver: CodexDesktopDriver | null = null
  * didn't" failure this guards against. The Codex project list rides along so
  * "put it in the unmute project" can be resolved by name.
  */
+/**
+ * Is the Claude Code CLI actually installed?
+ *
+ * This used to be ASSUMED — `agents` started as `['claude']` and resolveAgent
+ * fell back to it whenever Codex was unreachable. For a user who has the Codex
+ * desktop app and no Claude CLI that is exactly backwards: every fallback lands
+ * on the one backend they cannot run, and the router (a Claude session) never
+ * starts either, so routing silently degrades to failsafeDecision — a new task
+ * per utterance, carrying the raw transcript, with no targeting or naming.
+ *
+ * Checked against the SAME PATH the executors get (fixPath has already run by
+ * the time anything routes), cached briefly because it is asked per dispatch.
+ */
+let claudeCliCache: { at: number; ok: boolean } | null = null
+export async function claudeCliAvailable(): Promise<boolean> {
+  if (claudeCliCache && Date.now() - claudeCliCache.at < 60_000) return claudeCliCache.ok
+  const ok = await new Promise<boolean>((resolve) => {
+    execFile('/usr/bin/which', ['claude'], { env: process.env }, (err, stdout) => {
+      resolve(!err && !!String(stdout).trim())
+    })
+  })
+  if (claudeCliCache?.ok !== ok) log.event('claude-cli-availability', { ok })
+  claudeCliCache = { at: Date.now(), ok }
+  return ok
+}
+
 async function agentAvailability(): Promise<AgentAvailability> {
-  const agents: Array<'claude' | 'codex-desktop'> = ['claude']
+  const agents: Array<'claude' | 'codex-desktop'> = []
+  if (await claudeCliAvailable()) agents.push('claude')
   let codexProjects: string[] | undefined
   if (codexDriver) {
     try {
@@ -308,9 +336,15 @@ async function agentAvailability(): Promise<AgentAvailability> {
       }
     } catch { /* availability is best-effort; absence just means "not offered" */ }
   }
+  // Prefer what the user chose, but never offer a backend they cannot run. With
+  // neither present we still report 'claude' so the caller has something to
+  // name in an error — reporting an empty list would read as "no agents" to
+  // every consumer and hide the real problem.
   const stored = settings.get('agent')
   const preferred: 'claude' | 'codex-desktop' =
-    stored === 'codex-desktop' && agents.includes('codex-desktop') ? 'codex-desktop' : 'claude'
+    stored === 'codex-desktop' && agents.includes('codex-desktop') ? 'codex-desktop'
+      : agents.includes('claude') ? 'claude'
+      : agents[0] ?? 'claude'
   return { agents, preferred, ...(codexProjects?.length ? { codexProjects } : {}) }
 }
 
@@ -322,15 +356,31 @@ async function agentAvailability(): Promise<AgentAvailability> {
  */
 async function resolveAgent(spoken: 'claude' | 'codex-desktop' | undefined, avail: AgentAvailability): Promise<AgentKind> {
   const want = spoken ?? avail.preferred
-  if (want === 'codex-desktop' && !avail.agents.includes('codex-desktop')) {
-    log.warn('agent-unavailable-fallback', { want, to: 'claude' })
-    return 'claude'
+  if (avail.agents.includes(want)) return want
+  // FALL BACK TO WHAT EXISTS, not to Claude by reflex. A Codex-only user was
+  // being sent to a CLI they do not have, which fails at spawn rather than
+  // degrading.
+  const alt = avail.agents[0]
+  if (alt) {
+    log.warn('agent-unavailable-fallback', { want, to: alt })
+    return alt
   }
+  log.warn('no-agent-available', { want })
   return want
 }
 let completeFn: CompleteFn | null = null
-// The warm routing classifier (lazy — spawns on first routed utterance).
-let router: Router | null = null
+// ONE ROUTER PER BACKEND, both warm, each blind to the other's tasks.
+//
+// A single shared router is what let a Codex task be proposed as a resume while
+// the picker said Claude — the decision then ran the wrong backend entirely.
+// Splitting them makes that impossible by construction rather than by rule: the
+// Claude router is never handed a Codex task, so it cannot name one.
+//
+// Both are held warm regardless of the current picker, so switching provider
+// costs nothing. The Codex engine warms in ~435ms and answers in ~5s, against
+// the Claude REPL's 8-14s measured in the field — this is not a fallback.
+let router: Router | null = null            // claude
+let codexRouter: Router | null = null       // codex-desktop
 // Curator store paths (fixed, homedir-based) — shared by initRemote's wiring and
 // the route handler in dispatchFromCaptureInner (both module-scope readers).
 const curatorPathsV: CuratorPaths = curatorPaths()
@@ -353,6 +403,7 @@ function routerExecutorFactory() {
 function snapshotOf(t: Task, now: number, surfaced: boolean): RoutableTask {
   return {
     id: t.id,
+    agent: t.agent === 'codex-desktop' ? 'codex-desktop' : 'claude',
     intent: t.intent,
     name: t.name ?? null,
     state: t.state,
@@ -1469,7 +1520,10 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
   //    and its project binding ("work on the unmute repo" → that exact dir), so
   //    even a cold first utterance needs its judgement. It folds transcript
   //    cleanup into the same turn, and it's resident/warm — still instant.
-  if (router) {
+  // EITHER router will do — a Codex-only user has no Claude REPL, and gating on
+  // `router` alone would skip routing entirely for them (the old behaviour, and
+  // the reason their utterances fell to failsafeDecision).
+  if (router || codexRouter) {
     const awaitingIds = new Set(manager.tasksAwaitingUser().map((t) => t.id))
     try {
       const tRoute = Date.now()
@@ -1508,7 +1562,44 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // that appears here — so a task can never be promised to an app the user
       // doesn't have. Probing is cheap: a HEAD on the CDP port plus a DOM read.
       const avail = await agentAvailability()
-      const decision = await router.route(raw, targetable, projects, finished, coldSessions, wall, skillNames, avail)
+
+      // ROUTE ON THE PICKER'S BACKEND, AND SHOW THAT ROUTER ONLY ITS OWN WORK.
+      //
+      // Two independent guarantees, and both matter:
+      //
+      //   * the ENGINE is one the user actually has — a Codex-only user used to
+      //     get no router at all, because routeOnce spawned a Claude REPL,
+      //     threw, and fell to failsafeDecision (a new task per utterance, raw
+      //     transcript, no targeting or naming);
+      //   * the SNAPSHOT is scoped, so a router cannot name a task belonging to
+      //     the other backend. That is the cross-provider bleed that sent a
+      //     resume decision for a Codex thread into `claude --continue`.
+      //
+      // The picker governs NEW work. Continuing existing work still follows the
+      // task's own backend at dispatch (see TaskManager.resume / followUp) — so
+      // scoping here narrows what can be PROPOSED, never where a chosen task runs.
+      // Prefer the picker's engine; fall back to whichever exists, because one of
+      // the two may legitimately be absent (no Claude CLI, or no Codex app).
+      const useCodex = (avail.preferred === 'codex-desktop' || !router) && !!codexRouter
+      const activeRouter = useCodex ? codexRouter! : router!
+      const mine = (t: RoutableTask) =>
+        (t.agent ?? 'claude') === (useCodex ? 'codex-desktop' : 'claude')
+      log.event('router-selected', {
+        engine: useCodex ? 'codex' : 'claude',
+        preferred: avail.preferred,
+        tasks: targetable.filter(mine).length,
+        hidden: targetable.length - targetable.filter(mine).length,
+      })
+      const decision = await activeRouter.route(
+        raw,
+        targetable.filter(mine),
+        projects,
+        finished.filter(mine),
+        coldSessions.filter(mine),
+        wall.filter(mine),
+        skillNames,
+        avail,
+      )
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       // Explicit-skill prefix: when the user named a skill, prefix the
@@ -2182,12 +2273,26 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // idle-kills itself; tool-less, no glow). Star topology: Unmute is the hub.
   router = new Router({
     executorFactory: routerExecutorFactory,
+    slot: 'claude',
     decisionTimeoutMs: getKnobs().routerDecisionTimeoutMs,
     maxSessionMs: getKnobs().routerMaxSessionMs,
   })
   // Resident from startup — bring the classifier up now so the FIRST follow-up
   // utterance hits a warm session, never a cold spawn + timeout. Fire-and-forget.
-  void router.warm()
+  // Only when the CLI is actually there: warming a binary the user does not have
+  // just logs a spawn failure every launch.
+  void claudeCliAvailable().then((ok) => { if (ok) void router?.warm() })
+
+  // The Codex router. Same prompt, different transport — and a separate slot so
+  // the two can never read each other's decision file.
+  codexRouter = new Router({
+    executorFactory: routerExecutorFactory,   // unused: `engine` takes the path
+    engine: new CodexRouterEngine(),
+    slot: 'codex',
+    decisionTimeoutMs: getKnobs().routerDecisionTimeoutMs,
+    maxSessionMs: getKnobs().routerMaxSessionMs,
+  })
+  void codexRouter.warm().catch(() => { /* no Codex CLI — the Claude router stands */ })
 
   // ── The Skill Curator (spec §11) — supersedes the parked librarian ──
   // A background scheduler that sweeps session transcripts, distills recurring

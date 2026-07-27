@@ -54,6 +54,17 @@ export interface RoutableTask {
   /** workspace group ("what the work is about") — live groups only; the router
    *  joins/creates against exactly what it sees here. */
   group?: string | null
+  /**
+   * Which backend this task LIVES on.
+   *
+   * Each router is only ever handed its own backend's tasks, so this is not a
+   * field the model reasons about — it is what the host filters on before the
+   * snapshot is built. A Claude router that never sees a Codex task cannot
+   * propose resuming one, which is a stronger guarantee than a rule saying it
+   * must not: rules are what failed when a resume decision reached a Codex
+   * thread and spawned `claude --continue` against it.
+   */
+  agent?: 'claude' | 'codex-desktop'
 }
 
 /** What the host can actually run a task on RIGHT NOW. Passed in per-utterance
@@ -156,7 +167,7 @@ export function fmtAge(ageSec: number): string {
 
 /** The instruction we type into the warm REPL each call. Self-contained: the
  *  router relies on THIS snapshot, not on accumulated memory (keeps it thin). */
-export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): string {
+export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], decisionPath: string | null, projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): string {
   const lines = tasks.map((t) =>
     `  [${t.id}]${t.name ? ` "${t.name}" —` : ''} "${t.intent}" — ${t.state}` +
     `${t.kind === 'session' ? ' · PERSISTENT SESSION' : ''}${t.project ? ` · project: ${t.project}` : ''}` +
@@ -171,7 +182,19 @@ export function buildRoutingPrompt(utterance: string, tasks: RoutableTask[], dec
       : `  ${t.name ? `"${t.name}" — ` : ''}"${t.intent}" — ${t.state} · ${fmtAge(t.ageSec)} (context only)`,
   )
   return [
-    `[Unmute router] You route a spoken command to where it belongs. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else — no tools, no browser, no research.`,
+    // TWO WAYS TO ANSWER, one prompt.
+    //
+    // Claude Code runs as a TUI session, so the decision comes back through a
+    // FILE — there is no clean stdout to read. The Codex app-server returns the
+    // assistant's message directly, so asking it to write a file would add a
+    // tool call, a permission surface and seconds of latency for nothing.
+    //
+    // Everything BELOW this line — targeting rules, consent policy, kinds,
+    // groups, skills, ops — is identical for both, and must stay that way: it
+    // is how unmute thinks, not how a particular CLI talks.
+    decisionPath
+      ? `[Unmute router] You route a spoken command to where it belongs. Reply ONLY by writing JSON to ${decisionPath} (atomically: write ${decisionPath}.tmp then rename). Do nothing else — no tools, no browser, no research.`
+      : `[Unmute router] You route a spoken command to where it belongs. Reply with ONLY one line of JSON — no prose, no explanation, no code fence. Do nothing else — no tools, no browser, no research.`,
     ``,
     `Spoken command: "${utterance}"`,
     ``,
@@ -479,6 +502,22 @@ export function parseDecision(raw: string | null, fallbackIntent: string, tasks:
 export interface RouterOpts {
   /** Builds the tool-less classifier session (a minimal claude REPL). */
   executorFactory: ExecutorFactory
+  /**
+   * When present, decisions go to CODEX instead of a Claude REPL.
+   *
+   * The whole prompt is shared; only the transport and the answer style differ
+   * (file vs direct reply). See codex-router-engine.ts for why this is not an
+   * AgentExecutor.
+   */
+  engine?: { warm(): Promise<void>; decide(prompt: string, timeoutMs?: number): Promise<string | null>; dispose(): void }
+  /**
+   * Distinguishes this router's working directory from the other one's.
+   *
+   * Two routers sharing `<baseDir>/router/decision.json` would read each
+   * other's answers — the exact cross-provider bleed this split exists to make
+   * impossible.
+   */
+  slot?: string
   baseDir?: string
   /** Per-call wait for the decision file (default 60s — cloud inference + a
    *  tool-driven file write can be slow; we are diagnosing the true latency). */
@@ -505,7 +544,8 @@ export class Router {
   private spawnedAt = 0
   private readonly dir: string
   private readonly decisionPath: string
-  private readonly o: Required<Omit<RouterOpts, 'now'>> & Pick<RouterOpts, 'now'>
+  private readonly o: Required<Omit<RouterOpts, 'now' | 'engine' | 'slot'>> & Pick<RouterOpts, 'now'>
+  private readonly engine: RouterOpts['engine'] | null
 
   constructor(opts: RouterOpts) {
     this.o = {
@@ -519,7 +559,8 @@ export class Router {
       maxSessionMs: opts.maxSessionMs ?? 2 * 60 * 60_000,
       now: opts.now,
     }
-    this.dir = join(this.o.baseDir, 'router')
+    this.engine = opts.engine ?? null
+    this.dir = join(this.o.baseDir, opts.slot ? `router-${opts.slot}` : 'router')
     this.decisionPath = join(this.dir, 'decision.json')
   }
 
@@ -545,6 +586,21 @@ export class Router {
 
   private async routeOnce(utterance: string, tasks: RoutableTask[], projects: RoutableProject[] = [], finished: RoutableTask[] = [], coldSessions: RoutableTask[] = [], wall: RoutableTask[] = [], skillNames: string[] = [], avail?: AgentAvailability): Promise<RouteDecision> {
     const fallback = (utterance || '').trim()
+    // THE CODEX PATH IS NOT A SESSION AND NOT A FILE. It answers directly, so
+    // none of the REPL choreography below (ready grace, paste-confirm Enter,
+    // re-inject-on-stall) applies — every one of those exists for Claude's TUI.
+    if (this.engine) {
+      try {
+        const prompt = buildRoutingPrompt(utterance, tasks, null, projects, finished, coldSessions, wall, skillNames, avail)
+        const raw = await this.engine.decide(prompt, this.o.decisionTimeoutMs)
+        const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail)
+        log.event('route-decision', { engine: 'codex', action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length })
+        return decision
+      } catch (e) {
+        log.warn('codex route failed — using failsafe', { error: (e as Error).message })
+        return failsafeDecision(tasks, fallback)
+      }
+    }
     try {
       await this.ensureSession()
       await fs.mkdir(this.dir, { recursive: true })
