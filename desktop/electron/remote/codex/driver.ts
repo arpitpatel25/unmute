@@ -189,9 +189,14 @@ export class CodexDesktopDriver {
       // The ceiling logic is choosePolicy's, mirrored: auto-approve wants
       // full-access, anything else wants approve-for-me. If we are already
       // there, nothing about opening the menu could change the outcome.
-      const ceiling: CodexApprovalLevel = userMode === 'auto-approve' ? 'full-access' : 'approve-for-me'
-      if (current === ceiling) {
-        log.event('codex-approval-unchanged', { level: current, userMode, viaLabel: true })
+      // NEVER DOWNGRADE. A user who has deliberately turned Full Access on —
+      // reading the dialog and confirming it — must not have it quietly taken
+      // away by a dictated task. We only ever raise, and only as far as
+      // choosePolicy allows.
+      const ORDER: CodexApprovalLevel[] = ['ask', 'approve-for-me', 'full-access']
+      const ceiling: CodexApprovalLevel = 'approve-for-me'
+      if (current && ORDER.indexOf(current) >= ORDER.indexOf(ceiling)) {
+        log.event('codex-approval-unchanged', { level: current, userMode, atOrAbove: ceiling })
         return
       }
 

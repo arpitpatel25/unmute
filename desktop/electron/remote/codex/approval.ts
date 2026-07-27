@@ -73,9 +73,24 @@ export function choosePolicy(
   const offered = LEVEL_ORDER.filter((l) => available.includes(l))
   if (!offered.length) return { level: 'ask', ...POLICIES.ask }
 
-  // The user's setting is the first cap.
+  // THE AUTOMATIC CEILING IS 'approve-for-me', NEVER 'full-access'.
+  //
+  // Codex guards Full Access behind a confirmation dialog — "Turn on Full
+  // Access?", listing unrestricted files, terminal commands and network — and
+  // that dialog exists so a HUMAN reads what is being granted. We can click it
+  // (and do, if a user has already chosen that level), but choosing it FOR them
+  // on a dictated task would defeat a safety gate the vendor put there on
+  // purpose, unattended, on their whole machine.
+  //
+  // 'approve-for-me' is the honest middle: one click, no confirmation dialog
+  // (measured), available on managed devices where full access is withheld
+  // entirely, and it only stops for actions Codex judges genuinely unsafe. The
+  // approval hook surfaces those in the notch, which is the point of having it.
+  //
+  // Full access remains reachable — the user sets it in Codex themselves, and
+  // the never-downgrade rule in applyApprovalPolicy leaves it alone.
   const userCeiling: CodexApprovalLevel =
-    userMode === 'auto-approve' && !sandboxed ? 'full-access' : 'approve-for-me'
+    userMode === 'auto-approve' && !sandboxed ? 'approve-for-me' : 'approve-for-me'
 
   // ...and the device ceiling is the second. Take the highest offered level
   // that is at or below BOTH.
