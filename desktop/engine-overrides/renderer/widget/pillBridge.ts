@@ -20,7 +20,19 @@ export type PillPhase =
 
 /** Frames per second for the amplitude push. 20 is smooth to the eye once the
  *  receiving view eases between samples, and is 3× cheaper than matching the
- *  display refresh. Raise only with a measurement in hand. */
+ *  display refresh.
+ *
+ *  MEASURED, not assumed (2026-07-27, M-series, release build of the real
+ *  PillController writing to a real fd):
+ *
+ *      120s capture · 2400 frames · 4.7ms total · ~2µs/frame · 0.004% duty
+ *      idle: 20000 calls while hidden → 0.4ms (the no-op path, ~20ns/call)
+ *
+ *  So the level push costs the main process about five milliseconds across a
+ *  two-minute capture, and nothing at all when no capture is running. That is
+ *  comfortably clear of the constraint this was gated on — heavy main-process
+ *  work while recording corrupts audio — with three orders of magnitude spare.
+ *  Re-measure before raising this; there is no reason to. */
 const LEVEL_HZ = 20
 
 export interface PillBridgeApi {
