@@ -42,7 +42,21 @@ struct NotchView: View {
             model.onHover(hovering)
             if hovering && !expanded { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
-        .animation(Theme.morph, value: model.state)
+        // NO `.animation(_:value: model.state)` HERE.
+        //
+        // An explicit .animation modifier OVERRIDES the ambient transaction for
+        // its whole subtree, so this silently beat the withAnimation in
+        // AppController.applyState — the frame moved on a 0.42s curve while the
+        // content was still governed by a spring settling nearer 0.8s. That is
+        // the "1 running" strip sitting in a full-size task panel, and task
+        // chrome squeezed into the notch on the way back. Matching the
+        // durations at the mutation site did nothing while this line existed.
+        //
+        // The comment on materialTint below describes this exact failure for
+        // the tint, and was patched by gating on commandedState — a symptom
+        // fix that left the cause in place. AppController is now the single
+        // timing authority: every mutation of model.state carries its own
+        // animation, matched to the window's.
     }
 
     private var expanded: Bool { model.state == .task || model.state == .cockpit }

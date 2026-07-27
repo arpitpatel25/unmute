@@ -357,8 +357,8 @@ final class AppController: NSObject, NotchResizing {
             hoverTimer?.invalidate()
             if model.state == .dormant && commandedState == .dormant {
                 NotchLog.log("hover-wake: dormant → idle")
-                withAnimation(Theme.morph) { model.state = .idle }
-                window.applyFrame(frame(for: .idle), animated: true)
+                withAnimation(.easeOut(duration: Self.growS)) { model.state = .idle }
+                window.applyFrame(frame(for: .idle), animated: true, duration: Self.growS)
             }
         } else {
             guard model.state == .idle, commandedState == .dormant else { return }
@@ -366,8 +366,8 @@ final class AppController: NSObject, NotchResizing {
             hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
                 guard let self, self.model.state == .idle, self.commandedState == .dormant else { return }
                 NotchLog.log("hover-sleep: idle → dormant")
-                withAnimation(Theme.collapse) { self.model.state = .dormant }
-                self.window.applyFrame(self.frame(for: .dormant), animated: true)
+                withAnimation(.easeOut(duration: Self.shrinkS)) { self.model.state = .dormant }
+                self.window.applyFrame(self.frame(for: .dormant), animated: true, duration: Self.shrinkS)
             }
         }
     }
