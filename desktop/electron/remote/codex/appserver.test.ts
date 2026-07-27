@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseModels, matchCurrent, listCodexModels } from './appserver'
+import { parseModels, matchCurrent, listCodexModels, toUiLabel, toEffortUiLabel } from './appserver'
 
 /** A trimmed copy of a real `model/list` response from Codex. */
 const RAW = [
@@ -29,6 +29,8 @@ describe('parseModels', () => {
     assert.equal(m[0].id, 'gpt-5.6-sol')
     assert.equal(m[0].label, 'GPT-5.6-Sol')
     assert.deepEqual(m[0].efforts, ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+    // Index-aligned menu spellings — note `low` is "Light", `xhigh` is "Extra High".
+    assert.deepEqual(m[0].effortLabels, ['Light', 'Medium', 'High', 'Extra High', 'Max', 'Ultra'])
     assert.equal(m[0].defaultEffort, 'low')
   })
 
@@ -51,20 +53,61 @@ describe('parseModels', () => {
   })
 })
 
+describe('toUiLabel', () => {
+  test('protocol spelling becomes the spelling Codex shows in its own menus', () => {
+    assert.equal(toUiLabel('GPT-5.6-Sol'), '5.6 Sol')
+    assert.equal(toUiLabel('GPT-5.4-Mini'), '5.4 Mini')
+  })
+
+  test('a name with no GPT prefix survives unharmed', () => {
+    assert.equal(toUiLabel('Codex Mini'), 'Codex Mini')
+  })
+})
+
+describe('toEffortUiLabel', () => {
+  test('the two that are NOT the wire value capitalised', () => {
+    // Lifted from Codex's own i18n table; assuming would have broken both.
+    assert.equal(toEffortUiLabel('low'), 'Light')
+    assert.equal(toEffortUiLabel('xhigh'), 'Extra High')
+  })
+
+  test('the ones that are', () => {
+    assert.equal(toEffortUiLabel('medium'), 'Medium')
+    assert.equal(toEffortUiLabel('ultra'), 'Ultra')
+  })
+
+  test('an effort tier we have never seen falls back to Title Case, not blank', () => {
+    assert.equal(toEffortUiLabel('titanic'), 'Titanic')
+    assert.equal(toEffortUiLabel(''), '')
+  })
+})
+
 describe('matchCurrent', () => {
   const models = parseModels(RAW)
 
   test('reads model and effort out of the button label', () => {
-    assert.deepEqual(matchCurrent('5.6 Sol High', models), { model: 'GPT-5.6-Sol', effort: 'high' })
+    assert.deepEqual(matchCurrent('5.6 Sol High', models), { model: '5.6 Sol', effort: 'High' })
   })
 
   test('tolerates the GPT prefix and hyphens', () => {
-    assert.deepEqual(matchCurrent('GPT-5.6-Luna Max', models), { model: 'GPT-5.6-Luna', effort: 'max' })
+    assert.deepEqual(matchCurrent('GPT-5.6-Luna Max', models), { model: '5.6 Luna', effort: 'Max' })
+  })
+
+  test('REPORTS THE UI SPELLING — it must equal a value the panel lists', () => {
+    // The panel lists uiLabel; if `current` were the protocol name it would
+    // match no row and nothing would ever read as selected.
+    const current = matchCurrent('5.6 Sol High', models).model
+    assert.ok(models.some((m) => m.uiLabel === current))
   })
 
   test('prefers the LONGEST match so a shorter name cannot shadow it', () => {
     // "5.6 Luna" must not be claimed by a hypothetical "5.6" entry.
-    assert.equal(matchCurrent('5.6 Luna xhigh', models).model, 'GPT-5.6-Luna')
+    assert.equal(matchCurrent('5.6 Luna xhigh', models).model, '5.6 Luna')
+  })
+
+  test('READS THE PRINTED SPELLING — the button says "Extra High", never "xhigh"', () => {
+    assert.equal(matchCurrent('5.6 Sol Extra High', models).effort, 'Extra High')
+    assert.equal(matchCurrent('5.6 Sol Light', models).effort, 'Light')
   })
 
   test('an effort the model does not support is not reported', () => {

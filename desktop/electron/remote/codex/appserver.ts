@@ -30,11 +30,29 @@ export const BUNDLED_CODEX = '/Applications/ChatGPT.app/Contents/Resources/codex
 export interface CodexModel {
   /** Wire id, e.g. "gpt-5.6-sol". */
   id: string
-  /** What Codex calls it, e.g. "GPT-5.6-Sol". */
+  /** What Codex calls it in the protocol, e.g. "GPT-5.6-Sol". */
   label: string
+  /**
+   * What Codex calls it IN ITS OWN MENUS, e.g. "5.6 Sol".
+   *
+   * The protocol and the UI use different spellings for the same model, and the
+   * WRITE path is CDP — it finds a menu item by text. Sending the protocol name
+   * matched nothing and failed silently: the pick fired, the log recorded the
+   * choice, and the menu never moved. The button label ("5.6 Sol High") is the
+   * proof of which spelling the UI uses.
+   */
+  uiLabel: string
   description?: string
-  /** Reasoning efforts THIS model supports, in Codex's own order. */
+  /** Reasoning efforts THIS model supports, as WIRE values, in Codex's order. */
   efforts: string[]
+  /**
+   * The same efforts spelled the way Codex's menu prints them, index-aligned
+   * with `efforts`. Both are kept rather than one derived on the fly: the wire
+   * value is the protocol's identity and the label is what a click has to find,
+   * and collapsing them is how "xhigh" came to be sent to a menu that says
+   * "Extra High".
+   */
+  effortLabels: string[]
   /** The effort Codex starts this model on. */
   defaultEffort?: string
 }
@@ -126,6 +144,51 @@ export async function listCodexModels(deps: ListModelsDeps = {}): Promise<CodexM
   })
 }
 
+/**
+ * Protocol spelling → menu spelling. "GPT-5.6-Sol" → "5.6 Sol".
+ *
+ * Codex drops the vendor prefix and uses spaces in its own UI; the reasoning
+ * button's label is the evidence. Exported so the mapping is testable rather
+ * than an inline regex nobody can see.
+ */
+export function toUiLabel(displayName: string): string {
+  return displayName.replace(/^gpt[-\s]*/i, '').replace(/-/g, ' ').trim()
+}
+
+/**
+ * Effort wire value → the words Codex prints in its own menu.
+ *
+ * NOT GUESSED. Lifted from Codex's own i18n table inside app.asar, keyed
+ * `composer.mode.local.reasoning.<effort>.label` — the exact strings that
+ * render in the composer's reasoning menu, which is the control we click.
+ *
+ * Two of them are not the wire value with a capital letter, which is why
+ * assuming would have failed: `low` prints as "Light" and `xhigh` as
+ * "Extra High". Picking either wrote nothing and reported success.
+ *
+ * Unknown efforts (a future tier) fall through to Title Case — the honest
+ * default — and the writer now logs what the menu actually offered when the
+ * value is not found, so the next surprise announces itself.
+ */
+const EFFORT_UI_LABEL: Record<string, string> = {
+  none: 'None',
+  minimal: 'Minimal',
+  low: 'Light',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  max: 'Max',
+  ultra: 'Ultra',
+}
+
+export function toEffortUiLabel(effort: string): string {
+  const key = effort.trim().toLowerCase()
+  return EFFORT_UI_LABEL[key] ?? (key ? key[0].toUpperCase() + key.slice(1) : '')
+}
+
+const efforts = (m: RawModel): string[] =>
+  (m.supportedReasoningEfforts ?? []).map((e) => String(e?.reasoningEffort ?? '')).filter(Boolean)
+
 /** Hidden models are Codex's own business — never offer them. */
 export function parseModels(rows: RawModel[]): CodexModel[] {
   return rows
@@ -133,10 +196,10 @@ export function parseModels(rows: RawModel[]): CodexModel[] {
     .map((m) => ({
       id: String(m.model ?? m.id ?? ''),
       label: String(m.displayName ?? m.model ?? m.id ?? ''),
+      uiLabel: toUiLabel(String(m.displayName ?? m.model ?? m.id ?? '')),
       description: m.description,
-      efforts: (m.supportedReasoningEfforts ?? [])
-        .map((e) => String(e?.reasoningEffort ?? ''))
-        .filter(Boolean),
+      efforts: efforts(m),
+      effortLabels: efforts(m).map(toEffortUiLabel),
       defaultEffort: m.defaultReasoningEffort,
     }))
     .filter((m) => m.id !== '')
@@ -150,6 +213,11 @@ export function parseModels(rows: RawModel[]): CodexModel[] {
  * read returned it correctly, while `current` came back empty about a third of
  * the time. Matching it against the real catalogue is both more reliable than
  * the axis walk and cheaper.
+ *
+ * Reports the UI spelling, because ONE VOCABULARY travels downstream: the value
+ * shown in the panel is the value handed back on a pick, and the pick is a menu
+ * search. Reporting "GPT-5.6-Luna" here while the panel listed "5.6 Luna" also
+ * meant `current` matched no row, so nothing ever read as selected.
  */
 export function matchCurrent(label: string | null, models: CodexModel[]): {
   model?: string; effort?: string
@@ -160,13 +228,17 @@ export function matchCurrent(label: string | null, models: CodexModel[]): {
   const model = [...models]
     .sort((a, b) => b.label.length - a.label.length)
     .find((m) => flat.includes(m.label.toLowerCase().replace(/[\s-]+/g, '').replace(/^gpt/, '')))
-  const efforts = model?.efforts ?? []
-  const effort = [...efforts].sort((a, b) => b.length - a.length).find((e) => flat.endsWith(e.toLowerCase()))
+  // Match the button against the LABELS — the button prints "5.6 Sol Extra
+  // High", never "5.6 Sol xhigh".
+  const labels = model?.effortLabels ?? []
+  const effort = [...labels]
+    .sort((a, b) => b.length - a.length)
+    .find((e) => flat.endsWith(e.toLowerCase().replace(/[\s-]+/g, '')))
   // Build conditionally: `{ model: undefined }` is not the same as `{}`. The
   // key would survive JSON as an explicit absence and read downstream as "we
   // looked and there is none" rather than "we could not tell".
   const out: { model?: string; effort?: string } = {}
-  if (model) out.model = model.label
+  if (model) out.model = model.uiLabel
   if (effort) out.effort = effort
   return out
 }

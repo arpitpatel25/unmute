@@ -521,6 +521,32 @@ export async function readReasoning(cdp: CodexCdp, sleep: (ms: number) => Promis
   return { label, current, options }
 }
 
+/** One row of an open submenu: its text and where to click it. */
+export interface MenuItem { text: string; x: number; y: number }
+
+/**
+ * Which submenu row is `value`?
+ *
+ * EXACT BEFORE PREFIX. The old matcher was a bare `startsWith`, and Codex's own
+ * catalogue contains "5.4" alongside "5.4 Mini" — whichever the DOM listed
+ * first won, so choosing the plain model could silently select the mini. Rows
+ * also carry a description on a second line ("5.6 Sol\nLatest frontier…"), which
+ * is why a whole-innerText equality check cannot replace the prefix outright:
+ * we compare the FIRST LINE exactly, then fall back to prefix for rows that
+ * render their subtitle inline.
+ *
+ * Exported so this is covered by tests rather than living as an unreadable
+ * string inside an `evaluate` call.
+ */
+export function pickMenuItem(items: MenuItem[], value: string): MenuItem | null {
+  const want = value.trim().toLowerCase()
+  if (!want) return null
+  const head = (t: string) => (t || '').split('\n')[0].trim().toLowerCase()
+  return items.find((i) => head(i.text) === want)
+    ?? items.find((i) => head(i.text).startsWith(want))
+    ?? null
+}
+
 /** Choose a value on one axis. False when this device does not offer it. */
 export async function setReasoning(
   cdp: CodexCdp, axis: ReasoningAxis, value: string, sleep: (ms: number) => Promise<void>,
@@ -536,16 +562,25 @@ export async function setReasoning(
   const row = JSON.parse(rowBox) as { x: number; y: number }
   await cdp.hover(row.x, row.y)
   await sleep(700)
-  const itemBox = await cdp.evaluate<string>(`(() => {
-    const want = ${JSON.stringify(value.toLowerCase())};
+  // Harvest every row, then choose in TypeScript — see pickMenuItem. Doing the
+  // choosing in the page put the one rule that decides whether a pick lands
+  // beyond the reach of any test.
+  const itemsJson = await cdp.evaluate<string>(`(() => {
     const items = [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')];
-    const el = items.find((e) => (e.innerText || '').trim().toLowerCase().startsWith(want));
-    if (!el) return '';
-    const r = el.getBoundingClientRect();
-    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+    return JSON.stringify(items.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { text: (e.innerText || '').trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }));
   })()`)
-  if (!itemBox) { await cdp.pressEscape(); await sleep(200); return false }
-  const at = JSON.parse(itemBox) as { x: number; y: number }
+  let rows: MenuItem[] = []
+  try { rows = JSON.parse(itemsJson || '[]') as MenuItem[] } catch { rows = [] }
+  const at = pickMenuItem(rows, value)
+  if (!at) {
+    // Name what was on offer: a silent false here is exactly how the last
+    // vocabulary mismatch hid for a whole build.
+    log.warn('reasoning value not in menu', { axis, value, offered: rows.map((r) => r.text.split('\n')[0]) })
+    await cdp.pressEscape(); await sleep(200); return false
+  }
   await cdp.click(at.x, at.y)
   await sleep(500)
   await cdp.pressEscape()

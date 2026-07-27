@@ -800,12 +800,15 @@ async function pushPillChips(): Promise<void> {
       const models = await listCodexModels().catch(() => [] as CodexModel[])
       // The button label is the one part of the CDP read that never failed, so
       // it stays the source of the CURRENT values.
-      const live = matchCurrent(cached?.label ?? null, models)
+      const live = matchCurrent(cached?.label ?? null, models)   // returns UI spellings
       chips.model = cached?.label || (models.length ? 'Codex' : 'Codex')
+      // LABELS, not wire values — the pick is handed straight to a menu search.
       const effortsForCurrent =
-        models.find((m) => m.label === live.model)?.efforts ?? models[0]?.efforts ?? []
+        models.find((m) => m.uiLabel === live.model)?.effortLabels ?? models[0]?.effortLabels ?? []
+      // Values carry the UI spelling — they are what the CDP writer looks for
+      // in Codex's menu, and what the button label already shows.
       chips.modelAxes = [
-        { axis: 'Model', values: models.map((m) => m.label), current: live.model },
+        { axis: 'Model', values: models.map((m) => m.uiLabel), current: live.model },
         { axis: 'Effort', values: effortsForCurrent, current: live.effort },
       ].filter((a) => a.values.length > 0)
       // AN EMPTY ARRAY, NOT `undefined` — this is the bug that caused the hang.
