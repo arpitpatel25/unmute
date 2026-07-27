@@ -182,7 +182,9 @@ const settings = new Store<RemoteSettings>({
     voiceHeadlines: true,
     screenshotCapture: true,
     pinnedSkills: [],
-    surfaceAppearance: 'system',
+    // FIXED by default — see Theme.swift. Live glass is opt-in while
+    // macOS 26.2 caches its backdrop on all-Spaces panels.
+    surfaceAppearance: 'solid',
     agentTasksEnabled: true,
     computerUse: { enabled: false, screenshotEnabled: true, allowAll: true, allowed: [] },
   },
@@ -2055,7 +2057,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // Push the stored preference immediately: the helper starts on 'system',
       // so without this a user who chose Solid would see one glassy frame on
       // every launch.
-      notchClient.send({ type: 'appearance', value: settings.get('surfaceAppearance') || 'system' } as never)
+      notchClient.send({ type: 'appearance', value: settings.get('surfaceAppearance') || 'solid' } as never)
 
       log.info('notch shell started', { bin: notchBin })
     } catch (e) {
@@ -2807,7 +2809,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // exist because a hand-built pre-26 surface cannot follow the system slider
   // at all, and because a persistent always-on-top panel over someone else's
   // work is a reasonable thing to want solid regardless.
-  ipcMain.handle('remote:get-surface-appearance', async () => settings.get('surfaceAppearance') || 'system')
+  ipcMain.handle('remote:get-surface-appearance', async () => settings.get('surfaceAppearance') || 'solid')
   ipcMain.handle('remote:set-surface-appearance', async (_e, v: string) => {
     const value = v === 'glass' || v === 'solid' ? v : 'system'
     settings.set('surfaceAppearance', value)

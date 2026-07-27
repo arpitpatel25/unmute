@@ -57,8 +57,29 @@ private struct PillGlass<S: Shape>: ViewModifier {
                         }
                     } else {
                         ZStack {
+                            // FIXED GLASS — a lens that never samples anything.
+                            //
+                            // What reads as "glass" is the EDGE and the sheen,
+                            // not the see-through: a specular rim, and light
+                            // falling off from the top as it would across a
+                            // curved surface. Both are static, so this cannot go
+                            // stale, cannot blink, and is immune to the macOS
+                            // 26.2 backdrop-caching regression (FB: NSGlassEffect
+                            // caches its backdrop on borderless all-Spaces
+                            // panels) and to whatever the compositor does next.
+                            //
+                            // It is also DETERMINISTIC: the surface looks the
+                            // same on every wallpaper, every Space, every Mac —
+                            // which suits a product surface that should read as
+                            // one instrument rather than as a different colour
+                            // depending on what happens to be behind it.
                             Color(red: 0.055, green: 0.06, blue: 0.075)
-                            if let tint { tint.opacity(0.14) }
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.085),
+                                         Color.white.opacity(0.022),
+                                         Color.white.opacity(0.0)],
+                                startPoint: .top, endPoint: .bottom)
+                            if let tint { tint.opacity(0.16) }
                         }
                         .clipShape(shape)
                     }

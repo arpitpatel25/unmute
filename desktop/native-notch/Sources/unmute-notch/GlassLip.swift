@@ -208,10 +208,19 @@ struct GlassSurface: View {
                     tierB
                 }
             } else {
-                // Reduce Transparency, or the user chose Solid.
+                // FIXED GLASS — see PillView for the full reasoning. A lens that
+                // samples nothing: the specular rim and a top-down falloff are
+                // what read as glass, and both are static. Cannot go stale,
+                // cannot blink, immune to the macOS 26.2 backdrop-caching
+                // regression. Also covers Reduce Transparency.
                 ZStack {
                     Color(red: 0.055, green: 0.06, blue: 0.075)
-                    if let tint { tint.opacity(0.14) }
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.085),
+                                 Color.white.opacity(0.022),
+                                 Color.white.opacity(0.0)],
+                        startPoint: .top, endPoint: .bottom)
+                    if let tint { tint.opacity(0.16) }
                 }
             }
         }

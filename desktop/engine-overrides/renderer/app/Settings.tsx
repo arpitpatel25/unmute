@@ -342,13 +342,13 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
         </SettingRow>
         <SettingRow
           label="Surface material"
-          description="How the notch and the recording pill render. Follow system uses your macOS Reduce Transparency setting — Glass is always translucent, Solid is always opaque."
+          description="How the notch and the recording pill render. Fixed is a constant surface that always looks the same — the default, because on macOS 26.2 live glass can keep showing the previous Space's colours. Live glass samples whatever is behind it."
         >
           <SegmentedControl
             options={[
+              { value: 'solid', label: 'Fixed' },
+              { value: 'glass', label: 'Live glass' },
               { value: 'system', label: 'Follow system' },
-              { value: 'glass', label: 'Glass' },
-              { value: 'solid', label: 'Solid' },
             ]}
             value={surfaceAppearance}
             onChange={handleSurfaceAppearanceChange}

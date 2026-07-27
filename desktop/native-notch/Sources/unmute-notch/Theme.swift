@@ -180,7 +180,15 @@ final class Appearance: ObservableObject {
     static let shared = Appearance()
 
     /// The user's choice from unmute Settings.
-    @Published var preference: SurfaceAppearance = .system {
+    /// Defaults to `.solid` — the FIXED treatment.
+    ///
+    /// Live Liquid Glass remains available in Settings, but it is not the
+    /// default: on macOS 26.2 its backdrop is cached by the system, so it shows
+    /// the previous Space's colours until something behind it repaints, and
+    /// every way of forcing a re-sample is visible as a flicker. A surface that
+    /// is occasionally wrong, or that blinks on every swipe, is worse than one
+    /// that is always exactly itself. Flip the setting back when Apple fixes it.
+    @Published var preference: SurfaceAppearance = .solid {
         didSet { recompute() }
     }
     /// Resolved: should this surface render translucent right now?

@@ -486,55 +486,23 @@ final class AppController: NSObject, NotchResizing {
             object: nil, queue: .main
         ) { [weak self] _ in self?.recomputeGeometry("screen-params-changed") }
 
-        // A SPACE CHANGE DOES NOT RE-SAMPLE THE GLASS.
+        // NO SPACE-CHANGE HANDLER. Every invalidation strong enough to force a
+        // re-sample — ordering the window out and back, or displacing it — is
+        // VISIBLE as a blink on each swipe, and a surface that flickers every
+        // time the user changes Space is worse than one that is briefly stale.
         //
-        // Liquid Glass shows what is behind the window, and macOS refreshes that
-        // sample only when something back there REPAINTS — not on a Space
-        // change. Land on a live desktop (widgets ticking, Dock, wallpaper) and
-        // it corrects itself; land on a STATIC full-screen app and it keeps the
-        // previous Space's colours until the cursor passes over it, which is
-        // what made the bug look random rather than conditional.
+        // It is also a narrow case. The glass IS live: a window moving beneath
+        // the pill retints it continuously (measured — the pill tracked a
+        // white-to-yellow gradient sliding under it). macOS re-samples whenever
+        // something behind REPAINTS. The only gap is arriving on a Space whose
+        // content is completely static, where nothing repaints to trigger it,
+        // and Apple exposes no way to ask for a re-sample — its own
+        // always-present surfaces are composited by the WindowServer instead.
         //
-        // Apple offers no invalidation API — its own always-present surfaces are
-        // composited by the WindowServer instead of being drawn with app-level
-        // vibrancy — so this fires every lever that was observed to work, on the
-        // reasoning that three cheap ones together beat one elegant guess. An
-        // earlier build nudged the frame to the SAME rect inside one runloop
-        // turn; AppKit coalesces that into no geometry change at all, which is
-        // why it fired twenty times and fixed nothing.
-        let ws = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didWakeNotification] {
-            ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                self?.refreshBackdrop(name == NSWorkspace.didWakeNotification ? "woke" : "space-changed")
-            }
-        }
+        // The pill covers itself on the way in (see reconcilePillVisibility):
+        // it is ordered out between captures, so rebuilding as it appears costs
+        // nothing visually and is the moment that actually matters.
     }
-
-    /// Force every glass surface to sample the Space it is actually on.
-    func refreshBackdrop(_ reason: String) {
-        // 1. Rebuild the material. A remade view samples afresh; this is the
-        //    only lever that reaches BOTH tiers, and it works on a window that
-        //    is currently ordered out — which matters, because the pill is
-        //    hidden between captures and would otherwise be shown carrying a
-        //    backdrop it sampled on another Space entirely.
-        Appearance.shared.invalidateBackdrop()
-
-        // 2. Order out and straight back in. Observed live to correct the
-        //    backdrop where a frame nudge did not.
-        // 3. A REAL displacement, restored on the NEXT runloop turn so the two
-        //    frames cannot be collapsed into a no-op the way they were before.
-        var touched = 0
-        for w in NSApp.windows where w.isVisible {
-            let f = w.frame
-            w.orderOut(nil)
-            w.orderFrontRegardless()
-            w.setFrame(f.offsetBy(dx: 0, dy: -2), display: true)
-            DispatchQueue.main.async { w.setFrame(f, display: true) }
-            touched += 1
-        }
-        NotchLog.log("backdrop invalidated (\(reason)): windows=\(touched) token=\(Appearance.shared.backdropToken)")
-    }
-
     private func recomputeGeometry(_ reason: String) {
         geometry = NotchGeometry.current()
         model.hasNotch = geometry.hasNotch
