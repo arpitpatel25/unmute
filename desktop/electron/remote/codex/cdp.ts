@@ -543,6 +543,36 @@ async function dispatchPointerAt(cdp: CodexCdp, ariaPrefix: string): Promise<boo
   return ok === true
 }
 
+/**
+ * Tell the page the pointer LEFT. The other half of dispatchPointerAt.
+ *
+ * We open submenus by dispatching pointerover/pointerenter/pointermove at the
+ * trigger. Nothing ever dispatched the matching leave, so Radix went on
+ * believing the cursor was sitting inside the menu — its pointer tracking (the
+ * safe-triangle heuristic, onPointerLeave) never stood down, and neither did
+ * the DismissableLayer/FocusScope that come with an open menu. Escape closed
+ * the menu visually while the app still behaved as though one were live: the
+ * composer accepted TYPING (key events reach whatever is focused) but would not
+ * SUBMIT. That is the dispatch that typed its whole intent and then died.
+ *
+ * Main never had this problem because its hover approach never opened a submenu
+ * at all — it could not unbalance a state machine it never reached.
+ */
+async function releasePointerFrom(cdp: CodexCdp, ariaPrefix: string): Promise<void> {
+  await cdp.evaluate(`(() => {
+    const el = [...document.querySelectorAll('[aria-haspopup="menu"]')]
+      .find((x) => (x.getAttribute('aria-label') || '').startsWith(${JSON.stringify(ariaPrefix)}));
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const o = { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse',
+                isPrimary: true, clientX: r.left + r.width / 2, clientY: r.top - 200 };
+    // Move away first, then leave — the order a real pointer produces.
+    el.dispatchEvent(new PointerEvent('pointermove', o));
+    for (const t of ['pointerout', 'pointerleave']) el.dispatchEvent(new PointerEvent(t, o));
+    for (const t of ['mouseout', 'mouseleave']) el.dispatchEvent(new MouseEvent(t, o));
+  })()`)
+}
+
 /** Is this axis's submenu open, per Radix's own state attribute? */
 async function submenuIsOpen(cdp: CodexCdp, ariaPrefix: string): Promise<boolean> {
   return (await cdp.evaluate<boolean>(`(() => {
@@ -666,6 +696,7 @@ async function readAxisOptions(
   const r = await openSubmenu(cdp, axis, at, sleep, t0)
   if (r.strategy === 'failed') log.warn('submenu never opened', { axis, sawInstead: r.sawInstead, ms: r.ms })
   else log.info('submenu opened', { axis, via: r.strategy, count: r.items.length, ms: r.ms })
+  await releasePointerFrom(cdp, axis)      // balance the enter — see the helper
   await cdp.pressEscape()
   await sleep(250)
   return r.items
@@ -775,6 +806,7 @@ export async function setReasoning(
 
   const sub = await openSubmenu(cdp, axis, row, sleep, t0)
   if (sub.strategy === 'failed') {
+    await releasePointerFrom(cdp, axis)
     await cdp.pressEscape(); await sleep(200)
     return done({ stage: 'submenu-closed', ok: false, via: 'failed', offered: sub.sawInstead, labelBefore })
   }
@@ -794,12 +826,16 @@ export async function setReasoning(
 
   const at = pickMenuItem(rows, value)
   if (!at) {
+    await releasePointerFrom(cdp, axis)
     await cdp.pressEscape(); await sleep(200)
     return done({ stage: 'value-absent', ok: false, via: sub.strategy, offered: sub.items, labelBefore })
   }
 
   await cdp.click(at.x, at.y)
   await sleep(500)
+  // The pointer must be released even on the SUCCESS path — this is the one the
+  // real dispatch takes, and the one that stranded a task.
+  await releasePointerFrom(cdp, axis)
   await cdp.pressEscape()
   await sleep(200)
   const labelAfter = await readReasoningLabel(cdp)
