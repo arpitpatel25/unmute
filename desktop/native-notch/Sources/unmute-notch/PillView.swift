@@ -22,9 +22,9 @@ import SwiftUI
 // Text appears only where something needs explaining. The two states you look at
 // most are wordless.
 //
-// MATERIAL: one path, behind-window. SwiftUI's .glassEffect samples content
-// WITHIN the window; this panel is transparent and floats over other apps, so
-// it had nothing to refract and rendered flat grey. See GlassLip.swift.
+// MATERIAL: real Liquid Glass on macOS 26+ (verified by probe), with the
+// specular rim as an overlay stroke. The hand-built material is the pre-26
+// fallback only. See GlassLip.swift.
 
 /// Applies the cluster's material to one element.
 private struct PillGlass<S: Shape>: ViewModifier {
@@ -35,23 +35,34 @@ private struct PillGlass<S: Shape>: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background {
-                ZStack {
+                Group {
                     if appearance.translucent {
-                        // The sampler — the desktop behind this window.
-                        VisualEffectBackdrop(material: .hudWindow)
-                        // Black glass. The wash was 0.58 on top of an already
-                        // dark material, which totalled nearly opaque — the
-                        // wallpaper was technically there and invisible. At 0.30
-                        // the surface still reads black on a white page and you
-                        // can genuinely see colour move behind it.
-                        Color(red: 0.016, green: 0.020, blue: 0.030).opacity(0.30)
-                        if let tint { tint.opacity(0.18) }
+                        if #available(macOS 26.0, *) {
+                            // REAL Liquid Glass + the specular rim overlaid —
+                            // the treatment chosen from a four-way comparison
+                            // rendered on the target machine. Bare glass read as
+                            // flat; the rim is what gives the capsule its edge.
+                            // A stroke is NOT a second material, so this is not
+                            // glass-on-glass.
+                            Color.clear.glassEffect(
+                                tint.map { Glass26Style.regular.tint($0.opacity(0.5)) } ?? .regular,
+                                in: shape)
+                        } else {
+                            ZStack {
+                                VisualEffectBackdrop(material: .hudWindow)
+                                Color(red: 0.016, green: 0.020, blue: 0.030).opacity(0.30)
+                                if let tint { tint.opacity(0.18) }
+                            }
+                            .clipShape(shape)
+                        }
                     } else {
-                        Color(red: 0.055, green: 0.06, blue: 0.075)
-                        if let tint { tint.opacity(0.14) }
+                        ZStack {
+                            Color(red: 0.055, green: 0.06, blue: 0.075)
+                            if let tint { tint.opacity(0.14) }
+                        }
+                        .clipShape(shape)
                     }
                 }
-                .clipShape(shape)
                 .overlay(shape.stroke(Glass.rim(highlight: tint ?? .white), lineWidth: 1))
                 // NO DROP SHADOW. The original says why, in its own words:
                 // "Unmute must occupy ONLY the widget itself — a soft 36px
@@ -76,6 +87,9 @@ private extension View {
 
 struct PillView: View {
     @ObservedObject var model: PillModel
+    /// Whether the selector panel is open. Local to the view — main never needs
+    /// to know, and a round-trip would make it feel slow.
+    @State private var selectorOpen = false
 
     private var s: PillState { model.state }
 
@@ -93,6 +107,9 @@ struct PillView: View {
             // can't hear themselves." Mic narration outranks both because it is
             // the only one describing something that just CHANGED.
             if chipsVisible { hint }
+            if chipsVisible && selectorOpen && s.kind == .remote {
+                SelectorPanel(state: s, model: model, open: $selectorOpen)
+            }
             cluster
             if chipsVisible, let reason = s.offline {
                 OfflineCard(reason: reason,
@@ -104,6 +121,7 @@ struct PillView: View {
         .padding(.bottom, 4)
         .animation(Theme.morph, value: s.phase)
         .animation(Theme.morph, value: s.stagedCount)
+        .onChange(of: s.phase) { p in if p != .recording && p != .processing { selectorOpen = false } }
     }
 
     /// Always a single horizontal row, and EVERY element is 44pt tall.
@@ -126,7 +144,8 @@ struct PillView: View {
                 // tightens the INNER sides — 15/12 and 12/14 — which is why it
                 // reads evenly. And there are no icons on either half: the dot
                 // is the connection indicator, the chevron belongs to the model.
-                AgentModelControl(state: s, model: model)
+                AgentModelControl(state: s, model: model, open: $selectorOpen)
+                // Absent ⇒ not applicable on this backend (Codex), so no chip.
                 if let raw = s.raw {
                     RawChip(on: raw) { model.emit(.toggleRaw(!raw)) }.pillGlass(Capsule())
                 }
@@ -424,113 +443,170 @@ private struct ChipBody<Content: View>: View {
     }
 }
 
-/// The joined agent + model control.
+/// ONE CAPSULE, ONE HIT TARGET, ONE PANEL.
 ///
-/// Agent is a CYCLE (tap → the other platform), because there are only ever two
-/// and the original made it a tap. Model is a menu whose CONTENTS depend on the
-/// agent: Claude's flat catalog, or Codex's three axes.
+/// The divider is gone because the ambiguity is gone. It existed to say "two
+/// controls in one object", and it was the only square edge in a row of
+/// capsules. Agent moves INTO the panel as its leftmost column, which costs
+/// nothing — the panel is already columns — and makes "the platform decides the
+/// model list" something you watch happen instead of a surprise.
 private struct AgentModelControl: View {
     let state: PillState
     @ObservedObject var model: PillModel
-
-    /// Claude's brand orange, as the original colours the model label.
-    private let modelInk = Color(red: 0.851, green: 0.467, blue: 0.341)
+    @Binding var open: Bool
 
     var body: some View {
-        HStack(spacing: 0) {
-            if let agent = state.agent {
-                Button(action: { model.emit(.cycleAgent) }) {
-                    HStack(spacing: 7) {
-                        // THE CONNECTION DOT — functional, not decorative. Green
-                        // when the backend can take work right now, dim when it
-                        // cannot, and the label then says so.
-                        Circle()
-                            .fill(state.agentConnected
-                                  ? Color(red: 0.436, green: 0.749, blue: 0.604)
-                                  : Color.white.opacity(0.35))
-                            .frame(width: 7, height: 7)
-                        Text(agent + (state.agentConnected ? "" : " · connect"))
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundColor(Color.white.opacity(state.agentConnected ? 0.92 : 0.5))
-                            .lineLimit(1)
-                    }
-                    // ASYMMETRIC: 15 outer, 12 inner. This is the fix for the
-                    // uneven margins — not splitting the control.
-                    .padding(.leading, 15).padding(.trailing, 12)
-                    .frame(height: PillMetrics.height)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(state.agentConnected ? "Where this task runs — tap to switch"
-                                           : "Not connected — tap to connect")
-
-                Rectangle().fill(Color.white.opacity(0.28))
-                    .frame(width: 1, height: PillMetrics.height)
-            }
-
-            if let label = state.model {
-                ModelMenu(label: label, ink: modelInk, state: state, model: model,
-                          leadingInset: state.agent == nil ? 14 : 12)
-            }
-        }
-        .fixedSize()
-        .frame(height: PillMetrics.height)
-        .pillGlass(Capsule())
-    }
-}
-
-/// The model control. Its CONTENTS follow the platform — a flat catalog for
-/// Claude, Codex's Model/Effort/Speed axes for Codex. The two never share a
-/// list, which is the whole reason switching platform has to change this.
-private struct ModelMenu: View {
-    let label: String
-    let ink: Color
-    let state: PillState
-    @ObservedObject var model: PillModel
-    var leadingInset: CGFloat = 12
-
-    var body: some View {
-        Menu {
-            if let axes = state.modelAxes, !axes.isEmpty {
-                ForEach(axes) { axis in
-                    Section(axis.axis) {
-                        ForEach(axis.values, id: \.self) { v in
-                            Button(action: { model.emit(.pickAxis(axis: axis.axis, value: v)) }) {
-                                // A tick marks the live value, since these are
-                                // three independent axes rather than one choice.
-                                Text(axis.current == v ? "✓ \(v)" : v)
-                            }
-                        }
-                    }
-                }
-            } else {
-                ForEach(state.modelOptions ?? []) { o in
-                    Button(action: { model.emit(.pickModel(o.id)) }) {
-                        if let d = o.detail, !d.isEmpty { Text("\(o.label)   \(d)") }
-                        else { Text(o.label) }
-                    }
-                    .disabled(!o.isAvailable)
-                }
-            }
-        } label: {
-            HStack(spacing: 7) {
-                Text(label)
+        Button(action: { open.toggle() }) {
+            HStack(spacing: 9) {
+                // THE CONNECTION DOT — functional, not decorative. Green when
+                // the backend can take work right now, dim when it cannot, and
+                // the label then says so.
+                Circle()
+                    .fill(state.agentConnected
+                          ? Color(red: 0.436, green: 0.749, blue: 0.604)
+                          : Color.white.opacity(0.35))
+                    .frame(width: 7, height: 7)
+                Text((state.agent ?? "Claude Code") + (state.agentConnected ? "" : " · connect"))
                     .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundColor(ink)
+                    .foregroundColor(Theme.text.opacity(state.agentConnected ? 1 : 0.55))
                     .lineLimit(1)
-                // The only glyph either half carries, and it earns its place —
-                // it says this opens.
+                if let m = state.model {
+                    // NOT Claude's brand orange — this chip also represents
+                    // Codex. Emphasis lives on the active row inside the panel.
+                    Text(m)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(Theme.textDim)
+                        .lineLimit(1)
+                }
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .bold))
-                    .foregroundColor(ink.opacity(0.7))
+                    .foregroundColor(Theme.textFaint)
+                    .rotationEffect(.degrees(open ? 180 : 0))
             }
-            .padding(.leading, leadingInset).padding(.trailing, 14)
+            // Symmetric, now that there is no seam to compensate for.
+            .padding(.horizontal, 15)
             .frame(height: PillMetrics.height)
             .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .pillGlass(Capsule())
+        .animation(Theme.hover, value: open)
+    }
+}
+
+/// The panel: Agent · Model · Effort · Speed for Codex, Agent · Model for
+/// Claude. Columns rather than a stacked list because Codex's three axes are
+/// ~13 rows — taller than the space above a pill that already sits near the
+/// bottom edge. In columns everything is visible at once.
+private struct SelectorPanel: View {
+    let state: PillState
+    @ObservedObject var model: PillModel
+    @Binding var open: Bool
+
+    private var axes: [PillAxis] { state.modelAxes ?? [] }
+    private var isCodex: Bool { (state.agent ?? "") == "Codex" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // The chip label, decomposed — legible before you open anything.
+            Text(summary.uppercased())
+                .font(.system(size: 10, weight: .bold)).tracking(0.7)
+                .foregroundColor(Theme.textFaint)
+                .padding(.horizontal, 10).padding(.top, 3)
+
+            HStack(alignment: .top, spacing: 14) {
+                column("Agent", rows: [("Codex", isCodex), ("Claude Code", !isCodex)]) { label in
+                    let want = label == "Codex" ? "codex-desktop" : "claude"
+                    model.emit(.pickAgent(want))
+                }
+
+                if isCodex && axes.isEmpty {
+                    // HONEST EMPTY STATE. Falling through to the other
+                    // platform's list is what made picking a model silently
+                    // write the wrong setting.
+                    VStack(alignment: .leading, spacing: 2) {
+                        header("Model")
+                        Text("Connect Codex to choose a model")
+                            .font(.system(size: 12)).foregroundColor(Theme.textFaint)
+                            .padding(.horizontal, 10).padding(.vertical, 7)
+                    }
+                    .frame(minWidth: 150, alignment: .leading)
+                } else if isCodex {
+                    ForEach(axes) { a in
+                        column(a.axis, rows: a.values.map { ($0, $0 == a.current) }) { v in
+                            model.emit(.pickAxis(axis: a.axis, value: v))
+                        }
+                    }
+                } else {
+                    let opts = state.modelOptions ?? []
+                    column("Model", rows: opts.map { ($0.label, $0.label == state.model) }) { label in
+                        if let o = opts.first(where: { $0.label == label }) {
+                            model.emit(.pickModel(o.id))
+                        }
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .pillGlass(RoundedRectangle(cornerRadius: 14))
         .fixedSize()
+    }
+
+    private var summary: String {
+        if isCodex {
+            let vals = axes.compactMap(\.current)
+            return vals.isEmpty ? "Not connected" : vals.joined(separator: " · ")
+        }
+        return state.model ?? "Model"
+    }
+
+    private func header(_ t: String) -> some View {
+        Text(t.uppercased())
+            .font(.system(size: 10, weight: .bold)).tracking(0.6)
+            .foregroundColor(Theme.textFaint)
+            .padding(.horizontal, 10).padding(.top, 5).padding(.bottom, 2)
+    }
+
+    private func column(_ title: String,
+                        rows: [(String, Bool)],
+                        pick: @escaping (String) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            header(title)
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
+                SelectorRow(label: r.0, on: r.1) { pick(r.0) }
+            }
+        }
+        .frame(minWidth: 118, alignment: .leading)
+    }
+}
+
+private struct SelectorRow: View {
+    let label: String
+    let on: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .opacity(on ? 1 : 0)
+                    .frame(width: 11)
+                Text(label).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(on ? Theme.text : Theme.textDim)
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: 8)
+                .fill(on ? Color.white.opacity(0.13)
+                         : (hovering ? Color.white.opacity(0.07) : .clear)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Theme.hover, value: hovering)
     }
 }
 

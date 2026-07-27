@@ -147,9 +147,15 @@ struct NotchGeometry {
     // content — the window is a canvas the cluster centres itself in, so chips
     // joining and leaving never move the pill.
 
-    /// Height of the pill window canvas. Tall enough for the pill (44) plus the
-    /// awareness card below it (36) plus breathing room.
-    static let pillCanvasHeight: CGFloat = 132
+    /// Height of the pill window canvas.
+    ///
+    /// Must clear the TALLEST thing that can appear above the cluster — the
+    /// model selector, which is four columns of up to ~5 rows plus a summary
+    /// line (~230pt) — as well as the coaching chip and the awareness card. At
+    /// 132 the panel opened into a window too short to show it and was simply
+    /// clipped away; nothing is drawn outside the cluster, so an oversized
+    /// canvas costs nothing (see PillWindow: empty area stays click-through).
+    static let pillCanvasHeight: CGFloat = 400
     /// Distance from the bottom of the screen's visible frame.
     static let pillBottomInset: CGFloat = 26
 

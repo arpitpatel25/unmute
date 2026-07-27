@@ -1142,6 +1142,12 @@ export default function WidgetApp() {
       console.log(`[widget:ux] EVENT session:too-short (state was ${stateRef.current})`)
       setState('too-short')
       setShowDiscardHint(false)
+      // THE SIBLING OF THE `cancelled` BUG. Both "nothing happened" states
+      // relied on main hiding the HUD window out from under them; the native
+      // pill is its own window with no such rescue, so "Didn't catch that" sat
+      // on screen forever. I fixed cancelled and did not check the handler
+      // directly beneath it.
+      scheduleAutoHide(2500)
     })
 
     api.onEngineNotice((reason) => {

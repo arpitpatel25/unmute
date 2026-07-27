@@ -472,16 +472,37 @@ async function readAxisOptions(
   })()`.replace('AXIS_LITERAL', JSON.stringify(axis)))
   if (!box) { await cdp.pressEscape(); return [] }
   const at = JSON.parse(box) as { x: number; y: number }
-  await cdp.hover(at.x, at.y)
-  await sleep(800)
-  const raw = await cdp.evaluate<string>(`JSON.stringify(
+
+  // SNAPSHOT THE PARENT MENU FIRST, then diff after the hover.
+  //
+  // This used to scrape everything after hovering and subtract the three axis
+  // names, on the assumption that whatever remained belonged to the submenu.
+  // When the submenu had NOT opened yet — an 800ms hover is not a guarantee —
+  // what remained was simply the parent menu's other rows, and Codex has one
+  // called "Advanced". That is why every axis came back offering exactly one
+  // value, "Advanced", and why a correct-looking cache could still be garbage.
+  //
+  // A set difference cannot make that mistake: if the submenu never opened,
+  // nothing is new and we return empty, which the UI can say honestly.
+  const readItems = async (): Promise<string[]> => JSON.parse(await cdp.evaluate<string>(`JSON.stringify(
     [...document.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')]
       .map((e) => (e.innerText || '').trim().split(String.fromCharCode(10))[0].trim())
-  )`)
+      .filter(Boolean)
+  )`) ?? '[]') as string[]
+
+  const before = new Set(await readItems())
+  await cdp.hover(at.x, at.y)
+  await sleep(800)
+  let after = await readItems()
+  // One retry: the submenu is the slowest thing in this walk, and a thin read
+  // poisons the cache for the rest of the session.
+  if (after.every((t) => before.has(t))) {
+    await sleep(600)
+    after = await readItems()
+  }
   await cdp.pressEscape()
   await sleep(250)
-  // Everything that is not one of the parent rows belongs to the submenu.
-  return (JSON.parse(raw ?? '[]') as string[]).filter((t) => !AXIS_ROWS.has(t))
+  return after.filter((t) => !before.has(t) && !AXIS_ROWS.has(t))
 }
 
 /** Read the whole control: current values and what this device offers. */

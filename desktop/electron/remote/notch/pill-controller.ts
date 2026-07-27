@@ -72,7 +72,8 @@ export interface PillStateP {
   /** One line of mic narration, shown briefly beside the pill. */
   micStatus?: string | null
   stagedCount?: number
-  raw?: boolean
+  /** null CLEARS the chip (Codex has nothing for raw to skip). */
+  raw?: boolean | null
   micOptions?: PillOptionP[]
   mic?: string
   coaching?: PillCoachingP | null

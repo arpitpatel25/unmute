@@ -775,7 +775,6 @@ async function pushPillChips(): Promise<void> {
         { id: 'claude', label: 'Claude Code', available: true },
         { id: 'codex-desktop', label: 'Codex', available: codexOk },
       ],
-      raw: injectionDisabled(),
       stagedCount: stagedAttachments.length + pendingClipboardCount,
     }
 
@@ -794,7 +793,16 @@ async function pushPillChips(): Promise<void> {
           current: cached?.current?.[axis],
         }))
         .filter((a) => a.values.length > 0)
-      // modelOptions stays undefined — the axes REPLACE the flat list.
+      // AN EMPTY ARRAY, NOT `undefined` — this is the bug that caused the hang.
+      // push() merges, so an ABSENT key KEEPS the previous value: the Claude
+      // catalog survived into the Codex state, the view fell through to it, and
+      // picking a "Codex model" wrote Claude's setting while the Codex label
+      // never moved. Absent means keep; empty means cleared.
+      chips.modelOptions = []
+      // RAW is not offered on Codex at all — dispatchCodexDesktop returns before
+      // `mode` is ever read and then records 'managed', so there is nothing for
+      // raw to skip. A control that cannot act is worse than no control.
+      chips.raw = null
     } else {
       const catalog = getModelCatalog()
       const current = settings.get('model') || getModels().doerDefault
@@ -802,7 +810,8 @@ async function pushPillChips(): Promise<void> {
       chips.modelOptions = catalog.map((c) => ({
         id: c.id, label: c.label, detail: c.description ?? '',
       }))
-      chips.modelAxes = undefined
+      chips.modelAxes = []          // same reasoning — clear, do not omit
+      chips.raw = injectionDisabled()
     }
 
     pillController.push(chips)
@@ -1932,7 +1941,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         undo:        () => toWidget('undo'),
         acceptDraft: () => toWidget('acceptDraft'),
         pickMic:     (id) => toWidget('pickMic', id),
-        toggleRaw:   (on) => toWidget('toggleRaw', on),
+        // Main owns sessionForceRaw, so set it HERE rather than bouncing through
+        // the renderer and back. The old round-trip also never re-pushed, so the
+        // chip kept reporting the previous value — the same "dead control" the
+        // model and agent labels had.
+        toggleRaw: (on) => {
+          sessionForceRaw = on
+          log.event('force-raw-set', { on, scope: 'session', from: 'pill' })
+          toWidget('rawChanged', on)   // keep the DOM toggle in step
+          void pushPillChips()
+        },
         dismissOffline:    () => toWidget('dismissOffline'),
         openBillingPortal: () => toWidget('openBillingPortal'),
         pickModel: (m) => {
