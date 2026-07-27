@@ -2205,6 +2205,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     settings.set('model', 'sonnet')
     log.event('model-migrated-opus-to-sonnet', {})
   }
+  // One-time: move users off the OLD 'system' surface default.
+  //
+  // 'system' was the previous DEFAULT, written into every existing install, so
+  // it carries no signal that anyone chose it — and it resolves to translucent,
+  // which on macOS 26.2 means a cached backdrop showing the previous Space's
+  // colours (developer.apple.com/forums/thread/810314). Changing the default
+  // alone reached nobody who had already run the app, which is precisely how
+  // this shipped looking unfixed. An explicit 'glass' choice is preserved.
+  if (settings.get('surfaceAppearance') === 'system') {
+    settings.set('surfaceAppearance', 'solid')
+    log.event('surface-migrated-system-to-fixed', {})
+  }
   // Codex isn't wired yet (shown as "coming soon"). If a past build stored it as
   // the agent, reset to claude so Remote works instead of failing every task.
   // Only the unwired CLI adapter is reset; 'codex-desktop' is a supported choice.
