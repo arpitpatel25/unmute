@@ -53,7 +53,16 @@ private struct PillGlass<S: Shape>: ViewModifier {
                 }
                 .clipShape(shape)
                 .overlay(shape.stroke(Glass.rim(highlight: tint ?? .white), lineWidth: 1))
-                .shadow(color: .black.opacity(0.34), radius: 14, y: 5)
+                // NO DROP SHADOW. The original says why, in its own words:
+                // "Unmute must occupy ONLY the widget itself — a soft 36px
+                // shadow pooled behind the whole pill row and read as a
+                // bounding box around the panel." Its CSS sets
+                // `box-shadow: none` for exactly this reason, and reinstating
+                // one brought the box straight back — worst over a light
+                // wallpaper, where a rectangular halo sat around the capsules.
+                // (SwiftUI cannot reliably shape a shadow around an
+                // NSViewRepresentable anyway; it falls back to layer bounds,
+                // which is why it read as a BOX and not a capsule.)
             }
             .animation(Theme.flip, value: appearance.translucent)
     }
@@ -103,28 +112,22 @@ struct PillView: View {
     private var cluster: some View {
         HStack(spacing: 8) {
             if chipsVisible && s.kind == .remote {
-                // MODEL + AGENT ARE ONE CAPSULE, split by a hairline — "which
-                // agent" and "which model" are a single decision, because the
-                // agent decides which models exist. They were two separate
-                // floating chips, which said the opposite.
-                if s.model != nil || s.agent != nil {
-                    HStack(spacing: 0) {
-                        if let m = s.model {
-                            MenuChip(label: m, symbol: "sparkles", symbolColor: Theme.cNeeds,
-                                     options: s.modelOptions ?? []) { model.emit(.pickModel($0)) }
-                        }
-                        if s.model != nil && s.agent != nil {
-                            Rectangle().fill(Color.white.opacity(0.24))
-                                .frame(width: 1, height: PillMetrics.height)
-                        }
-                        if let a = s.agent {
-                            MenuChip(label: a, symbol: "chevron.left.forwardslash.chevron.right",
-                                     symbolColor: Theme.textDim,
-                                     options: s.agentOptions ?? []) { model.emit(.pickAgent($0)) }
-                        }
-                    }
-                    .frame(height: PillMetrics.height)
-                    .pillGlass(Capsule())
+                // TWO SEPARATE CAPSULES. Joining them behind one hairline made
+                // the divider the loudest thing in the row, and it broke the
+                // padding: each half kept its own 14pt inset, so the gap around
+                // the rule was 28pt against 14pt at the outer edges. Every
+                // element in the cluster is now the same capsule with the same
+                // inset, and the row reads evenly.
+                if let m = s.model {
+                    MenuChip(label: m, symbol: "sparkles", symbolColor: Theme.cNeeds,
+                             options: s.modelOptions ?? []) { model.emit(.pickModel($0)) }
+                        .pillGlass(Capsule())
+                }
+                if let a = s.agent {
+                    MenuChip(label: a, symbol: "chevron.left.forwardslash.chevron.right",
+                             symbolColor: Theme.textDim,
+                             options: s.agentOptions ?? []) { model.emit(.pickAgent($0)) }
+                        .pillGlass(Capsule())
                 }
                 if let raw = s.raw {
                     RawChip(on: raw) { model.emit(.toggleRaw(!raw)) }.pillGlass(Capsule())

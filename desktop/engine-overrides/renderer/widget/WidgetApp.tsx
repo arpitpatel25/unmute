@@ -1270,6 +1270,20 @@ export default function WidgetApp() {
     draftOffer,
     engineNotice: !!engineNotice,
     showDiscardHint,
+    // THE MIC CHIP. It was simply never pushed, so it could never render.
+    // Same rule as the original: the chip exists ONLY while an iPhone mic is
+    // actually around — no phone, no chip, no greyed-out icon begging for
+    // attention. And it shows what is ACTUALLY capturing during a recording,
+    // not what is merely preferred.
+    mic: recordingNow && captureSource
+      ? captureSource
+      : effectiveSource(mic.preference, mic.devices),
+    micOptions: mic.featureEnabled && findIphoneMic(mic.devices) !== null
+      ? [
+          { id: 'mac', label: 'MacBook Microphone' },
+          { id: 'iphone', label: findIphoneMic(mic.devices)?.label || 'iPhone' },
+        ]
+      : undefined,
     coaching: recordingNow && noisyEnvironment
       ? { condition: 'Noisy spot', remedy: captureSource === 'iphone' ? 'speak up' : 'lean in & speak up', level: 'warn' as const }
       : recordingNow && tooQuiet
@@ -1284,7 +1298,7 @@ export default function WidgetApp() {
   }), [state, draftOffer, isRemote, maxDurationSeconds, errorMessage, fallbackMessage,
        outputPreview, mutedText, engineNotice, showDiscardHint,
        recordingNow, noisyEnvironment, tooQuiet, captureSource, offlineReason,
-       dismissedTick])
+       dismissedTick, mic.preference, mic.devices, mic.featureEnabled])
 
   usePillState(pillState, nativePill)
   usePillTicker(recordingNow, elapsedSec, nativePill)

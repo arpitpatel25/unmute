@@ -755,6 +755,7 @@ async function pushPillChips(): Promise<void> {
         { id: 'codex-desktop', label: 'Codex', available: codexOk },
       ],
       raw: injectionDisabled(),
+      stagedCount: stagedAttachments.length + pendingClipboardCount,
     })
   } catch (e) {
     log.warn('pill chips push failed', { error: (e as Error).message })
@@ -785,6 +786,9 @@ function broadcastStaged(): void {
     if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length + pendingClipboardCount, paths: stagedAttachments.map((s) => s.path), pending: pendingClipboardCount })
   }
   notchController?.notifyStagedChanged()
+  // The staged-image chip lives on the pill too, and main is the only place
+  // that knows the true count (the renderer's chip keeps its own copy).
+  pillController?.push({ stagedCount: stagedAttachments.length + pendingClipboardCount })
 }
 
 // ── Utterance-scoped screenshot capture (the pill ledger). The dictation window
@@ -1890,6 +1894,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
             if (!w.isDestroyed()) w.webContents.send('remote:model-changed', model)
           }
           log.event('model-set', { model, from: 'pill' })
+          // RE-PUSH, or the chip keeps its old label for the rest of the
+          // capture. The setting changed correctly and the surface said
+          // otherwise, which reads exactly like a dead control.
+          void pushPillChips()
         },
         pickAgent: (a) => {
           // Only ever a backend this host can actually dispatch to — the same
@@ -1901,6 +1909,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
             if (!w.isDestroyed()) w.webContents.send('remote:agent-changed', a)
           }
           log.event('agent-set', { agent: a, from: 'pill' })
+          void pushPillChips()   // see pickModel — the label must follow the setting
         },
         clearStaged: () => { stagedAttachments = []; broadcastStaged() },
       })
