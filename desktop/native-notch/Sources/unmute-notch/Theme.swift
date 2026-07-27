@@ -186,6 +186,23 @@ final class Appearance: ObservableObject {
     /// Resolved: should this surface render translucent right now?
     @Published private(set) var translucent: Bool = true
 
+    /// Bumped to force every glass surface to be REBUILT from scratch.
+    ///
+    /// Liquid Glass samples what is behind the window, and macOS refreshes that
+    /// sample only when something behind it repaints — never merely because the
+    /// Space changed. Land on a live desktop and the widgets and Dock repaint,
+    /// so it corrects itself; land on a STATIC full-screen app and it holds the
+    /// old Space's colours until the cursor passes over it.
+    ///
+    /// Apple exposes no way to invalidate a backdrop, because its own
+    /// always-present surfaces are composited by the WindowServer rather than
+    /// drawn with app-level vibrancy. Rebuilding the view is the closest thing
+    /// available: the material is constructed anew and samples afresh.
+    @Published private(set) var backdropToken: Int = 0
+
+    /// Called on a Space change / wake. See AppController.refreshBackdrop.
+    func invalidateBackdrop() { backdropToken &+= 1 }
+
     private init() {
         recomputeSilently()
         NSWorkspace.shared.notificationCenter.addObserver(

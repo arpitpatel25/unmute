@@ -63,6 +63,10 @@ private struct PillGlass<S: Shape>: ViewModifier {
                         .clipShape(shape)
                     }
                 }
+                // REBUILT whenever the backdrop is invalidated — see
+                // Appearance.backdropToken. A Space change does not make macOS
+                // re-sample what is behind the glass; remaking the view does.
+                .id(appearance.backdropToken)
                 .overlay(shape.stroke(Glass.rim(highlight: tint ?? .white), lineWidth: 1))
                 // NO DROP SHADOW. The original says why, in its own words:
                 // "Unmute must occupy ONLY the widget itself — a soft 36px

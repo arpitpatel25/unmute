@@ -215,6 +215,11 @@ struct GlassSurface: View {
                 }
             }
         }
+        // REBUILT whenever the backdrop is invalidated — see
+        // Appearance.backdropToken. macOS re-samples what is behind the glass
+        // only when something back there repaints, never merely because the
+        // Space changed; remaking the view is the one lever available.
+        .id(appearance.backdropToken)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(shape)
         .contentShape(shape)
