@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, setReasoning, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, readReasoningLabel, setReasoning, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, type CodexSnapshot } from './rollout'
 
@@ -273,6 +273,24 @@ export class CodexDesktopDriver {
     const wanted: Array<[ReasoningAxis, string | undefined]> =
       [['Model', want.model], ['Effort', want.effort], ['Speed', want.speed]]
     if (!wanted.some(([, v]) => v)) return async () => {}
+
+    // CHEAP PRE-CHECK — do not open a single menu unless something must change.
+    //
+    // The button already states what is live ("5.6 Sol High"), and reading it is
+    // one evaluate. Walking the menus to discover the same thing costs seconds
+    // AND leaves the composer unable to submit: a dispatch that opened them
+    // typed its intent correctly and then sat there while Enter did nothing
+    // (codex-create-send-unconfirmed). Dispatches that never touched a menu sent
+    // instantly. Since the pill writes these preferences from the SAME live
+    // values it reads, the overwhelmingly common case is that nothing differs.
+    const liveLabel = (await readReasoningLabel(cdp)).toLowerCase().replace(/[\s-]+/g, '')
+    const satisfied = wanted.every(([, v]) =>
+      !v || liveLabel.includes(v.toLowerCase().replace(/[\s-]+/g, '')))
+    if (satisfied) {
+      log.event('codex-reasoning-already-set', { want, label: liveLabel })
+      return async () => {}
+    }
+
     const before = await readReasoning(cdp, (ms) => this.sleep(ms))
     const changed: Array<[ReasoningAxis, string]> = []
     for (const [axis, value] of wanted) {
@@ -359,6 +377,34 @@ export class CodexDesktopDriver {
     for (let i = 0; i < 20; i++) {
       await this.sleep(200)
       if (!(await cdp.composerText()).trim()) { sent = true; break }
+    }
+
+    // FALL BACK TO THE SEND BUTTON.
+    //
+    // Enter is a key event to whatever holds focus; the button is the app's own
+    // submit path and does not care what the page thinks the pointer or focus
+    // is doing. A dispatch once typed its whole intent correctly and then died
+    // because Enter did nothing after some menus had been opened — the work was
+    // done and the task stranded on the last inch.
+    if (!sent) {
+      log.warn('codex-create-enter-ignored', { retrying: 'send-button' })
+      const clicked = await cdp.evaluate<boolean>(`(() => {
+        const el = document.querySelector('[data-app-action-id="composer-send"],[aria-label="Send"],[data-testid="send-button"]');
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+      })()`)
+      if (typeof clicked === 'string' && clicked) {
+        const at = JSON.parse(clicked) as { x: number; y: number }
+        await cdp.click(at.x, at.y)
+        for (let i = 0; i < 15; i++) {
+          await this.sleep(200)
+          if (!(await cdp.composerText()).trim()) { sent = true; break }
+        }
+        log.event('codex-create-send-button', { ok: sent })
+      } else {
+        log.warn('codex-create-no-send-button', {})
+      }
     }
     if (!sent) { log.warn('codex-create-send-unconfirmed', {}); return { ok: false, reason: 'send-failed' } }
     log.event('codex-create-sent', {})

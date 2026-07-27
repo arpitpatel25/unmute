@@ -732,7 +732,12 @@ export interface SetReasoningTrace {
   ms: number
 }
 
-const buttonLabel = async (cdp: CodexCdp): Promise<string> =>
+/**
+ * The reasoning button's own label ("5.6 Sol High"), read WITHOUT opening
+ * anything. One evaluate, no menus, no pointer events — which is what makes a
+ * "do we even need to change this?" pre-check affordable on every dispatch.
+ */
+export const readReasoningLabel = async (cdp: CodexCdp): Promise<string> =>
   (await cdp.evaluate<string>(
     `(() => { const b = document.querySelector('${REASONING_BUTTON}'); return b ? (b.innerText || '').trim().replace(/\\n/g, ' ') : ''; })()`,
   )) ?? ''
@@ -752,7 +757,7 @@ export async function setReasoning(
   const done = (t: Omit<SetReasoningTrace, 'axis' | 'want' | 'ms'>): SetReasoningTrace =>
     ({ axis, want: value, ms: Date.now() - t0, ...t })
 
-  const labelBefore = await buttonLabel(cdp)
+  const labelBefore = await readReasoningLabel(cdp)
   if (!(await openReasoningMenu(cdp, sleep))) return done({ stage: 'menu-closed', ok: false, labelBefore })
 
   const row = await axisRowBox(cdp, axis)
@@ -787,7 +792,7 @@ export async function setReasoning(
   await sleep(500)
   await cdp.pressEscape()
   await sleep(200)
-  const labelAfter = await buttonLabel(cdp)
+  const labelAfter = await readReasoningLabel(cdp)
   return done({
     stage: 'clicked', ok: true, via: sub.strategy, offered: sub.items,
     matched: at.text.split('\n')[0], labelBefore, labelAfter,
