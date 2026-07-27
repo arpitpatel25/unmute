@@ -48,6 +48,7 @@ import { startCuaServer, type CuaServer } from './cua/server'
 import { NotchClient } from './notch/notch-client'
 import { NotchController } from './notch/notch-controller'
 import { PillController, type PillStateP } from './notch/pill-controller'
+import { listCodexModels, matchCurrent, type CodexModel } from './codex/appserver'
 import { DriverManager } from './cua/driver-manager'
 import { CdpLane } from './cua/lanes/cdp'
 import { Arming } from './cua/lanes/arming'
@@ -785,14 +786,28 @@ async function pushPillChips(): Promise<void> {
       // model after the switch.
       const cached = settings.get('codexReasoningCache' as never) as
         { label?: string | null; current?: Record<string, string>; options?: Record<string, string[]> } | undefined
-      chips.model = cached?.label || 'Codex'
-      chips.modelAxes = (['Model', 'Effort', 'Speed'] as const)
-        .map((axis) => ({
-          axis,
-          values: cached?.options?.[axis] ?? [],
-          current: cached?.current?.[axis],
-        }))
-        .filter((a) => a.values.length > 0)
+      // OPTIONS COME FROM THE PROTOCOL, NOT THE DOM.
+      //
+      // `model/list` over the app-server answers in ~1ms, headless, with no
+      // arming and no selectors — against a CDP menu walk that took seconds,
+      // needed the debug port, and returned "Advanced" as the only value for
+      // every axis whenever a submenu was slow. It also carries what the DOM
+      // never exposed: efforts are a property OF a model (Sol offers six, Luna
+      // five), so the Effort column follows the Model selection.
+      //
+      // SPEED IS GONE. It is not a model axis in Codex's own catalogue — it was
+      // an artefact of scraping a menu and treating every row as an axis.
+      const models = await listCodexModels().catch(() => [] as CodexModel[])
+      // The button label is the one part of the CDP read that never failed, so
+      // it stays the source of the CURRENT values.
+      const live = matchCurrent(cached?.label ?? null, models)
+      chips.model = cached?.label || (models.length ? 'Codex' : 'Codex')
+      const effortsForCurrent =
+        models.find((m) => m.label === live.model)?.efforts ?? models[0]?.efforts ?? []
+      chips.modelAxes = [
+        { axis: 'Model', values: models.map((m) => m.label), current: live.model },
+        { axis: 'Effort', values: effortsForCurrent, current: live.effort },
+      ].filter((a) => a.values.length > 0)
       // AN EMPTY ARRAY, NOT `undefined` — this is the bug that caused the hang.
       // push() merges, so an ABSENT key KEEPS the previous value: the Claude
       // catalog survived into the Codex state, the view fell through to it, and
@@ -1985,7 +2000,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           }
         },
         pickAxis: (axis, value) => {
-          if (axis !== 'Model' && axis !== 'Effort' && axis !== 'Speed') return
+          // Speed is gone — it was never a model axis, only a scraped row.
+          if (axis !== 'Model' && axis !== 'Effort') return
           if (!codexDriver) return
           void codexDriver.setReasoningAxis(axis, value)
             .then(() => refreshCodexReasoningForPill())
