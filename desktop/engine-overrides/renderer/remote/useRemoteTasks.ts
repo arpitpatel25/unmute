@@ -21,6 +21,24 @@ export interface RemoteTask {
    *  their work is not a PTY we can show, so the card offers "open in Codex"
    *  instead of the live terminal. */
   agent?: 'claude' | 'codex' | 'codex-desktop'
+  /** WHAT that backend is, resolved by the main process from the provider
+   *  registry (electron/remote/providers.ts) and sent with the task.
+   *
+   *  The renderer deliberately keeps no table of its own — it is a separate
+   *  tsconfig and cannot import from electron/, and a second copy is exactly the
+   *  drift the registry replaced. Asking `provider.canResume` instead of
+   *  `agent !== 'codex-desktop'` is what keeps the UI right when a backend is
+   *  added, instead of treating every unknown one as a resumable Claude session.
+   *  Optional so a card from an older payload still draws. */
+  provider?: {
+    id: string
+    vendor: string
+    surface: 'cli' | 'desktop'
+    label: string
+    transport: 'pty' | 'driver'
+    hasTerminal: boolean
+    canResume: boolean
+  }
   /** Codex project the thread was created in (codex-desktop only). */
   codexProject?: string | null
   /** Rolling "where you left off" (2-3 sentences from the session itself,

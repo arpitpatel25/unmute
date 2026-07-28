@@ -142,7 +142,23 @@ function setMainFocus(id: string | null) {
  *  own? Such a thread is never "dead": there is no session to end and none to
  *  resume, so every liveness affordance must branch on this FIRST. */
 function isChat(t: RemoteTask): boolean {
-  return t.agent === 'codex-desktop'
+  // Reads the provider registry (resolved by main, sent with the task) rather
+  // than naming Codex, so the next desktop backend is classified correctly the
+  // day it lands instead of being mistaken for a PTY session. The literal stays
+  // only as a fallback for a payload rendered before `provider` existed.
+  return t.provider ? t.provider.transport === 'driver' : t.agent === 'codex-desktop'
+}
+
+/** WHICH backend this task runs on — shown quietly in the card footer.
+ *
+ *  EVERY card names its provider now, not only the non-default ones. The wall
+ *  mixes backends freely and they no longer behave alike (one has a live
+ *  terminal and a Resume button, one has neither), so "which is this?" is
+ *  information the card owes the user rather than noise. */
+function providerLabel(t: RemoteTask): string {
+  const base = t.provider?.label ?? (t.agent === 'codex-desktop' ? 'Codex desktop' : 'Claude Code CLI')
+  // A Codex thread lives in a project; it disambiguates two threads on one wall.
+  return t.codexProject ? `${base} · ${t.codexProject}` : base
 }
 
 /** Hand the user the real Codex chat (main routes open-in-terminal by backend). */
@@ -193,6 +209,11 @@ function Card({ t, now, queuePos, promoted = false, onClick }: { t: RemoteTask; 
       <div style={{ display: 'flex', gap: 10, fontSize: 10.5, color: C.dimText }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {dirLabel(t) || (t.kind === 'session' ? 'session' : 'one-off')}
+        </span>
+        {/* The backend, in the same dim ink as the path: present for every card,
+            never loud enough to compete with the intent. */}
+        <span style={{ flex: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`Runs on ${providerLabel(t)}`}>
+          {providerLabel(t)}
         </span>
         <span style={{ marginLeft: 'auto', flex: 'none' }}>{elapsed(t.createdAt, now)}</span>
       </div>

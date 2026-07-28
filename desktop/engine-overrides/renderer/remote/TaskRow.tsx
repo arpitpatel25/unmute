@@ -60,22 +60,24 @@ export function TaskRow({
       <div className="text-sm text-ink font-medium leading-snug">{task.intent}</div>
 
       {/* #2 status + duration + WHICH BACKEND.
-          The wall mixes Claude Code and Codex tasks freely, so a card must say
-          where its work actually lives — otherwise "open it" is ambiguous and
-          the user can't tell why one card has a terminal and another doesn't.
-          Only non-default backends are tagged: labelling every Claude card
-          would be noise on the common case. */}
+          The wall mixes backends freely, so a card must say where its work
+          actually lives — otherwise "open it" is ambiguous and the user can't
+          tell why one card has a terminal and another doesn't.
+          EVERY backend is named now, not only the non-default one. With several
+          providers coming, each in a CLI and a desktop flavour, "untagged means
+          Claude" stops being a safe convention — an unlabelled card would just
+          mean "some backend we didn't think about". Rendered dim so the common
+          case stays quiet. */}
       <div className="flex items-center gap-2 mt-1 text-[11px]" style={{ color: STATE_COLOR[task.state] }}>
         <span className="inline-block w-[6px] h-[6px] rounded-full" style={{ background: STATE_COLOR[task.state] }} />
         {STATE_LABEL[task.state]} · {durationLabel(task)}
-        {task.agent === 'codex-desktop' && (
-          <span
-            className="ml-1 px-1.5 py-[1px] rounded text-[10px] font-medium border border-black/10 bg-black/5 text-ink/70"
-            title={task.codexProject ? `Runs in Codex · project ${task.codexProject}` : 'Runs in the Codex desktop app'}
-          >
-            Codex{task.codexProject ? ` · ${task.codexProject}` : ''}
-          </span>
-        )}
+        <span
+          className="ml-1 text-[10px] text-ink/45"
+          title={task.codexProject ? `Runs on ${task.provider?.label ?? 'Codex desktop'} · project ${task.codexProject}` : `Runs on ${task.provider?.label ?? 'Claude Code CLI'}`}
+        >
+          {task.provider?.label ?? (task.agent === 'codex-desktop' ? 'Codex desktop' : 'Claude Code CLI')}
+          {task.codexProject ? ` · ${task.codexProject}` : ''}
+        </span>
       </div>
 
       {/* #3 inline result on done */}
@@ -191,8 +193,10 @@ export function TaskRow({
           </button>
         )}
         {/* Resume is a PTY concept. A Codex thread lives in Codex — it has no
-            session of ours to end, so it must never be offered one to revive. */}
-        {!active && onResume && task.agent !== 'codex-desktop' && (
+            session of ours to end, so it must never be offered one to revive.
+            Asked of the provider registry rather than spelled "not Codex", so a
+            backend that cannot resume never gets the button by default. */}
+        {!active && onResume && (task.provider ? task.provider.canResume : task.agent !== 'codex-desktop') && (
           <button
             className="text-[11px] px-2 py-0.5 rounded border border-black/15 hover:bg-black/5"
             title="Continue this exact session with full prior context (resumes interrupted work)"

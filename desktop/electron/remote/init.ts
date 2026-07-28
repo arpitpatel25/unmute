@@ -29,6 +29,7 @@ import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor'
+import { providerOf } from './providers'
 import { CodexDesktopDriver } from './codex/driver'
 import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
@@ -656,6 +657,13 @@ function serializeTask(t: Task) {
     // wall mixing Claude Code and Codex tasks is never ambiguous about where
     // the work actually lives.
     agent: t.agent ?? 'claude',
+    // ...and WHAT THAT BACKEND IS, resolved from the one registry (providers.ts).
+    // Sent rather than re-derived because the renderer is a separate tsconfig
+    // that cannot import from electron/ — the alternative was a second copy of
+    // the table in the renderer, which is the exact drift this replaces. The
+    // renderer stays dumb: it renders `provider.label` and honours
+    // `provider.canResume` without knowing what any backend is.
+    provider: providerOf(t.agent),
     codexProject: t.codexProject ?? null,
     // The GUI-agent equivalent of the terminal (see Task.conversation).
     conversation: t.conversation ?? null,
