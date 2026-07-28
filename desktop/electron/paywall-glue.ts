@@ -14,6 +14,13 @@ import { deliverCaptureQuality, invokeDraftAccept } from './main-extensions'
 // (this exact line was missing on 2026-07-15 and capture-quality telemetry
 // silently vanished; the handler's try/catch ate the ReferenceError).
 import { logTelemetry } from '../dictationTelemetry'
+// Unmute Remote trigger gate — STATIC for the same reason as the line above.
+import {
+  setRemoteTriggerEntitled,
+  setRemoteTriggerUserPref,
+  resetRemoteTriggerUserPref,
+  getRemoteTriggerState,
+} from '../remoteTriggerGate'
 
 type EngineMode = 'auto' | 'managed' | 'local'
 interface PaywallSettings {
@@ -34,6 +41,11 @@ interface PaywallSettings {
   // Post-STT cleanup pass (fillers/stutters removed via a fast LLM call,
   // 900ms budget, fails open to the raw transcript). Default ON.
   dictationCleanup?: boolean
+  // Last-known "this account's plan includes Unmute Remote". Cached ONLY so a
+  // Pro user's Remote key works during the seconds before the subscription
+  // fetch resolves on a cold start — the live answer always overwrites it.
+  // Never a grant on its own: the refresh below runs on every launch.
+  remoteTriggerEntitled?: boolean
 }
 const settings = new Store<PaywallSettings>({ name: 'unmute-paywall-settings' })
 
@@ -103,6 +115,53 @@ export function getDictationCleanupEnabled(): boolean {
 }
 export function getPaywallUser(): { id: string; email: string | null } | null {
   return currentSession.user
+}
+
+// ─── Unmute Remote trigger entitlement ──────────────────────────
+//
+// Remote (the task trigger on the key opposite dictation) ships with the
+// 'unmute' plan only. paywall-glue owns the plan → gate translation; the gate
+// module (../remoteTriggerGate) owns the rule, and keyboard.ts reads it on
+// every press. The user's own on/off lives in the gate too, session-scoped by
+// design — it is NOT written to `settings`, so reopening the app restores the
+// default (on for Pro).
+
+/** Broadcast the current gate state so every open window's toggle agrees
+ *  (Settings, the Remote tab, the overlay's task panel). */
+function broadcastRemoteTriggerState(): void {
+  const state = getRemoteTriggerState()
+  for (const w of BrowserWindow.getAllWindows()) {
+    w.webContents.send('paywall:remote-trigger-changed', state)
+  }
+}
+
+/** Apply a freshly-read subscription to the gate. `null` means "we couldn't
+ *  tell" (no token yet / network blip) — keep the last known answer rather
+ *  than dropping a paying user's Remote key mid-session. */
+function applySubscriptionToRemoteTrigger(
+  sub: { active: boolean; plan: 'dictation' | 'unmute' | null } | null,
+): void {
+  if (!sub) return
+  const entitled = !!sub.active && sub.plan === 'unmute'
+  settings.set('remoteTriggerEntitled', entitled)
+  setRemoteTriggerEntitled(entitled)
+  broadcastRemoteTriggerState()
+}
+
+/** Re-read the subscription and push the answer into the gate. Cheap enough to
+ *  call on sign-in, on settings-open and at startup; silent on failure. */
+export async function refreshRemoteTriggerEntitlement(): Promise<void> {
+  const token = currentSession.accessToken
+  if (!token) return
+  try {
+    const { fetchSubscription } = await import('./managed-client')
+    applySubscriptionToRemoteTrigger(await fetchSubscription(token))
+  } catch (e) {
+    console.warn(
+      '[paywall-glue] remote-trigger entitlement refresh failed:',
+      e instanceof Error ? e.message : e,
+    )
+  }
 }
 
 
@@ -238,6 +297,9 @@ function registerSessionBridge() {
     if (!hadToken && data.accessToken) {
       const { refreshBalanceNow } = await import('./balance-ipc')
       await refreshBalanceNow()
+      // Same moment, same reason: settle whether this account's plan includes
+      // Remote so the trigger is live (or locked) before the first key press.
+      void refreshRemoteTriggerEntitlement()
     }
     return true
   })
@@ -245,6 +307,12 @@ function registerSessionBridge() {
   ipcMain.handle('paywall:sign-out', () => {
     currentSession = { accessToken: null, refreshToken: null, expiresAt: null, user: null }
     if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null }
+    // Signed out = no plan: lock Remote and forget this session's choice so the
+    // next account starts from its own default.
+    settings.set('remoteTriggerEntitled', false)
+    setRemoteTriggerEntitled(false)
+    resetRemoteTriggerUserPref()
+    broadcastRemoteTriggerState()
     return true
   })
   // NOTE: paywall:request-sign-in is registered by main-extensions.ts (it has
@@ -312,6 +380,24 @@ function registerSessionBridge() {
     return true
   })
 
+  // ─── Unmute Remote trigger on/off ───────────────────────────
+  // Sibling of the AI-format toggle above, with two differences: it is gated
+  // on the Unmute (Pro) plan, and the user's choice lives for this app session
+  // only (see ../remoteTriggerGate). Both handlers return the full state so the
+  // renderer never has to infer `locked` itself.
+  ipcMain.handle('paywall:get-remote-trigger', () => {
+    // Opportunistic re-read: opening Settings is exactly when a stale
+    // entitlement (just upgraded, just lapsed) should correct itself.
+    void refreshRemoteTriggerEntitlement()
+    return getRemoteTriggerState()
+  })
+  ipcMain.handle('paywall:set-remote-trigger-enabled', (_e, enabled: boolean) => {
+    setRemoteTriggerUserPref(!!enabled) // no-ops when the plan doesn't include Remote
+    const state = getRemoteTriggerState()
+    broadcastRemoteTriggerState()
+    return state
+  })
+
   // ─── Dodo payments IPC ──────────────────────────────────────
   // All three go through payments-client which calls the payments worker.
   // They require a valid session — if the user isn't signed in, they
@@ -363,7 +449,11 @@ function registerSessionBridge() {
     // renderer keeps its cached/last-known plan instead of showing Free.
     if (!token) return null
     const { fetchSubscription } = await import('./managed-client')
-    return (await fetchSubscription(token)) ?? { active: false, plan: null }
+    const sub = await fetchSubscription(token)
+    // Free ride for the Remote gate: this poll already knows the plan, so an
+    // upgrade (or lapse) flips the trigger without a second round trip.
+    applySubscriptionToRemoteTrigger(sub)
+    return sub ?? { active: false, plan: null }
   })
 
   ipcMain.handle('paywall:get-ledger', async () => {
@@ -443,6 +533,14 @@ export function initPaywallGlue(): void {
       )
     }
   })()
+
+  // Unmute Remote trigger: start from the cached entitlement so a Pro user's
+  // Remote key isn't dead for the first seconds after launch, then confirm it
+  // against the server as soon as a token exists. The user's own on/off is
+  // NOT restored — a fresh app session always starts at the default (on for
+  // Pro), which is the whole point of it being session-scoped.
+  setRemoteTriggerEntitled(settings.get('remoteTriggerEntitled', false) === true)
+  void refreshRemoteTriggerEntitlement()
 
   // Same pattern for outputMode — paste vs clipboard-only.
   void (async () => {

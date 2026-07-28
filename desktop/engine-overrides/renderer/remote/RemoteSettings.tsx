@@ -46,7 +46,13 @@ type API = {
   remoteSetScreenshotCapture?: (on: boolean) => Promise<boolean>
   remoteGetMemoryUsage?: () => Promise<MemoryUsage>
   remoteCleanupMemory?: () => Promise<CleanupResult | null>
+  // Remote trigger gate (paywall layer): `locked` = the plan doesn't include
+  // Remote; `enabled` = the key is live right now. Per app session, not saved.
+  paywallGetRemoteTrigger?: () => Promise<RemoteTriggerState>
+  paywallSetRemoteTriggerEnabled?: (enabled: boolean) => Promise<RemoteTriggerState>
+  paywallOnRemoteTriggerChanged?: (cb: (s: RemoteTriggerState) => void) => () => void
 }
+interface RemoteTriggerState { enabled: boolean; locked: boolean }
 interface MemoryUsage { bytes: number; recipeCount: number; skillCount: number }
 interface CleanupResult { pruned: string[]; evicted: string[]; demoted: string[]; deduped: string[] }
 
@@ -66,6 +72,9 @@ export function RemoteSettings() {
   const [cleaning, setCleaning] = useState(false)
   const [cleanupNote, setCleanupNote] = useState<string | null>(null)
   const [catalog, setCatalog] = useState<ModelChoice[]>(FALLBACK_CATALOG)
+  // Locked until main says otherwise — never flash an unlocked switch at a
+  // user whose plan doesn't include Remote.
+  const [trigger, setTrigger] = useState<RemoteTriggerState>({ enabled: false, locked: true })
 
   const refreshUsage = () => void api().remoteGetMemoryUsage?.().then((u) => u && setUsage(u))
 
@@ -74,9 +83,12 @@ export function RemoteSettings() {
     // Config-driven model catalog (falls back to the classic tiers if absent).
     void api().remoteGetModelCatalog?.().then((c) => { if (c && c.length) setCatalog(c) })
     refreshUsage()
+    void api().paywallGetRemoteTrigger?.().then((t) => t && setTrigger(t)).catch(() => {})
     // Stay in sync when the model is changed from the capture-widget badge.
     const off = api().remoteOnModelChanged?.((model) => setS((prev) => (prev ? { ...prev, model } : prev)))
-    return () => off?.()
+    // …and when the trigger is toggled elsewhere (Settings tab) or the plan changes.
+    const offTrigger = api().paywallOnRemoteTriggerChanged?.((t) => setTrigger(t))
+    return () => { off?.(); offTrigger?.() }
   }, [])
   if (!s) return null
 
@@ -97,9 +109,37 @@ export function RemoteSettings() {
     <div className="rounded-lg border border-black/10 p-3 mb-3 bg-cream-mid/40 text-[12px]">
       <div className="font-semibold text-ink mb-2">Remote settings</div>
 
-      <div className="text-[11px] text-ink/50 mb-2">
-        Remote key: <b>{s.remoteKey === 'fn' ? 'Function key' : 'Right-option'}</b> (the key not used for dictation).
-      </div>
+      {/* The trigger itself — the master switch for Remote activation. Mirrors
+          Settings → Your triggers; both read the same main-process gate. Locked
+          (off, inert) without the Unmute plan; for Pro it's on at every launch
+          and any off you set here lasts until you quit Unmute. */}
+      <label className="flex items-center justify-between py-1.5 mb-1">
+        <span>
+          Remote trigger{' '}
+          <span className="text-ink/40">
+            ({s.remoteKey === 'fn' ? 'Function key' : 'Right-option'} — the key not used for
+            dictation
+            {trigger.locked
+              ? '; part of the Unmute plan)'
+              : trigger.enabled
+                ? ')'
+                : '; back on when you reopen Unmute)'}
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          checked={trigger.enabled}
+          disabled={trigger.locked}
+          title={trigger.locked ? 'Unmute Remote is part of the Unmute plan' : undefined}
+          onChange={(e) => {
+            const on = e.target.checked
+            setTrigger((prev) => ({ ...prev, enabled: on })) // optimistic
+            void api().paywallSetRemoteTriggerEnabled?.(on)
+              .then((next) => next && setTrigger(next)) // main owns the plan gate
+              .catch(() => {})
+          }}
+        />
+      </label>
 
       {/* Doer model — Remote tasks run on this. Applies to the next task. */}
       <div className="py-1.5 border-t border-black/5">

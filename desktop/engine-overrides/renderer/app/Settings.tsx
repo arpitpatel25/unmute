@@ -43,6 +43,12 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
   const [instructionEnabled, setInstructionEnabled] = useState<boolean>(true)
+  // Unmute Remote trigger — the key OPPOSITE the dictation key. `locked` is
+  // the plan gate (no Unmute plan → off and not togglable); `enabled` is the
+  // live gate, which for a Pro user starts on every time the app opens.
+  const [remoteTrigger, setRemoteTrigger] = useState<{ enabled: boolean; locked: boolean }>(
+    { enabled: false, locked: true },
+  )
   const [lowercaseOutput, setLowercaseOutput] = useState<boolean>(false)
   const [dictationCleanup, setDictationCleanup] = useState<boolean>(true)
   const [appVersion, setAppVersion] = useState<string | null>(null)
@@ -100,6 +106,30 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
       .then((v: boolean) => setInstructionEnabled(v !== false))
       .catch(() => {})
   }, [])
+
+  // Unmute Remote trigger: read once, then follow main's broadcasts so this
+  // toggle can't drift from the Remote tab's copy of it (or from an
+  // entitlement change that lands while Settings is open).
+  useEffect(() => {
+    const api = window.electronAPI as unknown as {
+      paywallGetRemoteTrigger?: () => Promise<{ enabled: boolean; locked: boolean }>
+      paywallOnRemoteTriggerChanged?: (
+        cb: (s: { enabled: boolean; locked: boolean }) => void,
+      ) => () => void
+    }
+    api.paywallGetRemoteTrigger?.().then((s) => s && setRemoteTrigger(s)).catch(() => {})
+    const off = api.paywallOnRemoteTriggerChanged?.((s) => setRemoteTrigger(s))
+    return () => off?.()
+  }, [])
+
+  function handleRemoteTriggerChange(next: boolean) {
+    setRemoteTrigger((prev) => ({ ...prev, enabled: next })) // optimistic
+    void (window.electronAPI as unknown as {
+      paywallSetRemoteTriggerEnabled?: (v: boolean) => Promise<{ enabled: boolean; locked: boolean }>
+    }).paywallSetRemoteTriggerEnabled?.(next)
+      .then((s) => s && setRemoteTrigger(s)) // main is the authority (plan gate)
+      .catch(() => {})
+  }
 
   async function loadAudioDevices() {
     try {
@@ -179,6 +209,9 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
     window.electronAPI.setActivationMode(mode)
   }
 
+  // Remote always sits on whichever trigger dictation isn't using.
+  const remoteKeyLabel = dictationKey === 'fn' ? 'Right Opt' : 'Fn'
+
   return (
     <div className="max-w-lg">
       <h2 className="font-display text-[22px] font-bold text-ink tracking-tight mb-6">Settings</h2>
@@ -256,6 +289,40 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
                   setInstructionEnabled(next)
                   window.electronAPI.paywallSetInstructionEnabled?.(next)
                 }}
+              />
+            </div>
+          </div>
+          {/* Unmute Remote — the trigger on the key NOT used for dictation. */}
+          <div className="flex items-center justify-between px-4 py-3.5 bg-white/[0.055] border border-white/[0.08] rounded-[13px] hover:bg-white/[0.085] transition-colors">
+            <div>
+              <h4 className="text-[13px] font-medium text-white/88 mb-0.5 flex items-center gap-1.5">
+                Unmute Remote (Task trigger)
+                {remoteTrigger.locked && (
+                  <span className="px-1.5 py-[1px] rounded-full bg-white/12 text-[8px] font-bold tracking-[0.08em] uppercase text-white/50">
+                    Pro
+                  </span>
+                )}
+              </h4>
+              <p className="text-[11px] text-white/36">
+                {remoteTrigger.locked
+                  ? 'On the Unmute plan — upgrade to send voice tasks to your agent'
+                  : remoteTrigger.enabled
+                    ? 'Tap to start a task, tap again to send'
+                    : `Off for now — ${remoteKeyLabel} works as a normal key. Back on when you reopen Unmute.`}
+              </p>
+            </div>
+            <div className="flex items-center gap-2.5">
+              {remoteTrigger.enabled && <MiniWave />}
+              {remoteTrigger.enabled ? (
+                <HeroKey variant="red">{remoteKeyLabel}</HeroKey>
+              ) : (
+                <HeroKey>Off</HeroKey>
+              )}
+              <Toggle
+                checked={remoteTrigger.enabled}
+                disabled={remoteTrigger.locked}
+                title={remoteTrigger.locked ? 'Unmute Remote is part of the Unmute plan' : undefined}
+                onChange={handleRemoteTriggerChange}
               />
             </div>
           </div>

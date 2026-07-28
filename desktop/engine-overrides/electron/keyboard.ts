@@ -1,5 +1,9 @@
 import { EventEmitter } from 'events'
 import { keyListener, KeyEvent } from './keyListener'
+// Remote trigger gate (plan entitlement + the user's session toggle). Static
+// import on purpose — a lazy require of a relative path dies in the bundled
+// main process, and a silently-missing gate would leave Remote ungated.
+import { isRemoteTriggerEnabled } from './remoteTriggerGate'
 
 export type SessionMode = 'dictation' | 'instruction'
 export type KeyboardEvent =
@@ -155,6 +159,13 @@ class KeyboardManager extends EventEmitter {
   // active; while a task capture is active, the dictation handlers below bail out.
 
   private handleRemoteKeyDown(): void {
+    // Gate (Pro entitlement + the user's per-session toggle). A capture already
+    // in progress is still allowed to STOP — turning the trigger off mid-capture
+    // must never strand `remoteActive` and block dictation's mutual exclusion.
+    if (!isRemoteTriggerEnabled() && !this.remoteActive) {
+      console.log('[keyboard] Remote key ignored — Unmute Remote trigger is off')
+      return
+    }
     const now = Date.now()
     // Debounce only the START (a too-fast re-tap right after toggling). The STOP
     // tap must always go through so the user can submit/cancel without delay.

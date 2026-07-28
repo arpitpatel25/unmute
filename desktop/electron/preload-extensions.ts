@@ -120,6 +120,25 @@ export const paywallPreloadExtensions = {
     ipcRenderer.invoke('paywall:get-instruction-enabled'),
   paywallSetInstructionEnabled: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('paywall:set-instruction-enabled', enabled),
+  // Unmute Remote trigger on/off — gates the task key (the trigger opposite
+  // dictation) in keyboard.ts. `locked` means the user's plan doesn't include
+  // Remote: show the toggle off and non-interactive, not merely unchecked.
+  // The user's choice is per app session; every launch starts at the default.
+  paywallGetRemoteTrigger: (): Promise<{ enabled: boolean; locked: boolean }> =>
+    ipcRenderer.invoke('paywall:get-remote-trigger'),
+  paywallSetRemoteTriggerEnabled: (
+    enabled: boolean,
+  ): Promise<{ enabled: boolean; locked: boolean }> =>
+    ipcRenderer.invoke('paywall:set-remote-trigger-enabled', enabled),
+  /** Fires when the gate changes anywhere (another window's toggle, an
+   *  entitlement refresh, sign-out). Returns an unsubscribe function. */
+  paywallOnRemoteTriggerChanged: (
+    cb: (state: { enabled: boolean; locked: boolean }) => void,
+  ): (() => void) => {
+    const handler = (_e: unknown, state: { enabled: boolean; locked: boolean }) => cb(state)
+    ipcRenderer.on('paywall:remote-trigger-changed', handler)
+    return () => { ipcRenderer.removeListener('paywall:remote-trigger-changed', handler) }
+  },
   paywallGetUser: (): Promise<{ id: string; email: string | null } | null> =>
     ipcRenderer.invoke('paywall:get-user'),
   paywallRequestSignIn: (): Promise<boolean> =>

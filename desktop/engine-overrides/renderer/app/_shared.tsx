@@ -17,13 +17,24 @@ export function SectionHeader({ icon, title }: { icon: React.ReactNode; title: s
 
 /* ─── Toggle ─── */
 
-export function Toggle({ checked, onChange }: { checked: boolean; onChange: (val: boolean) => void }) {
+export function Toggle({ checked, onChange, disabled = false, title }: {
+  checked: boolean
+  onChange: (val: boolean) => void
+  /** Locked — the setting isn't the user's to change (e.g. plan-gated).
+   *  Rendered dimmed and inert rather than hidden, so the capability is
+   *  discoverable and the upgrade path is obvious. */
+  disabled?: boolean
+  title?: string
+}) {
   return (
     <button
-      onClick={() => onChange(!checked)}
+      onClick={() => { if (!disabled) onChange(!checked) }}
+      disabled={disabled}
+      title={title}
+      aria-disabled={disabled}
       className={`w-[38px] h-[22px] rounded-full transition-all duration-200 relative shrink-0 ${
         checked ? 'bg-ink' : 'bg-cream-dark'
-      }`}
+      } ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
     >
       <div
         className={`w-[18px] h-[18px] rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.18)] absolute top-[2px] transition-transform duration-200 ${
