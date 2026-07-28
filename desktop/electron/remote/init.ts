@@ -688,14 +688,18 @@ function notify(title: string, body: string): void {
   }
 }
 
-function executorFactory(resume = false) {
+function executorFactory(resume = false, forTask?: AgentKind) {
   const mode = settings.get('permissionMode')
-  const agent = settings.get('agent')
+  // WHOSE BACKEND IS THIS? `forTask` = the agent an EXISTING task was created on;
+  // it always wins. The global picker answers only "what should NEW work run on",
+  // and using it for a resume is what made every Claude session unresumable the
+  // moment the picker was flipped to Codex (field report 2026-07-28).
+  const agent: AgentKind = forTask ?? settings.get('agent')
   const sandboxRoots = settings.get('sandboxRoots') ?? []
   const sandboxed = sandboxRoots.length > 0
   const model = settings.get('model') || getModels().doerDefault
   const browser = settings.get('browserEnabled') !== false
-  log.event('executor-factory', { agent, permissionMode: mode, sandboxed, sandboxRoots, model, browser, resume })
+  log.event('executor-factory', { agent, forTask: forTask ?? null, permissionMode: mode, sandboxed, sandboxRoots, model, browser, resume })
   // HARD SEPARATION (invariant). Everything below builds a PTY-backed CLI
   // session — i.e. Claude Code. An external backend must never reach here: if
   // it did, the fall-through would hand the user a Claude session for a task

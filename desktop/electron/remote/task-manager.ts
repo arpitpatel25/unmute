@@ -408,11 +408,17 @@ export class TaskManager extends EventEmitter {
     }
     const external = runCwd !== dir
 
+    // TAG THE BACKEND AT BIRTH. Anything reaching here is a PTY task — dispatch
+    // branched to the Codex driver above — so the only options are the CLI
+    // adapters, and an absent opts.agent means Claude. Recording it is what lets
+    // resume() rebuild on the SAME backend later instead of asking the global
+    // picker, and what lets the card name its provider without guessing.
+    const agent: AgentKind = opts.agent ?? 'claude'
     const task: Task = {
       id, intent, sessionId, kind, state: 'processing', createdAt: now, updatedAt: now,
       cwd: runCwd, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
       surface, mode, injectedRecipes: [], lastUserInputAt: now,
-      spawnedBy: opts.spawnedBy,
+      spawnedBy: opts.spawnedBy, agent,
     }
     this.tasks.set(id, task)
     tlog.event('task-created', { intent, cwd: dir })
@@ -478,11 +484,12 @@ export class TaskManager extends EventEmitter {
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}) }))
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, agent, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}) }))
       // TEMP(memory-debug): remove after calibration
       tlog.event('dispatch-memory', { MEMORY_DEBUG: true, surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
 
-      const ex = this.opts.executorFactory()
+      // Named, not left to the picker — see the task literal above.
+      const ex = this.opts.executorFactory(undefined, agent)
       this.executors.set(id, ex)
       // Buffer raw PTY output (capped) for render-on-demand (§4.3/§13.4#8) and
       // emit it live so a watching terminal view updates in real time.
@@ -1802,7 +1809,14 @@ export class TaskManager extends EventEmitter {
     this.resuming.add(id)
     tlog.event('resume-start', { cwd: task.cwd, resumeBy: byId ? 'session-id' : 'continue' })
     try {
-      const ex = this.opts.executorFactory(!byId) // --continue only when we can't target the exact session by id
+      // NAME THE BACKEND. This task already has one; the global picker describes
+      // only what the user wants NEXT. Omitting it meant flipping the picker to
+      // Codex made every existing Claude session unresumable — executorFactory
+      // read the picker, threw AGENT_SEPARATION_VIOLATION, and Resume did nothing
+      // visible (field report 2026-07-28). The `?? 'claude'` is load-bearing: PTY
+      // tasks are stored with NO `agent` key, so absent must mean Claude here and
+      // must never fall through to the picker.
+      const ex = this.opts.executorFactory(!byId, task.agent ?? 'claude') // --continue only when we can't target the exact session by id
       this.executors.set(id, ex)
       this.outputBuffers.set(id, this.outputBuffers.get(id) ?? '')
       ex.onData((chunk) => {

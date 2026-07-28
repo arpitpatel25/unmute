@@ -60,5 +60,10 @@ export interface AgentExecutor {
 /** Factory type so callers can be handed a constructor without importing node-pty.
  *  `resume` (optional) asks for an executor that CONTINUES the cwd's existing
  *  session (e.g. `claude --continue`) rather than starting fresh — used by
- *  TaskManager.resume(). Factories that don't support resume ignore the flag. */
-export type ExecutorFactory = (resume?: boolean) => AgentExecutor
+ *  TaskManager.resume(). Factories that don't support resume ignore the flag.
+ *
+ *  `agent` (optional) names the backend to build FOR AN EXISTING TASK. Omit it
+ *  only for brand-new work, where the user's current selection is the answer.
+ *  Passing it is what stops a resumed task from being rebuilt on whatever the
+ *  picker happens to say now — see codex/separation.test.ts. */
+export type ExecutorFactory = (resume?: boolean, agent?: import('./codex-executor').AgentKind) => AgentExecutor
