@@ -27,6 +27,51 @@ struct NotchShape: Shape {
     }
 }
 
+/// The notch-plus-tongue shape used on HARDWARE-NOTCH displays.
+///
+/// A physical notch is a hole in the screen: nothing drawn in the middle of the
+/// top edge can be seen. The old shape ignored that — it grew SIDEWAYS and
+/// centred its content, so the message landed inside the cutout and only the
+/// empty wings either side stayed visible. On a 14" MBP an attention strip
+/// showed an amber bar with a black hole in it and no readable words.
+///
+/// So the surface is two parts: a top band exactly the width of the notch —
+/// invisible, because that is where the notch is — and a TONGUE hanging below
+/// it carrying everything that has to be read. The tongue may be wider than the
+/// notch when a message needs the room; never narrower, or it reads as hanging
+/// off the hardware rather than growing out of it.
+struct NotchTongueShape: Shape {
+    /// Width of the top band — the physical notch.
+    var topWidth: CGFloat
+    /// Height of that band — the menu-bar inset.
+    var topHeight: CGFloat
+    /// Corner radius on the tongue's bottom edge.
+    var bottomRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let tw = min(topWidth, rect.width)
+        let th = min(topHeight, rect.height)
+        let br = min(bottomRadius, rect.width / 2, max(rect.height - th, 0))
+        let l = rect.midX - tw / 2, r = rect.midX + tw / 2
+
+        var p = Path()
+        p.move(to: CGPoint(x: l, y: rect.minY))
+        p.addLine(to: CGPoint(x: r, y: rect.minY))
+        p.addLine(to: CGPoint(x: r, y: rect.minY + th))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + th))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX - br, y: rect.maxY),
+                       control: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX + br, y: rect.maxY))
+        p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - br),
+                       control: CGPoint(x: rect.minX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + th))
+        p.addLine(to: CGPoint(x: l, y: rect.minY + th))
+        p.closeSubpath()
+        return p
+    }
+}
+
 // MARK: - Status
 
 /// Status dot — the one colour variable.

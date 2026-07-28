@@ -41,9 +41,17 @@ struct NotchGeometry {
         let frame = screen.frame
 
         let topInset = screen.safeAreaInsets.top
-        let hasNotch = topInset > 0
+        // UNMUTE_FAKE_NOTCH=1 pretends this display has a hardware notch
+        // (200pt wide, 37pt menu bar). Off by default and never set in the app.
+        //
+        // It exists because the notched layout is otherwise UNTESTABLE by anyone
+        // without a notched Mac — which is how the old centred strip shipped
+        // with its message inside the camera housing and nobody noticed. This is
+        // the only way to look at that path on an external display or an M1 Air.
+        let fake = ProcessInfo.processInfo.environment["UNMUTE_FAKE_NOTCH"] == "1"
+        let hasNotch = fake || topInset > 0
 
-        var notchWidth: CGFloat = Self.dummyNotchWidth
+        var notchWidth: CGFloat = fake ? 200 : Self.dummyNotchWidth
         if hasNotch,
            let left = screen.auxiliaryTopLeftArea,
            let right = screen.auxiliaryTopRightArea {
@@ -51,9 +59,36 @@ struct NotchGeometry {
             if gap > 0 { notchWidth = gap }
         }
 
-        let menuBarHeight = hasNotch ? topInset : Self.dummyMenuBarHeight
+        let menuBarHeight = fake ? 37 : (hasNotch ? topInset : Self.dummyMenuBarHeight)
         return NotchGeometry(screenFrame: frame, hasNotch: hasNotch,
                              notchWidth: notchWidth, menuBarHeight: menuBarHeight)
+    }
+
+    // ── HARDWARE-NOTCH LAYOUT ──
+    //
+    // On a notched display nothing readable may sit BESIDE the cutout: there is
+    // no screen there. The per-state widths below (+150 active, +220 attention)
+    // grew the strip sideways and centred the text inside it — straight into the
+    // camera housing, leaving two empty wings and no readable words.
+    //
+    // So on notched hardware the surface is the notch plus a TONGUE below it,
+    // and its width follows the MESSAGE rather than the state. Notchless
+    // displays keep the strip sizes exactly as they are: with no hole to avoid
+    // they are already correct, and that is the only configuration in use today.
+
+    /// Height of the tongue that carries a message below the notch.
+    static let tongueHeight: CGFloat = 27
+
+    /// Notched-display size. `contentWidth == nil` means no tongue at all —
+    /// dormant, and idle until the pointer arrives. The tongue never goes
+    /// narrower than the notch, or it reads as hanging off the hardware rather
+    /// than growing out of it.
+    func notchedSize(contentWidth: CGFloat?) -> NSSize {
+        guard let cw = contentWidth else {
+            return NSSize(width: notchWidth, height: menuBarHeight)
+        }
+        let w = min(max(cw + 30, notchWidth), screenFrame.width * 0.9)
+        return NSSize(width: round(w), height: menuBarHeight + Self.tongueHeight)
     }
 
     static let dummyNotchWidth: CGFloat = 190

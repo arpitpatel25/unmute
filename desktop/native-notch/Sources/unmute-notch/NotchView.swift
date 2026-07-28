@@ -88,6 +88,39 @@ struct NotchView: View {
     }
 
     @ViewBuilder private var content: some View {
+        // NOTCHED HARDWARE TAKES A DIFFERENT PATH ENTIRELY.
+        //
+        // Everything below centres its row in the window — which on a notched
+        // display is exactly where the camera housing is. Here the row hangs in
+        // a tongue BELOW the cutout instead, so it is on screen and readable.
+        // The small states only; task and cockpit already own the whole surface.
+        if model.hasNotch, model.state == .idle || model.state == .active || model.state == .attention {
+            VStack(spacing: 0) {
+                // The band the notch occupies. Nothing may live here.
+                Color.clear.frame(height: topInset > 0 ? min(topInset, 60) : 0)
+                    .frame(maxWidth: .infinity)
+                if let text = tongueText {
+                    HStack(spacing: 8) {
+                        if model.state == .active {
+                            Dot(status: .processing, size: 7, breathing: true)
+                        } else if model.state == .attention {
+                            Dot(status: model.task?.status ?? .needsUser, size: 7)
+                        }
+                        Text(text)
+                            .font(model.state == .idle ? .system(size: 9.5, weight: .light) : Theme.fCap)
+                            .tracking(model.state == .idle ? 2.1 : 0)
+                            .foregroundColor(model.state == .idle ? Color.white.opacity(0.62) : Theme.text)
+                            .lineLimit(1)
+                        if model.state == .attention, model.attention > 1 {
+                            Badge(text: "\(model.attention)",
+                                  color: Theme.status(model.task?.status ?? .needsUser))
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: NotchGeometry.tongueHeight)
+                }
+            }
+        } else {
         switch model.state {
         case .dormant:
             EmptyView()
@@ -160,6 +193,7 @@ struct NotchView: View {
                 }
             }
         }
+        }
     }
 
     /// The opaque content plane inside the glass shell.
@@ -186,6 +220,37 @@ struct NotchView: View {
                     .stroke(Theme.hairline, lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
                 .padding(.bottom, 18)
+        }
+    }
+
+    /// What the tongue says on a notched display, or nil for no tongue at all.
+    ///
+    /// One place, because the WIDTH of the surface is measured from this same
+    /// string in AppController — if the two ever disagree the message is clipped
+    /// or the surface is padded with dead space.
+    var tongueText: String? { Self.tongueText(for: model) }
+
+    static func tongueText(for m: NotchModel) -> String? {
+        switch m.state {
+        case .dormant:   return nil
+        // Idle says nothing until the pointer arrives. At rest the app is
+        // invisible on notched hardware, so hovering is the only way to ask
+        // "is this running?" — and this is the answer.
+        case .idle:      return m.hovering ? "unmute" : nil
+        case .active:    return m.working == 1 ? "1 running" : "\(m.working) running"
+        case .attention: return Self.attentionLabel(for: m)
+        default:         return nil
+        }
+    }
+
+    static func attentionLabel(for m: NotchModel) -> String {
+        guard let t = m.task else { return "Something needs you" }
+        switch t.status {
+        case .needsUser: return t.question?.text ?? t.title
+        case .stuck:     return "Stuck — \(t.title)"
+        case .failed:    return "Errored — \(t.title)"
+        case .ready:     return "Ready — \(t.title)"
+        default:         return t.title
         }
     }
 

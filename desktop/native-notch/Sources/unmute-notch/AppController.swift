@@ -245,6 +245,26 @@ final class AppController: NSObject, NotchResizing {
             // transcript and a composer, so they want the same room as a
             // terminal.
             size = geometry.taskSize
+        } else if geometry.hasNotch,
+                  state == .idle || state == .active || state == .attention {
+            // NOTCHED HARDWARE: the surface is the notch plus a tongue, and its
+            // width is MEASURED from the message the tongue will show. Sizing by
+            // state instead is what put the text inside the camera housing.
+            //
+            // Measured with the same font the view renders, so the frame and the
+            // string agree — a mismatch either clips the message or pads the
+            // surface with dead space.
+            let text = NotchView.tongueText(for: model)
+            size = geometry.notchedSize(contentWidth: text.map { t in
+                let font = state == .idle
+                    ? NSFont.systemFont(ofSize: 9.5, weight: .light)
+                    : NSFont.systemFont(ofSize: 11.5)
+                var w = (t as NSString).size(withAttributes: [.font: font]).width
+                if state == .idle { w += CGFloat(t.count) * 2.1 }      // tracking
+                if state != .idle { w += 15 }                          // status dot + gap
+                if state == .attention, model.attention > 1 { w += 26 } // count badge
+                return w
+            })
         } else {
             size = geometry.size(for: state)
         }
@@ -353,6 +373,16 @@ final class AppController: NSObject, NotchResizing {
     /// the AppKit tracking area — SwiftUI's own tracking can miss a never-key
     /// panel, which is exactly the dormant window; two paths, one behavior).
     func handleHover(_ entering: Bool) {
+        // The flag is READ by the view (idle's tongue) and by frame(for:), so a
+        // change of hover on notched hardware changes the window size too.
+        if model.hovering != entering {
+            model.hovering = entering
+            if geometry.hasNotch, model.state == .idle {
+                withAnimation(.easeOut(duration: entering ? Self.growS : Self.shrinkS)) { }
+                window.applyFrame(frame(for: .idle), animated: true,
+                                  duration: entering ? Self.growS : Self.shrinkS)
+            }
+        }
         if entering {
             hoverTimer?.invalidate()
             if model.state == .dormant && commandedState == .dormant {
