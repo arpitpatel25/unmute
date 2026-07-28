@@ -80,6 +80,17 @@ export function TaskRow({
         </span>
       </div>
 
+      {/* A resume that did not happen. Shown on the card because the click is
+          fire-and-forget: without this the button appeared to do nothing at all
+          and the reason lived only in the log. */}
+      {task.resumeError && !task.resuming && (
+        <div className="mt-1 text-[11px] text-red-700/80" title={task.resumeError}>
+          Couldn’t resume — {task.resumeError.startsWith('AGENT_SEPARATION_VIOLATION')
+            ? 'this session belongs to a different agent'
+            : task.resumeError}
+        </div>
+      )}
+
       {/* #3 inline result on done */}
       {task.state === 'done' && task.result && (
         <div className="mt-2 text-[12px] text-ink/80">
@@ -198,11 +209,15 @@ export function TaskRow({
             backend that cannot resume never gets the button by default. */}
         {!active && onResume && (task.provider ? task.provider.canResume : task.agent !== 'codex-desktop') && (
           <button
-            className="text-[11px] px-2 py-0.5 rounded border border-black/15 hover:bg-black/5"
-            title="Continue this exact session with full prior context (resumes interrupted work)"
+            className="text-[11px] px-2 py-0.5 rounded border border-black/15 hover:bg-black/5 disabled:opacity-50 disabled:cursor-default"
+            title={task.resuming ? 'Bringing the session back…' : 'Continue this exact session with full prior context (resumes interrupted work)'}
+            // Disabled WHILE IT WORKS. Resume takes seconds; an enabled button
+            // that does nothing visible is what got double-tapped into spawning
+            // a second session (the race the manager guards internally).
+            disabled={task.resuming}
             onClick={() => onResume(task.id)}
           >
-            Resume
+            {task.resuming ? 'Resuming…' : 'Resume'}
           </button>
         )}
         {/* #8 render-on-demand terminal */}

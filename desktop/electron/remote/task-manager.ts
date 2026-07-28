@@ -89,6 +89,19 @@ export interface Task {
    *  through another app's window; silence for a second reads as nothing
    *  having happened. */
   sending?: boolean
+  /** True while this task is being brought back. Resume is SECONDS long — spawn,
+   *  isReady, a 2s trust-accept, the status read, the nudge, a 450ms submit — and
+   *  the state used to change only at the very end. Nothing moved in between, so
+   *  a working Resume looked exactly like a dead button and users pressed it
+   *  again (the race the private `resuming` set guards). Same purpose as
+   *  `sending`, for the same reason. */
+  resuming?: boolean
+  /** Why the last resume did not happen. Distinct from `error` (the WORK failed)
+   *  and `deliveryError` (a message did not land): the session could not be
+   *  brought back at all. Every resume failure used to be logged and swallowed,
+   *  so the button simply did nothing — which is what made the backend crossing
+   *  on 2026-07-28 take an hour to identify. Cleared by the next attempt. */
+  resumeError?: string
   /** Codex's own label for what this thread runs on ("5.6 Terra High"), as it
    *  was when the task was created. */
   codexModelLabel?: string
@@ -1807,6 +1820,12 @@ export class TaskManager extends EventEmitter {
     // opening a card resumes it while its Resume button is still on screen.
     if (this.resuming.has(id)) { tlog.event('resume-noop-already-resuming', {}); return true }
     this.resuming.add(id)
+    // SAY IT STARTED, BEFORE the seconds-long spawn. The private set above is
+    // only a re-entry guard; this is the half the user can see, so the card can
+    // show progress and disable its own button instead of looking inert.
+    task.resuming = true
+    task.resumeError = undefined // a fresh attempt clears the last failure
+    this.emit('updated', task)
     tlog.event('resume-start', { cwd: task.cwd, resumeBy: byId ? 'session-id' : 'continue' })
     try {
       // NAME THE BACKEND. This task already has one; the global picker describes
@@ -1860,11 +1879,23 @@ export class TaskManager extends EventEmitter {
       tlog.event('resume-ready', { unfinished: false })
       return true
     } catch (e) {
-      tlog.error('resume failed', { error: (e as Error).message })
+      const error = (e as Error).message
+      tlog.error('resume failed', { error })
       this.hardKill(id)
+      // ANNOUNCE IT. Logging alone is what made a broken resume indistinguishable
+      // from an unclicked button: the renderer discards the returned boolean
+      // (`void api().remoteResume?.(id)`), so this event and `resumeError` are
+      // the only ways the user ever learns the session did not come back.
+      task.resumeError = error
+      task.updatedAt = this.clock()
+      this.emit('resume-failed', { taskId: id, error })
+      this.emit('updated', task)
       return false
     } finally {
       this.resuming.delete(id)
+      // Clear the visible flag on EVERY exit — success, failure or throw — or a
+      // card would spin forever on the one path that matters most.
+      if (task.resuming) { task.resuming = false; this.emit('updated', task) }
     }
   }
 

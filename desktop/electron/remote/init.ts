@@ -674,6 +674,10 @@ function serializeTask(t: Task) {
     updatedAt: t.updatedAt,
     result: t.result ?? null,
     error: t.error ?? null,
+    // Resume is seconds long and used to move nothing until it finished; these
+    // two are what let the card show it is working, and say so when it isn't.
+    resuming: t.resuming ?? false,
+    resumeError: t.resumeError ?? null,
     question: t.question ?? null,
     mcpGap: t.mcpGap ?? null,
     // PTY still alive (running or parked-warm) → the live terminal can repaint
@@ -2513,6 +2517,21 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     reconcileDock(activeTaskCount())
     notify('Task may be stuck', t.intent)
     speakHeadline(t, 'stuck')
+  })
+  // A RESUME THAT DID NOT HAPPEN. The renderer fires resume and discards the
+  // result (`void api().remoteResume?.(id)`), so without this a failure was
+  // visible only in the log — the button simply did nothing. Spoken because the
+  // user just pressed something and is owed an answer; the card carries the
+  // detail via `resumeError`.
+  manager.on('resume-failed', ({ taskId, error }: { taskId: string; error: string }) => {
+    const t = manager?.get(taskId)
+    log.error('resume failed — telling the user', { taskId, error })
+    if (t) { broadcast('remote:task-updated', t); maybePresent(t) }
+    speakLine(
+      error.startsWith('AGENT_SEPARATION_VIOLATION')
+        ? 'That session belongs to a different agent.'
+        : "I couldn't bring that session back.",
+    )
   })
   // Task erased (Kill/Delete) → tell renderers to drop the row + update the dock.
   manager.on('removed', (t: Task) => {

@@ -233,10 +233,15 @@ function Expanded({
             the provider registry, not spelled "not Codex". */}
         {!active && (task.provider ? task.provider.canResume : task.agent !== 'codex-desktop') && (
           <button
-            className="text-white/35 hover:text-white/80"
-            title="Continue this exact session with full prior context"
+            className="text-white/35 hover:text-white/80 disabled:opacity-40 disabled:cursor-default"
+            title={task.resuming ? 'Bringing the session back…' : 'Continue this exact session with full prior context'}
+            disabled={task.resuming}
             onClick={() => onResume(task.id)}
-          >resume</button>
+          >{task.resuming ? 'resuming…' : 'resume'}</button>
+        )}
+        {/* The reason, when it did not work — the click discards its result. */}
+        {task.resumeError && !task.resuming && (
+          <span className="text-red-400/70" title={task.resumeError}>couldn’t resume</span>
         )}
         {wallOwned ? (
           <span className="text-white/30" title="This session's terminal is open in the Orchestrate cockpit">in cockpit ↗</span>

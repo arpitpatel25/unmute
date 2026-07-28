@@ -104,6 +104,70 @@ test('resume does NOT nudge a task that already completed (no regression to the 
   tm.kill(tid) // cancel the warm timer so the test process exits cleanly
 })
 
+test('resume ANNOUNCES ITSELF before the spawn, so the click is never silent', { timeout: 5000 }, async () => {
+  // Resume is seconds long: spawn, isReady, a 2s trust-accept wait, a status
+  // read, the nudge, a 450ms submit wait — and the state only changed at the
+  // very END. Nothing moved in between, so a working Resume was indistinguishable
+  // from a dead button, and users pressed it again (which is the race the
+  // `resuming` guard exists for).
+  const baseDir = await tmpBase()
+  let releaseSpawn: () => void = () => {}
+  const spawnBlocked = new Promise<void>((r) => { releaseSpawn = r })
+  const fake = makeFakeExecutor()
+  const slow: AgentExecutor = { ...fake, spawn: async () => { await spawnBlocked } }
+  const tm = new TaskManager({ executorFactory: () => slow, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const tid = randomUUID()
+  const dir = path.join(baseDir, 'local', tid)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'scroll my feed', createdAt: Date.now() }))
+  await claudeWrites(path.join(dir, 'status.json'), { state: 'processing' })
+  await tm.rehydrate()
+
+  // Wait on the EVENT, not on a tick: resume does async fs work (resolving the
+  // transcript) before it ever reaches the spawn, so a fixed tick count is a
+  // race. This resolves only if the announcement really is emitted early.
+  const announced = new Promise<void>((resolve) => {
+    tm.on('updated', (t: { id: string; resuming?: boolean }) => { if (t.id === tid && t.resuming) resolve() })
+  })
+  const inFlight = tm.resume(tid) // do NOT await — we want the middle
+  await announced                 // still inside the blocked spawn
+  assert.equal(tm.get(tid)!.resuming, true, 'the task must read as resuming WHILE the spawn is still going')
+
+  releaseSpawn()
+  await inFlight
+  assert.equal(tm.get(tid)!.resuming ?? false, false, 'and must stop reading as resuming once it lands')
+  tm.kill(tid)
+})
+
+test('a FAILED resume says so — it never just reverts in silence', async () => {
+  // Every failure path in resume() logged and returned false. The caller
+  // (`void api().remoteResume?.(id)`) discards that, so a resume that could not
+  // possibly work looked exactly like one that had not been clicked. This is what
+  // made the 2026-07-28 backend crossing take an hour to even identify.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => { throw new Error('AGENT_SEPARATION_VIOLATION: codex-desktop has no PTY executor') },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  const tid = randomUUID()
+  const dir = path.join(baseDir, 'local', tid)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'scroll my feed', createdAt: Date.now() }))
+  await claudeWrites(path.join(dir, 'status.json'), { state: 'processing' })
+  await tm.rehydrate()
+
+  const failures: Array<{ taskId: string; error: string }> = []
+  tm.on('resume-failed', (p: { taskId: string; error: string }) => failures.push(p))
+
+  const ok = await tm.resume(tid)
+
+  assert.equal(ok, false)
+  assert.equal(failures.length, 1, 'the failure must be announced, not only logged')
+  assert.match(failures[0].error, /AGENT_SEPARATION_VIOLATION/, 'and must carry the reason')
+  assert.match(tm.get(tid)!.resumeError ?? '', /AGENT_SEPARATION_VIOLATION/, 'the card must be able to show it')
+  assert.equal(tm.get(tid)!.resuming ?? false, false, 'the in-flight flag must clear on failure too')
+})
+
 test('rehydrate recovers sessionId from meta.json, falling back to the task id for old receipts', async () => {
   const baseDir = await tmpBase()
   const root = path.join(baseDir, 'local')

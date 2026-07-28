@@ -458,10 +458,22 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
             {t.result?.detail && <div style={{ fontSize: 12.5, color: C.midText, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{t.result.detail}</div>}
             {t.error?.reason && <div style={{ fontSize: 13, color: C.midText, lineHeight: 1.5 }}>{t.error.reason}{t.error.detail ? ` — ${t.error.detail}` : ''}</div>}
             {!t.result?.summary && !t.error?.reason && <div style={{ fontSize: 12.5, color: C.dimText }}>No recorded output.</div>}
+            {/* WHY THE LAST ATTEMPT DID NOT TAKE. onResume is fire-and-forget, so
+                without this the button just sat there looking untouched. */}
+            {t.resumeError && !t.resuming && (
+              <div style={{ fontSize: 12.5, color: '#f85149', lineHeight: 1.5 }} title={t.resumeError}>
+                Couldn’t resume — {t.resumeError.startsWith('AGENT_SEPARATION_VIOLATION')
+                  ? 'this session belongs to a different agent'
+                  : t.resumeError}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 9, marginTop: 4 }}>
-              <button onClick={() => onResume(t.id)}
-                style={{ fontFamily: C.mono, fontSize: 12, fontWeight: 700, color: C.bg, background: '#3fb950', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer' }}>
-                resume — continue with full context
+              {/* Resume is seconds long (spawn → trust-accept → nudge). The label
+                  and the disabled state ARE the progress indicator: previously
+                  nothing on this card moved until the terminal appeared. */}
+              <button onClick={() => onResume(t.id)} disabled={t.resuming}
+                style={{ fontFamily: C.mono, fontSize: 12, fontWeight: 700, color: C.bg, background: t.resuming ? '#2b6a33' : '#3fb950', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: t.resuming ? 'default' : 'pointer', opacity: t.resuming ? 0.75 : 1 }}>
+                {t.resuming ? 'resuming — bringing the session back…' : 'resume — continue with full context'}
               </button>
               <button onClick={() => onRerun(t.intent)}
                 style={{ fontFamily: C.mono, fontSize: 12, color: C.nameText, background: C.surface, border: `1px solid ${C.borderHi}`, borderRadius: 6, padding: '7px 16px', cursor: 'pointer' }}>

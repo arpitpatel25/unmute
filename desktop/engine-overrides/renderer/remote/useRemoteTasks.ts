@@ -39,6 +39,13 @@ export interface RemoteTask {
     hasTerminal: boolean
     canResume: boolean
   }
+  /** This task is being brought back right now. Resume takes seconds (spawn,
+   *  trust-accept, nudge); without this the card showed nothing until it landed,
+   *  so a working Resume was indistinguishable from a dead button. */
+  resuming?: boolean
+  /** Why the last resume did not happen. The renderer fires resume and discards
+   *  the result, so this is how a failure becomes visible at all. */
+  resumeError?: string | null
   /** Codex project the thread was created in (codex-desktop only). */
   codexProject?: string | null
   /** Rolling "where you left off" (2-3 sentences from the session itself,
