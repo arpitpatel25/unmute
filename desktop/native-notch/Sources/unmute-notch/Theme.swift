@@ -32,15 +32,23 @@ enum Theme {
     static let cReady   = Color(nsColor: .systemTeal)
     static let cError   = Color(nsColor: .systemRed)
     static let cDone    = Color(nsColor: .systemGray)
-    /// REMOTE MODE — a mode, not a status, so it gets its own hue.
+    /// THE AI FORMATTER (Caps Lock) — a mode, not a status, so its own hue.
     ///
-    /// Caps Lock opens a capture that will DISPATCH A TASK rather than paste
-    /// text, and the two looked identical beyond a small glyph swap. Red was the
-    /// obvious ask and the wrong answer: it is cError, and a Remote capture that
-    /// reads as a failure teaches the user to ignore the one colour that means
-    /// something is actually wrong. Indigo belongs to nothing else on this
-    /// surface, so it can only mean "this is the other mode".
-    static let cRemote  = Color(nsColor: .systemIndigo)
+    /// Fn dictates verbatim; Caps Lock runs what you say through the formatter.
+    /// The two pills were identical, so there was nothing to tell you which one
+    /// you had opened until the text landed.
+    ///
+    /// Red was the obvious ask and the wrong answer: red is cError, and a mode
+    /// used many times a day that reads as a failure teaches the user to ignore
+    /// the one colour that means something is genuinely wrong. Indigo belongs to
+    /// nothing else here.
+    ///
+    /// REMOTE IS DELIBERATELY NOT TINTED. It already announces itself — its own
+    /// glyph in place of the record dot, plus the agent/model chip beside the
+    /// timer. Tinting it too would leave the neutral pill meaning "not one of
+    /// the two special modes", which is a weaker signal than "this one is the
+    /// formatter".
+    static let cInstruction = Color(nsColor: .systemIndigo)
 
     static func status(_ s: TaskStatus) -> Color {
         switch s {

@@ -42,6 +42,10 @@ enum PillPhase: String, Codable {
 /// recording state alone is always wrong for the picker.
 enum PillKind: String, Codable {
     case dictation
+    /// The AI formatter (Caps Lock) — transforms what you say instead of
+    /// typing it verbatim. A DIFFERENT AXIS from `remote`: this is about what
+    /// happens to the words, not about where the work runs.
+    case instruction
     case remote
 }
 

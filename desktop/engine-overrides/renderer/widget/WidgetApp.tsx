@@ -870,6 +870,12 @@ export default function WidgetApp() {
   // (types text)? Drives the Remote badge next to the pill. Set on every
   // recording:start from its kind, so it's always fresh for this capture.
   const [isRemote, setIsRemote] = useState(false)
+  // Is the CURRENT capture the AI FORMATTER (Caps Lock) rather than plain
+  // dictation (Fn)? Latched at recording:start like isRemote, because `state`
+  // only says 'instruction-active' while the mic is open — by `processing` the
+  // distinction is gone, and the pill must keep its identity for the whole
+  // capture rather than reverting halfway through.
+  const [isInstruction, setIsInstruction] = useState(false)
   // Backend picker for Remote captures. Refreshed when a Remote capture STARTS
   // rather than polled: availability changes rarely (Codex opened/closed), and
   // the answer is only ever needed at the moment the pill appears.
@@ -985,7 +991,7 @@ export default function WidgetApp() {
       state === 'dictation-active' ||
       state === 'instruction-active' ||
       state === 'processing'
-    if (!active) setIsRemote(false)
+    if (!active) { setIsRemote(false); setIsInstruction(false) }
   }, [state])
 
   // ─── Peek the current engine each time a dictation starts ───
@@ -1073,6 +1079,7 @@ export default function WidgetApp() {
       setEngineNotice(null)
       setDraftOffer(false)
       setMutedText(null)
+      setIsInstruction(mode !== 'dictation')
       setState(mode === 'dictation' ? 'dictation-active' : 'instruction-active')
       try {
         await startRecording(resolvedDeviceId, mode, sessionId)
@@ -1265,7 +1272,7 @@ export default function WidgetApp() {
   // keeping a second copy that could disagree.
   const pillState = useMemo(() => ({
     phase: toPhase(state),
-    kind: isRemote ? 'remote' : 'dictation',
+    kind: isRemote ? 'remote' : isInstruction ? 'instruction' : 'dictation',
     maxSeconds: maxDurationSeconds,
     // Each state's own copy, kept distinct — the first build funnelled all of
     // these through one `message` and lost the differences.

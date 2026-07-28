@@ -88,7 +88,22 @@ private struct PillGlass<S: Shape>: ViewModifier {
                 // Appearance.backdropToken. A Space change does not make macOS
                 // re-sample what is behind the glass; remaking the view does.
                 .id(appearance.backdropToken)
-                .overlay(shape.stroke(Glass.rim(highlight: tint ?? .white), lineWidth: 1))
+                // A TINTED MODE GETS A REAL BORDER, not a wash.
+                //
+                // The tint alone rides the material at 0.16 on the Fixed
+                // surface (0.5 on glass) — tuned for translucency, and over a
+                // near-black base it is invisible. Rendered side by side, a
+                // formatter capture and a dictation capture were identical
+                // pixels. A mode marker that cannot be seen is not a marker.
+                //
+                // So the stroke carries it: the mode's own colour at full
+                // presence, slightly thicker than the specular rim it replaces.
+                // Untinted pills keep the rim exactly as before.
+                .overlay(
+                    shape.stroke(
+                        tint.map { AnyShapeStyle($0.opacity(0.95)) }
+                            ?? AnyShapeStyle(Glass.rim(highlight: .white)),
+                        lineWidth: tint == nil ? 1 : 2))
                 // NO DROP SHADOW. The original says why, in its own words:
                 // "Unmute must occupy ONLY the widget itself — a soft 36px
                 // shadow pooled behind the whole pill row and read as a
@@ -249,16 +264,15 @@ struct PillView: View {
         switch s.phase {
         case .error:          return Theme.cError
         case .outputFallback: return Theme.cNeeds
-        // A REMOTE capture is a different MODE, and only the glyph said so —
-        // too quiet for something that dispatches a task instead of pasting
-        // text. The tint washes the material and, more visibly, the rim, so the
-        // difference reads at a glance without adding a word.
+        // THE FORMATTER, and only the formatter. Remote is not tinted: it
+        // already reads as itself from its glyph and its agent chip, whereas
+        // Caps Lock produced a pill indistinguishable from plain dictation.
         //
-        // Only while the capture is LIVE: a terminal state's own colour
-        // (error red, fallback orange, success) must never be overridden by
-        // which mode produced it.
+        // Only while the capture is LIVE — a terminal state's own colour
+        // (error red, fallback orange) must never be overridden by which mode
+        // produced it.
         case .recording, .processing:
-            return s.kind == .remote ? Theme.cRemote : nil
+            return s.kind == .instruction ? Theme.cInstruction : nil
         default:              return nil
         }
     }
