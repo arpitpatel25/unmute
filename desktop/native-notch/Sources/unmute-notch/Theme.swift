@@ -32,6 +32,15 @@ enum Theme {
     static let cReady   = Color(nsColor: .systemTeal)
     static let cError   = Color(nsColor: .systemRed)
     static let cDone    = Color(nsColor: .systemGray)
+    /// REMOTE MODE — a mode, not a status, so it gets its own hue.
+    ///
+    /// Caps Lock opens a capture that will DISPATCH A TASK rather than paste
+    /// text, and the two looked identical beyond a small glyph swap. Red was the
+    /// obvious ask and the wrong answer: it is cError, and a Remote capture that
+    /// reads as a failure teaches the user to ignore the one colour that means
+    /// something is actually wrong. Indigo belongs to nothing else on this
+    /// surface, so it can only mean "this is the other mode".
+    static let cRemote  = Color(nsColor: .systemIndigo)
 
     static func status(_ s: TaskStatus) -> Color {
         switch s {

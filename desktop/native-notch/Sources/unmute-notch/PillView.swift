@@ -249,6 +249,16 @@ struct PillView: View {
         switch s.phase {
         case .error:          return Theme.cError
         case .outputFallback: return Theme.cNeeds
+        // A REMOTE capture is a different MODE, and only the glyph said so —
+        // too quiet for something that dispatches a task instead of pasting
+        // text. The tint washes the material and, more visibly, the rim, so the
+        // difference reads at a glance without adding a word.
+        //
+        // Only while the capture is LIVE: a terminal state's own colour
+        // (error red, fallback orange, success) must never be overridden by
+        // which mode produced it.
+        case .recording, .processing:
+            return s.kind == .remote ? Theme.cRemote : nil
         default:              return nil
         }
     }
