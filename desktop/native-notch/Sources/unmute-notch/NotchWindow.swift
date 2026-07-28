@@ -26,13 +26,49 @@ final class NotchWindow: NSPanel {
         )
         isFloatingPanel = true
         level = .screenSaver
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        // NO `.stationary` — IT STRANDS THE GLASS.
+        //
+        // `.stationary` means "do not take part in Space transitions". A window
+        // that sits out the transition never has its behind-window backdrop
+        // re-bound to the newly active Space, so the material goes on
+        // compositing the desktop it last sampled: swipe to a new Space and the
+        // surface wears the OLD one's colour until something forces a redraw
+        // (moving the cursor over it did, which is what made it look random).
+        //
+        // Proven by A/B, not reasoned: two identical vibrant panels differing
+        // only in this flag, photographed in the same frame on the same Space —
+        // the `.stationary` one stayed dark from a Space three swipes back while
+        // the other correctly sampled the wallpaper under it. `.canJoinAllSpaces`
+        // is NOT the culprit and is kept; the panel without `.stationary` still
+        // appears on every Space and still tracks the backdrop.
+        //
+        // The cost is that these surfaces now travel with the desktop during a
+        // swipe rather than staying welded to the screen edge. That is the
+        // trade, and it was taken deliberately: correct glass everywhere beats
+        // a pinned position during the half-second of a transition.
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false                  // the shape draws its own
         hidesOnDeactivate = false
         isMovableByWindowBackground = false
-        becomesKeyOnlyIfNeeded = true      // fields/terminal claim key on click; body clicks don't
+        // MUST BE FALSE, or Escape leaks to the app underneath.
+        //
+        // `true` means "only take key when something that genuinely needs keys
+        // is clicked" — which quietly undoes the explicit makeKey() in
+        // applyState. The panel then became key only after you clicked INTO a
+        // field, so opening the cockpit by voice, or by clicking the notch
+        // body, left key focus with the app below: Escape reached only the
+        // GLOBAL monitor, which macOS defines as observe-only and therefore
+        // cannot consume. The surface collapsed AND the Escape also landed in
+        // the user's Codex/Terminal session.
+        //
+        // `canBecomeKey` is already the correct gate — it returns `allowsKey`,
+        // which is false for every small state. So the resting states still
+        // never take key and never disturb focus; only task/cockpit do, which
+        // is exactly when Escape belongs to us. This is a nonactivating panel,
+        // so taking key does NOT activate the app or move the frontmost window.
+        becomesKeyOnlyIfNeeded = false
     }
 
     override var canBecomeKey: Bool { allowsKey }
@@ -61,10 +97,15 @@ final class NotchWindow: NSPanel {
     func present() { orderFrontRegardless() }
 
     /// Resize + reposition to an explicit top-pinned frame, spring-eased.
-    func applyFrame(_ frame: NSRect, animated: Bool) {
+    ///
+    /// `duration` should MATCH the SwiftUI animation driving the content. They
+    /// were 0.34s and 0.48s respectively, so the window finished resizing while
+    /// the content was still mid-transition — the frame reached task size while
+    /// the material still carried attention's wash.
+    func applyFrame(_ frame: NSRect, animated: Bool, duration: TimeInterval = 0.42) {
         guard animated else { setFrame(frame, display: true); return }
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.34
+            ctx.duration = duration
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
             ctx.allowsImplicitAnimation = true
             animator().setFrame(frame, display: true)

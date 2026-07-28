@@ -46,6 +46,12 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [lowercaseOutput, setLowercaseOutput] = useState<boolean>(false)
   const [dictationCleanup, setDictationCleanup] = useState<boolean>(true)
   const [appVersion, setAppVersion] = useState<string | null>(null)
+  // 'system' is the default and the only value that respects an accessibility
+  // preference — macOS already owns this setting (Accessibility → Reduce
+  // Transparency, and the Liquid Glass opacity slider on 26+). The explicit
+  // options exist because a pre-26 surface cannot follow the system slider, and
+  // because an always-on-top panel is a reasonable thing to want solid.
+  const [surfaceAppearance, setSurfaceAppearance] = useState<'system' | 'glass' | 'solid'>('system')
 
   useEffect(() => {
     loadAudioDevices()
@@ -58,6 +64,10 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
     window.electronAPI.getWidgetPosition().then((v: string) => {
       if (v === 'center' || v === 'right') setWidgetPosition(v)
     })
+    ;(window.electronAPI as unknown as { getSurfaceAppearance?: () => Promise<string> })
+      .getSurfaceAppearance?.()
+      .then((v) => { if (v === 'system' || v === 'glass' || v === 'solid') setSurfaceAppearance(v) })
+      .catch(() => {})
     window.electronAPI.getSoundFeedback().then((v: boolean) => {
       setSoundFeedback(v)
     ;(window.electronAPI as unknown as { getIphoneMicEnabled?: () => Promise<boolean> })
@@ -118,6 +128,15 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
     const pos = value as 'center' | 'right'
     setWidgetPosition(pos)
     window.electronAPI.setWidgetPosition(pos)
+  }
+
+  function handleSurfaceAppearanceChange(value: string) {
+    const v = (value === 'glass' || value === 'solid' ? value : 'system') as
+      'system' | 'glass' | 'solid'
+    setSurfaceAppearance(v)
+    void (window.electronAPI as unknown as {
+      setSurfaceAppearance?: (v: string) => Promise<string>
+    }).setSurfaceAppearance?.(v)
   }
 
   function handleSoundFeedbackChange(value: boolean) {
@@ -319,6 +338,20 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
             ]}
             value={widgetPosition}
             onChange={handleWidgetPositionChange}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Surface material"
+          description="How the notch and the recording pill render. Fixed is a constant surface that always looks the same — the default, because on macOS 26.2 live glass can keep showing the previous Space's colours. Live glass samples whatever is behind it."
+        >
+          <SegmentedControl
+            options={[
+              { value: 'solid', label: 'Fixed' },
+              { value: 'glass', label: 'Live glass' },
+              { value: 'system', label: 'Follow system' },
+            ]}
+            value={surfaceAppearance}
+            onChange={handleSurfaceAppearanceChange}
           />
         </SettingRow>
       </div>

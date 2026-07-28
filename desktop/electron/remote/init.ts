@@ -41,12 +41,15 @@ import { buildSetupChecklist, setupComplete } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape, setOverlaySuppressed } from './overlay'
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask, type AgentAvailability } from './router'
+import { CodexRouterEngine } from './codex-router-engine'
 import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
 import { startCuaServer, type CuaServer } from './cua/server'
 import { NotchClient } from './notch/notch-client'
 import { NotchController } from './notch/notch-controller'
+import { PillController, type PillStateP } from './notch/pill-controller'
+import { listCodexModels, matchCurrent, type CodexModel } from './codex/appserver'
 import { DriverManager } from './cua/driver-manager'
 import { CdpLane } from './cua/lanes/cdp'
 import { Arming } from './cua/lanes/arming'
@@ -140,6 +143,12 @@ interface RemoteSettings {
   // Skills the user pinned to the top of the cockpit rail (manual override of
   // the earned-trust ranking).
   pinnedSkills: string[]
+  // How the notch and the pill render their material.
+  //   'system' — follow Accessibility → Reduce Transparency (the default, and
+  //              the only value that respects an accessibility preference)
+  //   'glass'  — always translucent
+  //   'solid'  — always opaque
+  surfaceAppearance: 'system' | 'glass' | 'solid'
   // The Unmute MCP (agent intercom): may sessions create peer tasks? ON by
   // default — the guardrails (provenance, depth-1, rate caps) carry the
   // safety; this is the master off-switch.
@@ -174,6 +183,9 @@ const settings = new Store<RemoteSettings>({
     voiceHeadlines: true,
     screenshotCapture: true,
     pinnedSkills: [],
+    // FIXED by default — see Theme.swift. Live glass is opt-in while
+    // macOS 26.2 caches its backdrop on all-Spaces panels.
+    surfaceAppearance: 'solid',
     agentTasksEnabled: true,
     computerUse: { enabled: false, screenshotEnabled: true, allowAll: true, allowed: [] },
   },
@@ -187,6 +199,11 @@ let cuaServer: CuaServer | null = null
 let cuaManager: DriverManager | null = null
 let notchClient: NotchClient | null = null
 let notchController: NotchController | null = null
+/** The bottom-centre input surface. Shares the notch's helper process and its
+ *  stdio channel — one process owning both panels is what keeps the two
+ *  surfaces on literally the same material system rather than on two
+ *  implementations that agree by discipline. */
+let pillController: PillController | null = null
 function broadcastAxActivity(ev: { app?: string; tool: string; ok: boolean }): void {
   try {
     for (const w of BrowserWindow.getAllWindows()) {
@@ -280,8 +297,35 @@ let codexDriver: CodexDesktopDriver | null = null
  * didn't" failure this guards against. The Codex project list rides along so
  * "put it in the unmute project" can be resolved by name.
  */
+/**
+ * Is the Claude Code CLI actually installed?
+ *
+ * This used to be ASSUMED — `agents` started as `['claude']` and resolveAgent
+ * fell back to it whenever Codex was unreachable. For a user who has the Codex
+ * desktop app and no Claude CLI that is exactly backwards: every fallback lands
+ * on the one backend they cannot run, and the router (a Claude session) never
+ * starts either, so routing silently degrades to failsafeDecision — a new task
+ * per utterance, carrying the raw transcript, with no targeting or naming.
+ *
+ * Checked against the SAME PATH the executors get (fixPath has already run by
+ * the time anything routes), cached briefly because it is asked per dispatch.
+ */
+let claudeCliCache: { at: number; ok: boolean } | null = null
+export async function claudeCliAvailable(): Promise<boolean> {
+  if (claudeCliCache && Date.now() - claudeCliCache.at < 60_000) return claudeCliCache.ok
+  const ok = await new Promise<boolean>((resolve) => {
+    execFile('/usr/bin/which', ['claude'], { env: process.env }, (err, stdout) => {
+      resolve(!err && !!String(stdout).trim())
+    })
+  })
+  if (claudeCliCache?.ok !== ok) log.event('claude-cli-availability', { ok })
+  claudeCliCache = { at: Date.now(), ok }
+  return ok
+}
+
 async function agentAvailability(): Promise<AgentAvailability> {
-  const agents: Array<'claude' | 'codex-desktop'> = ['claude']
+  const agents: Array<'claude' | 'codex-desktop'> = []
+  if (await claudeCliAvailable()) agents.push('claude')
   let codexProjects: string[] | undefined
   if (codexDriver) {
     try {
@@ -292,9 +336,15 @@ async function agentAvailability(): Promise<AgentAvailability> {
       }
     } catch { /* availability is best-effort; absence just means "not offered" */ }
   }
+  // Prefer what the user chose, but never offer a backend they cannot run. With
+  // neither present we still report 'claude' so the caller has something to
+  // name in an error — reporting an empty list would read as "no agents" to
+  // every consumer and hide the real problem.
   const stored = settings.get('agent')
   const preferred: 'claude' | 'codex-desktop' =
-    stored === 'codex-desktop' && agents.includes('codex-desktop') ? 'codex-desktop' : 'claude'
+    stored === 'codex-desktop' && agents.includes('codex-desktop') ? 'codex-desktop'
+      : agents.includes('claude') ? 'claude'
+      : agents[0] ?? 'claude'
   return { agents, preferred, ...(codexProjects?.length ? { codexProjects } : {}) }
 }
 
@@ -306,15 +356,31 @@ async function agentAvailability(): Promise<AgentAvailability> {
  */
 async function resolveAgent(spoken: 'claude' | 'codex-desktop' | undefined, avail: AgentAvailability): Promise<AgentKind> {
   const want = spoken ?? avail.preferred
-  if (want === 'codex-desktop' && !avail.agents.includes('codex-desktop')) {
-    log.warn('agent-unavailable-fallback', { want, to: 'claude' })
-    return 'claude'
+  if (avail.agents.includes(want)) return want
+  // FALL BACK TO WHAT EXISTS, not to Claude by reflex. A Codex-only user was
+  // being sent to a CLI they do not have, which fails at spawn rather than
+  // degrading.
+  const alt = avail.agents[0]
+  if (alt) {
+    log.warn('agent-unavailable-fallback', { want, to: alt })
+    return alt
   }
+  log.warn('no-agent-available', { want })
   return want
 }
 let completeFn: CompleteFn | null = null
-// The warm routing classifier (lazy — spawns on first routed utterance).
-let router: Router | null = null
+// ONE ROUTER PER BACKEND, both warm, each blind to the other's tasks.
+//
+// A single shared router is what let a Codex task be proposed as a resume while
+// the picker said Claude — the decision then ran the wrong backend entirely.
+// Splitting them makes that impossible by construction rather than by rule: the
+// Claude router is never handed a Codex task, so it cannot name one.
+//
+// Both are held warm regardless of the current picker, so switching provider
+// costs nothing. The Codex engine warms in ~435ms and answers in ~5s, against
+// the Claude REPL's 8-14s measured in the field — this is not a fallback.
+let router: Router | null = null            // claude
+let codexRouter: Router | null = null       // codex-desktop
 // Curator store paths (fixed, homedir-based) — shared by initRemote's wiring and
 // the route handler in dispatchFromCaptureInner (both module-scope readers).
 const curatorPathsV: CuratorPaths = curatorPaths()
@@ -337,6 +403,7 @@ function routerExecutorFactory() {
 function snapshotOf(t: Task, now: number, surfaced: boolean): RoutableTask {
   return {
     id: t.id,
+    agent: t.agent === 'codex-desktop' ? 'codex-desktop' : 'claude',
     intent: t.intent,
     name: t.name ?? null,
     state: t.state,
@@ -695,6 +762,12 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
   // this broadcast never fires for plain dictation). The clipboard sweep runs at
   // 'transcribing' (key just lifted, recording stopped) so a mid-hold
   // ⌃-screenshot rides with THIS utterance, before routing delivers it.
+  // The pill's model/agent chips come from HERE, not from the capture renderer:
+  // main owns the setting and the config-driven catalog, so a second copy in the
+  // renderer could only ever disagree. Resolved once as the capture opens —
+  // availability changes rarely (Codex opened or closed), and the answer is only
+  // needed at the moment the chips appear.
+  if (phase === 'listening') void pushPillChips()
   if (phase === 'listening') startCaptureWatch()
   else if (phase === 'transcribing') secureAndClearClipboard() // key just lifted — secure, then clear if consumed
   // idle = the remote capture RESOLVED. Delivery already emptied the tray via
@@ -712,6 +785,162 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
  *  mis-spawn and reroutes the SAME intent into the alternate; ignoring it costs
  *  nothing and it simply expires in the UI. */
 let pendingRouteOffer: { newTaskId: string; altTaskId: string; intent: string; at: number } | null = null
+
+/** At most one background repair in flight, and never a storm of them. */
+let reasoningRepairAt = 0
+function scheduleReasoningRepair(): void {
+  const now = Date.now()
+  if (now - reasoningRepairAt < 60_000) return
+  reasoningRepairAt = now
+  void refreshCodexReasoningForPill()
+    .then(() => { void pushPillChips() })
+    .catch(() => { /* best-effort; the fallback list still renders */ })
+}
+
+/** Re-read Codex's reasoning axes and cache them, so the pill's model half can
+ *  be served instantly on the next push. Best-effort: a failed walk must never
+ *  erase what we last genuinely saw. */
+async function refreshCodexReasoningForPill(): Promise<void> {
+  if (!codexDriver) return
+  try {
+    const state = await codexDriver.reasoningOptions()
+    // Only overwrite with a REAL reading — a failed walk must not erase what we
+    // last genuinely saw. "Advanced" is a PARENT-menu row, so an axis reporting
+    // it is not reporting options at all; treating it as real is what left a
+    // poisoned cache on disk and emptied the Effort column.
+    const real = (state?.options?.Model ?? []).filter((v) => v && v.toLowerCase() !== 'advanced')
+    if (real.length) {
+      settings.set('codexReasoningCache' as never, state as never)
+      log.event('codex-reasoning-cached', {
+        model: state.options.Model?.length, effort: state.options.Effort?.length, speed: state.options.Speed?.length,
+      })
+    } else {
+      log.warn('codex-reasoning-read-unusable', { options: state?.options })
+    }
+  } catch (e) {
+    log.warn('codex reasoning refresh failed', { error: (e as Error).message })
+  }
+}
+
+/** Push the model / agent / raw chips to the native pill.
+ *
+ *  Best-effort by design: a chip that cannot be resolved simply does not
+ *  render, and a failure here must never surface on the capture path. */
+async function pushPillChips(): Promise<void> {
+  if (!pillController) return
+  try {
+    const agent = (settings.get('agent') as AgentKind) ?? 'claude'
+    const isCodex = agent === 'codex-desktop'
+    const codexOk = codexDriver
+      ? await codexDriver.availability().then((a) => a.ok).catch(() => false)
+      : false
+
+    // THE MODEL CONTROL FOLLOWS THE PLATFORM.
+    //
+    // Claude Code and Codex do not share a model list and never can — Claude has
+    // a flat catalog, Codex has its own Model / Effort / Speed axes read out of
+    // its menus. Serving one list regardless of agent is how the chip ended up
+    // offering Claude models while Codex was selected. The renderer already
+    // solved this with an `isCodex` gate; this is the same gate, on the side
+    // that now owns the data.
+    const chips: PillStateP = {
+      agent: isCodex ? 'Codex' : 'Claude Code',
+      agentConnected: isCodex ? codexOk : true,
+      agentOptions: [
+        { id: 'claude', label: 'Claude Code', available: true },
+        { id: 'codex-desktop', label: 'Codex', available: codexOk },
+      ],
+      stagedCount: stagedAttachments.length + pendingClipboardCount,
+    }
+
+    if (isCodex) {
+      // Served from CACHE so the axes are there immediately — reading them live
+      // walks Codex's menus (~3s) and a capture is often over before that
+      // returns, which is exactly why the chip used to keep showing a Claude
+      // model after the switch.
+      const cached = settings.get('codexReasoningCache' as never) as
+        { label?: string | null; current?: Record<string, string>; options?: Record<string, string[]> } | undefined
+      // THE LIVE MENU IS THE AUTHORITY ON WHAT CAN BE PICKED.
+      //
+      // Every value here has to be clickable, because the write path IS a menu
+      // click. So the menu decides — and it can now be read reliably: the
+      // pointer-event opener returns all three axes in ~1.5s
+      // (Model 6, Effort 5, Speed 2, measured). Before that opener existed the
+      // scrape returned "Advanced" as the only value for every axis, and two
+      // decisions were made on top of that garbage:
+      //
+      //   * Effort was taken from the PROTOCOL instead. But `model/list` is a
+      //     SUPERSET of what is offerable — it reports Max for 5.6 Sol, which
+      //     the menu does not offer at all. Picking it changed nothing.
+      //   * Speed was DELETED, on the reasoning that it "was an artefact of
+      //     scraping a menu and treating every row as an axis". It is not. The
+      //     menu genuinely offers Standard and Fast. A real control was removed
+      //     because the reader was broken.
+      //
+      // The protocol still earns its place: it is the model CATALOGUE, read
+      // headless in ~1ms with no arming, and it is the fallback when no menu
+      // read has happened yet — better than an empty column on first launch.
+      const models = await listCodexModels().catch(() => [] as CodexModel[])
+
+      // Reject a cache written by the OLD reader. Its signature is unmistakable:
+      // "Advanced" is a row of the PARENT menu, so an axis offering it is not
+      // reporting options at all. Version-stamping the cache would not have
+      // helped here — the poison was already on disk — but a shape check does,
+      // and it keeps working if a future read degrades the same way.
+      const sane = (vals: string[] | undefined): string[] =>
+        (vals ?? []).filter((v) => v && v.toLowerCase() !== 'advanced')
+      const menu = {
+        Model: sane(cached?.options?.Model),
+        Effort: sane(cached?.options?.Effort),
+        Speed: sane(cached?.options?.Speed),
+      }
+
+      const live = matchCurrent(cached?.label ?? null, models)   // returns UI spellings
+      chips.model = cached?.label || 'Codex'
+      const cur = cached?.current ?? {}
+      // Menu first, protocol second. Values carry the UI spelling either way —
+      // it is what the writer searches for and what the button already shows.
+      // SELF-HEAL. A cache that offers nothing usable — never read, or written
+      // by the old scraper — is repaired in the BACKGROUND so this push stays
+      // instant. The capture path must never wait on a menu walk; that is the
+      // whole reason these values are cached in the first place.
+      if (!menu.Model.length || !menu.Effort.length) scheduleReasoningRepair()
+
+      const modelValues = menu.Model.length ? menu.Model : models.map((m) => m.uiLabel)
+      const effortValues = menu.Effort.length
+        ? menu.Effort
+        : (models.find((m) => m.uiLabel === live.model)?.effortLabels ?? models[0]?.effortLabels ?? [])
+      chips.modelAxes = [
+        { axis: 'Model', values: modelValues, current: cur.Model ?? live.model },
+        { axis: 'Effort', values: effortValues, current: cur.Effort ?? live.effort },
+        { axis: 'Speed', values: menu.Speed, current: cur.Speed },
+      ].filter((a) => a.values.length > 0)
+      // AN EMPTY ARRAY, NOT `undefined` — this is the bug that caused the hang.
+      // push() merges, so an ABSENT key KEEPS the previous value: the Claude
+      // catalog survived into the Codex state, the view fell through to it, and
+      // picking a "Codex model" wrote Claude's setting while the Codex label
+      // never moved. Absent means keep; empty means cleared.
+      chips.modelOptions = []
+      // RAW is not offered on Codex at all — dispatchCodexDesktop returns before
+      // `mode` is ever read and then records 'managed', so there is nothing for
+      // raw to skip. A control that cannot act is worse than no control.
+      chips.raw = null
+    } else {
+      const catalog = getModelCatalog()
+      const current = settings.get('model') || getModels().doerDefault
+      chips.model = catalog.find((c) => c.id === current)?.label ?? current
+      chips.modelOptions = catalog.map((c) => ({
+        id: c.id, label: c.label, detail: c.description ?? '',
+      }))
+      chips.modelAxes = []          // same reasoning — clear, do not omit
+      chips.raw = injectionDisabled()
+    }
+
+    pillController.push(chips)
+  } catch (e) {
+    log.warn('pill chips push failed', { error: (e as Error).message })
+  }
+}
 
 // ── Staging tray (multimodal, capture-first): images pasted/dropped with NO
 // target stage here, then ride with the NEXT utterance to wherever it lands —
@@ -737,6 +966,9 @@ function broadcastStaged(): void {
     if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length + pendingClipboardCount, paths: stagedAttachments.map((s) => s.path), pending: pendingClipboardCount })
   }
   notchController?.notifyStagedChanged()
+  // The staged-image chip lives on the pill too, and main is the only place
+  // that knows the true count (the renderer's chip keeps its own copy).
+  pillController?.push({ stagedCount: stagedAttachments.length + pendingClipboardCount })
 }
 
 // ── Utterance-scoped screenshot capture (the pill ledger). The dictation window
@@ -979,6 +1211,27 @@ function stopCaptureWatch(opts: { purgeAuto?: boolean } = {}): void {
 /** Dictation delivery seam (clipboard.ts calls this after pasting the text):
  *  hand over everything staged and close the watch window. The ledger's contract
  *  holds across BOTH capture kinds — what the pill showed is what got delivered. */
+/**
+ * Hide the native input surface, whatever the renderer thinks its state is.
+ *
+ * THE DOM PILL NEVER NEEDED THIS. It lived inside the HUD window, so
+ * hideHUD() removed it from the screen regardless of the React state machine —
+ * and that state machine does NOT reach a terminal state on every path. The
+ * remote one is the clearest case: sessionManager sends 'remote:dispatched'
+ * and schedules the hide, and NOTHING in the widget handles that event, so the
+ * renderer sits on 'processing' forever. Invisible while the window was doing
+ * the hiding; permanent once the pill moved into its own Swift window.
+ *
+ * So the pill is hidden by the same authority that hides the window, at the
+ * same moments. Every scheduleAutoHide and every direct hideHUD in
+ * sessionManager funnels through here — which matters, because there are more
+ * than twenty of them (timeouts, cancels, undo expiry, quiet-miss, engine
+ * failures) and the renderer only models a subset.
+ */
+export function hideNativePill(): void {
+  pillController?.hide()
+}
+
 export function consumeStagedForDictation(): string[] {
   stopCaptureWatch({ purgeAuto: false }) // delivery: takeStaged() takes it all
   return takeStaged()
@@ -1267,7 +1520,10 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
   //    and its project binding ("work on the unmute repo" → that exact dir), so
   //    even a cold first utterance needs its judgement. It folds transcript
   //    cleanup into the same turn, and it's resident/warm — still instant.
-  if (router) {
+  // EITHER router will do — a Codex-only user has no Claude REPL, and gating on
+  // `router` alone would skip routing entirely for them (the old behaviour, and
+  // the reason their utterances fell to failsafeDecision).
+  if (router || codexRouter) {
     const awaitingIds = new Set(manager.tasksAwaitingUser().map((t) => t.id))
     try {
       const tRoute = Date.now()
@@ -1306,7 +1562,44 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // that appears here — so a task can never be promised to an app the user
       // doesn't have. Probing is cheap: a HEAD on the CDP port plus a DOM read.
       const avail = await agentAvailability()
-      const decision = await router.route(raw, targetable, projects, finished, coldSessions, wall, skillNames, avail)
+
+      // ROUTE ON THE PICKER'S BACKEND, AND SHOW THAT ROUTER ONLY ITS OWN WORK.
+      //
+      // Two independent guarantees, and both matter:
+      //
+      //   * the ENGINE is one the user actually has — a Codex-only user used to
+      //     get no router at all, because routeOnce spawned a Claude REPL,
+      //     threw, and fell to failsafeDecision (a new task per utterance, raw
+      //     transcript, no targeting or naming);
+      //   * the SNAPSHOT is scoped, so a router cannot name a task belonging to
+      //     the other backend. That is the cross-provider bleed that sent a
+      //     resume decision for a Codex thread into `claude --continue`.
+      //
+      // The picker governs NEW work. Continuing existing work still follows the
+      // task's own backend at dispatch (see TaskManager.resume / followUp) — so
+      // scoping here narrows what can be PROPOSED, never where a chosen task runs.
+      // Prefer the picker's engine; fall back to whichever exists, because one of
+      // the two may legitimately be absent (no Claude CLI, or no Codex app).
+      const useCodex = (avail.preferred === 'codex-desktop' || !router) && !!codexRouter
+      const activeRouter = useCodex ? codexRouter! : router!
+      const mine = (t: RoutableTask) =>
+        (t.agent ?? 'claude') === (useCodex ? 'codex-desktop' : 'claude')
+      log.event('router-selected', {
+        engine: useCodex ? 'codex' : 'claude',
+        preferred: avail.preferred,
+        tasks: targetable.filter(mine).length,
+        hidden: targetable.length - targetable.filter(mine).length,
+      })
+      const decision = await activeRouter.route(
+        raw,
+        targetable.filter(mine),
+        projects,
+        finished.filter(mine),
+        coldSessions.filter(mine),
+        wall.filter(mine),
+        skillNames,
+        avail,
+      )
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       // Explicit-skill prefix: when the user named a skill, prefix the
@@ -1810,7 +2103,140 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         clearStaged: () => { stagedAttachments = []; broadcastStaged() },
         getLastSeen: () => notchLastSeen,
         setLastSeen: (ms) => { notchLastSeen = ms },
+        // (pill deps are wired separately, below — see PillController)
       })
+
+      // ── The input surface ──
+      //
+      // Same helper, same channel — the pill is a second NSPanel in the process
+      // the notch already owns. Every dep here is a RELAY: the capture renderer
+      // still owns the behaviour (it owns the audio), main only forwards the
+      // gesture back to it. The two exceptions are model and agent, which are
+      // real settings and are set here exactly as remote:set-model does.
+      const toWidget = (type: string, value?: unknown) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+          if (!w.isDestroyed()) w.webContents.send('pill:event', { type, value })
+        }
+      }
+      pillController = new PillController(notchClient, {
+        stop:        () => toWidget('stop'),
+        cancel:      () => toWidget('cancel'),
+        undo:        () => toWidget('undo'),
+        acceptDraft: () => toWidget('acceptDraft'),
+        pickMic:     (id) => toWidget('pickMic', id),
+        // Main owns sessionForceRaw, so set it HERE rather than bouncing through
+        // the renderer and back. The old round-trip also never re-pushed, so the
+        // chip kept reporting the previous value — the same "dead control" the
+        // model and agent labels had.
+        toggleRaw: (on) => {
+          sessionForceRaw = on
+          log.event('force-raw-set', { on, scope: 'session', from: 'pill' })
+          toWidget('rawChanged', on)   // keep the DOM toggle in step
+          void pushPillChips()
+        },
+        dismissOffline:    () => toWidget('dismissOffline'),
+        openBillingPortal: () => toWidget('openBillingPortal'),
+        pickModel: (m) => {
+          const model = isSelectableModel(m) ? m : (settings.get('model') || getModels().doerDefault)
+          settings.set('model', model)
+          settings.set('modelUserSet', true) // explicit choice — never auto-migrate it
+          for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed()) w.webContents.send('remote:model-changed', model)
+          }
+          log.event('model-set', { model, from: 'pill' })
+          // RE-PUSH, or the chip keeps its old label for the rest of the
+          // capture. The setting changed correctly and the surface said
+          // otherwise, which reads exactly like a dead control.
+          void pushPillChips()
+        },
+        // The agent control CYCLES — there are only ever two, and the original
+        // made it a tap rather than a list.
+        cycleAgent: () => {
+          const now = (settings.get('agent') as AgentKind) ?? 'claude'
+          const next: AgentKind = now === 'codex-desktop' ? 'claude' : 'codex-desktop'
+          settings.set('agent', next)
+          for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed()) w.webContents.send('remote:agent-changed', next)
+          }
+          log.event('agent-set', { agent: next, from: 'pill-cycle' })
+          // Refresh Codex's axes on the way IN, then re-push — otherwise the
+          // model half keeps the other platform's list.
+          if (next === 'codex-desktop') {
+            void refreshCodexReasoningForPill().finally(() => { void pushPillChips() })
+          } else {
+            void pushPillChips()
+          }
+        },
+        pickAxis: (axis, value) => {
+          // Speed IS a real axis (the menu offers Standard / Fast); it was
+          // dropped only because the old reader could not see it.
+          if (axis !== 'Model' && axis !== 'Effort' && axis !== 'Speed') return
+          log.event('codex-pick-start', { axis, value, from: 'pill', hasDriver: !!codexDriver })
+          if (!codexDriver) {
+            // Say so. This returned silently, and a pick that never left the
+            // building looked identical to one the menu rejected.
+            log.warn('codex-pick-done', { axis, value, ok: false, stage: 'no-driver' })
+            return
+          }
+          // Remember the CHOICE even if the live write misses, so dispatch can
+          // still apply it — the same contract the IPC path already honours.
+          settings.set(
+            (axis === 'Model' ? 'codexModel' : axis === 'Effort' ? 'codexEffort' : 'codexSpeed') as never,
+            value as never)
+          void codexDriver.setReasoningAxis(axis, value)
+            .then((trace) => {
+              // ONE LINE WITH THE WHOLE STORY: what was clicked, how the menu
+              // opened, what it offered, what we matched, and whether Codex's
+              // own label actually moved.
+              log[trace.ok && trace.changed ? 'event' : 'warn']('codex-pick-done', {
+                axis, value, from: 'pill', ok: trace.ok, changed: trace.changed,
+                stage: trace.stage, via: trace.via, matched: trace.matched,
+                offered: trace.offered, label: `${trace.labelBefore ?? '?'} -> ${trace.labelAfter ?? '?'}`,
+                ms: trace.ms,
+              })
+              // The trace already carries the new label, so the chip updates
+              // from it directly. This used to trigger a FULL menu walk per
+              // pick — seconds long, over the very menu the next pick needs.
+              if (trace.labelAfter || trace.offered?.length) {
+                const cached = (settings.get('codexReasoningCache' as never) ?? {}) as
+                  { label?: string | null; current?: Record<string, string>; options?: Record<string, string[]> }
+                // The trace carries what the submenu ACTUALLY offered. That is a
+                // first-hand reading of the one authority that matters, so it
+                // replaces whatever the cache held — including the "Advanced"
+                // garbage the retired scraper left behind.
+                settings.set('codexReasoningCache' as never, {
+                  ...cached,
+                  label: trace.labelAfter || cached.label,
+                  current: { ...(cached.current ?? {}), ...(trace.changed ? { [axis]: value } : {}) },
+                  options: trace.offered?.length
+                    ? { ...(cached.options ?? {}), [axis]: trace.offered }
+                    : cached.options,
+                } as never)
+              }
+              void pushPillChips()
+            })
+            .catch((e) => log.warn('codex-pick-done', { axis, value, ok: false, stage: 'threw', error: (e as Error).message }))
+        },
+        pickAgent: (a) => {
+          // Only ever a backend this host can actually dispatch to — the same
+          // guard the picker itself applies, repeated here because an event can
+          // arrive from a surface whose options are a moment stale.
+          if (a !== 'claude' && a !== 'codex-desktop') return
+          settings.set('agent', a)
+          for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed()) w.webContents.send('remote:agent-changed', a)
+          }
+          log.event('agent-set', { agent: a, from: 'pill' })
+          void pushPillChips()   // see pickModel — the label must follow the setting
+        },
+        clearStaged: () => { stagedAttachments = []; broadcastStaged() },
+      })
+
+      // Push the stored preference immediately: the helper starts on 'system',
+      // so without this a user who chose Solid would see one glassy frame on
+      // every launch.
+      notchClient.send({ type: 'appearance', value: settings.get('surfaceAppearance') || 'solid' } as never)
+
       log.info('notch shell started', { bin: notchBin })
     } catch (e) {
       log.warn('notch shell not started', { error: (e as Error).message })
@@ -1847,12 +2273,26 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // idle-kills itself; tool-less, no glow). Star topology: Unmute is the hub.
   router = new Router({
     executorFactory: routerExecutorFactory,
+    slot: 'claude',
     decisionTimeoutMs: getKnobs().routerDecisionTimeoutMs,
     maxSessionMs: getKnobs().routerMaxSessionMs,
   })
   // Resident from startup — bring the classifier up now so the FIRST follow-up
   // utterance hits a warm session, never a cold spawn + timeout. Fire-and-forget.
-  void router.warm()
+  // Only when the CLI is actually there: warming a binary the user does not have
+  // just logs a spawn failure every launch.
+  void claudeCliAvailable().then((ok) => { if (ok) void router?.warm() })
+
+  // The Codex router. Same prompt, different transport — and a separate slot so
+  // the two can never read each other's decision file.
+  codexRouter = new Router({
+    executorFactory: routerExecutorFactory,   // unused: `engine` takes the path
+    engine: new CodexRouterEngine(),
+    slot: 'codex',
+    decisionTimeoutMs: getKnobs().routerDecisionTimeoutMs,
+    maxSessionMs: getKnobs().routerMaxSessionMs,
+  })
+  void codexRouter.warm().catch(() => { /* no Codex CLI — the Claude router stands */ })
 
   // ── The Skill Curator (spec §11) — supersedes the parked librarian ──
   // A background scheduler that sweeps session transcripts, distills recurring
@@ -1957,6 +2397,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     settings.set('model', 'sonnet')
     log.event('model-migrated-opus-to-sonnet', {})
   }
+  // One-time: move users off the OLD 'system' surface default.
+  //
+  // 'system' was the previous DEFAULT, written into every existing install, so
+  // it carries no signal that anyone chose it — and it resolves to translucent,
+  // which on macOS 26.2 means a cached backdrop showing the previous Space's
+  // colours (developer.apple.com/forums/thread/810314). Changing the default
+  // alone reached nobody who had already run the app, which is precisely how
+  // this shipped looking unfixed. An explicit 'glass' choice is preserved.
+  if (settings.get('surfaceAppearance') === 'system') {
+    settings.set('surfaceAppearance', 'solid')
+    log.event('surface-migrated-system-to-fixed', {})
+  }
   // Codex isn't wired yet (shown as "coming soon"). If a past build stored it as
   // the agent, reset to claude so Remote works instead of failing every task.
   // Only the unwired CLI adapter is reset; 'codex-desktop' is a supported choice.
@@ -2051,6 +2503,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   app.on('before-quit', () => {
     try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
     try { cuaManager?.dispose(); cuaServer?.close(); void cuaArming.disposeAll() } catch (e) { log.warn('cua shutdown failed', { error: (e as Error).message }) }
+    try { pillController?.hide() } catch { /* best-effort */ }
     try { notchController?.dispose(); notchClient?.dispose() } catch (e) { log.warn('notch shutdown failed', { error: (e as Error).message }) }
     try { router?.dispose() } catch { /* best-effort */ }
   })
@@ -2536,6 +2989,39 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('model-set', { model })
     return model
   })
+  // ── The input surface: renderer → native pill ──
+  //
+  // `send`, not `invoke`. These are fire-and-forget on the CAPTURE PATH and a
+  // round-trip per animation frame is exactly the kind of main-process work
+  // that corrupts audio. The controller drops unchanged payloads, and
+  // pill:level is a no-op unless a capture is actually running.
+  ipcMain.on('pill:state', (_e, state: PillStateP) => {
+    try { pillController?.push(state ?? {}) } catch { /* never break a capture */ }
+  })
+  ipcMain.on('pill:level', (_e, level: number, elapsed?: number) => {
+    try { pillController?.level(level, elapsed) } catch { /* never break a capture */ }
+  })
+  ipcMain.on('pill:hide', () => {
+    try { pillController?.hide() } catch { /* best-effort */ }
+  })
+
+  // ── Surface appearance (Glass / Solid / Follow system) ──
+  //
+  // macOS already owns this preference twice — Accessibility → Reduce
+  // Transparency, and the global Liquid Glass opacity slider on 26+. So
+  // 'system' is the default and the helper honours it. The explicit options
+  // exist because a hand-built pre-26 surface cannot follow the system slider
+  // at all, and because a persistent always-on-top panel over someone else's
+  // work is a reasonable thing to want solid regardless.
+  ipcMain.handle('remote:get-surface-appearance', async () => settings.get('surfaceAppearance') || 'solid')
+  ipcMain.handle('remote:set-surface-appearance', async (_e, v: string) => {
+    const value = v === 'glass' || v === 'solid' ? v : 'system'
+    settings.set('surfaceAppearance', value)
+    notchClient?.send({ type: 'appearance', value } as never)
+    log.event('surface-appearance-set', { value })
+    return value
+  })
+
   ipcMain.handle('remote:set-overlay-docked', async (_e, on: boolean) => {
     settings.set('overlayDocked', !!on)
     setDockedMode(!!on)
@@ -2753,8 +3239,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // another menu walk.
     const cached = settings.get('codexReasoningCache' as never) as { current?: Record<string, string> } | undefined
     if (cached?.current) settings.set('codexReasoningCache' as never, { ...cached, current: { ...cached.current, [axis]: value } } as never)
-    log.event('codex-reasoning-choice', { axis, value })
-    return await codexDriver.setReasoningAxis(axis, value).catch(() => false)
+    log.event('codex-reasoning-choice', { axis, value, from: 'settings' })
+    const trace = await codexDriver.setReasoningAxis(axis, value).catch((e) => ({
+      axis, want: value, stage: 'threw' as const, ok: false, ms: 0, error: (e as Error).message,
+    }))
+    return trace.ok
   })
 
   ipcMain.handle('remote:codex-projects', async () => {

@@ -1,10 +1,16 @@
 import SwiftUI
 
 // The focused Stage inside the cockpit — split (stage + sessions minirail) or
-// full (terminal edge-to-edge). Header carries every per-task action from the
-// React wall: rename, pin/unpin, kill, resume, shelve, remove, next, full/split,
-// esc. Body: warm-up, editable note, pending question (chips or free-text),
-// live terminal when alive, dead panel (resume / re-run + artifacts) when not.
+// full (terminal edge-to-edge). Header carries every per-task action: rename,
+// pin/unpin, kill, resume, shelve, remove, next, full/split, esc. Body: warm-up,
+// editable note, pending question (chips or free-text), live terminal when
+// alive, dead panel (resume / re-run + artifacts) when not.
+//
+// HIERARCHY FROM GROUPING, NOT DECORATION. The new design system asks us to
+// strip the extra backgrounds and borders that used to give buttons weight, and
+// to express hierarchy through layout instead. So the header is four groups —
+// curation, lifecycle, destructive, view — with ONE tinted primary (the crank).
+// Nothing was removed; the spacing does the work the borders used to.
 struct StageView: View {
     @ObservedObject var model: NotchModel
     let topInset: CGFloat
@@ -36,30 +42,29 @@ struct StageView: View {
                 // out as literal asterisks next to a correctly-rendered copy of
                 // itself two lines below.
                 if t.backend != "codex-desktop", let warm = t.warmup, !warm.isEmpty {
-                    RichText(text: "where you left off — \(warm)", size: 12.5)
-                        .padding(.leading, 10)
-                        .overlay(Rectangle().fill(Color.white.opacity(0.18)).frame(width: 2), alignment: .leading)
-                        .padding(.top, 12)
+                    warmupStrip(warm)
                 }
-                noteRow(t).padding(.top, 6)
+                noteRow(t).padding(.top, 8)
                 if t.status == .needsUser, let q = t.question {
-                    QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 8)
+                    QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 10)
                 }
                 if t.backend == "codex-desktop" {
                     // Wherever a Claude task shows its terminal, a Codex task
                     // shows its messages — and can be replied to. Neither the
                     // terminal nor DeadPanel belongs here: the first does not
-                    // exist for this backend, and the second offered to
-                    // "resume" a chat that had never stopped.
-                    // See TaskSurfaceView: the panel scrolls itself, and a second
-                    // ScrollView around it disables that.
+                    // exist for this backend, and the second offered to "resume"
+                    // a chat that had never stopped.
+                    // The panel scrolls itself; a second ScrollView around it
+                    // would disable that.
                     ConversationPanel(turns: t.conversation ?? [], id: t.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 10)
                     CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
-                                  modelLabel: t.modelLabel, sending: t.sending ?? false).padding(.top, 9)
+                                  modelLabel: t.modelLabel, sending: t.sending ?? false)
+                        .padding(.top, 9)
                 } else if t.alive {
-                    TerminalPanel(model: model, taskId: t.id, tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
+                    TerminalPanel(model: model, taskId: t.id,
+                                  tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
                         .padding(.top, 10)
                 } else {
                     DeadPanel(model: model, t: t).padding(.top, 10)
@@ -69,71 +74,113 @@ struct StageView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(.horizontal, 30)
-        .padding(.top, topInset + 6)
-        .padding(.bottom, 22)
+        .padding(.horizontal, Theme.gutter)
+        .padding(.top, topInset + 4)
+        .padding(.bottom, 14)
+    }
+
+    private func warmupStrip(_ warm: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            SectionLabel(text: "Where you left off")
+            RichText(text: warm, size: 12.5, color: Theme.textDim)
+        }
+        .padding(.leading, 11)
+        .overlay(Rectangle().fill(Theme.hairline).frame(width: 2), alignment: .leading)
+        .padding(.top, 12)
     }
 
     private func header(_ t: TaskDetail) -> some View {
         HStack(spacing: 6) {
-            Dot(status: t.status)
+            Dot(status: t.status, size: 9, breathing: t.status == .processing)
             if renaming {
-                TextField("name", text: $renameText, onCommit: {
+                TextField("Name", text: $renameText, onCommit: {
                     let v = renameText.trimmingCharacters(in: .whitespaces)
                     if !v.isEmpty { model.emit(.rename(id: t.id, name: v)) }
                     renaming = false
                 })
                 .textFieldStyle(.plain)
-                .font(.system(size: 15, weight: .semibold)).foregroundColor(Theme.text)
+                .font(Theme.fTitle).foregroundColor(Theme.text)
                 .frame(maxWidth: 260)
             } else {
                 Text(t.title)
-                    .font(.system(size: 15, weight: .semibold)).foregroundColor(Theme.text)
+                    .font(Theme.fTitle).foregroundColor(Theme.text)
                     .lineLimit(1)
                     .onTapGesture { renameText = t.title; renaming = true }
-                    .help("click to rename — names are voice addresses")
+                    .help("Click to rename — names are voice addresses")
             }
-            Spacer(minLength: 8)
-            KeyButton(label: t.kind == "session" ? "unpin" : "pin") {
-                model.emit(.setKind(id: t.id, kind: t.kind == "session" ? "oneoff" : "session"))
+
+            Spacer(minLength: 10)
+
+            // 1 · CURATION
+            HStack(spacing: 4) {
+                KeyButton(label: t.kind == "session" ? "Unpin" : "Pin",
+                          symbol: t.kind == "session" ? "pin.slash" : "pin") {
+                    model.emit(.setKind(id: t.id, kind: t.kind == "session" ? "oneoff" : "session"))
+                }
+                KeyButton(label: (t.shelved ?? false) ? "Unshelve" : "Shelve",
+                          symbol: "archivebox") {
+                    model.emit(.shelve(id: t.id, shelved: !(t.shelved ?? false)))
+                }
             }
-            // BACKEND FIRST, then liveness.
+            // 2 · LIFECYCLE — BACKEND FIRST, then liveness.
             //
-            // This branched on `alive` first and put "open in Codex" in the
-            // dead-session arm — while the same change made Codex tasks report
-            // alive, so the button could never render on this surface at all.
-            // Two edits that cancelled out; the Stage showed `kill` instead.
-            if t.backend == "codex-desktop" {
-                KeyButton(label: "open in Codex") { model.emit(.openInTerminal(id: t.id)) }
-            } else if t.alive {
-                KeyButton(label: "kill", danger: true) { model.emit(.kill(id: t.id)) }
-            } else {
-                KeyButton(label: "resume") { model.emit(.resume(id: t.id)) }
+            // This once branched on `alive` first and put "open in Codex" in the
+            // dead arm — while the same change made Codex tasks report alive, so
+            // the button could never render at all. Two edits that cancelled out.
+            HStack(spacing: 4) {
+                if t.backend == "codex-desktop" {
+                    KeyButton(label: "Open in Codex", symbol: "arrow.up.forward.app") {
+                        model.emit(.openInTerminal(id: t.id))
+                    }
+                } else if t.alive {
+                    KeyButton(label: "Kill", danger: true, symbol: "stop.circle") {
+                        model.emit(.kill(id: t.id))
+                    }
+                } else {
+                    KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
+                }
             }
-            KeyButton(label: (t.shelved ?? false) ? "unshelve" : "shelve") {
-                model.emit(.shelve(id: t.id, shelved: !(t.shelved ?? false)))
+            .padding(.leading, 6)
+            // 3 · DESTRUCTIVE — isolated, so it is never a neighbour-miss.
+            KeyButton(label: "Remove", danger: true, symbol: "trash") {
+                model.emit(.remove(id: t.id))
             }
-            KeyButton(label: "remove", danger: true) { model.emit(.remove(id: t.id)) }
-            KeyButton(label: "next") { model.emit(.next) }
-            KeyButton(label: model.stageFull ? "split" : "full") { model.stageFull.toggle() }
-            KeyButton(label: "esc") { model.stageFull = false; model.emit(.closeStage) }
+            .padding(.leading, 6)
+            // 4 · VIEW
+            KeyButton(label: model.stageFull ? "Split" : "Full",
+                      symbol: model.stageFull ? "rectangle.split.2x1" : "rectangle") {
+                model.stageFull.toggle()
+            }
+            .padding(.leading, 6)
+            // THE ONE TINTED PRIMARY.
+            ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
+                .padding(.leading, 6)
+            CloseButton { model.stageFull = false; model.emit(.closeStage) }
         }
     }
 
     private func noteRow(_ t: TaskDetail) -> some View {
         Group {
             if editingNote {
-                TextField("note", text: $noteText, onCommit: {
-                    model.emit(.setNote(id: t.id, note: noteText))
-                    editingNote = false
-                })
-                .textFieldStyle(.plain)
-                .font(.system(size: 12)).foregroundColor(Theme.cReady)
+                HStack(spacing: 6) {
+                    Image(systemName: "pencil").font(.system(size: 10)).foregroundColor(Theme.cReady)
+                    TextField("Note", text: $noteText, onCommit: {
+                        model.emit(.setNote(id: t.id, note: noteText))
+                        editingNote = false
+                    })
+                    .textFieldStyle(.plain)
+                    .font(Theme.fSub).foregroundColor(Theme.cReady)
+                }
             } else {
-                Text("✎ \((t.note?.isEmpty == false) ? t.note! : "add a note (yours — never sent to the agent)")")
-                    .font(.system(size: 12))
-                    .foregroundColor((t.note?.isEmpty == false) ? Theme.cReady : Theme.textFaint)
-                    .onTapGesture { noteText = t.note ?? ""; editingNote = true }
+                HStack(spacing: 6) {
+                    Image(systemName: "pencil").font(.system(size: 10))
+                    Text((t.note?.isEmpty == false) ? t.note!
+                         : "Add a note — yours, never sent to the agent")
+                        .font(Theme.fSub)
+                }
+                .foregroundColor((t.note?.isEmpty == false) ? Theme.cReady : Theme.textFaint)
+                .contentShape(Rectangle())
+                .onTapGesture { noteText = t.note ?? ""; editingNote = true }
             }
         }
     }
@@ -142,29 +189,28 @@ struct StageView: View {
 
     private var miniRail: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
                 let all = (model.cockpit?.groups ?? []).flatMap(\.cards)
-                Text("SESSIONS · \(all.count)")
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                    .tracking(1.2).foregroundColor(Theme.textFaint)
+                SectionLabel(text: "Sessions · \(all.count)")
+                    .padding(.horizontal, 8).padding(.bottom, 4)
                 ForEach(all, id: \.id) { c in
-                    Button(action: { model.emit(.focusTask(id: c.id)) }) {
-                        HStack(spacing: 8) {
-                            Dot(status: c.status, size: 6)
-                            Text(c.title).font(.system(size: 13))
-                                .foregroundColor(c.id == model.focusedId ? Theme.text : Theme.textDim)
-                                .lineLimit(1)
-                        }
-                    }.buttonStyle(.plain)
+                    RailRow(action: { model.emit(.focusTask(id: c.id)) }) {
+                        Dot(status: c.status, size: 6)
+                        Text(c.title).font(Theme.fBody)
+                            .foregroundColor(c.id == model.focusedId ? Theme.text : Theme.textDim)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
                 }
                 Spacer(minLength: 20)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 12)
             .padding(.top, topInset)
         }
-        .frame(width: 250)
+        .scrollEdge(topInset + 12)
+        .frame(width: 216)
         .background(Theme.railBg)
-        .overlay(Rectangle().fill(Theme.hairline).frame(width: 1), alignment: .leading)
+        .overlay(Rectangle().fill(Theme.hairlineSoft).frame(width: 1), alignment: .leading)
     }
 }
 
@@ -177,12 +223,16 @@ struct QuestionBlock: View {
     @State private var answerText = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9) {
             if question.irreversible == true {
-                Text("⚠ irreversible").font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.cError)
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                    Text("Irreversible").font(Theme.fCap).fontWeight(.semibold)
+                }
+                .foregroundColor(Theme.cError)
             }
             Text(question.text)
-                .font(.system(size: 13.5)).foregroundColor(Theme.cNeeds)
+                .font(.system(size: 13.5)).foregroundColor(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
             if let choices = question.choices, !choices.isEmpty {
                 FlowChips(choices: choices) { idx in
@@ -190,19 +240,32 @@ struct QuestionBlock: View {
                 }
             } else {
                 HStack(spacing: 8) {
-                    TextField(question.kind == "confirm" ? "type to confirm…" : "type your answer…", text: $answerText, onCommit: send)
+                    TextField(question.kind == "confirm" ? "Type to confirm…" : "Type your answer…",
+                              text: $answerText, onCommit: send)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 13)).foregroundColor(Theme.text)
-                        .padding(.horizontal, 11).padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.35)))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline, lineWidth: 1))
-                    ActButton(label: "send", go: true, action: send)
+                        .font(Theme.fBody).foregroundColor(Theme.text)
+                        .padding(.horizontal, 11).padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: Theme.controlRadius)
+                            .fill(Theme.sunken))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius)
+                            .stroke(Theme.hairline, lineWidth: 0.5))
+                    ActButton(label: "Send", go: true, action: send)
                 }
-                Text("🎙 or hold the Remote key and speak your answer")
-                    .font(.system(size: 11)).foregroundColor(Theme.textFaint)
+                HStack(spacing: 5) {
+                    Image(systemName: "mic").font(.system(size: 9.5))
+                    Text("or hold the Remote key and speak your answer").font(.system(size: 11))
+                }
+                .foregroundColor(Theme.textFaint)
             }
         }
+        .padding(13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Theme.cardRadius)
+            .fill(Theme.cNeeds.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
+            .stroke(Theme.cNeeds.opacity(0.26), lineWidth: 0.5))
     }
+
     private func send() {
         let v = answerText.trimmingCharacters(in: .whitespaces)
         guard !v.isEmpty else { return }
@@ -215,19 +278,40 @@ struct QuestionBlock: View {
 struct FlowChips: View {
     let choices: [String]
     let onPick: (Int) -> Void
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(choices.enumerated()), id: \.offset) { idx, c in
-                Button(action: { onPick(idx) }) {
-                    Text("\(idx + 1). \(c)")
-                        .font(.system(size: 13)).foregroundColor(Color(red: 0.94, green: 0.83, blue: 0.60))
-                        .padding(.horizontal, 11).padding(.vertical, 7)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.accent.opacity(0.12)))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accentDim, lineWidth: 1))
-                }.buttonStyle(.plain)
+                ChoiceChip(index: idx, label: c) { onPick(idx) }
             }
         }
+    }
+}
+
+private struct ChoiceChip: View {
+    let index: Int
+    let label: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                NumText(text: "\(index + 1)", color: Theme.textFaint).frame(width: 10, alignment: .leading)
+                Text(label).font(Theme.fBody).foregroundColor(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 11).padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: Theme.controlRadius)
+                .fill(hovering ? Theme.raisedHover : Theme.raised))
+            .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius)
+                .stroke(Theme.hairline, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Theme.hover, value: hovering)
     }
 }
 
@@ -238,57 +322,71 @@ struct DeadPanel: View {
     let t: TaskDetail
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("session ended · \(Theme.statusLabel(t.status))")
-                .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textFaint)
+        VStack(alignment: .leading, spacing: 9) {
+            SectionLabel(text: "Session ended · \(Theme.statusLabel(t.status))")
+
             if let r = t.result {
                 Text(r.summary).font(.system(size: 13.5)).foregroundColor(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                 if let d = r.detail, !d.isEmpty {
-                    ScrollView { MarkdownText(text: d).frame(maxWidth: .infinity, alignment: .leading) }
-                        .frame(maxHeight: 180)
+                    ScrollView {
+                        MarkdownText(text: d).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 180)
                 }
                 if let arts = r.artifacts, !arts.isEmpty {
                     HStack(spacing: 6) {
                         ForEach(Array(arts.enumerated()), id: \.offset) { _, a in
                             Button(action: { model.emit(.openArtifact(type: a.type, value: a.value)) }) {
-                                Text("↗ \(a.value)")
-                                    .font(.system(size: 12)).foregroundColor(Theme.cReady).lineLimit(1)
-                                    .padding(.horizontal, 9).padding(.vertical, 5)
-                                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.cReady.opacity(0.1)))
-                                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.cReady.opacity(0.3), lineWidth: 1))
+                                HStack(spacing: 5) {
+                                    Image(systemName: a.type == "url"
+                                          ? "arrow.up.forward.square" : "doc")
+                                        .font(.system(size: 10))
+                                    Text(a.value).font(Theme.fSub).lineLimit(1)
+                                }
+                                .foregroundColor(Theme.cReady)
+                                .padding(.horizontal, 9).padding(.vertical, 5)
+                                .background(Capsule().fill(Theme.cReady.opacity(0.11)))
+                                .overlay(Capsule().stroke(Theme.cReady.opacity(0.28), lineWidth: 0.5))
                             }.buttonStyle(.plain)
                         }
                     }
                 }
             } else if let e = t.error {
                 Text(e.reason).font(.system(size: 13.5)).foregroundColor(Theme.cError)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let d = e.detail, !d.isEmpty {
-                    Text(d).font(.system(size: 12)).foregroundColor(Theme.textDim)
+                    Text(d).font(Theme.fSub).foregroundColor(Theme.textDim)
                 }
             } else if let gap = t.mcpGap {
-                Text(gap.message).font(.system(size: 13)).foregroundColor(Theme.textDim)
+                Text(gap.message).font(Theme.fBody).foregroundColor(Theme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(gap.fixCommand)
-                    .font(.system(size: 12, design: .monospaced)).foregroundColor(Theme.cReady)
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Color.black.opacity(0.4)))
+                    .font(Theme.fTerm).foregroundColor(Theme.cReady)
+                    .padding(9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(Theme.sunken))
                     .onTapGesture {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(gap.fixCommand, forType: .string)
-                        model.toast = "fix command copied"
+                        model.toast = "Fix command copied"
                     }
-                    .help("click to copy")
+                    .help("Click to copy")
             } else {
-                Text("No recorded output.").font(.system(size: 13)).foregroundColor(Theme.textFaint)
+                Text("No recorded output.").font(Theme.fBody).foregroundColor(Theme.textFaint)
             }
+
             HStack(spacing: 8) {
-                ActButton(label: "resume — continue with full context", go: true) { model.emit(.resume(id: t.id)) }
-                ActButton(label: "re-run fresh") { model.emit(.rerun(id: t.id)) }
-            }.padding(.top, 4)
+                ActButton(label: "Resume — continue with full context", go: true) {
+                    model.emit(.resume(id: t.id))
+                }
+                ActButton(label: "Re-run fresh") { model.emit(.rerun(id: t.id)) }
+            }.padding(.top, 3)
         }
         .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.cardBg))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hairline, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.raised))
+        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
+            .stroke(Theme.hairline, lineWidth: 0.5))
     }
 }

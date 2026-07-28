@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, setReasoning, type ReasoningState, type ReasoningAxis } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, readReasoningLabel, setReasoning, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, type CodexSnapshot } from './rollout'
 
@@ -176,6 +176,30 @@ export class CodexDesktopDriver {
   private async applyApprovalPolicy(cdp: CodexCdp, userMode: UnmutePermissionMode): Promise<void> {
     try {
       const current = levelFromLabel(await readApprovalLabel(cdp))
+
+      // CHEAP PRE-CHECK, and it has to come BEFORE readApprovalMenu.
+      //
+      // readApprovalMenu OPENS the permissions menu to enumerate levels, and it
+      // ran on every dispatch — the `policy.level === current` early-return
+      // below fires only AFTER the menu has already been opened. So every Codex
+      // task touched a menu before typing, which is the thing that leaves the
+      // composer unable to submit. Reading the button's own label costs one
+      // evaluate and opens nothing.
+      //
+      // The ceiling logic is choosePolicy's, mirrored: auto-approve wants
+      // full-access, anything else wants approve-for-me. If we are already
+      // there, nothing about opening the menu could change the outcome.
+      // NEVER DOWNGRADE. A user who has deliberately turned Full Access on —
+      // reading the dialog and confirming it — must not have it quietly taken
+      // away by a dictated task. We only ever raise, and only as far as
+      // choosePolicy allows.
+      const ORDER: CodexApprovalLevel[] = ['ask', 'approve-for-me', 'full-access']
+      const ceiling: CodexApprovalLevel = 'approve-for-me'
+      if (current && ORDER.indexOf(current) >= ORDER.indexOf(ceiling)) {
+        log.event('codex-approval-unchanged', { level: current, userMode, atOrAbove: ceiling })
+        return
+      }
+
       const available = levelsFromMenu(await readApprovalMenu(cdp, (ms) => this.sleep(ms)))
       if (!available.length) { log.warn('codex-approval-menu-empty', {}); return }
       const policy = choosePolicy(available, userMode)
@@ -202,20 +226,60 @@ export class CodexDesktopDriver {
    * follow, for the same reason.
    */
   async reasoningOptions(): Promise<ReasoningState> {
-    const cdp = await this.connect()
-    if (!cdp) return { label: null, current: {}, options: {} }
-    const state = await readReasoning(cdp, (ms) => this.sleep(ms))
-    log.event('codex-reasoning-read', { label: state.label, current: state.current })
-    return state
+    return await this.serialize('read', async () => {
+      const cdp = await this.connect()
+      if (!cdp) {
+        log.warn('codex-reasoning-read', { ok: false, reason: 'no-cdp' })
+        return { label: null, current: {}, options: {} }
+      }
+      const state = await readReasoning(cdp, (ms) => this.sleep(ms))
+      log.event('codex-reasoning-read', { label: state.label, current: state.current })
+      return state
+    })
   }
 
-  /** Set one axis of the reasoning control on the current composer. */
-  async setReasoningAxis(axis: ReasoningAxis, value: string): Promise<boolean> {
-    const cdp = await this.connect()
-    if (!cdp) return false
-    const ok = await setReasoning(cdp, axis, value, (ms) => this.sleep(ms))
-    log[ok ? 'event' : 'warn']('codex-reasoning-set', { axis, value, ok })
-    return ok
+  /**
+   * Set one axis of the reasoning control on the current composer.
+   *
+   * The returned trace is the whole point: `ok` alone was what let three builds
+   * ship with every pick dead. Callers log it verbatim.
+   */
+  async setReasoningAxis(axis: ReasoningAxis, value: string): Promise<SetReasoningTrace> {
+    return await this.serialize('set', async () => {
+      const cdp = await this.connect()
+      if (!cdp) {
+        const t: SetReasoningTrace = { axis, want: value, stage: 'menu-closed', ok: false, ms: 0 }
+        log.warn('codex-reasoning-set', { ...t, reason: 'no-cdp' })
+        return t
+      }
+      const trace = await setReasoning(cdp, axis, value, (ms) => this.sleep(ms))
+      // A click that changed nothing is a FAILURE, however cleanly it ran.
+      log[trace.ok && trace.changed ? 'event' : 'warn']('codex-reasoning-set', { ...trace })
+      return trace
+    })
+  }
+
+  /**
+   * One reasoning operation at a time, app-wide.
+   *
+   * Each pick used to fire a multi-second refresh walk that opens, reads and
+   * ESCAPES the same menu the next pick needs. Five clicks in twelve seconds
+   * meant pick N+1 opened into pick N's teardown, and the log showed a submenu
+   * read of `[]` — nothing was open at all. These operations share one piece of
+   * global state (the open menu), so they cannot overlap.
+   */
+  private reasoningChain: Promise<unknown> = Promise.resolve()
+  private async serialize<T>(kind: string, fn: () => Promise<T>): Promise<T> {
+    const queuedAt = Date.now()
+    const run = this.reasoningChain.then(async () => {
+      const waited = Date.now() - queuedAt
+      if (waited > 250) log.info('codex-reasoning-queued', { kind, waitedMs: waited })
+      return await fn()
+    })
+    // Keep the chain alive even when this link rejects, or one thrown error
+    // would wedge every later pick.
+    this.reasoningChain = run.catch(() => undefined)
+    return await run
   }
 
   /**
@@ -233,6 +297,24 @@ export class CodexDesktopDriver {
     const wanted: Array<[ReasoningAxis, string | undefined]> =
       [['Model', want.model], ['Effort', want.effort], ['Speed', want.speed]]
     if (!wanted.some(([, v]) => v)) return async () => {}
+
+    // CHEAP PRE-CHECK — do not open a single menu unless something must change.
+    //
+    // The button already states what is live ("5.6 Sol High"), and reading it is
+    // one evaluate. Walking the menus to discover the same thing costs seconds
+    // AND leaves the composer unable to submit: a dispatch that opened them
+    // typed its intent correctly and then sat there while Enter did nothing
+    // (codex-create-send-unconfirmed). Dispatches that never touched a menu sent
+    // instantly. Since the pill writes these preferences from the SAME live
+    // values it reads, the overwhelmingly common case is that nothing differs.
+    const liveLabel = (await readReasoningLabel(cdp)).toLowerCase().replace(/[\s-]+/g, '')
+    const satisfied = wanted.every(([, v]) =>
+      !v || liveLabel.includes(v.toLowerCase().replace(/[\s-]+/g, '')))
+    if (satisfied) {
+      log.event('codex-reasoning-already-set', { want, label: liveLabel })
+      return async () => {}
+    }
+
     const before = await readReasoning(cdp, (ms) => this.sleep(ms))
     const changed: Array<[ReasoningAxis, string]> = []
     for (const [axis, value] of wanted) {
@@ -243,7 +325,9 @@ export class CodexDesktopDriver {
         continue
       }
       if (before.current[axis] === value) continue
-      if (await setReasoning(cdp, axis, value, (ms) => this.sleep(ms))) {
+      const trace = await setReasoning(cdp, axis, value, (ms) => this.sleep(ms))
+      log[trace.ok && trace.changed ? 'event' : 'warn']('codex-reasoning-dispatch-set', { ...trace })
+      if (trace.ok) {
         const prev = before.current[axis]
         if (prev) changed.push([axis, prev])
       }
@@ -317,6 +401,48 @@ export class CodexDesktopDriver {
     for (let i = 0; i < 20; i++) {
       await this.sleep(200)
       if (!(await cdp.composerText()).trim()) { sent = true; break }
+    }
+
+    // FALL BACK TO THE SEND BUTTON.
+    //
+    // Enter is a key event to whatever holds focus; the button is the app's own
+    // submit path and does not care what the page thinks the pointer or focus
+    // is doing. A dispatch once typed its whole intent correctly and then died
+    // because Enter did nothing after some menus had been opened — the work was
+    // done and the task stranded on the last inch.
+    if (!sent) {
+      log.warn('codex-create-enter-ignored', { retrying: 'send-button' })
+      // FOUND BY EXCLUSION, because Codex's send control has no identity of its
+      // own: no aria-label, no data-app-action-id, no data-testid. The composer
+      // chrome holds exactly three buttons — the reasoning picker (which carries
+      // data-composer-navigation-target), "Dictate" (aria-label), and the submit
+      // arrow, which is the one with neither. Guessing at [aria-label="Send"]
+      // matched nothing and made this whole fallback dead code.
+      const clicked = await cdp.evaluate<string>(`(() => {
+        const anchor = document.querySelector('[data-composer-navigation-target="reasoning"]');
+        if (!anchor) return '';
+        let root = anchor;
+        for (let i = 0; i < 6 && root.parentElement; i++) root = root.parentElement;
+        const btns = [...root.querySelectorAll('button')].filter((b) =>
+          !b.getAttribute('data-composer-navigation-target') && !b.getAttribute('aria-label'));
+        // Rightmost wins if more than one survives — submit sits at the end.
+        const el = btns.sort((a, b) =>
+          a.getBoundingClientRect().left - b.getBoundingClientRect().left).pop();
+        if (!el) return '';
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+      })()`)
+      if (typeof clicked === 'string' && clicked) {
+        const at = JSON.parse(clicked) as { x: number; y: number }
+        await cdp.click(at.x, at.y)
+        for (let i = 0; i < 15; i++) {
+          await this.sleep(200)
+          if (!(await cdp.composerText()).trim()) { sent = true; break }
+        }
+        log.event('codex-create-send-button', { ok: sent })
+      } else {
+        log.warn('codex-create-no-send-button', {})
+      }
     }
     if (!sent) { log.warn('codex-create-send-unconfirmed', {}); return { ok: false, reason: 'send-failed' } }
     log.event('codex-create-sent', {})

@@ -45,7 +45,7 @@ import type { AgentExecutor, ExecutorFactory } from './executor'
 import { settleRepl } from './repl-settle'
 import { type AgentKind, isExternalAgent } from './codex-executor'
 import type { CodexDesktopDriver } from './codex/driver'
-import { beat, pendingApprovals, decideApproval, clearApproval, describeApproval } from './codex/hooks'
+import { beat, pendingApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
 
 const log = createLogger('task-manager')
 
@@ -624,6 +624,19 @@ export class TaskManager extends EventEmitter {
     const kind = opts.kind ?? 'oneoff'
 
     tlog.event('codex-dispatch-begin', { project: opts.project ?? null, kind, intentLen: intent.length })
+
+    // REPAIR THE APPROVAL CHANNEL BEFORE DISPATCHING, not only on connect.
+    //
+    // Two stat calls when it is healthy, which is always. When it is not, a
+    // Codex task that stops for permission is invisible to unmute — it sits at
+    // "Working" while Codex shows its own dialog somewhere the user is not
+    // looking, and there is no way to answer from the notch. Field-observed:
+    // config.toml still trusted a hooks.json that had ceased to exist.
+    //
+    // Never fatal. A task at the user's existing approval level beats no task.
+    await ensureApprovalHook({ runtime: process.execPath })
+      .then((r) => { if (!('reason' in r) || r.reason !== 'present') log.event('codex-hook-repaired', { ...r }) })
+      .catch((e) => log.warn('codex-hook-repair-failed', { error: (e as Error).message }))
     const reasoning = this.opts.codexReasoning?.() ?? {}
     const modelLabel = [reasoning.model, reasoning.effort].filter(Boolean).join(' ') || undefined
     const created = await driver.createTask(intent, {
@@ -1734,6 +1747,26 @@ export class TaskManager extends EventEmitter {
     const tlog = log.child({ taskId: id })
     const task = this.tasks.get(id)
     if (!task) { tlog.warn('resume: no such task'); return false }
+
+    // A CODEX TASK IS NOT A PTY, AND RESUMING IT MUST NOT SPAWN ONE.
+    //
+    // Everything below builds a Claude Code session. Without this guard a
+    // resume targeting a Codex task ran `claude --continue` inside that task's
+    // directory — where no Claude conversation has ever existed — and the
+    // process exited 0 within seconds. Observed in the field: a Codex thread
+    // was created, the user switched the picker to Claude, the router chose to
+    // resume that thread, and the resume silently ran the wrong backend.
+    //
+    // The create path has always had this guard
+    // (`if (isExternalAgent(opts.agent)) return this.dispatchCodexDesktop(...)`);
+    // resume never got one. A Codex thread lives in the Codex app and is never
+    // dead in the sense a PTY is, so "resuming" it means nothing more than the
+    // thread still being there — which the poller re-establishes on its own.
+    if (task.agent === 'codex-desktop' || task.codexThreadId) {
+      tlog.event('resume-codex-noop', { threadId: task.codexThreadId ?? null })
+      return !!task.codexThreadId
+    }
+
     if (this.executors.get(id)?.alive) { tlog.event('resume-noop-already-alive', {}); return true }
     try { await fs.access(task.cwd) } catch { tlog.warn('resume: task dir gone — cannot resume', {}); return false }
 

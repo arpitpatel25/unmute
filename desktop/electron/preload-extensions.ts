@@ -243,6 +243,33 @@ export const paywallPreloadExtensions = {
   hudSetInteractive: (on: boolean): void =>
     ipcRenderer.send('hud:set-interactive', on),
 
+  // ── The native input surface ──
+  //
+  // The pill's PIXELS live in the Swift helper; its BEHAVIOUR stays here,
+  // because this renderer owns the audio. These push what to draw and receive
+  // what the user did.
+  //
+  // `send`, never `invoke`: pillPushLevel runs on the capture path and a
+  // round-trip per animation frame is exactly the main-process work that
+  // corrupts audio.
+  pillPushState: (state: Record<string, unknown>): void =>
+    ipcRenderer.send('pill:state', state),
+  /** Hot path — amplitude only, while recording. */
+  pillPushLevel: (level: number, elapsed?: number): void =>
+    ipcRenderer.send('pill:level', level, elapsed),
+  pillHide: (): void => ipcRenderer.send('pill:hide'),
+  onPillEvent: (cb: (e: { type: string; value?: unknown }) => void): (() => void) => {
+    const h = (_e: unknown, payload: { type: string; value?: unknown }) => cb(payload)
+    ipcRenderer.on('pill:event', h as never)
+    return () => ipcRenderer.removeListener('pill:event', h as never)
+  },
+
+  /** Surface material: 'system' (default — follows Reduce Transparency) | 'glass' | 'solid'. */
+  getSurfaceAppearance: (): Promise<'system' | 'glass' | 'solid'> =>
+    ipcRenderer.invoke('remote:get-surface-appearance'),
+  setSurfaceAppearance: (v: 'system' | 'glass' | 'solid'): Promise<'system' | 'glass' | 'solid'> =>
+    ipcRenderer.invoke('remote:set-surface-appearance', v),
+
   // Token refresh sync — main broadcasts new tokens when paywall-route
   // forces a refresh on 401. Renderer subscribes and pushes them into
   // supabase-js via setSession so the renderer doesn't later try the

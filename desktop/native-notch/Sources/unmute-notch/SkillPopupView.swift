@@ -30,52 +30,63 @@ struct SkillPopupView: View {
         VStack(alignment: .leading, spacing: 0) {
             // header
             HStack(spacing: 9) {
-                Text(kindLabel(p.kind))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(kindColor(p.kind))
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 5).fill(kindColor(p.kind).opacity(0.14)))
-                Text(p.name).font(.system(size: 16, weight: .semibold)).foregroundColor(Theme.text)
+                Badge(text: kindLabel(p.kind), color: kindColor(p.kind))
+                Text(p.name).font(Theme.fTitle).foregroundColor(Theme.text)
                 Spacer(minLength: 0)
-                Button(action: cancel) { Text("✕").font(.system(size: 15)).foregroundColor(Theme.textFaint) }
-                    .buttonStyle(.plain)
+                CloseButton(action: cancel)
             }
             .padding(.horizontal, 18).padding(.vertical, 14)
-            Divider().background(Theme.hairline)
+            Divider().background(Theme.hairlineSoft)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(p.evidence)
-                        .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textFaint)
+                        .font(Theme.fSub).foregroundColor(Theme.textFaint)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // A DECISION surface, not a glance surface — wider measure
+                    // and a larger body than anything else in the notch, because
+                    // this is read and weighed rather than scanned.
                     Text(p.summary)
-                        .font(.system(size: 13.5)).foregroundColor(Color(white: 0.87))
+                        .font(.system(size: 13.5)).foregroundColor(Theme.text)
                         .fixedSize(horizontal: false, vertical: true)
                     if let bullets = p.bullets, !bullets.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 5) {
                             ForEach(Array(bullets.enumerated()), id: \.offset) { _, b in
-                                Text("· \(b)").font(.system(size: 12.5)).foregroundColor(Theme.textDim)
+                                HStack(alignment: .top, spacing: 7) {
+                                    Text("•").font(Theme.fSub).foregroundColor(Theme.textFaint)
+                                    Text(b).font(Theme.fSub).foregroundColor(Theme.textDim)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                             }
                         }
                     }
                     if p.kind != "retire", p.body != nil || p.diff != nil {
                         Button(action: { showDetails.toggle() }) {
-                            Text(showDetails ? "▾ Hide details" : "▸ Show details" + (p.diff != nil ? " (diff)" : " (the drafted SKILL.md)"))
-                                .font(.system(size: 12.5)).foregroundColor(Color(red: 0.25, green: 0.75, blue: 0.64))
+                            HStack(spacing: 5) {
+                                Image(systemName: showDetails ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 9, weight: .semibold))
+                                Text(showDetails
+                                     ? "Hide details"
+                                     : (p.diff != nil ? "Show diff" : "Show the drafted SKILL.md"))
+                                    .font(Theme.fSub)
+                            }
+                            .foregroundColor(Theme.cReady)
                         }.buttonStyle(.plain)
                         if showDetails {
                             ScrollView {
                                 Text(p.diff ?? p.body ?? "")
-                                    .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textDim)
+                                    .font(Theme.fTerm).foregroundColor(Theme.textDim)
+                                    .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .frame(maxHeight: 220)
                             .padding(10)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.4)))
+                            .background(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(Theme.sunken))
                         }
                     }
                     // Tell me what to change — the review conversation.
                     VStack(alignment: .leading, spacing: 7) {
-                        Text("Tell me what to change").font(.system(size: 12)).foregroundColor(Theme.textDim)
+                        SectionLabel(text: "Tell me what to change")
                         TextField("e.g. only the work account, and cc me the doc link…", text: $convoText, onCommit: {
                             let v = convoText.trimmingCharacters(in: .whitespaces)
                             guard !v.isEmpty else { return }
@@ -83,19 +94,21 @@ struct SkillPopupView: View {
                             convoText = ""
                         })
                         .textFieldStyle(.plain)
-                        .font(.system(size: 13)).foregroundColor(Theme.text)
+                        .font(Theme.fBody).foregroundColor(Theme.text)
                         .padding(.horizontal, 11).padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.4)))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline, lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(Theme.sunken))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius)
+                            .stroke(Theme.hairline, lineWidth: 0.5))
                         if !model.convLog.isEmpty {
                             ScrollView {
                                 Text(model.convLog)
-                                    .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textDim)
+                                    .font(Theme.fTerm).foregroundColor(Theme.textDim)
+                                    .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .frame(maxHeight: 140)
-                            .padding(8)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.35)))
+                            .padding(9)
+                            .background(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(Theme.sunken))
                         }
                     }
                     .padding(.top, 4)
@@ -103,20 +116,24 @@ struct SkillPopupView: View {
                 .padding(18)
             }
 
-            Divider().background(Theme.hairline)
-            // footer
+            Divider().background(Theme.hairlineSoft)
+            // footer — ONE tinted primary; everything else recedes.
             HStack(spacing: 9) {
-                ActButton(label: "Accept", go: true) { model.emit(.suggestionAccept(id: p.id)) }
+                ActButton(label: "Accept — write the skill", go: true) {
+                    model.emit(.suggestionAccept(id: p.id))
+                }
                 if rejecting {
-                    TextField("why? (recorded)", text: $rejectReason, onCommit: {
+                    TextField("Why? (recorded)", text: $rejectReason, onCommit: {
                         model.emit(.suggestionReject(id: p.id, reason: rejectReason))
                         close()
                     })
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12.5)).foregroundColor(Theme.text)
+                    .font(Theme.fSub).foregroundColor(Theme.text)
                     .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.4)))
-                    ActButton(label: "confirm reject", danger: true) {
+                    .background(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(Theme.sunken))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius)
+                        .stroke(Theme.hairline, lineWidth: 0.5))
+                    ActButton(label: "Confirm reject", danger: true) {
                         model.emit(.suggestionReject(id: p.id, reason: rejectReason))
                         close()
                     }
@@ -124,16 +141,15 @@ struct SkillPopupView: View {
                     ActButton(label: "Reject") { rejecting = true }
                 }
                 Spacer(minLength: 0)
-                Button(action: cancel) {
-                    Text("cancel — keep pending").font(.system(size: 12)).foregroundColor(Theme.textFaint)
-                }.buttonStyle(.plain)
+                QuietButton(label: "Cancel — keep pending", color: Theme.textFaint, action: cancel)
             }
             .padding(.horizontal, 18).padding(.vertical, 13)
         }
         .frame(width: 560)
         .frame(maxHeight: 620)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(white: 0.075)))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.14), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 14)
+            .fill(Color(red: 0.10, green: 0.11, blue: 0.13)))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.hairline, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.6), radius: 34, y: 14)
         .onTapGesture {} // swallow — scrim handles cancel
     }

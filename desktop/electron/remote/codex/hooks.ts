@@ -50,7 +50,7 @@
 // agent when unmute is closed would be worse than no channel at all.
 
 import { spawn } from 'node:child_process'
-import { promises as fs } from 'node:fs'
+import { existsSync, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createLogger } from '../log'
@@ -151,11 +151,25 @@ while (Date.now() < deadline) {
     try { behavior = JSON.parse(raw).behavior } catch {}
     try { fs.unlinkSync(decision) } catch {}
     try { fs.unlinkSync(pending) } catch {}
-    if (behavior === 'allow' || behavior === 'deny') {
-      done(JSON.stringify({
-        suppressOutput: true,
-        hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior } },
-      }))
+    // CODEX'S CONTRACT, NOT CLAUDE'S.
+    //
+    // This used to emit Claude Code's shape —
+    //   { suppressOutput, hookSpecificOutput: { hookEventName, decision: { behavior } } }
+    // — and Codex recognises NONE of those keys (verified against the binary:
+    // hookSpecificOutput 0 matches, hookEventName 0, suppressOutput 0). So a
+    // DENY was silently ignored, Codex fell through to its own auto_review
+    // reviewer, and the command ran anyway. A user tapped Deny in the notch and
+    // the file was created on their Desktop.
+    //
+    // Codex's own strings give the contract: "hook returned decision:block
+    // without a non-empty reason" and "Command blocked by PreToolUse hook: ".
+    // The accepted values are 'allow' and 'block', and a block REQUIRES a
+    // non-empty reason or it is discarded.
+    if (behavior === 'deny') {
+      done(JSON.stringify({ decision: 'block', reason: 'Denied in unmute' }))
+    }
+    if (behavior === 'allow') {
+      done(JSON.stringify({ decision: 'allow' }))
     }
     done(NO_OPINION)
   }
@@ -213,6 +227,39 @@ export interface InstallResult {
  * clobbers the user's other hooks, and re-trusts the new hash. Idempotent by
  * construction — the hash only changes when we change the script.
  */
+/**
+ * Repair the approval channel if it has gone missing.
+ *
+ * Installation is tied to an explicit "connect Codex" — reasonable for the
+ * FIRST install, but it cannot be the only check. These files live outside the
+ * app bundle, so a Codex update, an app move, or a cleaned home directory takes
+ * them away and nothing notices: Codex is left holding a trusted hash for a
+ * file that no longer exists, every approval goes to Codex's own dialog, and a
+ * task blocked on permission sits at "Working" forever with no way to answer it
+ * from the notch. Observed in the field exactly that way — config.toml still
+ * trusted hooks.json days after hooks.json had ceased to exist.
+ *
+ * The check is two stat calls, so it is free to run before every dispatch. The
+ * REPAIR costs an app-server round trip, so it only happens when something is
+ * actually gone — and reinstalling is already idempotent by design.
+ */
+export async function ensureApprovalHook(opts: {
+  runtime: string
+  codexCli?: string
+  home?: string
+}): Promise<InstallResult | { ok: true; reason: 'present' }> {
+  const shim = join(hookDir(), 'permission-request.sh')
+  const handler = join(hookDir(), 'permission-request.cjs')
+  const hooksJson = join(opts.home ?? codexHome(), 'hooks.json')
+  if (existsSync(shim) && existsSync(handler) && existsSync(hooksJson)) {
+    return { ok: true, reason: 'present' }
+  }
+  log.warn('codex-hook-missing', {
+    shim: existsSync(shim), handler: existsSync(handler), hooksJson: existsSync(hooksJson),
+  })
+  return await installApprovalHook(opts)
+}
+
 export async function installApprovalHook(opts: {
   /** Absolute path to the Electron binary that will run the handler. */
   runtime: string
@@ -252,9 +299,28 @@ export async function installApprovalHook(opts: {
   const others = Array.isArray(events.PermissionRequest) ? events.PermissionRequest.filter((e) => !MINE(e)) : []
   events.PermissionRequest = [
     ...others,
-    // No `matcher` would default the timeout to 600s; we set both explicitly so
-    // Codex's kill deadline is always comfortably past our own wait.
-    { matcher: '*', hooks: [{ type: 'command', command: shim, timeout: waitSec + 30 }] },
+    // ASYNC:FALSE IS THE WHOLE POINT, AND IT IS A REQUIRED FIELD WE OMITTED.
+    //
+    // ConfiguredHookHandler requires ['async','command','type']. Without
+    // `async: false` Codex runs the hook FIRE-AND-FORGET: it starts our handler,
+    // does not wait, and executes the command anyway. Measured — the hook fired
+    // at :06, the command completed at :15, and the user's Deny arrived at :51
+    // into a process nobody was listening to. A denial cannot be enforced by a
+    // hook that the agent is not waiting on.
+    //
+    // THE FILE FORMAT IS NOT THE RPC FORMAT. On disk the key is `timeout`;
+    // Codex maps it to `timeoutSec` when it reports the hook back over
+    // hooks/list. Probed directly — writing timeout:111 and timeoutSec:222 made
+    // hooks/list report timeoutSec:111. Setting `timeoutSec` in the file (which
+    // is what the app-server's ConfiguredHookHandler schema calls it) is
+    // silently ignored and Codex falls back to its 600s default.
+    //
+    // `async` stays: it is REQUIRED by that same schema, and without it Codex
+    // treats the hook as fire-and-forget — it starts our handler, does not wait,
+    // and runs the command anyway. hooks/list does not echo the field, so
+    // whether the file honours this spelling is confirmed only by observing
+    // that a denial is actually enforced.
+    { matcher: '*', hooks: [{ type: 'command', command: shim, async: false, timeout: waitSec + 30 }] },
   ]
   file.hooks = events
   if (!file.description) file.description = 'Hooks configured by unmute and by you.'

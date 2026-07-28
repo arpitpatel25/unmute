@@ -1,36 +1,39 @@
 import SwiftUI
 import AppKit
 
-// The glass lip.
+// THE MATERIAL — two tiers, one design.
 //
-// The notch used to be a flat near-black fill inside a UNIFORM white ring, which
-// reads as a sticker laid on the screen rather than a surface above it: a real
-// edge never has the same brightness at the bottom as at the top, and a real
-// surface never has a hard boundary with nothing behind it.
+// Package.swift declares .macOS(.v13). Real Liquid Glass (NSGlassEffectView /
+// .glassEffect) needs macOS 26. So the material ships in two tiers that are
+// visually continuous — identical geometry, type, colour and motion, differing
+// only in how the surface is produced:
 //
-// The fix is deliberately NOT "make the whole panel translucent". Body text has
-// to sit on solid ground, and a full-height blur went milky-grey over a light
-// page and hurt legibility. So the panel stays PITCH BLACK everywhere content
-// lives, and becomes glass only in the last `lip` points — the band where the
-// bottom corner radius curves away and there is nothing to read anyway.
+//   TIER A (macOS 26+)  — the system material. Real lensing: light is BENT and
+//                         concentrated rather than scattered. Adapts its tint,
+//                         shadow and dynamic range to what is behind it, flips
+//                         light/dark on small elements, and follows the user's
+//                         global Liquid Glass opacity slider for free.
 //
-// Four things stack up inside that band, and all four are needed:
-//   1. MATERIAL  — a real NSVisualEffectView sampling what is BEHIND the window.
-//                  This is the part that makes it glass instead of a colour: the
-//                  wallpaper/app underneath genuinely shows through, blurred.
-//   2. TINT      — near-opaque black that falls away only across the lip, so the
-//                  material is revealed rather than pasted over.
-//   3. RIM       — a gradient hairline: bright on the top edge, ~nothing down the
-//                  sides, bright again at the lip. Replaces the uniform ring.
-//   4. THICKNESS — inner highlights top and bottom so the shape reads as a slab
-//                  with an edge, not a hole cut in the screen.
+//   TIER B (macOS 13–15) — NSVisualEffectView plus a hand-built rim. Blurs, but
+//                         cannot lens and cannot follow the system slider. This
+//                         is the original four-layer stack that shipped here,
+//                         kept almost unchanged; the reasoning behind it still
+//                         holds and it remains the correct floor.
 //
-// Everything is anchored in POINTS from the bottom, never in fractions of the
-// height. The cockpit is ~5x taller than the pill; a fractional lip would be a
-// thin line on one and a huge wash on the other (which is exactly what the first
-// attempt got wrong).
+// WHY THE BODY IS OPAQUE IN BOTH TIERS. Apple reserves glass for the navigation
+// layer floating above content. The small states ARE that layer — nothing sits
+// behind them but wallpaper — so they are wholly glass. The large states carry
+// real content (a terminal, a transcript, a wall of cards), and content on glass
+// is both against the guidance and, measured here first, simply less legible: a
+// full-height blur went milky-grey over a light page. So the large states are a
+// glass SHELL around an OPAQUE PLANE (Theme.plane), which is exactly how a Mac
+// window pairs a glass toolbar with a solid content area.
+//
+// Tier B anchors everything in POINTS from the bottom, never fractions of the
+// height. The cockpit is ~5x taller than the pill; a fractional lip is a thin
+// line on one and a huge wash on the other.
 
-// MARK: - Material
+// MARK: - Tier B material
 
 /// A live backdrop blur of whatever is behind the window. `.behindWindow`
 /// blending is what samples the desktop; `.withinWindow` would only blur our own
@@ -59,68 +62,68 @@ struct VisualEffectBackdrop: NSViewRepresentable {
 // MARK: - Tokens
 
 enum Glass {
-    /// Depth of the glass band, in points from the bottom edge. Tuned against the
-    /// cockpit's 26pt corner radius so the glass and the curve resolve together.
+    /// Depth of the translucent band, in points from the bottom edge. Tuned
+    /// against the panel's corner radius so glass and curve resolve together.
+    /// Only meaningful in Tier B — Tier A's shell is uniformly glass because it
+    /// never contains content directly.
     static func lip(for state: NotchState) -> CGFloat {
         switch state {
         case .dormant:            return 0      // hides against the hardware notch
         case .idle:               return 10
         case .active, .attention: return 12
-        case .task:               return 20
-        case .cockpit:            return 26
+        case .task:               return 18
+        case .cockpit:            return 22
         }
     }
 
-    /// Tint alpha at the very bottom edge. Never 0: a fully clear edge loses the
-    /// shape entirely against a bright backdrop, and the rim alone can't carry it.
-    /// This is THE dial for how glassy the lip reads — lower is more see-through.
-    static let edgeAlpha: Double = 0.30
-    /// Tint alpha everywhere above the lip. FULLY opaque on purpose: at .985 a
-    /// bright window behind still ghosted through at ~1.5%, which is visible on
-    /// white and makes the body look grubby rather than deliberate. Content sits
-    /// on solid ground; all translucency is spent on the lip.
-    static let bodyAlpha: Double = 1.0
-
-    /// Vertical tint ramp, expressed in points from the bottom so it is identical
-    /// on every state. Returns stops for a bottom-anchored gradient.
-    static func tint(lip: CGFloat, height: CGFloat) -> LinearGradient {
-        // Guard: on a zero/short frame (first layout pass) fall back to solid.
-        guard height > 1, lip > 1 else {
-            return LinearGradient(colors: [Color.black.opacity(bodyAlpha)], startPoint: .top, endPoint: .bottom)
+    /// True when this state is wholly glass (pure chrome, no content of its own).
+    /// The large states are a shell around an opaque plane instead.
+    static func isChromeOnly(_ state: NotchState) -> Bool {
+        switch state {
+        case .task, .cockpit: return false
+        default:              return true
         }
-        let lipFrac = min(max(lip / height, 0), 1)
+    }
+
+    /// THE BLACK-GLASS WASH.
+    ///
+    /// The identity is "black glass", not "grey panel": a near-black tint over a
+    /// real behind-window blur, dark enough to own its shape on a white page and
+    /// transparent enough that the wallpaper genuinely moves behind it.
+    ///
+    /// It is NOT opaque. The previous build made the body fully opaque and spent
+    /// all its translucency on a 10–26pt lip, which is why the surface read as a
+    /// solid slab. The large states can afford to be opaque *inside* — but that
+    /// is the content PLANE's job (Theme.plane), not the shell's.
+    static func bodyTint(for state: NotchState) -> LinearGradient {
+        // Large surfaces simulate a THICKER material: deeper tint, less of the
+        // backdrop through it. Apple's stated behaviour for large glass.
+        let top: Double    = isChromeOnly(state) ? 0.64 : 0.72
+        let bottom: Double = isChromeOnly(state) ? 0.44 : 0.58
+        let ink = Color(red: 0.016, green: 0.020, blue: 0.030)
         return LinearGradient(
             stops: [
-                .init(color: Color.black.opacity(bodyAlpha), location: 0),
-                .init(color: Color.black.opacity(bodyAlpha), location: 1 - lipFrac),
-                .init(color: Color(red: 0.004, green: 0.008, blue: 0.016).opacity(0.86), location: 1 - lipFrac * 0.38),
-                .init(color: Color(red: 0.016, green: 0.024, blue: 0.039).opacity(edgeAlpha), location: 1),
+                .init(color: ink.opacity(top), location: 0),
+                .init(color: ink.opacity(top), location: 0.5),
+                // The lip: the band where the corner curves away and there is
+                // nothing to read, so it can be the most transparent part.
+                .init(color: ink.opacity(bottom), location: 1),
             ],
             startPoint: .top, endPoint: .bottom
         )
     }
 
-    /// Mask for the material: fully hidden above the lip, fully shown at the edge.
-    /// Without this the blur covers the whole panel and washes the content out.
-    static func materialMask(lip: CGFloat, height: CGFloat) -> LinearGradient {
-        guard height > 1, lip > 1 else {
-            return LinearGradient(colors: [.clear], startPoint: .top, endPoint: .bottom)
-        }
-        let lipFrac = min(max(lip / height, 0), 1)
-        return LinearGradient(
-            stops: [
-                .init(color: .clear, location: 0),
-                .init(color: .clear, location: 1 - lipFrac),
-                .init(color: Color.black.opacity(0.55), location: 1 - lipFrac * 0.45),
-                .init(color: .black, location: 1),
-            ],
-            startPoint: .top, endPoint: .bottom
-        )
-    }
+    /// How strongly a status hue washes the material.
+    ///
+    /// LOW ON PURPOSE. Apple's adaptive tinting maps a tone range against the
+    /// backdrop it samples; ours has no such feedback, so a full-strength tint
+    /// renders as flat saturated colour. At attention size that was merely loud;
+    /// mid-morph, with the window already resized to the task frame, it was a
+    /// full-screen orange rectangle.
+    static let statusWashAlpha: Double = 0.22
 
     /// The specular rim. Bright where a light source would land (top edge and the
-    /// lip that catches it again), almost nothing down the sides. This is the
-    /// single biggest departure from the old uniform `white.opacity(0.55)` ring.
+    /// lip that catches it again), almost nothing down the sides.
     static func rim(highlight: Color = .white) -> LinearGradient {
         LinearGradient(
             stops: [
@@ -133,58 +136,165 @@ enum Glass {
             startPoint: .top, endPoint: .bottom
         )
     }
+
+    /// Drop shadow. Larger states simulate a THICKER material: deeper shadow,
+    /// more pronounced separation — Apple's stated behaviour for large glass.
+    static func shadowRadius(for state: NotchState) -> CGFloat {
+        isChromeOnly(state) ? 14 : 34
+    }
+    static func shadowY(for state: NotchState) -> CGFloat {
+        isChromeOnly(state) ? 4 : 14
+    }
+    static func shadowOpacity(for state: NotchState) -> Double {
+        isChromeOnly(state) ? 0.32 : 0.46
+    }
 }
 
 // MARK: - The composed surface
 
-/// The notch's background: material + tint + rim + thickness, clipped to `shape`.
-/// Draws nothing above the lip except solid black, so callers can lay content out
-/// exactly as before — with one caveat, handled by `Glass.lip`: keep real content
-/// out of the bottom `lip` points (NotchView adds it as bottom padding).
+/// The notch's background.
+///
+/// TIER A (macOS 26+) IS APPLE'S REAL LIQUID GLASS. An earlier build claimed
+/// `.glassEffect` "samples content within the window" and therefore could not
+/// work in a floating panel. THAT WAS WRONG, and a standalone probe against
+/// this exact window configuration disproved it: the desktop is genuinely
+/// visible through it and it lenses at its own edge.
+///
+/// What actually produced the flat grey was wrapping the glass in `.shadow()`.
+/// A shadow forces offscreen rasterisation, and a rasterised layer has no
+/// backdrop left to sample. One misread observation became a commit message
+/// stated as fact, and an entire hand-built material was built on top of it.
+///
+/// The rim is an OVERLAY STROKE, not a second material — Apple's prohibition is
+/// on stacking glass ON glass, and a stroke is explicitly the correct way to
+/// put something on top of it. Apple's own rim is subtle over a dark backdrop;
+/// ours restores the definition the surface is designed around.
+///
+/// TIER B (macOS 13–15) composes the material by hand and remains a genuine
+/// floor. It blurs but cannot lens, and cannot follow the user's system Liquid
+/// Glass opacity slider.
 struct GlassSurface: View {
     let shape: NotchShape
     let state: NotchState
-    /// Attention states tint the rim amber instead of white.
+    /// Attention tints the rim as well as the material.
     let rimHighlight: Color
-    /// Emphasize the rim (attention ring) without changing its gradient shape.
+    /// Emphasize the rim without changing its gradient shape.
     let rimWidth: CGFloat
+    /// Wash the material in a status hue — the sanctioned use of tint, for a
+    /// state that genuinely needs the user. nil = untinted.
+    var tint: Color? = nil
+
+    @ObservedObject private var appearance = Appearance.shared
 
     var body: some View {
-        GeometryReader { geo in
-            let h = geo.size.height
-            let lip = Glass.lip(for: state)
-            ZStack {
-                // 1 · MATERIAL — the real thing behind the window, revealed only
-                //     across the lip. `.hudWindow` is the darkest stock material,
-                //     which keeps the glass from going pale over a white page.
-                if lip > 0 {
-                    VisualEffectBackdrop(material: .hudWindow)
-                        .mask(Glass.materialMask(lip: lip, height: h))
+        Group {
+            if appearance.translucent {
+                if #available(macOS 26.0, *) {
+                    // REAL LIQUID GLASS. Verified against this exact window
+                    // configuration — a non-activating borderless panel over
+                    // other apps — with a standalone probe: the desktop is
+                    // genuinely visible through it, and it lenses at its own
+                    // edge rather than merely blurring.
+                    //
+                    // NEVER WRAP THIS IN .shadow(). A shadow forces offscreen
+                    // rasterisation, and a rasterised layer has no backdrop to
+                    // sample — which is why the first attempt rendered a flat
+                    // neutral grey and why I wrongly concluded the API could not
+                    // work here at all. The rim below is an OVERLAY STROKE, not
+                    // a second material, so it composes legally: Apple's
+                    // prohibition is on stacking glass ON glass.
+                    Color.clear.glassEffect(glassStyle, in: shape)
+                } else {
+                    tierB
                 }
-                // 2 · TINT — opaque where content lives, falling away at the lip.
-                Glass.tint(lip: lip, height: h)
-                // 3 · THICKNESS — inner light top and bottom: the shape reads as a
-                //     slab with an edge rather than a hole in the screen.
-                if lip > 0 {
-                    shape
-                        .stroke(
-                            LinearGradient(
-                                stops: [
-                                    .init(color: .white.opacity(0.20), location: 0),
-                                    .init(color: .clear, location: 0.30),
-                                    .init(color: .clear, location: 0.80),
-                                    .init(color: .white.opacity(0.26), location: 1),
-                                ],
-                                startPoint: .top, endPoint: .bottom),
-                            lineWidth: 1)
-                        .blur(radius: 0.5)
-                        .blendMode(.plusLighter)
-                        .opacity(0.9)
+            } else {
+                // FIXED GLASS — see PillView for the full reasoning. A lens that
+                // samples nothing: the specular rim and a top-down falloff are
+                // what read as glass, and both are static. Cannot go stale,
+                // cannot blink, immune to the macOS 26.2 backdrop-caching
+                // regression. Also covers Reduce Transparency.
+                ZStack {
+                    Color(red: 0.055, green: 0.06, blue: 0.075)
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.085),
+                                 Color.white.opacity(0.022),
+                                 Color.white.opacity(0.0)],
+                        startPoint: .top, endPoint: .bottom)
+                    if let tint { tint.opacity(0.16) }
                 }
             }
-            .clipShape(shape)
-            // 4 · RIM — the gradient hairline that replaces the uniform ring.
-            .overlay(shape.stroke(Glass.rim(highlight: rimHighlight), lineWidth: rimWidth))
+        }
+        // REBUILT whenever the backdrop is invalidated — see
+        // Appearance.backdropToken. macOS re-samples what is behind the glass
+        // only when something back there repaints, never merely because the
+        // Space changed; remaking the view is the one lever available.
+        .id(appearance.backdropToken)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipShape(shape)
+        .contentShape(shape)
+        // The specular rim: bright top edge, almost nothing down the sides,
+        // bright again at the lip. Apple's own rim is subtle on a dark backdrop;
+        // this restores the definition the surface is designed around.
+        .overlay(shape.stroke(Glass.rim(highlight: rimHighlight),
+                              lineWidth: appearance.translucent ? rimWidth : max(rimWidth, 1)))
+        .animation(Theme.flip, value: appearance.translucent)
+    }
+
+    @available(macOS 26.0, *)
+    private var glassStyle: Glass26Style {
+        // `.regular` — all adaptive effects, legibility guaranteed in any
+        // context. Attention passes its status hue through Apple's tinting,
+        // which maps a tone range against the backdrop instead of pasting a
+        // flat wash on top.
+        if let tint { return .regular.tint(tint.opacity(0.55)) }
+        return .regular
+    }
+
+    /// macOS 13–15: no Liquid Glass, so the material is composed by hand —
+    /// behind-window sampler, near-black wash, thickness. This is a genuine
+    /// floor, not the design.
+    private var tierB: some View {
+        ZStack {
+                VisualEffectBackdrop(material: .hudWindow)
+
+                // 2 · TINT — a near-black wash that carries the "black glass"
+                //     identity while leaving the wallpaper genuinely visible
+                //     through it. Deeper on the large surfaces, which simulate a
+                //     thicker material.
+                Glass.bodyTint(for: state)
+
+                // 3 · STATUS WASH — low alpha on purpose. At full strength an
+                //     unmodulated tint renders as flat saturated colour (the
+                //     orange-flash bug); Apple's adaptive tinting has a backdrop
+                //     to map against, ours does not, so we keep it a wash.
+                //     Never animated: it must switch with the state, not fade
+                //     across a frame change.
+                if let tint {
+                    tint.opacity(Glass.statusWashAlpha).blendMode(.softLight)
+                    tint.opacity(Glass.statusWashAlpha * 0.5)
+                }
+
+                // 4 · THICKNESS — inner light top and bottom, so the shape reads
+                //     as a slab with an edge rather than a hole in the screen.
+                shape
+                    .stroke(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .white.opacity(0.22), location: 0),
+                                .init(color: .clear, location: 0.28),
+                                .init(color: .clear, location: 0.82),
+                                .init(color: .white.opacity(0.28), location: 1),
+                            ],
+                            startPoint: .top, endPoint: .bottom),
+                        lineWidth: 1)
+                    .blur(radius: 0.5)
+                    .blendMode(.plusLighter)
+                    .opacity(0.9)
         }
     }
 }
+
+// The system glass style type. `Glass` is a namespace enum in this file, so the
+// SwiftUI type is aliased rather than referenced bare.
+@available(macOS 26.0, *)
+typealias Glass26Style = SwiftUI.Glass

@@ -6,6 +6,18 @@ import Combine
 final class NotchModel: ObservableObject {
     // Ladder + counts (pushed by main).
     @Published var state: NotchState = .dormant
+    /// The rung MAIN last asked for. `state` is what is rendered and flips
+    /// instantly; the window frame animates behind it, so during a morph the two
+    /// disagree. Anything whose appearance must not survive into the next state
+    /// — the attention colour wash above all — gates on BOTH.
+    @Published var commandedState: NotchState = .dormant
+    /// Is the pointer over the surface right now?
+    ///
+    /// Only idle reads it, and only on notched hardware: at rest unmute is
+    /// invisible there, so hovering is the one way to ask whether it is running.
+    /// Published because the WIDTH of the window follows what the tongue says,
+    /// and on notched hardware idle says nothing until you hover.
+    @Published var hovering: Bool = false
     @Published var attention: Int = 0
     @Published var working: Int = 0
 

@@ -1,10 +1,14 @@
 import SwiftUI
 
-// The cockpit wall — full parity with the React OrchestrateWall (resting mode):
-// group sections of cards, the right rail (queue / one-offs / projects /
-// suggestions / skills / shelf), the away digest, doorbell, staged-tray chip,
-// and the route offer. Clicking a card emits focusTask (voice address) and the
-// Stage takes over (StageView).
+// The cockpit wall — group sections of cards plus the sidebar (queue / one-offs
+// / projects / suggestions / skills / shelf), the away digest, doorbell,
+// staged-tray chip and the route offer. Clicking a card emits focusTask (the
+// voice address) and the Stage takes over (StageView).
+//
+// GOLDEN GATE: the sidebar is EDGE-TO-EDGE, not an inset floating pane — Tahoe's
+// floating sidebar was removed in the 27 design. Both scrollers carry a hard
+// scroll-edge effect so content dissolves under the pinned chrome rather than
+// colliding with it.
 struct WallView: View {
     @ObservedObject var model: NotchModel
     let topInset: CGFloat
@@ -19,16 +23,19 @@ struct WallView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
+            // THE FLOATING CHROME BELONGS TO THE MAIN COLUMN, NOT THE SURFACE.
+            //
+            // Overlaying it on the whole HStack floated the route offer and the
+            // doorbell across the sidebar, where they landed on top of the
+            // skills list and each other. Scoping the overlay to `main` keeps
+            // them over the wall — which is what they describe — and leaves the
+            // rail's own rows reachable all the way down.
             main
+                .overlay(alignment: .bottom) { bottomChrome }
             rail
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .bottomLeading) { bottomLeftChrome }
-        .overlay(alignment: .bottomTrailing) { bottomRightChrome }
         .overlay(alignment: .topLeading) { hoverCard }
-        .overlay(alignment: .topTrailing) {
-            CloseButton { model.emit(.collapsed) }.padding(.top, 10).padding(.trailing, 12)
-        }
     }
 
     // MARK: main column
@@ -36,274 +43,308 @@ struct WallView: View {
     private var main: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 10) {
-                    Text("UNMUTE · COCKPIT")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .tracking(1.6).foregroundColor(Theme.textFaint)
-                    Spacer(minLength: 0)
-                    // The wall-level way back. Deliberately not dependent on any
-                    // group rendering its own header — that dependency is what
-                    // made folded work unreachable.
-                    if data.showingAll == true {
-                        Button(action: { model.emit(.showAll(group: nil, on: false)) }) {
-                            Text("hide older everywhere")
-                                .font(.system(size: 11)).foregroundColor(Theme.textFaint)
-                        }.buttonStyle(.plain)
-                    } else if let n = data.hiddenTotal, n > 0 {
-                        Button(action: { model.emit(.showAll(group: nil, on: true)) }) {
-                            Text("show all · \(n) older")
-                                .font(.system(size: 11)).foregroundColor(Theme.cReady)
-                        }.buttonStyle(.plain)
-                    }
-                }
+                header
 
-                if let digest = data.digest {
-                    Button(action: { model.emit(.digestDismiss) }) {
-                        Text(digest)
-                            .font(.system(size: 12.5)).foregroundColor(Color(red: 0.75, green: 0.88, blue: 0.96))
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color(red: 0.36, green: 0.71, blue: 0.91).opacity(0.08)))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(red: 0.36, green: 0.71, blue: 0.91).opacity(0.2), lineWidth: 1))
-                    }.buttonStyle(.plain)
-                }
+                if let digest = data.digest { digestBanner(digest) }
 
                 // "Nothing here" means nothing EXISTS — not "everything is
                 // folded", which is a different thing with a way out.
                 if data.groups.allSatisfy({ $0.cards.isEmpty }) && (data.hiddenTotal ?? 0) == 0 {
-                    Text("no sessions — speak to spawn one")
-                        .font(.system(size: 13)).foregroundColor(Theme.textFaint)
-                        .padding(.top, 30).frame(maxWidth: .infinity, alignment: .center)
+                    Text("No sessions — speak to spawn one")
+                        .font(Theme.fBody).foregroundColor(Theme.textFaint)
+                        .padding(.top, 34).frame(maxWidth: .infinity, alignment: .center)
                 }
 
                 // A GROUP KEEPS ITS HEADER WHEN EVERYTHING IN IT IS FOLDED.
-                //
-                // This used to skip any group with no visible cards, which was
-                // harmless while nothing was ever folded — a group only existed
-                // if it had cards. Once folding arrived it silently deleted
-                // whole groups from the wall, taking their "show all" with them,
-                // so those tasks became unreachable by any gesture. A folded
-                // group must still say it is there.
+                // Skipping empty groups silently deleted whole groups from the
+                // wall once folding arrived, taking their "show all" with them
+                // and making those tasks unreachable by any gesture.
                 ForEach(Array(data.groups.enumerated()), id: \.offset) { _, group in
                     if !group.cards.isEmpty || (group.hidden ?? 0) > 0 { groupSection(group) }
                 }
             }
-            .padding(.horizontal, 30)
-            .padding(.top, topInset + 6)
-            .padding(.bottom, 56)
+            .padding(.horizontal, Theme.gutter)
+            .padding(.top, topInset + 4)
+            .padding(.bottom, 60)
         }
+        .scrollEdge(topInset + 18)
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            SectionLabel(text: "Cockpit")
+            Spacer(minLength: 0)
+            // The wall-level way back. Deliberately not dependent on any group
+            // rendering its own header — that dependency is what made folded
+            // work unreachable.
+            if data.showingAll == true {
+                QuietButton(label: "Hide older everywhere") {
+                    model.emit(.showAll(group: nil, on: false))
+                }
+            } else if let n = data.hiddenTotal, n > 0 {
+                QuietButton(label: "Show all · \(n) older", color: Theme.cReady) {
+                    model.emit(.showAll(group: nil, on: true))
+                }
+            }
+            CloseButton { model.emit(.collapsed) }
+        }
+    }
+
+    private func digestBanner(_ digest: String) -> some View {
+        Button(action: { model.emit(.digestDismiss) }) {
+            HStack(spacing: 10) {
+                Image(systemName: "moon.zzz")
+                    .font(.system(size: 12)).foregroundColor(Theme.accent)
+                Text(digest)
+                    .font(Theme.fSub).foregroundColor(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold)).foregroundColor(Theme.textFaint)
+            }
+            .padding(.horizontal, 13).padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: Theme.cardRadius)
+                .fill(Theme.accent.opacity(0.11)))
+            .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
+                .stroke(Theme.accent.opacity(0.26), lineWidth: 0.5))
+        }.buttonStyle(.plain)
     }
 
     private func groupSection(_ g: GroupP) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             // ALWAYS a heading, including for the ungrouped bucket. Without one
             // its cards rendered under the previous group's title — so the
-            // newest task on the wall looked like it belonged to someone else's
-            // group, and a correctly-sorted wall looked scrambled.
-            do {
-                HStack(spacing: 8) {
-                    Text(g.name.isEmpty ? "Ungrouped" : g.name)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(g.name.isEmpty ? Theme.textDim : Theme.text)
-                    if !g.name.isEmpty { Badge(text: "group") }
-                    // SAY that cards are folded away. A group silently missing
-                    // half its tasks reads as a group that lost them.
-                    // Acts on THIS group. A control in a group header that
-                    // expanded the whole wall — and then offered no way to
-                    // collapse — was the complaint.
-                    if g.expanded == true {
-                        Button(action: { model.emit(.showAll(group: g.name, on: false)) }) {
-                            Text("show less").font(.system(size: 11)).foregroundColor(Theme.textFaint)
-                        }.buttonStyle(.plain)
-                    } else if let n = g.hidden, n > 0 {
-                        Button(action: { model.emit(.showAll(group: g.name, on: true)) }) {
-                            Text("show all · \(n)").font(.system(size: 11)).foregroundColor(Theme.cReady)
-                        }.buttonStyle(.plain)
+            // newest task looked like it belonged to someone else's group and a
+            // correctly-sorted wall looked scrambled.
+            HStack(spacing: 8) {
+                Text(g.name.isEmpty ? "Ungrouped" : g.name)
+                    .font(Theme.fHead)
+                    .foregroundColor(g.name.isEmpty ? Theme.textDim : Theme.text)
+                if !g.name.isEmpty { Badge(text: "group") }
+                // SAY that cards are folded away — a group silently missing half
+                // its tasks reads as a group that lost them. Acts on THIS group:
+                // a control in a group header that expanded the whole wall, and
+                // then offered no way to collapse, was the complaint.
+                if g.expanded == true {
+                    QuietButton(label: "Show less") { model.emit(.showAll(group: g.name, on: false)) }
+                } else if let n = g.hidden, n > 0 {
+                    QuietButton(label: "Show all · \(n)", color: Theme.cReady) {
+                        model.emit(.showAll(group: g.name, on: true))
                     }
                 }
+                Spacer(minLength: 0)
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 236), spacing: 10)], alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 224), spacing: 8)],
+                      alignment: .leading, spacing: 8) {
                 ForEach(g.cards, id: \.id) { card($0) }
             }
         }
     }
 
+    // MARK: card
+
     private func card(_ c: CardP) -> some View {
         Button(action: { model.emit(.focusTask(id: c.id)) }) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
-                    Dot(status: c.status, size: 7)
-                    Text(Theme.statusLabel(c.status).uppercased())
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .tracking(0.5).foregroundColor(Theme.status(c.status))
-                    if c.promoted == true { Badge(text: "↑ now a session", color: Color(red: 0.36, green: 0.71, blue: 0.91)) }
-                    if c.agent == true { Badge(text: "↳ agent", color: Theme.cReady) }
+                    Dot(status: c.status, size: 7, breathing: c.status == .processing)
+                    StatusLabel(status: c.status)
+                    if c.promoted == true { Badge(text: "now a session", color: Theme.accent) }
+                    if c.agent == true { Badge(text: "agent", color: Theme.cReady) }
                     Spacer(minLength: 0)
-                    if let q = c.qpos { Badge(text: "Q\(q)", color: Theme.textDim) }
+                    if let q = c.qpos { Badge(text: "Q\(q)") }
                 }
-                Text(c.title).font(.system(size: 14, weight: .medium)).foregroundColor(Theme.text).lineLimit(1)
+                Text(c.title)
+                    .font(Theme.fBodyMed).foregroundColor(Theme.text).lineLimit(1)
                 if let a = c.activity, !a.isEmpty {
-                    Text(a).font(.system(size: 12)).foregroundColor(Theme.textDim).lineLimit(2)
+                    Text(a).font(Theme.fSub).foregroundColor(Theme.textDim).lineLimit(2)
                 }
                 if let n = c.note, !n.isEmpty {
-                    Text("✎ \(n)").font(.system(size: 11.5)).foregroundColor(Theme.cReady).lineLimit(1)
+                    HStack(spacing: 4) {
+                        Image(systemName: "pencil").font(.system(size: 9.5))
+                        Text(n).lineLimit(1)
+                    }
+                    .font(.system(size: 11.5)).foregroundColor(Theme.cReady)
                 }
-                // Footer sits at the bottom of the tile, not straight under the
+                // Footer sits at the BOTTOM of the tile, not straight under the
                 // body — otherwise a card with no activity line puts its footer
                 // halfway up while its neighbour's sits at the base.
                 Spacer(minLength: 0)
                 HStack(spacing: 6) {
-                    Text(c.kind == "session" ? (c.dir ?? "session") : "one-off")
+                    NumText(text: c.kind == "session" ? (c.dir ?? "session") : "one-off")
                     Spacer(minLength: 0)
                     if c.backend == "codex-desktop" {
                         // The grid is the one place we deliberately do NOT show
-                        // messages — many tasks at once, so a transcript per
-                        // card would drown the wall. The door into the real
-                        // chat still belongs here.
+                        // messages — many tasks at once, so a transcript per card
+                        // would drown the wall. The door into the real chat still
+                        // belongs here.
                         Button(action: { model.emit(.openInTerminal(id: c.id)) }) {
-                            Text("open in Codex")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(Theme.cReady)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(RoundedRectangle(cornerRadius: 5).fill(Theme.cReady.opacity(0.12)))
+                            Badge(text: "Open in Codex", color: Theme.cReady)
                         }.buttonStyle(.plain)
                     }
-                    Text(c.age ?? "")
+                    NumText(text: c.age ?? "")
                 }
-                .font(.system(size: 10.5, design: .monospaced)).foregroundColor(Theme.textFaint)
-                .padding(.top, 3)
+                .padding(.top, 2)
             }
-            // A UNIFORM TILE, whatever the card happens to carry.
-            //
-            // The body is optional — a Claude task usually has an activity line,
-            // a Codex one often does not — so cards in the same row came out
-            // different heights and the wall read as ragged. The spacer pushes
-            // the footer down so every card fills its row, and a floor keeps a
-            // lone short card from collapsing. Sized UP to the tallest, never
-            // shrinking the ones that have something to say.
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 116, maxHeight: .infinity, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.cardBg))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hairline, lineWidth: 1))
+            // A UNIFORM TILE, whatever the card happens to carry. The body is
+            // optional — a Claude task usually has an activity line, a Codex one
+            // often does not — so cards in a row came out different heights and
+            // the wall read as ragged. Sized UP to the tallest, never shrinking
+            // the ones that have something to say.
+            .padding(.horizontal, 12).padding(.vertical, 11)
+            .frame(maxWidth: .infinity, minHeight: 104, maxHeight: .infinity, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(cardFill(c)))
+            .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
+                .stroke(cardStroke(c), lineWidth: 0.5))
         }.buttonStyle(.plain)
     }
 
-    // MARK: rail
+    /// A your-move card carries a whisper of its OWN status hue mapped into the
+    /// fill — Apple's tinting model, where colour is mapped to the surface
+    /// rather than pasted on as a decorative stripe. Our-move and done stay
+    /// neutral, so the wall sorts itself visually before you read a word.
+    private func cardFill(_ c: CardP) -> Color {
+        c.status.isYourMove
+            ? Theme.status(c.status).opacity(0.09)
+            : Theme.raised
+    }
+    private func cardStroke(_ c: CardP) -> Color {
+        c.status.isYourMove ? Theme.status(c.status).opacity(0.26) : Theme.hairline
+    }
+
+    // MARK: sidebar
 
     private var rail: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Queue — the crank's order.
-                railSection("QUEUE · \(data.queue.count)") {
+                railSection("Queue · \(data.queue.count)") {
                     if data.queue.isEmpty {
-                        Text("clear").font(.system(size: 12)).foregroundColor(Theme.textFaint)
+                        Text("Clear").font(Theme.fSub).foregroundColor(Theme.textFaint)
                     }
                     ForEach(Array(data.queue.enumerated()), id: \.element.id) { i, q in
-                        Button(action: { model.emit(.focusTask(id: q.id)) }) {
-                            HStack(spacing: 8) {
-                                Text("Q\(i + 1)").font(.system(size: 10.5, design: .monospaced)).foregroundColor(Theme.textFaint).frame(width: 22, alignment: .leading)
-                                Dot(status: q.status, size: 6)
-                                Text(q.name).font(.system(size: 13)).foregroundColor(Theme.text).lineLimit(1)
-                            }
-                        }.buttonStyle(.plain)
+                        RailRow(action: { model.emit(.focusTask(id: q.id)) }) {
+                            NumText(text: "Q\(i + 1)").frame(width: 20, alignment: .leading)
+                            Dot(status: q.status, size: 6)
+                            Text(q.name).font(Theme.fBody).foregroundColor(Theme.text).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
                     }
                 }
                 // One-offs + clear finished.
-                railSection("ONE-OFFS · \(data.oneoffs.count)", trailing: ("clear finished", { model.emit(.clearFinished) })) {
+                railSection("One-offs · \(data.oneoffs.count)",
+                            trailing: ("Clear finished", { model.emit(.clearFinished) })) {
                     if data.oneoffs.isEmpty {
-                        Text("short-lived tasks resolve here").font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
+                        Text("Short-lived tasks resolve here")
+                            .font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
                     }
                     ForEach(data.oneoffs, id: \.id) { o in
-                        Button(action: { model.emit(.focusTask(id: o.id)) }) {
-                            HStack(spacing: 8) {
-                                Dot(status: o.status, size: 6)
-                                Text(o.name).font(.system(size: 13)).foregroundColor(Theme.text).lineLimit(1)
-                                Spacer(minLength: 0)
-                                Text(o.age ?? "").font(.system(size: 10.5, design: .monospaced)).foregroundColor(Theme.textFaint)
-                            }
-                        }.buttonStyle(.plain)
+                        RailRow(action: { model.emit(.focusTask(id: o.id)) }) {
+                            Dot(status: o.status, size: 6)
+                            Text(o.name).font(Theme.fBody).foregroundColor(Theme.text).lineLimit(1)
+                            Spacer(minLength: 0)
+                            NumText(text: o.age ?? "")
+                        }
                     }
                 }
                 // Projects.
                 if !data.projects.isEmpty {
-                    railSection("PROJECTS") {
+                    railSection("Projects") {
                         ForEach(data.projects, id: \.path) { p in
-                            Button(action: { model.emit(.openProject(path: p.path, name: p.name)) }) {
-                                Text("▸ \(p.name)").font(.system(size: 13)).foregroundColor(Theme.textDim).lineLimit(1)
-                            }.buttonStyle(.plain)
+                            RailRow(action: { model.emit(.openProject(path: p.path, name: p.name)) }) {
+                                Image(systemName: "folder")
+                                    .font(.system(size: 11)).foregroundColor(Theme.textFaint)
+                                Text(p.name).font(Theme.fBody).foregroundColor(Theme.textDim).lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
                         }
                     }
                 }
                 // Curator suggestions → review popup.
                 if !data.suggestions.isEmpty {
-                    railSection("SUGGESTIONS · \(data.suggestions.count)") {
+                    railSection("Suggestions · \(data.suggestions.count)") {
                         ForEach(data.suggestions, id: \.id) { s in
-                            Button(action: { model.proposalLoadingId = s.id; model.emit(.suggestionOpen(id: s.id)) }) {
-                                HStack(spacing: 7) {
-                                    Text(s.kind).font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(Theme.accent)
-                                    Text(s.name).font(.system(size: 13)).foregroundColor(Theme.text).lineLimit(1)
-                                }
-                            }.buttonStyle(.plain)
+                            RailRow(action: {
+                                model.proposalLoadingId = s.id
+                                model.emit(.suggestionOpen(id: s.id))
+                            }) {
+                                Badge(text: s.kind, color: suggestionColor(s.kind))
+                                Text(s.name).font(Theme.fBody).foregroundColor(Theme.text).lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
                         }
                     }
                 }
-                // Skills: curator-authored first, then the vocabulary (top-6 + expander).
+                // Skills: curator-authored first, then the vocabulary.
                 if !data.unmuteSkills.isEmpty {
-                    railSection("UNMUTE SKILLS") {
+                    railSection("Unmute skills") {
                         ForEach(data.unmuteSkills, id: \.name) { skillRow($0) }
                     }
                 }
                 if !data.skills.isEmpty {
-                    railSection("SKILLS") {
-                        ForEach(model.skillsExpanded ? data.skills : Array(data.skills.prefix(6)), id: \.name) { skillRow($0) }
+                    railSection("Skills") {
+                        ForEach(model.skillsExpanded ? data.skills : Array(data.skills.prefix(6)),
+                                id: \.name) { skillRow($0) }
                         if data.skills.count > 6 {
-                            Button(action: { model.skillsExpanded.toggle() }) {
-                                Text(model.skillsExpanded ? "· show less" : "· \(data.skills.count - 6) more…")
-                                    .font(.system(size: 12)).foregroundColor(Theme.textFaint)
-                            }.buttonStyle(.plain)
+                            QuietButton(label: model.skillsExpanded
+                                        ? "Show less" : "\(data.skills.count - 6) more…") {
+                                model.skillsExpanded.toggle()
+                            }
                         }
                     }
                 }
                 // Shelf.
                 if !data.shelf.isEmpty {
-                    railSection("SHELF · \(data.shelf.count)") {
+                    railSection("Shelf · \(data.shelf.count)") {
                         ForEach(data.shelf, id: \.id) { s in
                             HStack(spacing: 8) {
                                 Button(action: { model.emit(.focusTask(id: s.id)) }) {
-                                    Text(s.name).font(.system(size: 13)).foregroundColor(Theme.text).lineLimit(1)
+                                    Text(s.name).font(Theme.fBody)
+                                        .foregroundColor(Theme.text).lineLimit(1)
                                 }.buttonStyle(.plain)
                                 Spacer(minLength: 0)
                                 Button(action: { model.emit(.shelve(id: s.id, shelved: false)) }) {
-                                    Text("⌃").font(.system(size: 12)).foregroundColor(Theme.textFaint)
-                                }.buttonStyle(.plain).help("unshelve — back on the wall")
+                                    Image(systemName: "chevron.up")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(Theme.textFaint)
+                                }.buttonStyle(.plain).help("Unshelve — back on the wall")
                             }
+                            .padding(.horizontal, 8).padding(.vertical, 4)
                         }
                     }
                 }
-                Spacer(minLength: 40)
+                Spacer(minLength: 44)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 14)
             .padding(.top, topInset)
         }
-        .frame(width: 300)
+        .scrollEdge(topInset + 14)
+        .frame(width: 250)
         .background(Theme.railBg)
-        .overlay(Rectangle().fill(Theme.hairline).frame(width: 1), alignment: .leading)
+        .overlay(Rectangle().fill(Theme.hairlineSoft).frame(width: 1), alignment: .leading)
+    }
+
+    private func suggestionColor(_ kind: String) -> Color {
+        switch kind {
+        case "retire": return Theme.cError
+        case "create": return Theme.cWorking
+        default:       return Theme.cNeeds
+        }
     }
 
     private func railSection<Content: View>(_ title: String,
                                             trailing: (String, () -> Void)? = nil,
                                             @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(title).font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                    .tracking(1.2).foregroundColor(Theme.textFaint)
+                SectionLabel(text: title)
                 Spacer(minLength: 0)
                 if let (label, action) = trailing {
-                    Button(action: action) {
-                        Text(label).font(.system(size: 10, design: .monospaced)).foregroundColor(Theme.textDim)
-                    }.buttonStyle(.plain)
+                    QuietButton(label: label, color: Theme.textFaint, action: action)
                 }
             }
+            .padding(.bottom, 3)
             content()
         }
     }
@@ -311,16 +352,19 @@ struct WallView: View {
     private func skillRow(_ s: SkillP) -> some View {
         HStack(spacing: 7) {
             Button(action: { model.emit(.pinSkill(name: s.name, pinned: !s.pinned)) }) {
-                Text(s.pinned ? "★" : "☆")
-                    .font(.system(size: 12))
+                Image(systemName: s.pinned ? "star.fill" : "star")
+                    .font(.system(size: 10.5))
                     .foregroundColor(s.pinned ? Theme.pinGold : Theme.textFaint)
-            }.buttonStyle(.plain).help(s.pinned ? "unpin" : "pin — rank first")
-            Text(s.name).font(.system(size: 13)).foregroundColor(Theme.text).lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .help(s.pinned ? "Unpin" : "Pin — rank first")
+
+            Text(s.name).font(Theme.fBody).foregroundColor(Theme.text).lineLimit(1)
             if s.origin == "unmute" { Badge(text: "unmute", color: Theme.cReady) }
             Spacer(minLength: 0)
-            Text(s.runs > 0 ? "\(s.runs)×" : (s.lastUsed ?? ""))
-                .font(.system(size: 10.5, design: .monospaced)).foregroundColor(Theme.textFaint)
+            NumText(text: s.runs > 0 ? "\(s.runs)×" : (s.lastUsed ?? ""))
         }
+        .padding(.horizontal, 8).padding(.vertical, 4)
         .contentShape(Rectangle())
         // Capture the row's window-space frame so the detail card can anchor
         // BESIDE it (field feedback: it must never float at a far corner).
@@ -329,74 +373,102 @@ struct WallView: View {
                 if hovered == s.name { model.hoverSkillFrame = geo.frame(in: .global) }
             }
         })
-        .onHover { over in
-            model.hoverSkill = over ? s : nil
-        }
+        .onHover { over in model.hoverSkill = over ? s : nil }
         // Tap-to-invoke: types `/name ` unsubmitted into the focused, live task.
         .onTapGesture { model.emit(.tapSkill(name: s.name)) }
-        .help("say its name to use it · tap to type /\(s.name) into the focused task")
+        .help("Say its name to use it · tap to type /\(s.name) into the focused task")
     }
 
     // MARK: floating chrome
 
+    /// One bottom bar over the wall: staged tray, the live voice chip, then the
+    /// route offer and the doorbell pushed to the right. A single row means
+    /// nothing can overlap anything else however many pieces are present.
+    private var bottomChrome: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            bottomLeftChrome
+            Spacer(minLength: 12)
+            bottomRightChrome
+        }
+        .padding(.horizontal, Theme.gutter)
+        .padding(.bottom, 12)
+    }
+
     private var bottomLeftChrome: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             if data.stagedCount > 0 {
-                HStack(spacing: 8) {
-                    Text("🖼 \(data.stagedCount) staged — speaks with your next task")
+                HStack(spacing: 7) {
+                    Image(systemName: "photo.on.rectangle")
+                        .font(.system(size: 11)).foregroundColor(Theme.textDim)
+                    Text("\(data.stagedCount) staged — speaks with your next task")
                         .font(.system(size: 11.5)).foregroundColor(Theme.textDim)
                     Button(action: { model.emit(.clearStaged) }) {
-                        Text("✕").font(.system(size: 11)).foregroundColor(Theme.textFaint)
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 11)).foregroundColor(Theme.textFaint)
                     }.buttonStyle(.plain)
                 }
                 .padding(.horizontal, 11).padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 9).fill(Color.black.opacity(0.4)))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.hairline, lineWidth: 1))
+                .background(Capsule().fill(Theme.raised))
+                .overlay(Capsule().stroke(Theme.hairline, lineWidth: 0.5))
             }
             voiceChip
-        }.padding(14)
+        }
     }
 
     private var voiceChip: some View {
         HStack(spacing: 7) {
-            Image(systemName: "mic.fill").font(.system(size: 10)).foregroundColor(Theme.textDim)
-            Text(voiceChipText).font(.system(size: 12)).foregroundColor(model.capturePhase != nil ? Theme.cWorking : Theme.textDim)
+            Image(systemName: model.capturePhase == nil ? "mic" : "mic.fill")
+                .font(.system(size: 11))
+            Text(voiceChipText).font(Theme.fSub)
         }
+        .foregroundColor(model.capturePhase != nil ? Theme.cWorking : Theme.textDim)
         .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.black.opacity(0.35)))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.hairline, lineWidth: 1))
+        .background(Capsule().fill(model.capturePhase != nil
+                                   ? Theme.cWorking.opacity(0.14) : Theme.raised))
+        .overlay(Capsule().stroke(model.capturePhase != nil
+                                  ? Theme.cWorking.opacity(0.30) : Theme.hairline, lineWidth: 0.5))
+        .animation(Theme.hover, value: model.capturePhase)
     }
+
     private var voiceChipText: String {
         if let phase = model.capturePhase {
             let target = model.captureTarget ?? "new task"
             switch phase {
-            case "listening": return "listening → \(target)"
-            case "transcribing", "routing": return "\(phase)…"
-            case "landed": return "landed → \(target)"
+            case "listening": return "Listening → \(target)"
+            case "transcribing", "routing": return "\(phase.capitalized)…"
+            case "landed": return "Landed → \(target)"
             default: break
             }
         }
         if let f = model.focusedId, let name = model.stageTask?.title, model.stageTask?.id == f {
-            return "voice → \(name)"
+            return "Voice → \(name)"
         }
-        return "voice → new task"
+        return "Voice → new task"
     }
 
     private var bottomRightChrome: some View {
-        VStack(alignment: .trailing, spacing: 8) {
+        HStack(spacing: 8) {
             if let offer = data.routeOffer {
                 Button(action: { model.emit(.offerAccept(newTaskId: offer.newTaskId)) }) {
-                    Text("started new — send to “\(offer.altName)” instead?")
-                        .font(.system(size: 12)).foregroundColor(Color(red: 0.94, green: 0.83, blue: 0.60))
+                    Text("Started new — send to “\(offer.altName)” instead?")
+                        .font(Theme.fSub).foregroundColor(Theme.cNeeds)
+                        .lineLimit(1)
                         .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.accent.opacity(0.12)))
-                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.accentDim, lineWidth: 1))
+                        .background(Capsule().fill(Theme.cNeeds.opacity(0.14)))
+                        .overlay(Capsule().stroke(Theme.cNeeds.opacity(0.30), lineWidth: 0.5))
                 }.buttonStyle(.plain)
             }
             Button(action: { model.emit(.bellToggle) }) {
-                Text(data.doorbell ? "🔔" : "🔕").font(.system(size: 17))
-            }.buttonStyle(.plain).help("doorbell — spoken headlines when a task needs you")
-        }.padding(14)
+                Image(systemName: data.doorbell ? "bell" : "bell.slash")
+                    .font(.system(size: 12.5))
+                    .foregroundColor(data.doorbell ? Theme.text : Theme.textFaint)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(Theme.raised))
+                    .overlay(Circle().stroke(Theme.hairline, lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .help("Doorbell — spoken headlines when a task needs you")
+        }
     }
 
     // MARK: skill hover card
@@ -410,20 +482,43 @@ struct WallView: View {
             let x = max(8, f.minX - cardW - 12)
             let y = max(topInset, f.minY - 10)
             VStack(alignment: .leading, spacing: 5) {
-                Text(s.name).font(.system(size: 13, weight: .semibold)).foregroundColor(Theme.text)
-                Text((s.description?.isEmpty == false) ? s.description! : "No description in this skill's frontmatter.")
-                    .font(.system(size: 12)).foregroundColor(Theme.textDim)
+                Text(s.name).font(Theme.fBodyMed).foregroundColor(Theme.text)
+                Text((s.description?.isEmpty == false) ? s.description!
+                     : "No description in this skill's frontmatter.")
+                    .font(Theme.fSub).foregroundColor(Theme.textDim)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("last used \(s.lastUsed ?? "—") · say its name to use it")
-                    .font(.system(size: 10.5, design: .monospaced)).foregroundColor(Theme.textFaint)
+                NumText(text: "Last used \(s.lastUsed ?? "—") · say its name to use it")
             }
             .padding(12)
             .frame(width: cardW, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.07)))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.15), lineWidth: 1))
-            .shadow(color: .black.opacity(0.5), radius: 18, y: 8)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color(red: 0.10, green: 0.11, blue: 0.13)))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.hairline, lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.5), radius: 20, y: 8)
             .offset(x: x, y: y)
             .allowsHitTesting(false)
         }
+    }
+}
+
+/// A sidebar row with a hover surface, so it reads as a target before you touch
+/// it. Rows are 6pt-radius rather than square — dense controls stay rounded
+/// rectangles on macOS.
+struct RailRow<Content: View>: View {
+    let action: () -> Void
+    @ViewBuilder let content: () -> Content
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) { content() }
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .background(RoundedRectangle(cornerRadius: 6)
+                    .fill(hovering ? Theme.raised : Color.clear))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Theme.hover, value: hovering)
     }
 }

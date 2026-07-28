@@ -23,6 +23,17 @@ import {
   type AudioInputDeviceInfo,
 } from './micSource'
 import { connectWarmMic, disconnectWarmMic, onWarmState, warmState, type WarmState } from './micWarm'
+import {
+  nativePillActive, toPhase, usePillState, usePillTicker, usePillEvents,
+} from './pillBridge'
+
+/** Dodo customer portal, for the payment-failed recovery on the pill. */
+function portalApi() {
+  return window.electronAPI as unknown as {
+    paywallOpenPortal?: () => Promise<{ ok: boolean; portalUrl?: string }>
+    paywallOpenExternal?: (url: string) => Promise<unknown>
+  }
+}
 
 // ─── Sound Feedback (Web Audio API) ───
 let soundEnabled = true
@@ -859,6 +870,12 @@ export default function WidgetApp() {
   // (types text)? Drives the Remote badge next to the pill. Set on every
   // recording:start from its kind, so it's always fresh for this capture.
   const [isRemote, setIsRemote] = useState(false)
+  // Is the CURRENT capture the AI FORMATTER (Caps Lock) rather than plain
+  // dictation (Fn)? Latched at recording:start like isRemote, because `state`
+  // only says 'instruction-active' while the mic is open — by `processing` the
+  // distinction is gone, and the pill must keep its identity for the whole
+  // capture rather than reverting halfway through.
+  const [isInstruction, setIsInstruction] = useState(false)
   // Backend picker for Remote captures. Refreshed when a Remote capture STARTS
   // rather than polled: availability changes rarely (Codex opened/closed), and
   // the answer is only ever needed at the moment the pill appears.
@@ -974,7 +991,7 @@ export default function WidgetApp() {
       state === 'dictation-active' ||
       state === 'instruction-active' ||
       state === 'processing'
-    if (!active) setIsRemote(false)
+    if (!active) { setIsRemote(false); setIsInstruction(false) }
   }, [state])
 
   // ─── Peek the current engine each time a dictation starts ───
@@ -1062,6 +1079,7 @@ export default function WidgetApp() {
       setEngineNotice(null)
       setDraftOffer(false)
       setMutedText(null)
+      setIsInstruction(mode !== 'dictation')
       setState(mode === 'dictation' ? 'dictation-active' : 'instruction-active')
       try {
         await startRecording(resolvedDeviceId, mode, sessionId)
@@ -1114,6 +1132,13 @@ export default function WidgetApp() {
       console.log(`[widget:ux] EVENT session:cancelled (state was ${stateRef.current})`)
       setState('cancelled')
       setShowDiscardHint(false)
+      // THE ONLY TERMINAL STATE THAT NEVER SCHEDULED ITS OWN DISMISSAL.
+      // error gets 5000, too-short 2500, output 3000 — cancelled got nothing,
+      // and got away with it because the HUD window was hidden out from under
+      // it by main. The native pill is a separate window with no such rescue,
+      // so a cancelled capture left its pill on screen forever. Same 2500 as
+      // the rest of the family, and the Undo lives for exactly that long.
+      scheduleAutoHide(2500)
     })
 
     api.onProcessingDiscardHint(() => {
@@ -1124,6 +1149,12 @@ export default function WidgetApp() {
       console.log(`[widget:ux] EVENT session:too-short (state was ${stateRef.current})`)
       setState('too-short')
       setShowDiscardHint(false)
+      // THE SIBLING OF THE `cancelled` BUG. Both "nothing happened" states
+      // relied on main hiding the HUD window out from under them; the native
+      // pill is its own window with no such rescue, so "Didn't catch that" sat
+      // on screen forever. I fixed cancelled and did not check the handler
+      // directly beneath it.
+      scheduleAutoHide(2500)
     })
 
     api.onEngineNotice((reason) => {
@@ -1217,6 +1248,99 @@ export default function WidgetApp() {
     api.paywallAcceptDraft?.()
   }, [])
 
+  // ── The native input surface ──
+  //
+  // When the Swift helper is drawing the pill, this renderer stops drawing one
+  // and becomes a pure source of state + a sink for gestures. It keeps the
+  // audio, the recorder, the mic devices and the VAD — everything that must not
+  // move — and its window stays exactly as it was, so nothing about the capture
+  // path's lifecycle or throttling changes.
+  const nativePill = nativePillActive()
+  const recordingNow =
+    state === 'dictation-active' || state === 'instruction-active' || state === 'chained'
+  const startedAt = useRef(0)
+  useEffect(() => { if (recordingNow && !startedAt.current) startedAt.current = Date.now() }, [recordingNow])
+  useEffect(() => { if (!recordingNow) startedAt.current = 0 }, [recordingNow])
+  const elapsedSec = useCallback(
+    () => (startedAt.current ? Math.floor((Date.now() - startedAt.current) / 1000) : 0),
+    [],
+  )
+
+  // NOTE: the model and agent chips are NOT pushed from here. Main already owns
+  // the settings and the config-driven catalog, and PillController merges
+  // partial pushes — so it supplies them directly rather than this renderer
+  // keeping a second copy that could disagree.
+  const pillState = useMemo(() => ({
+    phase: toPhase(state),
+    kind: isRemote ? 'remote' : isInstruction ? 'instruction' : 'dictation',
+    maxSeconds: maxDurationSeconds,
+    // Each state's own copy, kept distinct — the first build funnelled all of
+    // these through one `message` and lost the differences.
+    message: errorMessage || undefined,
+    fallbackMessage: fallbackMessage || undefined,
+    outputPreview: outputPreview || undefined,
+    mutedText: mutedText || undefined,
+    draftOffer,
+    engineNotice: !!engineNotice,
+    showDiscardHint,
+    // THE MIC CHIP. It was simply never pushed, so it could never render.
+    // Same rule as the original: the chip exists ONLY while an iPhone mic is
+    // actually around — no phone, no chip, no greyed-out icon begging for
+    // attention. And it shows what is ACTUALLY capturing during a recording,
+    // not what is merely preferred.
+    mic: recordingNow && captureSource
+      ? captureSource
+      : effectiveSource(mic.preference, mic.devices),
+    micOptions: mic.featureEnabled && findIphoneMic(mic.devices) !== null
+      ? [
+          { id: 'mac', label: 'MacBook Microphone' },
+          { id: 'iphone', label: findIphoneMic(mic.devices)?.label || 'iPhone' },
+        ]
+      : undefined,
+    // MIC NARRATION — the line that was missing entirely, so the user had no
+    // way to know a source switch had been deferred to the next dictation.
+    // It already auto-clears after 4s via micStatusTimer, so the surface
+    // inherits that lifetime for free.
+    micStatus: micStatus || null,
+    // Coaching is SECOND in precedence, and its level distinguishes the two so
+    // each keeps its own accent and glyph rather than collapsing to one warn
+    // colour. "noise wins: it's the condition the user can't hear themselves."
+    coaching: recordingNow && noisyEnvironment
+      ? { condition: 'Noisy spot', remedy: captureSource === 'iphone' ? 'speak up' : 'lean in & speak up', level: 'noisy' as const }
+      : recordingNow && tooQuiet
+        ? { condition: 'Too quiet', remedy: captureSource === 'iphone' ? 'speak up a little' : 'bring the mic closer', level: 'quiet' as const }
+        : null,
+    // The awareness card's own visibility rule, evaluated here rather than
+    // recomputed on the Swift side: offlineReason is only meaningful while the
+    // pill is up and the user hasn't dismissed it this session.
+    offline: (recordingNow || state === 'processing') && offlineReason !== null && !sessionDismissed
+      ? offlineReason
+      : null,
+  }), [state, draftOffer, isRemote, maxDurationSeconds, errorMessage, fallbackMessage,
+       outputPreview, mutedText, engineNotice, showDiscardHint,
+       recordingNow, noisyEnvironment, tooQuiet, captureSource, offlineReason,
+       dismissedTick, mic.preference, mic.devices, mic.featureEnabled, micStatus])
+
+  usePillState(pillState, nativePill)
+  usePillTicker(recordingNow, elapsedSec, nativePill)
+  usePillEvents({
+    stop: () => { void handleStop() },
+    cancel: () => { void handleCancel() },
+    undo: handleUndo,
+    acceptDraft: handleAcceptDraft,
+    // The mic chip has always been a one-tap flip between the Mac and the
+    // phone, never a picker — keep that exactly.
+    pickMic: () => mic.toggle(),
+    // Session-scoped override, same call the DOM toggle makes.
+    toggleRaw: (v) => { void rawApi().remoteSetSessionRaw?.(v === true) },
+    dismissOffline: () => { sessionDismissed = true; setDismissedTick((t) => t + 1) },
+    openBillingPortal: () => {
+      void portalApi().paywallOpenPortal?.().then((r) => {
+        if (r?.ok && r.portalUrl) void portalApi().paywallOpenExternal?.(r.portalUrl)
+      })
+    },
+  }, nativePill)
+
   const handleAwarenessDismiss = useCallback(() => {
     sessionDismissed = true
     setDismissedTick((n) => n + 1)
@@ -1233,6 +1357,14 @@ export default function WidgetApp() {
     pillShowing && offlineReason !== null && !sessionDismissed
   // `dismissedTick` is read here just to trigger re-render on dismiss
   void dismissedTick
+
+  // THE NATIVE SURFACE DRAWS THE PILL — this renderer draws nothing.
+  //
+  // The window itself is untouched: same size, same position, same lifecycle,
+  // so nothing about background throttling or the audio graph changes. Only the
+  // pixels move. Every hook above still runs, which is the point — this
+  // renderer remains the source of capture state and the sink for gestures.
+  if (nativePill) return <div ref={rootRef} style={{ background: 'transparent' }} />
 
   return (
     <div

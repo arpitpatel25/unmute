@@ -7,11 +7,22 @@ import SwiftTerm
 final class AppController: NSObject, NotchResizing {
     private let model = NotchModel()
     private var window: NotchWindow!
+    // The INPUT surface — bottom-centre, same process, same material system.
+    // One helper owning both panels is what makes "one design system" true in
+    // code rather than by discipline, and it means the ⌘V responder-chain fix
+    // already covers the pill.
+    private let pillModel = PillModel()
+    private var pillWindow: PillWindow!
+    private var pillHost: NSHostingView<AnyView>!
     private var geometry: NotchGeometry
     /// Kept because contentView is now a container, not the hosting view.
     private var hostView: NSHostingView<NotchView>!
     /// The last state MAIN commanded (hover-wake is local and never fights it).
-    private var commandedState: NotchState = .dormant
+    /// Mirrored onto the model so the view can gate anything that must not
+    /// survive a morph — see NotchModel.commandedState.
+    private var commandedState: NotchState = .dormant {
+        didSet { model.commandedState = commandedState }
+    }
     private var hoverTimer: Timer?
     private var toastTimer: Timer?
 
@@ -40,6 +51,7 @@ final class AppController: NSObject, NotchResizing {
             self?.afterEmit(ev)
         }
         model.onHover = { [weak self] entering in self?.handleHover(entering) }
+        installPill()
         window.applyFrame(frame(for: .dormant), animated: false)
         window.present()
         installTracking()
@@ -51,6 +63,38 @@ final class AppController: NSObject, NotchResizing {
     /// Content inset that clears the physical notch (notched ≈ menu bar height
     /// + breathing room) or just the surface's own chrome on plain displays.
     private var topInset: CGFloat { geometry.hasNotch ? geometry.menuBarHeight + 10 : 14 }
+
+    // MARK: - The input surface
+
+    private func installPill() {
+        pillWindow = PillWindow()
+        pillModel.emit = { ev in
+            NotchLog.log("PILL EVENT out: \(ev.json)")
+            IPC.emit(ev)
+        }
+        pillWindow.fit(geometry: geometry)
+        let host = NSHostingView(rootView: AnyView(PillHost(model: pillModel)))
+        host.sizingOptions = []
+        pillHost = host
+        pillWindow.contentView = host
+        reconcilePillVisibility()
+    }
+
+    /// The pill exists only while a capture does. Hidden means ORDERED OUT, not
+    /// zero-alpha: an invisible always-on panel still sits in the window server
+    /// and still competes for clicks.
+    private func reconcilePillVisibility() {
+        if pillModel.visible {
+            if !pillWindow.isVisible {
+                pillWindow.present()
+                // Shown after being ordered out — whatever it last sampled may
+                // belong to a different Space entirely. Re-sample on the way in.
+                Appearance.shared.invalidateBackdrop()
+            }
+        } else if pillWindow.isVisible {
+            pillWindow.orderOut(nil)
+        }
+    }
 
     // MARK: - Commands in
 
@@ -109,6 +153,19 @@ final class AppController: NSObject, NotchResizing {
         case .notchGeometry:
             recomputeGeometry("explicit-push")
 
+        case let .appearance(pref):
+            NotchLog.log("CMD appearance \(pref.rawValue)")
+            Appearance.shared.preference = pref
+
+        case let .pill(state):
+            // Logged at phase granularity only — the level field changes every
+            // frame during a capture and would drown the log.
+            if state.phase != pillModel.state.phase {
+                NotchLog.log("CMD pill phase=\(state.phase.rawValue) kind=\(state.kind.rawValue)")
+            }
+            pillModel.state = state
+            reconcilePillVisibility()
+
         case .collapse:
             model.focusedId = nil
             model.stageTask = nil
@@ -126,6 +183,12 @@ final class AppController: NSObject, NotchResizing {
 
     // MARK: - State / frames
 
+    /// ONE pair of numbers for the frame AND the content, so they cannot drift.
+    /// Expansion is slower than collapse — the surface should feel like it is
+    /// arriving, and like it is getting out of the way.
+    private static let growS: Double = 0.42
+    private static let shrinkS: Double = 0.30
+
     private func applyState(_ state: NotchState) {
         // Each visit starts at the hard-coded size. A size dragged out for one
         // look at a task is not a preference — carrying it across would make the
@@ -136,7 +199,15 @@ final class AppController: NSObject, NotchResizing {
         // Terminal is OPEN BY DEFAULT on the task surface ("hide terminal" is
         // the choice); reset when leaving so re-entry starts open again.
         model.taskTerminalOpen = (state == .task)
-        withAnimation(up ? Theme.morph : Theme.collapse) { model.state = state }
+        // MATCHED TO THE WINDOW, and it must be a DURATION curve to be matched
+        // at all. This used to animate the content with Theme.morph — a spring
+        // whose `response: 0.48` is not a duration: it settles nearer 0.8s,
+        // while the frame finished in 0.42. For the difference you saw the OLD
+        // content inside the NEW frame — the "1 running" strip floating in a
+        // full-size task panel on the way up, and task chrome squeezed into the
+        // notch on the way down. Same numbers on both sides, so the surface and
+        // what it contains arrive together.
+        withAnimation(.easeOut(duration: up ? Self.growS : Self.shrinkS)) { model.state = state }
         let engaged = (state == .task || state == .cockpit)
         window.allowsKey = engaged
         // ESC MUST NOT LEAK TO THE APP UNDERNEATH.
@@ -159,7 +230,9 @@ final class AppController: NSObject, NotchResizing {
             if !window.isKeyWindow { window.makeKey() }
         }
         let f = frame(for: state)
-        window.applyFrame(f, animated: true)
+        // Same duration as the content's own animation, so the frame and what is
+        // drawn inside it arrive together.
+        window.applyFrame(f, animated: true, duration: up ? Self.growS : Self.shrinkS)
         NotchLog.log("state -> \(state.rawValue) window=\(NotchLog.rect(f))")
     }
 
@@ -172,6 +245,26 @@ final class AppController: NSObject, NotchResizing {
             // transcript and a composer, so they want the same room as a
             // terminal.
             size = geometry.taskSize
+        } else if geometry.hasNotch,
+                  state == .idle || state == .active || state == .attention {
+            // NOTCHED HARDWARE: the surface is the notch plus a tongue, and its
+            // width is MEASURED from the message the tongue will show. Sizing by
+            // state instead is what put the text inside the camera housing.
+            //
+            // Measured with the same font the view renders, so the frame and the
+            // string agree — a mismatch either clips the message or pads the
+            // surface with dead space.
+            let text = NotchView.tongueText(for: model)
+            size = geometry.notchedSize(contentWidth: text.map { t in
+                let font = state == .idle
+                    ? NSFont.systemFont(ofSize: 9.5, weight: .light)
+                    : NSFont.systemFont(ofSize: 11.5)
+                var w = (t as NSString).size(withAttributes: [.font: font]).width
+                if state == .idle { w += CGFloat(t.count) * 2.1 }      // tracking
+                if state != .idle { w += 15 }                          // status dot + gap
+                if state == .attention, model.attention > 1 { w += 26 } // count badge
+                return w
+            })
         } else {
             size = geometry.size(for: state)
         }
@@ -280,12 +373,22 @@ final class AppController: NSObject, NotchResizing {
     /// the AppKit tracking area — SwiftUI's own tracking can miss a never-key
     /// panel, which is exactly the dormant window; two paths, one behavior).
     func handleHover(_ entering: Bool) {
+        // The flag is READ by the view (idle's tongue) and by frame(for:), so a
+        // change of hover on notched hardware changes the window size too.
+        if model.hovering != entering {
+            model.hovering = entering
+            if geometry.hasNotch, model.state == .idle {
+                withAnimation(.easeOut(duration: entering ? Self.growS : Self.shrinkS)) { }
+                window.applyFrame(frame(for: .idle), animated: true,
+                                  duration: entering ? Self.growS : Self.shrinkS)
+            }
+        }
         if entering {
             hoverTimer?.invalidate()
             if model.state == .dormant && commandedState == .dormant {
                 NotchLog.log("hover-wake: dormant → idle")
-                withAnimation(Theme.morph) { model.state = .idle }
-                window.applyFrame(frame(for: .idle), animated: true)
+                withAnimation(.easeOut(duration: Self.growS)) { model.state = .idle }
+                window.applyFrame(frame(for: .idle), animated: true, duration: Self.growS)
             }
         } else {
             guard model.state == .idle, commandedState == .dormant else { return }
@@ -293,8 +396,8 @@ final class AppController: NSObject, NotchResizing {
             hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
                 guard let self, self.model.state == .idle, self.commandedState == .dormant else { return }
                 NotchLog.log("hover-sleep: idle → dormant")
-                withAnimation(Theme.collapse) { self.model.state = .dormant }
-                self.window.applyFrame(self.frame(for: .dormant), animated: true)
+                withAnimation(.easeOut(duration: Self.shrinkS)) { self.model.state = .dormant }
+                self.window.applyFrame(self.frame(for: .dormant), animated: true, duration: Self.shrinkS)
             }
         }
     }
@@ -307,14 +410,27 @@ final class AppController: NSObject, NotchResizing {
         // Global Esc: collapse even when we're not key (never required to
         // dismiss the resting state — only steps ENGAGED states down).
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            if e.keyCode == 53 { self?.stepDown() }
+            guard let self, e.keyCode == 53 else { return }
+            // A global monitor is OBSERVE-ONLY — it cannot consume the event, so
+            // reaching here while expanded means the Escape ALSO landed in the
+            // app underneath. That is the leak, and this line names it.
+            if self.model.state == .task || self.model.state == .cockpit {
+                NotchLog.log("esc: GLOBAL monitor while expanded — LEAKED to the app below (key=\(self.window.isKeyWindow))")
+            }
+            self.stepDown()
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self else { return e }
             // Never steal keys from a text field or the terminal.
             let fr = self.window.firstResponder
             let typing = fr is NSTextView || fr is TerminalView
-            if e.keyCode == 53 { self.stepDown(); return nil }
+            if e.keyCode == 53 {
+                // Logged so a leak is DIAGNOSABLE rather than inferred: if this
+                // line is absent when Escape leaks, the local monitor never
+                // fired and the panel was not key (see NotchWindow).
+                NotchLog.log("esc: LOCAL monitor (swallowed) state=\(self.model.state.rawValue) key=\(self.window.isKeyWindow)")
+                self.stepDown(); return nil
+            }
 
             // ⌘V AND FRIENDS, BECAUSE NOTHING ELSE WILL DELIVER THEM.
             //
@@ -339,12 +455,24 @@ final class AppController: NSObject, NotchResizing {
             // double-handling.
             if e.modifierFlags.contains(.command), !e.modifierFlags.contains(.control),
                let ch = e.charactersIgnoringModifiers?.lowercased() {
+                let shift = e.modifierFlags.contains(.shift)
                 let action: Selector? = {
                     switch ch {
                     case "v": return #selector(NSText.paste(_:))
                     case "c": return #selector(NSText.copy(_:))
                     case "x": return #selector(NSText.cut(_:))
                     case "a": return #selector(NSText.selectAll(_:))
+                    // UNDO / REDO — the same bug as ⌘V, and it was simply not on
+                    // the list. ⌘Z and ⌘⇧Z are menu commands too, so with no
+                    // main menu they were discarded everywhere: the rename
+                    // field, the note field, the Codex composer, the terminal.
+                    // Renaming a task and being unable to undo it is this, not a
+                    // clipboard problem and not a one-off.
+                    //
+                    // These selectors are informal (NSResponder forwards them to
+                    // the first responder's undoManager), so they are named
+                    // rather than #selector'd.
+                    case "z": return Selector((shift ? "redo:" : "undo:"))
                     default:  return nil
                     }
                 }()
@@ -401,6 +529,23 @@ final class AppController: NSObject, NotchResizing {
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
         ) { [weak self] _ in self?.recomputeGeometry("screen-params-changed") }
+
+        // NO SPACE-CHANGE HANDLER. Every invalidation strong enough to force a
+        // re-sample — ordering the window out and back, or displacing it — is
+        // VISIBLE as a blink on each swipe, and a surface that flickers every
+        // time the user changes Space is worse than one that is briefly stale.
+        //
+        // It is also a narrow case. The glass IS live: a window moving beneath
+        // the pill retints it continuously (measured — the pill tracked a
+        // white-to-yellow gradient sliding under it). macOS re-samples whenever
+        // something behind REPAINTS. The only gap is arriving on a Space whose
+        // content is completely static, where nothing repaints to trigger it,
+        // and Apple exposes no way to ask for a re-sample — its own
+        // always-present surfaces are composited by the WindowServer instead.
+        //
+        // The pill covers itself on the way in (see reconcilePillVisibility):
+        // it is ordered out between captures, so rebuilding as it appears costs
+        // nothing visually and is the moment that actually matters.
     }
     private func recomputeGeometry(_ reason: String) {
         geometry = NotchGeometry.current()
@@ -409,6 +554,11 @@ final class AppController: NSObject, NotchResizing {
         hostView?.rootView = NotchView(model: model, topInset: topInset)
         let f = frame(for: model.state)
         window.applyFrame(f, animated: false)
+        // The pill is bottom-anchored to the PRIMARY display's visible frame, so
+        // it has to move too — plugging in a monitor, or moving the menu bar to
+        // one, relocates both surfaces together. Its size preference does not
+        // re-fire on a screen change, so refit explicitly from the current frame.
+        pillWindow?.fit(geometry: geometry)
         NotchLog.log("geometry recomputed (\(reason)): screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) → window=\(NotchLog.rect(f))")
     }
 }
