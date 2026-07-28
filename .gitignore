@@ -11,4 +11,5 @@ desktop/work/
 *.log
 .wrangler/
 .claude/handoffs/
+desktop/node_modules
 desktop/native-notch/node_modules
