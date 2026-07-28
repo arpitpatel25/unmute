@@ -76,6 +76,23 @@ struct TaskDetail: Codable {
     let conversation: [TurnP]?
     /// Codex project name, for the header.
     let project: String?
+
+    /// Backends that drive a DESKTOP APP rather than a PTY. Their panel shows a
+    /// conversation, so they need less room than a live terminal — this is what
+    /// picks between SurfaceFill.desktopTask and .terminalTask.
+    ///
+    /// Listed POSITIVELY on purpose. The alternative — `backend != "codex-desktop"`
+    /// — makes every backend a terminal by default, so the next desktop agent
+    /// silently inherits the terminal's frame by never having been named.
+    /// `claude-code-desktop` does not exist on the wire yet; it is here so that
+    /// when it arrives it is already sized correctly.
+    static let desktopBackends: Set<String> = ["codex-desktop", "claude-code-desktop"]
+
+    /// Does this task have a live terminal? Absent backend ⇒ Claude's PTY.
+    var hasTerminal: Bool {
+        guard let backend else { return true }
+        return !Self.desktopBackends.contains(backend)
+    }
 }
 
 /// One turn of a GUI-agent conversation.

@@ -109,7 +109,14 @@ final class AppController: NSObject, NotchResizing {
 
         case let .showTask(task):
             NotchLog.log("CMD showTask id=\(task.id) status=\(task.status.rawValue)")
+            // The task surface's SIZE now depends on the backend, and detail can
+            // arrive independently of the setState that opened the surface —
+            // cranking from a PTY task to a Codex one sends showTask with the
+            // state unchanged. Without this the frame would keep the previous
+            // task's proportions until the next state change.
+            let fillChanged = model.task?.hasTerminal != task.hasTerminal
             model.task = task
+            if model.state == .task && fillChanged { refit(animated: true) }
 
         case let .stageDetail(task):
             NotchLog.log("CMD stageDetail id=\(task.id) status=\(task.status.rawValue)")
@@ -240,11 +247,10 @@ final class AppController: NSObject, NotchResizing {
     private func frame(for state: NotchState) -> NSRect {
         var size: NSSize
         if state == .task {
-            // Codex tasks were briefly given a compact frame, back when the
-            // panel had nothing but two buttons to show. They now carry a full
-            // transcript and a composer, so they want the same room as a
-            // terminal.
-            size = geometry.taskSize
+            // SIZED BY WHAT THE PANEL CARRIES, not by the state alone. A live
+            // terminal gets 80% of the screen; a desktop-app backend's
+            // conversation gets 60% (NotchGeometry.SurfaceFill).
+            size = geometry.taskSize(terminal: taskHasTerminal)
         } else if geometry.hasNotch,
                   state == .idle || state == .active || state == .attention {
             // NOTCHED HARDWARE: the surface is the notch plus a tongue, and its
@@ -287,6 +293,11 @@ final class AppController: NSObject, NotchResizing {
         return geometry.topPinnedFrame(width: size.width, height: size.height)
     }
 
+    /// Does the task surface's task have a live terminal? Nil task ⇒ true: a PTY
+    /// is the default backend, and opening a hair too large is recoverable in a
+    /// way that opening a terminal into a 60% frame is not.
+    private var taskHasTerminal: Bool { model.task?.hasTerminal ?? true }
+
     // MARK: - Drag to resize (session-scoped)
 
     /// How much bigger the user has dragged the current surface. Reset to 1 on
@@ -319,14 +330,27 @@ final class AppController: NSObject, NotchResizing {
     func endResize() { dragAnchor = nil }
 
     /// Never larger than the screen it lives on.
+    ///
+    /// Measured from the SAME base the frame uses, so the headroom shrinks as the
+    /// default grows: at 80% of the screen a drag can still add ~22% before
+    /// hitting the edge, and 0.6 in the other direction is still available. The
+    /// default being large does not take the choice away.
     private func maxScale() -> CGFloat {
-        let base = model.state == .cockpit ? geometry.cockpitSize : geometry.taskSize
+        let base = model.state == .cockpit ? geometry.cockpitSize
+                                           : geometry.taskSize(terminal: taskHasTerminal)
         let sw = geometry.screenFrame.width * 0.98 / max(base.width, 1)
         let sh = (geometry.screenFrame.height - geometry.menuBarHeight) * 0.98 / max(base.height, 1)
         return max(1, min(sw, sh))
     }
-    private func refit() {
-        window.applyFrame(frame(for: model.state), animated: false)
+    /// Re-apply the current state's frame after something the frame depends on
+    /// changed (the fronted task's backend, a stage detail arriving).
+    private func refit(animated: Bool = false) {
+        let f = frame(for: model.state)
+        let up = f.width >= window.frame.width
+        window.applyFrame(f, animated: animated, duration: up ? Self.growS : Self.shrinkS)
+        // Logged like a state change, because to the user it IS one: the surface
+        // visibly resizes without the rung changing.
+        NotchLog.log("refit \(model.state.rawValue) window=\(NotchLog.rect(f))")
     }
 
     private func rung(_ s: NotchState) -> Int {

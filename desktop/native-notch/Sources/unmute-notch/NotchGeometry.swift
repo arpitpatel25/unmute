@@ -95,8 +95,16 @@ struct NotchGeometry {
     static let dummyMenuBarHeight: CGFloat = 24
 
     // ── Per-state content sizes ──
-    // Small rungs are notch-scale fixed sizes; task/cockpit are FRACTIONS of the
-    // screen so they scale across displays (never hardcoded).
+    // Small rungs are notch-scale fixed sizes — they hug the notch, so they are
+    // sized in notch units and nothing else.
+    //
+    // The EXPANDED surfaces (task, cockpit) are pure FRACTIONS of the screen, on
+    // both axes, with no floor and no ceiling. A fraction that is then clamped to
+    // a pixel range is not a fraction: the old task width was
+    // `min(max(W*0.55, 560), 1100)`, so on any display wider than 2000pt the cap
+    // decided the size and the surface got proportionally SMALLER the bigger the
+    // monitor — 43% of a 2560-wide external, 55% of a laptop. Share of screen is
+    // the whole contract; see SurfaceFill.
 
     /// Dormant.
     ///
@@ -127,22 +135,45 @@ struct NotchGeometry {
     /// Kept for callers that don't distinguish the two strip states.
     var stripSize: NSSize { activeSize }
 
-    /// Task: a substantial surface. Slightly shorter than it was — the content
-    /// gutter dropped from 30pt to 16pt, so the same content needs less frame.
-    var taskSize: NSSize { taskSize(compact: false) }
+    /// How much of the screen an expanded surface fills, by what it carries.
+    ///
+    /// These are the whole sizing policy for task and cockpit, in one place and
+    /// stated as shares rather than pixels. Same share on a 13" laptop as on a
+    /// 32" external — the surface looks like the same object on both.
+    enum SurfaceFill {
+        /// A task on a backend with NO PTY (Codex desktop, Claude Code desktop).
+        /// Its panel is a conversation and a composer: readable at a smaller
+        /// measure, and a full-size frame around it renders as a large void with
+        /// two buttons floating in it (field feedback 2026-07-25).
+        static let desktopTask: CGFloat = 0.60
+        /// A terminal-backed task — Claude's PTY, the Codex CLI, anything with
+        /// live scrollback. The terminal IS the content here, and it was being
+        /// given a half-screen panel: 80 columns of output in a 792pt window is
+        /// the size complaint this whole change answers.
+        static let terminalTask: CGFloat = 0.80
+        /// The cockpit, always. Whatever is on the wall, expanding it is a
+        /// deliberate "show me everything" and it gets the room to be that.
+        static let cockpit: CGFloat = 0.80
+    }
 
-    /// `compact` is for backends with NO TERMINAL (Codex desktop). The full
-    /// height exists to give a live PTY room; a task whose panel shows a short
-    /// conversation instead got the same frame and rendered as a large void with
-    /// two buttons floating in it (field feedback 2026-07-25).
-    func taskSize(compact: Bool) -> NSSize {
-        NSSize(width: round(min(max(screenFrame.width * 0.55, 560), 1100)),
-               height: round(screenFrame.height * (compact ? 0.30 : 0.52)))
+    /// An expanded surface at `fill` of the screen, on BOTH axes.
+    func expandedSize(fill: CGFloat) -> NSSize {
+        NSSize(width: round(screenFrame.width * fill),
+               height: round(screenFrame.height * fill))
     }
+
+    /// Task, sized to what its backend needs. `terminal: false` is the
+    /// desktop-app case (see TaskDetail.hasTerminal — the one place that rule
+    /// is decided).
+    func taskSize(terminal: Bool) -> NSSize {
+        expandedSize(fill: terminal ? SurfaceFill.terminalTask : SurfaceFill.desktopTask)
+    }
+    /// Task, for callers with no task in hand. A PTY is the default backend, so
+    /// the terminal size is the honest default.
+    var taskSize: NSSize { taskSize(terminal: true) }
+
     /// Cockpit: the survey surface.
-    var cockpitSize: NSSize {
-        NSSize(width: round(screenFrame.width * 0.78), height: round(screenFrame.height * 0.76))
-    }
+    var cockpitSize: NSSize { expandedSize(fill: SurfaceFill.cockpit) }
 
     func size(for state: NotchState) -> NSSize {
         switch state {
@@ -169,11 +200,11 @@ struct NotchGeometry {
         return topPinnedFrame(width: size.width, height: size.height)
     }
 
-    /// Clamp a content-measured task height into a sane band (never a sliver,
-    /// never taller than ~65% of the screen).
-    func clampTaskHeight(_ h: CGFloat) -> CGFloat {
-        min(max(h, screenFrame.height * 0.30), screenFrame.height * 0.65)
-    }
+    // NO clampTaskHeight. It described a content-MEASURED task height clamped to
+    // a 30–65% band, from a design where the panel sized itself to its content.
+    // Nothing has called it since the task surface became a fixed share of the
+    // screen, and leaving a second, contradictory size contract lying next to
+    // SurfaceFill is how the two drift apart.
 
     // ── The input surface (pill cluster) ──
     //
