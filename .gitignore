@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 dist/
 # Generic build/ output dirs (not desktop/build which is our build script)
 /build/
