@@ -138,6 +138,19 @@ function setMainFocus(id: string | null) {
   void api?.remoteSetOrchestrateFocus?.(id)
 }
 
+/** Does this task live in a chat app we drive (Codex) rather than in a PTY we
+ *  own? Such a thread is never "dead": there is no session to end and none to
+ *  resume, so every liveness affordance must branch on this FIRST. */
+function isChat(t: RemoteTask): boolean {
+  return t.agent === 'codex-desktop'
+}
+
+/** Hand the user the real Codex chat (main routes open-in-terminal by backend). */
+function openInCodex(id: string) {
+  const api = (window as unknown as { electronAPI?: { remoteOpenInTerminal?: (id: string) => Promise<boolean> } }).electronAPI
+  void api?.remoteOpenInTerminal?.(id)
+}
+
 function Dot({ state }: { state: WallState }) {
   const { color } = statusOf(state)
   return (
@@ -314,8 +327,14 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
           const api = (window as unknown as { electronAPI?: { remoteSetKind?: (id: string, kind: 'oneoff' | 'session') => Promise<boolean> } }).electronAPI
           void api?.remoteSetKind?.(t.id, t.kind === 'session' ? 'oneoff' : 'session')
         }} />
-        {/* lifecycle controls — the manual fallback is always present (§9) */}
-        {t.alive ? (
+        {/* lifecycle controls — BACKEND FIRST, then liveness (the notch's rule).
+            A Codex thread has no PTY, so `alive` is always false for one — and
+            this branch used to read that as "dead" and offer to RESUME a chat
+            that had never stopped. There is nothing to kill and nothing to
+            revive: the only honest move is a door into the thread. */}
+        {isChat(t) ? (
+          <Key label="open in codex" onClick={() => openInCodex(t.id)} />
+        ) : t.alive ? (
           <Key label="kill" danger onClick={() => { if (window.confirm('Stop this session?')) onKill(t.id) }} />
         ) : (
           <Key label="resume" onClick={() => onResume(t.id)} />
@@ -383,12 +402,31 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
         </div>
       )}
 
-      {/* ALIVE → the REAL terminal, painted FRESH (no stale-width replay — the
+      {/* CHAT BACKEND → where a Claude task shows its terminal, a Codex task
+          shows where its conversation lives. Neither the terminal nor the ended-
+          session panel belongs here: the first does not exist for this backend,
+          the second offered to resume a chat that never stopped.
+          ALIVE → the REAL terminal, painted FRESH (no stale-width replay — the
           live TUI repaints on SIGWINCH; replaying old-width frames is what
           garbled the stage). DEAD → never an empty black void: the result/error
           panel with resume / re-run as the obvious next move. */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        {t.alive ? (
+        {isChat(t) ? (
+          <div style={{ height: '100%', overflow: 'auto', padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase' }}>
+              codex thread{t.codexProject ? ` · ${t.codexProject}` : ''} · {st.label}
+            </div>
+            {t.threadContext && <div style={{ fontSize: 13, color: C.midText, lineHeight: 1.55 }}>{t.threadContext}</div>}
+            {t.result?.summary && <div style={{ fontSize: 14, color: C.nameText, lineHeight: 1.55 }}>{t.result.summary}</div>}
+            {t.result?.detail && <div style={{ fontSize: 12.5, color: C.midText, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{t.result.detail}</div>}
+            <div style={{ display: 'flex', gap: 9, marginTop: 4 }}>
+              <button onClick={() => openInCodex(t.id)}
+                style={{ fontFamily: C.mono, fontSize: 12, fontWeight: 700, color: C.bg, background: '#3fb950', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer' }}>
+                open in codex — the thread is still there
+              </button>
+            </div>
+          </div>
+        ) : t.alive ? (
           <LiveTerminal taskId={t.id} onClose={onClose} fill />
         ) : (
           <div style={{ height: '100%', overflow: 'auto', padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>

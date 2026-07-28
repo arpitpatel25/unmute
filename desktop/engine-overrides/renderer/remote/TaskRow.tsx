@@ -190,7 +190,9 @@ export function TaskRow({
             Re-run
           </button>
         )}
-        {!active && onResume && (
+        {/* Resume is a PTY concept. A Codex thread lives in Codex — it has no
+            session of ours to end, so it must never be offered one to revive. */}
+        {!active && onResume && task.agent !== 'codex-desktop' && (
           <button
             className="text-[11px] px-2 py-0.5 rounded border border-black/15 hover:bg-black/5"
             title="Continue this exact session with full prior context (resumes interrupted work)"

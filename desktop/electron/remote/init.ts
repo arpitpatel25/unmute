@@ -707,7 +707,19 @@ function executorFactory(resume = false) {
     throw new Error(`AGENT_SEPARATION_VIOLATION: ${agent} has no PTY executor; dispatch must route it to its driver`)
   }
   if (agent === 'codex') {
-    return new CodexExecutor({}) // NOTE: Codex resume isn't wired yet (different mechanism)
+    // Codex CLI resume is NOT wired (its continuation mechanism differs from
+    // Claude's --resume/--continue). Building a plain executor here would spawn a
+    // BRAND-NEW, context-free codex REPL behind a button that promises "continue
+    // with full context" — and, now that opening a session can resume it without
+    // a tap, it would do so silently. Fail loudly instead: resume() catches this,
+    // reports false, and the card keeps its (honest) ended state. Dormant today —
+    // the picker offers Claude and Codex desktop only — this is the guard for
+    // when the CLI backend ships.
+    if (resume) {
+      log.error('codex CLI resume is not implemented — refusing to spawn a context-free session', { agent })
+      throw new Error('CODEX_CLI_RESUME_UNSUPPORTED: a fresh codex REPL would not continue this task')
+    }
+    return new CodexExecutor({})
   }
   // PRD §10.1/§10.6 interaction: a sandbox is the "fenced yard" — when it's ON
   // we do NOT skip permissions globally (out-of-fence access still prompts via
@@ -2025,6 +2037,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         setShelved: (id, on) => mgr.setShelved(id, on),
         setNote: (id, note) => mgr.setNote(id, note),
         focus: (id) => { orchestrateFocusId = id },
+        opened: (id) => mgr.opened(id),
         // terminal — same as remote:get-output/terminal-input/terminal-resize
         getOutput: (id) => mgr.getOutput(id),
         sendInput: (id, data) => mgr.sendInput(id, data),
@@ -2521,6 +2534,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:set-orchestrate-focus', async (_e, id: string | null) => {
     orchestrateFocusId = id || null
     log.event('orchestrate-focus-set', { taskId: orchestrateFocusId })
+    // Opening a session on the wall is the same gesture as opening it in the
+    // notch: if the quit switch closed its PTY, bring it back (no Resume tap).
+    if (orchestrateFocusId) manager?.opened(orchestrateFocusId)
     // Announce the new terminal owner to every renderer. The overlay defers to a
     // glance for the wall-owned session, so exactly one surface renders a terminal
     // for a session at a time — no two LiveTerminals fighting over the PTY width.

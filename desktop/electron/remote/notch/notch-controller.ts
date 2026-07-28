@@ -80,6 +80,10 @@ export interface NotchControllerDeps {
   setShelved(id: string, on: boolean): void
   setNote(id: string, note: string): void
   focus(id: string | null): void
+  /** The user opened this card (tap / cockpit stage). Revives a persistent
+   *  session whose PTY the quit switch closed — see TaskManager.opened. Optional
+   *  so a host that doesn't wire it simply keeps the manual Resume button. */
+  opened?(id: string): void
   // terminal
   getOutput(id: string): string
   sendInput(id: string, data: string): void
@@ -447,6 +451,7 @@ export class NotchController {
     if (!target) { this.openCockpit(); return }
     this.engaged = 'task'
     this.setFocus(target.id) // voice routes to the fronted task
+    this.deps.opened?.(target.id) // a closed working session comes back by itself
     this.reconcile()
   }
 
@@ -495,6 +500,7 @@ export class NotchController {
   private onFocusTask(id: string): void {
     this.engaged = 'cockpit'
     this.setFocus(id)
+    this.deps.opened?.(id) // opening the stage IS the intent to work in it
     this.reconcile()
   }
 

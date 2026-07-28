@@ -916,6 +916,126 @@ test('resume of a ready task is SILENT — warm re-entry, no continue nudge', { 
   tm.kill(tid)
 })
 
+// ─── Opening a card revives the session (the quit switch closed it) ──────────
+
+/** Poll a predicate — opened() resumes in the background (fire-and-forget). */
+async function waitFor(pred: () => boolean, ms = 2000): Promise<void> {
+  const until = Date.now() + ms
+  while (Date.now() < until) {
+    if (pred()) return
+    await new Promise((r) => setTimeout(r, 10))
+  }
+  throw new Error('waitFor: condition never became true')
+}
+
+/** Seed an on-disk task that was mid-work when the app quit. */
+async function seedInterrupted(baseDir: string, kind: 'oneoff' | 'session', extraMeta: object = {}): Promise<string> {
+  const id = randomUUID()
+  const dir = path.join(baseDir, 'local', id)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id, intent: 'the long thread', sessionId: randomUUID(), kind, createdAt: Date.now(), ...extraMeta }))
+  await claudeWrites(path.join(dir, 'status.json'), { state: 'processing', step: 'mid-turn' })
+  return id
+}
+
+test('a session closed by the quit switch comes back READY, not failed; a one-off still reads interrupted', async () => {
+  const baseDir = await tmpBase()
+  const sid = await seedInterrupted(baseDir, 'session')
+  const oid = await seedInterrupted(baseDir, 'oneoff')
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm.rehydrate()
+  // The quit switch closes every session BY DESIGN — that is not a failure.
+  assert.equal(tm.get(sid)!.state, 'ready', 'persistent session restores as ball-with-you')
+  assert.equal(tm.get(sid)!.error, undefined, 'and carries no error to explain away')
+  // A one-off errand really was cut short: unchanged.
+  assert.equal(tm.get(oid)!.state, 'failed')
+  assert.match(tm.get(oid)!.error!.reason, /Interrupted by an app restart/)
+})
+
+test('opening a persistent session revives it with no Resume tap; a one-off is left alone', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  let spawns = 0
+  const sid = await seedInterrupted(baseDir, 'session')
+  const oid = await seedInterrupted(baseDir, 'oneoff')
+  const tm = new TaskManager({
+    executorFactory: () => { spawns++; return makeFakeExecutor() },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  await tm.rehydrate()
+  assert.equal(tm.isAlive(sid), false, 'rehydrate never re-attaches')
+
+  tm.opened(sid)
+  await waitFor(() => tm.isAlive(sid))
+  assert.equal(spawns, 1, 'opening the card resumed it')
+  // Mid-work when it closed ⇒ the resume NUDGES it to carry on.
+  assert.equal(tm.get(sid)!.state, 'processing')
+
+  // A one-off is opened to READ its result — resuming it would spawn a REPL
+  // behind the user's back (and after a purge there is nothing to resume).
+  tm.opened(oid)
+  await new Promise((r) => setTimeout(r, 120))
+  assert.equal(spawns, 1, 'one-off keeps its explicit Resume button')
+  assert.equal(tm.isAlive(oid), false)
+  tm.killAll()
+})
+
+test('opened() is idempotent — the surfaces re-announce on every tick, one gesture = one respawn', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  let spawns = 0
+  const sid = await seedInterrupted(baseDir, 'session')
+  const tm = new TaskManager({
+    executorFactory: () => { spawns++; return makeFakeExecutor() },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  await tm.rehydrate()
+  for (let i = 0; i < 5; i++) tm.opened(sid) // reconcile fires repeatedly
+  await waitFor(() => tm.isAlive(sid))
+  tm.opened(sid) // and again once it IS alive
+  await new Promise((r) => setTimeout(r, 120))
+  assert.equal(spawns, 1, 'exactly one session, however many opens')
+  tm.killAll()
+})
+
+test('two resumes racing (auto-resume + a Resume tap) build ONE session, not two', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  let spawns = 0
+  const sid = await seedInterrupted(baseDir, 'session')
+  // Mirror the REAL executor: a PTY is not `alive` until spawn resolves, and
+  // that window is exactly where a second resume used to orphan the first PTY.
+  const slowExecutor = () => {
+    spawns++
+    let live = false
+    const ex = makeFakeExecutor()
+    return Object.defineProperty(ex, 'alive', { get: () => live, configurable: true }) &&
+      Object.assign(ex, { spawn: async () => { await new Promise((r) => setTimeout(r, 60)); live = true } })
+  }
+  const tm = new TaskManager({
+    executorFactory: slowExecutor,
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  await tm.rehydrate()
+  const [a, b] = await Promise.all([tm.resume(sid), tm.resume(sid)])
+  assert.equal(a, true)
+  assert.equal(b, true)
+  assert.equal(spawns, 1, 'the second resume is absorbed, not a second session')
+  tm.killAll()
+})
+
+test('opening a Codex thread spawns nothing — it has no session of ours to revive', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  let spawns = 0
+  const cid = await seedInterrupted(baseDir, 'session', { agent: 'codex-desktop', codexThreadId: 'th-1' })
+  const tm = new TaskManager({
+    executorFactory: () => { spawns++; return makeFakeExecutor() },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  await tm.rehydrate()
+  tm.opened(cid)
+  await new Promise((r) => setTimeout(r, 120))
+  assert.equal(spawns, 0, 'no PTY is ever built for a chat backend')
+  tm.killAll()
+})
+
 test('shelve/note persist to meta.json and survive rehydrate; shelved is purge-exempt', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })

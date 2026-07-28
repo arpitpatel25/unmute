@@ -229,7 +229,8 @@ function Expanded({
         {!active && (
           <button className="text-white/35 hover:text-white/80" onClick={() => onRerun(task.intent)}>re-run</button>
         )}
-        {!active && (
+        {/* PTY-only: a Codex thread has no session of ours to revive. */}
+        {!active && task.agent !== 'codex-desktop' && (
           <button
             className="text-white/35 hover:text-white/80"
             title="Continue this exact session with full prior context"

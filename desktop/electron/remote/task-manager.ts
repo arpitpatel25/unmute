@@ -293,6 +293,10 @@ export class TaskManager extends EventEmitter {
   private surfacedApprovals = new Map<string, number>()
   /** Poll decimation for settled Codex tasks (see pollCodexDesktop). */
   private codexIdleTicks = new Map<string, number>()
+  /** Resumes currently in flight (see resume) — a session is not `alive` until
+   *  its PTY spawns, so this is what keeps a second call from building a second
+   *  session in that window. */
+  private resuming = new Set<string>()
   // Per-task chain serializing meta.json read-modify-writes. Two concurrent
   // merges (e.g. setShelved + setNote in one tick) would otherwise race the
   // read and the last write would silently drop the other's field.
@@ -1270,6 +1274,17 @@ export class TaskManager extends EventEmitter {
       const status = await readStatus(statusPath)
       const now = this.clock()
       const terminal = status?.state === 'done' || status?.state === 'failed' || status?.state === 'ready'
+      // A PERSISTENT SESSION CLOSED BY THE QUIT SWITCH DID NOT FAIL.
+      //
+      // Every session dies when the app quits (killAll on before-quit — the
+      // guard against leaving processes behind). For a one-off that lands as
+      // 'failed / interrupted', which is honest: its errand was cut short. For a
+      // working session it was a lie in red — nothing failed, you closed the
+      // laptop. It comes back as `ready` instead: terminal (so it never inflates
+      // the running count), ball-with-you, no error to explain away. Opening the
+      // card revives it (see `opened`). Sessions are exempt from the ready decay,
+      // so this cannot quietly settle to done either.
+      const isSession = (meta.kind ?? 'oneoff') === 'session'
       const task: Task = {
         id,
         intent: meta.intent,
@@ -1280,8 +1295,8 @@ export class TaskManager extends EventEmitter {
         kind: meta.kind ?? 'oneoff',
         // A non-terminal task whose session died with the app is, to the user,
         // interrupted — surface it as failed (still resumable) rather than a
-        // forever-spinning 'processing'.
-        state: terminal ? status!.state : 'failed',
+        // forever-spinning 'processing'. Sessions get `ready` instead (above).
+        state: terminal ? status!.state : (isSession ? 'ready' : 'failed'),
         createdAt: meta.createdAt ?? now,
         updatedAt: (await statusMtimeMs(statusPath)) ?? meta.createdAt ?? now,
         // Project-bound sessions ran in the user's real dir (meta.cwd); resume
@@ -1294,7 +1309,7 @@ export class TaskManager extends EventEmitter {
         lastHeartbeatMs: now,
         category: status?.category,
         result: status?.result,
-        error: terminal ? status?.error : { reason: 'Interrupted by an app restart — resume to continue' },
+        error: terminal ? status?.error : (isSession ? undefined : { reason: 'Interrupted by an app restart — resume to continue' }),
         question: status?.question,
         surface: meta.surface,
         mode: meta.mode ?? 'managed',
@@ -1778,6 +1793,13 @@ export class TaskManager extends EventEmitter {
     // pre-sessionId receipt whose sessionId defaulted to the taskId) so resume
     // still works. NEVER passes --fork-session — that would branch, not resume.
     const byId = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
+    // ONE RESUME AT A TIME. `alive` only turns true once the PTY has spawned, so
+    // a second call arriving during the (seconds-long) respawn passed the check
+    // above and built a SECOND session — orphaning the first, which nothing then
+    // held a handle to. Reachable by double-tapping Resume, and more so now that
+    // opening a card resumes it while its Resume button is still on screen.
+    if (this.resuming.has(id)) { tlog.event('resume-noop-already-resuming', {}); return true }
+    this.resuming.add(id)
     tlog.event('resume-start', { cwd: task.cwd, resumeBy: byId ? 'session-id' : 'continue' })
     try {
       const ex = this.opts.executorFactory(!byId) // --continue only when we can't target the exact session by id
@@ -1827,7 +1849,45 @@ export class TaskManager extends EventEmitter {
       tlog.error('resume failed', { error: (e as Error).message })
       this.hardKill(id)
       return false
+    } finally {
+      this.resuming.delete(id)
     }
+  }
+
+  /**
+   * The user OPENED this card — revive a persistent session that isn't running.
+   *
+   * Quitting Unmute kills every session by design (killAll on before-quit), so a
+   * working session comes back on the next launch as a row with a dead PTY. The
+   * Resume tap that followed bought nothing: OPENING the card is already the
+   * intent, and nobody opens a working session to look at a "session ended"
+   * panel. So opening one resumes it.
+   *
+   * Deliberately narrow, because the cost of being wrong is a spawned process:
+   *  • PERSISTENT SESSIONS ONLY. A one-off is opened to READ its result — often
+   *    long after it finished, sometimes after its dir was purged (nothing left
+   *    to resume anyway) — so it keeps the explicit Resume button.
+   *  • EXTERNAL BACKENDS ARE SKIPPED. A Codex thread has no PTY and was never
+   *    dead; resume() is a no-op for it (see the guard there).
+   *  • ALREADY ALIVE is a no-op, and an in-flight respawn is absorbed by
+   *    resume()'s own single-flight guard. Both surfaces re-announce the open on
+   *    every reconcile tick, so this is called repeatedly for one gesture and
+   *    must stay idempotent.
+   *
+   * Fire-and-forget: the card is already on screen; it flips from the dead panel
+   * to the live terminal when the respawn lands.
+   */
+  opened(id: string): void {
+    const task = this.tasks.get(id)
+    if (!task || (task.kind ?? 'oneoff') !== 'session') return
+    if (isExternalAgent(task.agent)) return
+    if (this.executors.get(id)?.alive) return
+    if (this.resuming.has(id)) return
+    const tlog = log.child({ taskId: id })
+    tlog.event('auto-resume-on-open', {})
+    void this.resume(id)
+      .then((ok) => { if (!ok) tlog.warn('auto-resume on open did not take', {}) })
+      .catch((e) => tlog.error('auto-resume on open threw', { error: (e as Error).message }))
   }
 
   /** Tasks currently BLOCKED on a needs-user question, newest first. The router
