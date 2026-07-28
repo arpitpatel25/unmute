@@ -308,10 +308,19 @@ export async function installApprovalHook(opts: {
     // into a process nobody was listening to. A denial cannot be enforced by a
     // hook that the agent is not waiting on.
     //
-    // The timeout key is `timeoutSec`, not `timeout`. Ours was silently ignored
-    // and Codex used its 600s default — harmless, but it meant the number we
-    // thought we were setting had never applied.
-    { matcher: '*', hooks: [{ type: 'command', command: shim, async: false, timeoutSec: waitSec + 30 }] },
+    // THE FILE FORMAT IS NOT THE RPC FORMAT. On disk the key is `timeout`;
+    // Codex maps it to `timeoutSec` when it reports the hook back over
+    // hooks/list. Probed directly — writing timeout:111 and timeoutSec:222 made
+    // hooks/list report timeoutSec:111. Setting `timeoutSec` in the file (which
+    // is what the app-server's ConfiguredHookHandler schema calls it) is
+    // silently ignored and Codex falls back to its 600s default.
+    //
+    // `async` stays: it is REQUIRED by that same schema, and without it Codex
+    // treats the hook as fire-and-forget — it starts our handler, does not wait,
+    // and runs the command anyway. hooks/list does not echo the field, so
+    // whether the file honours this spelling is confirmed only by observing
+    // that a denial is actually enforced.
+    { matcher: '*', hooks: [{ type: 'command', command: shim, async: false, timeout: waitSec + 30 }] },
   ]
   file.hooks = events
   if (!file.description) file.description = 'Hooks configured by unmute and by you.'

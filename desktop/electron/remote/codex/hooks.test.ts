@@ -244,7 +244,9 @@ describe('installing into the user\'s hooks.json', () => {
     // a Deny arrives after the fact. This assertion is the difference between
     // an approval prompt and an approval GATE.
     assert.equal(entry.async, false, 'async:false — otherwise Codex does not wait for our decision')
-    // The key is `timeoutSec`, not `timeout`; the latter is silently ignored.
-    assert.ok(entry.timeoutSec > 0, 'Codex kills the hook at timeoutSec; it must outlast our own wait')
+    // ON DISK the key is `timeout` (Codex renames it to timeoutSec only when
+    // reporting via hooks/list). Writing `timeoutSec` here is ignored and Codex
+    // silently uses its 600s default — verified by probe.
+    assert.ok(entry.timeout > 0, 'Codex kills the hook at timeout; it must outlast our own wait')
   })
 })
