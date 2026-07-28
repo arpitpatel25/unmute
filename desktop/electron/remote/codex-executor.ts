@@ -10,6 +10,7 @@
 // billing (PRD §11.2). Codex is driven in its interactive REPL, never headless.
 
 import { CliAgentExecutor, type CliAgentConfig } from './pty-session'
+import { providerOf, type ProviderId } from './providers'
 
 type NodePtyLoader = CliAgentConfig['ptyLoader']
 
@@ -34,6 +35,10 @@ export class CodexExecutor extends CliAgentExecutor {
 
 /** The agent the executor factory should build (PRD §11 selector).
  *
+ *  Now an alias of ProviderId: the registry in providers.ts is the source of
+ *  truth for what each backend IS and what it can do. The name is kept because
+ *  ~130 call sites and the persisted meta.json speak of `agent`.
+ *
  *  'claude'        — Claude Code CLI in an Unmute-owned PTY (the default).
  *  'codex'         — Codex CLI in an Unmute-owned PTY (same mechanism).
  *  'codex-desktop' — the Codex DESKTOP app. Not an executor at all: Unmute owns
@@ -41,9 +46,12 @@ export class CodexExecutor extends CliAgentExecutor {
  *    (codex/driver.ts) — writes via CDP into the app the user actually sees,
  *    state read from the rollout files on disk. `executorFactory` is never
  *    called for it; `TaskManager.dispatch` branches before that point. */
-export type AgentKind = 'claude' | 'codex' | 'codex-desktop'
+export type AgentKind = ProviderId
 
-/** True for backends Unmute drives as an external app rather than an owned PTY. */
+/** True for backends Unmute drives as an external app rather than an owned PTY.
+ *
+ *  Reads the registry rather than naming Codex, so the answer stays right when a
+ *  backend is added — the ~13 callers of this helper need no edit. */
 export function isExternalAgent(agent: AgentKind | undefined): boolean {
-  return agent === 'codex-desktop'
+  return providerOf(agent).transport === 'driver'
 }
