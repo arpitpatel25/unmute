@@ -55,6 +55,11 @@ export interface TaskDetailP {
   /** Which backend runs this task; drives whether the panel shows a terminal
    *  (Claude, PTY) or the conversation (Codex, no PTY). */
   backend?: 'claude' | 'codex-desktop'
+  /** Does this task have a live terminal? Resolved from the provider registry
+   *  (providers.ts) and SENT, so the Swift side stops deriving it from its own
+   *  list of desktop backends — the two lists had already drifted. Optional: an
+   *  older helper binary ignores the field and falls back to its own answer. */
+  terminal?: boolean
   /** Last message that did not reach the agent (NOT a task failure). */
   deliveryError?: string
   /** A message is in flight to the agent. */

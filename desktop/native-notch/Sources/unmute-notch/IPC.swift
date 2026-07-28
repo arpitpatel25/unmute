@@ -77,21 +77,26 @@ struct TaskDetail: Codable {
     /// Codex project name, for the header.
     let project: String?
 
-    /// Backends that drive a DESKTOP APP rather than a PTY. Their panel shows a
-    /// conversation, so they need less room than a live terminal — this is what
-    /// picks between SurfaceFill.desktopTask and .terminalTask.
+    /// Does this task have a live terminal? SENT by the engine, which resolves it
+    /// from the one provider registry (electron/remote/providers.ts). This is
+    /// what picks between SurfaceFill.desktopTask and .terminalTask.
     ///
-    /// Listed POSITIVELY on purpose. The alternative — `backend != "codex-desktop"`
-    /// — makes every backend a terminal by default, so the next desktop agent
-    /// silently inherits the terminal's frame by never having been named.
-    /// `claude-code-desktop` does not exist on the wire yet; it is here so that
-    /// when it arrives it is already sized correctly.
-    static let desktopBackends: Set<String> = ["codex-desktop", "claude-code-desktop"]
+    /// It used to be decided here, from a local set of desktop backends — a
+    /// second source of truth that had ALREADY drifted from the TypeScript one
+    /// (it listed a `claude-code-desktop` that does not exist in AgentKind).
+    /// Adding a backend meant remembering to edit a Swift file too, and
+    /// forgetting silently handed the new agent a terminal's frame.
+    let terminal: Bool?
+
+    /// Fallback for an engine older than the `terminal` field, and ONLY that.
+    /// Do not add backends here — add them to providers.ts.
+    private static let legacyDesktopBackends: Set<String> = ["codex-desktop", "claude-code-desktop"]
 
     /// Does this task have a live terminal? Absent backend ⇒ Claude's PTY.
     var hasTerminal: Bool {
+        if let terminal { return terminal }
         guard let backend else { return true }
-        return !Self.desktopBackends.contains(backend)
+        return !Self.legacyDesktopBackends.contains(backend)
     }
 }
 

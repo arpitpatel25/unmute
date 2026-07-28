@@ -13,6 +13,7 @@ import type {
   NotchCommand, NotchEvent, NotchStateName, TaskStatusName,
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
 } from './notch-client'
+import { providerOf } from '../providers'
 import { createLogger } from '../log'
 
 const log = createLogger('notch-controller')
@@ -736,6 +737,13 @@ export class NotchController {
     return {
       id: t.id,
       title: t.name ?? truncate(t.intent),
+      // WHETHER THERE IS A LIVE TERMINAL, decided here and sent, rather than
+      // re-derived on the Swift side from its own list of desktop backends.
+      // Those two lists had already drifted — the Swift one named a
+      // 'claude-code-desktop' that does not exist in AgentKind — and this is
+      // what picks the expanded surface's share of the screen (80% for a
+      // terminal, 60% for a conversation). One registry, one answer.
+      terminal: providerOf(t.agent).hasTerminal,
       // An external backend has no PTY, so the panel renders the CONVERSATION
       // where a Claude task renders its terminal. Both are "the real thing,
       // shown raw" — neither is a re-implementation of the other app's UI.
