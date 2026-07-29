@@ -70,7 +70,7 @@ import {
   type CuratorPaths, type Proposal,
 } from './curator-store'
 import { writeSkill } from './curator-writer'
-import { devlog } from './curator-devlog'
+import { devlog, devEvent } from './curator-devlog'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -2292,8 +2292,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // write-mode librarian session (single-writer invariant covers gardening).
     void librarian.runMaintenance(async () => {
       const actions = await planGardening({ nowMs: Date.now() })
-      // TEMP(memory-debug): remove after calibration
-      log.event('gardening-sweep', { MEMORY_DEBUG: true, planned: actions.length })
+      devEvent(log, 'gardening-sweep', { planned: actions.length })
       await applyGardening(actions, {})
     }).catch((e) => log.warn('gardening sweep failed', { error: (e as Error).message }))
   }, GARDEN_MS)
@@ -3118,7 +3117,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     let res: CleanupResult | null = null
     await librarian.runMaintenance(async () => { res = await cleanupMemory({ nowMs: Date.now() }) })
     const r = res as CleanupResult | null
-    log.event('cleanup-memory-ipc', { MEMORY_DEBUG: true,
+    devEvent(log, 'cleanup-memory-ipc', {
       pruned: r?.pruned.length ?? 0, evicted: r?.evicted.length ?? 0, demoted: r?.demoted.length ?? 0, deduped: r?.deduped.length ?? 0 })
     return r
   })

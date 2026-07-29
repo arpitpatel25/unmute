@@ -24,6 +24,7 @@ import { settleRepl } from './repl-settle'
 import { locateTranscript, reduceTranscript } from './trace-reducer'
 import { listRecipes, recipesDir, graduatedDir } from './recipe-store'
 import { SURFACES } from './surface'
+import { devEvent } from './curator-devlog'
 
 const log = createLogger('librarian')
 
@@ -338,8 +339,7 @@ export class Librarian {
       const tFile = await locateTranscript(s.cwd)
       if (tFile) { reducedTrace = reduceTranscript(await fs.readFile(tFile, 'utf8')); traceSource = 'jsonl' }
     } catch (e) {
-      // TEMP(memory-debug): remove after calibration
-      llog.warn('trace resolve failed — using PTY fallback', { MEMORY_DEBUG: true, error: (e as Error).message })
+      llog.warn('trace resolve failed — using PTY fallback', { error: (e as Error).message })
     }
     const reducedTraceBytes = reducedTrace.length
 
@@ -354,8 +354,7 @@ export class Librarian {
         description: r.frontmatter.description,
       }))
     } catch (e) {
-      // TEMP(memory-debug): remove after calibration
-      llog.warn('listRecipes failed — continuing with empty memory', { MEMORY_DEBUG: true, error: (e as Error).message })
+      llog.warn('listRecipes failed — continuing with empty memory', { error: (e as Error).message })
     }
 
     const profile = await readUserProfile(this.opts.baseDir || undefined)
@@ -390,19 +389,16 @@ export class Librarian {
     })
 
     try { await fs.writeFile(join(libCwd, 'librarian-prompt.txt'), prompt) }
-    catch (e) { llog.warn('prompt-file write failed (continuing)', { MEMORY_DEBUG: true, error: (e as Error).message }) }
+    catch (e) { llog.warn('prompt-file write failed (continuing)', { error: (e as Error).message }) }
 
-    // TEMP(memory-debug): remove after calibration
-    llog.event('librarian-inputs', {
-      MEMORY_DEBUG: true,
+    devEvent(llog, 'librarian-inputs', {
       intent,
       outcome,
       injectedRecipes,
       reducedTraceBytes,
       existingCount: existing.length,
       writeEnabled,
-      traceSource,
-    })
+      traceSource })
 
     // Accumulate the PTY output so the settle loop can observe when the REPL is
     // actually at its idle prompt (capped — we only ever read the tail).

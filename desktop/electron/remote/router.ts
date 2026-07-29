@@ -25,6 +25,7 @@ import { homedir } from 'node:os'
 import { createLogger } from './log'
 import { SURFACES, normalizeSurface } from './surface'
 import type { AgentExecutor, ExecutorFactory } from './executor'
+import { devEvent } from './curator-devlog'
 
 const log = createLogger('router')
 
@@ -615,8 +616,7 @@ export class Router {
       if (this.ex?.alive) { this.ex.write('\r'); log.event('router-submit-confirm', { afterMs: this.o.submitConfirmMs }) }
       const raw = await this.waitForDecision(prompt)
       const decision = parseDecision(raw, fallback, tasks, projects, coldSessions, finished, wall, skillNames, avail)
-      // TEMP(memory-debug)
-      log.event('route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, group: decision.group ?? null, ops: decision.ops?.length ?? 0, MEMORY_DEBUG: true })
+      devEvent(log, 'route-decision', { action: decision.action, targetTaskId: decision.targetTaskId ?? null, tasks: tasks.length, surface: decision.surface ?? null, mode: decision.mode ?? null, kind: decision.kind ?? null, dir: decision.dir ?? null, group: decision.group ?? null, ops: decision.ops?.length ?? 0 })
       return decision
     } catch (e) {
       log.warn('route failed — using failsafe', { error: (e as Error).message })

@@ -18,6 +18,7 @@ import { homedir } from 'node:os'
 import { createLogger } from './log'
 import { graduatedDir } from './recipe-store'
 import { GENERAL_SURFACE } from './surface'
+import { devEvent } from './curator-devlog'
 
 const log = createLogger('skills')
 
@@ -50,8 +51,7 @@ export async function installSkillsIntoCwd(cwd: string, opts: { surface?: string
       }
     }
   }
-  // TEMP(memory-debug): remove after calibration
-  log.event('skills-installed-into-cwd', { MEMORY_DEBUG: true, cwd, surfaces, copied })
+  devEvent(log, 'skills-installed-into-cwd', { cwd, surfaces, copied })
   return copied
 }
 

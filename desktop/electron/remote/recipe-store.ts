@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createLogger } from './log'
+import { devEvent } from './curator-devlog'
 
 const log = createLogger('recipe-store')
 
@@ -33,14 +34,12 @@ const NUM_FIELDS = new Set(['runs_confirmed', 'runs_contradicted'])
  *  if the leading `---` fenced frontmatter is absent/!malformed (tolerant). */
 export function parseRecipe(text: string, path: string): Recipe | null {
   if (!text.startsWith('---')) {
-    // TEMP(memory-debug): remove after calibration
-    log.event('parse-recipe.no-frontmatter', { MEMORY_DEBUG: true, path, reason: 'text does not start with ---' })
+    devEvent(log, 'parse-recipe.no-frontmatter', { path, reason: 'text does not start with ---' })
     return null
   }
   const end = text.indexOf('\n---', 3)
   if (end === -1) {
-    // TEMP(memory-debug): remove after calibration
-    log.event('parse-recipe.no-frontmatter-close', { MEMORY_DEBUG: true, path, reason: 'closing --- not found' })
+    devEvent(log, 'parse-recipe.no-frontmatter-close', { path, reason: 'closing --- not found' })
     return null
   }
   const fmBlock = text.slice(3, end).trim()
@@ -55,8 +54,7 @@ export function parseRecipe(text: string, path: string): Recipe | null {
     fm[key] = val
   }
   if (typeof fm.name !== 'string' || !fm.name) {
-    // TEMP(memory-debug): remove after calibration
-    log.event('parse-recipe.missing-name', { MEMORY_DEBUG: true, path, reason: 'name field absent or empty' })
+    devEvent(log, 'parse-recipe.missing-name', { path, reason: 'name field absent or empty' })
     return null
   }
   const conf = (fm.confidence === 'medium' || fm.confidence === 'high') ? fm.confidence : 'low'
@@ -140,8 +138,7 @@ export async function listRecipes(opts: { tier?: Tier; surface?: string; baseDir
   let all: Recipe[] = []
   for (const root of roots) all = all.concat(await readRecipeDir(root))
   const result = opts.surface ? all.filter((r) => r.frontmatter.surface === opts.surface) : all
-  // TEMP(memory-debug): remove after calibration
-  log.event('list-recipes', { MEMORY_DEBUG: true, tier: opts.tier ?? 'all', surface: opts.surface ?? 'all', count: result.length })
+  devEvent(log, 'list-recipes', { tier: opts.tier ?? 'all', surface: opts.surface ?? 'all', count: result.length })
   return result
 }
 
@@ -161,8 +158,7 @@ export async function writeRecipe(r: Pick<Recipe, 'frontmatter' | 'body'>, baseD
   const tmp = `${dest}.${process.pid}.${tmpSeq++}.tmp`
   await fs.writeFile(tmp, serializeRecipe(r), 'utf8')
   await fs.rename(tmp, dest)
-  // TEMP(memory-debug): remove after calibration
-  log.event('recipe-written', { MEMORY_DEBUG: true, name: r.frontmatter.name, confidence: r.frontmatter.confidence, surface: r.frontmatter.surface, dest })
+  devEvent(log, 'recipe-written', { name: r.frontmatter.name, confidence: r.frontmatter.confidence, surface: r.frontmatter.surface, dest })
   return dest
 }
 
@@ -176,8 +172,7 @@ export async function moveRecipe(r: Recipe, toConfidence: Confidence, baseDir?: 
   if (r.path && r.path !== newPath) {
     try { await fs.rm(r.path, { force: true }) } catch { /* best-effort */ }
   }
-  // TEMP(memory-debug): remove after calibration
-  log.event('recipe-moved', { MEMORY_DEBUG: true, name: r.frontmatter.name, from: r.frontmatter.confidence, to: toConfidence })
+  devEvent(log, 'recipe-moved', { name: r.frontmatter.name, from: r.frontmatter.confidence, to: toConfidence })
   return { ...next, path: newPath }
 }
 

@@ -3,6 +3,7 @@ import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { createLogger } from './log'
 import { projectSlug } from './projects'
+import { devEvent } from './curator-devlog'
 
 const log = createLogger('trace-reducer')
 const reducerLog = createLogger('trace-reducer:reduce')
@@ -39,16 +40,14 @@ export async function locateTranscript(taskCwd: string, opts: { projectsDir?: st
   try { dirs = await fs.readdir(projectsDir) } catch { return null }
   const match = dirs.find((d) => d.includes(taskId))
   if (!match) {
-    // TEMP(memory-debug): remove after calibration
-    log.event('locate-transcript', { taskId, matched: false, resolved: null })
+    devEvent(log, 'locate-transcript', { taskId, matched: false, resolved: null })
     return null
   }
   const dir = join(projectsDir, match)
   let files: string[]
   try { files = (await fs.readdir(dir)).filter((f) => f.endsWith('.jsonl')) } catch { return null }
   if (!files.length) {
-    // TEMP(memory-debug): remove after calibration
-    log.event('locate-transcript', { taskId, matched: true, resolved: null })
+    devEvent(log, 'locate-transcript', { taskId, matched: true, resolved: null })
     return null
   }
   // stat can race a concurrent delete; a vanished file sorts last (m: -1) rather than throwing.
@@ -57,8 +56,7 @@ export async function locateTranscript(taskCwd: string, opts: { projectsDir?: st
   }))
   withMtime.sort((a, b) => b.m - a.m)
   const resolved = join(dir, withMtime[0].f)
-  // TEMP(memory-debug): remove after calibration
-  log.event('locate-transcript', { taskId, matched: true, resolved })
+  devEvent(log, 'locate-transcript', { taskId, matched: true, resolved })
   return resolved
 }
 
@@ -139,7 +137,6 @@ export function reduceTranscript(jsonl: string, opts: { maxChars?: number } = {}
   }
   const joined = out.join('\n')
   const result = joined.length > maxChars ? joined.slice(-maxChars) : joined
-  // TEMP(memory-debug): summary log — input bytes → output bytes
-  reducerLog.event('reduce-transcript', { inputBytes: jsonl.length, outputBytes: result.length })
+  devEvent(reducerLog, 'reduce-transcript', { inputBytes: jsonl.length, outputBytes: result.length })
   return result
 }

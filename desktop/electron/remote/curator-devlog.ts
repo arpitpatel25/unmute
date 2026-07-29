@@ -24,6 +24,29 @@ export function devLogEnabled(): boolean {
   return process.env.UNMUTE_CURATOR_DEVLOG === '1'
 }
 
+/** Minimal shape of the structured event loggers (log.ts), declared locally so
+ *  this module stays dependency-free and testable without electron. */
+interface EventLog { event: (name: string, payload: Record<string, unknown>) => void }
+
+/** A structured event that exists ONLY to debug — dropped in a packaged build.
+ *
+ *  A set of these shipped ungated as `TEMP(memory-debug)` markers, so every
+ *  user's ~/.unmute/remote/logs carried memory-calibration noise they had no use
+ *  for and no way to switch off. Same gate as devlog(): a dev build still sees
+ *  everything, a public build sees none of it. */
+export function devEvent(log: EventLog, name: string, payload: Record<string, unknown> = {}): void {
+  if (!devLogEnabled()) return
+  log.event(name, payload)
+}
+
+/** Debug-only FIELDS on an event that is otherwise worth keeping.
+ *
+ *  Spread it: `log.event('x', { real, ...devFields({ verbose }) })`. Empty in a
+ *  packaged build, so the event still ships and only the calibration extras go. */
+export function devFields(fields: Record<string, unknown>): Record<string, unknown> {
+  return devLogEnabled() ? fields : {}
+}
+
 // Serialize every append/dump through one module-level promise chain so JSON
 // lines never interleave (mirrors the store's write-chain discipline). The chain
 // never rejects: each step swallows its own errors.

@@ -46,6 +46,7 @@ import { settleRepl } from './repl-settle'
 import { type AgentKind, isExternalAgent } from './codex-executor'
 import type { CodexDesktopDriver } from './codex/driver'
 import { beat, pendingApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
+import { devEvent } from './curator-devlog'
 
 const log = createLogger('task-manager')
 
@@ -468,8 +469,7 @@ export class TaskManager extends EventEmitter {
         await installSkillsIntoCwd(dir, { surface, baseDir: this.opts.baseDir }) // graduated skills auto-discovery, surface-scoped (PRD §8.3)
         await installProfileIntoCwd(dir, this.opts.baseDir) // user facts/prefs the doer Reads on demand
         const nurseryAll = await readNurseryRecipes(surface, this.opts.baseDir).catch((e) => {
-          // TEMP(memory-debug): remove after calibration
-          tlog.warn('nursery read failed — no leads injected', { MEMORY_DEBUG: true, error: (e as Error).message }); return []
+          tlog.warn('nursery read failed — no leads injected', { error: (e as Error).message }); return []
         })
         // Flood-backstop: in healthy operation this keeps everything (executor
         // judges relevance); it only trims when a surface is bloated — and a trim
@@ -477,13 +477,12 @@ export class TaskManager extends EventEmitter {
         const { kept: nursery, trimmed } = selectNurseryWithinBudget(nurseryAll)
         if (trimmed > 0) {
           tlog.warn('nursery injection trimmed to budget — surface may be bloated, consider cleanup', {
-            MEMORY_DEBUG: true, surface, total: nurseryAll.length, kept: nursery.length, trimmed,
+            surface, total: nurseryAll.length, kept: nursery.length, trimmed,
           })
         }
         nurseryForDispatch = nursery.map((r) => ({ name: r.frontmatter.name, confidence: r.frontmatter.confidence, body: r.body }))
         const graduated = await listRecipes({ tier: 'skill', surface, baseDir: this.opts.baseDir }).catch((e) => {
-          // TEMP(memory-debug): remove after calibration
-          tlog.warn('graduated read failed', { MEMORY_DEBUG: true, error: (e as Error).message }); return []
+          tlog.warn('graduated read failed', { error: (e as Error).message }); return []
         })
         staleNotes = graduated
           .filter((r) => isStaleHigh(r, this.clock()))
@@ -498,8 +497,7 @@ export class TaskManager extends EventEmitter {
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
       await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, agent, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}) }))
-      // TEMP(memory-debug): remove after calibration
-      tlog.event('dispatch-memory', { MEMORY_DEBUG: true, surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
+      devEvent(tlog, 'dispatch-memory', { surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
 
       // Named, not left to the picker — see the task literal above.
       const ex = this.opts.executorFactory(undefined, agent)
@@ -1108,8 +1106,7 @@ export class TaskManager extends EventEmitter {
     if (task.mode !== 'managed' || !this.opts.librarian) return
     if (outcome === 'failed' && !task.injectedRecipes?.length) return
     const tlog = log.child({ taskId: task.id })
-    // TEMP(memory-debug): remove after calibration
-    tlog.event('librarian-handoff', { taskId: task.id, outcome, MEMORY_DEBUG: true, fired: true, injectedRecipes: task.injectedRecipes?.length ?? 0 })
+    devEvent(tlog, 'librarian-handoff', { taskId: task.id, outcome, fired: true, injectedRecipes: task.injectedRecipes?.length ?? 0 })
     void this.opts.librarian.submit({
       taskId: task.id,
       intent: task.intent,

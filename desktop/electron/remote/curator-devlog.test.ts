@@ -3,7 +3,45 @@ import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { devLogEnabled, devlog, devlogDump, devlogReason } from './curator-devlog.ts'
+import { devLogEnabled, devlog, devlogDump, devlogReason, devEvent, devFields } from './curator-devlog.ts'
+
+// THE SAME GATE, FOR THE STRUCTURED EVENT LOG.
+//
+// A set of `TEMP(memory-debug)` events shipped ungated, so every user's
+// ~/.unmute/remote/logs carried memory-calibration diagnostics they had no use
+// for. Two shapes needed covering: whole events that exist only to debug, and
+// debug FIELDS bolted onto an event that is genuinely useful.
+test('devEvent emits only when the gate is on', () => {
+  const prev = process.env.UNMUTE_CURATOR_DEVLOG
+  const seen: Array<[string, Record<string, unknown>]> = []
+  const log = { event: (n: string, p: Record<string, unknown>) => { seen.push([n, p]) } }
+  try {
+    delete process.env.UNMUTE_CURATOR_DEVLOG
+    devEvent(log, 'gardening-planned', { count: 3 })
+    assert.equal(seen.length, 0, 'a packaged build must write nothing')
+
+    process.env.UNMUTE_CURATOR_DEVLOG = '1'
+    devEvent(log, 'gardening-planned', { count: 3 })
+    assert.deepEqual(seen, [['gardening-planned', { count: 3 }]], 'a dev build still gets the full event')
+  } finally {
+    if (prev === undefined) delete process.env.UNMUTE_CURATOR_DEVLOG
+    else process.env.UNMUTE_CURATOR_DEVLOG = prev
+  }
+})
+
+test('devFields strips debug-only fields from an event that is otherwise kept', () => {
+  const prev = process.env.UNMUTE_CURATOR_DEVLOG
+  try {
+    delete process.env.UNMUTE_CURATOR_DEVLOG
+    assert.deepEqual(devFields({ nurseryNames: ['a'] }), {}, 'nothing extra reaches a user log')
+
+    process.env.UNMUTE_CURATOR_DEVLOG = '1'
+    assert.deepEqual(devFields({ nurseryNames: ['a'] }), { nurseryNames: ['a'] })
+  } finally {
+    if (prev === undefined) delete process.env.UNMUTE_CURATOR_DEVLOG
+    else process.env.UNMUTE_CURATOR_DEVLOG = prev
+  }
+})
 
 // The ONLY gate is the env var. Fail-safe-off: when it is unset, devlog/devlogDump
 // must be no-ops — no file, no dir — so a packaged public build logs nothing.

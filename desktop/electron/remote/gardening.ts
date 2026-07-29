@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { createLogger } from './log'
 import { listRecipes, isStaleHigh, moveRecipe, recipesDir, graduatedDir, type Confidence, type Recipe, type RecipeFrontmatter } from './recipe-store'
 import { userProfilePath } from './skills'
+import { devEvent } from './curator-devlog'
 
 const log = createLogger('gardening')
 
@@ -25,8 +26,7 @@ export async function planGardening(opts: { baseDir?: string; nowMs: number; pru
   }
   // (dedupe across overlapping descriptions: deferred to a librarian-assisted pass;
   //  not auto-destructive here — see plan §Deferred.)
-  // TEMP(memory-debug): remove after calibration
-  log.event('gardening-planned', { MEMORY_DEBUG: true, count: actions.length })
+  devEvent(log, 'gardening-planned', { count: actions.length })
   return actions
 }
 
@@ -39,8 +39,7 @@ export async function applyGardening(actions: GardenAction[], opts: { baseDir?: 
     if (!r?.path) continue
     try {
       await fs.rm(r.path, { force: true })
-      // TEMP(memory-debug): remove after calibration
-      log.event('gardening-pruned', { MEMORY_DEBUG: true, name: a.name, reason: a.reason })
+      devEvent(log, 'gardening-pruned', { name: a.name, reason: a.reason })
     }
     catch (e) { log.warn('gardening prune failed', { name: a.name, error: (e as Error).message }) }
   }
@@ -121,8 +120,7 @@ export async function cleanupMemory(opts: { baseDir?: string; nowMs: number; idl
       catch (e) { log.warn('cleanup demote failed', { name: r.frontmatter.name, error: (e as Error).message }) }
     }
   }
-  // TEMP(memory-debug): remove after calibration
-  log.event('cleanup-memory', { MEMORY_DEBUG: true, pruned: res.pruned.length, evicted: res.evicted.length, demoted: res.demoted.length, deduped: res.deduped.length })
+  devEvent(log, 'cleanup-memory', { pruned: res.pruned.length, evicted: res.evicted.length, demoted: res.demoted.length, deduped: res.deduped.length })
   return res
 }
 

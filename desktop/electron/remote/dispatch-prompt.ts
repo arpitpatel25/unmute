@@ -12,6 +12,7 @@
 
 import { createLogger } from './log'
 import type { Confidence } from './recipe-store'
+import { devFields } from './curator-devlog'
 
 const log = createLogger('dispatch-prompt')
 
@@ -69,10 +70,11 @@ export function buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRe
     statusPath,
     bytes: payload.length,
     nursery: injectedRecipes.length,
-    // TEMP(memory-debug): remove after calibration
-    MEMORY_DEBUG: true,
-    nurseryNames: injectedRecipes.map(r => r.name),
-    nurseryConfidences: injectedRecipes.map(r => r.confidence),
+    // Calibration extras only — the event itself is kept for everyone.
+    ...devFields({
+      nurseryNames: injectedRecipes.map(r => r.name),
+      nurseryConfidences: injectedRecipes.map(r => r.confidence),
+    }),
   })
   return payload
 }
