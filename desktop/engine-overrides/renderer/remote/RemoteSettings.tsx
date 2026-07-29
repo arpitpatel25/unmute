@@ -11,7 +11,9 @@ import { ComputerUseSettings } from './ComputerUseSettings'
 interface Settings {
   permissionMode: 'prompt' | 'auto-approve'
   remoteKey: 'fn' | 'right-option'
-  agent: 'claude' | 'codex'
+  /** 'codex' is the legacy CLI adapter, kept only so a stored value still
+   *  parses; it is migrated to 'claude' at startup and never offered. */
+  agent: 'claude' | 'codex' | 'codex-desktop'
   sandboxRoots: string[]
   model: string
   browserEnabled: boolean
@@ -33,7 +35,7 @@ const FALLBACK_CATALOG: ModelChoice[] = [
 type API = {
   remoteGetSettings?: () => Promise<Settings>
   remoteSetPermissionMode?: (m: 'prompt' | 'auto-approve') => Promise<boolean>
-  remoteSetAgent?: (a: 'claude' | 'codex') => Promise<boolean>
+  remoteSetAgent?: (a: 'claude' | 'codex-desktop') => Promise<boolean>
   remoteSetSandboxRoots?: (r: string[]) => Promise<boolean>
   remoteSetBrowserEnabled?: (enabled: boolean) => Promise<boolean>
   remoteSetModel?: (m: string) => Promise<string>
@@ -253,17 +255,21 @@ export function RemoteSettings() {
         <span>Executor</span>
         <select
           className="text-[12px] border border-black/15 rounded px-1 py-0.5 bg-white"
-          // Codex is shown but not selectable yet — coerce a stale value to claude.
+          // 'codex' is the UNWIRED CLI adapter; startup migrates a stored one
+          // back to claude, so it is never offered. 'codex-desktop' is real and
+          // has shipped since v1.4.8 — this control still said "coming soon" and
+          // refused the selection, which is where users concluded Codex did not
+          // exist. It also rendered blank for anyone already on codex-desktop,
+          // and wrote 'claude' over their choice if they touched it.
           value={s.agent === 'codex' ? 'claude' : s.agent}
           onChange={(e) => {
-            const agent = e.target.value as 'claude' | 'codex'
-            if (agent !== 'claude') return // Codex is coming soon — ignore
+            const agent = e.target.value as 'claude' | 'codex-desktop'
             update({ agent })
             void api().remoteSetAgent?.(agent)
           }}
         >
           <option value="claude">Claude Code</option>
-          <option value="codex" disabled>Codex (coming soon)</option>
+          <option value="codex-desktop">Codex desktop</option>
         </select>
       </label>
 

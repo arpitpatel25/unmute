@@ -2,6 +2,70 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseMcpList, buildSetupChecklist, setupComplete } from './setup-status.ts'
 
+// BACKENDS COME FIRST.
+//
+// The checklist covered Chrome, tmux and MCPs — everything EXCEPT the agents
+// that actually run the work. A user with no `claude` on PATH got silent
+// degradation (no router warm-up, failsafe routing, MCP steps reading "todo"
+// because `claude mcp list` could not run), and Codex desktop had no setup
+// surface anywhere: the only way to arm it was tapping a greyed-out entry in the
+// pill's picker, while the main app's settings said "Codex (coming soon)".
+const noBackends = { mcpListOutput: '', browserEnabled: false, tmuxAvailable: true, confirmations: {} }
+
+test('a missing Claude CLI is a TODO step, not a silent degradation', () => {
+  const steps = buildSetupChecklist({
+    ...noBackends,
+    backends: [{ id: 'claude', label: 'Claude Code CLI', installed: false, ready: false }],
+  })
+  const s = steps.find((x) => x.key === 'backend-claude')
+  assert.ok(s, 'the backend must appear in the checklist')
+  assert.equal(s!.status, 'todo')
+  assert.equal(s!.auto, true, 'we can detect this ourselves — never ask the user to self-confirm it')
+  assert.equal(s!.optional, undefined, 'a backend is not an optional enhancement')
+  assert.match(s!.command ?? '', /claude/, 'tell them how to install it')
+})
+
+test('backend steps come BEFORE the optional extras', () => {
+  const steps = buildSetupChecklist({
+    ...noBackends,
+    backends: [{ id: 'claude', label: 'Claude Code CLI', installed: true, ready: true }],
+  })
+  assert.equal(steps[0].key, 'backend-claude', 'nothing else matters if no agent can run')
+})
+
+test('Codex desktop distinguishes NOT INSTALLED from INSTALLED-BUT-NOT-ARMED', () => {
+  const missing = buildSetupChecklist({
+    ...noBackends,
+    backends: [{ id: 'codex-desktop', label: 'Codex desktop', installed: false, ready: false, reason: 'not-installed' }],
+  }).find((x) => x.key === 'backend-codex-desktop')!
+  assert.equal(missing.status, 'todo')
+  assert.equal(missing.action, undefined, 'nothing to connect to — do not offer a Connect button')
+  assert.match(missing.detail, /install/i)
+
+  const unarmed = buildSetupChecklist({
+    ...noBackends,
+    backends: [{ id: 'codex-desktop', label: 'Codex desktop', installed: true, ready: false, reason: 'not-armed' }],
+  }).find((x) => x.key === 'backend-codex-desktop')!
+  assert.equal(unarmed.status, 'todo')
+  assert.equal(unarmed.action, 'codex-connect', 'this one is fixable in a click')
+  assert.match(unarmed.detail, /restart|relaunch/i, 'warn that connecting restarts their app')
+})
+
+test('a ready backend is done and offers no action', () => {
+  const s = buildSetupChecklist({
+    ...noBackends,
+    backends: [{ id: 'codex-desktop', label: 'Codex desktop', installed: true, ready: true }],
+  }).find((x) => x.key === 'backend-codex-desktop')!
+  assert.equal(s.status, 'done')
+  assert.equal(s.action, undefined)
+})
+
+test('backends are optional INPUT — an older caller still gets the old checklist', () => {
+  const steps = buildSetupChecklist({ ...noBackends, browserEnabled: true })
+  assert.ok(steps.length > 0)
+  assert.ok(!steps.some((s) => s.key.startsWith('backend-')), 'no backends passed ⇒ no backend rows')
+})
+
 test('parseMcpList reads names + connectivity from healthy/failed lines', () => {
   const out = parseMcpList([
     'Checking MCP server health...',

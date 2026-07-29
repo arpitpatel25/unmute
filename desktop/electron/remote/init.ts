@@ -29,7 +29,7 @@ import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor'
-import { providerOf } from './providers'
+import { providerOf, PROVIDERS } from './providers'
 import { CodexDesktopDriver } from './codex/driver'
 import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
@@ -38,7 +38,7 @@ import { initRuntimeConfig, getModels, getKnobs, getModelCatalog, isSelectableMo
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
-import { buildSetupChecklist, setupComplete } from './setup-status'
+import { buildSetupChecklist, setupComplete, type BackendProbe } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape, setOverlaySuppressed } from './overlay'
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask, type AgentAvailability } from './router'
@@ -273,12 +273,46 @@ function refreshTmux(): void {
   }
 }
 
+/**
+ * Probe every backend the app knows about, for the setup checklist.
+ *
+ * Driven by the provider registry rather than a hand-written list, so a backend
+ * added to providers.ts gets a setup row without touching this function or the
+ * renderer. `codex` (the CLI adapter) is skipped: it is not a user-selectable
+ * backend today — startup migrates a stored 'codex' back to 'claude'.
+ */
+async function probeBackends(): Promise<BackendProbe[]> {
+  const out: BackendProbe[] = []
+  for (const p of Object.values(PROVIDERS)) {
+    if (p.id === 'codex') continue
+    if (p.transport === 'pty') {
+      // An owned-PTY backend needs its CLI on the PATH the executors will get.
+      const ok = await claudeCliAvailable()
+      out.push({ id: p.id, label: p.label, installed: ok, ready: ok, ...(ok ? {} : { reason: 'not-installed' }) })
+      continue
+    }
+    // A driven app: installed is not enough — it has to be reachable as well,
+    // which is the state the user has no other way of discovering.
+    if (!codexDriver) { out.push({ id: p.id, label: p.label, installed: false, ready: false, reason: 'not-installed' }); continue }
+    try {
+      const a = await codexDriver.availability()
+      const installed = a.ok || a.reason !== 'not-installed'
+      out.push({ id: p.id, label: p.label, installed, ready: a.ok, ...(a.ok ? {} : { reason: a.reason }) })
+    } catch {
+      out.push({ id: p.id, label: p.label, installed: false, ready: false, reason: 'not-installed' })
+    }
+  }
+  log.event('setup-backends', { probed: out.map((b) => ({ id: b.id, ready: b.ready, reason: b.reason ?? null })) })
+  return out
+}
+
 /** Assemble the onboarding checklist from detected + confirmed state (§12). */
 async function getSetupStatus() {
   const browserEnabled = settings.get('browserEnabled') !== false
   const mcpListOutput = await claudeMcpList()
   const confirmations = settings.get('setupConfirmations') ?? {}
-  const steps = buildSetupChecklist({ mcpListOutput, browserEnabled, tmuxAvailable: tmuxBin !== null, confirmations })
+  const backends = await probeBackends()
+  const steps = buildSetupChecklist({ mcpListOutput, browserEnabled, tmuxAvailable: tmuxBin !== null, confirmations, backends })
   const complete = setupComplete(steps)
   log.event('setup-status', { complete, todo: steps.filter((s) => s.status === 'todo').map((s) => s.key) })
   return { steps, complete }

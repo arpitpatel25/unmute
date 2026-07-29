@@ -22,6 +22,8 @@ interface SetupStep {
   status: 'done' | 'todo'
   auto: boolean
   optional?: boolean
+  /** A fix Unmute can perform itself (see setup-status.ts). */
+  action?: 'codex-connect'
 }
 interface SetupStatus {
   steps: SetupStep[]
@@ -31,6 +33,7 @@ type API = {
   remoteGetSetupStatus?: () => Promise<SetupStatus>
   remoteSetSetupConfirmation?: (key: string, done: boolean) => Promise<SetupStatus>
   remoteInstallTmux?: () => Promise<SetupStatus>
+  remoteCodexConnect?: () => Promise<{ ok: boolean; reason?: string }>
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -59,8 +62,12 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
   const refresh = () => api().remoteGetSetupStatus?.().then((v) => v && setStatus(v))
   useEffect(() => { void refresh() }, [])
 
+  // AGENTS FIRST. Everything below is an enhancement; without a backend there is
+  // no product at all, so these get their own group at the top rather than
+  // sitting in the same list as "connect Gmail".
+  const backends = (status?.steps ?? []).filter((s) => s.key.startsWith('backend-'))
   const ext = status?.steps.find((s) => s.key === 'chrome-extension')
-  const optional = (status?.steps ?? []).filter((s) => s.key !== 'chrome-extension')
+  const optional = (status?.steps ?? []).filter((s) => s.key !== 'chrome-extension' && !s.key.startsWith('backend-'))
 
   const setConfirm = async (key: string, done: boolean) => {
     setBusy(true)
@@ -80,9 +87,62 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
 
       <div className="text-lg font-semibold text-ink mb-1">Set up Remote</div>
       <div className="text-[12px] text-ink/50 mb-5">
-        Remote needs just one thing to work: the Claude for Chrome extension.
-        Everything else is optional — add it whenever you like.
+        Remote runs your work on an agent — set up at least one below. The Claude
+        for Chrome extension is needed for browser tasks; everything else is
+        optional, add it whenever you like.
       </div>
+
+      {/* ─── The agents that run the work ───
+          First, because nothing else matters without one. Each row is
+          auto-detected, and offers whatever fix is actually possible: a command
+          when something must be installed, a button when Unmute can do it. */}
+      {backends.length > 0 && (
+        <div className="rounded-lg border border-black/10 p-4 mb-4">
+          <div className="text-[13px] font-semibold text-ink mb-1">Agents</div>
+          <div className="text-[12px] text-ink/50 mb-3">
+            Where your tasks actually run. You need at least one.
+          </div>
+          {backends.map((step) => (
+            <div key={step.key} className="py-2 border-t border-black/5 first:border-t-0">
+              <div className="flex items-start gap-2">
+                <span className={step.status === 'done' ? 'text-green-700' : 'text-ink/30'}>
+                  {step.status === 'done' ? '✓' : '○'}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-[12px] font-medium ${step.status === 'done' ? 'text-ink/50' : 'text-ink'}`}>
+                    {step.title}
+                  </div>
+                  {step.status !== 'done' && (
+                    <div className="text-[11px] text-ink/50 mt-0.5">{step.detail}</div>
+                  )}
+                  {step.command && step.status !== 'done' && (
+                    <div className="flex items-center gap-1.5 mt-1.5">
+                      <code className="flex-1 px-1.5 py-0.5 bg-black/5 rounded text-[11px] truncate">{step.command}</code>
+                      <CopyButton text={step.command} />
+                    </div>
+                  )}
+                  {step.action === 'codex-connect' && step.status !== 'done' && (
+                    <button
+                      className="mt-2 text-[11px] px-2.5 py-1 rounded border border-black/15 hover:bg-black/5 disabled:opacity-50"
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true)
+                        // Arming quits and relaunches Codex in the background; the
+                        // detail text warns about that before this point.
+                        try { await api().remoteCodexConnect?.() } catch { /* re-check tells the truth */ }
+                        await refresh()
+                        setBusy(false)
+                      }}
+                    >
+                      {busy ? 'Connecting…' : 'Connect'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ─── Required: the Chrome extension ─── */}
       <div className="rounded-lg border border-black/10 p-4 mb-4 bg-cream-mid/40">

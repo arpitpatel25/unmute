@@ -76,6 +76,23 @@ export interface SetupStep {
   auto: boolean
   /** Optional enhancement — doesn't block "setup complete". */
   optional?: boolean
+  /** A one-click fix the UI can offer, when the problem is one Unmute can solve
+   *  itself. Only set when acting would actually help — an app that isn't
+   *  installed cannot be connected to, so that case gets a command instead. */
+  action?: 'codex-connect'
+}
+
+/** What we know about one backend, probed by the main process. */
+export interface BackendProbe {
+  id: string
+  /** Human name, from the provider registry (providers.ts). */
+  label: string
+  /** Present on this machine at all? */
+  installed: boolean
+  /** Able to take a task RIGHT NOW (installed, and reachable if it needs to be). */
+  ready: boolean
+  /** Why not, when we know: 'not-installed' | 'not-armed' | 'not-running'. */
+  reason?: string
 }
 
 export interface SetupInputs {
@@ -87,6 +104,29 @@ export interface SetupInputs {
   tmuxAvailable: boolean
   /** User-confirmed manual steps (persisted), keyed by step key. */
   confirmations: Record<string, boolean>
+  /** The agents that can run work, probed. Optional so existing callers and
+   *  tests keep their old checklist unchanged. */
+  backends?: BackendProbe[]
+}
+
+/** How a backend that isn't ready gets fixed. Keyed by provider id, because the
+ *  remedy is provider-specific in a way the registry's capability flags are not:
+ *  one is "install a CLI", the other is "let us relaunch your app with a debug
+ *  port". Anything not listed falls back to a generic install line. */
+const BACKEND_REMEDIES: Record<string, { install: string; command?: string; unready?: { detail: string; action?: SetupStep['action'] } }> = {
+  claude: {
+    install: 'Install the Claude Code CLI and sign in, then re-check. If it is already installed but not found, it is probably not on the PATH a launched app sees — reopen Unmute from your terminal once, or install it under /usr/local/bin.',
+    command: 'npm install -g @anthropic-ai/claude-code',
+  },
+  'codex-desktop': {
+    install: 'Install the Codex desktop app (ChatGPT.app) in /Applications and sign in to it. Unmute drives the real app, so it must be installed at that exact path.',
+    unready: {
+      // The relaunch is the one unavoidable interruption in this lane, so say so
+      // BEFORE they click rather than quitting their app as a surprise.
+      detail: 'Codex is installed but Unmute cannot talk to it yet. Connecting restarts the Codex app in the background so Unmute can drive it — you will not lose your threads.',
+      action: 'codex-connect',
+    },
+  },
 }
 
 // DECIDED: browser tasks drive the user's REAL, already-signed-in Chrome (no
@@ -110,6 +150,25 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
   const steps: SetupStep[] = []
   const servers = parseMcpList(inputs.mcpListOutput)
   const confirmed = (k: string) => inputs.confirmations?.[k] === true
+
+  // BACKENDS FIRST — nothing else in this list matters if no agent can run the
+  // work. These are never `optional`: a user with no working backend has no
+  // product, and they are never self-confirmed, because we can see the truth.
+  for (const b of inputs.backends ?? []) {
+    const remedy = BACKEND_REMEDIES[b.id]
+    const unready = !b.installed ? undefined : remedy?.unready
+    steps.push({
+      key: `backend-${b.id}`,
+      title: b.ready ? `${b.label} — ready` : `Set up ${b.label}`,
+      detail: b.ready
+        ? `${b.label} can take tasks.`
+        : unready?.detail ?? remedy?.install ?? `${b.label} is not available on this machine.`,
+      ...(b.ready || b.installed ? {} : remedy?.command ? { command: remedy.command } : {}),
+      ...(b.ready ? {} : unready?.action ? { action: unready.action } : {}),
+      status: b.ready ? 'done' : 'todo',
+      auto: true,
+    })
+  }
 
   if (inputs.browserEnabled) {
     for (const s of MANUAL_BROWSER_STEPS) {
