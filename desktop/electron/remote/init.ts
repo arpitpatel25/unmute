@@ -38,7 +38,7 @@ import { initRuntimeConfig, getModels, getKnobs, getModelCatalog, isSelectableMo
 import { deriveRemoteKey, type TriggerKey } from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
-import { buildSetupChecklist, setupComplete, type BackendProbe } from './setup-status'
+import { buildSetupChecklist, setupComplete, blockerOf, confirmationKey, type BackendProbe } from './setup-status'
 import { createOverlayWindow, presentOrExpand, expandOverlay, openOverlay, dismissOverlay, setDockedMode, reconcileDock, onNewTask, getOverlayMode, setOverlayInteractive, pauseOverlayEscape, resumeOverlayEscape, setOverlaySuppressed } from './overlay'
 import { registerOrchestrateShortcut, openOrchestrateWindow } from './orchestrate'
 import { Router, type RoutableTask, type AgentAvailability } from './router'
@@ -314,8 +314,11 @@ async function getSetupStatus() {
   const backends = await probeBackends()
   const steps = buildSetupChecklist({ mcpListOutput, browserEnabled, tmuxAvailable: tmuxBin !== null, confirmations, backends })
   const complete = setupComplete(steps)
-  log.event('setup-status', { complete, todo: steps.filter((s) => s.status === 'todo').map((s) => s.key) })
-  return { steps, complete }
+  // The blocker travels WITH the status so no surface has to guess which step
+  // matters most — the old nudge named the Chrome extension unconditionally.
+  const blocker = blockerOf(steps)
+  log.event('setup-status', { complete, blocker, todo: steps.filter((s) => s.status === 'todo').map((s) => s.key) })
+  return { steps, complete, blocker }
 }
 
 let manager: TaskManager | null = null
@@ -3174,7 +3177,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:get-setup-status', async () => getSetupStatus())
   ipcMain.handle('remote:set-setup-confirmation', async (_e, key: string, done: boolean) => {
     const cur = { ...(settings.get('setupConfirmations') ?? {}) }
-    cur[key] = !!done
+    // Versioned key — see confirmationKey(). Writing the bare key would make the
+    // confirmation invisible the moment a step's requirement is bumped.
+    cur[confirmationKey(key)] = !!done
     settings.set('setupConfirmations', cur)
     log.event('setup-confirmation-set', { key, done: !!done })
     return getSetupStatus()

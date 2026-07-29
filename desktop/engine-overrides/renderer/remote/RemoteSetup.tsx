@@ -82,10 +82,10 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
         className="text-[11px] text-ink/50 hover:text-ink mb-3 flex items-center gap-1"
         onClick={onBack}
       >
-        ← Back to tasks
+        ← Back to Remote
       </button>
 
-      <div className="text-lg font-semibold text-ink mb-1">Set up Remote</div>
+      <div className="text-lg font-semibold text-ink mb-1">Agents &amp; setup</div>
       <div className="text-[12px] text-ink/50 mb-5">
         Remote runs your work on an agent — set up at least one below. The Claude
         for Chrome extension is needed for browser tasks; everything else is

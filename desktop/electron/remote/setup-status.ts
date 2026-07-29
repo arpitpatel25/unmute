@@ -80,6 +80,9 @@ export interface SetupStep {
    *  itself. Only set when acting would actually help — an app that isn't
    *  installed cannot be connected to, so that case gets a command instead. */
   action?: 'codex-connect'
+  /** Steps that are satisfied as a SET rather than individually. Backends are the
+   *  only such group: you need one working agent, not every agent. */
+  group?: 'backend'
 }
 
 /** What we know about one backend, probed by the main process. */
@@ -133,6 +136,31 @@ const BACKEND_REMEDIES: Record<string, { install: string; command?: string; unre
 // dedicated profile, no separate sign-in, no Space juggling). The only one-time
 // thing is having the Claude for Chrome extension installed in that Chrome — and
 // most users already do. So onboarding is a single, self-confirmed reminder.
+/**
+ * Version of each self-confirmed step's REQUIREMENT.
+ *
+ * A confirmation is stored forever and survives upgrades, so if what we ask for
+ * ever changes, a stale `true` would hide the new requirement and the user would
+ * never learn they are missing it. The confirmation is therefore keyed
+ * `<step>@<version>`; bumping the number reverts that step to todo.
+ *
+ * v1 also honours the ORIGINAL unversioned key, so nobody is re-nagged for
+ * something they already confirmed before this existed.
+ */
+const STEP_VERSION: Record<string, number> = { 'chrome-extension': 1 }
+
+/** Storage key for a step's confirmation. Exported so the IPC writes the same
+ *  key the checklist reads — two spellings would silently never agree. */
+export function confirmationKey(stepKey: string): string {
+  return `${stepKey}@${STEP_VERSION[stepKey] ?? 1}`
+}
+
+function isConfirmed(confirmations: Record<string, boolean> | undefined, stepKey: string): boolean {
+  if (confirmations?.[confirmationKey(stepKey)] === true) return true
+  // Legacy: pre-versioning confirmations were stored bare, and only ever meant v1.
+  return (STEP_VERSION[stepKey] ?? 1) === 1 && confirmations?.[stepKey] === true
+}
+
 export const MANUAL_BROWSER_STEPS: Array<Pick<SetupStep, 'key' | 'title' | 'detail'>> = [
   {
     key: 'chrome-extension',
@@ -149,7 +177,7 @@ export const MANUAL_BROWSER_STEPS: Array<Pick<SetupStep, 'key' | 'title' | 'deta
 export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
   const steps: SetupStep[] = []
   const servers = parseMcpList(inputs.mcpListOutput)
-  const confirmed = (k: string) => inputs.confirmations?.[k] === true
+  const confirmed = (k: string) => isConfirmed(inputs.confirmations, k)
 
   // BACKENDS FIRST — nothing else in this list matters if no agent can run the
   // work. These are never `optional`: a user with no working backend has no
@@ -167,6 +195,7 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
       ...(b.ready ? {} : unready?.action ? { action: unready.action } : {}),
       status: b.ready ? 'done' : 'todo',
       auto: true,
+      group: 'backend',
     })
   }
 
@@ -210,5 +239,31 @@ export function buildSetupChecklist(inputs: SetupInputs): SetupStep[] {
 /** Headline: are the ESSENTIAL steps done? (drives the "setup needed" nudge.)
  *  Optional enhancements (e.g. tmux) don't count against completeness. */
 export function setupComplete(steps: SetupStep[]): boolean {
-  return steps.filter((s) => !s.optional).every((s) => s.status === 'done')
+  const required = steps.filter((s) => !s.optional)
+  // BACKENDS ARE SATISFIED AS A SET. Requiring every one meant a user who runs
+  // only Claude Code — a perfectly complete setup — was permanently incomplete
+  // and permanently nagged to install an agent they had chosen not to use.
+  // Backends also regress on their own (Codex loses its debug port whenever the
+  // app is reopened normally), so "all of them" would flap for everyone.
+  const backends = required.filter((s) => s.group === 'backend')
+  const rest = required.filter((s) => s.group !== 'backend')
+  const backendsOk = backends.length === 0 || backends.some((s) => s.status === 'done')
+  return backendsOk && rest.every((s) => s.status === 'done')
+}
+
+/**
+ * The ONE thing most worth telling the user, or null when nothing is wrong.
+ *
+ * The nudge used to hardcode the Chrome extension, so a user with no working
+ * agent at all — the only condition under which Remote genuinely cannot run —
+ * was told to install a browser extension. Ordered by how badly it blocks.
+ */
+export function blockerOf(steps: SetupStep[]): string | null {
+  const required = steps.filter((s) => !s.optional)
+  const backends = required.filter((s) => s.group === 'backend')
+  if (backends.length > 0 && !backends.some((s) => s.status === 'done')) {
+    return 'No agent is set up yet — Remote needs Claude Code or Codex desktop to run anything.'
+  }
+  const other = required.find((s) => s.group !== 'backend' && s.status === 'todo')
+  return other ? `${other.title} — ${other.detail}` : null
 }

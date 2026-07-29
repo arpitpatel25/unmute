@@ -19,6 +19,8 @@ import { SignInScreen } from '../paywall/SignInScreen'
 // Remote settings live in the main window now that the floating overlay that
 // used to host them was retired (ede9966).
 import { RemoteSettings } from '../remote/RemoteSettings'
+import { RemoteSetup } from '../remote/RemoteSetup'
+import { RemoteSetupEntry } from '../remote/RemoteSetupEntry'
 
 type Tab = 'history' | 'voice' | 'remote' | 'account' | 'permissions' | 'language' | 'settings' | 'privacy'
 
@@ -41,6 +43,10 @@ function AppInner() {
   // sync via a polling re-read on tab focus + a refresh on every Language-tab
   // visit, since the Language component itself is the only writer.
   const [languageBadge, setLanguageBadge] = useState<string>('Auto')
+  // Sub-page of the Remote tab. Setup is NOT one-time — a user may add a second
+  // agent months later, and Codex loses its connection whenever its app is
+  // reopened normally — so the way in is permanent, never gated on "complete".
+  const [remotePage, setRemotePage] = useState<'settings' | 'setup'>('settings')
 
   async function refreshLanguageBadge() {
     try {
@@ -234,7 +240,14 @@ function AppInner() {
         <div className="max-w-2xl mx-auto pb-8">
           {activeTab === 'history' && <History />}
           {activeTab === 'voice' && <Voice dictationKey={dictationKey} />}
-          {activeTab === 'remote' && <RemoteSettings />}
+          {activeTab === 'remote' && (remotePage === 'setup' ? (
+            <RemoteSetup onBack={() => setRemotePage('settings')} />
+          ) : (
+            <>
+              <RemoteSetupEntry onOpen={() => setRemotePage('setup')} />
+              <RemoteSettings />
+            </>
+          ))}
           {activeTab === 'account' && <Account />}
           {activeTab === 'permissions' && <Permissions />}
           {activeTab === 'language' && <Language />}

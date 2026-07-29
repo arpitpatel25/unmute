@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseMcpList, buildSetupChecklist, setupComplete } from './setup-status.ts'
+import { parseMcpList, buildSetupChecklist, setupComplete, blockerOf } from './setup-status.ts'
 
 // BACKENDS COME FIRST.
 //
@@ -64,6 +64,74 @@ test('backends are optional INPUT — an older caller still gets the old checkli
   const steps = buildSetupChecklist({ ...noBackends, browserEnabled: true })
   assert.ok(steps.length > 0)
   assert.ok(!steps.some((s) => s.key.startsWith('backend-')), 'no backends passed ⇒ no backend rows')
+})
+
+// COMPLETENESS, WITH BACKENDS IN THE PICTURE
+//
+// Backends are not a checklist: they are a live readout that can regress with no
+// user action (Codex loses its debug port the moment the app is reopened
+// normally). Demanding every backend meant a user who deliberately runs only one
+// agent was permanently "incomplete" and permanently nagged — which is what
+// shipped in v1.4.12.
+test('ONE working backend is a complete setup — you need not install them all', () => {
+  const steps = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: false, tmuxAvailable: true, confirmations: {},
+    backends: [
+      { id: 'claude', label: 'Claude Code CLI', installed: true, ready: true },
+      { id: 'codex-desktop', label: 'Codex desktop', installed: false, ready: false, reason: 'not-installed' },
+    ],
+  })
+  assert.equal(setupComplete(steps), true, 'not wanting a second agent is not an incomplete setup')
+})
+
+test('ZERO working backends is incomplete — that is the real alarm', () => {
+  const steps = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: false, tmuxAvailable: true, confirmations: {},
+    backends: [
+      { id: 'claude', label: 'Claude Code CLI', installed: false, ready: false },
+      { id: 'codex-desktop', label: 'Codex desktop', installed: false, ready: false, reason: 'not-installed' },
+    ],
+  })
+  assert.equal(setupComplete(steps), false)
+})
+
+test('blockerOf names what is actually wrong, not a hardcoded step', () => {
+  const noAgent = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: false, tmuxAvailable: true, confirmations: {},
+    backends: [{ id: 'claude', label: 'Claude Code CLI', installed: false, ready: false }],
+  })
+  assert.match(blockerOf(noAgent) ?? '', /agent/i, 'no agent is the blocker worth naming')
+
+  const onlyExtension = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: true, tmuxAvailable: true, confirmations: {},
+    backends: [{ id: 'claude', label: 'Claude Code CLI', installed: true, ready: true }],
+  })
+  assert.match(blockerOf(onlyExtension) ?? '', /chrome|extension/i)
+
+  const fine = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: false, tmuxAvailable: true, confirmations: {},
+    backends: [{ id: 'claude', label: 'Claude Code CLI', installed: true, ready: true }],
+  })
+  assert.equal(blockerOf(fine), null, 'nothing wrong ⇒ nothing to nag about')
+})
+
+// A CONFIRMATION IS ONLY EVER ABOUT THE STEP AS IT WAS WORDED.
+// Confirmations persist in settings forever and survive upgrades, so if a step's
+// requirement changes, a stale `true` would silently hide the new one. Versioning
+// the key means a bumped step reverts to todo instead.
+test('a confirmation is scoped to the step VERSION, and v1 honours the old unversioned key', () => {
+  const withOld = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: true, tmuxAvailable: true,
+    confirmations: { 'chrome-extension': true }, // written before versioning existed
+  })
+  assert.equal(withOld.find((s) => s.key === 'chrome-extension')!.status, 'done',
+    'existing users must not be re-nagged for something they already did')
+
+  const withVersioned = buildSetupChecklist({
+    mcpListOutput: '', browserEnabled: true, tmuxAvailable: true,
+    confirmations: { 'chrome-extension@1': true },
+  })
+  assert.equal(withVersioned.find((s) => s.key === 'chrome-extension')!.status, 'done')
 })
 
 test('parseMcpList reads names + connectivity from healthy/failed lines', () => {
