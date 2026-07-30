@@ -105,9 +105,6 @@ export function armScratchpad(on: boolean): boolean {
   return armed
 }
 
-/** Test/lifecycle escape hatch. Prefer armScratchpad, which honours the gate. */
-export function setArmed(on: boolean): void { armed = on }
-
 /** A capture began.
  *
  *  An ARMED pad survives between captures and the next one appends to it —
@@ -123,6 +120,8 @@ export function beginSegment(origin: Destination, now: number, observe: boolean)
   if (!pad) pad = emptyPad(randomUUID(), origin, now)
   captureStartedAt = now
   openSegmentId = randomUUID()
+  ownSequenceDepth = 0
+  suppressDetectedUpTo = 0
   pad = addSegment(pad, { id: openSegmentId, text: '', startMs: 0, endMs: 0, now })
   armWatchers(padDirFor(scratchpadRoot, pad.id), observe)
   schedulePersist()
@@ -132,6 +131,11 @@ export function beginSegment(origin: Destination, now: number, observe: boolean)
 export function endSegment(now: number): void {
   disarmWatchers()
   openSegmentId = null
+  // The claims map is per-capture: it exists to merge two detectors reporting
+  // ONE user action within a 2s window, and that question dies with the
+  // window. Without this it is a Map that only ever grows, for the lifetime of
+  // the main process.
+  sharedLedger.claims.clear()
   if (pad) { pad = { ...pad, updatedAt: now }; schedulePersist() }
 }
 
@@ -176,6 +180,10 @@ export function recordInsert(
   now: number,
 ): void {
   if (!pad) return
+  // Anything SEEN while Unmute owned the pasteboard is Unmute's, not the
+  // user's — see beginOwnClipboardSequence. Checked on the detection instant,
+  // not on arrival, so a rescue that outlives the sequence is refused too.
+  if (ownSequenceDepth > 0 || i.atMs <= suppressDetectedUpTo) return
   if (i.kind === 'image') {
     const sig = imageSignature(i.content)
     // An unreadable file yields no signature. Insert it rather than dropping
@@ -297,7 +305,7 @@ function discardPadFiles(p: Pad): void {
 let clipboardWatch: ReturnType<typeof createClipboardWatch> | null = null
 let screenshotWatch: ReturnType<typeof createScreenshotWatch> | null = null
 /** Did THIS window actually arm the watchers? Gating on the flag (not on
- *  `pad !== null`) is what keeps rebaselineClipboard from arming a watcher the
+ *  `pad !== null`) is what keeps a sequence resume from arming a watcher the
  *  capture gate deliberately left off. */
 let watchersArmed = false
 
@@ -337,25 +345,74 @@ function disarmWatchers(): void {
   }
 }
 
-/** BACKSTOP FOR OUR OWN SYNTHESISED ⌘C.
- *
- *  captureSelectedText clears the pasteboard, has ANOTHER PROCESS copy into
- *  it, then restores it — three changes, all ours, all inside a hot-mic
- *  window. They announce themselves through noteOwnClipboardWrite(), but the
- *  middle one is performed asynchronously by osascript, so there is a window
- *  in which the 250ms poll could see the user's selection land before we have
- *  recorded its counter value — and the cost of losing that race is the user's
- *  selection at the top of every dictation.
- *
- *  Re-baselining once the whole sequence has finished removes the race instead
- *  of narrowing it: arm() takes a fresh baseline, so every change up to this
- *  instant is, by construction, not a candidate. The cost is that a genuine
- *  copy made during those first few hundred milliseconds is not captured —
- *  a missed insert, against a corrupted transcript. */
-export function rebaselineClipboard(): void {
+// ── Our own pasteboard sequences ────────────────────────────────────────
+//
+// THE RACE THIS CLOSES. captureSelectedText clears the pasteboard, has ANOTHER
+// PROCESS copy into it, then restores it — three changes, all ours, all inside
+// a hot-mic window. Each announces itself through noteOwnClipboardWrite(), but
+// the middle one is performed asynchronously by osascript, so the announcement
+// cannot happen until the child's callback runs. Traced timeline:
+//
+//   T+0    we clear, and record it
+//   T+200  the target app serves our synthesised ⌘C — counter moves
+//   T+250  the 250ms poll ticks, sees a counter it was never told about, and
+//          inserts THE USER'S OWN SELECTION
+//   T+260  execFile's callback finally lets us record that counter — too late
+//
+// And the damage is not confined to the pad: that insert also pushes
+// capture:insert-detected, which sets insertPendingRef, which permits an
+// earlier chunk boundary — so it MOVES THE UNARMED FAST PATH'S CHUNKING.
+//
+// Re-baselining after the fact cannot fix this: a tick that already fired
+// cannot be retracted. So observation is suspended for the DURATION of the
+// sequence instead, by construction:
+//
+//   * stop()   — the interval is cleared, so no tick can START inside it.
+//   * disarm() — armed=false, so a tick suspended mid-await on rescueImage
+//                takes the module's own "the window closed" exit and delivers
+//                nothing.
+//   * a detection-time floor — on resume, any insert whose DETECTION instant
+//                is at or before the end of the sequence is refused. This is
+//                what catches the one remaining case: a rescue that was
+//                already in flight when suppression began and only resolves
+//                after it ends. Causal, not timing-based — we are refusing
+//                what was seen during a window we know was ours.
+//
+// The cost is that a genuine copy made in those few hundred milliseconds is
+// not captured. A missed insert, weighed against a corrupted transcript and a
+// moved fast path.
+
+let ownSequenceDepth = 0
+/** No insert may be admitted whose DETECTION instant is at or before this. */
+let suppressDetectedUpTo = 0
+
+/** Unmute is about to perform a multi-step pasteboard sequence of its own.
+ *  Re-entrant: nested/overlapping sequences suspend once and resume once. */
+export function beginOwnClipboardSequence(): void {
+  ownSequenceDepth++
+  if (ownSequenceDepth > 1) return
+  try {
+    clipboardWatch?.stop()
+    clipboardWatch?.disarm()
+  } catch (err) {
+    console.warn('[capture] clipboard suspend failed:', err)
+  }
+}
+
+/** The sequence is finished and the pasteboard is back to the user's. */
+export function endOwnClipboardSequence(now: number): void {
+  if (ownSequenceDepth === 0) return
+  ownSequenceDepth--
+  if (ownSequenceDepth > 0) return
+  if (now > suppressDetectedUpTo) suppressDetectedUpTo = now
   if (!watchersArmed || !pad) return
-  try { clipboardWatch?.arm(padDirFor(scratchpadRoot, pad.id)) } catch (err) {
-    console.warn('[capture] rebaseline failed:', err)
+  try {
+    // arm() re-baselines to the counter as it stands NOW, so every change the
+    // sequence made is, by construction, not a candidate.
+    clipboardWatch?.arm(padDirFor(scratchpadRoot, pad.id))
+    clipboardWatch?.start()
+  } catch (err) {
+    console.warn('[capture] clipboard resume failed:', err)
   }
 }
 
@@ -372,6 +429,8 @@ export function _resetForTest(): void {
   clipboardWatch = null
   screenshotWatch = null
   watchersArmed = false
+  ownSequenceDepth = 0
+  suppressDetectedUpTo = 0
   sharedLedger.ownWrites.clear()
   sharedLedger.claims.clear()
   scratchpadRoot = SCRATCHPAD_ROOT

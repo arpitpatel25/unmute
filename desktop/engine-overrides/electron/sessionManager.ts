@@ -20,8 +20,8 @@ import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 // Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
 import { dispatchFromCapture, hideNativePill } from './paywall/remote/init'
 import {
-  attachTranscript, beginSegment, cancelOpenSegment,
-  endSegment, getCaptureSettings, isArmed, rebaselineClipboard, registerPaste,
+  attachTranscript, beginOwnClipboardSequence, beginSegment, cancelOpenSegment,
+  endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed, registerPaste,
 } from './paywall/remote/capture/index'
 import { canObserve } from './paywall/remote/capture/captureGate'
 import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
@@ -997,10 +997,23 @@ class SessionManager {
     // very point — destroying it now would be a trap for the next task.
     if (!armed) return false
 
-    try {
-      attachTranscript(session.captureSegmentId, text, Date.now())
-    } catch (e) {
-      console.warn('[session] capture hold failed:', e)
+    // JUNK IS HELD AS NOTHING, NOT AS THE WORD "[BLANK_AUDIO]".
+    //
+    // This guard sits ABOVE the remote/paste split so both branches are
+    // covered, which also puts it above the per-cluster blank checks — and one
+    // of those clusters has no blank check before its split at all. Filtering
+    // here rather than moving the guard keeps a single rule for all three
+    // sites: an armed tap that said nothing still HOLDS (the pad and the arm
+    // survive), it just contributes no text to it.
+    const spoken = (text || '').trim()
+    if (spoken && spoken !== '[BLANK_AUDIO]') {
+      try {
+        attachTranscript(session.captureSegmentId, spoken, Date.now())
+      } catch (e) {
+        console.warn('[session] capture hold failed:', e)
+      }
+    } else {
+      console.log('[session] 📌 armed, but nothing was said — holding an empty segment')
     }
     console.log('[session] 📌 SCRATCHPAD ARMED — holding, not delivering')
     session.status = 'done'
@@ -2429,6 +2442,14 @@ class SessionManager {
 
   private async captureSelection(mode: 'dictation' | 'instruction'): Promise<void> {
     console.log('[session] Attempting to capture selected text, mode:', mode)
+    // OBSERVATION IS SUSPENDED FOR THE WHOLE SEQUENCE, not corrected after it.
+    // captureSelectedText clears the pasteboard, has osascript copy into it,
+    // and restores it; the middle change cannot be announced until the child's
+    // callback runs, so a poll landing in between would insert the user's own
+    // selection — and, through capture:insert-detected, move the fast path's
+    // chunking. Suspending around the sequence makes that unobservable by
+    // construction. MUST wrap the whole call, including its error paths.
+    beginOwnClipboardSequence()
     try {
       const useClipboardFallback = mode === 'instruction'
       const selectedText = await captureSelectedText(useClipboardFallback)
@@ -2443,12 +2464,11 @@ class SessionManager {
     } catch (err) {
       console.warn('[session] Failed to capture selected text:', err instanceof Error ? err.message : err)
     } finally {
-      // Our own clear → synthesised ⌘C → restore has finished. Re-baseline the
-      // clipboard watcher so none of those three changes can ever be read back
-      // as a user copy, whatever the poll happened to observe mid-sequence.
-      // No-op when the watcher was never armed (capture disabled, or a remote
-      // capture whose grab runs after the mic is already cold).
-      try { rebaselineClipboard() } catch { /* watcher not armed */ }
+      // The pasteboard is the user's again. Resume observation, refusing
+      // anything detected up to this instant. No-op when the watcher was never
+      // armed (capture disabled, or a remote capture whose grab runs after the
+      // mic is already cold).
+      try { endOwnClipboardSequence(Date.now()) } catch { /* watcher not armed */ }
     }
   }
 

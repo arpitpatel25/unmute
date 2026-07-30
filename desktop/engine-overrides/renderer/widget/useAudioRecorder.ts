@@ -232,9 +232,12 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const hardChunkCapMsRef = useRef<number>(DEFAULT_HARD_CHUNK_CAP_MS)
   const vadPollIntervalMsRef = useRef<number>(DEFAULT_VAD_POLL_INTERVAL_MS)
 
-  // Subscribe once to main's insert-detected push. NOT wired anywhere yet — no
-  // sender exists until a later task in this spec adds the clipboard watcher
-  // and its IPC forwarder. Until then this listener is simply inert.
+  // Subscribe once to main's insert-detected push. LIVE: main sends
+  // 'capture:insert-detected' from the capture seam whenever a watcher records
+  // an insert during a hot mic, so this flag really does reach decideCut's
+  // 'insert' branch and really can move a chunk boundary. It only ever PERMITS
+  // an earlier cut (never forces one), and it is cleared on any cut — but it
+  // is on the dictation path, so a false insert upstream is a real cost.
   useEffect(() => {
     const api = window.electronAPI as unknown as {
       onInsertDetected?: (cb: () => void) => (() => void) | void

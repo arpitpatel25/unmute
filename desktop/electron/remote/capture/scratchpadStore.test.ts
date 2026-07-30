@@ -196,10 +196,26 @@ describe('deserialize validates entry PAYLOADS, not just the tag', () => {
         null,
       )
     })
-    test('every known kind is accepted', () => {
+    test('every known kind round-trips with its payload, and only that payload', () => {
       for (const kind of ['url', 'path', 'line', 'block', 'image']) {
-        const raw = wrap({ type: 'insert', id: 'i', kind, content: 'x', atMs: 0 })
-        assert.notEqual(deserialize(raw), null, `kind ${kind} should be accepted`)
+        const ok = deserialize(wrap({ type: 'insert', id: 'i', kind, content: 'x', atMs: 7 }))
+        assert.deepEqual(
+          ok?.entries[0],
+          { type: 'insert', id: 'i', kind, content: 'x', atMs: 7 },
+          `kind ${kind} must survive intact`,
+        )
+        // The same kind with a broken payload must still be refused — this is
+        // what distinguishes payload validation from a kind allowlist.
+        assert.equal(
+          deserialize(wrap({ type: 'insert', id: 'i', kind, atMs: 7 })),
+          null,
+          `kind ${kind} with no content must be refused`,
+        )
+        assert.equal(
+          deserialize(wrap({ type: 'insert', id: 'i', kind, content: 'x' })),
+          null,
+          `kind ${kind} with no atMs must be refused`,
+        )
       }
     })
   })

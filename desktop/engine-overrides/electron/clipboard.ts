@@ -21,6 +21,16 @@ import { noteOwnClipboardWrite } from './paywall/remote/capture/index'
  * and the record lets the poll observe our own write as a user copy — and a
  * user copy becomes an insert at the top of the transcript.
  *
+ * THIS IS NOT WHAT MAKES captureSelectedText SAFE. It cannot be: the
+ * synthesised ⌘C is performed by another process, so its counter value is
+ * unknowable until the child returns, and a poll landing in between has
+ * already fired. The caller suspends observation around that whole sequence
+ * instead (beginOwnClipboardSequence). These records remain because the
+ * invariant is per-WRITE, not per-caller: injectOutput and copyToClipboard are
+ * not wrapped in a sequence and still need to announce themselves, and any
+ * future caller that forgets to wrap gets the narrow protection rather than
+ * none.
+ *
  * Fail-open: an unarmed (or absent) watcher has nothing to record, and a
  * throw here must never reach the dictation path.
  */
@@ -300,11 +310,6 @@ export async function captureSelectedText(useClipboardFallback: boolean = false)
       noteOurWrite()
       // Wait for clipboard to update
       await sleep(150)
-      // The pasteboard may only settle during the sleep above (osascript
-      // returns as soon as the keystroke is posted, not when the target app
-      // has served the copy). Record the counter again so a late-landing
-      // change from OUR synthesized ⌘C is covered too.
-      noteOurWrite()
 
       // Read the new clipboard content
       const selectedText = clipboard.readText()

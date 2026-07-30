@@ -946,7 +946,7 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
   // needed at the moment the chips appear.
   if (phase === 'listening') void pushPillChips()
   if (phase === 'listening') startCaptureWatch()
-  else if (phase === 'transcribing') secureAndClearClipboard() // key just lifted — secure, then clear if consumed
+  else if (phase === 'transcribing') secureClipboard() // key just lifted — secure what was captured (never clears)
   // idle = the remote capture RESOLVED. Delivery already emptied the tray via
   // takeStaged(); anything auto still here means no delivery (empty transcript,
   // router error) — forfeit it.
@@ -1216,9 +1216,6 @@ let clipProbeBusy = false
  *  a skipped baseline (previous probe still in flight) or a failed osascript
  *  must NEVER let a pre-dictation image slip through as "new". */
 let clipBaselined = false
-/** Did any clipboard image get STAGED during the current capture? Drives the
- *  consume-then-clear at key-lift (we only clear what we delivered). */
-let clipStagedThisCapture = false
 function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, stagedNew: boolean) => void): void {
   if (clipProbeBusy || (!markOnly && stagedAttachments.length >= getKnobs().captureMaxAuto)) { onDone?.(false, false); return }
   clipProbeBusy = true
@@ -1260,7 +1257,6 @@ function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, s
       copyFileSync(probe, dest)
       try { rmSync(probe, { force: true }) } catch { /* next probe overwrites anyway */ }
       stagedAttachments.push({ path: dest, auto: true })
-      clipStagedThisCapture = true
       broadcastStaged()
       log.event('capture-staged', { file: dest, via: 'clipboard-probe' })
       onDone?.(true, true)
@@ -1268,24 +1264,23 @@ function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, s
   })
 }
 
-/** Key-lift: secure any last clipboard screenshot, then — if this capture
- *  consumed clipboard images — CLEAR the clipboard. Transcription (1-3s) gives
- *  the clear ages to propagate, so the TEXT paste later races against an empty,
- *  long-settled pasteboard = the ancient fast path that never failed. We only
- *  clear what we delivered: a pre-dictation image we never staged is left alone. */
-function secureAndClearClipboard(): void {
+/** Key-lift: secure any last clipboard screenshot.
+ *
+ *  THE CLEAR IS GONE. It used to wipe the pasteboard when this capture had
+ *  consumed a clipboard image, and that was defensible only because the image
+ *  was about to be pasted back seconds later — a handoff, not a deletion.
+ *  Nothing consumes staged images any more (they are inserts in the capture
+ *  buffer now), so the clear had become pure data loss: copy an image
+ *  mid-dictation and your clipboard was emptied and you got nothing back.
+ *
+ *  It also contradicted this design's flat rule — Unmute does not mutate the
+ *  user's pasteboard. The only write we make is delivery's own, and that one
+ *  announces itself. */
+function secureClipboard(): void {
   if (settings.get('captureEnabled') === false) return
   // If the baseline never completed this capture, this probe is LEARN-ONLY: an
   // image of unknown provenance (could predate the trigger) must not attach.
-  probeClipboardViaChild(!clipBaselined, (sawImage, stagedNew) => {
-    if (sawImage && (stagedNew || clipStagedThisCapture)) {
-      try {
-        const { clipboard } = require('electron') as typeof import('electron')
-        clipboard.clear()
-        log.event('clipboard-cleared-after-consume', {})
-      } catch { /* best-effort */ }
-    }
-  })
+  probeClipboardViaChild(!clipBaselined)
 }
 
 function screenshotDir(): string {
@@ -1485,7 +1480,6 @@ function startCaptureWatch(): void {
   if (captureWatchTimer) clearInterval(captureWatchTimer)
   const startedAt = Date.now()
   pendingClipboardCount = 0
-  clipStagedThisCapture = false
   // CLEAR-FIRST (the lifecycle rule's backstop): any auto-captured screenshot
   // still in the tray belongs to a PREVIOUS window that ended without
   // delivering — it must never ride this one.
@@ -2783,7 +2777,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // Key lifted → recording ended → secure a last-second ⌃-shot, then clear
       // the clipboard if this capture consumed images — so the text paste later
       // never races a slow image payload. Transcription absorbs the latency.
-      secureAndClearClipboard()
+      secureClipboard()
       // Safety stop for a cancelled/failed dictation (generation-guarded:
       // never kills a NEWER capture's watch).
       const gen = captureWatchGen

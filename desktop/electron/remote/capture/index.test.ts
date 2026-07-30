@@ -4,14 +4,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  PERSIST_DEBOUNCE_MS, _resetForTest, armScratchpad, attachTranscript, beginSegment,
-  cancelOpenSegment, currentPad, deliver, discard, endSegment, getCaptureSettings,
-  initWatchers, isArmed, noteOwnClipboardWrite, pasteAtCursor, rebaselineClipboard,
-  recordInsert, registerPaste, registerSettings, removeFromPad, setScratchpadRoot,
-  writePadNow,
+  PERSIST_DEBOUNCE_MS, _resetForTest, armScratchpad, attachTranscript,
+  beginOwnClipboardSequence, beginSegment, cancelOpenSegment, currentPad, deliver,
+  discard, endOwnClipboardSequence, endSegment, getCaptureSettings, initWatchers,
+  isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerPaste,
+  registerSettings, removeFromPad, setScratchpadRoot, writePadNow,
 } from './index'
 import { deserialize, padDirFor } from './scratchpadStore'
-import type { createClipboardWatch } from './clipboardWatch'
+import { createClipboardWatch } from './clipboardWatch'
 import type { createScreenshotWatch } from './screenshotWatch'
 
 // ── Fake watchers ───────────────────────────────────────────────────────
@@ -102,27 +102,151 @@ describe('the capture window is the recording window', () => {
     initWatchers(null, null)
     assert.doesNotThrow(() => noteOwnClipboardWrite())
   })
+
+  test('the dedup claims do not accumulate across captures', () => {
+    // The claims map answers "did the other detector already report this one
+    // action?", which is only meaningful inside a window. Left unreset it is a
+    // Map that grows for the life of the main process.
+    const shot = join(root, 'same.png')
+    writeFileSync(shot, 'IDENTICAL-BYTES')
+
+    beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'image', content: shot, atMs: 1100 }, 1100)
+    assert.equal(inserts().length, 1)
+    endSegment(2000)
+
+    beginSegment('cursor', 3000, true)
+    recordInsert({ kind: 'image', content: shot, atMs: 3100 }, 3100)
+    assert.equal(inserts().length, 1, 'a NEW capture re-copying the same image still records it')
+  })
 })
 
-describe('rebaselineClipboard', () => {
-  test('re-arms the clipboard watcher on the same pad dir', () => {
-    beginSegment('cursor', 1000, true)
-    rebaselineClipboard()
-    assert.equal(clipCalls.armed.length, 2)
-    assert.equal(clipCalls.armed[0], clipCalls.armed[1])
+// The failure this exists to prevent: our own synthesised ⌘C read back as a
+// user copy. That would put the user's selection at the top of every dictation
+// AND — through capture:insert-detected → insertPendingRef → decideCut — move
+// the unarmed fast path's chunking. These tests drive the REAL clipboardWatch,
+// because the guarantee is about what a tick can observe, not about what the
+// façade remembers.
+describe('our own pasteboard sequences are unobservable', () => {
+  /** Wires a real clipboardWatch over a fake pasteboard. */
+  function realWatch(state: { counter: number; text: string }) {
+    const seen: { kind: string; content: string }[] = []
+    const cw = createClipboardWatch({
+      changeCount: () => state.counter,
+      readText: () => state.text,
+      hasImage: () => false,
+      rescueImage: async () => null,
+      exists: () => false,
+      now: () => Date.now(),
+      onInsert: (i) => { seen.push({ kind: i.kind, content: i.content }); recordInsert(i, Date.now()) },
+    })
+    initWatchers(cw, fakeScreenshotWatch(shotCalls))
+    return { cw, seen }
+  }
+
+  test('THE TRACED TIMELINE: a tick landing between the copy and its record inserts NOTHING', async () => {
+    const state = { counter: 10, text: 'https://the-users-own-selection.example' }
+    const { cw, seen } = realWatch(state)
+    beginSegment('cursor', Date.now(), true)
+
+    // captureSelectedText begins.
+    beginOwnClipboardSequence()
+
+    state.counter++            // T+0    our clear …
+    noteOwnClipboardWrite()    //        … announced immediately
+    state.counter++            // T+200  the target app serves our synthesised ⌘C
+    await cw.tick()            // T+250  THE POLL LANDS HERE — before the record
+    noteOwnClipboardWrite()    // T+260  execFile's callback, 10ms too late
+    state.counter++            //        our restore …
+    noteOwnClipboardWrite()    //        … announced immediately
+
+    endOwnClipboardSequence(Date.now())
+
+    assert.deepEqual(seen, [], 'no tick may observe any change in the sequence')
+    assert.equal(inserts().length, 0, 'and nothing reached the pad')
   })
 
-  test('does NOTHING when the watcher was never armed — the gate stays honoured', () => {
+  test('a tick DURING the sequence cannot fire even if the counter moved twice', async () => {
+    const state = { counter: 10, text: 'user selection' }
+    const { cw, seen } = realWatch(state)
+    beginSegment('cursor', Date.now(), true)
+
+    beginOwnClipboardSequence()
+    state.counter += 2
+    await cw.tick()
+    await cw.tick()
+    endOwnClipboardSequence(Date.now())
+
+    assert.deepEqual(seen, [])
+  })
+
+  test('an insert DETECTED during the sequence is refused even if it arrives after it', async () => {
+    // The in-flight rescue case: a tick suspended mid-await when suppression
+    // began, resolving only once we have resumed.
+    const state = { counter: 10, text: 'x' }
+    realWatch(state)
+    beginSegment('cursor', 1000, true)
+
+    beginOwnClipboardSequence()
+    const detectedAt = Date.now()
+    endOwnClipboardSequence(detectedAt + 5)
+
+    recordInsert({ kind: 'image', content: '/tmp/in-flight.png', atMs: detectedAt }, Date.now())
+    assert.equal(inserts().length, 0, 'refused on its DETECTION instant, not its arrival')
+  })
+
+  test('a REAL copy after the sequence still lands — suppression is not a mute switch', async () => {
+    const state = { counter: 10, text: 'before' }
+    const { cw, seen } = realWatch(state)
+    beginSegment('cursor', Date.now(), true)
+
+    beginOwnClipboardSequence()
+    state.counter++
+    endOwnClipboardSequence(Date.now())
+
+    await new Promise((r) => setTimeout(r, 2))
+    state.counter++
+    state.text = 'https://a-genuine-copy.example'
+    await cw.tick()
+
+    assert.equal(seen.length, 1)
+    assert.equal(seen[0].content, 'https://a-genuine-copy.example')
+    assert.equal(inserts().length, 1)
+  })
+
+  test('the sequence suspends the poll and resumes it', () => {
+    beginSegment('cursor', 1000, true)
+    const armsBefore = clipCalls.armed.length
+    beginOwnClipboardSequence()
+    assert.equal(clipCalls.stops, 1, 'no tick can START inside the sequence')
+    assert.equal(clipCalls.disarms, 1, 'an in-flight tick takes the window-closed exit')
+    endOwnClipboardSequence(2000)
+    assert.equal(clipCalls.armed.length, armsBefore + 1, 're-baselined on resume')
+    assert.equal(clipCalls.starts, 2, 'polling resumed')
+  })
+
+  test('nested sequences suspend once and resume once', () => {
+    beginSegment('cursor', 1000, true)
+    beginOwnClipboardSequence()
+    beginOwnClipboardSequence()
+    endOwnClipboardSequence(2000)
+    assert.equal(clipCalls.starts, 1, 'still suspended — the outer sequence is live')
+    endOwnClipboardSequence(2001)
+    assert.equal(clipCalls.starts, 2)
+  })
+
+  test('an unmatched end is a no-op, not a spurious arm', () => {
     beginSegment('cursor', 1000, false)
-    rebaselineClipboard()
-    assert.equal(clipCalls.armed.length, 0)
+    endOwnClipboardSequence(2000)
+    assert.equal(clipCalls.armed.length, 0, 'the capture gate stays honoured')
   })
 
-  test('does nothing after the window closed', () => {
-    beginSegment('cursor', 1000, true)
-    endSegment(2000)
-    rebaselineClipboard()
-    assert.equal(clipCalls.armed.length, 1)
+  test('resuming does NOT arm a watcher the gate left off', () => {
+    beginSegment('cursor', 1000, false)
+    beginOwnClipboardSequence()
+    endOwnClipboardSequence(2000)
+    assert.equal(clipCalls.armed.length, 0)
+    assert.equal(clipCalls.starts, 0)
   })
 })
 
@@ -351,9 +475,18 @@ describe('persistence', () => {
     assert.ok(existsSync(attachment), 'the delivered attachment survives')
   })
 
-  test('a persist failure never throws at the caller', () => {
+  test('a persist failure never throws — and the pad survives it intact', () => {
     armScratchpad(true)
-    beginSegment('cursor', 1000, true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'held work', 1500)
+
+    // First prove the write is REAL, so the no-throw below cannot be satisfied
+    // by writePadNow simply doing nothing.
+    writePadNow()
+    const good = join(padDirFor(root, currentPad()!.id), 'pad.json')
+    assert.ok(existsSync(good), 'the happy path genuinely writes')
+    const bytes = readFileSync(good, 'utf8')
+
     setScratchpadRoot('/dev/null/definitely-not-a-directory')
     const warn = console.warn
     console.warn = () => {} // the failure IS logged; keep it out of test output
@@ -362,5 +495,8 @@ describe('persistence', () => {
     } finally {
       console.warn = warn
     }
+
+    assert.equal(currentPad()?.entries.length, 1, 'the in-memory pad is untouched')
+    assert.equal(readFileSync(good, 'utf8'), bytes, 'the last good write is not corrupted')
   })
 })
