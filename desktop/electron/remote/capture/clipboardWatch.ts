@@ -118,6 +118,17 @@ export function createClipboardWatch(deps: ClipboardWatchDeps): ClipboardWatch {
       const text = deps.readText()
       if (!text.trim()) return
       deps.onInsert({ kind: classifyText(text, deps.exists), content: text, atMs: seenAt })
+    } catch (err) {
+      // A detection tick must never be able to take the process down, no
+      // matter what a dep does. start()'s interval callback discards tick()'s
+      // promise with `void`, so an escaping throw here — from hasImage(),
+      // readText(), classifyText(), or onInsert() (e.g. a destroyed
+      // BrowserWindow mid-teardown) — would be an unhandled rejection that
+      // kills the Electron main process. The rescueImage() catch above stays
+      // narrow (it has its own "degrade to no insert" contract); this one is
+      // the backstop for everything else in the branch. Logged, not silent —
+      // a dep throwing here is a real bug someone needs to be able to find.
+      console.warn('[capture] clipboardWatch tick failed:', err)
     } finally {
       busy = false
     }

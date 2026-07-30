@@ -189,6 +189,63 @@ describe('content', () => {
     await tickPromise
     assert.equal(h.inserts.length, 0)
   })
+
+  test('readText throwing does not escape tick(), and busy is released', async () => {
+    let shouldThrow = true
+    const h = harness({
+      readText: () => {
+        if (shouldThrow) throw new Error('readText blew up')
+        return 'https://a.com'
+      },
+    })
+    h.w.arm('/pad')
+    h.bump()
+    await assert.doesNotReject(() => h.w.tick())
+    assert.equal(h.inserts.length, 0)
+
+    shouldThrow = false
+    h.bump()
+    await h.w.tick()
+    assert.equal(h.inserts.length, 1)
+  })
+
+  test('hasImage throwing does not escape tick(), and busy is released', async () => {
+    let shouldThrow = true
+    const h = harness({
+      hasImage: () => {
+        if (shouldThrow) throw new Error('hasImage blew up')
+        return false
+      },
+    })
+    h.w.arm('/pad')
+    h.bump()
+    await assert.doesNotReject(() => h.w.tick())
+    assert.equal(h.inserts.length, 0)
+
+    shouldThrow = false
+    h.bump()
+    await h.w.tick()
+    assert.equal(h.inserts.length, 1)
+  })
+
+  test('onInsert throwing does not escape tick(), and busy is released', async () => {
+    let shouldThrow = true
+    const h = harness({
+      onInsert: (i) => {
+        if (shouldThrow) throw new Error('onInsert blew up (e.g. destroyed BrowserWindow)')
+        h.inserts.push(i)
+      },
+    })
+    h.w.arm('/pad')
+    h.bump()
+    await assert.doesNotReject(() => h.w.tick())
+    assert.equal(h.inserts.length, 0)
+
+    shouldThrow = false
+    h.bump()
+    await h.w.tick()
+    assert.equal(h.inserts.length, 1)
+  })
 })
 
 describe('the clipboard is never mutated', () => {
