@@ -83,6 +83,13 @@ export interface Task {
    *  `local:` prefix). This is the whole handle — it addresses the rollout file
    *  for reads and the sidebar row for open/send. */
   codexThreadId?: string
+  /** The id Codex's SIDEBAR uses for this thread, when it differs from the
+   *  durable one. A not-yet-persisted thread is labelled
+   *  `local:client-new-thread:<unrelated-uuid>` and nothing on the row joins the
+   *  two, so it is captured at creation — the one moment the correlation is
+   *  unambiguous — and used to find the thread's status chip during its first
+   *  turn, which is exactly when Computer Use consents fire. */
+  codexDomThreadId?: string
   /** Last delivery problem — the message did not reach the agent. Distinct from
    *  `error`, which means the WORK failed; this one never settles the task. */
   deliveryError?: string
@@ -725,6 +732,7 @@ export class TaskManager extends EventEmitter {
       sessionId: created.threadId,   // the Codex thread IS this task's session handle
       agent: 'codex-desktop',
       codexThreadId: created.threadId,
+      codexDomThreadId: created.domThreadId,
       codexProject: opts.project ?? null,
       ...(modelLabel ? { codexModelLabel: modelLabel } : {}),
       kind,
@@ -747,7 +755,8 @@ export class TaskManager extends EventEmitter {
 
     await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
       id, intent, sessionId: created.threadId, kind, createdAt: now, surface, mode: 'managed',
-      agent: 'codex-desktop', codexThreadId: created.threadId, codexProject: opts.project ?? null,
+      agent: 'codex-desktop', codexThreadId: created.threadId,
+      codexDomThreadId: created.domThreadId, codexProject: opts.project ?? null,
       state: 'processing', updatedAt: now,
       ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
     })).catch(() => {})
@@ -883,7 +892,7 @@ export class TaskManager extends EventEmitter {
       isStale({ state: 'processing' }, task.lastHeartbeatMs, this.clock(), this.opts.codexBlockedMs)
 
     if (frozenMidCall && task.state !== 'needs-user') {
-      const chip = await this.codexChipFor(task.codexThreadId, driver, task.intent)
+      const chip = await this.codexChipFor(task.codexThreadId, driver, task.codexDomThreadId)
 
       // CONFIRMATION MUST NOT BE A GATE, only an accelerator.
       //
@@ -1400,7 +1409,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; codexThreadId?: string; codexProject?: string | null }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; codexThreadId?: string; codexDomThreadId?: string; codexProject?: string | null }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       // EXTERNAL BACKEND: a Codex thread lives in Codex, so an Unmute restart
@@ -1416,6 +1425,7 @@ export class TaskManager extends EventEmitter {
           sessionId: meta.codexThreadId,
           agent: 'codex-desktop',
           codexThreadId: meta.codexThreadId,
+          codexDomThreadId: meta.codexDomThreadId,
           codexProject: meta.codexProject ?? null,
           kind: meta.kind ?? 'oneoff',
           // RESTORE what we last observed. Defaulting to 'processing' meant the
@@ -1560,7 +1570,7 @@ export class TaskManager extends EventEmitter {
   private async codexChipFor(
     threadId: string,
     driver: { threadChips?: () => Promise<Array<{ id: string; title?: string; active: boolean; chip: string | null }>> },
-    title?: string,
+    domId?: string,
   ): Promise<{ active: boolean; chip: string | null } | null> {
     if (!driver.threadChips) return null
     const now = this.clock()
@@ -1594,23 +1604,14 @@ export class TaskManager extends EventEmitter {
     // the FIRST turn — exactly when a Computer Use consent tends to fire. So the
     // common case, not an edge case.
     const bare = (s: string) => s.split(':').pop() ?? s
-    const byId = rows.find((r) => r.id === threadId || bare(r.id) === bare(threadId))
-    if (byId) return byId.chip ? { active: byId.active, chip: byId.chip } : null
-
-    // No id match ⇒ this thread is probably still wearing a transient label.
-    // Fall back to the title, which IS ours: it is the prompt we sent.
-    const wanted = (title ?? '').trim().toLowerCase()
-    if (wanted) {
-      const byTitle = rows.find((r) => {
-        const t = (r.title ?? '').trim().toLowerCase()
-        if (!t) return false
-        // Sidebar titles are truncated, so compare on the shared prefix.
-        const n = Math.min(t.length, wanted.length, 40)
-        return n >= 12 && t.slice(0, n) === wanted.slice(0, n)
-      })
-      if (byTitle) return byTitle.chip ? { active: byTitle.active, chip: byTitle.chip } : null
-    }
-    return null
+    const row = rows.find((r) =>
+      r.id === threadId || bare(r.id) === bare(threadId) ||
+      // …or the label the sidebar was using when we created it. Captured at
+      // creation because nothing on the row links a transient id to the durable
+      // one, and TITLES ARE NOT AN OPTION — the user can rename a thread.
+      (!!domId && (r.id === domId || bare(r.id) === bare(domId))))
+    if (!row?.chip) return null
+    return { active: row.active, chip: row.chip }
   }
 
   private async sweepApprovals(): Promise<void> {

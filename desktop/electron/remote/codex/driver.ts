@@ -46,6 +46,21 @@ export interface CodexAvailability {
 export interface CreateTaskResult {
   ok: boolean
   threadId?: string
+  /**
+   * The id the SIDEBAR is using for this thread, when it differs from the
+   * durable one.
+   *
+   * A not-yet-persisted thread is labelled `local:client-new-thread:<uuid>` in
+   * the DOM, and that uuid is unrelated to the durable id — there is no shared
+   * field on the row to join them (checked: host-id and kind are both just
+   * "local", everything else is title-derived, and titles are user-editable).
+   *
+   * Creation is the ONE moment the correlation is free and unambiguous: exactly
+   * one row appears, and it is ours. Captured here rather than guessed later.
+   * Without it, sidebar-based blocked detection cannot identify a thread during
+   * its first turn — which is exactly when Computer Use consents fire.
+   */
+  domThreadId?: string
   reason?: CodexUnavailableReason | 'no-composer' | 'no-project' | 'send-failed' | 'id-unresolved'
 }
 
@@ -447,6 +462,16 @@ export class CodexDesktopDriver {
     if (!sent) { log.warn('codex-create-send-unconfirmed', {}); return { ok: false, reason: 'send-failed' } }
     log.event('codex-create-sent', {})
 
+    // Which sidebar row appeared? Diffed against the snapshot taken before we
+    // clicked New, so it needs no name and no timing heuristic.
+    let domThreadId: string | undefined
+    try {
+      const added = (await listThreads(cdp)).map((t) => t.id).filter((id) => id && !before.has(id))
+      if (added.length === 1) domThreadId = added[0]
+      else if (added.length > 1) log.warn('codex-create-ambiguous-row', { added: added.length })
+      if (domThreadId) log.event('codex-create-dom-row', { domThreadId, transient: isTransientThreadId(domThreadId) })
+    } catch { /* best effort — the durable id below is what the task is keyed on */ }
+
     const threadId = await this.resolveNewThreadId(startedAt)
     if (!threadId) {
       // The message IS in Codex at this point — the send was confirmed above.
@@ -457,8 +482,8 @@ export class CodexDesktopDriver {
     }
     // The turn is away; hand the composer back to whatever the user had.
     await restoreReasoning().catch(() => {})
-    log.event('codex-task-created', { threadId, project: opts.project ?? null })
-    return { ok: true, threadId }
+    log.event('codex-task-created', { threadId, domThreadId: domThreadId ?? null, project: opts.project ?? null })
+    return { ok: true, threadId, domThreadId }
   }
 
   /**

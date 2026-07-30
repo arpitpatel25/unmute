@@ -7,14 +7,14 @@ import { TaskManager } from '../task-manager'
 
 // A fake Codex backend: records what the manager asks of it and returns
 // scripted snapshots, so the whole lifecycle can be driven without a Codex app.
-function fakeDriver(script: { states?: Array<{ state: string; lastAgentMessage?: string | null; everCompleted?: boolean }> } = {}) {
+function fakeDriver(script: { domThreadId?: string; states?: Array<{ state: string; lastAgentMessage?: string | null; everCompleted?: boolean }> } = {}) {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   let i = 0
   return {
     calls,
     createTask: async (intent: string, opts: { project?: string | null }) => {
       calls.push({ fn: 'createTask', args: [intent, opts] })
-      return { ok: true as const, threadId: 'thread-123' }
+      return { ok: true as const, threadId: 'thread-123', domThreadId: (script as { domThreadId?: string }).domThreadId }
     },
     /** Overridable so a test can make a delivery fail without failing the task. */
     sendResult: { ok: true } as { ok: boolean; reason?: string },
@@ -268,7 +268,7 @@ async function frozenTurn(opts: { pending: number; grows?: boolean; chip?: strin
   const base = await tmp()
   let now = Date.now()
   let wrote = now                       // newest rollout timestamp
-  const d = fakeDriver()
+  const d = fakeDriver({ domThreadId: opts.sidebarId })
   d.snapshot = async () => ({
     state: 'processing', lastAgentMessage: null, turns: [],
     updatedAt: opts.grows ? (wrote += 30_000) : wrote,
@@ -445,18 +445,34 @@ test('a NON-mounted blocked thread is never switched to just to read it', async 
 // "Working" and logged codex-quiet once a second.
 
 test('a thread still wearing its TRANSIENT sidebar id is still matched', async () => {
+  // Codex AUTO-TITLES a thread ("Summarize Tanmay Sharma messages" for a prompt
+  // that said none of that) and the user can rename it, so titles are not an
+  // identifier. The sidebar row id captured AT CREATION is.
   const { m, id, poll, advance } = await frozenTurn({
     pending: 1,
     sidebarId: 'local:client-new-thread:8ea1da75-1abb-460c-9ac6-b28421825b7f',
-    sidebarTitle: 'open whatsapp',
+    sidebarTitle: 'a title Codex invented and the user then renamed',
     chip: 'Awaiting approval',
   })
   try {
+    assert.equal(m.get(id)!.codexDomThreadId,
+      'local:client-new-thread:8ea1da75-1abb-460c-9ac6-b28421825b7f',
+      'the sidebar row id must be captured at creation, when it is unambiguous')
     advance(5 * 60_000)
     await poll(id)
     const t = m.get(id)!
-    assert.equal(t.state, 'needs-user', 'the id will not match; the title must')
+    assert.equal(t.state, 'needs-user', 'matched on the captured row id, not the title')
     assert.equal(t.question?.text, 'Awaiting approval')
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+test('the captured sidebar id survives a restart (it is in meta.json)', async () => {
+  const { m, id } = await frozenTurn({
+    pending: 1, sidebarId: 'local:client-new-thread:abc', chip: 'Awaiting approval',
+  })
+  try {
+    const raw = await fs.readFile(join(m.get(id)!.home, 'meta.json'), 'utf8')
+    assert.equal(JSON.parse(raw).codexDomThreadId, 'local:client-new-thread:abc')
   } finally { m.killAll(); m.stopMaintenance() }
 })
 
