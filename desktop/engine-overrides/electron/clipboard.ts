@@ -401,12 +401,20 @@ export async function injectOutput(text: string): Promise<void> {
   }
 
   // Brief wait so the pasteboard write is observable to the target app before
-  // we post Cmd+V. TEXT MUST BE INSTANT — no verification here. The old race
-  // (Cmd+V pasting a stale IMAGE) is eliminated upstream: any consumed
-  // screenshot is CLEARED from the clipboard at key-lift, seconds before this
-  // runs, so the text-write only ever races an empty, long-settled pasteboard —
-  // the ancient fast path that never failed. (Own-process readText cannot
-  // verify cross-process propagation; polling it was proven useless.)
+  // we post Cmd+V. TEXT MUST BE INSTANT — no verification here.
+  //
+  // THE OLD RACE IS GONE BECAUSE NOTHING IS CONSUMED ANY MORE, not because
+  // anything is cleared. This comment used to justify the bare sleep with "any
+  // consumed screenshot is CLEARED from the clipboard at key-lift" — that clear
+  // (secureAndClearClipboard) was deleted with the staging ledger, and §9b rule
+  // 4 says it is never coming back: we do not destroy the user's clipboard for
+  // our own convenience. What makes the bare sleep correct now is simpler and
+  // needs no cooperation from anyone: `writeText` above REPLACES whatever was on
+  // the pasteboard, image included, and it is the last write before the ⌘V. An
+  // image captured during the dictation was rescued into the pad's own storage
+  // the instant it was detected (§9b rule 1), so nothing downstream depends on
+  // the pasteboard still holding it. (Own-process readText cannot verify
+  // cross-process propagation; polling it was proven useless.)
   await sleep(8)
 
   try {

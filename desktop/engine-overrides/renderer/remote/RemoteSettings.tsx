@@ -21,9 +21,12 @@ interface Settings {
   overlayDocked: boolean
   osNotifications: boolean
   forceRawMode: boolean
-  /** Capture during dictation — copies AND screenshots, not images alone. The
-   *  key predates text capture; main reads it from `captureEnabled`. */
-  screenshotCapture: boolean
+  // NO CAPTURE FIELD HERE. `remote:get-settings` still carries the capture
+  // switch under its shipped wire key (`screenshotCapture`), but this screen
+  // never drew a control for it — it only mirrored the old, image-only framing
+  // in a type. The setting governs TEXT as well now and is surfaced in exactly
+  // one place, Settings.tsx, under a label that says so ("Capture while
+  // dictating"). One setting, one honest description.
   agentTasksEnabled?: boolean
   logFile: string | null
 }
@@ -47,7 +50,6 @@ type API = {
   remoteSetOverlayDocked?: (on: boolean) => Promise<boolean>
   remoteSetOsNotifications?: (on: boolean) => Promise<boolean>
   remoteSetForceRaw?: (on: boolean) => Promise<boolean>
-  remoteSetScreenshotCapture?: (on: boolean) => Promise<boolean>
   remoteGetMemoryUsage?: () => Promise<MemoryUsage>
   remoteCleanupMemory?: () => Promise<CleanupResult | null>
   // Remote trigger gate (paywall layer): `locked` = the plan doesn't include
