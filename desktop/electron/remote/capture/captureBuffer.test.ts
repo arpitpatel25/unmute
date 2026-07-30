@@ -108,3 +108,37 @@ describe('setSegmentText', () => {
     assert.equal(p.entries.length, 0)
   })
 })
+
+describe('isEmpty means NOTHING DELIVERABLE, not zero entries', () => {
+  // Every capture opens a segment with `text: ''` the instant recording starts,
+  // so an armed tap on silence has an entry and holds nothing. Counting entries
+  // made that pad "content": it settled, it pinned a panel open on a row
+  // reading "Still transcribing…" that nothing would ever fill, and every
+  // destination button on it rendered ''.
+  test('a pad of one blank segment holds nothing', () => {
+    let p = pad0()
+    p = addSegment(p, { id: 's1', text: '', startMs: 0, endMs: 0 })
+    assert.equal(p.entries.length, 1)
+    assert.equal(isEmpty(p), true)
+  })
+
+  test('whitespace is not speech', () => {
+    let p = pad0()
+    p = addSegment(p, { id: 's1', text: '   \n ', startMs: 0, endMs: 0 })
+    assert.equal(isEmpty(p), true)
+  })
+
+  test('one real word anywhere is content', () => {
+    let p = pad0()
+    p = addSegment(p, { id: 's1', text: '', startMs: 0, endMs: 0 })
+    p = addSegment(p, { id: 's2', text: 'the thing I said', startMs: 10, endMs: 20 })
+    assert.equal(isEmpty(p), false)
+  })
+
+  test('an insert alone is content — including an image, which renders to nothing at a cursor', () => {
+    let p = pad0()
+    p = addSegment(p, { id: 's1', text: '', startMs: 0, endMs: 0 })
+    p = addInsert(p, { id: 'i1', kind: 'image', content: '/tmp/shot.png', atMs: 5 })
+    assert.equal(isEmpty(p), false, 'the user captured it deliberately, and a task can take it')
+  })
+})

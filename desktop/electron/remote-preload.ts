@@ -7,7 +7,6 @@ import { ipcRenderer } from 'electron'
 import type { Proposal } from './remote/curator-store'
 // Type-only: erased at compile, so the preload bundle gains no dependency.
 import type { ProviderId } from './remote/providers'
-import type { Pad } from './remote/capture/types'
 
 export interface RemoteTaskSnapshot {
   id: string
@@ -54,23 +53,6 @@ export interface RemoteSetupStep {
 export interface RemoteSetupStatus {
   steps: RemoteSetupStep[]
   complete: boolean
-}
-
-/** What the scratchpad looks like right now. `held` is a pad a previous run
- *  left behind: settled, waiting, and brought back by arming. */
-export interface ScratchpadState {
-  pad: Pad | null
-  armed: boolean
-  held: Pad | null
-}
-
-/** Where a held pad can be sent. `openTask` is present ONLY while a task is
- *  genuinely focused and still exists — the set is decided per read, never
- *  cached, because a task can end while a pad is held. */
-export interface ScratchpadDestinations {
-  cursor: true
-  newTask: true
-  openTask: { id: string; name: string } | null
 }
 
 export const remotePreloadExtensions = {
@@ -428,33 +410,6 @@ export const remotePreloadExtensions = {
   remoteOnCaptureKind: (cb: (kind: 'dictation' | 'remote') => void) =>
     ipcRenderer.on('recording:start', (_e, _mode, _sessionId, kind) =>
       cb(kind === 'remote' ? 'remote' : 'dictation')),
-
-  // ── The scratchpad (a capture HELD instead of delivered) ──
-  // Grouped rather than flat: these are one surface's whole vocabulary, and the
-  // destination is chosen at DELIVERY, not when the capture started.
-  scratchpad: {
-    /** The pad, the arm state, and the destinations that can actually receive. */
-    get: (): Promise<ScratchpadState & { destinations: ScratchpadDestinations }> =>
-      ipcRenderer.invoke('scratchpad:get'),
-    /** Hold the next capture instead of delivering it. Returns the state that
-     *  actually resulted — arming is refused when the feature is off. Arming
-     *  also brings back a pad a previous run left settled on disk. */
-    arm: (on: boolean): Promise<boolean> => ipcRenderer.invoke('scratchpad:arm', on),
-    /** Drop one entry (a mis-heard segment, a stray copy) without delivering. */
-    removeEntry: (id: string): Promise<boolean> => ipcRenderer.invoke('scratchpad:remove-entry', id),
-    /** Send it. Resolves to where it landed — 'cursor', a task id, or null. */
-    deliver: (dest: 'cursor' | 'newTask' | 'openTask'): Promise<string | null> =>
-      ipcRenderer.invoke('scratchpad:deliver', dest),
-    /** Throw the pad away, files and all. The only thing that deletes held work. */
-    discard: (): Promise<boolean> => ipcRenderer.invoke('scratchpad:discard'),
-    /** Live pad changes. Returns an UNSUBSCRIBE fn — without it a remounting
-     *  panel leaks a listener per mount over a long-lived window. */
-    onChanged: (cb: (s: ScratchpadState) => void): (() => void) => {
-      const h = (_e: unknown, s: ScratchpadState) => cb(s)
-      ipcRenderer.on('scratchpad:changed', h)
-      return () => ipcRenderer.removeListener('scratchpad:changed', h)
-    },
-  },
 }
 
 export type RemoteAPI = typeof remotePreloadExtensions

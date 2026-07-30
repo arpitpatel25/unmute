@@ -25,14 +25,31 @@
  *  deliberate copies of the same thing. */
 export const DEDUP_WINDOW_MS = 2000
 
-export interface Ledger {
-  ownWrites: Set<number>
+/** THE DEDUP HALF, ON ITS OWN.
+ *
+ *  The own-write skip set belongs to the clipboard watcher: it is the only
+ *  thing that writes it (noteOwnWrite, immediately after an Unmute pasteboard
+ *  write) and the only thing that reads it (shouldObserve). The dedup half is
+ *  claimed somewhere else entirely — capture/index's recordInsert, the one
+ *  point the two detectors converge — and handing THAT call site a whole
+ *  Ledger gave it an `ownWrites` set nothing could ever write: dead state that
+ *  reads as a second, silently-empty skip set. A caller that only dedups takes
+ *  this instead. */
+export interface Claims {
   claims: Map<string, number>
   dedupWindowMs: number
 }
 
+export function createClaims(dedupWindowMs: number = DEDUP_WINDOW_MS): Claims {
+  return { claims: new Map(), dedupWindowMs }
+}
+
+export interface Ledger extends Claims {
+  ownWrites: Set<number>
+}
+
 export function createLedger(dedupWindowMs: number = DEDUP_WINDOW_MS): Ledger {
-  return { ownWrites: new Set(), claims: new Map(), dedupWindowMs }
+  return { ownWrites: new Set(), ...createClaims(dedupWindowMs) }
 }
 
 /** Called immediately after any Unmute write to the pasteboard, with the
@@ -48,7 +65,7 @@ export function shouldObserve(l: Ledger, changeCount: number): boolean {
 
 /** True if this content is new enough to become an insert. False means another
  *  detector already claimed the same user action. */
-export function claimContent(l: Ledger, hash: string, atMs: number): boolean {
+export function claimContent(l: Claims, hash: string, atMs: number): boolean {
   const prev = l.claims.get(hash)
   if (prev !== undefined && atMs - prev <= l.dedupWindowMs) return false
   l.claims.set(hash, atMs)

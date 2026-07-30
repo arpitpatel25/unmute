@@ -17,7 +17,7 @@ import {
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Destination, InsertKind, Pad } from './types'
-import { deserialize, padDirFor, serialize } from './scratchpadStore'
+import { deserialize, padDirFor, serialize, shouldSettle } from './scratchpadStore'
 import { createClipboardWatch } from './clipboardWatch'
 import { createScreenshotWatch } from './screenshotWatch'
 import {
@@ -25,7 +25,7 @@ import {
 } from './captureBuffer'
 import { render, type RenderResult } from './insertRender'
 import { canArmScratchpad, type CaptureSettings } from './captureGate'
-import { claimContent, createLedger } from './clipboardLedger'
+import { claimContent, createClaims } from './clipboardLedger'
 
 /** Where pads live on disk. Unmute-owned, safe to delete, recreated on demand. */
 export const SCRATCHPAD_ROOT = join(homedir(), '.unmute', 'remote', 'scratchpad')
@@ -49,15 +49,20 @@ let captureStartedAt = 0
  *  arming promotes it back — see armScratchpad. */
 let heldPad: Pad | null = null
 
-// Both detectors claim against ONE ledger, because a tool set to write a file
-// AND copy fires each of them for a single user action. It lives HERE, not in
-// init.ts, because recordInsert is the one point the two detectors converge.
-const sharedLedger = createLedger()
+// Both detectors claim against ONE dedup map, because a tool set to write a
+// file AND copy fires each of them for a single user action. It lives HERE, not
+// in init.ts, because recordInsert is the one point the two detectors converge.
+//
+// CLAIMS ONLY — deliberately not a whole Ledger. The own-write skip set is the
+// clipboard watcher's, written and read entirely inside it; a Ledger here would
+// carry an `ownWrites` set nothing could ever write, which reads as a second
+// skip set that silently skips nothing.
+const sharedClaims = createClaims()
 
 /** The screenshot watcher's path-keyed claim. Exposed so init.ts can hand it to
- *  createScreenshotWatch without owning a second ledger. */
+ *  createScreenshotWatch without owning a second dedup map. */
 export function claimShared(hash: string, atMs: number): boolean {
-  return claimContent(sharedLedger, hash, atMs)
+  return claimContent(sharedClaims, hash, atMs)
 }
 
 // ── Injected effects ────────────────────────────────────────────────────
@@ -136,10 +141,14 @@ export function getCaptureSettings(): CaptureSettings {
 }
 
 export function isArmed(): boolean { return armed }
-export function currentPad(): Pad | null { return pad }
-/** The settled pad from a previous run, if one is waiting. Null once it has
- *  been brought back (or if there never was one). */
-export function settledPad(): Pad | null { return heldPad }
+
+/** Is a capture RUNNING right now — mic hot, segment open?
+ *
+ *  Delivery asks, because a pad with an open segment is not held work however
+ *  it got here: it is the buffer of an utterance still being spoken, and
+ *  sending it would deliver half a sentence and leave every later
+ *  attachTranscript writing into a pad that has been taken away. */
+export function segmentOpen(): boolean { return openSegmentId !== null }
 
 /** Everything a surface needs to render the scratchpad, read in one go so the
  *  pad, the arm state and the settled pad can never be sampled out of step. */
@@ -169,9 +178,31 @@ export function snapshot(): ScratchpadSnapshot {
  *  waiting. `?? held` rather than a plain ternary is deliberate belt-and-braces
  *  — arming promotes a settled pad into the live slot, so armed-with-no-pad
  *  should be unreachable, and if it ever happens the held pad is still the
- *  honest answer. */
-export function heldForSurface(s: ScratchpadSnapshot = snapshot()): Pad | null {
-  return (s.armed ? s.pad : null) ?? s.held
+ *  honest answer.
+ *
+ *  NOTHING DELIVERABLE IS NOTHING TO SHOW. A pad whose only entry is the blank
+ *  segment of an armed tap that said nothing has entries but no content, and
+ *  every destination button on it would render ''. See captureBuffer.isEmpty:
+ *  the same rule decides what can be delivered and what can be drawn, because
+ *  they are the same question.
+ *
+ *  SETTLE, DO NOT NAG (§9). A pad that has been idle past the threshold stops
+ *  ASKING for attention while keeping everything it holds: it is still on disk,
+ *  still exactly where it was, and arming brings it straight back
+ *  (armScratchpad promotes `held` with no settle check of its own). Without
+ *  this, a pad adopted at startup put a 380×460 always-on-top panel on the
+ *  screen at EVERY launch until it was dealt with — the nagging product §9
+ *  exists to prevent. The rule applies only to a SETTLED pad: a live armed one
+ *  is the capture the user is in the middle of, whatever its timestamps say. */
+export function heldForSurface(
+  s: ScratchpadSnapshot = snapshot(),
+  now: number = Date.now(),
+): Pad | null {
+  const live = s.armed ? s.pad : null
+  if (live) return isEmpty(live) ? null : live
+  const held = s.held
+  if (!held || isEmpty(held) || shouldSettle(held, now)) return null
+  return held
 }
 
 /** Bring a settled pad back into the live slot.
@@ -324,7 +355,7 @@ export function endSegment(now: number): void {
   // ONE user action within a 2s window, and that question dies with the
   // window. Without this it is a Map that only ever grows, for the lifetime of
   // the main process.
-  sharedLedger.claims.clear()
+  sharedClaims.claims.clear()
   if (pad) { pad = { ...pad, updatedAt: now }; schedulePersist() }
   // An ARMED stop settles the pad instead of delivering it — this is the moment
   // the panel is supposed to appear holding it.
@@ -419,18 +450,29 @@ export function removeFromPad(id: string, now: number): void {
   if (!pad) return
   pad = removeEntry(pad, id, now)
   schedulePersist()
+  // A removal can come from the capture lifecycle and not from a surface — the
+  // empty segment of an armed tap that said nothing is dropped when the
+  // transcript comes back blank, long after the panel last drew — so it
+  // announces itself, exactly like attachTranscript. (A surface that removes an
+  // entry re-broadcasts too; the push is idempotent, as it is for discard.)
+  announcePad()
 }
 
-/** Render and clear. Returns null when there is nothing to send. */
+/** Render and clear. Returns null when there is nothing to send.
+ *
+ *  IT DOES NOT TOUCH THE DISK. pad.json is the ONLY remaining copy of the work
+ *  between here and the destination accepting it, and that gap is not short: a
+ *  task send drives another app and has been measured at ~36s. Removing the
+ *  file here meant a crash or a quit inside that window lost the pad from
+ *  memory AND from disk, which is precisely the failure the scratchpad exists
+ *  to prevent. commitDelivery removes it, once the destination has actually
+ *  taken it; takeForDelivery removes it when there was nothing to send. */
 export function deliver(dest: Destination): RenderResult | null {
   const p = pad
   if (!p || isEmpty(p)) { pad = null; armed = false; return null }
   const out = render(p, dest)
   pad = null
   armed = false
-  // The held state is gone; the rescued FILES stay, because a delivered pad's
-  // attachments are referenced by whatever received them.
-  removePadState(p)
   return out
 }
 
@@ -510,17 +552,35 @@ export function deliveryInFlight(): boolean { return inFlight !== null }
 export function takeForDelivery(target: DeliveryTarget): RenderResult | null {
   const taken = pad
   const out = deliver(destinationFor(target))
-  if (!out || !out.text.trim()) return null
+  if (!out || !out.text.trim()) {
+    // Nothing is going anywhere, so nothing is at risk: there is no destination
+    // to wait for and no restage to come. The state file goes now rather than
+    // outliving the pad it describes and being adopted at the next launch.
+    if (taken) removePadState(taken)
+    return null
+  }
   inFlight = taken
   return out
 }
 
-/** The destination took it. Now the pad is genuinely gone. */
-export function commitDelivery(): void { inFlight = null }
+/** The destination took it. NOW the pad is genuinely gone — and only now is
+ *  pad.json removed, because until this point it was the one durable copy of
+ *  work the user chose not to risk (see deliver). */
+export function commitDelivery(): void {
+  const p = inFlight
+  inFlight = null
+  // The rescued FILES stay, because a delivered pad's attachments are
+  // referenced by whatever received them. Only the state file goes.
+  if (p) removePadState(p)
+}
 
 /** The destination did NOT take it. Put the work back where the user can reach
- *  it, and back on disk — `deliver()` removed pad.json on an assumption that
- *  turned out to be wrong.
+ *  it, and re-assert it on disk. pad.json has been there all along now that
+ *  only commitDelivery removes it, so this write is belt-and-braces rather than
+ *  a recovery — and it stays, because the pad's `updatedAt` decides which of
+ *  two settled pads arming brings back, and because a pad that was never
+ *  persisted in the first place (a write that failed earlier) gets its chance
+ *  here.
  *
  *  WHERE IT GOES: the live slot, if it is free. That is the normal case, and it
  *  puts the pad straight back in front of the user, armed, ready to retry. If a
@@ -675,6 +735,72 @@ export async function formatForDelivery(
     console.warn('[capture] delivery formatting failed — sending as captured:', err)
     return out
   }
+}
+
+// ── Universal capture's delivery half ───────────────────────────────────
+//
+// CAPTURE IS UNMODED (§2). A copy or a screenshot made during ANY hot mic lands
+// in the buffer at the position it happened — armed or not. The scratchpad
+// decides WHEN the buffer leaves, never WHAT goes into it.
+//
+// Everything above records that faithfully on the unarmed path too: beginSegment
+// opens a pad for every capture, both watchers arm, recordInsert positions what
+// arrives. What was missing was the other end. `render` had exactly one caller
+// chain (deliver → takeForDelivery → runDelivery → the scratchpad's own delivery
+// seam), so an ordinary unarmed stop pasted the transcript alone and the next
+// beginSegment deleted the pad, inserts and all. A ⌘C mid-dictation cost the
+// user a chunk boundary and gave back nothing — and it was a REGRESSION, since
+// the ledger this branch deleted did stage a screenshot and paste it after the
+// text.
+//
+// This closes it, and the ONE rule that outranks the feature is structural
+// rather than argued.
+
+/** The text an UNARMED stop actually delivers: the speech it already has, with
+ *  everything captured during that same recording rendered in around it.
+ *
+ *  NULL MEANS "SEND EXACTLY WHAT YOU HAVE", and that is how the fast path is
+ *  protected. When nothing was copied — the overwhelming majority of dictations
+ *  — this returns null before touching the renderer at all, and the caller
+ *  delivers the very string it was already holding: not an equal string, the
+ *  same one. Byte-identity is therefore a property of the CONTROL FLOW, not a
+ *  claim about `render` (which trims, and so would differ on any transcript
+ *  with a trailing newline). No pad, nothing in it, armed, or no insert in it:
+ *  the fast path does not move.
+ *
+ *  IT MUTATES NOTHING. No setSegmentText on the live pad, no persist, no
+ *  announce — the pad is read, a copy is rendered, and the pad is dropped at the
+ *  next beginSegment exactly as before. An unarmed pad is not held work and this
+ *  must not make it look like any.
+ *
+ *  THE TEXT ARRIVES ALREADY FORMATTED and is used as-is. The caller composes
+ *  AFTER its own maybeCleanupDictation + formatOutputForUser, so the speech gets
+ *  precisely the treatment it gets today and gets it exactly once. This path
+ *  deliberately does NOT go through formatForDelivery, which exists for the
+ *  scratchpad's own delivery, where the pad holds a cleaned transcript that has
+ *  never been formatted.
+ *
+ *  A blank or junk transcript contributes NO segment rather than the literal
+ *  word "[BLANK_AUDIO]" — the same rule holdIfArmed applies when holding. */
+export function composeWithInserts(
+  segmentId: string | null,
+  text: string,
+  dest: Destination,
+): string | null {
+  if (armed || !pad) return null
+  if (!pad.entries.some((e) => e.type === 'insert')) return null
+  const spoken = (text || '').trim()
+  const said = spoken && spoken !== '[BLANK_AUDIO]' ? spoken : ''
+  const known = !!segmentId
+    && pad.entries.some((e) => e.type === 'segment' && e.id === segmentId)
+  const composed = known
+    ? setSegmentText(pad, segmentId as string, said)
+    : addSegment(pad, { id: randomUUID(), text: said, startMs: 0, endMs: 0 })
+  const out = render(composed, dest)
+  // Nothing renderable came of it (an image-only pad at the cursor, which skips
+  // images by design). Fall back rather than paste emptiness over the user's
+  // transcript.
+  return out.text.trim() ? out.text : null
 }
 
 /** Drop the segment in progress without touching the rest of the pad. Escape
@@ -931,7 +1057,6 @@ export function _resetForTest(): void {
   ownSequenceDepth = 0
   suppressDetectedUpTo = 0
   ownSequenceCeilingMs = OWN_SEQUENCE_MAX_MS
-  sharedLedger.ownWrites.clear()
-  sharedLedger.claims.clear()
+  sharedClaims.claims.clear()
   scratchpadRoot = SCRATCHPAD_ROOT
 }

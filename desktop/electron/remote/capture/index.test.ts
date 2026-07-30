@@ -5,15 +5,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   PERSIST_DEBOUNCE_MS, _resetForTest, adoptPersistedPad, armScratchpad, attachTranscript,
-  beginOwnClipboardSequence, beginSegment, cancelOpenSegment, currentPad, deliver,
+  beginOwnClipboardSequence, beginSegment, cancelOpenSegment, composeWithInserts, deliver,
   discard, endOwnClipboardSequence, endSegment, formatForDelivery, getCaptureSettings,
   initWatchers, isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerFormat,
   deliveryInFlight, heldForSurface, promoteSettledPad, registerPadObserver, registerPaste,
-  registerSettings, removeFromPad, runDelivery,
-  setOwnSequenceCeiling, setScratchpadRoot, settledPad, snapshot, takeForDelivery,
+  commitDelivery, registerSettings, removeFromPad, runDelivery,
+  segmentOpen, setOwnSequenceCeiling, setScratchpadRoot, snapshot, takeForDelivery,
   writePadNow,
 } from './index'
-import { deserialize, padDirFor, serialize } from './scratchpadStore'
+import { SETTLE_IDLE_MS, deserialize, padDirFor, serialize } from './scratchpadStore'
+import { render } from './insertRender'
 import { createClipboardWatch } from './clipboardWatch'
 import type { createScreenshotWatch } from './screenshotWatch'
 
@@ -61,8 +62,8 @@ afterEach(() => {
   try { rmSync(root, { recursive: true, force: true }) } catch { /* gone */ }
 })
 
-const segs = () => currentPad()?.entries.filter((e) => e.type === 'segment') ?? []
-const inserts = () => currentPad()?.entries.filter((e) => e.type === 'insert') ?? []
+const segs = () => snapshot().pad?.entries.filter((e) => e.type === 'segment') ?? []
+const inserts = () => snapshot().pad?.entries.filter((e) => e.type === 'insert') ?? []
 
 describe('the capture window is the recording window', () => {
   test('beginSegment arms both watchers, endSegment disarms both', () => {
@@ -86,7 +87,7 @@ describe('the capture window is the recording window', () => {
 
   test('the clipboard watcher is armed on the pad\'s own directory', () => {
     beginSegment('cursor', 1000, true)
-    assert.equal(clipCalls.armed[0], padDirFor(root, currentPad()!.id))
+    assert.equal(clipCalls.armed[0], padDirFor(root, snapshot().pad!.id))
   })
 
   test('cancelling the utterance also closes the capture window', () => {
@@ -368,10 +369,10 @@ describe('pad lifecycle across captures', () => {
     const first = beginSegment('cursor', 1000, true)
     attachTranscript(first, 'one', 1500)
     endSegment(2000)
-    const firstPadId = currentPad()!.id
+    const firstPadId = snapshot().pad!.id
 
     beginSegment('cursor', 3000, true)
-    assert.notEqual(currentPad()!.id, firstPadId, 'a new pad, not the old one')
+    assert.notEqual(snapshot().pad!.id, firstPadId, 'a new pad, not the old one')
     assert.equal(segs().length, 1, 'only this capture\'s segment')
   })
 
@@ -380,13 +381,13 @@ describe('pad lifecycle across captures', () => {
     const a = beginSegment('cursor', 1000, true)
     attachTranscript(a, 'one', 1500)
     endSegment(2000)
-    const padId = currentPad()!.id
+    const padId = snapshot().pad!.id
 
     const b = beginSegment('cursor', 3000, true)
     attachTranscript(b, 'two', 3500)
     endSegment(4000)
 
-    assert.equal(currentPad()!.id, padId)
+    assert.equal(snapshot().pad!.id, padId)
     assert.equal(segs().length, 2)
   })
 
@@ -396,14 +397,14 @@ describe('pad lifecycle across captures', () => {
     endSegment(2000)
 
     armScratchpad(true)
-    assert.equal(currentPad(), null, 'the leftover pad was dropped')
+    assert.equal(snapshot().pad, null, 'the leftover pad was dropped')
   })
 
   test('arming DURING a capture keeps what is being said right now', () => {
     const a = beginSegment('cursor', 1000, true)
-    const padId = currentPad()!.id
+    const padId = snapshot().pad!.id
     armScratchpad(true)
-    assert.equal(currentPad()?.id, padId)
+    assert.equal(snapshot().pad?.id, padId)
     attachTranscript(a, 'mine', 1500)
     assert.equal(segs().length, 1)
   })
@@ -439,7 +440,7 @@ describe('transcripts land on the right segment', () => {
 
   test('attachTranscript with no pad is a no-op', () => {
     assert.doesNotThrow(() => attachTranscript('nope', 'x', 1))
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().pad, null)
   })
 })
 
@@ -453,7 +454,7 @@ describe('inserts', () => {
 
   test('are ignored when there is no pad', () => {
     recordInsert({ kind: 'url', content: 'https://a.com', atMs: 5 }, 5)
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().pad, null)
   })
 
   test('two detectors reporting the SAME image content yield ONE insert', () => {
@@ -504,20 +505,20 @@ describe('deliver and discard', () => {
 
     const out = deliver('task')
     assert.equal(out?.text, 'look at this https://a.com')
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().pad, null)
     assert.equal(isArmed(), false, 'delivering ends the hold')
   })
 
   test('deliver on an empty pad returns null and still clears', () => {
     assert.equal(deliver('cursor'), null)
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().pad, null)
   })
 
   test('discard clears the pad and the hold', () => {
     armScratchpad(true)
     beginSegment('cursor', 1000, true)
     discard()
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().pad, null)
     assert.equal(isArmed(), false)
   })
 })
@@ -551,9 +552,9 @@ describe('persistence', () => {
     attachTranscript(id, 'held work', 1500)
     writePadNow()
 
-    const file = join(padDirFor(root, currentPad()!.id), 'pad.json')
+    const file = join(padDirFor(root, snapshot().pad!.id), 'pad.json')
     assert.ok(existsSync(file), 'pad.json exists')
-    assert.deepEqual(deserialize(readFileSync(file, 'utf8')), currentPad())
+    assert.deepEqual(deserialize(readFileSync(file, 'utf8')), snapshot().pad)
   })
 
   test('THE FAST PATH TOUCHES NO DISK: an unarmed capture writes nothing', async () => {
@@ -561,31 +562,54 @@ describe('persistence', () => {
     attachTranscript(id, 'ordinary dictation', 1500)
     endSegment(2000)
     await new Promise((r) => setTimeout(r, PERSIST_DEBOUNCE_MS + 120))
-    assert.equal(existsSync(padDirFor(root, currentPad()!.id)), false)
+    assert.equal(existsSync(padDirFor(root, snapshot().pad!.id)), false)
   })
 
   test('discard takes the pad directory with it', () => {
     armScratchpad(true)
     beginSegment('cursor', 1000, true)
     writePadNow()
-    const dir = padDirFor(root, currentPad()!.id)
+    const dir = padDirFor(root, snapshot().pad!.id)
     assert.ok(existsSync(dir))
     discard()
     assert.equal(existsSync(dir), false)
   })
 
-  test('deliver removes the HELD STATE but leaves the rescued files', () => {
+  test('the held state outlives the TAKE and dies at the COMMIT — the rescued files never do', () => {
+    // A destination can take ~36s to answer (init.ts measured a Codex task at
+    // that), and for as long as it does, pad.json is the ONLY copy of the work
+    // left: `deliver` has already emptied the live slot. Removing it at the
+    // take meant a crash or a quit in that window lost the pad from memory AND
+    // from disk — the one thing the scratchpad promises cannot happen.
     armScratchpad(true)
     const id = beginSegment('task', 1000, true)
     attachTranscript(id, 'text', 1500)
     writePadNow()
-    const dir = padDirFor(root, currentPad()!.id)
+    const dir = padDirFor(root, snapshot().pad!.id)
     const attachment = join(dir, 'insert-1.png')
     writeFileSync(attachment, 'IMG')
 
-    deliver('task')
-    assert.equal(existsSync(join(dir, 'pad.json')), false, 'held state gone')
+    takeForDelivery('newTask')
+    assert.equal(snapshot().pad, null, 'the live slot really is empty')
+    assert.ok(existsSync(join(dir, 'pad.json')), 'still recoverable while the destination decides')
+
+    commitDelivery()
+    assert.equal(existsSync(join(dir, 'pad.json')), false, 'the destination took it — now it is gone')
     assert.ok(existsSync(attachment), 'the delivered attachment survives')
+  })
+
+  test('a delivery that is never committed leaves the work on disk', () => {
+    // The crash case, exactly: take it, then never reach commit or restage.
+    armScratchpad(true)
+    const id = beginSegment('task', 1000, true)
+    attachTranscript(id, 'the thing I was keeping', 1500)
+    writePadNow()
+    const dir = padDirFor(root, snapshot().pad!.id)
+
+    takeForDelivery('newTask')
+
+    const raw = readFileSync(join(dir, 'pad.json'), 'utf8')
+    assert.match(raw, /the thing I was keeping/, 'recoverable by the next launch')
   })
 
   test('a persist failure never throws — and the pad survives it intact', () => {
@@ -596,7 +620,7 @@ describe('persistence', () => {
     // First prove the write is REAL, so the no-throw below cannot be satisfied
     // by writePadNow simply doing nothing.
     writePadNow()
-    const good = join(padDirFor(root, currentPad()!.id), 'pad.json')
+    const good = join(padDirFor(root, snapshot().pad!.id), 'pad.json')
     assert.ok(existsSync(good), 'the happy path genuinely writes')
     const bytes = readFileSync(good, 'utf8')
 
@@ -609,7 +633,7 @@ describe('persistence', () => {
       console.warn = warn
     }
 
-    assert.equal(currentPad()?.entries.length, 1, 'the in-memory pad is untouched')
+    assert.equal(snapshot().pad?.entries.length, 1, 'the in-memory pad is untouched')
     assert.equal(readFileSync(good, 'utf8'), bytes, 'the last good write is not corrupted')
   })
 })
@@ -721,7 +745,7 @@ describe('takeForDelivery renders for the target and clears', () => {
     endSegment(2000)
 
     assert.equal(takeForDelivery('cursor'), null)
-    assert.equal(currentPad(), null, 'the user committed it; it does not linger')
+    assert.equal(snapshot().pad, null, 'the user committed it; it does not linger')
     assert.equal(isArmed(), false)
   })
 })
@@ -751,8 +775,8 @@ describe('a pad on disk is adopted at startup', () => {
     const adopted = adoptPersistedPad()
     assert.equal(adopted?.id, 'pad-a')
     assert.equal(isArmed(), false, 'never armed on the user\'s behalf')
-    assert.equal(currentPad(), null, 'not live — nothing demands attention')
-    assert.equal(settledPad()?.id, 'pad-a', 'held, waiting')
+    assert.equal(snapshot().pad, null, 'not live — nothing demands attention')
+    assert.equal(snapshot().held?.id, 'pad-a', 'held, waiting')
     assert.deepEqual(snapshot(), { pad: null, armed: false, held: adopted })
   })
 
@@ -761,9 +785,9 @@ describe('a pad on disk is adopted at startup', () => {
     adoptPersistedPad()
 
     assert.equal(armScratchpad(true), true)
-    assert.equal(currentPad()?.id, 'pad-a', 'the pad the user left is live again')
-    assert.equal(settledPad(), null, 'and is no longer waiting')
-    const e = currentPad()!.entries[0]
+    assert.equal(snapshot().pad?.id, 'pad-a', 'the pad the user left is live again')
+    assert.equal(snapshot().held, null, 'and is no longer waiting')
+    const e = snapshot().pad!.entries[0]
     assert.equal(e.type === 'segment' && e.text, 'friday draft')
   })
 
@@ -775,20 +799,20 @@ describe('a pad on disk is adopted at startup', () => {
     const id = beginSegment('cursor', 6000, true)
     attachTranscript(id, 'unrelated dictation', 6500)
     endSegment(7000)
-    assert.equal(settledPad()?.id, 'pad-a', 'still waiting')
+    assert.equal(snapshot().held?.id, 'pad-a', 'still waiting')
     assert.ok(existsSync(join(padDirFor(root, 'pad-a'), 'pad.json')), 'still on disk')
 
     // …and the FIRST arm after that dictation is what brings it back — it must
     // not spend itself clearing the leftover unarmed pad.
     assert.equal(armScratchpad(true), true)
-    assert.equal(currentPad()?.id, 'pad-a')
+    assert.equal(snapshot().pad?.id, 'pad-a')
   })
 
   test('a CORRUPT pad is discarded silently and never blocks startup', () => {
     leaveOnDisk({ id: 'pad-bad', updatedAt: 5000, raw: '{ this is not json' })
     assert.doesNotThrow(() => adoptPersistedPad())
-    assert.equal(settledPad(), null)
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().held, null)
+    assert.equal(snapshot().pad, null)
   })
 
   test('a pad whose ENTRIES are half-shaped is refused too', () => {
@@ -804,18 +828,18 @@ describe('a pad on disk is adopted at startup', () => {
       }),
     })
     assert.equal(adoptPersistedPad(), null)
-    assert.equal(settledPad(), null)
+    assert.equal(snapshot().held, null)
   })
 
   test('NO pad on disk: nothing happens, nothing throws', () => {
     assert.equal(adoptPersistedPad(), null)
-    assert.equal(settledPad(), null)
+    assert.equal(snapshot().held, null)
   })
 
   test('a missing scratchpad root is not an error', () => {
     setScratchpadRoot(join(root, 'never-created'))
     assert.doesNotThrow(() => adoptPersistedPad())
-    assert.equal(settledPad(), null)
+    assert.equal(snapshot().held, null)
   })
 
   test('an EMPTY pad is not worth bringing back', () => {
@@ -842,7 +866,7 @@ describe('a pad on disk is adopted at startup', () => {
     attachTranscript(id, 'live work', 1500)
 
     assert.equal(adoptPersistedPad(), null)
-    const e = currentPad()!.entries[0]
+    const e = snapshot().pad!.entries[0]
     assert.equal(e.type === 'segment' && e.text, 'live work')
   })
 
@@ -851,7 +875,7 @@ describe('a pad on disk is adopted at startup', () => {
     adoptPersistedPad()
 
     discard()
-    assert.equal(settledPad(), null)
+    assert.equal(snapshot().held, null)
     assert.equal(existsSync(padDirFor(root, 'pad-a')), false, 'it cannot come back at the next arm')
   })
 
@@ -861,8 +885,8 @@ describe('a pad on disk is adopted at startup', () => {
     registerSettings(() => ({ scratchpadEnabled: false, captureEnabled: true }))
 
     assert.equal(armScratchpad(true), false)
-    assert.equal(settledPad()?.id, 'pad-a', 'not promoted into a pad nothing will hold')
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().held?.id, 'pad-a', 'not promoted into a pad nothing will hold')
+    assert.equal(snapshot().pad, null)
   })
 })
 
@@ -881,10 +905,10 @@ describe('a destination that fails does not take the pad with it', () => {
     const r = await runDelivery('cursor', async () => { throw new Error('pasteboard is locked') })
 
     assert.equal(r.landed, null)
-    assert.equal(r.restaged?.id, currentPad()?.id, 'it went back into the live slot')
+    assert.equal(r.restaged?.id, snapshot().pad?.id, 'it went back into the live slot')
     assert.equal((r.error as Error).message, 'pasteboard is locked')
     assert.equal(isArmed(), true, 'still held — the next capture appends, it does not replace')
-    const e = currentPad()!.entries[0]
+    const e = snapshot().pad!.entries[0]
     assert.equal(e.type === 'segment' && e.text, 'the paragraph I spent ten minutes on')
   })
 
@@ -896,9 +920,9 @@ describe('a destination that fails does not take the pad with it', () => {
     const r = await runDelivery('newTask', async () => { throw new Error('fetch failed') })
 
     assert.equal(r.landed, null)
-    assert.equal(r.restaged?.id, currentPad()?.id)
+    assert.equal(r.restaged?.id, snapshot().pad?.id)
     assert.equal(isArmed(), true)
-    const e = currentPad()!.entries[0]
+    const e = snapshot().pad!.entries[0]
     assert.equal(e.type === 'segment' && e.text, 'refactor the arbiter and add the missing test')
   })
 
@@ -906,7 +930,7 @@ describe('a destination that fails does not take the pad with it', () => {
     heldWork('and one more thing')
     const r = await runDelivery('openTask', async () => { throw new Error('pty is gone') })
     assert.equal(r.landed, null)
-    assert.equal(currentPad()?.entries.length, 1)
+    assert.equal(snapshot().pad?.entries.length, 1)
   })
 
   test('a destination that DECLINES (returns null) puts it back — no throw needed', async () => {
@@ -919,14 +943,14 @@ describe('a destination that fails does not take the pad with it', () => {
 
     assert.equal(r.landed, null)
     assert.equal(r.restaged?.entries.length, 1)
-    assert.equal(currentPad()?.entries.length, 1)
+    assert.equal(snapshot().pad?.entries.length, 1)
     assert.equal(r.error, undefined, 'declining is not an error, it is an answer')
   })
 
   test('THE RESTORED PAD IS BACK ON DISK — a crash after a failed delivery loses nothing', async () => {
     heldWork('durable again')
     writePadNow()
-    const padId = currentPad()!.id
+    const padId = snapshot().pad!.id
     const file = join(padDirFor(root, padId), 'pad.json')
     assert.ok(existsSync(file))
 
@@ -937,7 +961,7 @@ describe('a destination that fails does not take the pad with it', () => {
     assert.ok(existsSync(file), 'pad.json is back')
     assert.equal(r.restaged?.id, padId)
     const onDisk = deserialize(readFileSync(file, 'utf8'))
-    assert.deepEqual(onDisk, currentPad(), 'and it matches what is held')
+    assert.deepEqual(onDisk, snapshot().pad, 'and it matches what is held')
   })
 
   test('a SUCCESSFUL delivery really does clear it — the safety net is not a leak', async () => {
@@ -946,9 +970,9 @@ describe('a destination that fails does not take the pad with it', () => {
 
     assert.equal(r.landed, 'cursor')
     assert.equal(r.restaged, null)
-    assert.equal(currentPad(), null, 'delivered work does not linger')
+    assert.equal(snapshot().pad, null, 'delivered work does not linger')
     assert.equal(isArmed(), false)
-    assert.equal(settledPad(), null, 'and it is not quietly settled either')
+    assert.equal(snapshot().held, null, 'and it is not quietly settled either')
   })
 
   test('a delivered pad cannot be resurrected by a LATER failure', async () => {
@@ -958,7 +982,7 @@ describe('a destination that fails does not take the pad with it', () => {
     // restage the pad the first one legitimately consumed.
     const r = await runDelivery('cursor', async () => { throw new Error('boom') })
     assert.equal(r.restaged, null)
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().pad, null)
   })
 
   test('the destination is not even called when there is nothing to send', async () => {
@@ -970,7 +994,7 @@ describe('a destination that fails does not take the pad with it', () => {
 
   test('if a NEW CAPTURE claimed the live slot, the failed pad settles instead of colliding', async () => {
     heldWork('the work I tried to send')
-    const padId = currentPad()!.id
+    const padId = snapshot().pad!.id
 
     const r = await runDelivery('newTask', async () => {
       // The user starts talking again while the router is hanging.
@@ -979,8 +1003,8 @@ describe('a destination that fails does not take the pad with it', () => {
     })
 
     assert.equal(r.restaged?.id, padId)
-    assert.notEqual(currentPad()?.id, padId, 'the new capture keeps the live slot')
-    assert.equal(settledPad()?.id, padId, 'and the failed delivery is one arm away')
+    assert.notEqual(snapshot().pad?.id, padId, 'the new capture keeps the live slot')
+    assert.equal(snapshot().held?.id, padId, 'and the failed delivery is one arm away')
     assert.ok(existsSync(join(padDirFor(root, padId), 'pad.json')), 'on disk either way')
   })
 
@@ -990,7 +1014,7 @@ describe('a destination that fails does not take the pad with it', () => {
     leaveOnDisk({ id: 'pad-old', updatedAt: 100, text: 'from last week' })
     adoptPersistedPad()
     heldWork('todays work')
-    const padId = currentPad()!.id
+    const padId = snapshot().pad!.id
 
     const warn = console.warn
     console.warn = () => {} // the second pad's location IS logged; keep it quiet here
@@ -1002,7 +1026,7 @@ describe('a destination that fails does not take the pad with it', () => {
     }
 
     assert.equal(r!.restaged?.id, padId)
-    assert.equal(settledPad()?.id, padId, 'the more recently touched pad is the one arming brings back')
+    assert.equal(snapshot().held?.id, padId, 'the more recently touched pad is the one arming brings back')
     assert.ok(existsSync(join(padDirFor(root, 'pad-old'), 'pad.json')), 'the older one is still recoverable on disk')
     assert.ok(existsSync(join(padDirFor(root, padId), 'pad.json')))
   })
@@ -1011,7 +1035,7 @@ describe('a destination that fails does not take the pad with it', () => {
     heldWork('watch the pad')
     const seen: (string | null)[] = []
     await runDelivery('newTask', async () => { throw new Error('boom') }, () => {
-      seen.push(currentPad()?.id ?? null)
+      seen.push(snapshot().pad?.id ?? null)
     })
     assert.equal(seen.length, 2)
     assert.equal(seen[0], null, 'cleared the instant the user committed it')
@@ -1046,7 +1070,7 @@ describe('a destination that fails does not take the pad with it', () => {
 describe('a second delivery cannot clobber one already in flight', () => {
   test('THE FIRST PAD SURVIVES a second click and is still recoverable when it fails', async () => {
     heldWork('the work in flight')
-    const padId = currentPad()!.id
+    const padId = snapshot().pad!.id
 
     let release: () => void = () => {}
     const destinationIsSlow = new Promise<void>((r) => { release = r })
@@ -1065,7 +1089,7 @@ describe('a second delivery cannot clobber one already in flight', () => {
     release()
     const r = await first
     assert.equal(r.restaged?.id, padId, 'the first delivery could still put its pad back')
-    assert.equal(currentPad()?.id, padId, 'and it is live again, not lost')
+    assert.equal(snapshot().pad?.id, padId, 'and it is live again, not lost')
     assert.equal(isArmed(), true)
     assert.ok(existsSync(join(padDirFor(root, padId), 'pad.json')), 'and back on disk')
   })
@@ -1090,7 +1114,7 @@ describe('a second delivery cannot clobber one already in flight', () => {
     release()
     const r = await first
     assert.equal(r.landed, 'cursor', 'the first delivery finishes normally')
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().pad, null)
   })
 
   test('once the first finishes, a later delivery is accepted again', async () => {
@@ -1110,7 +1134,7 @@ describe('a second delivery cannot clobber one already in flight', () => {
 
     const retry = await runDelivery('newTask', async () => 'task-9')
     assert.equal(retry.landed, 'task-9', 'the retry is not refused as busy')
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().pad, null)
   })
 })
 
@@ -1160,8 +1184,8 @@ describe('a surface may only ever show work the user chose to hold', () => {
     attachTranscript(id, 'just dictating into slack', 1500)
     recordInsert({ kind: 'url', content: 'https://example.com', atMs: 1200 }, 1200)
 
-    assert.ok(currentPad(), 'the live pad exists — it always does')
-    assert.ok(currentPad()!.entries.length >= 2, 'and it has content')
+    assert.ok(snapshot().pad, 'the live pad exists — it always does')
+    assert.ok(snapshot().pad!.entries.length >= 2, 'and it has content')
     assert.equal(heldForSurface(), null, 'but NONE of it is the user\'s held work')
   })
 
@@ -1170,7 +1194,7 @@ describe('a surface may only ever show work the user chose to hold', () => {
     const id = beginSegment('cursor', 1000, true)
     attachTranscript(id, 'this one I am keeping', 1500)
 
-    assert.equal(heldForSurface()?.id, currentPad()!.id)
+    assert.equal(heldForSurface()?.id, snapshot().pad!.id)
   })
 
   test('arming MID-capture promotes what is being said right now', () => {
@@ -1179,15 +1203,18 @@ describe('a surface may only ever show work the user chose to hold', () => {
     assert.equal(heldForSurface(), null)
 
     armScratchpad(true)
-    assert.equal(heldForSurface()?.id, currentPad()!.id, 'the gesture keeps the live pad')
+    assert.equal(heldForSurface()?.id, snapshot().pad!.id, 'the gesture keeps the live pad')
   })
 
   test('a SETTLED pad is shown when nothing is live', () => {
     leaveOnDisk({ id: 'pad-a', updatedAt: 5000, text: 'friday draft' })
     adoptPersistedPad()
 
-    assert.equal(currentPad(), null)
-    assert.equal(heldForSurface()?.id, 'pad-a')
+    assert.equal(snapshot().pad, null)
+    // `now` is explicit because the settle rule reads it — these pads live in
+    // the test's own clock domain, and against the wall clock every one of them
+    // is decades idle.
+    assert.equal(heldForSurface(snapshot(), 5500)?.id, 'pad-a')
   })
 
   test('a settled pad stays shown THROUGH an ordinary dictation, and the live one never is', () => {
@@ -1196,20 +1223,20 @@ describe('a surface may only ever show work the user chose to hold', () => {
 
     const id = beginSegment('cursor', 6000, true)
     attachTranscript(id, 'unrelated dictation', 6500)
-    assert.equal(heldForSurface()?.id, 'pad-a', 'still the held pad, never the live one')
+    assert.equal(heldForSurface(snapshot(), 6600)?.id, 'pad-a', 'still the held pad, never the live one')
     endSegment(7000)
-    assert.equal(heldForSurface()?.id, 'pad-a')
+    assert.equal(heldForSurface(snapshot(), 7100)?.id, 'pad-a')
   })
 
   test('disarming stops showing the live pad without destroying it mid-capture', () => {
     armScratchpad(true)
     const id = beginSegment('cursor', 1000, true)
     attachTranscript(id, 'never mind', 1200)
-    assert.equal(heldForSurface()?.id, currentPad()!.id)
+    assert.equal(heldForSurface()?.id, snapshot().pad!.id)
 
     armScratchpad(false)
     assert.equal(heldForSurface(), null, 'no longer held work')
-    assert.ok(currentPad(), 'but the capture is untouched — it still delivers normally')
+    assert.ok(snapshot().pad, 'but the capture is untouched — it still delivers normally')
   })
 })
 
@@ -1217,15 +1244,15 @@ describe('discard cannot reach an utterance the user is still speaking', () => {
   test('an UNARMED capture in progress survives a discard', () => {
     const id = beginSegment('cursor', 1000, true)
     attachTranscript(id, 'half a sentence so far', 1200)
-    const before = currentPad()!.id
+    const before = snapshot().pad!.id
 
     discard()
 
-    assert.equal(currentPad()?.id, before, 'the live pad is still there')
+    assert.equal(snapshot().pad?.id, before, 'the live pad is still there')
     // The real damage was downstream of a null pad: everything after went
     // nowhere, silently.
     attachTranscript(id, 'half a sentence so far, and the rest of it', 1800)
-    const seg = currentPad()!.entries.find((e) => e.type === 'segment')
+    const seg = snapshot().pad!.entries.find((e) => e.type === 'segment')
     assert.equal(seg?.type === 'segment' && seg.text, 'half a sentence so far, and the rest of it',
       'the words still land')
     assert.equal(recordInsert({ kind: 'url', content: 'https://x.test', atMs: 1900 }, 1900), true,
@@ -1236,7 +1263,7 @@ describe('discard cannot reach an utterance the user is still speaking', () => {
     armScratchpad(true)
     beginSegment('cursor', 1000, true)
     discard()
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().pad, null)
     assert.equal(isArmed(), false)
   })
 
@@ -1248,9 +1275,9 @@ describe('discard cannot reach an utterance the user is still speaking', () => {
 
     discard()   // the user means the pad on screen — the settled one
 
-    assert.equal(settledPad(), null, 'the held pad is gone')
+    assert.equal(snapshot().held, null, 'the held pad is gone')
     assert.ok(!existsSync(join(padDirFor(root, 'pad-a'), 'pad.json')), 'and off disk')
-    const seg = currentPad()?.entries.find((e) => e.type === 'segment')
+    const seg = snapshot().pad?.entries.find((e) => e.type === 'segment')
     assert.equal(seg?.type === 'segment' && seg.text, 'unrelated dictation',
       'the dictation is untouched')
   })
@@ -1260,9 +1287,9 @@ describe('discard cannot reach an utterance the user is still speaking', () => {
     // stands: there is nothing to protect.
     beginSegment('cursor', 1000, true)
     endSegment(2000)
-    assert.ok(currentPad())
+    assert.ok(snapshot().pad)
     discard()
-    assert.equal(currentPad(), null)
+    assert.equal(snapshot().pad, null)
   })
 })
 
@@ -1270,11 +1297,11 @@ describe('a destination button that is shown must work', () => {
   test('a SETTLED pad delivers — it is promoted into the live slot first', async () => {
     leaveOnDisk({ id: 'pad-a', updatedAt: 5000, text: 'friday draft' })
     adoptPersistedPad()
-    assert.equal(currentPad(), null, 'the seam only ever reads the live slot')
+    assert.equal(snapshot().pad, null, 'the seam only ever reads the live slot')
 
     assert.equal(promoteSettledPad(), true)
-    assert.equal(currentPad()?.id, 'pad-a')
-    assert.equal(settledPad(), null)
+    assert.equal(snapshot().pad?.id, 'pad-a')
+    assert.equal(snapshot().held, null)
 
     let sent = ''
     const r = await runDelivery('cursor', async (t) => { sent = t; return 'cursor' })
@@ -1293,7 +1320,7 @@ describe('a destination button that is shown must work', () => {
     const r = await runDelivery('cursor', async () => { sends++; return 'cursor' })
     assert.equal(r.landed, null)
     assert.equal(sends, 0, 'the destination was never even called')
-    assert.equal(settledPad()?.id, 'pad-a', 'the pad is exactly where it was')
+    assert.equal(snapshot().held?.id, 'pad-a', 'the pad is exactly where it was')
   })
 
   test('promotion REFUSES while a capture owns the live slot', () => {
@@ -1302,8 +1329,8 @@ describe('a destination button that is shown must work', () => {
     beginSegment('cursor', 6000, true)
 
     assert.equal(promoteSettledPad(), false, 'callers must refuse, not deliver the wrong pad')
-    assert.equal(settledPad()?.id, 'pad-a', 'the held pad is untouched')
-    assert.ok(currentPad(), 'and so is the capture')
+    assert.equal(snapshot().held?.id, 'pad-a', 'the held pad is untouched')
+    assert.ok(snapshot().pad, 'and so is the capture')
   })
 
   test('promotion is not behind the feature gate — held work stays deliverable when it is off', () => {
@@ -1312,9 +1339,9 @@ describe('a destination button that is shown must work', () => {
     adoptPersistedPad()
 
     assert.equal(armScratchpad(true), false, 'arming is refused, as it should be')
-    assert.equal(settledPad()?.id, 'pad-a', 'and the work is still stranded where it was')
+    assert.equal(snapshot().held?.id, 'pad-a', 'and the work is still stranded where it was')
     assert.equal(promoteSettledPad(), true, 'but it can still be got out')
-    assert.equal(currentPad()?.id, 'pad-a')
+    assert.equal(snapshot().pad?.id, 'pad-a')
   })
 })
 
@@ -1366,7 +1393,7 @@ describe('turning the scratchpad off cannot lose what is already held', () => {
     const id = beginSegment('cursor', 1000, true)
     attachTranscript(id, text, 1500)
     endSegment(2000)
-    return currentPad()!.id
+    return snapshot().pad!.id
   }
 
   test('the icon: disarming keeps the work reachable', () => {
@@ -1376,8 +1403,8 @@ describe('turning the scratchpad off cannot lose what is already held', () => {
     armScratchpad(false)
 
     assert.equal(isArmed(), false)
-    assert.equal(heldForSurface()?.id, padId, 'still on screen, not abandoned')
-    assert.equal(settledPad()?.id, padId, 'settled, where arming brings it back from')
+    assert.equal(heldForSurface(snapshot(), 2500)?.id, padId, 'still on screen, not abandoned')
+    assert.equal(snapshot().held?.id, padId, 'settled, where arming brings it back from')
     assert.ok(existsSync(join(padDirFor(root, padId), 'pad.json')), 'and durable')
   })
 
@@ -1388,8 +1415,8 @@ describe('turning the scratchpad off cannot lose what is already held', () => {
 
     armScratchpad(false)
 
-    assert.equal(heldForSurface()?.id, padId, 'the work outlives the feature being switched off')
-    assert.equal(settledPad()?.id, padId)
+    assert.equal(heldForSurface(snapshot(), 2500)?.id, padId, 'the work outlives the feature being switched off')
+    assert.equal(snapshot().held?.id, padId)
   })
 
   test('and it is still DELIVERABLE after being switched off', async () => {
@@ -1416,7 +1443,7 @@ describe('turning the scratchpad off cannot lose what is already held', () => {
     attachTranscript(id, 'something unrelated', 6500)
     endSegment(7000)
 
-    assert.equal(settledPad()?.id, padId, 'survived the next capture')
+    assert.equal(snapshot().held?.id, padId, 'survived the next capture')
     assert.ok(existsSync(join(padDirFor(root, padId), 'pad.json')))
   })
 
@@ -1424,15 +1451,15 @@ describe('turning the scratchpad off cannot lose what is already held', () => {
     const padId = holdSomeWork('half a thought')
     armScratchpad(false)
     assert.equal(armScratchpad(true), true)
-    assert.equal(currentPad()?.id, padId, 'the same pad, not a fresh one')
-    const seg = currentPad()!.entries.find((e) => e.type === 'segment')
+    assert.equal(snapshot().pad?.id, padId, 'the same pad, not a fresh one')
+    const seg = snapshot().pad!.entries.find((e) => e.type === 'segment')
     assert.equal(seg?.type === 'segment' && seg.text, 'half a thought')
   })
 
   test('an EMPTY armed pad is not settled — there is nothing to keep', () => {
     armScratchpad(true)
     armScratchpad(false)
-    assert.equal(settledPad(), null, 'settling nothing would resurrect an empty pad at the next arm')
+    assert.equal(snapshot().held, null, 'settling nothing would resurrect an empty pad at the next arm')
   })
 
   test('disarming MID-capture still leaves the pad live, to be delivered normally', () => {
@@ -1444,10 +1471,10 @@ describe('turning the scratchpad off cannot lose what is already held', () => {
 
     armScratchpad(false)
 
-    assert.ok(currentPad(), 'still live')
-    assert.equal(settledPad(), null, 'not settled out from under the capture')
+    assert.ok(snapshot().pad, 'still live')
+    assert.equal(snapshot().held, null, 'not settled out from under the capture')
     attachTranscript(id, 'never mind, just paste it — and the rest', 1800)
-    const seg = currentPad()!.entries.find((e) => e.type === 'segment')
+    const seg = snapshot().pad!.entries.find((e) => e.type === 'segment')
     assert.equal(seg?.type === 'segment' && seg.text, 'never mind, just paste it — and the rest',
       'the capture keeps working')
   })
@@ -1458,13 +1485,243 @@ describe('turning the scratchpad off cannot lose what is already held', () => {
     // Arm DURING a capture, so the settled pad is not promoted and both exist.
     beginSegment('cursor', 1000, true)
     armScratchpad(true)
-    attachTranscript(currentPad()!.entries[0].id, 'this week', 1500)
+    attachTranscript(snapshot().pad!.entries[0].id, 'this week', 1500)
     endSegment(2000)
-    const fresh = currentPad()!.id
+    const fresh = snapshot().pad!.id
 
     armScratchpad(false)
 
-    assert.equal(settledPad()?.id, fresh, 'the more recently touched one wins the slot')
+    assert.equal(snapshot().held?.id, fresh, 'the more recently touched one wins the slot')
     assert.ok(existsSync(join(padDirFor(root, 'pad-old'), 'pad.json')), 'the older one is NOT deleted')
+  })
+})
+
+// ── Universal capture reaches the UNARMED delivery, and does not move it ────
+//
+// A copy made during an ordinary dictation was recorded faithfully and then
+// thrown away: render() had one caller chain and none of it was reachable from
+// an unarmed stop. The URL appeared nowhere, and the copy had already cost a
+// chunk boundary. §2/§4/§9a all say the opposite, and origin/main did stage a
+// screenshot and paste it after the text, so it was a regression as well.
+
+describe('an unarmed stop delivers what was captured, not the speech alone', () => {
+  /** The delivery seam in one line: sessionManager composes, and sends whatever
+   *  comes back — the composed text, or the string it already had. */
+  const delivered = (segId: string | null, text: string, dest: 'cursor' | 'task' = 'cursor') =>
+    composeWithInserts(segId, text, dest) ?? text
+
+  test('a URL copied mid-dictation lands in the pasted text', () => {
+    const id = beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'url', content: 'https://slack.com/archives/C04', atMs: 4000 }, 4000)
+    endSegment(9000)
+
+    assert.equal(
+      delivered(id, 'go through the thread from this morning'),
+      'go through the thread from this morning https://slack.com/archives/C04',
+    )
+  })
+
+  test('a block is fenced, and the fence outgrows the backticks inside it', () => {
+    const id = beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'block', content: 'a ``` b', atMs: 2000 }, 2000)
+    endSegment(3000)
+
+    assert.equal(delivered(id, 'look at this'), 'look at this\n\n````\na ``` b\n````')
+  })
+
+  test('an image is skipped at the cursor and referenced for a task', () => {
+    const id = beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'image', content: '/tmp/Screenshot 14.22.png', atMs: 2000 }, 2000)
+    endSegment(3000)
+
+    assert.equal(delivered(id, 'fix this'), 'fix this', 'a text field cannot hold an image')
+    assert.equal(delivered(id, 'fix this', 'task'), 'fix this [image: /tmp/Screenshot 14.22.png]')
+  })
+
+  test('it does not run while ARMED — that stop holds, it does not deliver', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'url', content: 'https://example.com', atMs: 2000 }, 2000)
+
+    assert.equal(composeWithInserts(id, 'held', 'cursor'), null)
+  })
+
+  test('it MUTATES NOTHING — the unarmed pad is untouched scaffolding', () => {
+    const id = beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'url', content: 'https://example.com', atMs: 2000 }, 2000)
+    const before = JSON.stringify(snapshot().pad)
+
+    composeWithInserts(id, 'some words', 'cursor')
+
+    assert.equal(JSON.stringify(snapshot().pad), before, 'no segment text, no persist, no announce')
+  })
+
+  test('a blank transcript contributes no segment, not the word [BLANK_AUDIO]', () => {
+    const id = beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'url', content: 'https://example.com', atMs: 2000 }, 2000)
+    endSegment(3000)
+
+    assert.equal(delivered(id, '[BLANK_AUDIO]'), 'https://example.com')
+  })
+
+  test('an unknown segment id still delivers the speech — a cancelled+undone capture', () => {
+    beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'url', content: 'https://example.com', atMs: 2000 }, 2000)
+    endSegment(3000)
+
+    assert.equal(delivered('a-segment-that-is-gone', 'the words'), 'the words https://example.com')
+  })
+})
+
+describe('THE FAST PATH DOES NOT MOVE — byte-identical when nothing was copied', () => {
+  // The hard constraint, and it outranks the feature. It is answered
+  // STRUCTURALLY rather than argued: with no insert on the pad,
+  // composeWithInserts returns null before it reaches the renderer, so the
+  // caller delivers the very string it was already holding — the same
+  // reference, not an equal one. Every byte, including the ones a renderer
+  // would quietly eat.
+  const NASTY = [
+    'plain words',
+    'trailing newline\n',
+    'trailing spaces   ',
+    ' leading space',
+    'two\n\nparagraphs',
+    'a line\nthen another\n',
+    '  ',
+    '',
+    'unicode — em dash, curly ’quotes’, emoji 🎙',
+    '```\nnot actually a fence, just spoken\n```',
+  ]
+
+  test('with nothing copied, the delivered string is the SAME string, byte for byte', () => {
+    for (const text of NASTY) {
+      _resetForTest()
+      setScratchpadRoot(root)
+      wire()
+      const id = beginSegment('cursor', 1000, true)
+      endSegment(5000)
+
+      const out = composeWithInserts(id, text, 'cursor')
+      assert.equal(out, null, `no insert ⇒ no composition (${JSON.stringify(text)})`)
+      // What sessionManager actually delivers.
+      const deliveredText = out ?? text
+      assert.strictEqual(deliveredText, text, `byte-identical (${JSON.stringify(text)})`)
+      assert.equal(deliveredText.length, text.length, 'and the same length')
+    }
+  })
+
+  test('this is why it returns null: rendering the same pad would NOT be byte-identical', () => {
+    // The divergence the null return exists to avoid, demonstrated rather than
+    // asserted — a pad holding one segment renders through a trim().
+    const id = beginSegment('cursor', 1000, true)
+    endSegment(5000)
+    const pad = snapshot().pad!
+    const segment = pad.entries.find((e) => e.type === 'segment')!
+    const rendered = render(
+      { ...pad, entries: [{ ...segment, type: 'segment', text: 'trailing newline\n' }] },
+      'cursor',
+    ).text
+    assert.notStrictEqual(rendered, 'trailing newline\n', 'render() trims — so it must not be on this path')
+    assert.strictEqual(rendered, 'trailing newline')
+  })
+
+  test('no pad at all — before any capture — is also a pass-through', () => {
+    assert.equal(composeWithInserts(null, 'anything', 'cursor'), null)
+  })
+
+  test('a REFUSED insert (our own pasteboard sequence) leaves the fast path alone', () => {
+    const id = beginSegment('cursor', 1000, true)
+    beginOwnClipboardSequence()
+    // captureSelectedText's own ⌘C — recorded by nobody, so nothing to compose.
+    assert.equal(recordInsert({ kind: 'line', content: 'the user selection', atMs: 1100 }, 1100), false)
+    endOwnClipboardSequence(1200)
+    endSegment(5000)
+
+    assert.equal(composeWithInserts(id, 'ordinary dictation', 'cursor'), null)
+  })
+})
+
+describe('settle, do not nag — a pad stops asking for attention (§9)', () => {
+  test('a pad idle past the threshold is not shown, but is still on disk and still held', () => {
+    leaveOnDisk({ id: 'pad-friday', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+
+    assert.equal(heldForSurface(snapshot(), 5000 + SETTLE_IDLE_MS - 1)?.id, 'pad-friday', 'inside the window it shows')
+    assert.equal(heldForSurface(snapshot(), 5000 + SETTLE_IDLE_MS + 1), null, 'past it, it stops asking')
+    assert.equal(snapshot().held?.id, 'pad-friday', 'still held — nothing was dropped')
+    assert.ok(existsSync(join(padDirFor(root, 'pad-friday'), 'pad.json')), 'and still on disk')
+  })
+
+  test('arming brings a settled pad back however long it has been waiting', () => {
+    leaveOnDisk({ id: 'pad-friday', updatedAt: 1, text: 'friday draft' })
+    adoptPersistedPad()
+    assert.equal(heldForSurface(snapshot(), Date.now()), null, 'not on screen')
+
+    assert.equal(armScratchpad(true), true)
+
+    assert.equal(snapshot().pad?.id, 'pad-friday', 'back in the live slot')
+    assert.equal(heldForSurface(snapshot(), Date.now())?.id, 'pad-friday', 'and on screen again')
+  })
+
+  test('a LIVE armed pad never settles, whatever its timestamps say', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'this is the capture I am in the middle of', 1500)
+    endSegment(2000)
+
+    assert.equal(heldForSurface(snapshot(), 2000 + SETTLE_IDLE_MS * 10)?.id, snapshot().pad!.id)
+  })
+})
+
+describe('an armed tap that said nothing holds nothing', () => {
+  test('a pad of one blank segment is empty — nothing to show, nothing to deliver', () => {
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    endSegment(2000)
+
+    assert.equal(snapshot().pad!.entries.length, 1, 'the segment IS there — it positions inserts')
+    assert.equal(heldForSurface(snapshot(), 2500), null, 'but no panel pins itself open on it')
+    assert.equal(deliver('cursor'), null, 'and no destination button delivers an empty render')
+  })
+
+  test('it is not settled by a disarm either — an empty pad must not come back at the next arm', () => {
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    endSegment(2000)
+
+    armScratchpad(false)
+
+    assert.equal(snapshot().held, null)
+  })
+
+  test('but a copy alone IS content, even with nothing said', () => {
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'url', content: 'https://example.com', atMs: 1500 }, 1500)
+    endSegment(2000)
+
+    assert.ok(heldForSurface(snapshot(), 2500), 'the user captured it deliberately')
+    assert.equal(deliver('cursor')?.text, 'https://example.com')
+  })
+})
+
+describe('a capture in progress is not deliverable', () => {
+  test('segmentOpen is exactly the recording window', () => {
+    assert.equal(segmentOpen(), false)
+    beginSegment('cursor', 1000, true)
+    assert.equal(segmentOpen(), true, 'the delivery seam refuses on this')
+    endSegment(2000)
+    assert.equal(segmentOpen(), false)
+  })
+
+  test('and it stays true for an ARMED capture — the case the pad-identity guard missed', () => {
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    attachTranscript(snapshot().pad!.entries[0].id, 'still talking', 1200)
+
+    // heldForSurface returns the LIVE pad here, so a guard comparing the two
+    // sees no difference and lets the delivery through.
+    assert.equal(heldForSurface(snapshot(), 1300), snapshot().pad)
+    assert.equal(segmentOpen(), true, 'which is why the seam asks this instead')
   })
 })

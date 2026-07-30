@@ -16,8 +16,21 @@ export function emptyPad(id: string, origin: Destination, now: number): Pad {
   return { id, origin, createdAt: now, updatedAt: now, entries: [] }
 }
 
+/** NOTHING DELIVERABLE — not "zero entries".
+ *
+ *  Every capture opens a segment the instant recording starts, with `text: ''`
+ *  until transcription lands 30-45s later. So a pad that holds ONE armed tap on
+ *  silence has an entry and no content, and counting entries called it
+ *  non-empty: `deliver` rendered it to '', `armScratchpad` settled it, and the
+ *  panel pinned itself open on a row reading "Still transcribing…" that nothing
+ *  would ever fill. That is the first thing a user trying the feature does.
+ *
+ *  A blank segment is not content, so a pad made only of blank segments holds
+ *  nothing. An insert always counts: an image renders to nothing at the cursor,
+ *  but it is real, the user captured it deliberately, and it is deliverable to
+ *  a task. */
 export function isEmpty(pad: Pad): boolean {
-  return pad.entries.length === 0
+  return !pad.entries.some((e) => e.type === 'insert' || e.text.trim() !== '')
 }
 
 /** Time-ordered. Ties put the segment first, so an insert made at the instant a

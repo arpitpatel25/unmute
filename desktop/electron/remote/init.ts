@@ -80,9 +80,10 @@ import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
   adoptPersistedPad, armScratchpad, claimShared, deliveryInFlight, discard as discardPad,
   heldForSurface, initWatchers, padDirOf, pasteAtCursor, promoteSettledPad, recordInsert,
-  registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot,
+  registerPadObserver, registerSettings, removeFromPad, runDelivery, segmentOpen, snapshot,
   type DeliveryTarget,
 } from './capture/index'
+import { SETTLE_IDLE_MS } from './capture/scratchpadStore'
 import type { Entry, InsertKind } from './capture/types'
 import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
 
@@ -1195,12 +1196,37 @@ function notifyInsertDetected(): void {
  *  pad change; the pad panel (Task 14) renders whatever lands here. */
 function broadcastScratchpad(): void {
   const s = snapshot()
-  for (const w of BrowserWindow.getAllWindows()) {
-    try { if (!w.isDestroyed()) w.webContents.send('scratchpad:changed', s) } catch { /* window going away */ }
-  }
-  // The native pad panel reads the SAME snapshot, taken once above — two reads
-  // would let the panel and the renderer disagree about what is on the pad.
+  // ONE SHAPE, ONE SURFACE. There used to be a raw `scratchpad:changed` push to
+  // every BrowserWindow carrying `snapshot()` itself — the live pad of an
+  // UNARMED capture included, which is the exact value heldForSurface exists to
+  // keep off a surface. Nothing in the renderer ever listened to it. It is gone
+  // rather than filtered, along with the five `scratchpad:*` IPC handlers and
+  // the preload group behind it: a second shape of the same concept, reachable
+  // and unfiltered, is how the filtered one gets bypassed later.
   try { notchController?.notifyScratchpad(scratchpadPayload(s)) } catch { /* helper going away */ }
+  scheduleSettleRebroadcast(s)
+}
+
+/** SETTLE, DO NOT NAG (§9) — the half that needs a clock.
+ *
+ *  heldForSurface stops returning a settled pad once it has been idle past the
+ *  threshold, but nothing would ask it again: the pad has, by definition,
+ *  stopped changing. So one timer is armed for the exact instant it crosses,
+ *  and re-broadcasting then lets the panel take itself off screen. The pad is
+ *  untouched on disk and one arm away, which is the whole point — the CONTENT
+ *  persists while the DEMAND FOR ATTENTION decays.
+ *
+ *  It cannot loop: the re-broadcast finds the pad already past the threshold,
+ *  computes a non-positive delay, and arms nothing. */
+let settleTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleSettleRebroadcast(s: ReturnType<typeof snapshot>): void {
+  if (settleTimer) { clearTimeout(settleTimer); settleTimer = null }
+  const held = s.armed ? null : s.held
+  if (!held) return
+  const due = held.updatedAt + SETTLE_IDLE_MS - Date.now()
+  if (due <= 0) return
+  settleTimer = setTimeout(() => { settleTimer = null; broadcastScratchpad() }, due)
+  ;(settleTimer as unknown as { unref?: () => void }).unref?.()
 }
 
 /** One entry, raw. What it IS, not how to draw it: the surface decides glyph,
@@ -1294,12 +1320,28 @@ async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promi
   // can never deliver a pad the user was not looking at.
   const before = snapshot()
   const showing = heldForSurface(before)
-  if (showing && showing !== before.pad && !promoteSettledPad()) {
-    // The live slot is taken by a capture in progress. Refusing is the only
-    // honest answer: delivering the live pad would send an utterance the user
-    // is still speaking, and silently doing nothing is what this whole change
-    // exists to stop. The pad is untouched and still on disk.
+
+  // A CAPTURE IS RUNNING, so nothing is deliverable — asked directly rather
+  // than inferred from `showing !== before.pad`. That inference covers a
+  // SETTLED pad meeting a live slot, and misses the case it shares a shape
+  // with: an ARMED pad delivered mid-capture is `showing === before.pad`, so it
+  // sailed through, nulled `pad` with `openSegmentId` still set, and left every
+  // later attachTranscript and recordInsert writing into nothing — the
+  // utterance in progress silently destroyed. Latent through the notch (the
+  // panel is suppressed while the pill is up) and live through the registered
+  // IPC path, which is exactly the kind of door that gets opened later.
+  if (segmentOpen()) {
     log.event('scratchpad-deliver-refused', { to: target, reason: 'capture-in-progress' })
+    notchController?.toast('finish the recording first — the pad is still held')
+    return null
+  }
+  if (showing && showing !== before.pad && !promoteSettledPad()) {
+    // The live slot is taken by a pad that is not the one on screen — a
+    // finished unarmed dictation's buffer, waiting for the next capture
+    // boundary to drop it. Refusing is the only honest answer: delivering the
+    // live pad would send somebody else's utterance, and silently doing nothing
+    // is what this whole change exists to stop. The pad is untouched on disk.
+    log.event('scratchpad-deliver-refused', { to: target, reason: 'live-slot-taken' })
     notchController?.toast('finish the recording first — the pad is still held')
     return null
   }
@@ -2862,32 +2904,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // nothing (or that the wall already owns its session) without waiting for an event.
   ipcMain.handle('remote:get-orchestrate-owner', async () => orchestrateFocusId)
 
-  // ── IPC: the scratchpad ──
-  // THE DESTINATION IS CHOSEN AT THE END. The trigger key sets the pad's origin
-  // as a default, but nothing about a held capture commits to where it lands
-  // until the user says so — which is the whole point of deferring delivery.
-  ipcMain.handle('scratchpad:get', async () => ({
-    ...snapshot(),
-    destinations: scratchpadDestinations(),
-  }))
-
-  // Each of these is the renderer's door onto the same function the native pad
-  // panel reaches through the notch controller — see "the scratchpad's four
-  // verbs" above for why the implementation lives there and not here.
-  ipcMain.handle('scratchpad:arm', async (_e, on: boolean) => armScratchpadFrom(!!on))
-
-  ipcMain.handle('scratchpad:remove-entry', async (_e, id: string) => {
-    removeScratchpadEntry(String(id))
-    return true
-  })
-
-  ipcMain.handle('scratchpad:discard', async () => {
-    discardScratchpad()
-    return true
-  })
-
-  ipcMain.handle('scratchpad:deliver', async (_e, dest: 'cursor' | 'newTask' | 'openTask') =>
-    deliverScratchpad(dest))
+  // ── The scratchpad has NO IPC surface, deliberately ──
+  //
+  // Its surface is the native pad panel, which reaches the four verbs through
+  // the notch controller (see "the scratchpad's four verbs"). There WAS a
+  // parallel set of `scratchpad:*` handlers here plus a preload group for the
+  // renderer, and not one of them had a caller. Two of them were actively
+  // wrong: `scratchpad:get` and the `scratchpad:changed` broadcast shipped raw
+  // `snapshot()`, live unarmed pad and all, which is the precise value
+  // heldForSurface exists to keep off a surface. A renderer that wants the pad
+  // later gets it through scratchpadPayload, the one filtered shape — not
+  // through a second, unfiltered one that already exists.
   // Voice-as-doorbell toggle (§6.4) — read + set from the cockpit's 🔔 chip.
   ipcMain.handle('remote:get-voice-headlines', async () => settings.get('voiceHeadlines') !== false)
   ipcMain.handle('remote:set-voice-headlines', async (_e, on: boolean) => { settings.set('voiceHeadlines', !!on); return true })

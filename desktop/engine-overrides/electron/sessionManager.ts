@@ -21,8 +21,8 @@ import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 import { dispatchFromCapture, hideNativePill } from './paywall/remote/init'
 import {
   attachTranscript, beginOwnClipboardSequence, beginSegment, cancelOpenSegment,
-  endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed, registerFormat,
-  registerPaste,
+  composeWithInserts, endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed,
+  registerFormat, registerPaste, removeFromPad,
 } from './paywall/remote/capture/index'
 import { canObserve } from './paywall/remote/capture/captureGate'
 import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
@@ -986,6 +986,35 @@ class SessionManager {
    */
 
 
+  /** UNIVERSAL CAPTURE'S DELIVERY HALF (spec §2, §4, §9a): what the user copied
+   *  or screenshotted during THIS recording, rendered into the text that is
+   *  about to be delivered.
+   *
+   *  CALLED AFTER THIS SITE'S OWN FORMATTING, never before — the speech gets
+   *  exactly the maybeCleanupDictation + formatOutputForUser treatment it gets
+   *  today, applied exactly once, and the inserts go in around the finished
+   *  string. (The scratchpad's own delivery formats at the end instead, because
+   *  a held pad has no destination until the user picks one; this path has had
+   *  one all along.)
+   *
+   *  IT RETURNS `output` UNCHANGED unless something was actually captured.
+   *  composeWithInserts answers null for a pad with no inserts and the same
+   *  reference comes back out, so tap-talk-tap-paste with nothing copied
+   *  delivers the identical bytes it always has. A failure returns it unchanged
+   *  too: an inline URL is worth having, never at the cost of the dictation. */
+  private composeCaptured(
+    output: string,
+    session: SessionState,
+    dest: 'cursor' | 'task',
+  ): string {
+    try {
+      return composeWithInserts(session.captureSegmentId, output, dest) ?? output
+    } catch (e) {
+      console.warn('[session] capture compose failed — delivering speech alone:', e)
+      return output
+    }
+  }
+
   /**
    * ARMED STOP DELIVERS NOTHING. This is the behaviour the whole feature rests
    * on, so it lives in ONE place and is called ABOVE the remote/paste split at
@@ -996,9 +1025,10 @@ class SessionManager {
    * pasted and nothing is dispatched. Returns true, and the caller returns
    * immediately.
    *
-   * Unarmed: returns false and delivery is EXACTLY what it is today — this
-   * function's only effect is to drop the pad, which nothing on the unarmed
-   * path reads. The fast path does not move.
+   * Unarmed: returns false and delivery proceeds. This function does nothing to
+   * it — the pad it leaves alone is read afterwards by composeCaptured, which
+   * puts anything CAPTURED during the recording into the delivered text and
+   * returns the string untouched when nothing was.
    */
   private holdIfArmed(
     text: string,
@@ -1010,8 +1040,9 @@ class SessionManager {
 
     // UNARMED: nothing here touches delivery. The leftover pad is dropped at
     // the START of the next capture (beginSegment) rather than here, because
-    // the unarmed pad is what Task 12's inline-insert delivery reads at this
-    // very point — destroying it now would be a trap for the next task.
+    // the unarmed pad is exactly what composeCaptured reads a few lines further
+    // down each delivery site — destroying it now would throw away the inserts
+    // universal capture just recorded.
     if (!armed) return false
 
     // JUNK IS HELD AS NOTHING, NOT AS THE WORD "[BLANK_AUDIO]".
@@ -1030,12 +1061,23 @@ class SessionManager {
         console.warn('[session] capture hold failed:', e)
       }
     } else {
-      console.log('[session] 📌 armed, but nothing was said — holding an empty segment')
+      // AND THE EMPTY SEGMENT GOES. It was born at recording start so inserts
+      // could be positioned against it, and transcription has now come back
+      // with nothing to put in it — so it is a row that will never fill.
+      // Leaving it pinned a permanent "Still transcribing…" panel on the first
+      // thing anyone tries: arm the scratchpad, tap, say nothing. Dropping it
+      // is not lost work; there is nothing in it. Anything COPIED during the
+      // same window is an insert and stays.
+      console.log('[session] 📌 armed, but nothing was said — dropping the empty segment')
+      try {
+        if (session.captureSegmentId) removeFromPad(session.captureSegmentId, Date.now())
+      } catch (e) {
+        console.warn('[session] capture hold cleanup failed:', e)
+      }
     }
     console.log('[session] 📌 SCRATCHPAD ARMED — holding, not delivering')
     session.status = 'done'
     session.output = null
-    sendToWidget('scratchpad:held', session.sessionId)
     this.scheduleAutoHide(1500)
     clearTimeout(apiTimeout)
     this.abortController = null
@@ -1051,7 +1093,11 @@ class SessionManager {
     session: SessionState,
     apiTimeout: ReturnType<typeof setTimeout>,
   ): Promise<void> {
-    const cmd = (command || '').trim()
+    // Universal capture is unmoded and destination-independent (§2): a link
+    // copied while dictating a task belongs in the task, rendered for a task
+    // (§6.2 — an image becomes a real reference here rather than being skipped
+    // as it is at a cursor). Unchanged when nothing was copied.
+    const cmd = this.composeCaptured((command || '').trim(), session, 'task')
     console.log('[session] 🛰  REMOTE dispatch:', JSON.stringify(cmd))
     if (cmd && cmd !== '[BLANK_AUDIO]') {
       // DETACHED ON PURPOSE — the pill must not wait for the agent.
@@ -1637,6 +1683,9 @@ class SessionManager {
               return
             }
 
+            // ─── Universal capture: anything copied lands inline (§2) ───
+            output = this.composeCaptured(output, session, 'cursor')
+
             session.output = output
             session.status = 'done'
             console.log('[session] ✅ FINAL OUTPUT (raw transcript):', JSON.stringify(output))
@@ -1739,6 +1788,8 @@ class SessionManager {
           }
 
           output = formatOutputForUser(output)
+          // ─── Universal capture: anything copied lands inline (§2) ───
+          output = this.composeCaptured(output, session, 'cursor')
           session.output = output
           session.status = 'done'
 
@@ -2192,6 +2243,8 @@ class SessionManager {
         }
 
         output = formatOutputForUser(output)
+        // ─── Universal capture: anything copied lands inline (§2) ───
+        output = this.composeCaptured(output, session, 'cursor')
         session.output = output
         session.status = 'done'
 
