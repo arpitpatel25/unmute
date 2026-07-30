@@ -8,8 +8,8 @@ import {
   beginOwnClipboardSequence, beginSegment, cancelOpenSegment, currentPad, deliver,
   discard, endOwnClipboardSequence, endSegment, formatForDelivery, getCaptureSettings,
   initWatchers, isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerFormat,
-  registerPaste, registerSettings, removeFromPad, setOwnSequenceCeiling, setScratchpadRoot,
-  settledPad, snapshot, takeForDelivery, writePadNow,
+  registerPaste, registerSettings, removeFromPad, runDelivery, setOwnSequenceCeiling,
+  setScratchpadRoot, settledPad, snapshot, takeForDelivery, writePadNow,
 } from './index'
 import { deserialize, padDirFor, serialize } from './scratchpadStore'
 import { createClipboardWatch } from './clipboardWatch'
@@ -861,5 +861,174 @@ describe('a pad on disk is adopted at startup', () => {
     assert.equal(armScratchpad(true), false)
     assert.equal(settledPad()?.id, 'pad-a', 'not promoted into a pad nothing will hold')
     assert.equal(currentPad(), null)
+  })
+})
+
+// ── Delivery must not lose held work ────────────────────────────────────
+//
+// The pad is rendered, cleared, and its pad.json deleted BEFORE the
+// destination is reached. From that instant the user's work exists only as a
+// local variable, and held work is held precisely because the user chose not
+// to risk it. So every path where the destination does not take it has to put
+// the pad back.
+
+describe('a destination that fails does not take the pad with it', () => {
+  test('the CURSOR throwing leaves the pad live, armed, and intact', async () => {
+    heldWork('the paragraph I spent ten minutes on')
+
+    const r = await runDelivery('cursor', async () => { throw new Error('pasteboard is locked') })
+
+    assert.equal(r.landed, null)
+    assert.equal(r.restaged?.id, currentPad()?.id, 'it went back into the live slot')
+    assert.equal((r.error as Error).message, 'pasteboard is locked')
+    assert.equal(isArmed(), true, 'still held — the next capture appends, it does not replace')
+    const e = currentPad()!.entries[0]
+    assert.equal(e.type === 'segment' && e.text, 'the paragraph I spent ten minutes on')
+  })
+
+  test('a TASK destination throwing leaves the pad live, armed, and intact', async () => {
+    // The real case: dispatchFromCapture's no-open-tasks branch has no failsafe,
+    // so a network blip on the router propagates straight out of it.
+    heldWork('refactor the arbiter and add the missing test')
+
+    const r = await runDelivery('newTask', async () => { throw new Error('fetch failed') })
+
+    assert.equal(r.landed, null)
+    assert.equal(r.restaged?.id, currentPad()?.id)
+    assert.equal(isArmed(), true)
+    const e = currentPad()!.entries[0]
+    assert.equal(e.type === 'segment' && e.text, 'refactor the arbiter and add the missing test')
+  })
+
+  test('the OPEN TASK destination throwing puts it back too', async () => {
+    heldWork('and one more thing')
+    const r = await runDelivery('openTask', async () => { throw new Error('pty is gone') })
+    assert.equal(r.landed, null)
+    assert.equal(currentPad()?.entries.length, 1)
+  })
+
+  test('a destination that DECLINES (returns null) puts it back — no throw needed', async () => {
+    // pasteAtCursor returns false when no paste effect is registered, and
+    // dispatchFromCapture returns null when nothing routed. Neither throws, and
+    // both mean the text reached nothing.
+    heldWork('nothing took this')
+
+    const r = await runDelivery('newTask', async () => null)
+
+    assert.equal(r.landed, null)
+    assert.equal(r.restaged?.entries.length, 1)
+    assert.equal(currentPad()?.entries.length, 1)
+    assert.equal(r.error, undefined, 'declining is not an error, it is an answer')
+  })
+
+  test('THE RESTORED PAD IS BACK ON DISK — a crash after a failed delivery loses nothing', async () => {
+    heldWork('durable again')
+    writePadNow()
+    const padId = currentPad()!.id
+    const file = join(padDirFor(root, padId), 'pad.json')
+    assert.ok(existsSync(file))
+
+    // deliver() removes pad.json on the assumption the destination took it…
+    const r = await runDelivery('newTask', async () => { throw new Error('boom') })
+
+    // …and the restage has to undo that, not just fix memory.
+    assert.ok(existsSync(file), 'pad.json is back')
+    assert.equal(r.restaged?.id, padId)
+    const onDisk = deserialize(readFileSync(file, 'utf8'))
+    assert.deepEqual(onDisk, currentPad(), 'and it matches what is held')
+  })
+
+  test('a SUCCESSFUL delivery really does clear it — the safety net is not a leak', async () => {
+    heldWork('ship it')
+    const r = await runDelivery('cursor', async () => 'cursor')
+
+    assert.equal(r.landed, 'cursor')
+    assert.equal(r.restaged, null)
+    assert.equal(currentPad(), null, 'delivered work does not linger')
+    assert.equal(isArmed(), false)
+    assert.equal(settledPad(), null, 'and it is not quietly settled either')
+  })
+
+  test('a delivered pad cannot be resurrected by a LATER failure', async () => {
+    heldWork('first')
+    await runDelivery('cursor', async () => 'cursor')
+    // Nothing in flight any more; a second delivery of an empty pad must not
+    // restage the pad the first one legitimately consumed.
+    const r = await runDelivery('cursor', async () => { throw new Error('boom') })
+    assert.equal(r.restaged, null)
+    assert.equal(currentPad(), null)
+  })
+
+  test('the destination is not even called when there is nothing to send', async () => {
+    let calls = 0
+    const r = await runDelivery('cursor', async () => { calls++; return 'cursor' })
+    assert.equal(calls, 0)
+    assert.deepEqual({ landed: r.landed, restaged: r.restaged }, { landed: null, restaged: null })
+  })
+
+  test('if a NEW CAPTURE claimed the live slot, the failed pad settles instead of colliding', async () => {
+    heldWork('the work I tried to send')
+    const padId = currentPad()!.id
+
+    const r = await runDelivery('newTask', async () => {
+      // The user starts talking again while the router is hanging.
+      beginSegment('cursor', 9000, true)
+      throw new Error('router died')
+    })
+
+    assert.equal(r.restaged?.id, padId)
+    assert.notEqual(currentPad()?.id, padId, 'the new capture keeps the live slot')
+    assert.equal(settledPad()?.id, padId, 'and the failed delivery is one arm away')
+    assert.ok(existsSync(join(padDirFor(root, padId), 'pad.json')), 'on disk either way')
+  })
+
+  test('two pads wanting the settled slot: NEITHER is deleted', async () => {
+    // A pad from a previous run is still waiting when a delivery fails and a
+    // fresh capture is holding the live slot.
+    leaveOnDisk({ id: 'pad-old', updatedAt: 100, text: 'from last week' })
+    adoptPersistedPad()
+    heldWork('todays work')
+    const padId = currentPad()!.id
+
+    const warn = console.warn
+    console.warn = () => {} // the second pad's location IS logged; keep it quiet here
+    let r
+    try {
+      r = await runDelivery('newTask', async () => { beginSegment('cursor', 9000, true); throw new Error('nope') })
+    } finally {
+      console.warn = warn
+    }
+
+    assert.equal(r!.restaged?.id, padId)
+    assert.equal(settledPad()?.id, padId, 'the more recently touched pad is the one arming brings back')
+    assert.ok(existsSync(join(padDirFor(root, 'pad-old'), 'pad.json')), 'the older one is still recoverable on disk')
+    assert.ok(existsSync(join(padDirFor(root, padId), 'pad.json')))
+  })
+
+  test('the surface is told twice: once when the pad is taken, once when it comes back', async () => {
+    heldWork('watch the pad')
+    const seen: (string | null)[] = []
+    await runDelivery('newTask', async () => { throw new Error('boom') }, () => {
+      seen.push(currentPad()?.id ?? null)
+    })
+    assert.equal(seen.length, 2)
+    assert.equal(seen[0], null, 'cleared the instant the user committed it')
+    assert.ok(seen[1], 'and back again when nothing took it')
+  })
+
+  test('formatting still runs once, and still only for the cursor, through runDelivery', async () => {
+    let calls = 0
+    registerFormat((t) => { calls++; return t.toUpperCase() })
+
+    heldWork('to the cursor')
+    let sent = ''
+    await runDelivery('cursor', async (t) => { sent = t; return 'cursor' })
+    assert.equal(sent, 'TO THE CURSOR')
+    assert.equal(calls, 1)
+
+    heldWork('to a task')
+    await runDelivery('newTask', async (t) => { sent = t; return 'task-1' })
+    assert.equal(sent, 'to a task')
+    assert.equal(calls, 1, 'the task never reached the formatter')
   })
 })

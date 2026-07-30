@@ -371,12 +371,116 @@ function destinationFor(target: DeliveryTarget): Destination {
   return target === 'cursor' ? 'cursor' : 'task'
 }
 
+/** The pad a delivery has TAKEN but no destination has yet accepted.
+ *
+ *  `deliver()` nulls the pad and removes pad.json the instant it renders, on
+ *  the assumption that the destination will take it. Between that instant and
+ *  the destination actually accepting, the user's held work exists only as a
+ *  local variable — and the entire reason it was held is that they chose not to
+ *  risk it. So the PAD is parked here for the duration, and put back if nothing
+ *  took it. */
+let inFlight: Pad | null = null
+
 /** Render for this target and clear the pad. Null when there was nothing to
  *  send — the pad is cleared either way, because the user committed it. */
 export function takeForDelivery(target: DeliveryTarget): RenderResult | null {
+  const taken = pad
   const out = deliver(destinationFor(target))
-  if (!out || !out.text.trim()) return null
+  if (!out || !out.text.trim()) { inFlight = null; return null }
+  inFlight = taken
   return out
+}
+
+/** The destination took it. Now the pad is genuinely gone. */
+export function commitDelivery(): void { inFlight = null }
+
+/** The destination did NOT take it. Put the work back where the user can reach
+ *  it, and back on disk — `deliver()` removed pad.json on an assumption that
+ *  turned out to be wrong.
+ *
+ *  WHERE IT GOES: the live slot, if it is free. That is the normal case, and it
+ *  puts the pad straight back in front of the user, armed, ready to retry. If a
+ *  new capture has already claimed the live slot, it SETTLES instead — the same
+ *  place a pad from a previous run waits, one arm away.
+ *
+ *  Two pads can want the settled slot at once (a pad from a previous run that
+ *  has not been brought back yet). NEITHER IS DELETED: both are on disk by the
+ *  time this returns, the more recently touched one is what arming brings back,
+ *  and the other's directory is logged. */
+export function restageDelivery(): Pad | null {
+  const p = inFlight
+  inFlight = null
+  if (!p) return null
+  writePad(p) // durable again before anything else can go wrong
+  if (!pad) {
+    pad = p
+    armed = true
+    return p
+  }
+  const waiting = heldPad
+  if (!waiting || p.updatedAt >= waiting.updatedAt) {
+    heldPad = p
+    if (waiting) console.warn(`[capture] a second pad is waiting on disk: ${padDirFor(scratchpadRoot, waiting.id)}`)
+  } else {
+    console.warn(`[capture] a second pad is waiting on disk: ${padDirFor(scratchpadRoot, p.id)}`)
+  }
+  return p
+}
+
+/** Where a pad's state lives, so a failure can be logged as a recoverable
+ *  location rather than as the user's dictation in a log file. */
+export function padDirOf(p: Pad): string { return padDirFor(scratchpadRoot, p.id) }
+
+export interface DeliveryOutcome {
+  /** Where it landed — 'cursor', or a task id. Null means nowhere. */
+  landed: string | null
+  /** The pad, put back, when nothing took it. Null if it landed, or if there
+   *  was nothing to send. */
+  restaged: Pad | null
+  /** What the destination threw, when it threw. */
+  error?: unknown
+}
+
+/** THE DELIVERY: take the pad, format it for the target, hand it to the
+ *  destination — and PUT IT BACK if the destination does not take it.
+ *
+ *  The destination is injected, not imported. init.ts owns the paste and the
+ *  dispatch and neither may be imported into capture/ (nor capture/ into
+ *  init.ts) — and injecting it is also what makes the failure path testable,
+ *  which is the point: the pad is destroyed BEFORE the destination is reached,
+ *  so "what happens when the destination fails" is the question that decides
+ *  whether held work can be lost.
+ *
+ *  `send` returns where it landed, or null for "I did not take it". A throw is
+ *  the same answer with a reason attached, and it is a real one: the router's
+ *  no-open-tasks branch — the common case, when the user has no tasks — has no
+ *  failsafe of its own, so a network blip inside it propagates out. */
+export async function runDelivery(
+  target: DeliveryTarget,
+  send: (text: string) => Promise<string | null>,
+  onChanged?: () => void,
+): Promise<DeliveryOutcome> {
+  const out = takeForDelivery(target)
+  // Announce the empty pad straight away: the user committed it, and no surface
+  // should sit on stale content through a formatting round-trip.
+  onChanged?.()
+  if (!out) return { landed: null, restaged: null }
+
+  const ready = await formatForDelivery(out, target)
+  let landed: string | null = null
+  let error: unknown
+  try {
+    landed = await send(ready.text)
+  } catch (err) {
+    error = err
+  }
+  if (landed) {
+    commitDelivery()
+    return { landed, restaged: null }
+  }
+  const restaged = restageDelivery()
+  onChanged?.()
+  return { landed: null, restaged, error }
 }
 
 /** FORMATTING HAPPENS HERE, AND ONLY FOR THE CURSOR.
@@ -445,8 +549,12 @@ function schedulePersist(): void {
 
 /** Exposed for tests and for a deliberate flush. Never throws. */
 export function writePadNow(): void {
-  const p = pad
-  if (!p) return
+  if (pad) writePad(pad)
+}
+
+/** Atomic write of ANY pad, not only the live one — restaging a failed delivery
+ *  has to put a pad back on disk that is no longer in the live slot. */
+function writePad(p: Pad): void {
   try {
     const dir = padDirFor(scratchpadRoot, p.id)
     mkdirSync(dir, { recursive: true })
@@ -642,6 +750,7 @@ export function _resetForTest(): void {
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null }
   pad = null
   heldPad = null
+  inFlight = null
   armed = false
   openSegmentId = null
   captureStartedAt = 0

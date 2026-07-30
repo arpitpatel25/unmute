@@ -78,9 +78,9 @@ import { devlog, devEvent } from './curator-devlog'
 import { createClipboardWatch } from './capture/clipboardWatch'
 import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
-  adoptPersistedPad, armScratchpad, claimShared, discard as discardPad, formatForDelivery,
-  initWatchers, pasteAtCursor, recordInsert, registerSettings, removeFromPad, snapshot,
-  takeForDelivery, type DeliveryTarget,
+  adoptPersistedPad, armScratchpad, claimShared, discard as discardPad, initWatchers,
+  padDirOf, pasteAtCursor, recordInsert, registerSettings, removeFromPad, runDelivery,
+  snapshot, type DeliveryTarget,
 } from './capture/index'
 import type { InsertKind } from './capture/types'
 
@@ -3051,44 +3051,64 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     return true
   })
 
-  /** Send the pad. Returns where it landed ('cursor' or a task id), or null. */
+  /** Send the pad. Returns where it landed ('cursor' or a task id), or null.
+   *
+   *  DELIVERY MUST NOT DESTROY HELD WORK. Rendering the pad clears it and takes
+   *  pad.json with it, so from that instant until the destination accepts, the
+   *  text exists only in a local variable. If nothing takes it, runDelivery puts
+   *  the pad back — in memory and on disk — and the user can retry. Held work is
+   *  held BECAUSE the user chose not to risk it; losing it here would be the
+   *  exact failure this feature exists to prevent.
+   *
+   *  THE TWO DESTINATIONS FAIL DIFFERENTLY, and that is not papered over. The
+   *  cursor is largely SELF-INSURING: injectOutput writes the pasteboard before
+   *  it posts ⌘V and swallows a failed keystroke, so the ordinary cursor failure
+   *  still leaves the text where the user can paste it — what reaches the
+   *  restage path there is the case where nothing was written at all (no paste
+   *  effect registered, or the write itself threw). The task path has no such
+   *  property: if the router throws, the text reached nothing, and the pad is
+   *  the only copy. */
   ipcMain.handle('scratchpad:deliver', async (_e, dest: 'cursor' | 'newTask' | 'openTask') => {
     const target: DeliveryTarget = dest === 'cursor' ? 'cursor' : dest === 'openTask' ? 'openTask' : 'newTask'
-    // Render + clear FIRST, then tell the surfaces: the pad is gone the instant
-    // the user commits it, not after a formatting round-trip.
-    const out = takeForDelivery(target)
-    broadcastScratchpad()
-    if (!out) { log.event('scratchpad-delivered', { to: target, landed: null, empty: true }); return null }
 
-    // FORMATTED FOR THE CURSOR AND ONLY THE CURSOR — see formatForDelivery. The
-    // pad holds the cleaned transcript; the polish that belongs to a
-    // destination is applied here, where the destination is finally known.
-    const ready = await formatForDelivery(out, target)
-
-    if (target === 'cursor') {
-      // pasteAtCursor, NOT a direct injectOutput import: clipboard.ts imports
-      // FROM this module, and its header records why that direction is one-way
-      // (a lazy require of remote/init fails inside the bundled main, swallowed
-      // by a fail-open catch). Importing it here would close exactly that loop.
-      const pasted = await pasteAtCursor(ready.text)
-      log.event('scratchpad-delivered', { to: 'cursor', landed: pasted ? 'cursor' : null })
-      return pasted ? 'cursor' : null
-    }
-
-    const mgr = manager
-    if (target === 'openTask' && orchestrateFocusId && mgr?.get(orchestrateFocusId)) {
-      const fid = orchestrateFocusId
-      if (mgr.followUp(fid, ready.text)) {
-        log.event('scratchpad-delivered', { to: 'open-task', landed: fid })
-        return fid
+    // pasteAtCursor, NOT a direct injectOutput import: clipboard.ts imports FROM
+    // this module, and its header records why that direction is one-way (a lazy
+    // require of remote/init fails inside the bundled main, swallowed by a
+    // fail-open catch). Importing it here would close exactly that loop.
+    const send = target === 'cursor'
+      ? async (text: string): Promise<string | null> => ((await pasteAtCursor(text)) ? 'cursor' : null)
+      : async (text: string): Promise<string | null> => {
+        const mgr = manager
+        if (target === 'openTask' && orchestrateFocusId && mgr?.get(orchestrateFocusId)) {
+          const fid = orchestrateFocusId
+          if (mgr.followUp(fid, text)) return fid
+          // It couldn't take it (terminal/gone) — route it as a new task rather
+          // than dropping work the user already committed.
+          log.warn('focused task refused the pad — routing it as a new task', { taskId: fid })
+        }
+        return dispatchFromCapture(text)
       }
-      // It couldn't take it (terminal/gone) — fall through to a new task rather
-      // than dropping work the user already committed.
-      log.warn('focused task refused the pad — routing it as a new task', { taskId: fid })
+
+    const r = await runDelivery(target, send, broadcastScratchpad)
+    if (r.landed) {
+      log.event('scratchpad-delivered', { to: target, landed: r.landed })
+      return r.landed
     }
-    const landed = await dispatchFromCapture(ready.text)
-    log.event('scratchpad-delivered', { to: 'new-task', landed })
-    return landed
+    if (r.restaged) {
+      // Enough to recover by hand: the pad is back on disk at this path with its
+      // entries intact. The TEXT is deliberately not logged — it is the user's
+      // own dictation, and the file already has it.
+      log.error('scratchpad delivery failed — the pad was put back', {
+        to: target,
+        padId: r.restaged.id,
+        padDir: padDirOf(r.restaged),
+        entries: r.restaged.entries.length,
+        error: r.error instanceof Error ? r.error.message : String(r.error ?? 'destination declined'),
+      })
+    } else {
+      log.event('scratchpad-delivered', { to: target, landed: null, empty: true })
+    }
+    return null
   })
   // Voice-as-doorbell toggle (§6.4) — read + set from the cockpit's 🔔 chip.
   ipcMain.handle('remote:get-voice-headlines', async () => settings.get('voiceHeadlines') !== false)
