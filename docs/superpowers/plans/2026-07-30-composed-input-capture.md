@@ -2241,11 +2241,46 @@ This is the behaviour the whole feature rests on. In `processSession()`, guard *
 
 - [ ] **Step 5: Register our own clipboard writes**
 
-In `clipboard.ts`, in `captureSelectedText` immediately after each `clipboard.writeText(...)`, and in `injectOutput` immediately after `clipboard.writeText(padded)`:
+`noteOwnClipboardWrite()` reads the change counter *at call time* and records that value. So it must be called **synchronously, with no `await` between the write and the call** — otherwise the 250ms poll can slip in between and observe our own write as a user copy.
+
+There are **three** call sites in `clipboard.ts`, not two, and the third is the one that is easy to miss:
+
+```ts
+async function captureSelectedText(...) {
+  const savedClipboard = clipboard.readText()
+
+  clipboard.writeText('')                      // ← ours (1)
+  noteOwnClipboardWrite()
+
+  await execFile('osascript', …)               // ← synthesised ⌘C
+  // (2) THE ONE THAT IS EASY TO MISS. This change is CAUSED by us but
+  // PERFORMED by another process, so its counter value cannot be known in
+  // advance — it can only be read after the child completes. Miss it and the
+  // user's selection is inserted at the top of every single dictation, which
+  // is exactly the corruption this whole design exists to prevent.
+  noteOwnClipboardWrite()
+
+  const selectedText = clipboard.readText()
+
+  clipboard.writeText(savedClipboard)          // ← ours (3), restoring
+  noteOwnClipboardWrite()
+}
+```
+
+And in `injectOutput`, immediately after `clipboard.writeText(padded)`:
+
+```ts
+  clipboard.writeText(padded)
+  noteOwnClipboardWrite()
+```
+
+Wrap each call so a missing watcher is harmless:
 
 ```ts
   try { noteOwnClipboardWrite() } catch { /* watcher not armed — nothing to record */ }
 ```
+
+If the osascript path fails and takes its error branch, the restore write still happens — so that branch needs its own `noteOwnClipboardWrite()` too. Grep the function for every `writeText` and confirm each one is followed by a record call.
 
 Delete the `consumeStagedForDictation()` call and the `stagedImages` variable from `injectOutput` — Task 13 removes the function itself.
 
