@@ -12,7 +12,7 @@
 //     words when at all possible.
 // Pure module: no DOM, no React — unit-tested by vadPolicy.test.ts.
 
-export type CutDecision = 'none' | 'silence' | 'soft-cap' | 'hard-cap'
+export type CutDecision = 'none' | 'silence' | 'soft-cap' | 'hard-cap' | 'insert'
 
 export interface CutInput {
   rms: number
@@ -24,6 +24,9 @@ export interface CutInput {
   hardCapMs: number
   softCapWindowMs: number
   threshold: number
+  /** An insert was detected and has not yet been given a boundary. */
+  insertPending?: boolean
+  insertFloorMs?: number
 }
 
 /** Ceiling: above this, "silence" would overlap real speech rms. */
@@ -33,6 +36,13 @@ const FLOOR_MARGIN = 1.6
 /** Soft-cap accepts a dip that isn't full silence — 1.5x the silence bar. */
 const SOFT_CAP_DIP = 1.5
 
+/** A clipboard event PERMITS an early cut, so an insert lands close to where it
+ *  happened. It never FORCES one: forcing a cut on every copy would slice
+ *  mid-word, which the 2026-07-14 investigation identified as the primary
+ *  source of garbled transcripts. Order already carries most of the value of
+ *  interleaving, so exactness is not worth the accuracy. */
+export const INSERT_FLOOR_MS = 9000
+
 export function effectiveSilenceThreshold(configured: number, floorP20: number | null): number {
   if (floorP20 == null) return configured
   return Math.min(Math.max(configured, floorP20 * FLOOR_MARGIN), THRESHOLD_CAP)
@@ -40,6 +50,21 @@ export function effectiveSilenceThreshold(configured: number, floorP20: number |
 
 export function decideCut(input: CutInput): CutDecision {
   if (input.chunkElapsedMs >= input.hardCapMs) return 'hard-cap'
+
+  // Below minChunkMs on purpose — but only in real, sustained silence, so this
+  // can never land mid-word, and only past a floor, so the chunk still has
+  // enough audio to transcribe well.
+  if (
+    input.insertPending &&
+    input.chunkElapsedMs < input.minChunkMs &&
+    input.chunkElapsedMs >= (input.insertFloorMs ?? INSERT_FLOOR_MS) &&
+    input.rms < input.threshold &&
+    input.silenceSinceMs != null &&
+    input.silenceSinceMs >= input.silenceDurationMs
+  ) {
+    return 'insert'
+  }
+
   if (input.chunkElapsedMs < input.minChunkMs) return 'none'
   if (
     input.chunkElapsedMs >= input.hardCapMs - input.softCapWindowMs &&

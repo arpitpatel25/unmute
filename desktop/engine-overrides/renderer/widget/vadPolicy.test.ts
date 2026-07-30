@@ -46,3 +46,52 @@ describe('decideCut', () => {
     assert.equal(decideCut({ ...base, chunkElapsedMs: 39_000, rms: 0.02 }), 'none')
   })
 })
+
+describe('insert cut (permit, never force)', () => {
+  const silent = {
+    ...base, rms: 0.001, silenceSinceMs: 800, chunkElapsedMs: 12_000,
+  }
+
+  test('a pending insert in sustained silence past the floor cuts', () => {
+    assert.equal(decideCut({ ...silent, insertPending: true }), 'insert')
+  })
+
+  test('no pending insert: unchanged behaviour, no cut before minChunkMs', () => {
+    assert.equal(decideCut(silent), 'none')
+  })
+
+  test('NEVER cuts mid-speech, however long the chunk has run', () => {
+    assert.equal(
+      decideCut({ ...silent, rms: 0.2, silenceSinceMs: null, insertPending: true }),
+      'none',
+    )
+  })
+
+  test('never cuts below the floor — a sliver transcribes badly', () => {
+    assert.equal(
+      decideCut({ ...silent, chunkElapsedMs: 3_000, insertPending: true }),
+      'none',
+    )
+  })
+
+  test('silence must be SUSTAINED, not a momentary dip', () => {
+    assert.equal(
+      decideCut({ ...silent, silenceSinceMs: 100, insertPending: true }),
+      'none',
+    )
+  })
+
+  test('hard cap still outranks an insert cut', () => {
+    assert.equal(
+      decideCut({ ...silent, chunkElapsedMs: 45_000, insertPending: true }),
+      'hard-cap',
+    )
+  })
+
+  test('past minChunkMs an ordinary silence cut still wins the label', () => {
+    assert.equal(
+      decideCut({ ...silent, chunkElapsedMs: 31_000, insertPending: true }),
+      'silence',
+    )
+  })
+})
