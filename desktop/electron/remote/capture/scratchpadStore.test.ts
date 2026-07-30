@@ -109,6 +109,116 @@ describe('deserialize refuses anything it does not recognise', () => {
   })
 })
 
+// A version-skewed or truncated pad must not survive load. insertRender does
+// `e.text.trim()` on a segment, so a segment without `text` would throw AT
+// DELIVERY and take the held work with it — the one failure this feature
+// promises can't happen. Every payload field is checked here instead.
+describe('deserialize validates entry PAYLOADS, not just the tag', () => {
+  const wrap = (entry: unknown): string => JSON.stringify({
+    id: 'a', origin: 'task', createdAt: 0, updatedAt: 0, entries: [entry],
+  })
+
+  describe('segment', () => {
+    test('a well-formed segment is accepted', () => {
+      const raw = wrap({ type: 'segment', id: 's', text: 'hi', startMs: 0, endMs: 1 })
+      assert.deepEqual(deserialize(raw)?.entries.length, 1)
+    })
+    test('a segment with no text returns null', () => {
+      assert.equal(deserialize(wrap({ type: 'segment', id: 's', startMs: 0, endMs: 1 })), null)
+    })
+    test('a segment whose text is not a string returns null', () => {
+      assert.equal(
+        deserialize(wrap({ type: 'segment', id: 's', text: 5, startMs: 0, endMs: 1 })),
+        null,
+      )
+    })
+    test('a segment whose text is null returns null', () => {
+      assert.equal(
+        deserialize(wrap({ type: 'segment', id: 's', text: null, startMs: 0, endMs: 1 })),
+        null,
+      )
+    })
+    test('a segment with a missing startMs returns null', () => {
+      assert.equal(deserialize(wrap({ type: 'segment', id: 's', text: '', endMs: 1 })), null)
+    })
+    test('a segment with a non-numeric startMs returns null', () => {
+      assert.equal(
+        deserialize(wrap({ type: 'segment', id: 's', text: '', startMs: '0', endMs: 1 })),
+        null,
+      )
+    })
+    test('a segment with a missing endMs returns null', () => {
+      assert.equal(deserialize(wrap({ type: 'segment', id: 's', text: '', startMs: 0 })), null)
+    })
+    test('a segment with a non-numeric endMs returns null', () => {
+      assert.equal(
+        deserialize(wrap({ type: 'segment', id: 's', text: '', startMs: 0, endMs: null })),
+        null,
+      )
+    })
+  })
+
+  describe('insert', () => {
+    test('a well-formed insert is accepted', () => {
+      const raw = wrap({ type: 'insert', id: 'i', kind: 'image', content: '/a.png', atMs: 2 })
+      assert.deepEqual(deserialize(raw)?.entries.length, 1)
+    })
+    test('an insert with an unknown kind returns null', () => {
+      assert.equal(
+        deserialize(wrap({ type: 'insert', id: 'i', kind: 'video', content: 'x', atMs: 0 })),
+        null,
+      )
+    })
+    test('an insert with no kind returns null', () => {
+      assert.equal(deserialize(wrap({ type: 'insert', id: 'i', content: 'x', atMs: 0 })), null)
+    })
+    test('an insert with a non-string kind returns null', () => {
+      assert.equal(
+        deserialize(wrap({ type: 'insert', id: 'i', kind: 3, content: 'x', atMs: 0 })),
+        null,
+      )
+    })
+    test('an insert with no content returns null', () => {
+      assert.equal(deserialize(wrap({ type: 'insert', id: 'i', kind: 'url', atMs: 0 })), null)
+    })
+    test('an insert whose content is not a string returns null', () => {
+      assert.equal(
+        deserialize(wrap({ type: 'insert', id: 'i', kind: 'url', content: { a: 1 }, atMs: 0 })),
+        null,
+      )
+    })
+    test('an insert with no atMs returns null', () => {
+      assert.equal(deserialize(wrap({ type: 'insert', id: 'i', kind: 'url', content: 'x' })), null)
+    })
+    test('an insert with a non-numeric atMs returns null', () => {
+      assert.equal(
+        deserialize(wrap({ type: 'insert', id: 'i', kind: 'url', content: 'x', atMs: '0' })),
+        null,
+      )
+    })
+    test('every known kind is accepted', () => {
+      for (const kind of ['url', 'path', 'line', 'block', 'image']) {
+        const raw = wrap({ type: 'insert', id: 'i', kind, content: 'x', atMs: 0 })
+        assert.notEqual(deserialize(raw), null, `kind ${kind} should be accepted`)
+      }
+    })
+  })
+
+  test('ONE bad entry invalidates the WHOLE pad — no half-valid delivery', () => {
+    const raw = JSON.stringify({
+      id: 'a',
+      origin: 'task',
+      createdAt: 0,
+      updatedAt: 0,
+      entries: [
+        { type: 'segment', id: 's1', text: 'good', startMs: 0, endMs: 1 },
+        { type: 'segment', id: 's2', startMs: 2, endMs: 3 },
+      ],
+    })
+    assert.equal(deserialize(raw), null)
+  })
+})
+
 describe('settle', () => {
   test('a pad touched recently does not settle', () => {
     const p = { ...full(), updatedAt: 1000 }

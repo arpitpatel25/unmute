@@ -13,7 +13,7 @@
 // strings and objects. The task that owns the capture lifecycle wires this to
 // disk with the house atomic-write pattern (write `.tmp`, then rename).
 
-import type { Destination, Entry, Pad } from './types'
+import type { Destination, Entry, Insert, InsertKind, Pad, Segment } from './types'
 
 /** Long enough to cover stepping away from a real piece of work; short enough
  *  that a forgotten pad stops occupying the screen the same day. */
@@ -31,11 +31,39 @@ const ORIGINS: Destination[] = ['cursor', 'task']
 
 const ENTRY_TYPES = new Set(['segment', 'insert'])
 
+const INSERT_KINDS = new Set<string>(
+  ['url', 'path', 'line', 'block', 'image'] satisfies InsertKind[],
+)
+
+/** THE PAYLOAD IS VALIDATED, NOT JUST THE TAG.
+ *
+ *  Checking only `type` and `id` would let a version-skewed or truncated pad
+ *  through with a segment that has no `text` — and insertRender calls
+ *  `e.text.trim()`, so it would throw AT DELIVERY, destroying held work. That
+ *  is the one thing the scratchpad promises never happens, so a half-shaped
+ *  entry has to fail here, at load, where the cost is starting fresh. */
+function validEntry(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false
+  const entry = e as Partial<Entry>
+  if (typeof entry.type !== 'string' || !ENTRY_TYPES.has(entry.type)) return false
+  if (typeof entry.id !== 'string') return false
+  if (entry.type === 'segment') {
+    const s = entry as Partial<Segment>
+    return typeof s.text === 'string'
+      && typeof s.startMs === 'number'
+      && typeof s.endMs === 'number'
+  }
+  const i = entry as Partial<Insert>
+  return typeof i.kind === 'string'
+    && INSERT_KINDS.has(i.kind)
+    && typeof i.content === 'string'
+    && typeof i.atMs === 'number'
+}
+
 /** Anything unrecognised returns null and the caller starts fresh. A pad is
  *  the user's own work, so a corrupt or partial file must never throw and
  *  must never yield a half-valid object that could deliver a mangled
- *  payload — every field is validated, including that every entry has a
- *  known `type` and a string `id`. */
+ *  payload — every field is validated, including every entry's payload. */
 export function deserialize(raw: string): Pad | null {
   let v: unknown
   try {
@@ -50,10 +78,7 @@ export function deserialize(raw: string): Pad | null {
   if (typeof p.createdAt !== 'number' || typeof p.updatedAt !== 'number') return null
   if (!Array.isArray(p.entries)) return null
   for (const e of p.entries) {
-    if (!e || typeof e !== 'object') return null
-    const entry = e as Partial<Entry>
-    if (typeof entry.type !== 'string' || !ENTRY_TYPES.has(entry.type)) return null
-    if (typeof entry.id !== 'string') return null
+    if (!validEntry(e)) return null
   }
   return {
     id: p.id,

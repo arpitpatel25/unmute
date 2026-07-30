@@ -1,12 +1,32 @@
-import { clipboard, app, nativeImage } from 'electron'
+import { clipboard, app } from 'electron'
 import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import path from 'path'
 import { keyListener } from './keyListener'
 // Static import (a lazy require of this path can't resolve inside the bundled
 // main — proven live: 'Cannot find module' swallowed by the fail-open catch).
-// No cycle: remote/init never imports clipboard.ts.
-import { consumeStagedForDictation } from './paywall/remote/init'
+// NO CYCLE, AND IT HAS TO STAY THAT WAY: remote/capture imports nothing from
+// engine-overrides. The paste effect it needs is REGISTERED into it by
+// sessionManager (registerPaste), never imported from here — see the façade's
+// header. Adding an import the other way closes the loop this comment exists
+// to prevent.
+import { noteOwnClipboardWrite } from './paywall/remote/capture/index'
+
+/**
+ * Announce a pasteboard write we caused.
+ *
+ * MUST BE CALLED SYNCHRONOUSLY, WITH NO `await` BETWEEN THE WRITE AND THE
+ * CALL. noteOwnWrite reads the change counter AT CALL TIME and records that
+ * value; the watcher polls every 250ms, so any suspension between the write
+ * and the record lets the poll observe our own write as a user copy — and a
+ * user copy becomes an insert at the top of the transcript.
+ *
+ * Fail-open: an unarmed (or absent) watcher has nothing to record, and a
+ * throw here must never reach the dictation path.
+ */
+function noteOurWrite(): void {
+  try { noteOwnClipboardWrite() } catch { /* watcher not armed — nothing to record */ }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -266,12 +286,25 @@ export async function captureSelectedText(useClipboardFallback: boolean = false)
 
     // Clear clipboard to detect if Cmd+C actually copies something new
     clipboard.writeText('')
+    noteOurWrite() // (1) ours — the clear
 
     // Try to simulate Cmd+C
     try {
       await simulateKeyCombo('c', 'command')
+      // (2) THE ONE THAT IS EASY TO MISS. The copy above is CAUSED by us but
+      // PERFORMED by System Events in another process, so its counter value
+      // cannot be known in advance — it can only be read once the child has
+      // completed. Miss it and the user's current selection is inserted at the
+      // top of EVERY SINGLE DICTATION, which is precisely the corruption this
+      // whole design exists to prevent.
+      noteOurWrite()
       // Wait for clipboard to update
       await sleep(150)
+      // The pasteboard may only settle during the sleep above (osascript
+      // returns as soon as the keystroke is posted, not when the target app
+      // has served the copy). Record the counter again so a late-landing
+      // change from OUR synthesized ⌘C is covered too.
+      noteOurWrite()
 
       // Read the new clipboard content
       const selectedText = clipboard.readText()
@@ -279,6 +312,7 @@ export async function captureSelectedText(useClipboardFallback: boolean = false)
 
       // Restore original clipboard
       clipboard.writeText(savedClipboard)
+      noteOurWrite() // (3) ours — the restore
 
       // If clipboard is still empty, nothing was selected
       if (!selectedText || selectedText.trim() === '') {
@@ -293,6 +327,9 @@ export async function captureSelectedText(useClipboardFallback: boolean = false)
 
       // Restore clipboard (we cleared it above)
       clipboard.writeText(savedClipboard)
+      noteOurWrite() // (3b) ours — the restore on the FAILURE branch, which
+      // still writes. A write that skips its record is indistinguishable from
+      // a user copy, so every branch that writes must announce itself.
 
       // Fallback: use clipboard contents as context if requested
       if (useClipboardFallback && savedClipboard && savedClipboard.trim() !== '') {
@@ -342,39 +379,15 @@ export function getOutputMode(): 'paste' | 'clipboard' {
   return outputMode
 }
 
-/** Ask a SEPARATE process whether the system pasteboard serves a PNG of the
- *  expected byte size (`clipboard info` is a tiny metadata listing — no image
- *  data crosses). Resolves true on confirmation, false on timeout (caller
- *  pastes anyway — bounded, never hangs). */
-function verifyPasteboardServesPNG(expectedBytes: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  return new Promise((resolve) => {
-    const attempt = () => {
-      execFile('osascript', ['-e', 'clipboard info'], { timeout: 2000 }, (err, stdout) => {
-        if (!err && stdout) {
-          // e.g. "«class PNGf», 2189440, TIFF picture, 9640988"
-          const m = /«class PNGf», (\d+)/.exec(stdout)
-          if (m && Number(m[1]) === expectedBytes) { resolve(true); return }
-        }
-        if (Date.now() >= deadline) { resolve(false); return }
-        setTimeout(attempt, 60)
-      })
-    }
-    attempt()
-  })
-}
-
 export async function injectOutput(text: string): Promise<void> {
   const tStart = Date.now()
-  // Consume the screenshot ledger BEFORE the text write below overwrites the
-  // clipboard — a ⌃-screenshot taken mid-dictation still lives there right now,
-  // and consume's sweep is what captures it. (Delivery happens after the text.)
-  let stagedImages: string[] = []
-  try { stagedImages = consumeStagedForDictation() } catch (err) {
-    console.warn('[clipboard] staged consume failed:', err instanceof Error ? err.message : err)
-  }
+  // No staged-screenshot consume here any more. Images captured during a
+  // dictation are INSERTS in the capture buffer now, positioned where they
+  // happened, and they are delivered by the capture seam — not appended blind
+  // after the text. (Task 13 removes the old ledger itself.)
   const padded = padOutput(text)
   clipboard.writeText(padded)
+  noteOurWrite() // ours — delivery's own write, synchronous with it
   console.log(`[clipboard] writeText (${padded.length} chars) in ${Date.now() - tStart}ms`)
 
   if (outputMode === 'clipboard') {
@@ -398,44 +411,11 @@ export async function injectOutput(text: string): Promise<void> {
     console.error(`[clipboard] Auto-paste FAILED after ${Date.now() - tStart}ms:`, err instanceof Error ? err.message : err)
     console.log('[clipboard] Text is in clipboard, user can Cmd+V manually')
   }
-
-  // ── Staged screenshots (ADDITIVE, fail-open): images captured during/just
-  // before this dictation ride into the SAME app, pasted right after the text —
-  // identical mechanism (clipboard + Cmd+V), one image per paste. The staging
-  // ledger (pill 🖼 chip) already gave the user visibility + pruning. Lazy
-  // require avoids an import cycle; ANY failure leaves dictation exactly as it
-  // was — text already delivered above.
-  try {
-    const staged = stagedImages
-    if (staged.length) {
-      for (const p of staged) {
-        const img = nativeImage.createFromPath(p)
-        if (img.isEmpty()) continue
-        const expectedBytes = img.toPNG().length
-        clipboard.writeImage(img)
-        // CROSS-PROCESS verified handoff (image latency is allowed): ask a child
-        // process (osascript `clipboard info`) whether the SYSTEM pasteboard
-        // actually serves our PNG — own-process reads reflect our own write
-        // instantly and prove nothing. Paste only once another process sees the
-        // exact payload (byte size match); bounded fallback keeps it un-hangable.
-        await verifyPasteboardServesPNG(expectedBytes, 900)
-        await simulateKeyCombo('v', 'command')
-        await sleep(180) // let the target app ingest before the next image
-      }
-      // Leave the TEXT on the clipboard, not the last image — otherwise the
-      // pasted image lingers and the next dictation's probe re-discovers it
-      // (the repeat-paste bug). Also matches pre-feature behavior: after a
-      // dictation, your clipboard holds what you dictated.
-      clipboard.writeText(padded)
-      console.log(`[clipboard] pasted ${staged.length} staged screenshot(s) after dictation`)
-    }
-  } catch (err) {
-    console.warn('[clipboard] staged-screenshot paste skipped:', err instanceof Error ? err.message : err)
-  }
 }
 
 export function copyToClipboard(text: string): void {
   const padded = padOutput(text)
   clipboard.writeText(padded)
+  noteOurWrite() // ours — the clipboard-mode delivery write
   console.log('[clipboard] Text copied to clipboard (padded), length:', padded.length)
 }

@@ -62,6 +62,7 @@ declare module 'electron' {
   }
   export const clipboard: {
     readImage(): NativeImage
+    readText(): string
     writeText(text: string): void
     availableFormats(): string[]
     clear(): void

@@ -19,6 +19,11 @@ import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
 import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 // Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
 import { dispatchFromCapture, hideNativePill } from './paywall/remote/init'
+import {
+  attachTranscript, beginSegment, cancelOpenSegment,
+  endSegment, getCaptureSettings, isArmed, rebaselineClipboard, registerPaste,
+} from './paywall/remote/capture/index'
+import { canObserve } from './paywall/remote/capture/captureGate'
 import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
 import { buildCorrectionMessages, shouldAttemptCleanup, CORRECTION_TIMEOUT_MS, CLEANUP_MODEL } from './cleanupPass'
 import { applyGatedCorrection } from './correctionGate'
@@ -137,6 +142,11 @@ interface SessionState {
   // Remote capture can never leak its mode into the next dictation. Default-safe:
   // a fresh session is always 'dictation' unless explicitly started as remote.
   kind: 'dictation' | 'remote'
+  // The capture-buffer segment this recording opened, so the transcript can be
+  // attached to the RIGHT segment when it lands 30-45s later. Null when the
+  // capture seam never opened one (it is fail-open — a capture failure must
+  // never surface on the dictation path).
+  captureSegmentId: string | null
 }
 
 function sendToWidget(channel: string, ...args: unknown[]): void {
@@ -156,6 +166,12 @@ function sendToWidget(channel: string, ...args: unknown[]): void {
  * putting it back on the user's screen.
  */
 let remoteDispatchQueue: Promise<void> = Promise.resolve()
+
+// The capture façade's delivery handler cannot import injectOutput without
+// closing the cycle clipboard.ts's header exists to prevent (a lazy require of
+// remote/init from clipboard.ts fails inside the bundled main). injectOutput
+// already lives here, so hand it over rather than importing it there.
+registerPaste(async (text: string) => { await injectOutput(text) })
 
 class SessionManager {
   private currentSession: SessionState | null = null
@@ -821,6 +837,7 @@ class SessionManager {
         errorMessage: null,
         createdAt: Date.now(),
         kind, // stamped at birth; default 'dictation' (default-safe → paste)
+        captureSegmentId: null,
       }
       console.log('[session] New session created:', sessionId, '| kind:', kind)
       logTelemetry('session-start', { sessionId, mode, kind, engineMode: (() => { try { return getPaywallEngineMode() } catch { return '?' } })() })
@@ -845,6 +862,16 @@ class SessionManager {
     // show the Remote badge on the pill.
     sendToWidget('recording:start', mode, this.currentSession.sessionId, this.currentSession.kind)
     console.log('[session] HUD shown, recording:start sent for mode:', mode, 'kind:', this.currentSession.kind)
+
+    // Capture arms with the mic and disarms with it — the recording window is
+    // the consent signal (spec §5.4). Fire-and-forget: a capture failure must
+    // never surface on the dictation path.
+    try {
+      const origin = this.currentSession.kind === 'remote' ? 'task' : 'cursor'
+      this.currentSession.captureSegmentId = beginSegment(
+        origin, Date.now(), canObserve(getCaptureSettings()),
+      )
+    } catch (e) { console.warn('[session] capture arm failed:', e) }
 
     // Warm the cloud path NOW — in parallel with the user speaking — so the STT
     // call rides a LIVE socket + FRESH token instead of a cold connection that
@@ -942,6 +969,53 @@ class SessionManager {
    */
 
 
+  /**
+   * ARMED STOP DELIVERS NOTHING. This is the behaviour the whole feature rests
+   * on, so it lives in ONE place and is called ABOVE the remote/paste split at
+   * every delivery site — guarding the two branches separately is how you ship
+   * half of it.
+   *
+   * Armed: the transcript attaches to its segment, the pad stays, nothing is
+   * pasted and nothing is dispatched. Returns true, and the caller returns
+   * immediately.
+   *
+   * Unarmed: returns false and delivery is EXACTLY what it is today — this
+   * function's only effect is to drop the pad, which nothing on the unarmed
+   * path reads. The fast path does not move.
+   */
+  private holdIfArmed(
+    text: string,
+    session: SessionState,
+    apiTimeout: ReturnType<typeof setTimeout>,
+  ): boolean {
+    let armed = false
+    try { armed = isArmed() } catch { armed = false }
+
+    // UNARMED: nothing here touches delivery. The leftover pad is dropped at
+    // the START of the next capture (beginSegment) rather than here, because
+    // the unarmed pad is what Task 12's inline-insert delivery reads at this
+    // very point — destroying it now would be a trap for the next task.
+    if (!armed) return false
+
+    try {
+      attachTranscript(session.captureSegmentId, text, Date.now())
+    } catch (e) {
+      console.warn('[session] capture hold failed:', e)
+    }
+    console.log('[session] 📌 SCRATCHPAD ARMED — holding, not delivering')
+    session.status = 'done'
+    session.output = null
+    sendToWidget('scratchpad:held', session.sessionId)
+    this.scheduleAutoHide(1500)
+    clearTimeout(apiTimeout)
+    this.abortController = null
+    this.isProcessing = false
+    this.resetChunkState()
+    this.currentSession = null
+    this.onSessionEnded?.()
+    return true
+  }
+
   private async dispatchRemoteAndFinish(
     command: string,
     session: SessionState,
@@ -1033,6 +1107,11 @@ class SessionManager {
 
     console.log('[session] STOP recording, mode:', mode)
     sendToWidget('recording:stop')
+
+    // The mic is cold: close the capture window. Both watchers stop here, so
+    // neither the clipboard nor the filesystem is observed for one moment
+    // longer than the user held the key.
+    try { endSegment(Date.now()) } catch (e) { console.warn('[session] capture disarm failed:', e) }
 
     // Notify main process (for Escape shortcut unregistration)
     this.onRecordingStopped?.()
@@ -1482,6 +1561,10 @@ class SessionManager {
             session.dictationTranscript = transcript
             let output = cleanTranscript(transcript) // reassigned below by formatOutputForUser
 
+            // ─── Scratchpad: armed stop HOLDS instead of delivering ───
+            // Above BOTH branches on purpose — see holdIfArmed.
+            if (this.holdIfArmed(output, session, apiTimeout)) return
+
             // ─── Unmute Remote (ADDITIVE): dispatch instead of paste ───
             if (session.kind === 'remote') {
               await this.dispatchRemoteAndFinish(output, session, apiTimeout)
@@ -1614,6 +1697,10 @@ class SessionManager {
             console.log(`[session] Pipeline used fallback (${pipelineResult.fallbackReason})`)
             session.errorMessage = 'formatting-fallback'
           }
+
+          // ─── Scratchpad: armed stop HOLDS instead of delivering ───
+          // Above BOTH branches on purpose — see holdIfArmed.
+          if (this.holdIfArmed(output, session, apiTimeout)) return
 
           // ─── Unmute Remote (ADDITIVE): dispatch instead of paste ───
           if (session.kind === 'remote') {
@@ -2064,6 +2151,10 @@ class SessionManager {
 
         const transformMs = Date.now() - transformStart
 
+        // ─── Scratchpad: armed stop HOLDS instead of delivering ───
+        // Above BOTH branches on purpose — see holdIfArmed.
+        if (this.holdIfArmed(output, session, apiTimeout)) return
+
         // ─── Unmute Remote (ADDITIVE): dispatch instead of paste ───
         if (session.kind === 'remote') {
           await this.dispatchRemoteAndFinish(output, session, apiTimeout)
@@ -2174,6 +2265,11 @@ class SessionManager {
 
     console.log('[session] Session DISCARDED (too short):', this.currentSession.sessionId)
 
+    // Backstop on the consent invariant: whatever route got us here, the mic is
+    // cold, so the watchers must be. stopRecording has normally already closed
+    // the window — this is idempotent when it has.
+    try { cancelOpenSegment(Date.now()) } catch { /* nothing open */ }
+
     this.currentSession = null
     this.resetChunkState()
     setTrayIdle()
@@ -2206,6 +2302,10 @@ class SessionManager {
     this.abortController = null
     this.expectingInstructionAudio = false
     this.resetChunkState()
+    // Escape kills the utterance, NEVER the pad. This drops the segment that
+    // was in progress and closes the capture window; held work is untouched —
+    // discard() is the only thing that destroys it, and it confirms first.
+    try { cancelOpenSegment(Date.now()) } catch { /* nothing open */ }
     console.log('[session] 🔓 isProcessing = FALSE (cancelled)')
     this.currentSession = null
     setTrayIdle()
@@ -2230,6 +2330,12 @@ class SessionManager {
 
     // Stop recording in the widget
     sendToWidget('recording:stop')
+
+    // Escape kills the utterance, NEVER the pad — same reasoning as
+    // cancelSession. Undo re-processes the audio; the segment it lost was
+    // empty anyway (the transcript had not landed yet), so nothing of the
+    // user's is at stake either way.
+    try { cancelOpenSegment(Date.now()) } catch { /* nothing open */ }
 
     // Save session state for potential undo
     this.cancelledSession = this.currentSession
@@ -2336,6 +2442,13 @@ class SessionManager {
       }
     } catch (err) {
       console.warn('[session] Failed to capture selected text:', err instanceof Error ? err.message : err)
+    } finally {
+      // Our own clear → synthesised ⌘C → restore has finished. Re-baseline the
+      // clipboard watcher so none of those three changes can ever be read back
+      // as a user copy, whatever the poll happened to observe mid-sequence.
+      // No-op when the watcher was never armed (capture disabled, or a remote
+      // capture whose grab runs after the mic is already cold).
+      try { rebaselineClipboard() } catch { /* watcher not armed */ }
     }
   }
 

@@ -18,12 +18,12 @@
 // NOT unit-tested — exactly like paywall/main-extensions.ts. The logic it
 // orchestrates (TaskManager, executor, status-file) is unit-tested separately.
 
-import { ipcMain, BrowserWindow, Notification, shell, app } from 'electron'
+import { ipcMain, BrowserWindow, Notification, shell, app, clipboard } from 'electron'
 import Store from 'electron-store'
 import { join, dirname, basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { existsSync, writeFileSync, mkdirSync, promises as fs } from 'node:fs'
+import { existsSync, writeFileSync, mkdirSync, statSync, watch, promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
@@ -75,6 +75,11 @@ import {
 } from './curator-store'
 import { writeSkill } from './curator-writer'
 import { devlog, devEvent } from './curator-devlog'
+import { createClipboardWatch } from './capture/clipboardWatch'
+import { createScreenshotWatch } from './capture/screenshotWatch'
+import {
+  claimShared, currentPad, initWatchers, recordInsert, registerSettings,
+} from './capture/index'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -1295,6 +1300,128 @@ function screenshotDir(): string {
   return screenshotDirCache
 }
 
+// ── The composed capture seam ───────────────────────────────────────────
+//
+// The two watchers live here because this is where the platform is: Electron's
+// clipboard, the native change counter, fs.watch. Everything they FEED is pure
+// and tested (capture/*). They are constructed once and armed/disarmed by the
+// session lifecycle — never by anything here.
+
+/** The pasteboard change counter. The addon may be absent (build failure,
+ *  non-mac); -1 means "cannot observe", which the watcher treats as never
+ *  firing — the same fail-quiet posture every other native-addon call site
+ *  takes. */
+let nativeClipCounter: { clipboardChangeCount(): number } | null = null
+let nativeClipTried = false
+function clipboardChangeCount(): number {
+  if (!nativeClipTried) {
+    nativeClipTried = true
+    try {
+      nativeClipCounter = require('unmute-native-paste') as { clipboardChangeCount(): number }
+      if (typeof nativeClipCounter?.clipboardChangeCount !== 'function') nativeClipCounter = null
+    } catch { nativeClipCounter = null }
+    if (!nativeClipCounter) log.warn('clipboard change counter unavailable — capture will not observe copies', {})
+  }
+  try { return nativeClipCounter?.clipboardChangeCount() ?? -1 } catch { return -1 }
+}
+
+/** Tell the recorder an insert is pending so decideCut may take an early cut
+ *  (Task 5). Best-effort: a missed push only costs positional precision. */
+function notifyInsertDetected(): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send('capture:insert-detected') } catch { /* window going away */ }
+  }
+}
+
+/** The pad changed. Inert until the pad panel exists (Task 14) — the channel
+ *  is here so there is exactly one place that announces a pad change. */
+function broadcastScratchpad(): void {
+  const pad = currentPad()
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send('scratchpad:changed', pad) } catch { /* window going away */ }
+  }
+}
+
+/** The ONE pasteboard image reader — one process, one PNG encoder. A second
+ *  reader with a different encoder is the documented cause of duplicated
+ *  pastes. Writes into padDir and returns the path; no baseline, no signature
+ *  set, and it never clears the clipboard. */
+function rescueClipboardImageViaChild(padDir: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    try { mkdirSync(padDir, { recursive: true }) } catch { /* exists */ }
+    const dest = join(padDir, `insert-${Date.now()}.png`)
+    const script = [
+      'try',
+      'set png to the clipboard as «class PNGf»',
+      `set f to open for access POSIX file "${dest}" with write permission`,
+      'set eof f to 0',
+      'write png to f',
+      'close access f',
+      'on error',
+      'end try',
+    ].flatMap((l) => ['-e', l])
+    execFile('osascript', script, { timeout: 5000 }, (err) => {
+      if (err) { resolve(null); return }
+      try { resolve(statSync(dest).size > 0 ? dest : null) } catch { resolve(null) }
+    })
+  })
+}
+
+/** Construct both watchers and hand them to the façade. Idempotent. */
+function initCaptureWatchers(): void {
+  // onInsert is the ONLY path from a watcher into the buffer, so position and
+  // dedup are decided in one place.
+  const cw = createClipboardWatch({
+    changeCount: clipboardChangeCount,
+    readText: () => { try { return clipboard.readText() } catch { return '' } },
+    hasImage: () => {
+      try { return clipboard.availableFormats().some((f) => f.startsWith('image/')) } catch { return false }
+    },
+    rescueImage: (padDir) => rescueClipboardImageViaChild(padDir),
+    exists: (p) => { try { return existsSync(p.replace(/^~/, homedir())) } catch { return false } },
+    now: () => Date.now(),
+    onInsert: (i) => { recordInsert(i, Date.now()); broadcastScratchpad(); notifyInsertDetected() },
+  })
+
+  const sw = createScreenshotWatch({
+    dirs: () => {
+      const base = screenshotDir()
+      return [
+        { dir: base, dedicated: false },
+        { dir: join(base, 'Screenshots'), dedicated: true },
+        { dir: join(homedir(), 'Desktop', 'Screenshots'), dedicated: true },
+      ]
+    },
+    // FAIL-SOFT PER DIRECTORY. Two of the three candidates usually do not
+    // exist, and fs.watch THROWS synchronously on a missing path — an
+    // unguarded throw here would abort the whole arm() loop and leave the
+    // directories that DO exist unwatched.
+    watch: (dir, cb) => {
+      try {
+        return watch(dir, (_evt, filename) => cb(String(filename ?? '')))
+      } catch {
+        return { close: () => { /* never opened */ } }
+      }
+    },
+    now: () => Date.now(),
+    // Path-keyed, and deliberately NOT the cross-detector dedup — that lives in
+    // recordInsert, where the two detectors actually meet. This only stops the
+    // SAME file firing twice from fs.watch, which macOS does emit (a write and
+    // a rename for one screenshot).
+    claim: (hash, atMs) => claimShared(hash, atMs),
+    onInsert: (i) => { recordInsert(i, Date.now()); broadcastScratchpad(); notifyInsertDetected() },
+  })
+
+  initWatchers(cw, sw)
+
+  // Settings read through a registered function, not an import — the same
+  // inversion, for the same reason (capture/ must not import init.ts).
+  registerSettings(() => ({
+    scratchpadEnabled: settings.get('scratchpadEnabled') !== false,
+    captureEnabled: settings.get('captureEnabled') !== false,
+  }))
+}
+
 function stageBuffer(buf: Buffer, tag: string): void {
   if (stagedAttachments.length >= getKnobs().captureMaxAuto) return
   try {
@@ -2091,6 +2218,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // config (no status bar, mouse scroll, fixed size).
   refreshTmux()
   log.event(tmuxBin ? 'tmux-available' : 'tmux-unavailable', { tmuxBin, conf: tmuxConfPath })
+
+  // Build the capture watchers and register the settings reader. Constructing
+  // them is inert — neither observes anything until the session lifecycle arms
+  // it at the start of a recording.
+  try { initCaptureWatchers() } catch (e) { log.warn('capture watchers unavailable', { error: (e as Error).message }) }
 
   // DECIDED isolation: browser tasks run in a DEDICATED Chrome (its own profile)
   // so automation + the "debugging" banner never touch the user's real browser.
