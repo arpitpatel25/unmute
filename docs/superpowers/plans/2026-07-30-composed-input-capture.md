@@ -1440,13 +1440,34 @@ export function createClipboardWatch(deps: ClipboardWatchDeps): ClipboardWatch {
     busy = true
     try {
       if (deps.hasImage()) {
-        const path = await deps.rescueImage(padDir)
-        if (path) deps.onInsert({ kind: 'image', content: path, atMs: seenAt })
+        // Tight catch: a failed rescue degrades to "no insert". Deliberately
+        // narrow so it cannot swallow a real programming error elsewhere.
+        let path: string | null = null
+        try { path = await deps.rescueImage(padDir) } catch { path = null }
+        if (path) {
+          // The window may have closed while the rescue was in flight. Capture
+          // happens ONLY while the mic is hot, so a late arrival is dropped.
+          if (armed) deps.onInsert({ kind: 'image', content: path, atMs: seenAt })
+        }
         return
       }
       const text = deps.readText()
       if (!text.trim()) return
-      deps.onInsert({ kind: classifyText(text, deps.exists), content: text, atMs: seenAt })
+      if (armed) {
+        deps.onInsert({ kind: classifyText(text, deps.exists), content: text, atMs: seenAt })
+      }
+    } catch (err) {
+      // A DETECTION TICK MUST NEVER TAKE THE PROCESS DOWN. start() calls this
+      // as `void tick()`, which discards a rejection — and Node >= 15
+      // terminates on an unhandled one. So a throw from any dep (readText,
+      // hasImage, classifyText, onInsert) would kill the Electron main process
+      // mid-recording. onInsert is the realistic one: it broadcasts to every
+      // BrowserWindow, and a window destroyed between the isDestroyed() guard
+      // and the send throws.
+      //
+      // Logged, not silently dropped — a throwing dep is a real bug someone
+      // needs to be able to find.
+      console.warn('[capture] clipboardWatch tick failed:', err)
     } finally {
       busy = false
     }
