@@ -96,6 +96,12 @@ final class AppController: NSObject, NotchResizing {
         padHost.sizingOptions = []
         scratchWindow.contentView = padHost
 
+        reconcileSurfaces()
+    }
+
+    /// THE TWO INPUT SURFACES ARE MUTUALLY EXCLUSIVE, so they must be decided
+    /// together — either one changing can change the other's answer.
+    private func reconcileSurfaces() {
         reconcilePillVisibility()
         reconcilePadVisibility()
     }
@@ -116,12 +122,29 @@ final class AppController: NSObject, NotchResizing {
         }
     }
 
-    /// The pad is on screen only when it HOLDS something. Same rule as the pill
-    /// and for the same reason: an invisible always-on panel still sits in the
-    /// window server and still competes for clicks.
+    /// The pad is on screen only when it HOLDS something, and NEVER while the
+    /// pill is up. Same ordered-out rule as the pill, for the same reason: an
+    /// invisible always-on panel still sits in the window server and still
+    /// competes for clicks.
+    ///
+    /// THE PILL WINS THE SLOT. The pad's bottom edge is the top of the pill
+    /// cluster plus the cluster's own 9pt row spacing — which is exactly where
+    /// `PillView.content` puts the mic-status hint and the model/agent selector.
+    /// Both windows are `.screenSaver` and the pad orders itself front as it
+    /// appears, so a co-visible pad would cover the coaching line and the
+    /// selector panel — the selector being opened by a click on the very
+    /// cluster the scratchpad chip lives in.
+    ///
+    /// Making them exclusive rather than nudging the pad upward is the honest
+    /// fix: while a capture is running the PILL is the surface, the pad's
+    /// destinations are not actionable yet (the set is still changing, and
+    /// pasting at a cursor mid-dictation would fight the capture), and the pad
+    /// carries nothing the icon's armed state does not already say. The pad
+    /// returns the moment the capture's pill goes away, in the same place it
+    /// always sits — it never has to move to dodge anything.
     private func reconcilePadVisibility() {
         guard let scratchWindow else { return }
-        if scratchModel.visible {
+        if scratchModel.visible && !pillModel.visible {
             if !scratchWindow.isVisible {
                 scratchWindow.present()
                 Appearance.shared.invalidateBackdrop()
@@ -206,12 +229,12 @@ final class AppController: NSObject, NotchResizing {
                 NotchLog.log("CMD pill phase=\(state.phase.rawValue) kind=\(state.kind.rawValue)")
             }
             pillModel.state = state
-            reconcilePillVisibility()
+            reconcileSurfaces()
 
         case let .scratchpad(payload):
             NotchLog.log("CMD scratchpad enabled=\(payload.enabled) armed=\(payload.armed) delivering=\(payload.delivering) entries=\(payload.pad?.entries.count ?? 0)")
             scratchModel.state = payload
-            reconcilePadVisibility()
+            reconcileSurfaces()
 
         case .collapse:
             model.focusedId = nil

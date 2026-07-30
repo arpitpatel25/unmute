@@ -79,8 +79,9 @@ import { createClipboardWatch } from './capture/clipboardWatch'
 import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
   adoptPersistedPad, armScratchpad, claimShared, deliveryInFlight, discard as discardPad,
-  initWatchers, padDirOf, pasteAtCursor, recordInsert, registerSettings, removeFromPad,
-  runDelivery, snapshot, type DeliveryTarget,
+  heldForSurface, initWatchers, padDirOf, pasteAtCursor, promoteSettledPad, recordInsert,
+  registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot,
+  type DeliveryTarget,
 } from './capture/index'
 import type { Entry, InsertKind } from './capture/types'
 import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
@@ -1212,15 +1213,20 @@ function toScratchpadEntry(e: Entry): ScratchpadEntryP {
 
 /** What the native pad panel draws.
  *
+ *  THE PAD IS `heldForSurface`, NOT `s.pad`. An unarmed capture has a live pad
+ *  too — scaffolding for positioning inserts — and showing it meant an ordinary
+ *  dictation into Slack popped a panel open the moment the user pressed ⌘C, for
+ *  work that was about to be pasted automatically anyway. Worse, its Discard
+ *  reached the utterance they were still speaking. See heldForSurface for the
+ *  full rule; the point is that a surface may only ever show work the user
+ *  actually chose to hold.
+ *
  *  `delivering` is the reason Discard can be disabled honestly. Once a pad is
  *  taken for delivery it is work the user tried to SEND, and the delivery seam
  *  deliberately refuses to let discard clear it — a later failure restages it.
- *  A Discard that appeared to cancel a send would be lying about both.
- *
- *  A HELD pad (settled from a previous run) is shown when nothing is live, so
- *  work left behind is visible rather than only discoverable by arming. */
+ *  A Discard that appeared to cancel a send would be lying about both. */
 function scratchpadPayload(s = snapshot()): ScratchpadPayloadP {
-  const pad = s.pad ?? s.held
+  const pad = heldForSurface(s)
   return {
     enabled: settings.get('scratchpadEnabled') !== false,
     armed: s.armed,
@@ -1273,9 +1279,30 @@ function discardScratchpad(): void {
  *  restage path there is the case where nothing was written at all (no paste
  *  effect registered, or the write itself threw). The task path has no such
  *  property: if the router throws, the text reached nothing, and the pad is
- *  the only copy. */
+ *  the only copy.
+ *
+ *  A DESTINATION BUTTON THAT IS SHOWN MUST WORK. The panel can be showing a
+ *  SETTLED pad — one a previous run left behind — and the delivery seam only
+ *  ever reads the LIVE slot, so without the promotion below every button on
+ *  such a pad was inert: `deliver()` saw a null pad, returned null, and this
+ *  logged `empty: true` while nothing happened and nothing on screen changed.
+ *  The only button that worked was the destructive one. */
 async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promise<string | null> {
   const target: DeliveryTarget = dest === 'cursor' ? 'cursor' : dest === 'openTask' ? 'openTask' : 'newTask'
+
+  // Exactly what the panel offered — the same rule it was drawn from, so this
+  // can never deliver a pad the user was not looking at.
+  const before = snapshot()
+  const showing = heldForSurface(before)
+  if (showing && showing !== before.pad && !promoteSettledPad()) {
+    // The live slot is taken by a capture in progress. Refusing is the only
+    // honest answer: delivering the live pad would send an utterance the user
+    // is still speaking, and silently doing nothing is what this whole change
+    // exists to stop. The pad is untouched and still on disk.
+    log.event('scratchpad-deliver-refused', { to: target, reason: 'capture-in-progress' })
+    notchController?.toast('finish the recording first — the pad is still held')
+    return null
+  }
 
   // pasteAtCursor, NOT a direct injectOutput import: clipboard.ts imports FROM
   // this module, and its header records why that direction is one-way (a lazy
@@ -1439,6 +1466,12 @@ function initCaptureWatchers(): void {
     scratchpadEnabled: settings.get('scratchpadEnabled') !== false,
     captureEnabled: settings.get('captureEnabled') !== false,
   }))
+
+  // The pad also changes from the capture LIFECYCLE, not just from gestures —
+  // a capture ending, a transcript landing, an open segment cancelled. Without
+  // this the panel would appear at an armed stop holding a pad whose words had
+  // not arrived yet, and never update.
+  registerPadObserver(broadcastScratchpad)
 }
 
 /**
@@ -2870,8 +2903,22 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // Turning it OFF cannot leave an armed pad behind: armScratchpad refuses
     // while disabled, so the surface would keep showing an armed icon it could
     // no longer act on. Disarming through the same gate settles it instead.
-    if (!on) armScratchpadFrom(false)
-    else broadcastScratchpad()   // the icon appears again
+    //
+    // AND IT MUST NOT STRAND WHAT IS ALREADY HELD. Turning the feature off
+    // removes the ICON, not the user's work: the panel stays reachable for a
+    // pad that is already on disk (see ScratchpadModel.visible), and delivery
+    // stays possible because promoteSettledPad is not behind the gate. Off
+    // means "hold nothing NEW", never "you can no longer reach what you held".
+    if (!on) {
+      armScratchpadFrom(false)
+      const stranded = snapshot().held
+      if (stranded) {
+        log.event('scratchpad-disabled-with-held-work',
+                  { padId: stranded.id, entries: stranded.entries.length })
+      }
+    } else {
+      broadcastScratchpad()   // the icon appears again
+    }
     return true
   })
   // The Unmute MCP master switch (agent-created tasks).

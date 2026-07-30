@@ -10,8 +10,10 @@ import Combine
 //
 // That boundary is not tidiness — it is the dictation constraint. Heavy
 // main-process work while recording corrupts audio, so the capture path keeps
-// its existing shape and this surface never touches it. The only new traffic
-// during a capture is one amplitude float per frame.
+// its existing shape and this surface never touches it. The traffic during a
+// capture is one amplitude float per frame, plus a `scratchpad` line whenever
+// something is copied into a pad the user chose to hold — which is a user
+// action, not a per-frame cost. Nothing else is sent while the mic is hot.
 
 /// What the capture pill is doing right now.
 ///

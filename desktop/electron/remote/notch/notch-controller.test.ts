@@ -945,30 +945,3 @@ test('notifyScratchpad pushes the payload verbatim', () => {
   assert.equal(sent.data.destinations.openTask, null)
 })
 
-test('a host that never wired the pad simply ignores its events', () => {
-  // The deps are optional exactly so an older host cannot crash on a surface
-  // that has the icon but no backing.
-  const events = new EventEmitter()
-  const client = new FakeClient()
-  const deps = {
-    listTasks: () => [], getTask: () => undefined, answer: () => {}, kill: () => {},
-    remove: () => {}, killAll: () => {}, resume: () => true, rerun: () => {},
-    setKind: () => {}, setName: () => {}, setShelved: () => {}, setNote: () => {},
-    focus: () => {}, getOutput: () => '', sendInput: () => {}, resizeTerm: () => {},
-    openInTerminal: () => {}, tmuxAvailable: () => false,
-    listSkills: async () => [], listProjects: async () => [], pinSkill: () => {},
-    tapSkill: () => {}, openProject: () => {}, listProposals: async () => [],
-    getProposal: async () => null, acceptProposal: async () => ({ ok: true }),
-    rejectProposal: () => {}, converseStart: async () => false, converseWrite: () => {},
-    converseStop: () => {}, openArtifact: () => {}, acceptRouteOffer: () => true,
-    getDoorbell: () => false, setDoorbell: () => {}, getLastSeen: () => 0, setLastSeen: () => {},
-  } satisfies NotchControllerDeps
-  const c = new NotchController(client, events, deps)
-  assert.doesNotThrow(() => {
-    client.fire({ type: 'scratchpadArm', on: true })
-    client.fire({ type: 'scratchpadRemove', id: 'x' })
-    client.fire({ type: 'scratchpadDeliver', dest: 'cursor' })
-    client.fire({ type: 'scratchpadDiscard' })
-  })
-  c.dispose()
-})

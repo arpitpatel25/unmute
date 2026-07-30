@@ -4,9 +4,8 @@
 // ARCHITECTURE, AND WHY IT IS THIS SHAPE.
 //
 // The pill's visuals moved to Swift; its BEHAVIOUR did not. Audio capture, VAD,
-// mic-source resolution, the staged-image ledger and the model/agent catalogs
-// all stay in the renderer and in main exactly where they already work. This
-// class only:
+// mic-source resolution and the model/agent catalogs all stay in the renderer
+// and in main exactly where they already work. This class only:
 //
 //   renderer state  →  `pill` command   →  the helper draws it
 //   helper gesture  →  `pill*` event    →  the SAME handlers the DOM pill called

@@ -42,9 +42,12 @@ struct ScratchpadEntry: Decodable, Identifiable, Equatable {
         func v<T: Decodable>(_ k: CodingKeys, _ d: T) -> T {
             (try? c.decodeIfPresent(T.self, forKey: k)) ?? d
         }
-        // The ID IS REQUIRED — it is what a remove is addressed to, and a row
-        // that cannot be removed is worse than a row that is not drawn. Every
-        // other field defaults.
+        // An entry with no id is DROPPED, not drawn — see ScratchpadPad, which
+        // filters them out. It is what a remove is addressed to, so an id-less
+        // row would render a × that emits `scratchpadRemove id:""`, which the
+        // controller drops on its `if (id)` guard: a visibly dead control. Two
+        // of them would also collide as ForEach identities. Defaulting here
+        // keeps the array decode from failing whole; the filter is the rule.
         id      = v(.id, "")
         type    = v(.type, "insert")
         text    = v(.text, "")
@@ -114,7 +117,11 @@ struct ScratchpadPad: Decodable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id      = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
         origin  = (try? c.decodeIfPresent(String.self, forKey: .origin)) ?? "cursor"
-        entries = (try? c.decodeIfPresent([ScratchpadEntry].self, forKey: .entries)) ?? []
+        // AN ID-LESS ENTRY IS NOT DRAWN. Its × could not remove it and two of
+        // them would collide as ForEach identities — a row that cannot be
+        // removed is worse than a row that is not there.
+        entries = ((try? c.decodeIfPresent([ScratchpadEntry].self, forKey: .entries)) ?? [])
+            .filter { !$0.id.isEmpty }
     }
 }
 
@@ -222,7 +229,15 @@ final class ScratchpadModel: ObservableObject {
 
     var emit: (Event) -> Void = { _ in }
 
-    /// Is the panel on screen? Content only — arming with nothing captured yet
-    /// shows the icon lit, not an empty window.
-    var visible: Bool { state.enabled && state.hasContent }
+    /// Is the panel on screen? CONTENT ONLY.
+    ///
+    /// Arming with nothing captured yet shows the icon lit, not an empty window
+    /// — a footer of destination buttons for sending nothing is not a surface.
+    ///
+    /// Deliberately NOT gated on `enabled`, which gates the ICON. Turning the
+    /// setting off means "hold nothing new"; it must not strand work that is
+    /// already held, unreachable on disk, deliverable and discardable by
+    /// nothing. What main sends is already filtered to work the user chose to
+    /// keep (heldForSurface), so anything that arrives here has earned a panel.
+    var visible: Bool { state.hasContent }
 }

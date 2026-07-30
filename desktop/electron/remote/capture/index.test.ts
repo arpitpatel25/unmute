@@ -8,7 +8,8 @@ import {
   beginOwnClipboardSequence, beginSegment, cancelOpenSegment, currentPad, deliver,
   discard, endOwnClipboardSequence, endSegment, formatForDelivery, getCaptureSettings,
   initWatchers, isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerFormat,
-  deliveryInFlight, registerPaste, registerSettings, removeFromPad, runDelivery,
+  deliveryInFlight, heldForSurface, promoteSettledPad, registerPadObserver, registerPaste,
+  registerSettings, removeFromPad, runDelivery,
   setOwnSequenceCeiling, setScratchpadRoot, settledPad, snapshot, takeForDelivery,
   writePadNow,
 } from './index'
@@ -1141,5 +1142,210 @@ describe('nothing can wedge the delivery slot', () => {
     heldWork('in and out')
     await runDelivery('cursor', async () => 'cursor')
     assert.equal(deliveryInFlight(), false)
+  })
+})
+
+// ── which pad a surface may show ────────────────────────────────────────
+//
+// THE RULE THE PANEL IS DRAWN FROM. `beginSegment` opens a live pad for EVERY
+// dictation, armed or not — inserts have to be positioned against speech either
+// way — so "there is a pad with content in it" is NOT the same question as
+// "the user is holding work". Getting these two confused put a panel on screen
+// during an ordinary dictation, offering to send an utterance that was about to
+// be pasted automatically, with a Discard that reached into the live capture.
+
+describe('a surface may only ever show work the user chose to hold', () => {
+  test('UNARMED capture with content → nothing to show', () => {
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'just dictating into slack', 1500)
+    recordInsert({ kind: 'url', content: 'https://example.com', atMs: 1200 }, 1200)
+
+    assert.ok(currentPad(), 'the live pad exists — it always does')
+    assert.ok(currentPad()!.entries.length >= 2, 'and it has content')
+    assert.equal(heldForSurface(), null, 'but NONE of it is the user\'s held work')
+  })
+
+  test('ARMED capture with content → the live pad is shown', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'this one I am keeping', 1500)
+
+    assert.equal(heldForSurface()?.id, currentPad()!.id)
+  })
+
+  test('arming MID-capture promotes what is being said right now', () => {
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'wait, keep this', 1200)
+    assert.equal(heldForSurface(), null)
+
+    armScratchpad(true)
+    assert.equal(heldForSurface()?.id, currentPad()!.id, 'the gesture keeps the live pad')
+  })
+
+  test('a SETTLED pad is shown when nothing is live', () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+
+    assert.equal(currentPad(), null)
+    assert.equal(heldForSurface()?.id, 'pad-a')
+  })
+
+  test('a settled pad stays shown THROUGH an ordinary dictation, and the live one never is', () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+
+    const id = beginSegment('cursor', 6000, true)
+    attachTranscript(id, 'unrelated dictation', 6500)
+    assert.equal(heldForSurface()?.id, 'pad-a', 'still the held pad, never the live one')
+    endSegment(7000)
+    assert.equal(heldForSurface()?.id, 'pad-a')
+  })
+
+  test('disarming stops showing the live pad without destroying it mid-capture', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'never mind', 1200)
+    assert.equal(heldForSurface()?.id, currentPad()!.id)
+
+    armScratchpad(false)
+    assert.equal(heldForSurface(), null, 'no longer held work')
+    assert.ok(currentPad(), 'but the capture is untouched — it still delivers normally')
+  })
+})
+
+describe('discard cannot reach an utterance the user is still speaking', () => {
+  test('an UNARMED capture in progress survives a discard', () => {
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'half a sentence so far', 1200)
+    const before = currentPad()!.id
+
+    discard()
+
+    assert.equal(currentPad()?.id, before, 'the live pad is still there')
+    // The real damage was downstream of a null pad: everything after went
+    // nowhere, silently.
+    attachTranscript(id, 'half a sentence so far, and the rest of it', 1800)
+    const seg = currentPad()!.entries.find((e) => e.type === 'segment')
+    assert.equal(seg?.type === 'segment' && seg.text, 'half a sentence so far, and the rest of it',
+      'the words still land')
+    assert.equal(recordInsert({ kind: 'url', content: 'https://x.test', atMs: 1900 }, 1900), true,
+      'and copies are still recorded')
+  })
+
+  test('an ARMED pad IS discarded, open segment or not — that is the gesture', () => {
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    discard()
+    assert.equal(currentPad(), null)
+    assert.equal(isArmed(), false)
+  })
+
+  test('a settled pad is discarded while an ordinary dictation runs, and the dictation lives', () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+    const id = beginSegment('cursor', 6000, true)
+    attachTranscript(id, 'unrelated dictation', 6500)
+
+    discard()   // the user means the pad on screen — the settled one
+
+    assert.equal(settledPad(), null, 'the held pad is gone')
+    assert.ok(!existsSync(join(padDirFor(root, 'pad-a'), 'pad.json')), 'and off disk')
+    const seg = currentPad()?.entries.find((e) => e.type === 'segment')
+    assert.equal(seg?.type === 'segment' && seg.text, 'unrelated dictation',
+      'the dictation is untouched')
+  })
+
+  test('between captures, a leftover unarmed pad is still discarded', () => {
+    // No open segment ⇒ nothing is being spoken into, so the old behaviour
+    // stands: there is nothing to protect.
+    beginSegment('cursor', 1000, true)
+    endSegment(2000)
+    assert.ok(currentPad())
+    discard()
+    assert.equal(currentPad(), null)
+  })
+})
+
+describe('a destination button that is shown must work', () => {
+  test('a SETTLED pad delivers — it is promoted into the live slot first', async () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+    assert.equal(currentPad(), null, 'the seam only ever reads the live slot')
+
+    assert.equal(promoteSettledPad(), true)
+    assert.equal(currentPad()?.id, 'pad-a')
+    assert.equal(settledPad(), null)
+
+    let sent = ''
+    const r = await runDelivery('cursor', async (t) => { sent = t; return 'cursor' })
+    assert.equal(r.landed, 'cursor', 'it actually landed')
+    assert.match(sent, /friday draft/)
+    assert.equal(heldForSurface(), null, 'and nothing is held any more')
+  })
+
+  test('WITHOUT the promotion the same delivery is a silent no-op', async () => {
+    // This is the shape of the bug: every button inert, no feedback, panel
+    // unchanged — and `landed: null` is indistinguishable from an empty pad.
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+
+    let sends = 0
+    const r = await runDelivery('cursor', async () => { sends++; return 'cursor' })
+    assert.equal(r.landed, null)
+    assert.equal(sends, 0, 'the destination was never even called')
+    assert.equal(settledPad()?.id, 'pad-a', 'the pad is exactly where it was')
+  })
+
+  test('promotion REFUSES while a capture owns the live slot', () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+    beginSegment('cursor', 6000, true)
+
+    assert.equal(promoteSettledPad(), false, 'callers must refuse, not deliver the wrong pad')
+    assert.equal(settledPad()?.id, 'pad-a', 'the held pad is untouched')
+    assert.ok(currentPad(), 'and so is the capture')
+  })
+
+  test('promotion is not behind the feature gate — held work stays deliverable when it is off', () => {
+    registerSettings(() => ({ scratchpadEnabled: false, captureEnabled: true }))
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+
+    assert.equal(armScratchpad(true), false, 'arming is refused, as it should be')
+    assert.equal(settledPad()?.id, 'pad-a', 'and the work is still stranded where it was')
+    assert.equal(promoteSettledPad(), true, 'but it can still be got out')
+    assert.equal(currentPad()?.id, 'pad-a')
+  })
+})
+
+describe('the pad announces itself when the capture lifecycle moves it', () => {
+  test('an armed stop and the transcript that follows both announce', () => {
+    let announces = 0
+    registerPadObserver(() => { announces++ })
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+
+    endSegment(2000)
+    assert.ok(announces >= 1, 'the stop that settles the pad is the moment the panel appears')
+
+    const afterStop = announces
+    attachTranscript(id, 'the words, 30 seconds later', 32000)
+    assert.ok(announces > afterStop, 'and the words must reach the panel when they land')
+  })
+
+  test('cancelling an open segment announces too', () => {
+    let announces = 0
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    registerPadObserver(() => { announces++ })
+    cancelOpenSegment(1500)
+    assert.equal(announces, 1)
+  })
+
+  test('an observer that throws cannot break a capture', () => {
+    registerPadObserver(() => { throw new Error('surface is gone') })
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    assert.doesNotThrow(() => endSegment(2000))
   })
 })

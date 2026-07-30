@@ -100,6 +100,33 @@ let settingsFn: SettingsFn | null = null
 
 export function registerSettings(fn: SettingsFn): void { settingsFn = fn }
 
+/** THE PAD CHANGED WITHOUT ANYONE ASKING IT TO.
+ *
+ *  Three of the pad's mutations come from the capture lifecycle rather than
+ *  from a user gesture on a surface — a capture ending, a transcript landing
+ *  30-45s later, an open segment being cancelled — and before this there was
+ *  nothing to announce them. The visible cost was the whole feature: an armed
+ *  stop settles the pad and the panel is supposed to appear holding it, but the
+ *  last broadcast happened at the last COPY, so the panel showed a pad with an
+ *  empty segment in it and the user's words never arrived on screen.
+ *
+ *  Registered rather than imported, the same inversion as the paste and format
+ *  effects and for the same reason: capture/ must not import init.ts.
+ *
+ *  NOT called from beginSegment. Capture start is the hottest point on the
+ *  path, and there is nothing to say there anyway — an unarmed pad is not shown
+ *  and an armed one has not changed yet. */
+type PadObserverFn = () => void
+let padObserver: PadObserverFn | null = null
+
+export function registerPadObserver(fn: PadObserverFn): void { padObserver = fn }
+
+/** Tell the surfaces, and never let that be the thing that goes wrong. A
+ *  surface failing to repaint must not abort a capture lifecycle step. */
+function announcePad(): void {
+  try { padObserver?.() } catch (err) { console.warn('[capture] pad announce failed:', err) }
+}
+
 export function getCaptureSettings(): CaptureSettings {
   try {
     return settingsFn?.() ?? { scratchpadEnabled: true, captureEnabled: true }
@@ -124,6 +151,50 @@ export interface ScratchpadSnapshot {
 
 export function snapshot(): ScratchpadSnapshot {
   return { pad, armed, held: heldPad }
+}
+
+/** WHICH PAD IS THE USER'S HELD WORK — the only pad a surface may show, offer
+ *  destinations for, or discard.
+ *
+ *  IT IS NOT `pad`. `beginSegment` opens a live pad for EVERY dictation, armed
+ *  or not, because inserts have to be positioned against speech either way. An
+ *  unarmed one is scaffolding: nothing consumes it (delivery goes down the
+ *  ordinary dictation path) and the next capture boundary throws it away. It is
+ *  not something the user asked to keep, and a surface must never present it as
+ *  such — offering "send this somewhere" for an utterance that is about to be
+ *  pasted automatically is confusing, and offering "discard" for it is
+ *  destructive: the user is still speaking into it.
+ *
+ *  So: the live pad ONLY while armed, and otherwise whatever settled and is
+ *  waiting. `?? held` rather than a plain ternary is deliberate belt-and-braces
+ *  — arming promotes a settled pad into the live slot, so armed-with-no-pad
+ *  should be unreachable, and if it ever happens the held pad is still the
+ *  honest answer. */
+export function heldForSurface(s: ScratchpadSnapshot = snapshot()): Pad | null {
+  return (s.armed ? s.pad : null) ?? s.held
+}
+
+/** Bring a settled pad back into the live slot.
+ *
+ *  THE DELIVERY SEAM ONLY EVER READS THE LIVE SLOT (`deliver()` renders `pad`
+ *  and nothing else), so a settled pad cannot be delivered from where it
+ *  waits — every destination button on one would be inert. This is the same
+ *  move `armScratchpad` makes, minus the arming: a delivery is about to empty
+ *  the slot again, so marking it held in between would be a lie.
+ *
+ *  DELIBERATELY NOT GATED on canArmScratchpad. The gate exists to stop NEW work
+ *  being held when the feature is off; work that is ALREADY held must stay
+ *  deliverable, or turning the setting off would strand it on disk with no way
+ *  to get it out.
+ *
+ *  False when the live slot is taken — a capture is in progress, and its pad is
+ *  somebody else's. Callers must handle that rather than delivering the wrong
+ *  pad. */
+export function promoteSettledPad(): boolean {
+  if (pad || !heldPad) return false
+  pad = heldPad
+  heldPad = null
+  return true
 }
 
 /** Arm/disarm the scratchpad. Returns the resulting state — arming is refused
@@ -232,6 +303,9 @@ export function endSegment(now: number): void {
   // the main process.
   sharedLedger.claims.clear()
   if (pad) { pad = { ...pad, updatedAt: now }; schedulePersist() }
+  // An ARMED stop settles the pad instead of delivering it — this is the moment
+  // the panel is supposed to appear holding it.
+  announcePad()
 }
 
 /** Transcription lands 30-45s after the audio, so text is attached later.
@@ -249,6 +323,9 @@ export function attachTranscript(segmentId: string | null, text: string, now: nu
     ? setSegmentText(pad, segmentId as string, text, now)
     : addSegment(pad, { id: randomUUID(), text, startMs: 0, endMs: 0, now })
   schedulePersist()
+  // The words arrive 30-45s after the audio. Without this the panel would sit
+  // on "Still transcribing…" forever — the pad's whole content, never shown.
+  announcePad()
 }
 
 /** An insert arrived from either watcher. Position is relative to capture
@@ -337,12 +414,23 @@ export function deliver(dest: Destination): RenderResult | null {
 /** The user threw the pad away. Unlike deliver, this takes the files too —
  *  INCLUDING a settled pad's, because from the user's side there is only ever
  *  one pad: if nothing is live, the pad they mean is the one waiting to come
- *  back. Leaving it on disk would resurrect it at the next arm. */
+ *  back. Leaving it on disk would resurrect it at the next arm.
+ *
+ *  IT WILL NOT TOUCH AN UNARMED CAPTURE IN PROGRESS. That pad is not held work
+ *  — it is the buffer for an ordinary dictation the user is still speaking into
+ *  (see heldForSurface), and no surface offering Discard is showing it. Dropping
+ *  it would clear `openSegmentId` and silently destroy that utterance: every
+ *  later `attachTranscript` and `recordInsert` returns early on a null pad, so
+ *  the words and anything copied after would go nowhere, with nothing on screen
+ *  to say so. This is the guard `armScratchpad` already applies for the same
+ *  reason, in the same words: never drop a pad with an open segment out from
+ *  under the capture that owns it. */
 export function discard(): void {
-  dropLivePad()
+  if (armed || !openSegmentId) dropLivePad()
   const h = heldPad
   heldPad = null
   if (h) discardPadFiles(h)
+  announcePad()
 }
 
 /** Drop the LIVE pad only. Split out because arming-between-captures throws
@@ -564,6 +652,7 @@ export function cancelOpenSegment(now: number): void {
   disarmWatchers()
   if (pad && openSegmentId) { pad = removeEntry(pad, openSegmentId, now); schedulePersist() }
   openSegmentId = null
+  announcePad()
 }
 
 // ── Persistence ─────────────────────────────────────────────────────────
@@ -799,6 +888,7 @@ export function _resetForTest(): void {
   pasteFn = null
   formatFn = null
   settingsFn = null
+  padObserver = null
   clipboardWatch = null
   screenshotWatch = null
   watchersArmed = false
