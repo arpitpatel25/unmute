@@ -38,8 +38,20 @@ export interface ScreenshotWatchDeps {
 export function createScreenshotWatch(deps: ScreenshotWatchDeps) {
   let handles: { close: () => void }[] = []
 
+  function disarm(): void {
+    for (const h of handles) { try { h.close() } catch { /* already gone */ } }
+    handles = []
+  }
+
   return {
     arm(): void {
+      // Self-disarm first. A caller is expected to disarm() before re-arming,
+      // but this module cannot enforce that discipline, and the cost of not
+      // enforcing it is not just a leaked file descriptor: a stale watcher
+      // left running keeps calling onInsert, which means the filesystem
+      // stays observed after the capture window is believed closed — the
+      // exact thing this module's header promises never happens.
+      disarm()
       handles = deps.dirs().map(({ dir, dedicated }) =>
         deps.watch(dir, (filename) => {
           // fs.watch invokes this callback directly — there is no promise
@@ -64,9 +76,6 @@ export function createScreenshotWatch(deps: ScreenshotWatchDeps) {
         }),
       )
     },
-    disarm(): void {
-      for (const h of handles) { try { h.close() } catch { /* already gone */ } }
-      handles = []
-    },
+    disarm,
   }
 }

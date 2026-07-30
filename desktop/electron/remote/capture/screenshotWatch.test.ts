@@ -49,7 +49,15 @@ describe('createScreenshotWatch', () => {
   function harness(overrides: Partial<ScreenshotWatchDeps> = {}) {
     const inserts: { kind: InsertKind; content: string; atMs: number }[] = []
     const closed: string[] = []
-    const callbacks = new Map<string, (filename: string) => void>()
+    // Every deps.watch() call gets its own registration, and — unlike a plain
+    // Map keyed by dir — a SECOND registration for the same dir does not
+    // clobber the first. This matters: on macOS, two independent fs.watch()
+    // calls on the same directory are two independent live watchers, and a
+    // real filesystem write reaches BOTH. So `fire()` below replays that:
+    // every registration for a dir that hasn't been closed gets the event,
+    // which is exactly what makes a leaked handle from a double-arm()
+    // observable in a test instead of merely inferred.
+    const registrations: { dir: string; cb: (filename: string) => void; closed: boolean }[] = []
     let now = 1000
     const claimed = new Set<string>()
     const deps: ScreenshotWatchDeps = {
@@ -58,8 +66,14 @@ describe('createScreenshotWatch', () => {
         { dir: SCREENSHOTS, dedicated: true },
       ],
       watch: (dir, cb) => {
-        callbacks.set(dir, cb)
-        return { close: () => { closed.push(dir) } }
+        const reg = { dir, cb, closed: false }
+        registrations.push(reg)
+        return {
+          close: () => {
+            reg.closed = true
+            closed.push(dir)
+          },
+        }
       },
       now: () => now,
       claim: (hash) => {
@@ -72,17 +86,22 @@ describe('createScreenshotWatch', () => {
     }
     const w = createScreenshotWatch(deps)
     return {
-      w, inserts, closed, callbacks,
+      w, inserts, closed,
       setNow: (t: number) => { now = t },
-      fire: (dir: string, filename: string) => callbacks.get(dir)?.(filename),
+      liveCount: (dir: string) => registrations.filter((r) => r.dir === dir && !r.closed).length,
+      fire: (dir: string, filename: string) => {
+        for (const r of registrations) {
+          if (r.dir === dir && !r.closed) r.cb(filename)
+        }
+      },
     }
   }
 
   test('arm registers a watcher per directory', () => {
     const h = harness()
     h.w.arm()
-    assert.equal(h.callbacks.has(DESKTOP), true)
-    assert.equal(h.callbacks.has(SCREENSHOTS), true)
+    assert.equal(h.liveCount(DESKTOP), 1)
+    assert.equal(h.liveCount(SCREENSHOTS), 1)
   })
 
   test('a matching file in a non-dedicated dir fires onInsert with the full path', () => {
@@ -224,5 +243,33 @@ describe('createScreenshotWatch', () => {
     shouldThrow = false
     h.fire(DESKTOP, 'Screenshot 2.png')
     assert.equal(h.inserts.length, 1)
+  })
+
+  test('arm() twice without disarm() closes the first set of handles (self-disarm)', () => {
+    const h = harness()
+    h.w.arm()
+    assert.equal(h.closed.length, 0)
+    h.w.arm()
+    // The FIRST arm()'s handles must actually have been closed, not merely
+    // replaced — otherwise the old fs.watch keeps running and keeps calling
+    // onInsert after the caller believes only the new watch is live.
+    assert.equal(h.closed.length, 2)
+    assert.deepEqual(h.closed.sort(), [DESKTOP, SCREENSHOTS].sort())
+  })
+
+  test('double-arm() then a single disarm() leaves NO live watcher: a late event produces no insert', () => {
+    const h = harness()
+    h.w.arm()
+    h.w.arm() // without self-disarm, the first arm()'s watcher is leaked, not closed
+    h.w.disarm() // closes whatever the CURRENT arm() produced
+    // A real macOS write reaches every watcher still registered on that
+    // directory. If the first arm()'s handle was never closed, it is still
+    // live here — disarm() only closed the second set — and this fire()
+    // reaches it, producing an insert after the capture window is supposed
+    // to be closed. That is the consent violation the fix removes.
+    h.fire(DESKTOP, 'Screenshot leaked.png')
+    assert.equal(h.inserts.length, 0)
+    assert.equal(h.liveCount(DESKTOP), 0)
+    assert.equal(h.liveCount(SCREENSHOTS), 0)
   })
 })
