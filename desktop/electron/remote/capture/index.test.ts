@@ -8,8 +8,9 @@ import {
   beginOwnClipboardSequence, beginSegment, cancelOpenSegment, currentPad, deliver,
   discard, endOwnClipboardSequence, endSegment, formatForDelivery, getCaptureSettings,
   initWatchers, isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerFormat,
-  registerPaste, registerSettings, removeFromPad, runDelivery, setOwnSequenceCeiling,
-  setScratchpadRoot, settledPad, snapshot, takeForDelivery, writePadNow,
+  deliveryInFlight, registerPaste, registerSettings, removeFromPad, runDelivery,
+  setOwnSequenceCeiling, setScratchpadRoot, settledPad, snapshot, takeForDelivery,
+  writePadNow,
 } from './index'
 import { deserialize, padDirFor, serialize } from './scratchpadStore'
 import { createClipboardWatch } from './clipboardWatch'
@@ -1030,5 +1031,115 @@ describe('a destination that fails does not take the pad with it', () => {
     await runDelivery('newTask', async (t) => { sent = t; return 'task-1' })
     assert.equal(sent, 'to a task')
     assert.equal(calls, 1, 'the task never reached the formatter')
+  })
+})
+
+// ── One delivery at a time ──────────────────────────────────────────────
+//
+// `inFlight` is a single slot. A second delivery arriving before the first
+// resolves finds the pad already taken, and — before the guard — its
+// "nothing to send" branch cleared the slot out from under the first one,
+// leaving the first pad in no slot at all and already off disk. A double-click
+// on a Send button is the most ordinary thing a user does.
+
+describe('a second delivery cannot clobber one already in flight', () => {
+  test('THE FIRST PAD SURVIVES a second click and is still recoverable when it fails', async () => {
+    heldWork('the work in flight')
+    const padId = currentPad()!.id
+
+    let release: () => void = () => {}
+    const destinationIsSlow = new Promise<void>((r) => { release = r })
+
+    const first = runDelivery('newTask', async () => {
+      await destinationIsSlow
+      throw new Error('router died') // …and then it fails
+    })
+
+    // The user clicks Send again while the first is still going.
+    const second = await runDelivery('newTask', async () => 'task-2')
+    assert.equal(second.landed, null)
+    assert.equal(second.busy, true, 'reported as ignored, not as an empty pad')
+    assert.equal(second.restaged, null)
+
+    release()
+    const r = await first
+    assert.equal(r.restaged?.id, padId, 'the first delivery could still put its pad back')
+    assert.equal(currentPad()?.id, padId, 'and it is live again, not lost')
+    assert.equal(isArmed(), true)
+    assert.ok(existsSync(join(padDirFor(root, padId), 'pad.json')), 'and back on disk')
+  })
+
+  test('the second call runs no destination and mutates nothing', async () => {
+    heldWork('one delivery only')
+    let sends = 0
+    let release: () => void = () => {}
+    const destinationIsSlow = new Promise<void>((r) => { release = r })
+
+    const first = runDelivery('cursor', async () => { sends++; await destinationIsSlow; return 'cursor' })
+
+    const before = snapshot()
+    const second = await runDelivery('cursor', async () => { sends++; return 'cursor' }, () => {
+      assert.fail('the ignored call must not announce anything to the surface')
+    })
+
+    assert.equal(sends, 1, 'the second call never reached a destination')
+    assert.equal(second.busy, true)
+    assert.deepEqual(snapshot(), before, 'and it moved no state at all')
+
+    release()
+    const r = await first
+    assert.equal(r.landed, 'cursor', 'the first delivery finishes normally')
+    assert.equal(currentPad(), null)
+  })
+
+  test('once the first finishes, a later delivery is accepted again', async () => {
+    heldWork('first')
+    assert.equal((await runDelivery('cursor', async () => 'cursor')).landed, 'cursor')
+
+    heldWork('second')
+    const r = await runDelivery('cursor', async () => 'cursor')
+    assert.equal(r.landed, 'cursor', 'the guard is not sticky')
+    assert.equal(r.busy, undefined)
+  })
+
+  test('a FAILED delivery also releases the guard — the pad can be retried', async () => {
+    heldWork('retry me')
+    const failed = await runDelivery('newTask', async () => { throw new Error('blip') })
+    assert.ok(failed.restaged, 'it came back')
+
+    const retry = await runDelivery('newTask', async () => 'task-9')
+    assert.equal(retry.landed, 'task-9', 'the retry is not refused as busy')
+    assert.equal(currentPad(), null)
+  })
+})
+
+describe('nothing can wedge the delivery slot', () => {
+  test('a THROWING surface notification does not strand the pad or block the next delivery', async () => {
+    heldWork('do not wedge me')
+    const warn = console.warn
+    console.warn = () => {} // the broadcast failure IS logged; keep it out of test output
+    let r
+    try {
+      r = await runDelivery('newTask', async () => { throw new Error('blip') }, () => {
+        throw new Error('every window is gone')
+      })
+    } finally {
+      console.warn = warn
+    }
+
+    assert.ok(r!.restaged, 'the pad still came back')
+    assert.equal(deliveryInFlight(), false, 'and the slot was released')
+
+    // The proof that matters: a later delivery is not refused as busy.
+    const retry = await runDelivery('newTask', async () => 'task-7')
+    assert.equal(retry.landed, 'task-7')
+    assert.equal(retry.busy, undefined)
+  })
+
+  test('the slot is free before and after an ordinary delivery', async () => {
+    assert.equal(deliveryInFlight(), false)
+    heldWork('in and out')
+    await runDelivery('cursor', async () => 'cursor')
+    assert.equal(deliveryInFlight(), false)
   })
 })

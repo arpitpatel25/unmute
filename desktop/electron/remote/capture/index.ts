@@ -381,12 +381,25 @@ function destinationFor(target: DeliveryTarget): Destination {
  *  took it. */
 let inFlight: Pad | null = null
 
+/** Is a delivery still waiting on its destination? `inFlight` is set for exactly
+ *  as long as one is running: it is assigned before the first `await` and
+ *  cleared by commit or restage, and a delivery with nothing to send never
+ *  yields at all. So this is an exact answer, not an approximation. */
+export function deliveryInFlight(): boolean { return inFlight !== null }
+
 /** Render for this target and clear the pad. Null when there was nothing to
- *  send — the pad is cleared either way, because the user committed it. */
+ *  send — the pad is cleared either way, because the user committed it.
+ *
+ *  IT NEVER CLEARS `inFlight`. Only commit and restage do. Clearing it here on
+ *  the nothing-to-send branch is how a second delivery used to destroy a FIRST
+ *  delivery's recovery reference: the second call finds the pad already taken,
+ *  falls into this branch, and the first pad ends up in no slot at all — and it
+ *  is already off disk. Callers must not start a delivery while one is running;
+ *  runDelivery is the guard. */
 export function takeForDelivery(target: DeliveryTarget): RenderResult | null {
   const taken = pad
   const out = deliver(destinationFor(target))
-  if (!out || !out.text.trim()) { inFlight = null; return null }
+  if (!out || !out.text.trim()) return null
   inFlight = taken
   return out
 }
@@ -439,6 +452,9 @@ export interface DeliveryOutcome {
   restaged: Pad | null
   /** What the destination threw, when it threw. */
   error?: unknown
+  /** A delivery was already running, so this call did nothing at all. Distinct
+   *  from an empty pad, which is also `landed: null` but means the opposite. */
+  busy?: boolean
 }
 
 /** THE DELIVERY: take the pad, format it for the target, hand it to the
@@ -460,10 +476,22 @@ export async function runDelivery(
   send: (text: string) => Promise<string | null>,
   onChanged?: () => void,
 ): Promise<DeliveryOutcome> {
+  // ONE DELIVERY AT A TIME, AND THE SECOND ONE IS IGNORED.
+  //
+  // A double-click on a Send button is the most ordinary thing a user does, and
+  // `inFlight` is a single slot holding the FIRST delivery's only remaining
+  // reference to the pad — in memory or on disk. A second call must therefore
+  // move no state whatsoever: not the slot, not the pad, not the surface.
+  //
+  // Ignored rather than queued, deliberately. The pad was taken by the first
+  // delivery; a queued second one would have nothing left to send, so queueing
+  // would only turn a no-op into a confusing empty delivery.
+  if (inFlight) return { landed: null, restaged: null, busy: true }
+
   const out = takeForDelivery(target)
   // Announce the empty pad straight away: the user committed it, and no surface
   // should sit on stale content through a formatting round-trip.
-  onChanged?.()
+  announce(onChanged)
   if (!out) return { landed: null, restaged: null }
 
   const ready = await formatForDelivery(out, target)
@@ -479,8 +507,22 @@ export async function runDelivery(
     return { landed, restaged: null }
   }
   const restaged = restageDelivery()
-  onChanged?.()
+  announce(onChanged)
   return { landed: null, restaged, error }
+}
+
+/** Tell the surfaces, and never let that be the thing that goes wrong.
+ *
+ *  This runs BETWEEN taking the pad and releasing `inFlight`. A throw here
+ *  would leave the slot occupied forever and wedge every later delivery as
+ *  "busy" — with the pad it is holding unreachable. A surface failing to
+ *  repaint is not a reason to lose the user's work. */
+function announce(onChanged?: () => void): void {
+  try {
+    onChanged?.()
+  } catch (err) {
+    console.warn('[capture] scratchpad broadcast failed:', err)
+  }
 }
 
 /** FORMATTING HAPPENS HERE, AND ONLY FOR THE CURSOR.

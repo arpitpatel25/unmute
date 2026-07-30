@@ -3094,6 +3094,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       log.event('scratchpad-delivered', { to: target, landed: r.landed })
       return r.landed
     }
+    if (r.busy) {
+      // A second Send while the first is still going. Ignored, and logged as
+      // what it is — an empty-pad log line here would be a lie, and the two
+      // look identical from the return value alone.
+      log.event('scratchpad-deliver-ignored', { to: target, reason: 'already-delivering' })
+      return null
+    }
     if (r.restaged) {
       // Enough to recover by hand: the pad is back on disk at this path with its
       // entries intact. The TEXT is deliberately not logged — it is the user's
