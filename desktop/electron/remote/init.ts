@@ -141,10 +141,13 @@ interface RemoteSettings {
   // actionable (needs-you/stuck/errored). ON by default; the product stays fully
   // usable dead silent with this off — one toggle away (cockpit 🔔 chip).
   voiceHeadlines: boolean
-  // Screenshot capture during dictation/Remote: screenshots taken WHILE speaking
-  // auto-attach (dictation → pasted after the text; Remote → attached to the
-  // task). OFF reverts to plain behavior — Unmute never touches screenshots.
-  screenshotCapture: boolean
+  // Capture: copies and screenshots made during a hot mic land in the
+  // transcript at the position they happened. Replaces `screenshotCapture`,
+  // widened to cover text as well as images.
+  captureEnabled: boolean
+  // The scratchpad: can a capture be HELD instead of delivered on stop?
+  // Independent of captureEnabled — see capture/captureGate.ts.
+  scratchpadEnabled: boolean
   // Skills the user pinned to the top of the cockpit rail (manual override of
   // the earned-trust ranking).
   pinnedSkills: string[]
@@ -186,7 +189,8 @@ const settings = new Store<RemoteSettings>({
     librarianWriteEnabled: false,
     forceRawMode: false,
     voiceHeadlines: true,
-    screenshotCapture: true,
+    captureEnabled: true,
+    scratchpadEnabled: true,
     pinnedSkills: [],
     // FIXED by default — see Theme.swift. Live glass is opt-in while
     // macOS 26.2 caches its backdrop on all-Spaces panels.
@@ -1265,7 +1269,7 @@ function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, s
  *  long-settled pasteboard = the ancient fast path that never failed. We only
  *  clear what we delivered: a pre-dictation image we never staged is left alone. */
 function secureAndClearClipboard(): void {
-  if (settings.get('screenshotCapture') === false) return
+  if (settings.get('captureEnabled') === false) return
   // If the baseline never completed this capture, this probe is LEARN-ONLY: an
   // image of unknown provenance (could predate the trigger) must not attach.
   probeClipboardViaChild(!clipBaselined, (sawImage, stagedNew) => {
@@ -1349,7 +1353,7 @@ function stageRecentScreenshotFiles(sinceMs: number): void {
  *  (readdir + stat, microseconds), so ⌘⇧3/⌘⇧4 file captures still count up in
  *  real time; a ⌃-clipboard capture taken mid-hold appears when the key lifts. */
 function startCaptureWatch(): void {
-  if (settings.get('screenshotCapture') === false) return // feature off — never touch screenshots
+  if (settings.get('captureEnabled') === false) return // feature off — never touch screenshots
   captureWatchGen++
   if (captureWatchTimer) clearInterval(captureWatchTimer)
   const startedAt = Date.now()
@@ -2835,12 +2839,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Voice-as-doorbell toggle (§6.4) — read + set from the cockpit's 🔔 chip.
   ipcMain.handle('remote:get-voice-headlines', async () => settings.get('voiceHeadlines') !== false)
   ipcMain.handle('remote:set-voice-headlines', async (_e, on: boolean) => { settings.set('voiceHeadlines', !!on); return true })
-  ipcMain.handle('remote:get-screenshot-capture', async () => settings.get('screenshotCapture') !== false)
+  ipcMain.handle('remote:get-screenshot-capture', async () => settings.get('captureEnabled') !== false)
   // The Unmute MCP master switch (agent-created tasks).
   ipcMain.handle('remote:get-agent-tasks', async () => settings.get('agentTasksEnabled') !== false)
   ipcMain.handle('remote:set-agent-tasks', async (_e, on: boolean) => { settings.set('agentTasksEnabled', !!on); return true })
   ipcMain.handle('remote:set-screenshot-capture', async (_e, on: boolean) => {
-    settings.set('screenshotCapture', !!on)
+    settings.set('captureEnabled', !!on)
     if (!on) stopCaptureWatch() // kill a live watcher immediately on disable
     log.event('screenshot-capture-set', { on: !!on })
     return true
@@ -3384,7 +3388,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     osNotifications: settings.get('osNotifications') === true,
     librarianWriteEnabled: settings.get('librarianWriteEnabled') === true,
     forceRawMode: settings.get('forceRawMode') === true,
-    screenshotCapture: settings.get('screenshotCapture') !== false,
+    screenshotCapture: settings.get('captureEnabled') !== false,
     logFile: getRemoteLogFilePath(),
   }))
   // ── Onboarding / guided one-time setup (PRD §12) ──
