@@ -13,3 +13,6 @@ desktop/work/
 .claude/handoffs/
 desktop/node_modules
 desktop/native-notch/node_modules
+
+# Subagent-driven-development scratch (ledgers, briefs, review packages)
+.superpowers/sdd/
