@@ -334,8 +334,15 @@ export const remotePreloadExtensions = {
   /** Voice-as-doorbell (§6.4): spoken headlines for needs-you states. */
   remoteGetVoiceHeadlines: (): Promise<boolean> => ipcRenderer.invoke('remote:get-voice-headlines'),
   remoteSetVoiceHeadlines: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-voice-headlines', on),
-  /** Screenshot auto-capture during dictation/Remote (off = never touch screenshots). */
+  /** Capture during dictation/Remote: copies AND screenshots land in the
+   *  transcript where they happened. Off = Unmute never looks at either.
+   *  (The channel name predates text capture; the setting is `captureEnabled`.) */
   remoteGetScreenshotCapture: (): Promise<boolean> => ipcRenderer.invoke('remote:get-screenshot-capture'),
+  /** The scratchpad: may a capture be HELD instead of delivered on stop?
+   *  Independent of capture — a pad can be built from speech alone. */
+  remoteGetScratchpadEnabled: (): Promise<boolean> => ipcRenderer.invoke('remote:get-scratchpad-enabled'),
+  remoteSetScratchpadEnabled: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-scratchpad-enabled', on),
   /** Unmute MCP: may sessions create peer tasks? */
   remoteGetAgentTasks: (): Promise<boolean> => ipcRenderer.invoke('remote:get-agent-tasks'),
   remoteSetAgentTasks: (on: boolean): Promise<boolean> => ipcRenderer.invoke('remote:set-agent-tasks', on),

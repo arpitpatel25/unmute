@@ -27,7 +27,12 @@ import SwiftUI
 // fallback only. See GlassLip.swift.
 
 /// Applies the cluster's material to one element.
-private struct PillGlass<S: Shape>: ViewModifier {
+///
+/// Internal rather than file-private because the pad panel (ScratchpadView) is
+/// part of the same input surface and must wear the same material. A second
+/// hand-rolled backdrop next to this one is exactly how a "one glass system"
+/// becomes two.
+struct PillGlass<S: Shape>: ViewModifier {
     let shape: S
     var tint: Color? = nil
     @ObservedObject private var appearance = Appearance.shared
@@ -119,7 +124,7 @@ private struct PillGlass<S: Shape>: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     func pillGlass<S: Shape>(_ shape: S, tint: Color? = nil) -> some View {
         modifier(PillGlass(shape: shape, tint: tint))
     }
@@ -127,6 +132,10 @@ private extension View {
 
 struct PillView: View {
     @ObservedObject var model: PillModel
+    /// The scratchpad, for the one control the cluster carries. The pad itself
+    /// is a separate panel (ScratchpadWindow) — it outlives any single capture,
+    /// so it cannot live inside a surface that disappears on stop.
+    @ObservedObject var scratch: ScratchpadModel
     /// Whether the selector panel is open. Local to the view — main never needs
     /// to know, and a round-trip would make it feel slow.
     @State private var selectorOpen = false
@@ -202,8 +211,8 @@ struct PillView: View {
     /// The chips were 32pt beside a 44pt pill, which is what made the row read
     /// as mismatched parts rather than one instrument. The original sets
     /// `height: 44, borderRadius: 9999` on the pill, the model badge, the agent,
-    /// the raw toggle, the staged chip and the mic chip alike — one height, one
-    /// radius, no exceptions. Restored.
+    /// the raw toggle, the mic chip and the scratchpad chip alike — one height,
+    /// one radius, no exceptions. Restored.
     private var cluster: some View {
         HStack(spacing: 8) {
             if chipsVisible && s.kind == .remote {
@@ -230,6 +239,18 @@ struct PillView: View {
                 if let opts = s.micOptions, opts.count > 1 {
                     MicChip(current: s.mic, options: opts) { model.emit(.pickMic($0)) }
                         .pillGlass(Capsule())
+                }
+                // THE SCRATCHPAD CONTROL. It ARMS AND DISARMS ONLY — it never
+                // sends. Toggle-off-to-send would be a silent commit dressed as
+                // a mode switch: a toggle reads as reversible, so a user tapping
+                // it to mean "never mind" would create a task instead. Send and
+                // discard live on the pad, where they read as the deliberate
+                // acts they are.
+                if scratch.state.enabled {
+                    ScratchpadChip(armed: scratch.state.armed) {
+                        scratch.emit(.scratchpadArm(!scratch.state.armed))
+                    }
+                    .pillGlass(Capsule())
                 }
             }
         }
@@ -734,6 +755,30 @@ private struct MicChip: View {
         .buttonStyle(.plain)
         .help(isPhone ? "Capturing from iPhone — tap for the Mac mic"
                       : "Capturing from the Mac — tap for iPhone")
+    }
+}
+
+/// Arm the scratchpad, or disarm it. THAT IS ALL IT DOES.
+///
+/// Armed, stopping the recording HOLDS the composed work on the pad instead of
+/// delivering it, so the next recording adds to the same pad. Disarming stops
+/// that; it does not send, and it does not throw anything away. Both of those
+/// are buttons on the pad itself.
+private struct ScratchpadChip: View {
+    let armed: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ChipBody {
+                Image(systemName: armed ? "note.text.badge.plus" : "note.text")
+                    .font(.system(size: 12))
+                    .foregroundColor(armed ? Theme.cReady : Theme.textFaint)
+            }
+        }
+        .buttonStyle(.plain)
+        .help(armed ? "Keeping on stop — tap to deliver normally again"
+                    : "Keep on stop instead of delivering")
     }
 }
 

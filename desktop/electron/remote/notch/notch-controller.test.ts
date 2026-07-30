@@ -83,6 +83,10 @@ function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
     setDoorbell: (on) => { doorbell = on },
     getLastSeen: () => lastSeen,
     setLastSeen: (ms) => { lastSeen = ms },
+    scratchpadArm: rec('scratchpadArm'),
+    scratchpadRemove: rec('scratchpadRemove'),
+    scratchpadDeliver: rec('scratchpadDeliver'),
+    scratchpadDiscard: rec('scratchpadDiscard'),
   }
   const controller = new NotchController(client, events, deps)
   // reconcile is debounced 80ms — tests force it synchronously by re-firing.
@@ -875,4 +879,96 @@ test('a PTY task is unaffected by the generalisation', () => {
   assert.equal(d.backend, undefined, 'a PTY backend names no backend')
   assert.equal(d.alive, false)
   assert.equal(d.conversation, undefined, 'and renders a terminal, not a conversation')
+})
+
+// ── the scratchpad ──────────────────────────────────────────────────────────
+//
+// Pure relay: each event must reach the SAME internal the scratchpad:* IPC
+// handler calls, with nothing invented in between and no state kept here.
+
+test('arm relays the boolean, both ways', () => {
+  const h = setup()
+  h.client.fire({ type: 'scratchpadArm', on: true })
+  h.client.fire({ type: 'scratchpadArm', on: false })
+  assert.deepEqual(h.calls.scratchpadArm, [[true], [false]])
+})
+
+test('a malformed arm is read as disarm, never as arm', () => {
+  // Arming HOLDS work; a garbled line must not be what starts holding it.
+  const h = setup()
+  h.client.fire({ type: 'scratchpadArm' } as unknown as NotchEvent)
+  assert.deepEqual(h.calls.scratchpadArm, [[false]])
+})
+
+test('remove carries the entry id, and an idless remove is dropped', () => {
+  const h = setup()
+  h.client.fire({ type: 'scratchpadRemove', id: 'e7' })
+  h.client.fire({ type: 'scratchpadRemove' } as unknown as NotchEvent)
+  assert.deepEqual(h.calls.scratchpadRemove, [['e7']])
+})
+
+test('deliver passes the three real destinations through', () => {
+  const h = setup()
+  h.client.fire({ type: 'scratchpadDeliver', dest: 'cursor' })
+  h.client.fire({ type: 'scratchpadDeliver', dest: 'newTask' })
+  h.client.fire({ type: 'scratchpadDeliver', dest: 'openTask' })
+  assert.deepEqual(h.calls.scratchpadDeliver, [['cursor'], ['newTask'], ['openTask']])
+})
+
+test('an unrecognised destination is DROPPED, not defaulted', () => {
+  // Defaulting would let a malformed line send held work somewhere the user
+  // never chose — the one failure this whole feature exists to prevent.
+  const h = setup()
+  h.client.fire({ type: 'scratchpadDeliver', dest: 'somewhere-else' } as unknown as NotchEvent)
+  assert.equal(h.calls.scratchpadDeliver, undefined)
+})
+
+test('discard is its own verb — it never reaches deliver', () => {
+  const h = setup()
+  h.client.fire({ type: 'scratchpadDiscard' })
+  assert.equal(h.calls.scratchpadDiscard?.length, 1)
+  assert.equal(h.calls.scratchpadDeliver, undefined)
+})
+
+test('notifyScratchpad pushes the payload verbatim', () => {
+  const h = setup()
+  h.controller.notifyScratchpad({
+    enabled: true,
+    armed: true,
+    delivering: false,
+    pad: { id: 'p1', origin: 'cursor', entries: [{ id: 'e1', type: 'segment', text: 'hi' }] },
+    destinations: { cursor: true, newTask: true, openTask: null },
+  })
+  const sent = h.client.last('scratchpad')!
+  assert.equal(sent.data.armed, true)
+  assert.equal(sent.data.pad?.entries[0].id, 'e1')
+  assert.equal(sent.data.destinations.openTask, null)
+})
+
+test('a host that never wired the pad simply ignores its events', () => {
+  // The deps are optional exactly so an older host cannot crash on a surface
+  // that has the icon but no backing.
+  const events = new EventEmitter()
+  const client = new FakeClient()
+  const deps = {
+    listTasks: () => [], getTask: () => undefined, answer: () => {}, kill: () => {},
+    remove: () => {}, killAll: () => {}, resume: () => true, rerun: () => {},
+    setKind: () => {}, setName: () => {}, setShelved: () => {}, setNote: () => {},
+    focus: () => {}, getOutput: () => '', sendInput: () => {}, resizeTerm: () => {},
+    openInTerminal: () => {}, tmuxAvailable: () => false,
+    listSkills: async () => [], listProjects: async () => [], pinSkill: () => {},
+    tapSkill: () => {}, openProject: () => {}, listProposals: async () => [],
+    getProposal: async () => null, acceptProposal: async () => ({ ok: true }),
+    rejectProposal: () => {}, converseStart: async () => false, converseWrite: () => {},
+    converseStop: () => {}, openArtifact: () => {}, acceptRouteOffer: () => true,
+    getDoorbell: () => false, setDoorbell: () => {}, getLastSeen: () => 0, setLastSeen: () => {},
+  } satisfies NotchControllerDeps
+  const c = new NotchController(client, events, deps)
+  assert.doesNotThrow(() => {
+    client.fire({ type: 'scratchpadArm', on: true })
+    client.fire({ type: 'scratchpadRemove', id: 'x' })
+    client.fire({ type: 'scratchpadDeliver', dest: 'cursor' })
+    client.fire({ type: 'scratchpadDiscard' })
+  })
+  c.dispose()
 })

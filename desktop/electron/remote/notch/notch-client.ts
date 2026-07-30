@@ -147,6 +147,56 @@ export interface ProposalDetailP {
   diff?: string
 }
 
+// ── The scratchpad ──────────────────────────────────────────────────────────
+//
+// ONE ENTRY, RAW. The surface is sent what the entry IS, not how to draw it:
+// a segment's text and its start/end, an insert's kind and content. Glyph,
+// preview and duration are decided in Swift, where the layout is.
+
+export interface ScratchpadEntryP {
+  id: string
+  type: 'segment' | 'insert'
+  /** segment: the transcript, '' until it lands. */
+  text?: string
+  /** insert: url | path | line | block | image. */
+  kind?: string
+  /** insert: the text, or an absolute file path for an image. */
+  content?: string
+  startMs?: number
+  endMs?: number
+  atMs?: number
+}
+
+export interface ScratchpadPadP {
+  id: string
+  /** Where the capture that opened this pad was heading — the DEFAULT
+   *  destination, never a commitment. */
+  origin: 'cursor' | 'task'
+  entries: ScratchpadEntryP[]
+}
+
+/** Where a held pad can go. `openTask` is null unless a task is genuinely
+ *  focused — offering a destination that cannot receive is worse than not
+ *  offering it. */
+export interface ScratchpadDestinationsP {
+  cursor: true
+  newTask: true
+  openTask: { id: string; name: string } | null
+}
+
+/** Everything the pad surface draws, read in one go so pad, arm state and
+ *  destinations can never be sampled from two different instants. */
+export interface ScratchpadPayloadP {
+  /** The feature's master switch (settings). Off ⇒ no icon at all. */
+  enabled: boolean
+  armed: boolean
+  /** A delivery is in flight. The pad has ALREADY been taken for it, so
+   *  Discard must not be offered — see the delivery seam's restage path. */
+  delivering: boolean
+  pad: ScratchpadPadP | null
+  destinations: ScratchpadDestinationsP
+}
+
 // ── Commands (main → helper) ────────────────────────────────────────────────
 
 export type NotchCommand =
@@ -158,6 +208,7 @@ export type NotchCommand =
   | { type: 'proposal'; data: ProposalDetailP }
   | { type: 'convData'; id: string; text: string }
   | { type: 'capturePhase'; phase: string; target?: string }
+  | { type: 'scratchpad'; data: ScratchpadPayloadP }
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
   | { type: 'collapse' }
@@ -205,6 +256,12 @@ export type NotchEvent =
   | { type: 'suggestionReject'; id: string; reason: string }
   | { type: 'converseWrite'; id: string; text: string }
   | { type: 'converseStop'; id: string }
+  // The scratchpad. ARM IS THE ONLY THING THE ICON SENDS — send and discard are
+  // deliberate acts on the pad itself, never a side effect of a mode switch.
+  | { type: 'scratchpadArm'; on: boolean }
+  | { type: 'scratchpadRemove'; id: string }
+  | { type: 'scratchpadDeliver'; dest: 'cursor' | 'newTask' | 'openTask' }
+  | { type: 'scratchpadDiscard' }
 
 export interface NotchClientOpts {
   binPath: string

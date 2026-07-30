@@ -21,6 +21,8 @@ interface Settings {
   overlayDocked: boolean
   osNotifications: boolean
   forceRawMode: boolean
+  /** Capture during dictation — copies AND screenshots, not images alone. The
+   *  key predates text capture; main reads it from `captureEnabled`. */
   screenshotCapture: boolean
   agentTasksEnabled?: boolean
   logFile: string | null

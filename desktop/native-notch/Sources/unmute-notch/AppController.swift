@@ -14,6 +14,11 @@ final class AppController: NSObject, NotchResizing {
     private let pillModel = PillModel()
     private var pillWindow: PillWindow!
     private var pillHost: NSHostingView<AnyView>!
+    // The pad — held work, waiting for a destination. A SEPARATE panel because
+    // it outlives the pill: the pill exists only while a capture does, and the
+    // whole point of the scratchpad is accumulating across several.
+    private let scratchModel = ScratchpadModel()
+    private var scratchWindow: ScratchpadWindow!
     private var geometry: NotchGeometry
     /// Kept because contentView is now a container, not the hosting view.
     private var hostView: NSHostingView<NotchView>!
@@ -72,12 +77,27 @@ final class AppController: NSObject, NotchResizing {
             NotchLog.log("PILL EVENT out: \(ev.json)")
             IPC.emit(ev)
         }
+        scratchModel.emit = { ev in
+            NotchLog.log("PAD EVENT out: \(ev.json)")
+            IPC.emit(ev)
+        }
         pillWindow.fit(geometry: geometry)
-        let host = NSHostingView(rootView: AnyView(PillHost(model: pillModel)))
+        let host = NSHostingView(rootView: AnyView(PillHost(model: pillModel, scratch: scratchModel)))
         host.sizingOptions = []
         pillHost = host
         pillWindow.contentView = host
+
+        // The pad's panel. Non-activating for the same reason the pill's is —
+        // see ScratchpadWindow: taking focus would kill the insertion point the
+        // user is about to deliver into.
+        scratchWindow = ScratchpadWindow()
+        scratchWindow.fit(geometry: geometry)
+        let padHost = NSHostingView(rootView: ScratchpadHost(model: scratchModel))
+        padHost.sizingOptions = []
+        scratchWindow.contentView = padHost
+
         reconcilePillVisibility()
+        reconcilePadVisibility()
     }
 
     /// The pill exists only while a capture does. Hidden means ORDERED OUT, not
@@ -93,6 +113,21 @@ final class AppController: NSObject, NotchResizing {
             }
         } else if pillWindow.isVisible {
             pillWindow.orderOut(nil)
+        }
+    }
+
+    /// The pad is on screen only when it HOLDS something. Same rule as the pill
+    /// and for the same reason: an invisible always-on panel still sits in the
+    /// window server and still competes for clicks.
+    private func reconcilePadVisibility() {
+        guard let scratchWindow else { return }
+        if scratchModel.visible {
+            if !scratchWindow.isVisible {
+                scratchWindow.present()
+                Appearance.shared.invalidateBackdrop()
+            }
+        } else if scratchWindow.isVisible {
+            scratchWindow.orderOut(nil)
         }
     }
 
@@ -172,6 +207,11 @@ final class AppController: NSObject, NotchResizing {
             }
             pillModel.state = state
             reconcilePillVisibility()
+
+        case let .scratchpad(payload):
+            NotchLog.log("CMD scratchpad enabled=\(payload.enabled) armed=\(payload.armed) delivering=\(payload.delivering) entries=\(payload.pad?.entries.count ?? 0)")
+            scratchModel.state = payload
+            reconcilePadVisibility()
 
         case .collapse:
             model.focusedId = nil
@@ -583,6 +623,7 @@ final class AppController: NSObject, NotchResizing {
         // one, relocates both surfaces together. Its size preference does not
         // re-fire on a screen change, so refit explicitly from the current frame.
         pillWindow?.fit(geometry: geometry)
+        scratchWindow?.fit(geometry: geometry)   // it rides directly above the pill
         NotchLog.log("geometry recomputed (\(reason)): screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) → window=\(NotchLog.rect(f))")
     }
 }

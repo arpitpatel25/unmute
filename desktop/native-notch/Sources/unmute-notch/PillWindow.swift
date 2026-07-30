@@ -82,9 +82,10 @@ final class PillWindow: NSPanel {
 /// underneath.
 struct PillHost: View {
     @ObservedObject var model: PillModel
+    @ObservedObject var scratch: ScratchpadModel
 
     var body: some View {
-        PillView(model: model)
+        PillView(model: model, scratch: scratch)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 }

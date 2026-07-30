@@ -78,11 +78,12 @@ import { devlog, devEvent } from './curator-devlog'
 import { createClipboardWatch } from './capture/clipboardWatch'
 import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
-  adoptPersistedPad, armScratchpad, claimShared, discard as discardPad, initWatchers,
-  padDirOf, pasteAtCursor, recordInsert, registerSettings, removeFromPad, runDelivery,
-  snapshot, type DeliveryTarget,
+  adoptPersistedPad, armScratchpad, claimShared, deliveryInFlight, discard as discardPad,
+  initWatchers, padDirOf, pasteAtCursor, recordInsert, registerSettings, removeFromPad,
+  runDelivery, snapshot, type DeliveryTarget,
 } from './capture/index'
-import type { InsertKind } from './capture/types'
+import type { Entry, InsertKind } from './capture/types'
+import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -1196,6 +1197,131 @@ function broadcastScratchpad(): void {
   for (const w of BrowserWindow.getAllWindows()) {
     try { if (!w.isDestroyed()) w.webContents.send('scratchpad:changed', s) } catch { /* window going away */ }
   }
+  // The native pad panel reads the SAME snapshot, taken once above — two reads
+  // would let the panel and the renderer disagree about what is on the pad.
+  try { notchController?.notifyScratchpad(scratchpadPayload(s)) } catch { /* helper going away */ }
+}
+
+/** One entry, raw. What it IS, not how to draw it: the surface decides glyph,
+ *  preview and duration, because that is layout and layout lives in Swift. */
+function toScratchpadEntry(e: Entry): ScratchpadEntryP {
+  return e.type === 'segment'
+    ? { id: e.id, type: 'segment', text: e.text, startMs: e.startMs, endMs: e.endMs }
+    : { id: e.id, type: 'insert', kind: e.kind, content: e.content, atMs: e.atMs }
+}
+
+/** What the native pad panel draws.
+ *
+ *  `delivering` is the reason Discard can be disabled honestly. Once a pad is
+ *  taken for delivery it is work the user tried to SEND, and the delivery seam
+ *  deliberately refuses to let discard clear it — a later failure restages it.
+ *  A Discard that appeared to cancel a send would be lying about both.
+ *
+ *  A HELD pad (settled from a previous run) is shown when nothing is live, so
+ *  work left behind is visible rather than only discoverable by arming. */
+function scratchpadPayload(s = snapshot()): ScratchpadPayloadP {
+  const pad = s.pad ?? s.held
+  return {
+    enabled: settings.get('scratchpadEnabled') !== false,
+    armed: s.armed,
+    delivering: deliveryInFlight(),
+    pad: pad ? { id: pad.id, origin: pad.origin, entries: pad.entries.map(toScratchpadEntry) } : null,
+    destinations: scratchpadDestinations(),
+  }
+}
+
+// ── The scratchpad's four verbs ─────────────────────────────────────────────
+//
+// ONE IMPLEMENTATION PER VERB, called by both the renderer's IPC handlers and
+// the native pad panel's events. Two surfaces reaching the same internals is
+// the contract; two surfaces with their own copies of it is how they drift.
+
+/** THE SINGLE GATE POINT. armScratchpad applies canArmScratchpad itself and
+ *  returns the state that actually resulted, so a disabled scratchpad refuses
+ *  in one place and cannot half-apply. Arming is also what brings a settled pad
+ *  back from a previous run. */
+function armScratchpadFrom(on: boolean): boolean {
+  const armedNow = armScratchpad(on)
+  broadcastScratchpad()
+  log.event('scratchpad-arm', { requested: on, armed: armedNow })
+  return armedNow
+}
+
+function removeScratchpadEntry(id: string): void {
+  removeFromPad(id, Date.now())
+  broadcastScratchpad()
+}
+
+function discardScratchpad(): void {
+  discardPad()
+  broadcastScratchpad()
+}
+
+/** Send the pad. Returns where it landed ('cursor' or a task id), or null.
+ *
+ *  DELIVERY MUST NOT DESTROY HELD WORK. Rendering the pad clears it and takes
+ *  pad.json with it, so from that instant until the destination accepts, the
+ *  text exists only in a local variable. If nothing takes it, runDelivery puts
+ *  the pad back — in memory and on disk — and the user can retry. Held work is
+ *  held BECAUSE the user chose not to risk it; losing it here would be the
+ *  exact failure this feature exists to prevent.
+ *
+ *  THE TWO DESTINATIONS FAIL DIFFERENTLY, and that is not papered over. The
+ *  cursor is largely SELF-INSURING: injectOutput writes the pasteboard before
+ *  it posts ⌘V and swallows a failed keystroke, so the ordinary cursor failure
+ *  still leaves the text where the user can paste it — what reaches the
+ *  restage path there is the case where nothing was written at all (no paste
+ *  effect registered, or the write itself threw). The task path has no such
+ *  property: if the router throws, the text reached nothing, and the pad is
+ *  the only copy. */
+async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promise<string | null> {
+  const target: DeliveryTarget = dest === 'cursor' ? 'cursor' : dest === 'openTask' ? 'openTask' : 'newTask'
+
+  // pasteAtCursor, NOT a direct injectOutput import: clipboard.ts imports FROM
+  // this module, and its header records why that direction is one-way (a lazy
+  // require of remote/init fails inside the bundled main, swallowed by a
+  // fail-open catch). Importing it here would close exactly that loop.
+  const send = target === 'cursor'
+    ? async (text: string): Promise<string | null> => ((await pasteAtCursor(text)) ? 'cursor' : null)
+    : async (text: string): Promise<string | null> => {
+      const mgr = manager
+      if (target === 'openTask' && orchestrateFocusId && mgr?.get(orchestrateFocusId)) {
+        const fid = orchestrateFocusId
+        if (mgr.followUp(fid, text)) return fid
+        // It couldn't take it (terminal/gone) — route it as a new task rather
+        // than dropping work the user already committed.
+        log.warn('focused task refused the pad — routing it as a new task', { taskId: fid })
+      }
+      return dispatchFromCapture(text)
+    }
+
+  const r = await runDelivery(target, send, broadcastScratchpad)
+  if (r.landed) {
+    log.event('scratchpad-delivered', { to: target, landed: r.landed })
+    return r.landed
+  }
+  if (r.busy) {
+    // A second Send while the first is still going. Ignored, and logged as
+    // what it is — an empty-pad log line here would be a lie, and the two
+    // look identical from the return value alone.
+    log.event('scratchpad-deliver-ignored', { to: target, reason: 'already-delivering' })
+    return null
+  }
+  if (r.restaged) {
+    // Enough to recover by hand: the pad is back on disk at this path with its
+    // entries intact. The TEXT is deliberately not logged — it is the user's
+    // own dictation, and the file already has it.
+    log.error('scratchpad delivery failed — the pad was put back', {
+      to: target,
+      padId: r.restaged.id,
+      padDir: padDirOf(r.restaged),
+      entries: r.restaged.entries.length,
+      error: r.error instanceof Error ? r.error.message : String(r.error ?? 'destination declined'),
+    })
+  } else {
+    log.event('scratchpad-delivered', { to: target, landed: null, empty: true })
+  }
+  return null
 }
 
 /** The pad's destinations. THE SET IS DYNAMIC: "add to the open task" appears
@@ -2234,8 +2360,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         setDoorbell: (on) => settings.set('voiceHeadlines', !!on),
         getLastSeen: () => notchLastSeen,
         setLastSeen: (ms) => { notchLastSeen = ms },
+        // The pad panel's four verbs, straight onto the same functions the
+        // scratchpad:* IPC handlers call. Deliver is fire-and-forget here: the
+        // surface learns the outcome from the broadcast, not a return value.
+        scratchpadArm: (on) => { armScratchpadFrom(on) },
+        scratchpadRemove: (id) => removeScratchpadEntry(id),
+        scratchpadDeliver: (dest) => { void deliverScratchpad(dest) },
+        scratchpadDiscard: () => discardScratchpad(),
         // (pill deps are wired separately, below — see PillController)
       })
+      // Seed the pad panel. Without this a pad adopted from a previous run is
+      // invisible until something else happens to change it.
+      try { notchController.notifyScratchpad(scratchpadPayload()) } catch { /* helper starting */ }
 
       // ── The input surface ──
       //
@@ -2702,99 +2838,42 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     destinations: scratchpadDestinations(),
   }))
 
-  // THE SINGLE GATE POINT. armScratchpad applies canArmScratchpad itself and
-  // returns the state that actually resulted, so a disabled scratchpad refuses
-  // in one place and cannot half-apply. Arming is also what brings a settled
-  // pad back from a previous run.
-  ipcMain.handle('scratchpad:arm', async (_e, on: boolean) => {
-    const armedNow = armScratchpad(!!on)
-    broadcastScratchpad()
-    log.event('scratchpad-arm', { requested: !!on, armed: armedNow })
-    return armedNow
-  })
+  // Each of these is the renderer's door onto the same function the native pad
+  // panel reaches through the notch controller — see "the scratchpad's four
+  // verbs" above for why the implementation lives there and not here.
+  ipcMain.handle('scratchpad:arm', async (_e, on: boolean) => armScratchpadFrom(!!on))
 
   ipcMain.handle('scratchpad:remove-entry', async (_e, id: string) => {
-    removeFromPad(String(id), Date.now())
-    broadcastScratchpad()
+    removeScratchpadEntry(String(id))
     return true
   })
 
   ipcMain.handle('scratchpad:discard', async () => {
-    discardPad()
-    broadcastScratchpad()
+    discardScratchpad()
     return true
   })
 
-  /** Send the pad. Returns where it landed ('cursor' or a task id), or null.
-   *
-   *  DELIVERY MUST NOT DESTROY HELD WORK. Rendering the pad clears it and takes
-   *  pad.json with it, so from that instant until the destination accepts, the
-   *  text exists only in a local variable. If nothing takes it, runDelivery puts
-   *  the pad back — in memory and on disk — and the user can retry. Held work is
-   *  held BECAUSE the user chose not to risk it; losing it here would be the
-   *  exact failure this feature exists to prevent.
-   *
-   *  THE TWO DESTINATIONS FAIL DIFFERENTLY, and that is not papered over. The
-   *  cursor is largely SELF-INSURING: injectOutput writes the pasteboard before
-   *  it posts ⌘V and swallows a failed keystroke, so the ordinary cursor failure
-   *  still leaves the text where the user can paste it — what reaches the
-   *  restage path there is the case where nothing was written at all (no paste
-   *  effect registered, or the write itself threw). The task path has no such
-   *  property: if the router throws, the text reached nothing, and the pad is
-   *  the only copy. */
-  ipcMain.handle('scratchpad:deliver', async (_e, dest: 'cursor' | 'newTask' | 'openTask') => {
-    const target: DeliveryTarget = dest === 'cursor' ? 'cursor' : dest === 'openTask' ? 'openTask' : 'newTask'
-
-    // pasteAtCursor, NOT a direct injectOutput import: clipboard.ts imports FROM
-    // this module, and its header records why that direction is one-way (a lazy
-    // require of remote/init fails inside the bundled main, swallowed by a
-    // fail-open catch). Importing it here would close exactly that loop.
-    const send = target === 'cursor'
-      ? async (text: string): Promise<string | null> => ((await pasteAtCursor(text)) ? 'cursor' : null)
-      : async (text: string): Promise<string | null> => {
-        const mgr = manager
-        if (target === 'openTask' && orchestrateFocusId && mgr?.get(orchestrateFocusId)) {
-          const fid = orchestrateFocusId
-          if (mgr.followUp(fid, text)) return fid
-          // It couldn't take it (terminal/gone) — route it as a new task rather
-          // than dropping work the user already committed.
-          log.warn('focused task refused the pad — routing it as a new task', { taskId: fid })
-        }
-        return dispatchFromCapture(text)
-      }
-
-    const r = await runDelivery(target, send, broadcastScratchpad)
-    if (r.landed) {
-      log.event('scratchpad-delivered', { to: target, landed: r.landed })
-      return r.landed
-    }
-    if (r.busy) {
-      // A second Send while the first is still going. Ignored, and logged as
-      // what it is — an empty-pad log line here would be a lie, and the two
-      // look identical from the return value alone.
-      log.event('scratchpad-deliver-ignored', { to: target, reason: 'already-delivering' })
-      return null
-    }
-    if (r.restaged) {
-      // Enough to recover by hand: the pad is back on disk at this path with its
-      // entries intact. The TEXT is deliberately not logged — it is the user's
-      // own dictation, and the file already has it.
-      log.error('scratchpad delivery failed — the pad was put back', {
-        to: target,
-        padId: r.restaged.id,
-        padDir: padDirOf(r.restaged),
-        entries: r.restaged.entries.length,
-        error: r.error instanceof Error ? r.error.message : String(r.error ?? 'destination declined'),
-      })
-    } else {
-      log.event('scratchpad-delivered', { to: target, landed: null, empty: true })
-    }
-    return null
-  })
+  ipcMain.handle('scratchpad:deliver', async (_e, dest: 'cursor' | 'newTask' | 'openTask') =>
+    deliverScratchpad(dest))
   // Voice-as-doorbell toggle (§6.4) — read + set from the cockpit's 🔔 chip.
   ipcMain.handle('remote:get-voice-headlines', async () => settings.get('voiceHeadlines') !== false)
   ipcMain.handle('remote:set-voice-headlines', async (_e, on: boolean) => { settings.set('voiceHeadlines', !!on); return true })
+  // CAPTURE — text as well as images. The wire key is still `screenshot-capture`
+  // because renaming a shipped IPC channel buys nothing; the SETTING it reads
+  // (captureEnabled) and the label the user sees are both honest about scope.
   ipcMain.handle('remote:get-screenshot-capture', async () => settings.get('captureEnabled') !== false)
+  // The scratchpad's master switch. Independent of capture — see captureGate.ts.
+  ipcMain.handle('remote:get-scratchpad-enabled', async () => settings.get('scratchpadEnabled') !== false)
+  ipcMain.handle('remote:set-scratchpad-enabled', async (_e, on: boolean) => {
+    settings.set('scratchpadEnabled', !!on)
+    log.event('scratchpad-enabled-set', { on: !!on })
+    // Turning it OFF cannot leave an armed pad behind: armScratchpad refuses
+    // while disabled, so the surface would keep showing an armed icon it could
+    // no longer act on. Disarming through the same gate settles it instead.
+    if (!on) armScratchpadFrom(false)
+    else broadcastScratchpad()   // the icon appears again
+    return true
+  })
   // The Unmute MCP master switch (agent-created tasks).
   ipcMain.handle('remote:get-agent-tasks', async () => settings.get('agentTasksEnabled') !== false)
   ipcMain.handle('remote:set-agent-tasks', async (_e, on: boolean) => { settings.set('agentTasksEnabled', !!on); return true })

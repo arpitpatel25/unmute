@@ -213,6 +213,10 @@ enum Command {
     /// including the per-frame level during a capture — one float, which is the
     /// only new traffic the capture path gains.
     case pill(PillState)
+    /// The scratchpad: a capture HELD instead of delivered, plus where it can
+    /// go. See ScratchpadModel — every field on that payload decodes leniently,
+    /// so a partial or older push still draws instead of being dropped.
+    case scratchpad(ScratchpadPayload)
     case collapse
     case quit
     case unknown
@@ -249,6 +253,12 @@ enum Command {
         case "pill":
             guard let p = sub("state", PillState.self) else { return .unknown }
             return .pill(p)
+        case "scratchpad":
+            // A payload that fails to decode falls back to EMPTY rather than
+            // .unknown: every field is optional with a default, so the only way
+            // to get here is a malformed `data`, and an empty pad (no panel) is
+            // the safe reading of "we do not know what is held".
+            return .scratchpad(sub("data", ScratchpadPayload.self) ?? .empty)
         case "appearance":
             // An unknown value falls back to `.system` rather than being
             // dropped: a malformed preference must never leave the surface
@@ -321,6 +331,16 @@ enum Event {
     case suggestionReject(id: String, reason: String)
     case converseWrite(id: String, text: String)
     case converseStop(id: String)
+    // ── The scratchpad ──
+    //
+    // ARM IS THE ONLY THING THE ICON SENDS. Deliver and discard come from the
+    // pad's own footer, where they read as the deliberate acts they are — a
+    // toggle that also sent would turn "never mind" into a dispatched task.
+    case scratchpadArm(Bool)
+    case scratchpadRemove(id: String)
+    /// "cursor" | "newTask" | "openTask" — chosen at the END, never at the start.
+    case scratchpadDeliver(dest: String)
+    case scratchpadDiscard
 
     var json: [String: Any] {
         switch self {
@@ -366,6 +386,10 @@ enum Event {
         case .suggestionReject(let id, let reason): return ["type": "suggestionReject", "id": id, "reason": reason]
         case .converseWrite(let id, let text): return ["type": "converseWrite", "id": id, "text": text]
         case .converseStop(let id): return ["type": "converseStop", "id": id]
+        case .scratchpadArm(let on): return ["type": "scratchpadArm", "on": on]
+        case .scratchpadRemove(let id): return ["type": "scratchpadRemove", "id": id]
+        case .scratchpadDeliver(let dest): return ["type": "scratchpadDeliver", "dest": dest]
+        case .scratchpadDiscard: return ["type": "scratchpadDiscard"]
         }
     }
 }

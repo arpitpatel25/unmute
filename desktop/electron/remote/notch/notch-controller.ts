@@ -3,15 +3,16 @@
 // v2: full cockpit/overlay parity. It owns the your-move QUEUE (skip=requeue),
 // derives the six-rung baseline (dormant/active/attention) vs. the user's
 // engaged state (task/cockpit), builds the complete CockpitPayload (groups,
-// queue, one-offs, projects, suggestions, skills, shelf, digest, staged,
-// doorbell, route offer) and per-task TaskDetail, streams PTY output to the
-// helper's terminal, and maps EVERY helper event onto the same internals the
-// old IPC handlers call. Pure orchestration over injected deps — unit-testable
-// without a TaskManager, window, or child process.
+// queue, one-offs, projects, suggestions, skills, shelf, digest, doorbell,
+// route offer) and per-task TaskDetail, streams PTY output to the helper's
+// terminal, and maps EVERY helper event onto the same internals the old IPC
+// handlers call. Pure orchestration over injected deps — unit-testable without
+// a TaskManager, window, or child process.
 import type { EventEmitter } from 'node:events'
 import type {
   NotchCommand, NotchEvent, NotchStateName, TaskStatusName,
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
+  ScratchpadPayloadP,
 } from './notch-client'
 import { providerOf, type ProviderId } from '../providers'
 import { createLogger } from '../log'
@@ -115,6 +116,17 @@ export interface NotchControllerDeps {
   setDoorbell(on: boolean): void
   getLastSeen(): number
   setLastSeen(ms: number): void
+  // scratchpad — each maps 1:1 onto the SAME internals the scratchpad:* IPC
+  // handlers call. Optional so a host that does not wire the pad simply never
+  // sees these events, exactly like `opened`.
+  //
+  // THERE IS NO SEND HERE. Arming is a mode switch and nothing else; the pad's
+  // own footer owns deliver and discard. A toggle reads as reversible, so
+  // toggle-off-to-send would turn "never mind" into a dispatched task.
+  scratchpadArm?(on: boolean): void
+  scratchpadRemove?(id: string): void
+  scratchpadDeliver?(dest: 'cursor' | 'newTask' | 'openTask'): void
+  scratchpadDiscard?(): void
 }
 
 export interface NotchClientLike {
@@ -319,6 +331,22 @@ export class NotchController {
     on('suggestionReject', (e) => { const { id, reason } = e as { id: string; reason: string }; void this.onSuggestionReject(id, reason) })
     on('converseWrite', (e) => { const { id, text } = e as { id: string; text: string }; void this.onConverseWrite(id, text) })
     on('converseStop', (e) => { this.deps.converseStop((e as { id: string }).id); this.conversing.delete((e as { id: string }).id) })
+    // The scratchpad. NO STATE LIVES HERE — every one of these is a straight
+    // relay onto the same internals the scratchpad:* IPC handlers call, and the
+    // resulting `scratchpad` push comes back through notifyScratchpad from the
+    // one place that announces a pad change.
+    on('scratchpadArm', (e) => this.deps.scratchpadArm?.((e as { on?: boolean }).on === true))
+    on('scratchpadRemove', (e) => {
+      const id = (e as { id?: string }).id
+      if (id) this.deps.scratchpadRemove?.(id)
+    })
+    on('scratchpadDeliver', (e) => {
+      const dest = (e as { dest?: string }).dest
+      // An unrecognised destination is DROPPED, not defaulted. Defaulting would
+      // let a malformed line send held work somewhere the user never chose.
+      if (dest === 'cursor' || dest === 'newTask' || dest === 'openTask') this.deps.scratchpadDeliver?.(dest)
+    })
+    on('scratchpadDiscard', () => this.deps.scratchpadDiscard?.())
 
     // Seed the queue from whatever already exists (post-rehydrate).
     for (const t of this.deps.listTasks()) this.trackKind(t)
@@ -643,6 +671,13 @@ export class NotchController {
     const t = taskId ? this.deps.getTask(taskId) : undefined
     const target = t ? (t.name ?? truncate(t.intent)) : (this.focusedId ? this.titleOf(this.focusedId) : undefined)
     this.client.send({ type: 'capturePhase', phase, target })
+  }
+
+  /** The pad changed. Pushed verbatim — the payload is built by the one
+   *  function that announces a pad change, so the surface can never see the pad
+   *  and the arm state from two different instants. */
+  notifyScratchpad(payload: ScratchpadPayloadP): void {
+    this.client.send({ type: 'scratchpad', data: payload })
   }
 
   notifyRouteOffer(offer: { newTaskId: string; altTaskId: string; altName: string } | null): void {

@@ -4,9 +4,9 @@ import Combine
 // THE INPUT SURFACE — bottom-centre, the counterpart to the notch's top-centre.
 //
 // ARCHITECTURE: this is a VIEW ONLY, exactly like the notch. Audio capture,
-// VAD, mic-source resolution and the staged-image ledger all stay in the
-// renderer where they already work; main pushes their state here and the user's
-// gestures travel back as events. Nothing about the capture path moves.
+// VAD, mic-source resolution and the scratchpad's buffer all stay where they
+// already work — the renderer and main; main pushes their state here and the
+// user's gestures travel back as events. Nothing about the capture path moves.
 //
 // That boundary is not tidiness — it is the dictation constraint. Heavy
 // main-process work while recording corrupts audio, so the capture path keeps

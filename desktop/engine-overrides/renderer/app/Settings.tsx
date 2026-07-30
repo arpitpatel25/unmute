@@ -31,6 +31,21 @@ interface SettingsProps {
   onDictationKeyChange?: (key: 'fn' | 'right-option') => void
 }
 
+/** The capture bridge's two scratchpad calls.
+ *
+ *  Cast off `window`, NOT off `window.electronAPI`: the property is undeclared
+ *  in this project's renderer types, so every `window.electronAPI as unknown
+ *  as …` in this file is itself a type error (there are dozens). Reaching for
+ *  the property through a cast window is the same runtime access with none of
+ *  the noise. */
+const captureApi = (): {
+  remoteGetScratchpadEnabled?: () => Promise<boolean>
+  remoteSetScratchpadEnabled?: (on: boolean) => Promise<boolean>
+} => (window as unknown as { electronAPI?: {
+  remoteGetScratchpadEnabled?: () => Promise<boolean>
+  remoteSetScratchpadEnabled?: (on: boolean) => Promise<boolean>
+} }).electronAPI ?? {}
+
 export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([])
   const [selectedDevice, setSelectedDevice] = useState<string>('')
@@ -39,6 +54,7 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
   const [soundFeedback, setSoundFeedback] = useState(true)
   const [iphoneMic, setIphoneMic] = useState(false)
   const [screenshotCapture, setScreenshotCapture] = useState(true)
+  const [scratchpadEnabled, setScratchpadEnabled] = useState(true)
   const [widgetPosition, setWidgetPosition] = useState<'center' | 'right'>('center')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
@@ -80,6 +96,7 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
       .getIphoneMicEnabled?.().then((on) => setIphoneMic(!!on)).catch(() => {})
     ;(window.electronAPI as unknown as { remoteGetScreenshotCapture?: () => Promise<boolean> })
       .remoteGetScreenshotCapture?.().then((on) => setScreenshotCapture(!!on)).catch(() => {})
+    captureApi().remoteGetScratchpadEnabled?.().then((on) => setScratchpadEnabled(!!on)).catch(() => {})
     })
     window.electronAPI.paywallGetOutputMode?.()
       .then((v: 'paste' | 'clipboard') => {
@@ -371,10 +388,19 @@ export default function Settings({ onDictationKeyChange }: SettingsProps = {}) {
         <SettingRow label="Sound feedback" description="Play sounds on start / stop">
           <Toggle checked={soundFeedback} onChange={handleSoundFeedbackChange} />
         </SettingRow>
-        <SettingRow label="Screenshot capture" description="Screenshots you take WHILE dictating attach automatically — pasted right after your text (or attached to the task in Remote). The pill shows a count of what will attach; nothing captured before or after a dictation is ever touched. Off: Unmute never looks at screenshots.">
+        {/* The label used to say "Screenshot capture", from when images were all
+            this touched. It now governs TEXT too — anything you copy while the
+            mic is hot — so the label says what it does. */}
+        <SettingRow label="Capture while dictating" description="Things you copy or screenshot WHILE dictating land in the text at the point they happened — inline where you paste, or attached to the task in Remote. Nothing copied or captured before or after a dictation is ever touched. Off: Unmute never looks at your clipboard or screenshots.">
           <Toggle checked={screenshotCapture} onChange={(on: boolean) => {
             setScreenshotCapture(on)
             void (window.electronAPI as unknown as { remoteSetScreenshotCapture?: (v: boolean) => Promise<boolean> }).remoteSetScreenshotCapture?.(on)
+          }} />
+        </SettingRow>
+        <SettingRow label="Scratchpad" description="Adds an icon to the recording pill that HOLDS what you dictate instead of delivering it on stop — so you can keep adding across several recordings, then choose where it all goes. Arming only ever holds; nothing is sent until you press a destination on the pad.">
+          <Toggle checked={scratchpadEnabled} onChange={(on: boolean) => {
+            setScratchpadEnabled(on)
+            void captureApi().remoteSetScratchpadEnabled?.(on)
           }} />
         </SettingRow>
         <SettingRow label="iPhone microphone" description="Use your iPhone as the dictation mic (via Apple Continuity — no install). Adds a mic-source switch next to the recording pill.">

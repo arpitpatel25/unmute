@@ -1,9 +1,9 @@
 import SwiftUI
 
 // The cockpit wall — group sections of cards plus the sidebar (queue / one-offs
-// / projects / suggestions / skills / shelf), the away digest, doorbell,
-// staged-tray chip and the route offer. Clicking a card emits focusTask (the
-// voice address) and the Stage takes over (StageView).
+// / projects / suggestions / skills / shelf), the away digest, doorbell and the
+// route offer. Clicking a card emits focusTask (the voice address) and the
+// Stage takes over (StageView).
 //
 // GOLDEN GATE: the sidebar is EDGE-TO-EDGE, not an inset floating pane — Tahoe's
 // floating sidebar was removed in the 27 design. Both scrollers carry a hard
@@ -381,9 +381,9 @@ struct WallView: View {
 
     // MARK: floating chrome
 
-    /// One bottom bar over the wall: staged tray, the live voice chip, then the
-    /// route offer and the doorbell pushed to the right. A single row means
-    /// nothing can overlap anything else however many pieces are present.
+    /// One bottom bar over the wall: the live voice chip, then the route offer
+    /// and the doorbell pushed to the right. A single row means nothing can
+    /// overlap anything else however many pieces are present.
     private var bottomChrome: some View {
         HStack(alignment: .bottom, spacing: 8) {
             bottomLeftChrome
