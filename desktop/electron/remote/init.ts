@@ -1665,6 +1665,39 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         skillNames,
         avail,
       )
+      // GUARD THE ANSWER, NOT JUST THE QUESTION.
+      //
+      // The scoping above controls what the router is SHOWN. Nothing checked
+      // what it hands back — and on 2026-07-30 a Claude router was given an
+      // EMPTY snapshot (tasks:0, hidden:0) and still returned
+      // action:"resume" naming a Codex task, which init.ts then resumed. The
+      // utterance went to a different agent than the user asked for, silently.
+      //
+      // The router is a persistent session, so its own history carries ids from
+      // earlier turns; "we didn't tell it this time" is not the same as "it
+      // cannot say it". This closes that gap without depending on model
+      // behaviour at all.
+      //
+      // Deliberately checks "was this shown AT ALL", not "is this a legal
+      // target": cold sessions and finished tasks are legitimately referenced
+      // by `speak`/`contextTaskId`, and their own rules already live elsewhere.
+      // Anything the router legitimately knows came from one of these lists, so
+      // rejecting ids in none of them can never remove working behaviour.
+      const offeredIds = new Set(
+        [...targetable, ...finished, ...coldSessions, ...wall]
+          .filter(mine).map((t) => t.id),
+      )
+      if (decision.targetTaskId && !offeredIds.has(decision.targetTaskId)) {
+        log.warn('router named a task outside its own snapshot — ignoring', {
+          engine: useCodex ? 'codex' : 'claude',
+          targetTaskId: decision.targetTaskId,
+          action: decision.action,
+          offered: offeredIds.size,
+          namedAgent: manager.get(decision.targetTaskId)?.agent ?? 'unknown',
+        })
+        decision.targetTaskId = undefined   // falls through to a NEW task
+      }
+
       // Phase timing: how long the utterance spent in the router (warm → decision).
       log.event('phase-timing', { phase: 'router', ms: Date.now() - tRoute, action: decision.action })
       // Explicit-skill prefix: when the user named a skill, prefix the

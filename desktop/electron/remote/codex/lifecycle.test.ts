@@ -60,10 +60,16 @@ test('a codex-desktop dispatch never touches the executor factory', async () => 
   // Created project-scoped, with the user's words verbatim — and carrying the
   // user's permission setting, so the Codex composer is raised to the same
   // level --dangerously-skip-permissions would give a Claude task.
-  assert.deepEqual(d.calls[0], {
-    fn: 'createTask',
-    args: ['fix the login bug', { project: 'unmute', permissionMode: 'ask' }],
-  })
+  assert.equal(d.calls[0].fn, 'createTask')
+  const [sentIntent, sentOpts] = d.calls[0].args as [string, Record<string, unknown>]
+  assert.equal(sentIntent, 'fix the login bug')
+  assert.equal(sentOpts.project, 'unmute')
+  assert.equal(sentOpts.permissionMode, 'ask')
+  // Threads already spoken for, so the durable-id scan can never hand this new
+  // task a RUNNING thread's id (see newestThreadIdSince). Asserted by field
+  // rather than deepEqual: this options bag grows, and a whole-object match
+  // turns every addition into a false failure.
+  assert.ok(sentOpts.knownThreadIds instanceof Set, 'must pass the ids already in use')
   m.killAll(); m.stopMaintenance()
 })
 

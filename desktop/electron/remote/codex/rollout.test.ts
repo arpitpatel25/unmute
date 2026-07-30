@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, appendFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, appendFile, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { parseRollout, watchThread } from './rollout'
@@ -314,4 +314,73 @@ test('an append wakes the watcher', async () => {
     for (let i = 0; i < 60 && hits === 0; i++) await new Promise((r) => setTimeout(r, 50))
     assert.ok(hits > 0, 'appending to the rollout should have woken the watcher')
   } finally { stop() }
+})
+
+// ── newestThreadIdSince: creation time, not mtime ───────────────────────────
+// 2026-07-30: two dispatches 29s apart resolved to the SAME threadId, so two
+// cards rendered one Codex conversation. mtime is bumped by every append, so a
+// thread that is merely STILL RUNNING looks brand new forever. Measured across
+// 57 real rollouts: 26 had an mtime over a minute past creation, one by 18h.
+
+import { newestThreadIdSince, rolloutCreatedAt } from './rollout'
+
+async function sessionsWith(files: Array<{ name: string; mtimeOffsetMs?: number }>) {
+  const dir = await mkdtemp(join(tmpdir(), 'unmute-sessions-'))
+  const day = join(dir, '2026', '07', '30')
+  await mkdir(day, { recursive: true })
+  for (const f of files) {
+    const p = join(day, f.name)
+    await writeFile(p, '')
+    if (f.mtimeOffsetMs) {
+      const t = new Date(Date.now() + f.mtimeOffsetMs)
+      await utimes(p, t, t)
+    }
+  }
+  return dir
+}
+
+const OLD = 'rollout-2026-07-30T21-12-54-019fb4df-77ad-7113-97fb-77419adae7e7.jsonl'
+const NEW = 'rollout-2026-07-30T21-13-23-019fb500-1111-2222-3333-444455556666.jsonl'
+
+test('rolloutCreatedAt reads the filename stamp, and null when absent', () => {
+  assert.equal(rolloutCreatedAt(OLD), new Date(2026, 6, 30, 21, 12, 54).getTime())
+  assert.equal(rolloutCreatedAt('not-a-rollout.jsonl'), null)
+})
+
+test('a STILL-RUNNING thread is not mistaken for a newly created one', async () => {
+  // Only the old thread exists, and it is being appended to right now — so its
+  // mtime is "now" while its creation is minutes old. Asking for threads created
+  // in the last two seconds must find NOTHING, not hand back the running one.
+  const dir = await sessionsWith([{ name: OLD, mtimeOffsetMs: 0 }])
+  const id = await newestThreadIdSince(Date.now() - 2000, dir)
+  assert.equal(id, null, 'mtime says "new", the filename says otherwise — trust the filename')
+})
+
+test('a genuinely new thread IS found', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'unmute-sessions-'))
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
+  const day = join(dir, String(now.getFullYear()), pad(now.getMonth() + 1), pad(now.getDate()))
+  await mkdir(day, { recursive: true })
+  await writeFile(join(day, `rollout-${stamp}-019fb500-1111-2222-3333-444455556666.jsonl`), '')
+  const id = await newestThreadIdSince(Date.now() - 5000, dir)
+  assert.equal(id, '019fb500-1111-2222-3333-444455556666')
+})
+
+test('a thread already owned by a live task is never handed out again', async () => {
+  // The belt to the filename braces: even if timing were ambiguous, an id that
+  // another task holds cannot be the thread we are creating right now.
+  const dir = await sessionsWith([{ name: OLD }, { name: NEW }])
+  const taken = new Set(['019fb500-1111-2222-3333-444455556666'])
+  const id = await newestThreadIdSince(0, dir, taken)
+  assert.equal(id, '019fb4df-77ad-7113-97fb-77419adae7e7')
+})
+
+test('an unparseable filename falls back to mtime rather than vanishing', async () => {
+  // 57/57 real files parsed, but a naming change must degrade to the old
+  // behaviour, never break task creation outright.
+  const dir = await sessionsWith([{ name: 'rollout-weird-019fb777-1111-2222-3333-444455556666.jsonl', mtimeOffsetMs: 0 }])
+  const id = await newestThreadIdSince(Date.now() - 5000, dir)
+  assert.equal(id, '019fb777-1111-2222-3333-444455556666')
 })

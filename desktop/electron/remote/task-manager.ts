@@ -707,6 +707,13 @@ export class TaskManager extends EventEmitter {
     const created = await driver.createTask(intent, {
       project: opts.project ?? null,
       permissionMode: this.opts.permissionMode?.() ?? 'ask',
+      // Threads already spoken for. The durable id is recovered by scanning the
+      // sessions directory, and a RUNNING thread's file keeps looking new, so
+      // without this a second dispatch could be handed the first task's thread
+      // — two cards on one Codex conversation (observed 2026-07-30).
+      knownThreadIds: new Set(
+        [...this.tasks.values()].map((t) => t.codexThreadId).filter((x): x is string => !!x),
+      ),
       ...reasoning,
     })
 

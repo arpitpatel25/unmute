@@ -370,6 +370,10 @@ export class CodexDesktopDriver {
       project?: string | null
       autoArm?: boolean
       permissionMode?: UnmutePermissionMode
+      /** Durable thread ids ALREADY owned by live tasks. A thread being created
+       *  now cannot be one of them, so passing them makes it impossible to hand
+       *  a newcomer a running thread's id — see newestThreadIdSince. */
+      knownThreadIds?: ReadonlySet<string>
       /** Codex's own labels, e.g. "5.6 Luna" / "High" / "Fast". */
       model?: string
       effort?: string
@@ -476,7 +480,7 @@ export class CodexDesktopDriver {
       if (domThreadId) log.event('codex-create-dom-row', { domThreadId, transient: isTransientThreadId(domThreadId) })
     } catch { /* best effort — the durable id below is what the task is keyed on */ }
 
-    const threadId = await this.resolveNewThreadId(startedAt)
+    const threadId = await this.resolveNewThreadId(startedAt, 20, opts.knownThreadIds)
     if (!threadId) {
       // The message IS in Codex at this point — the send was confirmed above.
       // Report the id failure distinctly so it is never mistaken for "the task
@@ -502,9 +506,9 @@ export class CodexDesktopDriver {
    * `client-new-thread:` id and the durable one is never written there, so the
    * old DOM poll could only ever time out.
    */
-  private async resolveNewThreadId(startedAt: number, tries = 20): Promise<string | null> {
+  private async resolveNewThreadId(startedAt: number, tries = 20, exclude: ReadonlySet<string> = new Set()): Promise<string | null> {
     for (let i = 0; i < tries; i++) {
-      const id = await newestThreadIdSince(startedAt, this.sessionsDir)
+      const id = await newestThreadIdSince(startedAt, this.sessionsDir, exclude)
       if (id) { log.event('codex-id-resolved', { threadId: id, attempts: i + 1 }); return id }
       await this.sleep(400)
     }

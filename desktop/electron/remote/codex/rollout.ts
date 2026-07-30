@@ -340,11 +340,28 @@ function numericMs(v: unknown): number {
  * Filenames look like:
  *   rollout-2026-07-25T02-40-24-019f95f7-1127-7792-9a96-e1148ed6d954.jsonl
  */
+/**
+ * Creation time from the filename, e.g. `rollout-2026-07-30T21-12-54-<id>.jsonl`.
+ * Null when unparseable, so callers fall back rather than treating the file as
+ * absent.
+ */
+export function rolloutCreatedAt(name: string): number | null {
+  const m = name.match(/^rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-/)
+  if (!m) return null
+  const t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+                     Number(m[4]), Number(m[5]), Number(m[6])).getTime()
+  return Number.isFinite(t) ? t : null
+}
+
 export async function newestThreadIdSince(
   sinceMs: number,
   sessionsDir = DEFAULT_SESSIONS_DIR,
+  /** Threads already claimed by a live task. A thread we are creating RIGHT NOW
+   *  can never be one of these, so excluding them makes a collision impossible
+   *  rather than merely unlikely — and it is independent of any timestamp. */
+  exclude: ReadonlySet<string> = new Set(),
 ): Promise<string | null> {
-  const candidates: Array<{ id: string; mtime: number }> = []
+  const candidates: Array<{ id: string; at: number }> = []
   const years = (await safeDirs(sessionsDir)).sort().reverse()
   // Only the newest date partitions can hold a thread we just created; scanning
   // newest-first and stopping at the first day with a hit keeps this cheap.
@@ -358,18 +375,34 @@ export async function newestThreadIdSince(
         try { names = await fs.readdir(dir) } catch { continue }
         for (const n of names) {
           const id = threadIdFromRolloutName(n)
-          if (!id) continue
-          try {
-            const mtime = (await fs.stat(join(dir, n))).mtimeMs
-            if (mtime >= sinceMs) candidates.push({ id, mtime })
-          } catch { /* file vanished mid-scan — ignore */ }
+          if (!id || exclude.has(id)) continue
+          // CREATION time from the FILENAME — never mtime.
+          //
+          // mtime is bumped by every append, so a thread that is merely STILL
+          // RUNNING looks brand new forever. Measured across 57 real rollouts:
+          // 26 had an mtime more than a minute past creation, one by 18 HOURS.
+          // So dispatching a second task while a first was working handed the
+          // newcomer the RUNNING thread's id — two cards, one Codex thread,
+          // each showing the other's conversation (observed 2026-07-30: two
+          // dispatches 29s apart resolved to the same threadId, and the
+          // resolver reported attempts:1, having never needed to wait).
+          //
+          // The filename stamp is written once and never changes. mtime stays
+          // as the fallback for an unparseable name (57/57 parsed on a real
+          // machine) so a naming change degrades to the old behaviour instead
+          // of breaking task creation outright.
+          let at = rolloutCreatedAt(n)
+          if (at === null) {
+            try { at = (await fs.stat(join(dir, n))).mtimeMs } catch { continue }
+          }
+          if (at >= sinceMs) candidates.push({ id, at })
         }
         if (candidates.length) break outer
       }
     }
   }
   if (!candidates.length) return null
-  candidates.sort((a, b) => b.mtime - a.mtime)
+  candidates.sort((a, b) => b.at - a.at)
   return candidates[0].id
 }
 
