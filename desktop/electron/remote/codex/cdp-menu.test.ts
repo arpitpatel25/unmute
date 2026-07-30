@@ -58,3 +58,63 @@ describe('SetReasoningTrace contract', () => {
     assert.equal(t.ok && t.changed, false)
   })
 })
+
+// ── Computer Use consent reading (added 2026-07-30) ─────────────────────────
+// The panel carries NO data-app-action-* hooks — probed live, zero matches — so
+// unlike the rest of cdp.ts this reader is structural. These pin the contract
+// the evaluate() expression must honour, with the browser stubbed out.
+
+import { readPendingConsent, answerConsent, isAwaitingConsent } from './cdp'
+
+/** A CodexCdp stand-in whose evaluate() returns whatever the DOM would have. */
+const fakeCdp = (payload: unknown, clicked: string[] = []) => ({
+  evaluate: async (expr: string) => {
+    if (/awaiting approval/i.test(expr) && !/querySelectorAll\('\*'\)\].filter/.test(expr)) {
+      return payload ? '1' : ''
+    }
+    return payload ? JSON.stringify(payload) : ''
+  },
+  clickText: async (t: string) => { clicked.push(t); return true },
+}) as never
+
+test('a consent is reported with EVERY option the DOM offers', async () => {
+  // Shape copied from the real blocked task on 2026-07-30 — three options, and
+  // the third ("Allow this conversation") is why nothing may be hardcoded.
+  const c = await readPendingConsent(fakeCdp({
+    question: 'Allow ChatGPT to use WhatsApp?',
+    options: ['Always allow', 'Deny', 'Allow this conversation'],
+  }))
+  assert.equal(c?.question, 'Allow ChatGPT to use WhatsApp?')
+  assert.deepEqual(c?.options, ['Always allow', 'Deny', 'Allow this conversation'])
+})
+
+test('no consent showing reads as null, never as an empty consent', async () => {
+  assert.equal(await readPendingConsent(fakeCdp(null)), null)
+})
+
+test('a panel with no options is not a consent', async () => {
+  assert.equal(await readPendingConsent(fakeCdp({ question: 'Really?', options: [] })), null)
+})
+
+test('answering clicks the option by its OWN label', async () => {
+  const clicked: string[] = []
+  const cdp = fakeCdp({ question: 'Allow ChatGPT to use WhatsApp?',
+    options: ['Always allow', 'Deny', 'Allow this conversation'] }, clicked)
+  assert.equal(await answerConsent(cdp, 'Deny'), true)
+  assert.deepEqual(clicked, ['Deny'])
+})
+
+test('answering an option Codex is NOT offering fails instead of guessing', async () => {
+  // The options differ per consent. Falling back to "something like it" would
+  // click the wrong button on a panel whose wording we have never seen.
+  const clicked: string[] = []
+  const cdp = fakeCdp({ question: 'Allow ChatGPT to use WhatsApp?',
+    options: ['Always allow', 'Deny'] }, clicked)
+  assert.equal(await answerConsent(cdp, 'Allow this conversation'), false)
+  assert.deepEqual(clicked, [])
+})
+
+test('isAwaitingConsent is true whenever Codex shows its parked marker', async () => {
+  assert.equal(await isAwaitingConsent(fakeCdp({ question: 'x?', options: ['a', 'b'] })), true)
+  assert.equal(await isAwaitingConsent(fakeCdp(null)), false)
+})

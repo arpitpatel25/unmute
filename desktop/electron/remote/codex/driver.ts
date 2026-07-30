@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, readReasoningLabel, setReasoning, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, readReasoningLabel, setReasoning, readPendingConsent, answerConsent, type CodexConsent, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, type CodexSnapshot } from './rollout'
 
@@ -584,6 +584,38 @@ export class CodexDesktopDriver {
   }
 
   /** Read a thread's state + recent turns from disk. Never touches the renderer. */
+  /**
+   * Read the Computer Use consent this thread is parked on, or null.
+   *
+   * Costs a thread switch, so callers must only reach for it once the CHEAP
+   * disk signal (snapshot.pendingToolCalls on a rollout that stopped growing)
+   * says the turn is parked. Backgrounded — the user's window is never raised.
+   *
+   * Returns null for "no consent" AND for "could not tell" (not armed, thread
+   * not mounted, DOM reworded). Callers must treat null as unknown and keep the
+   * disk-derived blocked state rather than clearing it.
+   */
+  async readConsent(threadId: string): Promise<CodexConsent | null> {
+    const cdp = await this.connect()
+    if (!cdp) return null
+    if (!(await this.openThread(threadId, cdp, { background: true }))) return null
+    await this.sleep(300)
+    try { return await readPendingConsent(cdp) } catch { return null }
+  }
+
+  /**
+   * Answer a consent by the option's own label, as read from readConsent().
+   * False when not armed, not mounted, or Codex is not offering that option —
+   * never a guess, because the options differ per consent.
+   */
+  async answerConsent(threadId: string, option: string): Promise<boolean> {
+    const cdp = await this.connect()
+    if (!cdp) return false
+    if (!(await this.openThread(threadId, cdp, { background: true }))) return false
+    await this.sleep(300)
+    try { return await answerConsent(cdp, option) } catch { return false }
+  }
+
   async snapshot(threadId: string): Promise<CodexSnapshot> {
     // The DEFAULT limit is 6, and passing nothing meant a whole conversation
     // was cut to its last 6 ITEMS at parse time — and items are per-step now, so

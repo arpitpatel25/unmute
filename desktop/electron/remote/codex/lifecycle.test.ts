@@ -281,7 +281,7 @@ async function frozenTurn(opts: { pending: number; grows?: boolean }) {
   const id = await m.dispatch('open whatsapp', { agent: 'codex-desktop' })
   const poll = (m as unknown as { pollCodexDesktop(id: string): Promise<void> }).pollCodexDesktop.bind(m)
   await poll(id)                        // first look: establishes the baseline
-  return { m, id, poll, advance: (ms: number) => { now += ms } }
+  return { m, id, poll, d, advance: (ms: number) => { now += ms } }
 }
 
 test('a frozen mid-tool-call turn settles on needs-user, it does NOT oscillate', async () => {
@@ -313,5 +313,57 @@ test('a frozen turn with NO open call is stuck, not blocked', async () => {
     advance(5 * 60_000)
     await poll(id); await poll(id)
     assert.equal(m.get(id)!.state, 'stuck')
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+// ── Computer Use consent reaches the card, and is answered by clicking ───────
+
+test('a blocked turn shows Codex OWN question and its own options', async () => {
+  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1 })
+  try {
+    // Shape from the real 2026-07-30 block — note the THIRD option.
+    ;(d as unknown as { readConsent: unknown }).readConsent = async () => ({
+      question: 'Allow ChatGPT to use WhatsApp?',
+      options: ['Always allow', 'Deny', 'Allow this conversation'],
+    })
+    advance(5 * 60_000)
+    await poll(id)
+    const t = m.get(id)!
+    assert.equal(t.state, 'needs-user')
+    assert.equal(t.question?.text, 'Allow ChatGPT to use WhatsApp?')
+    assert.deepEqual(t.question?.choices, ['Always allow', 'Deny', 'Allow this conversation'])
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+test('an unreadable consent still blocks — it does not pretend all is well', async () => {
+  // Not armed / thread not mounted / panel reworded all read as null. The DISK
+  // said parked, so the card must stay parked with honest generic wording.
+  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1 })
+  try {
+    ;(d as unknown as { readConsent: unknown }).readConsent = async () => null
+    advance(5 * 60_000)
+    await poll(id)
+    const t = m.get(id)!
+    assert.equal(t.state, 'needs-user')
+    assert.match(t.question?.text ?? '', /waiting on you/i)
+    assert.deepEqual(t.question?.choices, [])
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+test('answering a consent clicks that option, it does not write a decision file', async () => {
+  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1 })
+  try {
+    const clicked: string[] = []
+    ;(d as unknown as { readConsent: unknown }).readConsent = async () => ({
+      question: 'Allow ChatGPT to use WhatsApp?',
+      options: ['Always allow', 'Deny', 'Allow this conversation'],
+    })
+    ;(d as unknown as { answerConsent: unknown }).answerConsent = async (_t: string, o: string) => { clicked.push(o); return true }
+    advance(5 * 60_000)
+    await poll(id)
+    await m.answer(id, 'Allow this conversation')
+    assert.deepEqual(clicked, ['Allow this conversation'],
+      'the exact option Codex offered must be clicked, not an allow/deny guess')
+    assert.equal(m.get(id)!.state, 'processing')
   } finally { m.killAll(); m.stopMaintenance() }
 })

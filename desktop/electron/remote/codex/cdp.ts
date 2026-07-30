@@ -882,3 +882,108 @@ export function bareThreadId(domId: string): string {
 export function isTransientThreadId(domId: string): boolean {
   return domId.includes('client-new-thread')
 }
+
+// ── Computer Use consents ───────────────────────────────────────────────────
+//
+// A SECOND, separate approval surface, and the one that was invisible to unmute
+// until 2026-07-30. Codex has two permission systems:
+//
+//   tool approvals ("run this bash?")  -> PermissionRequest hook -> hooks.ts
+//   Computer Use   ("use WhatsApp?")   -> NEITHER hook NOR rollout
+//
+// Verified on a live blocked task: ~/.codex/hooks.json was trusted+enabled and
+// the hook never fired; nothing was written to codex-approvals/; the rollout
+// recorded no approval event. The turn just stopped mid-exec.
+//
+// It IS in the DOM, which is why this exists. But note the cost, because it is
+// unlike everything else in this file: the consent panel carries NO
+// `data-app-action-*` attributes (probed live — zero matches). OpenAI's stable
+// automation surface does not cover it. So this reader is structural + textual:
+//
+//   * the panel is located by SHAPE — the element owning >=2 buttons — not by a
+//     selector, so option count and wording are free to change;
+//   * the options are whatever the DOM says. Never hardcode "Deny"/"Allow": the
+//     third option here is "Allow this conversation", and Codex is free to add
+//     more.
+//   * only the blocked MARKER ("Awaiting approval") is a literal string, and it
+//     is the one thing that will break on a copy change or a localised build.
+//     Treat a null result as "unknown", never as "not blocked" — the disk-side
+//     pendingToolCalls signal in rollout.ts is the backstop.
+
+/** A consent Codex is blocking on, exactly as its own window words it. */
+export interface CodexConsent {
+  /** The question, e.g. "Allow ChatGPT to use WhatsApp?". */
+  question: string
+  /** Every option offered, in DOM order. Read, never assumed. */
+  options: string[]
+}
+
+/** Codex's own "this turn is parked" marker. The one literal we depend on. */
+const AWAITING_MARKER = /awaiting approval/i
+
+/**
+ * Read the consent panel of the MOUNTED thread, or null when none is showing.
+ *
+ * Only ever reflects the conversation Codex currently has open — a renderer
+ * mounts exactly one. Blocked-ness across ALL threads comes from the rollout.
+ */
+export async function readPendingConsent(cdp: CodexCdp): Promise<CodexConsent | null> {
+  const raw = await cdp.evaluate<string>(`(() => {
+    const norm = (s) => (s || '').replace(/[\\u200e\\u200f\\u2066-\\u2069]/g, '').replace(/\\s+/g, ' ').trim();
+    const awaiting = [...document.querySelectorAll('*')]
+      .some((e) => e.children.length === 0 && /awaiting approval/i.test(e.textContent || ''));
+    if (!awaiting) return '';
+    // Anchor on the QUESTION, then take the nearest ancestor that owns its
+    // answer buttons.
+    //
+    // Two heuristics were tried live and both failed, which is why this one is
+    // written the way it is: "container with the MOST buttons" finds the
+    // sidebar (dozens of thread rows), and "tightest container with >=2
+    // buttons" finds a two-item nav with no question in it. The question is the
+    // only reliable anchor, and '?' is the only thing assumed about it — no
+    // phrase, no selector, no option count.
+    const leaves = [...document.querySelectorAll('*')].filter((e) => e.children.length === 0);
+    const asks = leaves.filter((e) => {
+      const t = norm(e.textContent);
+      return t.endsWith('?') && t.length >= 8 && t.length <= 300;
+    });
+    let best = null, question = '';
+    for (const ask of asks) {
+      for (let p = ask.parentElement, hops = 0; p && hops < 8; p = p.parentElement, hops++) {
+        const own = [...p.querySelectorAll('button')].filter((x) => norm(x.innerText));
+        if (own.length >= 2 && own.length <= 6) { best = p; question = norm(ask.textContent); break; }
+      }
+      if (best) break;
+    }
+    if (!best) return '';
+    const opts = [...best.querySelectorAll('button')].map((b) => norm(b.innerText)).filter(Boolean);
+    return JSON.stringify({ question, options: opts });
+  })()`)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as CodexConsent
+    return parsed.options?.length ? parsed : null
+  } catch { return null }
+}
+
+/** True when the mounted thread shows Codex's parked marker at all. */
+export async function isAwaitingConsent(cdp: CodexCdp): Promise<boolean> {
+  const t = await cdp.evaluate<string>(
+    `(() => [...document.querySelectorAll('*')].some((e) => e.children.length === 0 && /awaiting approval/i.test(e.textContent || '')) ? '1' : '')()`,
+  )
+  return !!t
+}
+
+/**
+ * Answer a consent by the option's own label. False when that option is not on
+ * screen — the caller must NOT retry with a guess, because the options differ
+ * per consent ("Allow this conversation" exists here and nowhere else).
+ */
+export async function answerConsent(cdp: CodexCdp, option: string): Promise<boolean> {
+  const consent = await readPendingConsent(cdp)
+  if (!consent) return false
+  const match = consent.options.find((o) => o.toLowerCase() === option.toLowerCase())
+    ?? consent.options.find((o) => o.toLowerCase().startsWith(option.toLowerCase()))
+  if (!match) return false
+  return cdp.clickText(match)
+}

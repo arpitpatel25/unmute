@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { describeApproval, pendingApprovals, decideApproval, clearApproval, beat, type CodexApprovalRequest } from './hooks'
+import { describeApproval, pendingApprovals, expireStaleApprovals, decideApproval, clearApproval, beat, type CodexApprovalRequest } from './hooks'
 
 // These exercise the UNMUTE side of the channel against a real directory, and
 // the generated handler against a real node process. The handler is a string
@@ -249,4 +249,35 @@ describe('installing into the user\'s hooks.json', () => {
     // silently uses its 600s default — verified by probe.
     assert.ok(entry.timeout > 0, 'Codex kills the hook at timeout; it must outlast our own wait')
   })
+})
+
+// ── stale pending-approval garbage collection (added 2026-07-30) ────────────
+// A request from 2026-07-28 was still sitting in codex-approvals/ two days
+// later: the hook had fired, no live task carried that threadId, sweepApprovals
+// skipped it silently, and nothing ever deleted it.
+
+it('a request older than the handler could possibly wait is binned', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'unmute-approvals-'))
+  const now = Date.now()
+  const old = { threadId: 'thread-old', turnId: 't', cwd: '/tmp', toolName: 'Bash', toolInput: {}, at: now - 20 * 60_000 }
+  const fresh = { threadId: 'thread-fresh', turnId: 't', cwd: '/tmp', toolName: 'Bash', toolInput: {}, at: now - 5_000 }
+  await fs.writeFile(join(dir, 'thread-old.json'), JSON.stringify(old))
+  await fs.writeFile(join(dir, 'thread-fresh.json'), JSON.stringify(fresh))
+
+  assert.equal(await expireStaleApprovals(dir, () => now), 1)
+  const got = await pendingApprovals(dir)
+  assert.deepEqual(got.map((r) => r.threadId), ['thread-fresh'])
+  // and the stale one is GONE from disk, not merely filtered out
+  const left = (await fs.readdir(dir)).filter((n) => n.endsWith('.json'))
+  assert.deepEqual(left, ['thread-fresh.json'])
+})
+
+it('a fresh request is never binned by the sweep', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'unmute-approvals-'))
+  const now = Date.now()
+  await fs.writeFile(join(dir, 'a.json'), JSON.stringify(
+    { threadId: 'a', turnId: 't', cwd: '/tmp', toolName: 'Bash', toolInput: {}, at: now }))
+  assert.equal(await expireStaleApprovals(dir, () => now), 0)
+  assert.equal((await pendingApprovals(dir)).length, 1)
+  assert.equal((await fs.readdir(dir)).length, 1)
 })

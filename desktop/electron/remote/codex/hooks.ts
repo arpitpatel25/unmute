@@ -417,6 +417,51 @@ export async function pendingApprovals(dir = approvalDir()): Promise<CodexApprov
 }
 
 /**
+ * Bin requests the hook can no longer be waiting on.
+ *
+ * Kept OUT of pendingApprovals() on purpose: a reader that deletes is a side
+ * effect callers do not expect, and folding it in there broke a test whose
+ * subject was "read every pending request" — the right signal that read and
+ * sweep are different jobs.
+ *
+ * Only expires what can be DATED (`at` present and positive): a missing stamp
+ * would read as epoch 0 and bin a live request.
+ *
+ * Why it is needed: the handler waits WAIT_MS then gives up, and sweepApprovals
+ * skips any request whose task is not live in memory — so a request could sit
+ * forever. One from 2026-07-28 was still on disk two days later.
+ */
+export async function expireStaleApprovals(
+  dir = approvalDir(),
+  now: () => number = Date.now,
+): Promise<number> {
+  let names: string[] = []
+  try { names = await fs.readdir(dir) } catch { return 0 }
+  let binned = 0
+  for (const n of names) {
+    if (!n.endsWith('.json')) continue
+    const path = join(dir, n)
+    try {
+      const req = JSON.parse(await fs.readFile(path, 'utf8')) as CodexApprovalRequest
+      if (typeof req?.at !== 'number' || req.at <= 0) continue
+      const age = now() - req.at
+      if (age <= STALE_REQUEST_MS) continue
+      await fs.rm(path, { force: true }).catch(() => {})
+      binned++
+      log.event('codex-approval-expired', { threadId: req.threadId, ageMs: age })
+    } catch { /* half-written or junk; leave it */ }
+  }
+  return binned
+}
+
+/**
+ * Past this, the hook handler has stopped waiting and Codex has asked the user
+ * directly, so the pending file is garbage. Generous multiple of the handler's
+ * own WAIT_MS (240s) so a slow sweep can never bin a live request.
+ */
+export const STALE_REQUEST_MS = 10 * 60_000
+
+/**
  * Answer one. If the hook is still waiting this decides it outright; if it has
  * already timed out the file is simply consumed and Codex's own dialog stands.
  */

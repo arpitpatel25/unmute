@@ -45,7 +45,7 @@ import type { AgentExecutor, ExecutorFactory } from './executor'
 import { settleRepl } from './repl-settle'
 import { type AgentKind, isExternalAgent } from './codex-executor'
 import type { CodexDesktopDriver } from './codex/driver'
-import { beat, pendingApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
+import { beat, pendingApprovals, expireStaleApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
 import { devEvent } from './curator-devlog'
 
 const log = createLogger('task-manager')
@@ -312,6 +312,9 @@ export class TaskManager extends EventEmitter {
   /** taskId → newest rollout timestamp we have already seen, so a poll can tell
    *  "the file grew" from "the file is merely non-empty". */
   private codexLastSeenAt = new Map<string, number>()
+  /** threadIds whose pending approval matched no live task — logged once each,
+   *  so a genuinely dropped request is visible without spamming every sweep. */
+  private unmatchedApprovals = new Set<string>()
   /** Resumes currently in flight (see resume) — a session is not `alive` until
    *  its PTY spawns, so this is what keeps a second call from building a second
    *  session in that window. */
@@ -826,13 +829,25 @@ export class TaskManager extends EventEmitter {
     ) {
       if (task.state !== 'needs-user') {
         tlog.event('codex-blocked', { pendingTool: snap.pendingToolName, pendingCalls: snap.pendingToolCalls })
+        // The DISK told us it is parked; only the DOM knows what it is asking.
+        // Best-effort and backgrounded: a null answer (not armed, thread not
+        // mounted, panel reworded) must NOT clear the blocked state — we keep
+        // the honest generic wording instead of pretending nothing is wrong.
+        let consent: { question: string; choices: string[] } | null = null
+        try {
+          const c = await driver.readConsent?.(task.codexThreadId)
+          if (c?.options?.length) consent = { question: c.question, choices: c.options }
+        } catch { /* best effort — disk state stands on its own */ }
+        if (consent) tlog.event('codex-consent-read', { question: consent.question, choices: consent.choices })
+
         this.transition(task.id, 'needs-user', {
           state: 'needs-user',
           question: {
-            // Deliberately not invented: the consent text lives only in Codex's
-            // DOM, so the card says what we actually know and points there.
-            text: `Codex is waiting on you${snap.pendingToolName ? ` (${snap.pendingToolName})` : ''} — open Codex to answer.`,
-            choices: [],
+            text: consent?.question
+              ?? `Codex is waiting on you${snap.pendingToolName ? ` (${snap.pendingToolName})` : ''} — open Codex to answer.`,
+            // Whatever Codex offers, never a fixed pair: this consent shipped
+            // "Always allow" / "Deny" / "Allow this conversation".
+            choices: consent?.choices ?? [],
           },
         } as StatusPayload)
       }
@@ -1439,6 +1454,9 @@ export class TaskManager extends EventEmitter {
    * the queue, the notch and next/answer all work unchanged.
    */
   private async sweepApprovals(): Promise<void> {
+    // Bin what the hook can no longer be waiting on before reading, so a
+    // request whose task never came back does not live on disk forever.
+    try { await expireStaleApprovals() } catch { /* best effort */ }
     let requests: Awaited<ReturnType<typeof pendingApprovals>> = []
     try { requests = await pendingApprovals() } catch { return }
 
@@ -1449,8 +1467,22 @@ export class TaskManager extends EventEmitter {
       if (!task) {
         // A thread the user started inside Codex, not through us. Not ours to
         // answer — leave it for Codex's own dialog rather than inventing a card.
+        //
+        // It is ALSO how a request for one of our own tasks goes missing: the
+        // match is against tasks live in memory, so a restart between the hook
+        // firing and this sweep drops it. Silence made that indistinguishable
+        // from "nothing pending", so it is logged now; pendingApprovals()
+        // expires the file rather than leaving it forever.
+        if (!this.unmatchedApprovals.has(req.threadId)) {
+          this.unmatchedApprovals.add(req.threadId)
+          log.event('codex-approval-unmatched', {
+            threadId: req.threadId, tool: req.toolName,
+            note: 'no live task carries this threadId — left for Codex own dialog',
+          })
+        }
         continue
       }
+      this.unmatchedApprovals.delete(req.threadId)
       if (this.surfacedApprovals.get(req.threadId) === req.at) continue
       this.surfacedApprovals.set(req.threadId, req.at)
       const tlog = log.child({ taskId: task.id })
@@ -1484,7 +1516,31 @@ export class TaskManager extends EventEmitter {
    */
   private answerCodexApproval(task: Task, userAnswer: string): boolean {
     const threadId = task.codexThreadId
-    if (!threadId || !this.surfacedApprovals.has(threadId)) return false
+    if (!threadId) return false
+
+    // A COMPUTER USE consent is a different surface from a tool approval: it
+    // never reached the hook, so there is no decision-file to write. It is
+    // answered by clicking the option in Codex's own panel — and the options
+    // are whatever that panel offered ("Allow this conversation" is real), so
+    // we match the user's words against the choices we actually read, never
+    // against a hardcoded allow/deny pair.
+    const choices = task.question?.choices ?? []
+    if (task.state === 'needs-user' && choices.length && !this.surfacedApprovals.has(threadId)) {
+      const said = userAnswer.trim().toLowerCase()
+      const pick = choices.find((c) => c.toLowerCase() === said)
+        ?? choices.find((c) => said && c.toLowerCase().startsWith(said))
+        ?? choices.find((c) => said && said.startsWith(c.toLowerCase()))
+      if (!pick) return false      // not an answer to THIS panel; let it through
+      const driver = this.opts.codexDriver
+      if (!driver?.answerConsent) return false
+      log.child({ taskId: task.id }).event('codex-consent-answered', { threadId, choice: pick })
+      void driver.answerConsent(threadId, pick)
+      task.lastUserInputAt = this.clock()
+      this.transition(task.id, 'processing')
+      return true
+    }
+
+    if (!this.surfacedApprovals.has(threadId)) return false
     const yes = /^\s*(approve|allow|yes|y|ok|okay|sure|go ahead|do it|1)\b/i.test(userAnswer)
     const no = /^\s*(deny|reject|no|n|stop|don'?t|cancel|2)\b/i.test(userAnswer)
     if (!yes && !no) return false   // a real message; let it through as a follow-up
