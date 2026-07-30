@@ -24,11 +24,19 @@ Napi::Value ProcessInfo(const Napi::CallbackInfo& info) {
   return out;
 }
 
+Napi::Value ClipboardChangeCount(const Napi::CallbackInfo& info) {
+  // -1 is distinguishable from any real count, so callers treat the platform
+  // as "cannot observe" rather than "clipboard never changes".
+  return Napi::Number::New(info.Env(), (double)-1);
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("isAccessibilityTrusted",
               Napi::Function::New(env, IsAccessibilityTrusted));
   exports.Set("postCmdV", Napi::Function::New(env, PostCmdV));
   exports.Set("processInfo", Napi::Function::New(env, ProcessInfo));
+  exports.Set("clipboardChangeCount",
+              Napi::Function::New(env, ClipboardChangeCount));
   return exports;
 }
 

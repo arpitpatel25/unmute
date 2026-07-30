@@ -39,6 +39,15 @@ const r = native.postCmdV()
 //   stepFailed?: string,  // only when ok=false
 //   error?: string,       // only when ok=false
 // }
+
+// Diagnostic/polling primitive: NSPasteboard.changeCount, a monotonic
+// integer bumped on every clipboard write by any process. Reading it costs
+// one property access — no decode, no allocation — so it's safe to poll on
+// the main process WHILE RECORDING, where reading actual pasteboard
+// contents corrupts the audio. It also identifies our own writes exactly:
+// record the value right after an Unmute write and skip it. -1 on
+// non-macOS (distinguishable from any real count).
+const count: number = native.clipboardChangeCount()
 ```
 
 ## Build

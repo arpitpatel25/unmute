@@ -20,6 +20,7 @@
 #include <ApplicationServices/ApplicationServices.h>
 #include <Carbon/Carbon.h>
 #include <Foundation/Foundation.h>
+#include <AppKit/AppKit.h>
 
 // ────────────────────────────────────────────────────────────────────
 // isAccessibilityTrusted() — diagnostic
@@ -158,11 +159,35 @@ Napi::Value PostCmdV(const Napi::CallbackInfo& info) {
   return result;
 }
 
+// ────────────────────────────────────────────────────────────────────
+// clipboardChangeCount() — the cheapest possible "did the clipboard
+// change?"
+//
+// NSPasteboard.changeCount is a monotonically increasing integer bumped on
+// every write by any process. Reading it costs a single property access — no
+// decode, no allocation, no image work — which is what makes it safe to poll
+// on the main process WHILE RECORDING, where reading actual pasteboard
+// contents corrupts the audio.
+//
+// It is also what makes our own writes exactly identifiable: record the value
+// after an Unmute write and skip it, rather than trying to recognise our own
+// content by hashing it.
+// ────────────────────────────────────────────────────────────────────
+Napi::Value ClipboardChangeCount(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  @autoreleasepool {
+    NSInteger count = [[NSPasteboard generalPasteboard] changeCount];
+    return Napi::Number::New(env, (double)count);
+  }
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("isAccessibilityTrusted",
               Napi::Function::New(env, IsAccessibilityTrusted));
   exports.Set("postCmdV", Napi::Function::New(env, PostCmdV));
   exports.Set("processInfo", Napi::Function::New(env, ProcessInfo));
+  exports.Set("clipboardChangeCount",
+              Napi::Function::New(env, ClipboardChangeCount));
   return exports;
 }
 

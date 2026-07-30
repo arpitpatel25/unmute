@@ -9,7 +9,8 @@
             "OTHER_LDFLAGS": [
               "-framework", "ApplicationServices",
               "-framework", "Carbon",
-              "-framework", "Foundation"
+              "-framework", "Foundation",
+              "-framework", "AppKit"
             ],
             "MACOSX_DEPLOYMENT_TARGET": "11.0",
             "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
