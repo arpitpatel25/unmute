@@ -15,6 +15,18 @@
 // app-server client does not reflect the desktop app's UI state. The hooks
 // system is the only push channel that reaches every thread.
 //
+// CORRECTION (2026-07-30) — the sidebar claim above no longer holds. It exposes
+// no status ATTRIBUTE (still true: the row attributes are id/title/active/
+// kind/pinned/host-id), but it DOES render the status as TEXT inside the row.
+// A blocked thread that was not even mounted showed chip "Awaiting approval",
+// so cdp.readThreadChips() now reads every thread's state in one call without
+// switching the user's view. See cdp.ts.
+//
+// This channel is still needed and still different in kind: the sidebar tells
+// you a thread is blocked, but only the hook can ANSWER one headlessly —
+// returning allow/deny from inside Codex with no DOM, no click and no mounted
+// thread. Detection has two sources now; decision has one.
+//
 // WHAT WAS PROVEN LIVE (2026-07-25, codex 0.146.0-alpha.3.1)
 //
 //   1. `~/.codex/hooks.json` is read as a `user`-source config — it applies to

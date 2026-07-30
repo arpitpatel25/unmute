@@ -214,8 +214,11 @@ export interface TaskManagerOpts {
   pollMs?: number
   /** staleness threshold (ms) — generous (PRD §6.3). Default 4 min. */
   staleMs?: number
-  /** Frozen mid-tool-call Codex turn ⇒ blocked-on-user after this long. */
+  /** Frozen mid-tool-call Codex turn ⇒ SUSPECTED after this long (then the
+   *  sidebar confirms or the suspicion stays silent). */
   codexBlockedMs?: number
+  /** Lifetime of one shared sidebar-chip snapshot. */
+  codexChipTtlMs?: number
   /** ms to wait after accepting the folder-trust prompt for the REPL to boot. */
   trustAcceptMs?: number
   /** ms to wait after typing the dispatch payload before sending an explicit
@@ -318,6 +321,10 @@ export class TaskManager extends EventEmitter {
   /** taskId → rollout watcher disposer. Best-effort: absent when the transcript
    *  did not exist yet or fs.watch could not start; polling still covers it. */
   private codexWatchers = new Map<string, () => void>()
+  /** One sidebar read serves EVERY task on a tick. Ten blocked tasks polling
+   *  independently would be ten CDP round-trips for one identical answer. */
+  private codexChipCache: { at: number; rows: Array<{ id: string; active: boolean; chip: string | null }> } | null = null
+  private codexChipInflight: Promise<void> | null = null
   /** Resumes currently in flight (see resume) — a session is not `alive` until
    *  its PTY spawns, so this is what keeps a second call from building a second
    *  session in that window. */
@@ -344,7 +351,13 @@ export class TaskManager extends EventEmitter {
       // blocked-on-the-user. Shorter than staleMs on purpose: a consent dialog
       // should surface fast, while `stuck` stays the slow "something is wrong"
       // backstop. Long enough that an ordinary slow build is not mislabelled.
-      codexBlockedMs: opts.codexBlockedMs ?? 45_000,
+      // A frozen mid-tool-call turn is only SUSPECTED, and suspicion is silent,
+      // so this can be short: it merely decides when to spend one cheap sidebar
+      // read. Being wrong costs a DOM query nobody sees. (It was 45s when the
+      // dwell was itself the verdict; the sidebar took that job.)
+      codexBlockedMs: opts.codexBlockedMs ?? 5_000,
+      /** How long one sidebar snapshot serves every task. */
+      codexChipTtlMs: opts.codexChipTtlMs ?? 1_500,
       trustAcceptMs: opts.trustAcceptMs ?? 2000,
       submitConfirmMs: opts.submitConfirmMs ?? 450,
       verifyAfterMs: opts.verifyAfterMs ?? 7000,
@@ -842,34 +855,60 @@ export class TaskManager extends EventEmitter {
     // satisfied stuck-recovery, a frozen heartbeat satisfied staleness, and the
     // card flipped between them once a second (observed 2026-07-30, logs show
     // stuck-recovered/task-stuck alternating at 1s).
-    if (
+    // TWO SIGNALS, TWO CONFIDENCES. The disk can only ever SUSPECT: a frozen
+    // mid-tool-call turn looks identical whether Codex is waiting on a consent
+    // or a slow build is running (measured: thinking writes every ~0.5s, but a
+    // 60s tool call and a 61s consent block are indistinguishable on disk).
+    //
+    // Codex's SIDEBAR settles it, and does so for every thread at once without
+    // switching the mounted conversation — verified live against a blocked
+    // thread that was NOT on screen. So:
+    //
+    //   chip + frozen call  => CONFIRMED. Announce it; this is the user's move.
+    //   frozen call only    => SUSPECTED. Stay quiet. A slow build must never be
+    //                          announced as needing you — being wrong out loud
+    //                          is the one error that costs trust for good.
+    //
+    // Suspicion therefore does NOT transition the task. It stays `processing`
+    // and the poll keeps watching; only corroboration promotes it.
+    const frozenMidCall =
       snap.state === 'processing' && !advanced && snap.pendingToolCalls > 0 &&
       isStale({ state: 'processing' }, task.lastHeartbeatMs, this.clock(), this.opts.codexBlockedMs)
-    ) {
-      if (task.state !== 'needs-user') {
-        tlog.event('codex-blocked', { pendingTool: snap.pendingToolName, pendingCalls: snap.pendingToolCalls })
-        // The DISK told us it is parked; only the DOM knows what it is asking.
-        // Best-effort and backgrounded: a null answer (not armed, thread not
-        // mounted, panel reworded) must NOT clear the blocked state — we keep
-        // the honest generic wording instead of pretending nothing is wrong.
-        let consent: { question: string; choices: string[] } | null = null
+
+    if (frozenMidCall && task.state !== 'needs-user') {
+      const chip = await this.codexChipFor(task.codexThreadId, driver)
+      if (!chip) {
+        // Suspected only. Say nothing, change nothing — the turn may simply be
+        // slow. The staleness backstop below still catches a genuinely dead one.
+        tlog.debug('codex-quiet', { pendingTool: snap.pendingToolName, note: 'frozen but unconfirmed — staying processing' })
+        return
+      }
+      tlog.event('codex-blocked', { pendingTool: snap.pendingToolName, pendingCalls: snap.pendingToolCalls, chip })
+
+      // The question text lives ONLY in the mounted thread's panel, so reading
+      // it costs a thread switch. Take it when it is free (this thread is
+      // already on screen) and otherwise show Codex's own chip — the full
+      // question is fetched later, when the user actually opens the card.
+      let consent: { question: string; choices: string[] } | null = null
+      if (chip.active) {
         try {
           const c = await driver.readConsent?.(task.codexThreadId)
           if (c?.options?.length) consent = { question: c.question, choices: c.options }
-        } catch { /* best effort — disk state stands on its own */ }
+        } catch { /* best effort — the chip already carries the truth */ }
         if (consent) tlog.event('codex-consent-read', { question: consent.question, choices: consent.choices })
-
-        this.transition(task.id, 'needs-user', {
-          state: 'needs-user',
-          question: {
-            text: consent?.question
-              ?? `Codex is waiting on you${snap.pendingToolName ? ` (${snap.pendingToolName})` : ''} — open Codex to answer.`,
-            // Whatever Codex offers, never a fixed pair: this consent shipped
-            // "Always allow" / "Deny" / "Allow this conversation".
-            choices: consent?.choices ?? [],
-          },
-        } as StatusPayload)
       }
+
+      this.transition(task.id, 'needs-user', {
+        state: 'needs-user',
+        question: {
+          // Codex's OWN word when we could not read the panel — its chip said
+          // "Awaiting approval", so say that rather than inventing a label.
+          text: consent?.question ?? chip.chip ?? 'Codex is waiting on you',
+          // Whatever Codex offers, never a fixed pair: this consent shipped
+          // "Always allow" / "Deny" / "Allow this conversation".
+          choices: consent?.choices ?? [],
+        },
+      } as StatusPayload)
       return
     }
 
@@ -1472,6 +1511,44 @@ export class TaskManager extends EventEmitter {
    * turns it into the same `needs-user` state a blocked Claude task reaches, so
    * the queue, the notch and next/answer all work unchanged.
    */
+  /**
+   * Codex's own status chip for one thread, from a shared sidebar snapshot.
+   *
+   * Returns null for "no chip" AND for "could not look" (not armed, sidebar not
+   * rendered) — both mean UNCONFIRMED, and an unconfirmed suspicion must stay
+   * silent. Never mounts a thread.
+   *
+   * Cached for a tick and de-duplicated in flight, so N blocked tasks cost ONE
+   * CDP call rather than N.
+   */
+  private async codexChipFor(
+    threadId: string,
+    driver: { threadChips?: () => Promise<Array<{ id: string; active: boolean; chip: string | null }>> },
+  ): Promise<{ active: boolean; chip: string | null } | null> {
+    if (!driver.threadChips) return null
+    const now = this.clock()
+    if (!this.codexChipCache || now - this.codexChipCache.at > this.opts.codexChipTtlMs) {
+      if (!this.codexChipInflight) {
+        this.codexChipInflight = (async () => {
+          try {
+            const rows = await driver.threadChips!()
+            // An empty read is "unknown", not "nothing blocked" — do NOT cache
+            // it as an answer, or one unarmed moment silences every task.
+            if (rows.length) this.codexChipCache = { at: this.clock(), rows }
+          } catch { /* unknown; leave the previous answer alone */ }
+          finally { this.codexChipInflight = null }
+        })()
+      }
+      await this.codexChipInflight
+    }
+    const rows = this.codexChipCache?.rows ?? []
+    // Sidebar ids can carry a host prefix; match on the bare id either way.
+    const bare = threadId.split(':').pop() ?? threadId
+    const row = rows.find((r) => r.id === threadId || (r.id.split(':').pop() ?? r.id) === bare)
+    if (!row?.chip) return null
+    return { active: row.active, chip: row.chip }
+  }
+
   private async sweepApprovals(): Promise<void> {
     // Bin what the hook can no longer be waiting on before reading, so a
     // request whose task never came back does not live on disk forever.

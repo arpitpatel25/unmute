@@ -987,3 +987,73 @@ export async function answerConsent(cdp: CodexCdp, option: string): Promise<bool
   if (!match) return false
   return cdp.clickText(match)
 }
+
+// ── Blocked threads, read from the SIDEBAR (no thread switching) ────────────
+//
+// The consent panel only exists for the MOUNTED thread, so reading it per task
+// would mean switching Codex's view once per task — with several blocked tasks
+// that thrashes the window the user is looking at. The sidebar solves it: every
+// thread's row is in the DOM at once.
+//
+// VERIFIED LIVE 2026-07-30, and the non-mounted case is the one that matters:
+//   activeRow     : "Build the requested feature"        active=true   chip=null
+//   rowsWithChips : "Open the WhatsApp desktop app on m…" active=FALSE  chip="Awaiting approval"
+// One CDP call, 24 rows, ~300ms, and the blocked thread was NOT the one on
+// screen. That is what makes confident cross-task detection possible at all.
+//
+// NOTE this supersedes the finding recorded in hooks.ts (2026-07-25, "the
+// sidebar DOM exposes no status"). It exposes no status ATTRIBUTE — still true,
+// the row attributes are id/title/active/kind/pinned/host-id — but the status
+// is rendered as TEXT inside the row.
+//
+// NOTHING IS STRING-MATCHED. A chip is defined structurally: whatever text a row
+// carries BEYOND its own title. Every idle row's innerText equals its title
+// exactly; only a row with a status has more. That survives rewording, new
+// statuses and localisation, and it means we can show Codex's own word instead
+// of inventing a label. The cost is that a chip alone does not mean "your move"
+// — Codex also chips drafts and errors — so callers MUST corroborate with the
+// disk signal (rollout.pendingToolCalls on a frozen file) before acting.
+
+export interface CodexThreadChip {
+  /** Thread id as the sidebar carries it (may be host-prefixed). */
+  id: string
+  title: string
+  /** Is this the conversation currently mounted? */
+  active: boolean
+  /** Codex's own status word for this row, or null when it has none. */
+  chip: string | null
+}
+
+/**
+ * Every thread's status chip in ONE call. Never mounts, never switches view.
+ * Empty array when not armed or the sidebar is not rendered — callers must read
+ * that as "unknown", never as "nothing is blocked".
+ */
+export async function readThreadChips(cdp: CodexCdp): Promise<CodexThreadChip[]> {
+  const raw = await cdp.evaluate<string>(`(() => {
+    const norm = (s) => (s || '').replace(/[\\u200e\\u200f\\u2066-\\u2069]/g, '').replace(/\\s+/g, ' ').trim();
+    const rows = [...document.querySelectorAll('[data-app-action-sidebar-thread-id]')];
+    return JSON.stringify(rows.map((r) => {
+      const title = norm(r.getAttribute('data-app-action-sidebar-thread-title'));
+      const text = norm(r.innerText);
+      // The row renders the title (often ELLIPSISED) followed by any chip. So
+      // strip a leading run that matches the title's head, then the ellipsis.
+      let chip = text;
+      const head = title.slice(0, 20);
+      const at = head ? text.indexOf(head) : -1;
+      if (at >= 0) chip = norm(text.slice(at).replace(/^.*?…/, '').replace(title, ''));
+      if (chip === title) chip = '';
+      return {
+        id: r.getAttribute('data-app-action-sidebar-thread-id') || '',
+        title,
+        active: r.getAttribute('data-app-action-sidebar-thread-active') === 'true',
+        chip: chip || null,
+      };
+    }));
+  })()`)
+  if (!raw) return []
+  try {
+    const rows = JSON.parse(raw) as CodexThreadChip[]
+    return Array.isArray(rows) ? rows.filter((r) => r.id) : []
+  } catch { return [] }
+}

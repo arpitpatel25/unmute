@@ -264,7 +264,7 @@ test('the observed state is written to meta.json, so a restart restores it', asy
 // The clock is injected so a turn can be frozen for minutes without the test
 // sleeping; `updatedAt` is what Codex wrote, `now()` is wall time.
 
-async function frozenTurn(opts: { pending: number; grows?: boolean }) {
+async function frozenTurn(opts: { pending: number; grows?: boolean; chip?: string | null; active?: boolean }) {
   const base = await tmp()
   let now = Date.now()
   let wrote = now                       // newest rollout timestamp
@@ -275,8 +275,10 @@ async function frozenTurn(opts: { pending: number; grows?: boolean }) {
     turnsStarted: 1, everCompleted: false,
     pendingToolCalls: opts.pending, pendingToolName: opts.pending ? 'exec' : null,
   }) as never
+  ;(d as unknown as { threadChips: unknown }).threadChips = async () =>
+    (opts.chip === null ? [] : [{ id: 'thread-123', active: !!opts.active, chip: opts.chip ?? 'Awaiting approval' }])
   const m = await makeManager(d, base, {
-    codexBlockedMs: 45_000, staleMs: 60_000, now: () => now,
+    codexBlockedMs: 45_000, staleMs: 60_000, codexChipTtlMs: 0, now: () => now,
   })
   const id = await m.dispatch('open whatsapp', { agent: 'codex-desktop' })
   const poll = (m as unknown as { pollCodexDesktop(id: string): Promise<void> }).pollCodexDesktop.bind(m)
@@ -319,7 +321,8 @@ test('a frozen turn with NO open call is stuck, not blocked', async () => {
 // ── Computer Use consent reaches the card, and is answered by clicking ───────
 
 test('a blocked turn shows Codex OWN question and its own options', async () => {
-  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1 })
+  // Mounted, so the panel is readable without switching the user's view.
+  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1, active: true })
   try {
     // Shape from the real 2026-07-30 block — note the THIRD option.
     ;(d as unknown as { readConsent: unknown }).readConsent = async () => ({
@@ -335,23 +338,23 @@ test('a blocked turn shows Codex OWN question and its own options', async () => 
   } finally { m.killAll(); m.stopMaintenance() }
 })
 
-test('an unreadable consent still blocks — it does not pretend all is well', async () => {
-  // Not armed / thread not mounted / panel reworded all read as null. The DISK
-  // said parked, so the card must stay parked with honest generic wording.
-  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1 })
+test('an unreadable panel still blocks — it falls back to the chip, not silence', async () => {
+  // Panel reworded / read failed => null. The sidebar chip already CONFIRMED the
+  // block, so the card must stay parked, wearing Codex's own word.
+  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1, active: true })
   try {
     ;(d as unknown as { readConsent: unknown }).readConsent = async () => null
     advance(5 * 60_000)
     await poll(id)
     const t = m.get(id)!
     assert.equal(t.state, 'needs-user')
-    assert.match(t.question?.text ?? '', /waiting on you/i)
+    assert.equal(t.question?.text, 'Awaiting approval')
     assert.deepEqual(t.question?.choices, [])
   } finally { m.killAll(); m.stopMaintenance() }
 })
 
 test('answering a consent clicks that option, it does not write a decision file', async () => {
-  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1 })
+  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1, active: true })
   try {
     const clicked: string[] = []
     ;(d as unknown as { readConsent: unknown }).readConsent = async () => ({
@@ -365,5 +368,62 @@ test('answering a consent clicks that option, it does not write a decision file'
     assert.deepEqual(clicked, ['Allow this conversation'],
       'the exact option Codex offered must be clicked, not an allow/deny guess')
     assert.equal(m.get(id)!.state, 'processing')
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+// ── two confidences: the sidebar confirms, the disk only suspects ───────────
+// Measured 2026-07-30: a 60s tool call and a 61s consent block are identical on
+// disk. Announcing on disk alone would eventually cry wolf at a slow build, and
+// being wrong out loud is the one error that costs trust permanently.
+
+test('a frozen turn with NO sidebar chip stays quiet — it is only suspected', async () => {
+  const { m, id, poll, advance } = await frozenTurn({ pending: 1, chip: null })
+  try {
+    advance(5 * 60_000)
+    for (let i = 0; i < 4; i++) await poll(id)
+    assert.equal(m.get(id)!.state, 'processing',
+      'an unconfirmed suspicion must never announce itself as needing the user')
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+test("a chip promotes it, and the card shows Codex's own word", async () => {
+  // Not mounted, so the panel cannot be read without switching the user's view.
+  // The chip is the truth we already have — use it rather than inventing a label.
+  const { m, id, poll, advance } = await frozenTurn({ pending: 1, chip: 'Awaiting approval', active: false })
+  try {
+    advance(5 * 60_000)
+    await poll(id)
+    const t = m.get(id)!
+    assert.equal(t.state, 'needs-user')
+    assert.equal(t.question?.text, 'Awaiting approval')
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+test('when the blocked thread is already mounted, the full question is free', async () => {
+  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1, chip: 'Awaiting approval', active: true })
+  try {
+    ;(d as unknown as { readConsent: unknown }).readConsent = async () => ({
+      question: 'Allow ChatGPT to use WhatsApp?',
+      options: ['Always allow', 'Deny', 'Allow this conversation'],
+    })
+    advance(5 * 60_000)
+    await poll(id)
+    const t = m.get(id)!
+    assert.equal(t.question?.text, 'Allow ChatGPT to use WhatsApp?')
+    assert.deepEqual(t.question?.choices, ['Always allow', 'Deny', 'Allow this conversation'])
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+test('a NON-mounted blocked thread is never switched to just to read it', async () => {
+  // The whole point of the sidebar: with several blocked tasks, mounting each to
+  // read its panel would thrash the window the user is looking at.
+  const { m, id, poll, advance, d } = await frozenTurn({ pending: 1, chip: 'Awaiting approval', active: false })
+  try {
+    let mounted = 0
+    ;(d as unknown as { readConsent: unknown }).readConsent = async () => { mounted++; return null }
+    advance(5 * 60_000)
+    await poll(id)
+    assert.equal(mounted, 0, 'reading the panel must not happen at detection time')
+    assert.equal(m.get(id)!.state, 'needs-user')
   } finally { m.killAll(); m.stopMaintenance() }
 })

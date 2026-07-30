@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, readReasoningLabel, setReasoning, readPendingConsent, answerConsent, type CodexConsent, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, readReasoningLabel, setReasoning, readPendingConsent, answerConsent, readThreadChips, type CodexConsent, type CodexThreadChip, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, watchThread, type CodexSnapshot } from './rollout'
 
@@ -584,6 +584,22 @@ export class CodexDesktopDriver {
   }
 
   /** Read a thread's state + recent turns from disk. Never touches the renderer. */
+  /**
+   * Status chip for EVERY thread, in one call, without switching Codex's view.
+   *
+   * This is the cross-task detector: the consent panel exists only for the
+   * mounted thread, so per-task reads would thrash the window. Verified live
+   * against a NON-mounted blocked thread — that case is the whole point.
+   *
+   * Empty array means UNKNOWN (not armed / sidebar not rendered), never
+   * "nothing is blocked". Callers keep whatever the disk signal said.
+   */
+  async threadChips(): Promise<CodexThreadChip[]> {
+    const cdp = await this.connect()
+    if (!cdp) return []
+    try { return await readThreadChips(cdp) } catch { return [] }
+  }
+
   /**
    * Read the Computer Use consent this thread is parked on, or null.
    *
