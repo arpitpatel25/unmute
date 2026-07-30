@@ -241,3 +241,47 @@ test("Codex's own plumbing steps are not shown as work", () => {
   ].join('\n'))
   assert.equal(snap.turns.filter((t) => t.role === 'tool').length, 0)
 })
+
+// ── pendingToolCalls: the shadow a blocked turn casts on disk ────────────────
+// Observed 2026-07-30: a Computer Use consent ("Allow ChatGPT to use WhatsApp?")
+// stops the turn mid-exec. Codex writes the call line and then nothing — no
+// output, no task_complete, no hook. The unclosed call is the only trace.
+
+/** response_item helper that also sets the inner `type` (the call/output pair). */
+const resp = (type: string, payload: Record<string, unknown> = {}) =>
+  JSON.stringify({ type: 'response_item', payload: { type, ...payload } })
+
+test('an exec awaiting consent leaves the call unclosed', () => {
+  const snap = parseRollout([
+    line('task_started', { turn_id: 't1', started_at: 1784927426 }),
+    line('user_message', { message: 'open whatsapp' }),
+    resp('custom_tool_call', { call_id: 'c1', name: 'exec', input: 'open -a WhatsApp' }),
+  ].join('\n'))
+  assert.equal(snap.pendingToolCalls, 1)
+  assert.equal(snap.pendingToolName, 'exec')
+  // Still `processing` — an unclosed call is NOT on its own proof of blocking.
+  assert.equal(snap.state, 'processing')
+})
+
+test('a closed call leaves nothing pending', () => {
+  const snap = parseRollout([
+    line('task_started', { turn_id: 't1', started_at: 1784927426 }),
+    resp('custom_tool_call', { call_id: 'c1', name: 'exec', input: 'ls' }),
+    resp('custom_tool_call_output', { call_id: 'c1', output: 'ok' }),
+    line('task_complete', { duration_ms: 1200, last_agent_message: 'done' }),
+  ].join('\n'))
+  assert.equal(snap.pendingToolCalls, 0)
+  assert.equal(snap.pendingToolName, null)
+  assert.equal(snap.state, 'ready')
+})
+
+test('several unclosed calls are all counted', () => {
+  const snap = parseRollout([
+    line('task_started', { turn_id: 't1', started_at: 1784927426 }),
+    resp('custom_tool_call', { call_id: 'c1', name: 'exec', input: 'a' }),
+    resp('custom_tool_call', { call_id: 'c2', name: 'shell', input: 'b' }),
+    resp('custom_tool_call_output', { call_id: 'c1', output: 'ok' }),
+  ].join('\n'))
+  assert.equal(snap.pendingToolCalls, 1)
+  assert.equal(snap.pendingToolName, 'shell')
+})

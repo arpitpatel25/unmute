@@ -253,3 +253,65 @@ test('the observed state is written to meta.json, so a restart restores it', asy
   assert.ok(meta.updatedAt < Date.now() - 8 * 60 * 60 * 1000, 'and the honest timestamp with it')
   m.killAll(); m.stopMaintenance()
 })
+
+// ── the stuck ⇄ processing oscillation (observed 2026-07-30) ─────────────────
+// A Computer Use consent froze a turn mid-exec. The rollout stopped growing, so
+// the staleness rule said "stuck"; the same rollout still showed an unfinished
+// turn, so the recovery rule said "processing". They alternated once a SECOND —
+// logs show stuck-recovered/task-stuck at 1s intervals — and the notch strobed
+// red/green. Neither rule advanced the heartbeat, so it never settled.
+//
+// The clock is injected so a turn can be frozen for minutes without the test
+// sleeping; `updatedAt` is what Codex wrote, `now()` is wall time.
+
+async function frozenTurn(opts: { pending: number; grows?: boolean }) {
+  const base = await tmp()
+  let now = Date.now()
+  let wrote = now                       // newest rollout timestamp
+  const d = fakeDriver()
+  d.snapshot = async () => ({
+    state: 'processing', lastAgentMessage: null, turns: [],
+    updatedAt: opts.grows ? (wrote += 30_000) : wrote,
+    turnsStarted: 1, everCompleted: false,
+    pendingToolCalls: opts.pending, pendingToolName: opts.pending ? 'exec' : null,
+  }) as never
+  const m = await makeManager(d, base, {
+    codexBlockedMs: 45_000, staleMs: 60_000, now: () => now,
+  })
+  const id = await m.dispatch('open whatsapp', { agent: 'codex-desktop' })
+  const poll = (m as unknown as { pollCodexDesktop(id: string): Promise<void> }).pollCodexDesktop.bind(m)
+  await poll(id)                        // first look: establishes the baseline
+  return { m, id, poll, advance: (ms: number) => { now += ms } }
+}
+
+test('a frozen mid-tool-call turn settles on needs-user, it does NOT oscillate', async () => {
+  const { m, id, poll, advance } = await frozenTurn({ pending: 1 })
+  try {
+    advance(5 * 60_000)                 // five minutes with nothing written
+    const seen: string[] = []
+    for (let i = 0; i < 6; i++) { await poll(id); seen.push(m.get(id)!.state) }
+    assert.deepEqual([...new Set(seen)], ['needs-user'],
+      `state must be stable across polls, saw: ${seen.join(' -> ')}`)
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+test('a turn that is still GROWING is never called blocked', async () => {
+  // The discriminator is "did the rollout advance", not "is a call open" — a
+  // slow build has an open call too and must keep reading as processing.
+  const { m, id, poll, advance } = await frozenTurn({ pending: 1, grows: true })
+  try {
+    for (let i = 0; i < 4; i++) { advance(20_000); await poll(id) }
+    assert.equal(m.get(id)!.state, 'processing')
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+test('a frozen turn with NO open call is stuck, not blocked', async () => {
+  // Nothing to wait on => the genuine "something went wrong" backstop, which
+  // must stay reachable.
+  const { m, id, poll, advance } = await frozenTurn({ pending: 0 })
+  try {
+    advance(5 * 60_000)
+    await poll(id); await poll(id)
+    assert.equal(m.get(id)!.state, 'stuck')
+  } finally { m.killAll(); m.stopMaintenance() }
+})

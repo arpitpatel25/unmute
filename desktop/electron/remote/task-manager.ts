@@ -214,6 +214,8 @@ export interface TaskManagerOpts {
   pollMs?: number
   /** staleness threshold (ms) — generous (PRD §6.3). Default 4 min. */
   staleMs?: number
+  /** Frozen mid-tool-call Codex turn ⇒ blocked-on-user after this long. */
+  codexBlockedMs?: number
   /** ms to wait after accepting the folder-trust prompt for the REPL to boot. */
   trustAcceptMs?: number
   /** ms to wait after typing the dispatch payload before sending an explicit
@@ -307,6 +309,9 @@ export class TaskManager extends EventEmitter {
   private surfacedApprovals = new Map<string, number>()
   /** Poll decimation for settled Codex tasks (see pollCodexDesktop). */
   private codexIdleTicks = new Map<string, number>()
+  /** taskId → newest rollout timestamp we have already seen, so a poll can tell
+   *  "the file grew" from "the file is merely non-empty". */
+  private codexLastSeenAt = new Map<string, number>()
   /** Resumes currently in flight (see resume) — a session is not `alive` until
    *  its PTY spawns, so this is what keeps a second call from building a second
    *  session in that window. */
@@ -329,6 +334,11 @@ export class TaskManager extends EventEmitter {
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       pollMs: opts.pollMs ?? 1000,
       staleMs: opts.staleMs ?? 4 * 60_000,
+      // How long a frozen, mid-tool-call Codex turn must sit before we call it
+      // blocked-on-the-user. Shorter than staleMs on purpose: a consent dialog
+      // should surface fast, while `stuck` stays the slow "something is wrong"
+      // backstop. Long enough that an ordinary slow build is not mislabelled.
+      codexBlockedMs: opts.codexBlockedMs ?? 45_000,
       trustAcceptMs: opts.trustAcceptMs ?? 2000,
       submitConfirmMs: opts.submitConfirmMs ?? 450,
       verifyAfterMs: opts.verifyAfterMs ?? 7000,
@@ -751,6 +761,11 @@ export class TaskManager extends EventEmitter {
     }
 
     const snap = await driver.snapshot(task.codexThreadId)
+    // Did the rollout actually GROW since we last looked? This is the difference
+    // between "a turn is in flight" and "a turn is in flight and still moving",
+    // and the whole stuck/processing oscillation came from conflating them.
+    const advanced = snap.updatedAt > (this.codexLastSeenAt.get(id) ?? 0)
+    if (advanced) this.codexLastSeenAt.set(id, snap.updatedAt)
     if (snap.updatedAt > task.lastHeartbeatMs) task.lastHeartbeatMs = snap.updatedAt
 
     // Rolling "where you left off" comes free: the last agent message is exactly
@@ -795,7 +810,39 @@ export class TaskManager extends EventEmitter {
       return
     }
 
-    if (snap.state === 'processing' && task.state === 'stuck') {
+    // A turn that is in flight AND frozen mid-tool-call is not working and is
+    // not stuck — it is WAITING ON THE USER. Codex raises Computer Use consents
+    // ("Allow ChatGPT to use WhatsApp?") in its own window, writes nothing to
+    // the rollout and fires no PermissionRequest hook, so the only trace is an
+    // unclosed call on a file that stopped growing.
+    //
+    // Without this branch the two rules below fought every poll: `processing`
+    // satisfied stuck-recovery, a frozen heartbeat satisfied staleness, and the
+    // card flipped between them once a second (observed 2026-07-30, logs show
+    // stuck-recovered/task-stuck alternating at 1s).
+    if (
+      snap.state === 'processing' && !advanced && snap.pendingToolCalls > 0 &&
+      isStale({ state: 'processing' }, task.lastHeartbeatMs, this.clock(), this.opts.codexBlockedMs)
+    ) {
+      if (task.state !== 'needs-user') {
+        tlog.event('codex-blocked', { pendingTool: snap.pendingToolName, pendingCalls: snap.pendingToolCalls })
+        this.transition(task.id, 'needs-user', {
+          state: 'needs-user',
+          question: {
+            // Deliberately not invented: the consent text lives only in Codex's
+            // DOM, so the card says what we actually know and points there.
+            text: `Codex is waiting on you${snap.pendingToolName ? ` (${snap.pendingToolName})` : ''} — open Codex to answer.`,
+            choices: [],
+          },
+        } as StatusPayload)
+      }
+      return
+    }
+
+    // Only a rollout that GREW is proof of life. A frozen one satisfying
+    // `processing` is exactly the blocked case handled above, and recovering on
+    // it is what made the flip-flop self-sustaining.
+    if (snap.state === 'processing' && advanced && task.state === 'stuck') {
       tlog.event('stuck-recovered', { via: 'codex-rollout' })
       this.transition(id, 'processing')
       return
@@ -803,6 +850,7 @@ export class TaskManager extends EventEmitter {
 
     if (
       task.state !== 'stuck' &&
+      task.state !== 'needs-user' &&
       isStale({ state: task.state as TaskState }, task.lastHeartbeatMs, this.clock(), this.opts.staleMs)
     ) {
       tlog.event('task-stuck', { lastHeartbeatMs: task.lastHeartbeatMs, via: 'codex' })
@@ -2144,6 +2192,11 @@ export class TaskManager extends EventEmitter {
     const wt = this.warmTimers.get(id)
     if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
     this.typedBuffers.delete(id)
+    // Per-task Codex poll bookkeeping dies with the task, never during polling:
+    // clearing codexLastSeenAt on a live task makes every poll look like the
+    // rollout advanced, which silently disables the blocked-turn detection.
+    this.codexIdleTicks.delete(id)
+    this.codexLastSeenAt.delete(id)
     const ex = this.executors.get(id)
     if (ex?.alive) ex.kill() // the REPL won't exit on its own
     this.executors.delete(id)

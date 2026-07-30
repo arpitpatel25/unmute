@@ -15,12 +15,23 @@
 // task_complete; `last_agent_message` on task_complete is the doorbell headline
 // for free.
 //
-// NOT observable here: "blocked on approval". Codex never persists approval
-// requests — they are transient and routed to whichever client is the approval
-// reviewer (the desktop app). unmute therefore creates its Codex tasks with an
-// approval policy that does not block (see driver.ts), exactly as the Claude
-// adapter runs with permissions pre-granted, so `needs-user` for a Codex task
-// means "the turn finished and the ball is with you" — which IS task_complete.
+// PARTIALLY observable here: "blocked on approval". Codex never persists the
+// approval REQUEST — it is transient and routed to whichever client is the
+// approval reviewer (the desktop app). The original design leaned on that being
+// harmless, because unmute creates its Codex tasks with an approval policy that
+// does not block (see driver.ts).
+//
+// That assumption does not hold for COMPUTER USE consents. Observed 2026-07-30:
+// a task asked to drive WhatsApp, Codex raised "Allow ChatGPT to use WhatsApp?"
+// in its own window, and NOTHING was written here — no hook fired either, since
+// Computer Use consents do not go through `PermissionRequest`. The turn simply
+// stopped mid-`exec` and the rollout froze.
+//
+// What IS observable is the shadow it casts: the `exec` call line with no
+// matching `*_call_output`, and a file that stops growing. That pair is exposed
+// as `pendingToolCalls` — a CANDIDATE signal, never proof, because a slow build
+// looks the same. cdp.ts reads the authoritative "Awaiting approval" from the
+// DOM for the mounted thread.
 
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
@@ -74,6 +85,20 @@ export interface CodexSnapshot {
   turnsStarted: number
   /** True once at least one turn has completed. */
   everCompleted: boolean
+  /**
+   * Tool calls opened but never closed — the call line is written, its
+   * `*_call_output` never arrives.
+   *
+   * This is the ONLY on-disk trace of a turn that has stalled: a Computer Use
+   * consent ("Allow ChatGPT to use WhatsApp?") blocks the exec and Codex writes
+   * nothing further, so the rollout freezes mid-call. It is deliberately NOT
+   * proof of blocking on its own — a slow build looks identical — so callers
+   * must pair it with "and the file stopped growing" before drawing any
+   * conclusion. See TaskManager.pollCodex.
+   */
+  pendingToolCalls: number
+  /** Name of the oldest unclosed call, for the card's "waiting on…" line. */
+  pendingToolName: string | null
 }
 
 export const DEFAULT_SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
@@ -117,12 +142,16 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
   const snap: CodexSnapshot = {
     state: 'processing', lastAgentMessage: null, turns: [],
     updatedAt: 0, turnsStarted: 0, everCompleted: false,
+    pendingToolCalls: 0, pendingToolName: null,
   }
   let started = 0
   let completed = 0
   // call_id → the step awaiting its output. Codex writes the call and its
   // result as separate lines, sometimes many lines apart.
   const pendingCalls = new Map<string, CodexTurn>()
+  // call_id → tool name, kept in step with pendingCalls so an unclosed call can
+  // name itself ("exec") without re-walking the turns.
+  const pendingNames = new Map<string, string>()
   // Wall time per completed turn, in order — used to head each work block.
   const turnDurations: number[] = []
   let turnStartedAt = 0
@@ -200,6 +229,7 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
         }
         snap.turns.push(turn)
         pendingCalls.set(callId, turn)
+        pendingNames.set(callId, typeof p.name === 'string' ? p.name : 'step')
         break
       }
 
@@ -209,6 +239,7 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
         const turn = callId ? pendingCalls.get(callId) : undefined
         if (!turn || !callId) break
         pendingCalls.delete(callId)
+        pendingNames.delete(callId)
         const out = textOf(p.output)
         // Codex prefixes its own status line ("Script completed / Wall time 2.9
         // seconds / Output:"); lift the timing out of it and show the rest.
@@ -231,6 +262,8 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
   }
   snap.turnsStarted = started
   snap.everCompleted = completed > 0
+  snap.pendingToolCalls = pendingCalls.size
+  snap.pendingToolName = pendingNames.size ? [...pendingNames.values()][0] : null
   // A turn is in flight whenever more have started than completed. Otherwise the
   // ball is with the user: that is Unmute's `ready` (ORCHESTRATE-VISION §3 —
   // "the step is over but the ball is with you"), never `done`, because a Codex
@@ -361,7 +394,8 @@ export function threadIdFromRolloutName(name: string): string | null {
 const parseCache = new Map<string, { size: number; mtimeMs: number; limit: number; snap: CodexSnapshot }>()
 
 const EMPTY = (): CodexSnapshot =>
-  ({ state: 'processing', lastAgentMessage: null, turns: [], updatedAt: 0, turnsStarted: 0, everCompleted: false })
+  ({ state: 'processing', lastAgentMessage: null, turns: [], updatedAt: 0, turnsStarted: 0,
+     everCompleted: false, pendingToolCalls: 0, pendingToolName: null })
 
 export async function readThread(threadId: string, sessionsDir = DEFAULT_SESSIONS_DIR, turnLimit = 6): Promise<CodexSnapshot> {
   const path = await findRolloutPath(threadId, sessionsDir)
