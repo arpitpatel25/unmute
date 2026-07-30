@@ -695,24 +695,9 @@ export function render(pad: Pad, dest: Destination): RenderResult {
     pieces.push({ text: `${fence}\n${e.content}\n${fence}`, block: true })
   }
 
-  let text = ''
-  for (const p of pieces) {
-    if (!text) { text = p.text; continue }
-    const sep = p.block || pieces[pieces.indexOf(p) - 1]?.block ? '\n\n' : ' '
-    text += sep + p.text
-  }
-  return { text, attachments }
-}
-```
-
-- [ ] **Step 4: Run the test and verify it passes**
-
-Run: `cd desktop && npx tsx --test electron/remote/capture/insertRender.test.ts`
-Expected: PASS. If the separator logic fails on adjacent blocks, replace the `indexOf` lookup with an index-based `for` loop tracking `prevBlock` — `indexOf` is wrong when two pieces have identical text.
-
-- [ ] **Step 5: Fix the separator loop (the `indexOf` bug is real — do this now, not later)**
-
-```ts
+  // Track prevBlock explicitly. Do NOT look the previous piece up with
+  // indexOf: two identical blocks are equal by value, so indexOf returns the
+  // first one and the separator is computed against the wrong neighbour.
   let text = ''
   let prevBlock = false
   for (const p of pieces) {
@@ -721,9 +706,15 @@ Expected: PASS. If the separator logic fails on adjacent blocks, replace the `in
     prevBlock = p.block
   }
   return { text, attachments }
+}
 ```
 
-- [ ] **Step 6: Add a regression test for the duplicate-text case**
+- [ ] **Step 4: Run the test and verify it passes**
+
+Run: `cd desktop && npx tsx --test electron/remote/capture/insertRender.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: Add a regression test pinning the identical-blocks case**
 
 ```ts
 test('two identical blocks both render (no indexOf aliasing)', () => {
@@ -735,7 +726,7 @@ test('two identical blocks both render (no indexOf aliasing)', () => {
 })
 ```
 
-- [ ] **Step 7: Run the full suite and commit**
+- [ ] **Step 6: Run the full suite and commit**
 
 ```bash
 cd desktop && npm test
@@ -1922,15 +1913,56 @@ requested, so a disabled state cannot half-apply."
 // watcher ever runs outside a window the user deliberately opened.
 
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { Destination, InsertKind, Pad } from './types'
+import { padDirFor } from './scratchpadStore'
+import { createClipboardWatch } from './clipboardWatch'
+import { createScreenshotWatch } from './screenshotWatch'
 import { addInsert, addSegment, emptyPad, isEmpty, removeEntry, setSegmentText } from './captureBuffer'
 import { render, type RenderResult } from './insertRender'
+
+/** Where pads live on disk. Unmute-owned, safe to delete, recreated on demand. */
+export const SCRATCHPAD_ROOT = join(homedir(), '.unmute', 'remote', 'scratchpad')
 
 let pad: Pad | null = null
 let armed = false
 let openSegmentId: string | null = null
-let segmentStartMs = 0
 let captureStartedAt = 0
+
+// ── Injected effects ────────────────────────────────────────────────────
+//
+// DEPENDENCY INVERSION, NOT AN IMPORT. clipboard.ts already imports from
+// remote/init, and its header records why that direction is one-way: a lazy
+// require of that path fails inside the bundled main, swallowed by a fail-open
+// catch ("No cycle: remote/init never imports clipboard.ts"). If the delivery
+// handler imported injectOutput directly, it would close exactly that loop.
+//
+// So the paste effect is REGISTERED by the module that already owns it
+// (sessionManager, which imports injectOutput today) and called back through
+// here. No new edge in the import graph.
+
+type PasteFn = (text: string) => Promise<void>
+let pasteFn: PasteFn | null = null
+
+export function registerPaste(fn: PasteFn): void { pasteFn = fn }
+
+export async function pasteAtCursor(text: string): Promise<boolean> {
+  if (!pasteFn) return false
+  await pasteFn(text)
+  return true
+}
+
+/** Read once at capture start so a mid-capture settings change cannot make a
+ *  half-observed window. Registered the same way, for the same reason. */
+type SettingsFn = () => { scratchpadEnabled: boolean; captureEnabled: boolean }
+let settingsFn: SettingsFn | null = null
+
+export function registerSettings(fn: SettingsFn): void { settingsFn = fn }
+
+export function getCaptureSettings(): { scratchpadEnabled: boolean; captureEnabled: boolean } {
+  return settingsFn?.() ?? { scratchpadEnabled: true, captureEnabled: true }
+}
 
 export function isArmed(): boolean { return armed }
 export function currentPad(): Pad | null { return pad }
@@ -2050,6 +2082,58 @@ export function endSegment(now: number): void {
 
 - [ ] **Step 2: Construct and wire the watchers in `init.ts`**
 
+Preamble — the identifiers the two constructors need:
+
+```ts
+import { existsSync, watch } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { createLedger, claimContent } from './capture/clipboardLedger'
+
+// Both detectors claim against ONE ledger, because a tool set to write a file
+// AND copy fires each of them for a single user action.
+const sharedLedger = createLedger()
+
+// The addon may be absent (build failure, non-mac). -1 means "cannot observe",
+// which the watcher treats as never firing — the same fail-quiet posture the
+// rest of the native-addon call sites take.
+let nativePaste: { clipboardChangeCount(): number } | null = null
+try { nativePaste = require('unmute-native-paste') } catch { nativePaste = null }
+
+/** Tell the recorder an insert is pending so decideCut may take an early cut
+ *  (Task 5). Best-effort: a missed push only costs positional precision. */
+function notifyInsertDetected(): void {
+  try { getWidgetWindow()?.webContents.send('capture:insert-detected') } catch { /* no window */ }
+}
+
+/** The ONE pasteboard image reader — one process, one PNG encoder. A second
+ *  reader with a different encoder is the documented cause of duplicated
+ *  pastes. Writes into padDir and returns the path; no baseline, no signature
+ *  set, and it never clears the clipboard. */
+function rescueClipboardImageViaChild(padDir: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    try { mkdirSync(padDir, { recursive: true }) } catch { /* exists */ }
+    const dest = join(padDir, `insert-${Date.now()}.png`)
+    const script = [
+      'try',
+      'set png to the clipboard as «class PNGf»',
+      `set f to open for access POSIX file "${dest}" with write permission`,
+      'set eof f to 0',
+      'write png to f',
+      'close access f',
+      'on error',
+      'end try',
+    ].flatMap((l) => ['-e', l])
+    execFile('osascript', script, { timeout: 5000 }, (err) => {
+      if (err) { resolve(null); return }
+      try { resolve(statSync(dest).size > 0 ? dest : null) } catch { resolve(null) }
+    })
+  })
+}
+```
+
+Then the two constructors:
+
 ```ts
   // onInsert is the ONLY path from a watcher into the buffer, so position and
   // dedup are decided in one place.
@@ -2079,6 +2163,22 @@ export function endSegment(now: number): void {
   })
 
   initWatchers(cw, sw)
+
+  // Settings read through a registered function, not an import — same
+  // inversion, same reason.
+  registerSettings(() => ({
+    scratchpadEnabled: settings.get('scratchpadEnabled') !== false,
+    captureEnabled: settings.get('captureEnabled') !== false,
+  }))
+```
+
+And in `sessionManager.ts`, which already imports `injectOutput`, register the paste effect once at module init:
+
+```ts
+// The delivery handler in remote/init cannot import injectOutput without
+// closing the cycle clipboard.ts's header exists to prevent. It already lives
+// here, so hand it over rather than importing it there.
+registerPaste(async (text: string) => { await injectOutput(text) })
 ```
 
 `notifyInsertDetected()` pushes `capture:insert-detected` to the widget so the recorder sets `insertPendingRef` (Task 5, Step 5) and can take an early cut.
@@ -2223,7 +2323,10 @@ as user copies. The unarmed fast path is untouched."
     const out = deliver(dest === 'cursor' ? 'cursor' : 'task')
     broadcastScratchpad()
     if (!out || !out.text.trim()) return null
-    if (dest === 'cursor') { await injectOutput(out.text); return 'cursor' }
+    // pasteAtCursor, NOT a direct injectOutput import — see the dependency
+    // inversion note in capture/index.ts. Importing clipboard.ts from here
+    // closes the cycle its header exists to prevent.
+    if (dest === 'cursor') { return (await pasteAtCursor(out.text)) ? 'cursor' : null }
     if (dest === 'openTask' && orchestrateFocusId) {
       manager?.followUp(orchestrateFocusId, out.text)
       return orchestrateFocusId
