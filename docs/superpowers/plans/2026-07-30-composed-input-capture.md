@@ -2013,16 +2013,56 @@ export function attachTranscript(segmentId: string, text: string, now: number): 
 }
 
 /** An insert arrived from either watcher. Position is relative to capture
- *  start, so it sorts against segment times on the same clock. */
+ *  start, so it sorts against segment times on the same clock.
+ *
+ *  THIS IS ALSO THE CROSS-DETECTOR DEDUP POINT, and it has to be — the two
+ *  watchers cannot dedup against each other from where they sit. A tool set to
+ *  write a file AND copy (CleanShot, Shottr) fires BOTH for one user action,
+ *  but they hold different paths for it: the screenshot watcher has the
+ *  original file, the clipboard watcher has its own freshly-rescued copy under
+ *  padDir. Those strings can never be equal, so claiming on a path — which is
+ *  what an earlier draft did — dedups nothing and the user gets two image
+ *  inserts for one screenshot.
+ *
+ *  The only thing the two genuinely share is the image CONTENT. So images are
+ *  claimed on a content signature here, at the one point both detectors
+ *  converge, rather than in either watcher.
+ *
+ *  The signature is size + md5 of the first 4KB — NOT a full hash. Hashing a
+ *  multi-megabyte Retina PNG on the main process while recording is exactly
+ *  the heavy work that corrupts audio; reading 4KB is microseconds. This is
+ *  the one piece of the deleted ledger that was sound, and it is kept for the
+ *  same reason it worked there. */
 export function recordInsert(
   i: { kind: InsertKind; content: string; atMs: number },
   now: number,
 ): void {
   if (!pad) return
+  if (i.kind === 'image') {
+    const sig = imageSignature(i.content)
+    // An unreadable file yields no signature. Insert it rather than dropping
+    // it — a missed dedup shows the user one extra thumbnail they can remove,
+    // while a wrong drop loses something they captured on purpose.
+    if (sig && !claimContent(sharedLedger, sig, i.atMs)) return
+  }
   pad = addInsert(pad, {
     id: randomUUID(), kind: i.kind, content: i.content,
     atMs: i.atMs - captureStartedAt, now,
   })
+}
+
+/** size:md5(first 4KB). Cheap by construction — see recordInsert. */
+function imageSignature(path: string): string | null {
+  try {
+    const { statSync, openSync, readSync, closeSync } = require('node:fs') as typeof import('node:fs')
+    const st = statSync(path)
+    if (!st.size) return null
+    const head = Buffer.alloc(Math.min(4096, st.size))
+    const fd = openSync(path, 'r')
+    try { readSync(fd, head, 0, head.length, 0) } finally { closeSync(fd) }
+    const md5 = require('node:crypto').createHash('md5').update(head).digest('hex') as string
+    return `${st.size}:${md5}`
+  } catch { return null }
 }
 
 export function removeFromPad(id: string, now: number): void {
@@ -2179,6 +2219,9 @@ Then the two constructors:
     },
     watch: (dir, cb) => watch(dir, (_evt, filename) => cb(String(filename ?? ''))),
     now: () => Date.now(),
+    // Path-keyed, and deliberately NOT the cross-detector dedup — see
+    // recordInsert. This only stops the SAME file firing twice from fs.watch,
+    // which macOS does emit (a write and a rename for one screenshot).
     claim: (hash, atMs) => claimContent(sharedLedger, hash, atMs),
     onInsert: (i) => { recordInsert(i, Date.now()); broadcastScratchpad(); notifyInsertDetected() },
   })
