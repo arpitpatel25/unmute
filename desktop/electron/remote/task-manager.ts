@@ -219,6 +219,8 @@ export interface TaskManagerOpts {
   codexBlockedMs?: number
   /** Lifetime of one shared sidebar-chip snapshot. */
   codexChipTtlMs?: number
+  /** Frozen-but-unconfirmed ⇒ surface it hedged after this long. */
+  codexUnconfirmedMs?: number
   /** ms to wait after accepting the folder-trust prompt for the REPL to boot. */
   trustAcceptMs?: number
   /** ms to wait after typing the dispatch payload before sending an explicit
@@ -323,7 +325,7 @@ export class TaskManager extends EventEmitter {
   private codexWatchers = new Map<string, () => void>()
   /** One sidebar read serves EVERY task on a tick. Ten blocked tasks polling
    *  independently would be ten CDP round-trips for one identical answer. */
-  private codexChipCache: { at: number; rows: Array<{ id: string; active: boolean; chip: string | null }> } | null = null
+  private codexChipCache: { at: number; rows: Array<{ id: string; title?: string; active: boolean; chip: string | null }> } | null = null
   private codexChipInflight: Promise<void> | null = null
   /** Resumes currently in flight (see resume) — a session is not `alive` until
    *  its PTY spawns, so this is what keeps a second call from building a second
@@ -358,6 +360,11 @@ export class TaskManager extends EventEmitter {
       codexBlockedMs: opts.codexBlockedMs ?? 5_000,
       /** How long one sidebar snapshot serves every task. */
       codexChipTtlMs: opts.codexChipTtlMs ?? 1_500,
+      // Fallback window: how long a frozen tool call may go UNCONFIRMED before
+      // we surface it anyway, hedged. Long enough that ordinary slow steps
+      // finish inside it, short enough that a broken sidebar cannot hide a real
+      // block for the rest of the day.
+      codexUnconfirmedMs: opts.codexUnconfirmedMs ?? 3 * 60_000,
       trustAcceptMs: opts.trustAcceptMs ?? 2000,
       submitConfirmMs: opts.submitConfirmMs ?? 450,
       verifyAfterMs: opts.verifyAfterMs ?? 7000,
@@ -876,11 +883,40 @@ export class TaskManager extends EventEmitter {
       isStale({ state: 'processing' }, task.lastHeartbeatMs, this.clock(), this.opts.codexBlockedMs)
 
     if (frozenMidCall && task.state !== 'needs-user') {
-      const chip = await this.codexChipFor(task.codexThreadId, driver)
+      const chip = await this.codexChipFor(task.codexThreadId, driver, task.intent)
+
+      // CONFIRMATION MUST NOT BE A GATE, only an accelerator.
+      //
+      // First cut made "no chip" mean silence forever, so ONE broken link — an
+      // id mismatch, a reworded chip, CDP dropping, a chip we have never seen —
+      // silenced the entire needs-you signal. That happened on the very first
+      // real test: the card sat at "Working" while Codex was visibly asking,
+      // logging codex-quiet once a second.
+      //
+      // So the sidebar makes it FAST and CONFIDENT, and its absence makes it
+      // SLOW and VAGUE — never silent. After codexUnconfirmedMs of a frozen
+      // tool call we say so, hedged, because at that point we genuinely do not
+      // know whether it is blocked or merely slow, and the card should claim
+      // only what it knows.
+      const frozenForMs = this.clock() - task.lastHeartbeatMs
+      if (!chip && frozenForMs < this.opts.codexUnconfirmedMs) {
+        tlog.debug('codex-quiet', {
+          pendingTool: snap.pendingToolName, frozenForMs,
+          note: 'frozen but unconfirmed — staying processing until the fallback window',
+        })
+        return
+      }
       if (!chip) {
-        // Suspected only. Say nothing, change nothing — the turn may simply be
-        // slow. The staleness backstop below still catches a genuinely dead one.
-        tlog.debug('codex-quiet', { pendingTool: snap.pendingToolName, note: 'frozen but unconfirmed — staying processing' })
+        tlog.event('codex-blocked-unconfirmed', { pendingTool: snap.pendingToolName, frozenForMs })
+        this.transition(task.id, 'needs-user', {
+          state: 'needs-user',
+          question: {
+            // Hedged on purpose: we could not confirm, so we describe rather
+            // than diagnose. "Quiet", not "stuck", and not "waiting on you".
+            text: `Quiet for ${Math.round(frozenForMs / 60_000)}m — check Codex`,
+            choices: [],
+          },
+        } as StatusPayload)
         return
       }
       tlog.event('codex-blocked', { pendingTool: snap.pendingToolName, pendingCalls: snap.pendingToolCalls, chip })
@@ -1523,7 +1559,8 @@ export class TaskManager extends EventEmitter {
    */
   private async codexChipFor(
     threadId: string,
-    driver: { threadChips?: () => Promise<Array<{ id: string; active: boolean; chip: string | null }>> },
+    driver: { threadChips?: () => Promise<Array<{ id: string; title?: string; active: boolean; chip: string | null }>> },
+    title?: string,
   ): Promise<{ active: boolean; chip: string | null } | null> {
     if (!driver.threadChips) return null
     const now = this.clock()
@@ -1542,11 +1579,38 @@ export class TaskManager extends EventEmitter {
       await this.codexChipInflight
     }
     const rows = this.codexChipCache?.rows ?? []
-    // Sidebar ids can carry a host prefix; match on the bare id either way.
-    const bare = threadId.split(':').pop() ?? threadId
-    const row = rows.find((r) => r.id === threadId || (r.id.split(':').pop() ?? r.id) === bare)
-    if (!row?.chip) return null
-    return { active: row.active, chip: row.chip }
+
+    // MATCHING IS NOT JUST "same id", and getting that wrong silenced the whole
+    // feature once already (2026-07-30).
+    //
+    // A thread has TWO names. Unmute stores the durable id recovered from the
+    // rollout FILENAME (019fb3b3-…). Codex's sidebar labels a not-yet-persisted
+    // thread with a TRANSIENT id instead — `local:client-new-thread:8ea1da75-…`
+    // — whose uuid is unrelated. They never match, so the lookup failed on every
+    // tick and the card sat at "Working" while Codex was visibly asking.
+    //
+    // This is not a startup race that resolves itself: the sidebar keeps the
+    // transient label until Codex persists the thread, and that window covers
+    // the FIRST turn — exactly when a Computer Use consent tends to fire. So the
+    // common case, not an edge case.
+    const bare = (s: string) => s.split(':').pop() ?? s
+    const byId = rows.find((r) => r.id === threadId || bare(r.id) === bare(threadId))
+    if (byId) return byId.chip ? { active: byId.active, chip: byId.chip } : null
+
+    // No id match ⇒ this thread is probably still wearing a transient label.
+    // Fall back to the title, which IS ours: it is the prompt we sent.
+    const wanted = (title ?? '').trim().toLowerCase()
+    if (wanted) {
+      const byTitle = rows.find((r) => {
+        const t = (r.title ?? '').trim().toLowerCase()
+        if (!t) return false
+        // Sidebar titles are truncated, so compare on the shared prefix.
+        const n = Math.min(t.length, wanted.length, 40)
+        return n >= 12 && t.slice(0, n) === wanted.slice(0, n)
+      })
+      if (byTitle) return byTitle.chip ? { active: byTitle.active, chip: byTitle.chip } : null
+    }
+    return null
   }
 
   private async sweepApprovals(): Promise<void> {

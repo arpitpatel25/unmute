@@ -264,7 +264,7 @@ test('the observed state is written to meta.json, so a restart restores it', asy
 // The clock is injected so a turn can be frozen for minutes without the test
 // sleeping; `updatedAt` is what Codex wrote, `now()` is wall time.
 
-async function frozenTurn(opts: { pending: number; grows?: boolean; chip?: string | null; active?: boolean }) {
+async function frozenTurn(opts: { pending: number; grows?: boolean; chip?: string | null; active?: boolean; sidebarId?: string; sidebarTitle?: string; unconfirmedMs?: number }) {
   const base = await tmp()
   let now = Date.now()
   let wrote = now                       // newest rollout timestamp
@@ -276,9 +276,15 @@ async function frozenTurn(opts: { pending: number; grows?: boolean; chip?: strin
     pendingToolCalls: opts.pending, pendingToolName: opts.pending ? 'exec' : null,
   }) as never
   ;(d as unknown as { threadChips: unknown }).threadChips = async () =>
-    (opts.chip === null ? [] : [{ id: 'thread-123', active: !!opts.active, chip: opts.chip ?? 'Awaiting approval' }])
+    (opts.chip === null ? [] : [{
+      id: opts.sidebarId ?? 'thread-123',
+      title: opts.sidebarTitle ?? 'open whatsapp',
+      active: !!opts.active,
+      chip: opts.chip ?? 'Awaiting approval',
+    }])
   const m = await makeManager(d, base, {
-    codexBlockedMs: 45_000, staleMs: 60_000, codexChipTtlMs: 0, now: () => now,
+    codexBlockedMs: 45_000, staleMs: 60_000, codexChipTtlMs: 0,
+    codexUnconfirmedMs: opts.unconfirmedMs ?? 3 * 60_000, now: () => now,
   })
   const id = await m.dispatch('open whatsapp', { agent: 'codex-desktop' })
   const poll = (m as unknown as { pollCodexDesktop(id: string): Promise<void> }).pollCodexDesktop.bind(m)
@@ -376,13 +382,16 @@ test('answering a consent clicks that option, it does not write a decision file'
 // disk. Announcing on disk alone would eventually cry wolf at a slow build, and
 // being wrong out loud is the one error that costs trust permanently.
 
-test('a frozen turn with NO sidebar chip stays quiet — it is only suspected', async () => {
-  const { m, id, poll, advance } = await frozenTurn({ pending: 1, chip: null })
+test('a frozen turn with NO sidebar chip stays quiet inside the window', async () => {
+  // Unconfirmed means we cannot tell a consent from a slow build, so nothing is
+  // announced while the fallback window is open. (Past it, a hedged card
+  // appears — see 'an unconfirmable block still surfaces eventually'.)
+  const { m, id, poll, advance } = await frozenTurn({ pending: 1, chip: null, unconfirmedMs: 10 * 60_000 })
   try {
-    advance(5 * 60_000)
+    advance(2 * 60_000)
     for (let i = 0; i < 4; i++) await poll(id)
     assert.equal(m.get(id)!.state, 'processing',
-      'an unconfirmed suspicion must never announce itself as needing the user')
+      'an unconfirmed suspicion must never announce itself as "needs you"')
   } finally { m.killAll(); m.stopMaintenance() }
 })
 
@@ -425,5 +434,47 @@ test('a NON-mounted blocked thread is never switched to just to read it', async 
     await poll(id)
     assert.equal(mounted, 0, 'reading the panel must not happen at detection time')
     assert.equal(m.get(id)!.state, 'needs-user')
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+// ── the two-names bug, and why confirmation must not be a gate ──────────────
+// Live failure 2026-07-30: Unmute stores the DURABLE thread id recovered from
+// the rollout filename (019fb3b3-…), but Codex's sidebar labels a not-yet-
+// persisted thread `local:client-new-thread:8ea1da75-…` — an unrelated uuid.
+// The lookup missed on every tick, so a visibly-asking Codex showed as
+// "Working" and logged codex-quiet once a second.
+
+test('a thread still wearing its TRANSIENT sidebar id is still matched', async () => {
+  const { m, id, poll, advance } = await frozenTurn({
+    pending: 1,
+    sidebarId: 'local:client-new-thread:8ea1da75-1abb-460c-9ac6-b28421825b7f',
+    sidebarTitle: 'open whatsapp',
+    chip: 'Awaiting approval',
+  })
+  try {
+    advance(5 * 60_000)
+    await poll(id)
+    const t = m.get(id)!
+    assert.equal(t.state, 'needs-user', 'the id will not match; the title must')
+    assert.equal(t.question?.text, 'Awaiting approval')
+  } finally { m.killAll(); m.stopMaintenance() }
+})
+
+test('an unconfirmable block still surfaces eventually, hedged', async () => {
+  // Sidebar broken / reworded / CDP down. Silence forever would let ONE broken
+  // link hide every blocked task, so it degrades to slow-and-vague instead.
+  const { m, id, poll, advance } = await frozenTurn({ pending: 1, chip: null, unconfirmedMs: 60_000 })
+  try {
+    advance(30_000)
+    await poll(id)
+    assert.equal(m.get(id)!.state, 'processing', 'inside the window it stays quiet')
+
+    advance(5 * 60_000)
+    await poll(id)
+    const t = m.get(id)!
+    assert.equal(t.state, 'needs-user')
+    assert.match(t.question?.text ?? '', /^Quiet for \d+m — check Codex$/,
+      'describes what we know; never claims "waiting on you" unconfirmed')
+    assert.deepEqual(t.question?.choices, [])
   } finally { m.killAll(); m.stopMaintenance() }
 })
