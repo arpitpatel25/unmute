@@ -131,7 +131,6 @@ export interface CockpitPayload {
   skills: SkillItemP[]
   shelf: ShelfItemP[]
   digest: string | null
-  stagedCount: number
   doorbell: boolean
   routeOffer: RouteOfferP | null
   tmuxAvailable: boolean
@@ -195,7 +194,6 @@ export type NotchEvent =
   | { type: 'digestDismiss' }
   | { type: 'bellToggle' }
   | { type: 'offerAccept'; newTaskId: string }
-  | { type: 'clearStaged' }
   | { type: 'openArtifact'; artifactType: 'url' | 'path'; value: string }
   | { type: 'openInTerminal'; id: string }
   | { type: 'termOpen'; id: string }

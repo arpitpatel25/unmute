@@ -81,8 +81,6 @@ function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
     acceptRouteOffer: (id) => { rec('acceptRouteOffer')(id); return true },
     getDoorbell: () => doorbell,
     setDoorbell: (on) => { doorbell = on },
-    getStagedCount: () => 2,
-    clearStaged: rec('clearStaged'),
     getLastSeen: () => lastSeen,
     setLastSeen: (ms) => { lastSeen = ms },
   }
@@ -274,7 +272,6 @@ test('openDashboard builds the full cockpit payload', async () => {
   assert.equal(cp.skills.length, 1)
   assert.equal(cp.unmuteSkills.length, 1)
   assert.equal(cp.projects[0].name, 'unmute-cloud')
-  assert.equal(cp.stagedCount, 2)
   assert.equal(cp.doorbell, true)
   assert.equal(cp.tmuxAvailable, true)
   // queue: only your-move, unshelved

@@ -17,7 +17,7 @@ struct WallView: View {
         model.cockpit ?? CockpitData(groups: [], hiddenTotal: 0, showingAll: false,
                                      queue: [], oneoffs: [], projects: [],
                                      suggestions: [], unmuteSkills: [], skills: [], shelf: [],
-                                     digest: nil, stagedCount: 0, doorbell: true,
+                                     digest: nil, doorbell: true,
                                      routeOffer: nil, tmuxAvailable: false)
     }
 
@@ -396,21 +396,6 @@ struct WallView: View {
 
     private var bottomLeftChrome: some View {
         HStack(spacing: 8) {
-            if data.stagedCount > 0 {
-                HStack(spacing: 7) {
-                    Image(systemName: "photo.on.rectangle")
-                        .font(.system(size: 11)).foregroundColor(Theme.textDim)
-                    Text("\(data.stagedCount) staged — speaks with your next task")
-                        .font(.system(size: 11.5)).foregroundColor(Theme.textDim)
-                    Button(action: { model.emit(.clearStaged) }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 11)).foregroundColor(Theme.textFaint)
-                    }.buttonStyle(.plain)
-                }
-                .padding(.horizontal, 11).padding(.vertical, 7)
-                .background(Capsule().fill(Theme.raised))
-                .overlay(Capsule().stroke(Theme.hairline, lineWidth: 0.5))
-            }
             voiceChip
         }
     }

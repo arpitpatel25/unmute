@@ -938,22 +938,12 @@ let orchestrateFocusId: string | null = null
 type CapturePhase = 'listening' | 'transcribing' | 'routing' | 'idle'
 function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): void {
   captureBusy = phase !== 'idle' // the doorbell stays silent while the user speaks
-  // The screenshot ledger follows the capture window (remote captures only —
-  // this broadcast never fires for plain dictation). The clipboard sweep runs at
-  // 'transcribing' (key just lifted, recording stopped) so a mid-hold
-  // ⌃-screenshot rides with THIS utterance, before routing delivers it.
   // The pill's model/agent chips come from HERE, not from the capture renderer:
   // main owns the setting and the config-driven catalog, so a second copy in the
   // renderer could only ever disagree. Resolved once as the capture opens —
   // availability changes rarely (Codex opened or closed), and the answer is only
   // needed at the moment the chips appear.
   if (phase === 'listening') void pushPillChips()
-  if (phase === 'listening') startCaptureWatch()
-  else if (phase === 'transcribing') secureClipboard() // key just lifted — secure what was captured (never clears)
-  // idle = the remote capture RESOLVED. Delivery already emptied the tray via
-  // takeStaged(); anything auto still here means no delivery (empty transcript,
-  // router error) — forfeit it.
-  else if (phase === 'idle') stopCaptureWatch({ purgeAuto: true })
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
   }
@@ -1035,7 +1025,6 @@ async function pushPillChips(): Promise<void> {
       agent: selected?.label ?? providerOf(agent).label,
       agentConnected: selected?.available ?? true,
       agentOptions,
-      stagedCount: stagedAttachments.length + pendingClipboardCount,
     }
 
     if (isCodex) {
@@ -1152,139 +1141,7 @@ async function pushPillChips(): Promise<void> {
   }
 }
 
-// ── Staging tray (multimodal, capture-first): images pasted/dropped with NO
-// target stage here, then ride with the NEXT utterance to wherever it lands —
-// new task (paths join the intent), continuation/answer (paths typed into the
-// target right before the payload, submitting as ONE message). The tray is to
-// images what the router is to words: an address-free buffer resolved at
-// speak-time. Files live under ~/.unmute/remote/staging (tiny, swept with age).
-const STAGING_DIR = join(homedir(), '.unmute', 'remote', 'staging')
-// Two consent models share this tray, and the tag is what keeps them honest:
-// `auto` = ambient screenshot captured during a dictation window — its LIFE IS
-// THE WINDOW (start → delivery); it must never outlive a capture that ended
-// without delivering. `explicit` = the user deliberately pasted/dropped an
-// image with no target — that one rides to the next utterance by design
-// (visible in the chip, manually removable).
-interface StagedEntry { path: string; auto: boolean }
-let stagedAttachments: StagedEntry[] = []
-/** Clipboard screenshots NOTICED during recording but not yet readable (reading
- *  the image mid-recording corrupts audio; the FORMAT list is free metadata).
- *  Purely a counter for the pill — the real read happens at key-lift. */
-let pendingClipboardCount = 0
-function broadcastStaged(): void {
-  for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('remote:staged-changed', { count: stagedAttachments.length + pendingClipboardCount, paths: stagedAttachments.map((s) => s.path), pending: pendingClipboardCount })
-  }
-  notchController?.notifyStagedChanged()
-  // The staged-image chip lives on the pill too, and main is the only place
-  // that knows the true count (the renderer's chip keeps its own copy).
-  pillController?.push({ stagedCount: stagedAttachments.length + pendingClipboardCount })
-}
-
-// ── Utterance-scoped screenshot capture (the pill ledger). The dictation window
-// is the CONSENT signal: screenshots taken while addressing Unmute — or in the
-// short gap since the last utterance — belong to what's being said. Everything
-// staged is VISIBLE on the pill (🖼 n, prunable with ✕) before it sends; nothing
-// rides invisibly. Only ever active for REMOTE captures, never plain dictation.
-// Max screenshots auto-staged per remote capture — runtime-configurable via
-// getKnobs().captureMaxAuto (read at use so a live update applies).
-let captureWatchTimer: ReturnType<typeof setInterval> | null = null
-let captureWatchGen = 0 // generation guard: a stale safety-stop must not kill a newer watch
 let screenshotDirCache: string | null = null
-/** Signatures (size + head-hash) of every clipboard image we've seen — staged
- *  OR marked known at a capture boundary. One image never attaches twice, and
- *  a stale pre-existing clipboard image never auto-attaches. */
-const knownClipSigs = new Set<string>()
-
-/** Cheap, consistent signature: byte length + md5 of the first 4KB. Never
- *  hashes a whole multi-MB PNG. */
-function sigOf(buf: Buffer): string {
-  const head = buf.subarray(0, 4096)
-  const md5 = require('node:crypto').createHash('md5').update(head).digest('hex') as string
-  return `${buf.length}:${md5}`
-}
-
-
-// ── The multi-screenshot enabler: rescue each ⌃-clipboard screenshot the moment
-// it lands — BEFORE the next one overwrites it — without main ever touching the
-// image while recording. An osascript CHILD PROCESS dumps the pasteboard PNG to
-// a probe file (all decode/write cost lives in the child); main only stats the
-// result and reads 4KB for the signature. New signature → copy into staging
-// (APFS clone, ~instant) → the pill chip counts up live with a REAL file.
-const CLIP_PROBE_FILE = () => join(STAGING_DIR, '.clip-probe.png')
-let clipProbeBusy = false
-/** Has THIS capture window completed its baseline probe? The baseline learns
- *  whatever image was already in the clipboard BEFORE the trigger, so it never
- *  attaches. Until it has verifiably completed, every probe runs learn-only —
- *  a skipped baseline (previous probe still in flight) or a failed osascript
- *  must NEVER let a pre-dictation image slip through as "new". */
-let clipBaselined = false
-function probeClipboardViaChild(markOnly = false, onDone?: (sawImage: boolean, stagedNew: boolean) => void): void {
-  if (clipProbeBusy || (!markOnly && stagedAttachments.length >= getKnobs().captureMaxAuto)) { onDone?.(false, false); return }
-  clipProbeBusy = true
-  try { mkdirSync(STAGING_DIR, { recursive: true }) } catch { /* ignore */ }
-  const probe = CLIP_PROBE_FILE()
-  // Fresh slate: a leftover probe file from an earlier capture must not read as
-  // "the clipboard's current image" when the child's PNGf coercion errors out
-  // (empty clipboard) and leaves the file untouched.
-  try { (require('node:fs') as typeof import('node:fs')).rmSync(probe, { force: true }) } catch { /* ignore */ }
-  const script = [
-    'try',
-    'set png to the clipboard as «class PNGf»',
-    `set f to open for access POSIX file "${probe}" with write permission`,
-    'set eof f to 0',
-    'write png to f',
-    'close access f',
-    'on error',
-    'end try',
-  ].flatMap((l) => ['-e', l])
-  execFile('osascript', script, { timeout: 5000 }, (err) => {
-    clipProbeBusy = false
-    if (err) { onDone?.(false, false); return } // osascript itself failed — clipboard state UNKNOWN, stay unbaselined
-    try {
-      const { statSync, openSync, readSync, closeSync, copyFileSync, rmSync } = require('node:fs') as typeof import('node:fs')
-      let st: import('node:fs').Stats
-      try { st = statSync(probe) } catch { clipBaselined = true; onDone?.(false, false); return } // no file = no image on the clipboard — baseline trivially done
-      if (!st.size) { clipBaselined = true; onDone?.(false, false); return }
-      const head = Buffer.alloc(Math.min(4096, st.size))
-      const fd = openSync(probe, 'r')
-      readSync(fd, head, 0, head.length, 0)
-      closeSync(fd)
-      const md5 = require('node:crypto').createHash('md5').update(head).digest('hex') as string
-      const sig = `${st.size}:${md5}`
-      if (knownClipSigs.has(sig)) { clipBaselined = true; onDone?.(true, false); return }
-      knownClipSigs.add(sig)
-      clipBaselined = true
-      if (markOnly) { onDone?.(true, false); return } // baseline: pre-dictation image learned, never attached
-      const dest = join(STAGING_DIR, `capture-${Date.now()}-clipboard.png`)
-      copyFileSync(probe, dest)
-      try { rmSync(probe, { force: true }) } catch { /* next probe overwrites anyway */ }
-      stagedAttachments.push({ path: dest, auto: true })
-      broadcastStaged()
-      log.event('capture-staged', { file: dest, via: 'clipboard-probe' })
-      onDone?.(true, true)
-    } catch { onDone?.(false, false) /* probe unreadable — skip */ }
-  })
-}
-
-/** Key-lift: secure any last clipboard screenshot.
- *
- *  THE CLEAR IS GONE. It used to wipe the pasteboard when this capture had
- *  consumed a clipboard image, and that was defensible only because the image
- *  was about to be pasted back seconds later — a handoff, not a deletion.
- *  Nothing consumes staged images any more (they are inserts in the capture
- *  buffer now), so the clear had become pure data loss: copy an image
- *  mid-dictation and your clipboard was emptied and you got nothing back.
- *
- *  It also contradicted this design's flat rule — Unmute does not mutate the
- *  user's pasteboard. The only write we make is delivery's own, and that one
- *  announces itself. */
-function secureClipboard(): void {
-  if (settings.get('captureEnabled') === false) return
-  // If the baseline never completed this capture, this probe is LEARN-ONLY: an
-  // image of unknown provenance (could predate the trigger) must not attach.
-  probeClipboardViaChild(!clipBaselined)
-}
 
 function screenshotDir(): string {
   if (screenshotDirCache) return screenshotDirCache
@@ -1458,123 +1315,6 @@ function initCaptureWatchers(): void {
   }))
 }
 
-function stageBuffer(buf: Buffer, tag: string): void {
-  if (stagedAttachments.length >= getKnobs().captureMaxAuto) return
-  try {
-    mkdirSync(STAGING_DIR, { recursive: true })
-    const file = join(STAGING_DIR, `capture-${Date.now()}-${tag}.png`)
-    writeFileSync(file, buf)
-    stagedAttachments.push({ path: file, auto: true })
-    broadcastStaged()
-    log.event('capture-staged', { file, via: tag })
-  } catch (e) { log.warn('stageBuffer failed', { error: (e as Error).message }) }
-}
-
-/** Stage screenshot FILES newer than `sinceMs`. Scans the system screenshot
- *  location PLUS common user arrangements (a Screenshots subfolder on the
- *  Desktop / in the location). Inside a dedicated Screenshots folder any image
- *  counts; elsewhere only Screenshot-named files (never random Desktop pngs). */
-function stageRecentScreenshotFiles(sinceMs: number): void {
-  const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
-  const base = screenshotDir()
-  const dirs = [
-    { dir: base, anyImage: false },
-    { dir: join(base, 'Screenshots'), anyImage: true },
-    { dir: join(homedir(), 'Desktop', 'Screenshots'), anyImage: true },
-  ]
-  for (const { dir, anyImage } of dirs) {
-    let entries: string[]
-    try { entries = readdirSync(dir) } catch { continue }
-    let matched = 0
-    for (const entry of entries) {
-      if (stagedAttachments.length >= getKnobs().captureMaxAuto) break
-      if (!/\.(png|jpe?g)$/i.test(entry)) continue
-      if (!anyImage && !/^screen ?shot/i.test(entry)) continue
-      const full = join(dir, entry)
-      try {
-        const st = statSync(full)
-        if (st.mtimeMs > sinceMs && !stagedAttachments.some((s) => s.path === full)) {
-          matched++
-          stagedAttachments.push({ path: full, auto: true }) // reference in place — never copy/move user files
-          broadcastStaged()
-          log.event('capture-staged', { file: full, via: 'file' })
-        }
-      } catch { /* skip */ }
-    }
-    if (matched) log.event('capture-sweep', { dir, matched, sinceMs })
-  }
-}
-
-/** A capture began (remote OR dictation): sweep the pre-hold window, then watch live.
- *
- *  PERFORMANCE IS SACRED HERE: this runs WHILE audio is being recorded. Reading
- *  the clipboard image means decoding + PNG-encoding a potentially huge Retina
- *  screenshot on the main process — doing that on an interval stalled the
- *  recording pipeline and corrupted the audio (ffmpeg: "Invalid data"). So the
- *  clipboard is read exactly TWICE per capture — once at start (pre-hold sweep),
- *  once at stop — never on a timer. Only the cheap file-dir scan polls live
- *  (readdir + stat, microseconds), so ⌘⇧3/⌘⇧4 file captures still count up in
- *  real time; a ⌃-clipboard capture taken mid-hold appears when the key lifts. */
-function startCaptureWatch(): void {
-  if (settings.get('captureEnabled') === false) return // feature off — never touch screenshots
-  captureWatchGen++
-  if (captureWatchTimer) clearInterval(captureWatchTimer)
-  const startedAt = Date.now()
-  pendingClipboardCount = 0
-  // CLEAR-FIRST (the lifecycle rule's backstop): any auto-captured screenshot
-  // still in the tray belongs to a PREVIOUS window that ended without
-  // delivering — it must never ride this one.
-  purgeAutoStaged('new-capture-window')
-  log.event('capture-watch-start', { dir: screenshotDir() })
-  // DURING-DICTATION ONLY (the whole idea): what existed before key-down never
-  // attaches. Baseline probe LEARNS the pre-existing clipboard image (markOnly);
-  // file sweeps start from startedAt. Zero main-thread image work while
-  // recording — the osascript child does all pasteboard reads (the ONLY reader;
-  // a second reader with a different PNG encoder is what duplicated pastes).
-  clipBaselined = false
-  probeClipboardViaChild(true)
-  captureWatchTimer = setInterval(() => {
-    stageRecentScreenshotFiles(startedAt)
-    // Staging unlocks only once a baseline has COMPLETED for this window; until
-    // then each tick retries the baseline (learn-only) instead.
-    probeClipboardViaChild(!clipBaselined)
-  }, 900)
-  ;(captureWatchTimer as { unref?: () => void }).unref?.()
-}
-
-
-/** Kill every AUTO-captured screenshot in the tray (files we copied into our
- *  own staging dir are deleted; referenced user files are only de-listed).
- *  THE lifecycle rule: an ambient screenshot lives from capture-start to
- *  delivery — a window that ends without delivering forfeits its captures.
- *  Explicit paste/drop stages are deliberate and survive (tray design). */
-function purgeAutoStaged(reason: string): void {
-  const auto = stagedAttachments.filter((s) => s.auto)
-  if (!auto.length) return
-  stagedAttachments = stagedAttachments.filter((s) => !s.auto)
-  for (const { path } of auto) {
-    // Only ever delete OUR copies — a swept Desktop screenshot is the user's file.
-    if (path.startsWith(STAGING_DIR)) {
-      try { (require('node:fs') as typeof import('node:fs')).rmSync(path, { force: true }) } catch { /* best-effort */ }
-    }
-  }
-  log.event('auto-staged-purged', { count: auto.length, reason })
-  broadcastStaged()
-}
-
-function stopCaptureWatch(opts: { purgeAuto?: boolean } = {}): void {
-  if (captureWatchTimer) { clearInterval(captureWatchTimer); captureWatchTimer = null }
-  pendingClipboardCount = 0
-  // A window closing WITHOUT delivery forfeits its auto-captures (discard,
-  // cancel, empty transcript, the 20s safety stop). The delivery path calls
-  // with purgeAuto:false because takeStaged() is about to take everything.
-  if (opts.purgeAuto) purgeAutoStaged('watch-closed-undelivered')
-  broadcastStaged()
-}
-
-/** Dictation delivery seam (clipboard.ts calls this after pasting the text):
- *  hand over everything staged and close the watch window. The ledger's contract
- *  holds across BOTH capture kinds — what the pill showed is what got delivered. */
 /**
  * Hide the native input surface, whatever the renderer thinks its state is.
  *
@@ -1594,32 +1334,6 @@ function stopCaptureWatch(opts: { purgeAuto?: boolean } = {}): void {
  */
 export function hideNativePill(): void {
   pillController?.hide()
-}
-
-export function consumeStagedForDictation(): string[] {
-  stopCaptureWatch({ purgeAuto: false }) // delivery: takeStaged() takes it all
-  return takeStaged()
-}
-/** Consume the tray (one landing takes everything). */
-function takeStaged(): string[] {
-  if (!stagedAttachments.length) return []
-  const taken = stagedAttachments.map((s) => s.path)
-  stagedAttachments = []
-  broadcastStaged()
-  return taken
-}
-/** Type staged paths into a live session's input (unsubmitted — the payload that
- *  follows submits them together). Best-effort. */
-function typeStagedInto(taskId: string, staged: string[]): void {
-  if (!staged.length || !manager) return
-  manager.sendInput(taskId, ` ${staged.join(' ')} `)
-  log.event('staged-delivered', { taskId, count: staged.length, via: 'typed' })
-}
-/** Fold staged paths into a NEW task's intent (Claude Code reads images by path). */
-function intentWithStaged(intent: string, staged: string[]): string {
-  if (!staged.length) return intent
-  log.event('staged-delivered', { count: staged.length, via: 'intent' })
-  return `${intent}\n[The user attached ${staged.length} image${staged.length === 1 ? '' : 's'} — view: ${staged.join(' ')}]`
 }
 
 // ── Voice-as-doorbell (§6.4): one terse spoken headline when a task becomes
@@ -1846,8 +1560,6 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
   }
   const raw = (rawTranscript || '').trim()
   if (!raw) { log.warn('empty transcript — not dispatching', {}); return null }
-  // The staging tray rides with THIS utterance to wherever it lands.
-  const staged = takeStaged()
 
   // 0. ORCHESTRATE FOCUS short-circuit (§6.2). If the wall is focused on a session,
   //    the utterance goes THERE — deterministically, bypassing the router. This is
@@ -1863,13 +1575,11 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
     const text = completeFn ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
     const awaiting = manager.tasksAwaitingUser().some((t) => t.id === fid)
     if (awaiting) {
-      typeStagedInto(fid, staged) // images + answer submit as one message
       manager.answer(fid, text)
       log.event('routed-to-focus', { taskId: fid, kind: 'answer' })
       pendingBeat = '' // the stage is on screen — the beat would be noise
       return fid
     }
-    typeStagedInto(fid, staged)
     if (manager.followUp(fid, text)) {
       log.event('routed-to-focus', { taskId: fid, kind: 'continue' })
       pendingBeat = ''
@@ -2025,7 +1735,6 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
           const targetName = (target?.name || target?.intent || 'it').slice(0, 50)
           if (awaitingIds.has(tid)) {
             log.event('routed-as-answer', { taskId: tid, via: 'router' })
-            typeStagedInto(tid, staged)
             manager.answer(tid, withSkill(decision.intent || raw))
             // Assign-once grouping: the router may group the task it acted on,
             // never regroup one that already has a group (freeze).
@@ -2034,7 +1743,6 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
             return tid
           }
           const targetBusy = target?.state === 'processing' // mid-turn — the follow-up will queue
-          typeStagedInto(tid, staged)
           if (manager.followUp(tid, withSkill(decision.intent))) {
             log.event('routed-as-continuation', { taskId: tid, via: 'router' })
             // Assign-once grouping — covers graduation too: a one-off's 2nd
@@ -2105,7 +1813,6 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
         log.event('routed-as-resume', { taskId: tid, via: 'router' })
         try {
           if (await manager.resume(tid)) {
-            typeStagedInto(tid, staged) // images + words submit as one message
             if (manager.followUp(tid, withSkill(decision.intent || raw))) {
               pendingBeat = `Continuing ${(manager.get(tid)?.name || 'it').slice(0, 50)}.`
               return tid
@@ -2139,7 +1846,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // between the probe and the dispatch, the task lands on Claude with a log
       // rather than throwing in the user's face mid-sentence.
       const chosenAgent = await resolveAgent(decision.agent, avail)
-      const newId = await manager.dispatch(intentWithStaged(intentText, staged), {
+      const newId = await manager.dispatch(intentText, {
         surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir,
         agent: chosenAgent,
         ...(chosenAgent === 'codex-desktop' ? { project: decision.codexProject ?? null } : {}),
@@ -2186,7 +1893,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
   //    executor tolerates raw); use the managed LLM only if it's wired.
   const cleaned = completeFn ? (await cleanIntent(raw, completeFn)).intent : raw
   if (!cleaned) { log.warn('empty intent after cleanup — not dispatching', {}); return null }
-  return manager.dispatch(intentWithStaged(cleaned, staged), { mode: injectionDisabled() ? 'raw' : undefined })
+  return manager.dispatch(cleaned, { mode: injectionDisabled() ? 'raw' : undefined })
 }
 
 /** Read the current Remote trigger key (derived from the dictation key, §2.4.4). */
@@ -2232,21 +1939,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   const runId = String(Date.now())
   const logFile = configureRemoteLogging({ dir: logDir, runId })
   log.event('init-remote', { logFile, permissionMode: settings.get('permissionMode') })
-
-  // Staging hygiene: clipboard screenshots are WRITTEN to the staging dir (file
-  // screenshots are only referenced, never copied) and can't be deleted at send
-  // time — a Remote session may read the path minutes later. Age-sweep instead:
-  // anything older than 48h goes, once per launch. Keeps the disk honest.
-  try {
-    const { readdirSync, statSync, rmSync } = require('node:fs') as typeof import('node:fs')
-    const cutoff = Date.now() - 48 * 3600_000
-    let swept = 0
-    for (const entry of readdirSync(STAGING_DIR)) {
-      const full = join(STAGING_DIR, entry)
-      try { if (statSync(full).mtimeMs < cutoff) { rmSync(full, { force: true }); swept++ } } catch { /* skip */ }
-    }
-    if (swept) log.event('staging-swept', { swept })
-  } catch { /* staging dir doesn't exist yet — fine */ }
 
   // Resolve tmux once: if present, sessions run inside it so the live terminal
   // can be popped out to a real terminal app (same session). Write the minimal
@@ -2540,8 +2232,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         },
         getDoorbell: () => settings.get('voiceHeadlines') !== false,
         setDoorbell: (on) => settings.set('voiceHeadlines', !!on),
-        getStagedCount: () => stagedAttachments.length,
-        clearStaged: () => { stagedAttachments = []; broadcastStaged() },
         getLastSeen: () => notchLastSeen,
         setLastSeen: (ms) => { notchLastSeen = ms },
         // (pill deps are wired separately, below — see PillController)
@@ -2695,7 +2385,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           log.event('agent-set', { agent: a, from: 'pill' })
           void pushPillChips()   // see pickModel — the label must follow the setting
         },
-        clearStaged: () => { stagedAttachments = []; broadcastStaged() },
       })
 
       // Push the stored preference immediately: the helper starts on 'system',
@@ -2823,21 +2512,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       resumeOverlayEscape() // give Escape back to a still-visible overlay
       void deps.sessionManager.stopRemoteCapture()
       broadcastCapturePhase('transcribing')
-    } else if (e.type === 'session-start') {
-      // DICTATION captures get the screenshot ledger too (the pill 🖼 chip):
-      // capture-while-dictating pastes the images into the target app right
-      // after the text (see clipboard.ts injectOutput). Watch-only — the
-      // dictation flow itself is untouched.
-      startCaptureWatch()
-    } else if (e.type === 'session-stop') {
-      // Key lifted → recording ended → secure a last-second ⌃-shot, then clear
-      // the clipboard if this capture consumed images — so the text paste later
-      // never races a slow image payload. Transcription absorbs the latency.
-      secureClipboard()
-      // Safety stop for a cancelled/failed dictation (generation-guarded:
-      // never kills a NEWER capture's watch).
-      const gen = captureWatchGen
-      setTimeout(() => { if (captureWatchGen === gen) stopCaptureWatch({ purgeAuto: true }) }, 20_000)
     }
   })
 
@@ -3126,7 +2800,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:set-agent-tasks', async (_e, on: boolean) => { settings.set('agentTasksEnabled', !!on); return true })
   ipcMain.handle('remote:set-screenshot-capture', async (_e, on: boolean) => {
     settings.set('captureEnabled', !!on)
-    if (!on) stopCaptureWatch() // kill a live watcher immediately on disable
     log.event('screenshot-capture-set', { on: !!on })
     return true
   })
@@ -3435,48 +3108,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:set-note', async (_e, id: string, note: string) => {
     if (!manager) return false
     manager.setNote(id, typeof note === 'string' ? note : '')
-    return true
-  })
-  // Staging tray: stage an image with no target (rides with the next utterance).
-  ipcMain.handle('remote:stage-image', async (_e, data: ArrayBuffer, ext: string) => {
-    try {
-      mkdirSync(STAGING_DIR, { recursive: true })
-      const safeExt = (ext || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
-      const file = join(STAGING_DIR, `staged-${Date.now()}-${stagedAttachments.length}.${safeExt}`)
-      writeFileSync(file, Buffer.from(data))
-      stagedAttachments.push({ path: file, auto: false }) // explicit — rides to the next utterance
-      broadcastStaged()
-      log.event('image-staged', { file, count: stagedAttachments.length })
-      return file
-    } catch (e) {
-      log.warn('stage-image failed', { error: (e as Error).message })
-      return null
-    }
-  })
-  ipcMain.handle('remote:get-staged', async () => stagedAttachments.map((s) => s.path))
-  // Thumbnails for the pill ledger's dropdown — you can't judge "should I remove
-  // this?" from a number. Small data-URLs (CSP-proof; file:// is blocked in the
-  // renderer), freshly derived per call.
-  ipcMain.handle('remote:staged-previews', async () => {
-    // While a capture is live, decoding images for thumbnails is the SAME class
-    // of main-thread work that corrupted recordings — placeholder rows instead;
-    // real previews the moment the capture ends.
-    if (captureWatchTimer) return stagedAttachments.map(({ path }) => ({ path, dataUrl: '' }))
-    const { nativeImage } = require('electron') as typeof import('electron')
-    return stagedAttachments.map(({ path }) => {
-      try {
-        const img = nativeImage.createFromPath(path)
-        if (img.isEmpty()) return { path, dataUrl: '' }
-        return { path, dataUrl: img.resize({ height: 80 }).toDataURL() }
-      } catch { return { path, dataUrl: '' } }
-    })
-  })
-  ipcMain.handle('remote:clear-staged', async () => { stagedAttachments = []; broadcastStaged(); return true })
-  // Prune one staged image (the pill strip's ✕) — reversibility before send.
-  ipcMain.handle('remote:unstage-image', async (_e, path: string) => {
-    const before = stagedAttachments.length
-    stagedAttachments = stagedAttachments.filter((s) => s.path !== path)
-    if (stagedAttachments.length !== before) broadcastStaged()
     return true
   })
   // Attach an image to a session (voice-era screenshot paste/drag). Bytes arrive

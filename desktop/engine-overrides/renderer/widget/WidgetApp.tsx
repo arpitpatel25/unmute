@@ -237,9 +237,9 @@ function RemoteBadge({ picker, onPickAgent }: {
   )
 
   // The selector opens DOWNWARD (a dropdown below the pill row) so it scales to
-  // ANY number of catalog models — a horizontal reveal can't. Same seam the
-  // staged-images dropdown uses: grow the HUD window while open so the list
-  // isn't clipped, restore the 72px default on close/unmount.
+  // ANY number of catalog models — a horizontal reveal can't. Grow the HUD
+  // window while open so the list isn't clipped, restoring the 72px default on
+  // close/unmount.
   useEffect(() => {
     const api = remoteModelApi()
     const rows = panelRows(isCodex, axes, catalog.length)
@@ -450,142 +450,6 @@ function RemoteBadge({ picker, onPickAgent }: {
               >
                 {c.label}
               </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Staged-images chip (the attachment LEDGER, shown only during a Remote
-// capture). Screenshots captured while addressing Unmute — or in the short
-// window just before — stage automatically; this chip is the truth of what
-// rides with the utterance: 🖼 n, hover → numbered ✕ buttons to prune. What
-// you see is what sends. Same chip family as the model badge: dark fill,
-// whitish border, NO shadow, horizontal glide (nothing pops outside the
-// widget window).
-function stagedApi() {
-  return window.electronAPI as unknown as {
-    remoteGetStaged?: () => Promise<string[]>
-    remoteOnStagedChanged?: (cb: (d: { count: number; paths: string[]; pending?: number }) => void) => () => void
-    remoteUnstageImage?: (path: string) => Promise<boolean>
-    remoteGetStagedPreviews?: () => Promise<Array<{ path: string; dataUrl: string }>>
-    paywallSetHUDHeight?: (height: number) => Promise<boolean>
-  }
-}
-
-// Clean line-drawn image glyph (currentColor, no emoji).
-function ImageGlyph() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <rect x="3" y="3" width="18" height="18" rx="3" />
-      <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
-      <path d="M21 15l-5-5L5 21" />
-    </svg>
-  )
-}
-
-function StagedImagesChip() {
-  const [paths, setPaths] = useState<string[]>([])
-  const [pending, setPending] = useState(0) // clipboard screenshot noticed mid-recording (readable only at key-lift)
-  const [previews, setPreviews] = useState<Array<{ path: string; dataUrl: string }>>([])
-  const [expanded, setExpanded] = useState(false)
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    const api = stagedApi()
-    void api.remoteGetStaged?.().then((p) => { if (Array.isArray(p)) setPaths(p) })
-    const off = api.remoteOnStagedChanged?.((d) => { setPaths(d.paths ?? []); setPending(d.pending ?? 0) })
-    return () => off?.()
-  }, [])
-  // Refresh thumbnails whenever the dropdown is open and the set changes.
-  useEffect(() => {
-    if (!expanded) return
-    void stagedApi().remoteGetStagedPreviews?.().then((p) => { if (Array.isArray(p)) setPreviews(p) })
-  }, [expanded, paths])
-  // The dropdown extends below the pill row — grow the (72px) HUD window while
-  // open, restore on close/unmount. Same seam the awareness card uses.
-  useEffect(() => {
-    const api = stagedApi()
-    const rows = paths.length + pending
-    if (expanded && rows) void api.paywallSetHUDHeight?.(Math.min(220, 60 + rows * 42 + 16))
-    else void api.paywallSetHUDHeight?.(72)
-    return () => { void stagedApi().paywallSetHUDHeight?.(72) }
-  }, [expanded, paths.length, pending])
-  useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
-
-  const total = paths.length + pending
-  if (total === 0) return null
-
-  const open = () => {
-    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null }
-    setExpanded(true)
-  }
-  const scheduleClose = () => { closeTimer.current = setTimeout(() => setExpanded(false), 200) }
-
-  return (
-    <div
-      style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center', position: 'relative' }}
-      onMouseEnter={open}
-      onMouseLeave={scheduleClose}
-    >
-      <div
-        style={{
-          height: 44,
-          borderRadius: 9999,
-          background: '#000',
-          border: '1px solid rgba(255, 255, 255, 0.55)',
-          boxShadow: 'none',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 12px',
-          gap: 6,
-          color: 'rgba(255,255,255,0.85)',
-        }}
-      >
-        <ImageGlyph />
-        <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>{total}</span>
-      </div>
-
-      {/* vertical dropdown: one row per image — thumbnail preview + remove */}
-      {expanded && (
-        <div
-          style={{
-            position: 'absolute', top: 48, left: 0, minWidth: 168,
-            background: '#000', border: '1px solid rgba(255,255,255,0.35)',
-            borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 4,
-            zIndex: 10,
-          }}
-        >
-          {pending > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ width: 56, height: 34, borderRadius: 5, background: 'rgba(255,255,255,0.08)', flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.35)' }}>
-                <ImageGlyph />
-              </div>
-              <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.55)', flex: 1 }}>
-                screenshot — attaches when you release
-              </span>
-            </div>
-          )}
-          {paths.map((p) => {
-            const preview = previews.find((v) => v.path === p)?.dataUrl
-            return (
-              <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {preview ? (
-                  <img src={preview} alt="" style={{ width: 56, height: 34, objectFit: 'cover', borderRadius: 5, border: '1px solid rgba(255,255,255,0.15)', flex: 'none' }} />
-                ) : (
-                  <div style={{ width: 56, height: 34, borderRadius: 5, background: 'rgba(255,255,255,0.08)', flex: 'none' }} />
-                )}
-                <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.55)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, maxWidth: 120 }}>
-                  {p.split('/').pop()}
-                </span>
-                <button
-                  title="Remove — won't be sent"
-                  onClick={() => void stagedApi().remoteUnstageImage?.(p)}
-                  style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)', fontSize: 13, lineHeight: 1, padding: '4px 6px', cursor: 'pointer', flex: 'none' }}
-                >✕</button>
-              </div>
             )
           })}
         </div>
@@ -1420,7 +1284,6 @@ export default function WidgetApp() {
         {(state === 'dictation-active' || state === 'instruction-active') && !micStatus && !noisyEnvironment && tooQuiet && (
           <HintChip accent="#38bdf8" label="Too quiet" detail={captureSource === 'iphone' ? 'speak up a little' : 'bring the mic closer'} icon="mic" />
         )}
-        {pillShowing && <StagedImagesChip />}
         {/* mic-source glyph: exists ONLY while an iPhone mic is actually
             around — no phone, no chip, no greyed-out icon begging attention.
             Laptop vs phone tells the truth about what's listening; a tap

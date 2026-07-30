@@ -160,7 +160,6 @@ struct PillState: Codable, Equatable {
     /// One line of mic narration, shown for a few seconds and then dropped.
     /// "chip colours are ambience, WORDS are communication."
     var micStatus: String? = nil
-    var stagedCount: Int = 0
     var raw: Bool? = nil
     var micOptions: [PillOption]? = nil
     var mic: String? = nil
@@ -204,7 +203,6 @@ struct PillState: Codable, Equatable {
         agentOptions = try? c.decodeIfPresent([PillOption].self, forKey: .agentOptions)
         agentConnected = v(.agentConnected, true)
         micStatus    = try? c.decodeIfPresent(String.self, forKey: .micStatus)
-        stagedCount  = v(.stagedCount, 0)
         raw          = try? c.decodeIfPresent(Bool.self, forKey: .raw)
         micOptions   = try? c.decodeIfPresent([PillOption].self, forKey: .micOptions)
         mic          = try? c.decodeIfPresent(String.self, forKey: .mic)
@@ -229,7 +227,6 @@ enum PillEvent {
     case pickAgent(String)
     case pickMic(String)
     case toggleRaw(Bool)
-    case clearStaged
     case openBillingPortal
     case dismissOffline
 
@@ -245,7 +242,6 @@ enum PillEvent {
         case let .pickAgent(v):     return ["type": "pillPickAgent", "value": v]
         case let .pickMic(v):       return ["type": "pillPickMic", "value": v]
         case let .toggleRaw(v):     return ["type": "pillToggleRaw", "value": v]
-        case .clearStaged:          return ["type": "pillClearStaged"]
         case .openBillingPortal:    return ["type": "pillOpenBillingPortal"]
         case .dismissOffline:       return ["type": "pillDismissOffline"]
         }

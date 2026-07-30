@@ -194,7 +194,6 @@ struct PillView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.bottom, 4)
         .animation(Theme.morph, value: s.phase)
-        .animation(Theme.morph, value: s.stagedCount)
         .onChange(of: s.phase) { p in if p != .recording && p != .processing { selectorOpen = false } }
     }
 
@@ -228,10 +227,6 @@ struct PillView: View {
             pill.pillGlass(Capsule(), tint: pillTint)
 
             if chipsVisible {
-                if s.stagedCount > 0 {
-                    StagedChip(count: s.stagedCount) { model.emit(.clearStaged) }
-                        .pillGlass(Capsule())
-                }
                 if let opts = s.micOptions, opts.count > 1 {
                     MicChip(current: s.mic, options: opts) { model.emit(.pickMic($0)) }
                         .pillGlass(Capsule())
@@ -718,29 +713,6 @@ private struct RawChip: View {
         }
         .buttonStyle(.plain)
         .help(on ? "Raw — no unmute memory injected" : "Unmute memory is injected")
-    }
-}
-
-private struct StagedChip: View {
-    let count: Int
-    let onClear: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        ChipBody {
-            Image(systemName: "photo.on.rectangle")
-                .font(.system(size: 11)).foregroundColor(Theme.textDim)
-            Text("\(count)").font(.system(size: 12.5, weight: .medium)).foregroundColor(Theme.text)
-            if hovering {
-                Button(action: onClear) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11)).foregroundColor(Theme.textFaint)
-                }.buttonStyle(.plain)
-            }
-        }
-        .onHover { hovering = $0 }
-        .animation(Theme.hover, value: hovering)
-        .help("\(count) image\(count == 1 ? "" : "s") ride with this utterance")
     }
 }
 

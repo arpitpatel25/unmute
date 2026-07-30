@@ -113,8 +113,6 @@ export interface NotchControllerDeps {
   acceptRouteOffer(newTaskId: string): Promise<boolean> | boolean
   getDoorbell(): boolean
   setDoorbell(on: boolean): void
-  getStagedCount(): number
-  clearStaged(): void
   getLastSeen(): number
   setLastSeen(ms: number): void
 }
@@ -310,7 +308,6 @@ export class NotchController {
     on('digestDismiss', () => { this.digestDismissed = true; this.digestText = null; this.reconcile() })
     on('bellToggle', () => { this.deps.setDoorbell(!this.deps.getDoorbell()); this.reconcile() })
     on('offerAccept', (e) => void this.onOfferAccept((e as { newTaskId: string }).newTaskId))
-    on('clearStaged', () => { this.deps.clearStaged(); this.reconcile() })
     on('openArtifact', (e) => { const { artifactType, value } = e as { artifactType: 'url' | 'path'; value: string }; this.deps.openArtifact(artifactType, value) })
     on('openInTerminal', (e) => this.deps.openInTerminal((e as { id: string }).id))
     on('termOpen', (e) => this.onTermOpen((e as { id: string }).id))
@@ -653,8 +650,6 @@ export class NotchController {
     this.reconcile()
   }
 
-  notifyStagedChanged(): void { this.scheduleReconcile() }
-
   private titleOf(id: string): string | undefined {
     const t = this.deps.getTask(id)
     return t ? (t.name ?? truncate(t.intent)) : undefined
@@ -933,7 +928,6 @@ export class NotchController {
       skills: this.skills.filter((s) => s.origin !== 'unmute'),
       shelf,
       digest: this.digestText,
-      stagedCount: this.deps.getStagedCount(),
       doorbell: this.deps.getDoorbell(),
       routeOffer: this.routeOffer,
       tmuxAvailable: this.deps.tmuxAvailable(),

@@ -164,21 +164,6 @@ export const remotePreloadExtensions = {
   /** Rename a task (names are voice addresses — fixable by the user). */
   remoteRenameTask: (id: string, name: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:rename-task', id, name),
-  /** Staging tray: stage an image with NO target — it rides with the next
-   *  utterance to wherever that lands (new task / continuation / answer). */
-  remoteStageImage: (data: ArrayBuffer, ext: string): Promise<string | null> =>
-    ipcRenderer.invoke('remote:stage-image', data, ext),
-  remoteGetStaged: (): Promise<string[]> => ipcRenderer.invoke('remote:get-staged'),
-  remoteClearStaged: (): Promise<boolean> => ipcRenderer.invoke('remote:clear-staged'),
-  remoteUnstageImage: (path: string): Promise<boolean> => ipcRenderer.invoke('remote:unstage-image', path),
-  /** Small data-URL thumbnails of the staged images (for the pill dropdown). */
-  remoteGetStagedPreviews: (): Promise<Array<{ path: string; dataUrl: string }>> =>
-    ipcRenderer.invoke('remote:staged-previews'),
-  remoteOnStagedChanged: (cb: (d: { count: number; paths: string[] }) => void): (() => void) => {
-    const handler = (_e: unknown, d: { count: number; paths: string[] }) => cb(d)
-    ipcRenderer.on('remote:staged-changed', handler)
-    return () => ipcRenderer.removeListener('remote:staged-changed', handler)
-  },
   /** All tasks, newest first (PRD §13.3 panel + §13.5 history). */
   remoteList: (): Promise<RemoteTaskSnapshot[]> => ipcRenderer.invoke('remote:list'),
   /** Answer a needs-user question — piped into the session stdin (PRD §7). */

@@ -175,7 +175,6 @@ struct CockpitData: Codable {
     let skills: [SkillP]
     let shelf: [ShelfItemP]
     let digest: String?        // "while you were away: …" or nil
-    let stagedCount: Int
     let doorbell: Bool
     let routeOffer: RouteOfferP?
     let tmuxAvailable: Bool
@@ -311,7 +310,6 @@ enum Event {
     case digestDismiss
     case bellToggle
     case offerAccept(newTaskId: String)
-    case clearStaged
     case openArtifact(type: String, value: String)
     case openInTerminal(id: String)
     case termOpen(id: String)                      // start streaming PTY output
@@ -357,7 +355,6 @@ enum Event {
         case .digestDismiss: return ["type": "digestDismiss"]
         case .bellToggle: return ["type": "bellToggle"]
         case .offerAccept(let id): return ["type": "offerAccept", "newTaskId": id]
-        case .clearStaged: return ["type": "clearStaged"]
         case .openArtifact(let type, let value): return ["type": "openArtifact", "artifactType": type, "value": value]
         case .openInTerminal(let id): return ["type": "openInTerminal", "id": id]
         case .termOpen(let id): return ["type": "termOpen", "id": id]

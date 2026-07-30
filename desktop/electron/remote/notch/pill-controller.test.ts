@@ -21,7 +21,6 @@ function harness() {
     pickAxis: (axis: string, value: string) => calls.push(`pickAxis:${axis}=${value}`),
     pickMic: (id: string) => calls.push(`pickMic:${id}`),
     toggleRaw: (on: boolean) => calls.push(`toggleRaw:${on}`),
-    clearStaged: () => calls.push('clearStaged'),
     openBillingPortal: () => calls.push('openBillingPortal'),
     dismissOffline: () => calls.push('dismissOffline'),
   }
@@ -98,13 +97,12 @@ describe('PillController events', () => {
     h.fire({ type: 'pillPickAxis', axis: 'Effort', value: 'High' })
     h.fire({ type: 'pillPickMic', value: 'iphone' })
     h.fire({ type: 'pillToggleRaw', value: true })
-    h.fire({ type: 'pillClearStaged' })
     h.fire({ type: 'pillOpenBillingPortal' })
     h.fire({ type: 'pillDismissOffline' })
     assert.deepEqual(h.calls, [
       'stop', 'cancel', 'undo', 'acceptDraft',
       'pickModel:opus', 'pickAgent:codex-desktop', 'cycleAgent', 'pickAxis:Effort=High', 'pickMic:iphone',
-      'toggleRaw:true', 'clearStaged', 'openBillingPortal', 'dismissOffline',
+      'toggleRaw:true', 'openBillingPortal', 'dismissOffline',
     ])
   })
 
@@ -148,11 +146,11 @@ describe('PillController events', () => {
 describe('PillController.hide', () => {
   test('clears prior state so a stale chip cannot survive into the next capture', () => {
     const h = harness()
-    h.c.push({ phase: 'recording', stagedCount: 3, model: 'Opus' })
+    h.c.push({ phase: 'recording', micStatus: 'iPhone', model: 'Opus' })
     h.c.hide()
     assert.deepEqual(h.state(), { phase: 'hidden' })
     h.c.push({ phase: 'recording' })
-    assert.equal(h.state()?.stagedCount, undefined)
+    assert.equal(h.state()?.micStatus, undefined)
     assert.equal(h.state()?.model, undefined)
   })
 })

@@ -71,7 +71,6 @@ export interface PillStateP {
   agentConnected?: boolean
   /** One line of mic narration, shown briefly beside the pill. */
   micStatus?: string | null
-  stagedCount?: number
   /** null CLEARS the chip (Codex has nothing for raw to skip). */
   raw?: boolean | null
   micOptions?: PillOptionP[]
@@ -103,8 +102,6 @@ export interface PillControllerDeps {
   pickMic(id: string): void
   /** Session-scoped raw override. */
   toggleRaw(on: boolean): void
-  /** Drop every staged image. */
-  clearStaged(): void
   /** Open the Dodo customer portal (payment-failed recovery). */
   openBillingPortal(): void
   /** Dismiss the offline-awareness card for this app session. */
@@ -174,7 +171,6 @@ export class PillController {
       }
       case 'pillPickMic':     if (value) this.deps.pickMic(value); break
       case 'pillToggleRaw':   this.deps.toggleRaw(e.value === true); break
-      case 'pillClearStaged': this.deps.clearStaged(); break
       case 'pillOpenBillingPortal': this.deps.openBillingPortal(); break
       case 'pillDismissOffline':    this.deps.dismissOffline(); break
       default: return // not ours — the notch controller handles the rest
