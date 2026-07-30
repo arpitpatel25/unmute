@@ -88,7 +88,30 @@ export function createClipboardWatch(deps: ClipboardWatchDeps): ClipboardWatch {
     busy = true
     try {
       if (deps.hasImage()) {
-        const path = await deps.rescueImage(padDir)
+        // The rescue is a child-process spawn — it can REJECT (spawn failure,
+        // non-zero exit, IPC error), not just resolve null. A rejection must
+        // never escape tick(): start()'s interval callback discards it with
+        // `void`, and an unhandled rejection kills the Node process, which is
+        // exactly the failure this module exists to prevent. Degrade to "no
+        // insert" instead.
+        //
+        // If a second real copy happens while this rescue is still in flight,
+        // the FIRST one is unrecoverable — the pasteboard is a single slot and
+        // the newer content has already overwritten it by the time we could
+        // have read the old one. That loss is inherent, not a bug: lastSeen
+        // still advances to the newest changeCount, so no copy is silently
+        // skipped — the earlier one was simply never readable to begin with.
+        let path: string | null = null
+        try {
+          path = await deps.rescueImage(padDir)
+        } catch {
+          path = null
+        }
+        // The capture window may have closed (disarm()) while we were
+        // awaiting the rescue. Consent is checked at delivery time too, not
+        // just at detection time — an insert must never land after the mic
+        // has gone cold.
+        if (!armed) return
         if (path) deps.onInsert({ kind: 'image', content: path, atMs: seenAt })
         return
       }

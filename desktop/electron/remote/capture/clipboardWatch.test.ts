@@ -124,6 +124,71 @@ describe('content', () => {
     await h.w.tick()
     assert.equal(h.inserts.length, 0)
   })
+
+  test('a platform that BECOMES unobservable after arming never fires', async () => {
+    // Arm while genuinely observable (a positive baseline), then have the
+    // count move AND simultaneously the platform report -1. The `c === lastSeen`
+    // check alone would let this slip through (c=-1 differs from lastSeen=100);
+    // it is the `c < 0` guard that must catch it.
+    let observable = true
+    let count = 100
+    const inserts: { kind: InsertKind; content: string; atMs: number }[] = []
+    const deps: ClipboardWatchDeps = {
+      changeCount: () => (observable ? count : -1),
+      readText: () => 'https://a.com',
+      hasImage: () => false,
+      rescueImage: async () => '/staged/shot.png',
+      exists: () => false,
+      now: () => 1000,
+      onInsert: (i) => { inserts.push(i) },
+    }
+    const w = createClipboardWatch(deps)
+    w.arm('/pad') // baseline while observable: lastSeen = 100
+    count += 1 // 101 — a real change happened
+    observable = false // but the platform now reports -1
+    await w.tick()
+    assert.equal(inserts.length, 0)
+  })
+
+  test('a rescue that REJECTS produces no insert, does not throw out of tick(), and releases busy', async () => {
+    let shouldReject = true
+    const h = harness({
+      hasImage: () => true,
+      readText: () => '',
+      rescueImage: async () => {
+        if (shouldReject) throw new Error('spawn failed')
+        return '/staged/shot2.png'
+      },
+    })
+    h.w.arm('/pad')
+    h.bump()
+    await assert.doesNotReject(() => h.w.tick())
+    assert.equal(h.inserts.length, 0)
+
+    // busy must have been released in the finally — a later change still fires.
+    shouldReject = false
+    h.bump()
+    await h.w.tick()
+    assert.equal(h.inserts.length, 1)
+    assert.equal(h.inserts[0].content, '/staged/shot2.png')
+  })
+
+  test('disarm while a rescue is in flight drops the insert', async () => {
+    let resolveRescue: (v: string | null) => void = () => {}
+    const rescuePromise = new Promise<string | null>((resolve) => { resolveRescue = resolve })
+    const h = harness({
+      hasImage: () => true,
+      readText: () => '',
+      rescueImage: async () => rescuePromise,
+    })
+    h.w.arm('/pad')
+    h.bump()
+    const tickPromise = h.w.tick()
+    h.w.disarm()
+    resolveRescue('/staged/shot.png')
+    await tickPromise
+    assert.equal(h.inserts.length, 0)
+  })
 })
 
 describe('the clipboard is never mutated', () => {
