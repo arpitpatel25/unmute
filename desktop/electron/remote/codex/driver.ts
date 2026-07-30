@@ -209,7 +209,11 @@ export class CodexDesktopDriver {
       // away by a dictated task. We only ever raise, and only as far as
       // choosePolicy allows.
       const ORDER: CodexApprovalLevel[] = ['ask', 'approve-for-me', 'full-access']
-      const ceiling: CodexApprovalLevel = 'approve-for-me'
+      // MUST track choosePolicy's user ceiling. Hardcoding 'approve-for-me'
+      // here would early-return before the menu is ever opened, so an
+      // auto-approve user would silently stay one level short of what they
+      // asked for — the ceiling raise in approval.ts would never be reached.
+      const ceiling: CodexApprovalLevel = userMode === 'auto-approve' ? 'full-access' : 'approve-for-me'
       if (current && ORDER.indexOf(current) >= ORDER.indexOf(ceiling)) {
         log.event('codex-approval-unchanged', { level: current, userMode, atOrAbove: ceiling })
         return

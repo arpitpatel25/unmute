@@ -68,13 +68,16 @@ describe('policy choice', () => {
   const ALL = ['ask', 'approve-for-me', 'full-access'] as const
   const MANAGED = ['ask', 'approve-for-me'] as const
 
-  it('escalates an auto-approve user to approve-for-me and NEVER past it', () => {
-    // Full access is reachable only by the user's own hand. Codex guards it
-    // behind a confirmation dialog listing unrestricted files, terminal and
-    // network — a gate meant for a human to read, not for a dictated task to
-    // click through unattended. approve-for-me needs no dialog (measured) and
-    // exists on managed devices where full access is withheld outright.
-    assert.equal(choosePolicy([...ALL], 'auto-approve').level, 'approve-for-me')
+  it('gives an auto-approve user the MOST the device offers', () => {
+    // auto-approve means what it says, and the same unmute setting already
+    // gives Claude Code --dangerously-skip-permissions. Capping Codex one level
+    // lower made one switch mean two different things.
+    //
+    // Safe to raise because the level is per-thread: it is recorded in each
+    // thread's own rollout (turn_context.approval_policy) and there is no
+    // approval key in ~/.codex/config.toml, so a task we create does not
+    // reconfigure the user's manual chats. They can also lower it by hand.
+    assert.equal(choosePolicy([...ALL], 'auto-approve').level, 'full-access')
   })
 
   it('NEVER requests a level the device did not offer', () => {
@@ -101,16 +104,20 @@ describe('policy choice', () => {
   it('reports whether the chosen level can still block — the hooks trigger', () => {
     // If this were ever wrong we would stop shipping the approval channel for
     // users who need it most.
-    // Now ALWAYS true for auto-approve: approve-for-me still stops for actions
-    // Codex judges unsafe. That is precisely why the approval hook must work —
-    // capping the escalation makes the channel load-bearing, not optional.
-    assert.equal(choosePolicy([...ALL], 'auto-approve').canBlock, true)
+    // On an OPEN device full access no longer blocks on tool approvals — that
+    // is the point of asking for it. On a MANAGED device the ceiling is still
+    // approve-for-me, which does block, so the hook channel stays load-bearing
+    // for exactly the users who cannot escalate.
+    //
+    // Note this says nothing about Computer Use consents: those are a separate
+    // system, ungoverned by approval level, and they block regardless.
+    assert.equal(choosePolicy([...ALL], 'auto-approve').canBlock, false)
     assert.equal(choosePolicy([...MANAGED], 'auto-approve').canBlock, true)
     assert.equal(choosePolicy([...ALL], 'ask').canBlock, true)
   })
 
   it('maps each level to the Codex approval + sandbox pair', () => {
-    assert.equal(choosePolicy([...ALL], 'auto-approve').sandbox, 'workspace-write')
+    assert.equal(choosePolicy([...ALL], 'auto-approve').sandbox, 'danger-full-access')
     assert.equal(choosePolicy([...MANAGED], 'auto-approve').approvalPolicy, 'on-request')
     assert.equal(choosePolicy([...ALL], 'ask').sandbox, 'read-only')
   })

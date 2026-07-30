@@ -73,24 +73,32 @@ export function choosePolicy(
   const offered = LEVEL_ORDER.filter((l) => available.includes(l))
   if (!offered.length) return { level: 'ask', ...POLICIES.ask }
 
-  // THE AUTOMATIC CEILING IS 'approve-for-me', NEVER 'full-access'.
+  // ASK FOR THE MOST THE DEVICE ALLOWS. The user's unmute permission mode is
+  // the ceiling, and 'auto-approve' means exactly what it says.
   //
-  // Codex guards Full Access behind a confirmation dialog — "Turn on Full
-  // Access?", listing unrestricted files, terminal commands and network — and
-  // that dialog exists so a HUMAN reads what is being granted. We can click it
-  // (and do, if a user has already chosen that level), but choosing it FOR them
-  // on a dictated task would defeat a safety gate the vendor put there on
-  // purpose, unattended, on their whole machine.
+  // This used to stop at 'approve-for-me' even for auto-approve, on the
+  // reasoning that Codex guards Full Access behind a "Turn on Full Access?"
+  // dialog which exists for a human to read, so choosing it unattended defeated
+  // a vendor safety gate "on their whole machine".
   //
-  // 'approve-for-me' is the honest middle: one click, no confirmation dialog
-  // (measured), available on managed devices where full access is withheld
-  // entirely, and it only stops for actions Codex judges genuinely unsafe. The
-  // approval hook surfaces those in the notch, which is the point of having it.
+  // Two things were wrong with that (2026-07-31):
   //
-  // Full access remains reachable — the user sets it in Codex themselves, and
-  // the never-downgrade rule in applyApprovalPolicy leaves it alone.
+  //   1. "on their whole machine" describes what Full Access GRANTS
+  //      (unrestricted files, terminal, network) — not how long the SETTING
+  //      lasts. It is recorded per turn in each thread's own rollout
+  //      (turn_context.approval_policy) and there is no approval key in
+  //      ~/.codex/config.toml, so raising it for a task we created does not
+  //      reconfigure the user's manual chats.
+  //   2. It made auto-approve mean nothing here, while the SAME setting gives
+  //      Claude Code --dangerously-skip-permissions. One switch, two backends,
+  //      two meanings — the inconsistency was the bug.
+  //
+  // The user opted in once, deliberately, and can lower it in Codex whenever
+  // they like. The device ceiling below still does the real protecting: on a
+  // managed laptop Full Access is not offered at all, and we never invent a
+  // level the host did not report.
   const userCeiling: CodexApprovalLevel =
-    userMode === 'auto-approve' && !sandboxed ? 'approve-for-me' : 'approve-for-me'
+    userMode === 'auto-approve' && !sandboxed ? 'full-access' : 'approve-for-me'
 
   // ...and the device ceiling is the second. Take the highest offered level
   // that is at or below BOTH.
