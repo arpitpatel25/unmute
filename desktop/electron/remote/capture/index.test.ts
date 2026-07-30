@@ -8,7 +8,7 @@ import {
   beginOwnClipboardSequence, beginSegment, cancelOpenSegment, currentPad, deliver,
   discard, endOwnClipboardSequence, endSegment, getCaptureSettings, initWatchers,
   isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerPaste,
-  registerSettings, removeFromPad, setScratchpadRoot, writePadNow,
+  registerSettings, removeFromPad, setOwnSequenceCeiling, setScratchpadRoot, writePadNow,
 } from './index'
 import { deserialize, padDirFor } from './scratchpadStore'
 import { createClipboardWatch } from './clipboardWatch'
@@ -247,6 +247,116 @@ describe('our own pasteboard sequences are unobservable', () => {
     endOwnClipboardSequence(2000)
     assert.equal(clipCalls.armed.length, 0)
     assert.equal(clipCalls.starts, 0)
+  })
+
+  // The screenshot watcher is NOT suspended and fires synchronously, so a
+  // Cmd-Shift-4 landing inside the sequence really does reach recordInsert.
+  test('the CHUNKING SIGNAL is refused too, not just the pad entry', () => {
+    beginSegment('cursor', 1000, true)
+    beginOwnClipboardSequence()
+    const recorded = recordInsert(
+      { kind: 'image', content: join(root, 'shot-mid-sequence.png'), atMs: 1100 }, 1100,
+    )
+    assert.equal(recorded, false, 'recordInsert reports the refusal to its caller')
+    assert.equal(inserts().length, 0, 'and nothing reached the pad')
+    endOwnClipboardSequence(2000)
+  })
+
+  test('a normal insert reports that it WAS recorded', () => {
+    beginSegment('cursor', 1000, true)
+    assert.equal(recordInsert({ kind: 'url', content: 'https://a.com', atMs: 1100 }, 1100), true)
+    assert.equal(inserts().length, 1)
+  })
+
+  test('a deduped image reports refused, so it cannot double-signal either', () => {
+    beginSegment('cursor', 1000, true)
+    const a = join(root, 'dup-a.png')
+    const b = join(root, 'dup-b.png')
+    writeFileSync(a, 'SAME-BYTES')
+    writeFileSync(b, 'SAME-BYTES')
+    assert.equal(recordInsert({ kind: 'image', content: a, atMs: 1100 }, 1100), true)
+    assert.equal(recordInsert({ kind: 'image', content: b, atMs: 1200 }, 1200), false)
+  })
+
+  test('with no pad at all, recordInsert reports refused', () => {
+    assert.equal(recordInsert({ kind: 'url', content: 'https://a.com', atMs: 5 }, 5), false)
+  })
+
+  // init.ts is not unit-testable (it pulls in the whole remote stack), so this
+  // mirrors its onInsertRecorded helper exactly — `if (!recordInsert(…)) return`
+  // — and asserts the property that matters: the pad and the two siblings can
+  // never disagree about whether an insert happened.
+  test('BOTH siblings are gated: refused fires neither, recorded fires both', () => {
+    const broadcasts: number[] = []
+    const detects: number[] = []
+    const onInsertRecorded = (i: { kind: 'url' | 'image'; content: string; atMs: number }) => {
+      if (!recordInsert(i, Date.now())) return
+      broadcasts.push(i.atMs)
+      detects.push(i.atMs)
+    }
+
+    beginSegment('cursor', 1000, true)
+
+    beginOwnClipboardSequence()
+    onInsertRecorded({ kind: 'image', content: join(root, 'mid.png'), atMs: 1100 })
+    assert.deepEqual(broadcasts, [], 'no pad broadcast for a refused insert')
+    assert.deepEqual(detects, [], 'and NO capture:insert-detected — chunking is untouched')
+    endOwnClipboardSequence(1200)
+
+    onInsertRecorded({ kind: 'url', content: 'https://a.com', atMs: 1300 })
+    assert.deepEqual(broadcasts, [1300])
+    assert.deepEqual(detects, [1300])
+    assert.equal(inserts().length, 1, 'the pad agrees with the signals')
+  })
+})
+
+// captureSelectedText's osascript child has NO timeout, so a hung System
+// Events could otherwise hold suppression up for the rest of the recording —
+// refusing unrelated screenshot inserts the whole time. We bound the
+// suppression rather than the child.
+describe('suppression cannot outlive its purpose', () => {
+  test('a sequence that never ends expires, and observation resumes', async () => {
+    setOwnSequenceCeiling(30)
+    beginSegment('cursor', 1000, true)
+
+    const warn = console.warn
+    console.warn = () => {} // the expiry IS logged; keep it out of test output
+    try {
+      beginOwnClipboardSequence() // and never end it — the child hung
+      assert.equal(recordInsert({ kind: 'url', content: 'https://a.com', atMs: 1100 }, 1100), false)
+      await new Promise((r) => setTimeout(r, 60))
+    } finally {
+      console.warn = warn
+    }
+
+    assert.equal(clipCalls.starts, 2, 'polling was restored without the caller returning')
+    assert.equal(
+      recordInsert({ kind: 'url', content: 'https://b.com', atMs: Date.now() }, Date.now()),
+      true,
+      'capture resumed rather than staying dead for the recording',
+    )
+  })
+
+  test('a sequence that ends normally cancels its ceiling', async () => {
+    setOwnSequenceCeiling(30)
+    beginSegment('cursor', 1000, true)
+    beginOwnClipboardSequence()
+    endOwnClipboardSequence(2000)
+    const startsAfterEnd = clipCalls.starts
+    await new Promise((r) => setTimeout(r, 60))
+    assert.equal(clipCalls.starts, startsAfterEnd, 'the expiry did not fire a second resume')
+  })
+
+  test('the ceiling does not clobber a still-running NESTED sequence prematurely', () => {
+    setOwnSequenceCeiling(30)
+    beginSegment('cursor', 1000, true)
+    beginOwnClipboardSequence()
+    beginOwnClipboardSequence()
+    endOwnClipboardSequence(2000)
+    assert.equal(
+      recordInsert({ kind: 'url', content: 'https://a.com', atMs: 2100 }, 2100), false,
+      'the outer sequence is still live',
+    )
   })
 })
 

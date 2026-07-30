@@ -80,6 +80,7 @@ import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
   claimShared, currentPad, initWatchers, recordInsert, registerSettings,
 } from './capture/index'
+import type { InsertKind } from './capture/types'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
@@ -1362,6 +1363,24 @@ function rescueClipboardImageViaChild(padDir: string): Promise<string | null> {
   })
 }
 
+/** THE ONE PLACE AN INSERT BECOMES VISIBLE.
+ *
+ *  Both siblings are gated on whether the buffer actually RECORDED it.
+ *  recordInsert refuses inserts that were detected while Unmute owned the
+ *  pasteboard, and it dedups images across the two detectors — and
+ *  notifyInsertDetected reaches insertPendingRef → decideCut, which can move a
+ *  CHUNK BOUNDARY on the unarmed fast path. Firing it for an insert the pad
+ *  rejected would leave the pad and the chunking signal disagreeing about what
+ *  happened, which is the same invariant the suppression exists to protect.
+ *
+ *  screenshotWatch is synchronous and is NOT suspended during our own
+ *  pasteboard sequences, so this is a reachable path, not a theoretical one. */
+function onInsertRecorded(i: { kind: InsertKind; content: string; atMs: number }): void {
+  if (!recordInsert(i, Date.now())) return
+  broadcastScratchpad()
+  notifyInsertDetected()
+}
+
 /** Construct both watchers and hand them to the façade. Idempotent. */
 function initCaptureWatchers(): void {
   // onInsert is the ONLY path from a watcher into the buffer, so position and
@@ -1375,7 +1394,7 @@ function initCaptureWatchers(): void {
     rescueImage: (padDir) => rescueClipboardImageViaChild(padDir),
     exists: (p) => { try { return existsSync(p.replace(/^~/, homedir())) } catch { return false } },
     now: () => Date.now(),
-    onInsert: (i) => { recordInsert(i, Date.now()); broadcastScratchpad(); notifyInsertDetected() },
+    onInsert: (i) => onInsertRecorded(i),
   })
 
   const sw = createScreenshotWatch({
@@ -1404,7 +1423,7 @@ function initCaptureWatchers(): void {
     // SAME file firing twice from fs.watch, which macOS does emit (a write and
     // a rename for one screenshot).
     claim: (hash, atMs) => claimShared(hash, atMs),
-    onInsert: (i) => { recordInsert(i, Date.now()); broadcastScratchpad(); notifyInsertDetected() },
+    onInsert: (i) => onInsertRecorded(i),
   })
 
   initWatchers(cw, sw)

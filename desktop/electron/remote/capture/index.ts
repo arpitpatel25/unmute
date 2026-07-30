@@ -120,6 +120,7 @@ export function beginSegment(origin: Destination, now: number, observe: boolean)
   if (!pad) pad = emptyPad(randomUUID(), origin, now)
   captureStartedAt = now
   openSegmentId = randomUUID()
+  clearOwnSequenceTimer()
   ownSequenceDepth = 0
   suppressDetectedUpTo = 0
   pad = addSegment(pad, { id: openSegmentId, text: '', startMs: 0, endMs: 0, now })
@@ -174,28 +175,38 @@ export function attachTranscript(segmentId: string | null, text: string, now: nu
  *
  *  The signature is size + md5 of the first 4KB — NOT a full hash. Hashing a
  *  multi-megabyte Retina PNG on the main process while recording is exactly
- *  the heavy work that corrupts audio; reading 4KB is microseconds. */
+ *  the heavy work that corrupts audio; reading 4KB is microseconds.
+ *
+ *  RETURNS WHETHER IT RECORDED, and callers must respect that. Every refusal
+ *  path here is a decision that this insert does not exist — but the caller
+ *  also broadcasts the pad and pushes capture:insert-detected, and that second
+ *  one reaches insertPendingRef → decideCut, i.e. THE FAST PATH'S CHUNKING. If
+ *  the siblings fire unconditionally, a refused insert still moves a chunk
+ *  boundary, and the pad and the signal disagree about what happened. */
 export function recordInsert(
   i: { kind: InsertKind; content: string; atMs: number },
   now: number,
-): void {
-  if (!pad) return
+): boolean {
+  if (!pad) return false
   // Anything SEEN while Unmute owned the pasteboard is Unmute's, not the
   // user's — see beginOwnClipboardSequence. Checked on the detection instant,
   // not on arrival, so a rescue that outlives the sequence is refused too.
-  if (ownSequenceDepth > 0 || i.atMs <= suppressDetectedUpTo) return
+  // screenshotWatch is NOT suspended and fires synchronously, so this is a
+  // reachable path, not a theoretical one.
+  if (ownSequenceDepth > 0 || i.atMs <= suppressDetectedUpTo) return false
   if (i.kind === 'image') {
     const sig = imageSignature(i.content)
     // An unreadable file yields no signature. Insert it rather than dropping
     // it — a missed dedup shows the user one extra thumbnail they can remove,
     // while a wrong drop loses something they captured on purpose.
-    if (sig && !claimShared(sig, i.atMs)) return
+    if (sig && !claimShared(sig, i.atMs)) return false
   }
   pad = addInsert(pad, {
     id: randomUUID(), kind: i.kind, content: i.content,
     atMs: i.atMs - captureStartedAt, now,
   })
   schedulePersist()
+  return true
 }
 
 /** size:md5(first 4KB). Cheap by construction — see recordInsert. */
@@ -378,13 +389,33 @@ function disarmWatchers(): void {
 //                after it ends. Causal, not timing-based — we are refusing
 //                what was seen during a window we know was ours.
 //
-// The cost is that a genuine copy made in those few hundred milliseconds is
-// not captured. A missed insert, weighed against a corrupted transcript and a
-// moved fast path.
+// The cost is that a genuine copy is not captured for as long as the sequence
+// runs. THAT IS NOT A FIXED ~350ms, and it would be dishonest to write it as
+// one: simulateViaOsascript and the key-poster path call execFile with NO
+// timeout, so if System Events blocks — an unresponsive target app, an
+// Accessibility prompt — captureSelectedText runs as long as its child does,
+// and suppression runs with it. Typical is a few hundred milliseconds;
+// worst case is unbounded.
+//
+// We do NOT fix that by putting a timeout on the child: that is pre-existing
+// behaviour on the dictation fast path, and cutting off a slow-but-working app
+// is a worse risk than the one it would solve. We bound the SUPPRESSION
+// instead. Suppression exists to exclude a sub-second sequence; if it is still
+// up an order of magnitude later, something has gone wrong and the right
+// failure is "capture resumes", not "capture is dead for this recording".
 
 let ownSequenceDepth = 0
 /** No insert may be admitted whose DETECTION instant is at or before this. */
 let suppressDetectedUpTo = 0
+let ownSequenceTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Generous multiple of a healthy sequence (~350ms), short enough that a hung
+ *  child cannot cost the user a whole recording's captures. */
+export const OWN_SEQUENCE_MAX_MS = 3000
+let ownSequenceCeilingMs = OWN_SEQUENCE_MAX_MS
+
+/** Test-only: shorten the ceiling so its expiry is observable. */
+export function setOwnSequenceCeiling(ms: number): void { ownSequenceCeilingMs = ms }
 
 /** Unmute is about to perform a multi-step pasteboard sequence of its own.
  *  Re-entrant: nested/overlapping sequences suspend once and resume once. */
@@ -397,6 +428,18 @@ export function beginOwnClipboardSequence(): void {
   } catch (err) {
     console.warn('[capture] clipboard suspend failed:', err)
   }
+  clearOwnSequenceTimer()
+  ownSequenceTimer = setTimeout(() => {
+    ownSequenceTimer = null
+    if (ownSequenceDepth === 0) return
+    // The caller never came back. Do not wait on it — a hung osascript would
+    // otherwise hold capture down for the rest of the recording, and refuse
+    // unrelated screenshot inserts along the way.
+    console.warn('[capture] own-clipboard sequence exceeded its ceiling — resuming observation')
+    ownSequenceDepth = 0
+    resumeAfterOwnSequence(Date.now())
+  }, ownSequenceCeilingMs)
+  ;(ownSequenceTimer as unknown as { unref?: () => void }).unref?.()
 }
 
 /** The sequence is finished and the pasteboard is back to the user's. */
@@ -404,12 +447,30 @@ export function endOwnClipboardSequence(now: number): void {
   if (ownSequenceDepth === 0) return
   ownSequenceDepth--
   if (ownSequenceDepth > 0) return
+  clearOwnSequenceTimer()
+  resumeAfterOwnSequence(now)
+}
+
+function clearOwnSequenceTimer(): void {
+  if (ownSequenceTimer) { clearTimeout(ownSequenceTimer); ownSequenceTimer = null }
+}
+
+function resumeAfterOwnSequence(now: number): void {
   if (now > suppressDetectedUpTo) suppressDetectedUpTo = now
   if (!watchersArmed || !pad) return
+  // SEPARATE try BLOCKS, deliberately. Sharing one means a throwing arm()
+  // skips start(), leaving the watcher stopped AND disarmed for the rest of
+  // the recording — logged, never recovered. Losing the baseline is bad;
+  // losing the baseline AND the polling is strictly worse, and the pre-fix
+  // shape failed safer here.
   try {
     // arm() re-baselines to the counter as it stands NOW, so every change the
     // sequence made is, by construction, not a candidate.
     clipboardWatch?.arm(padDirFor(scratchpadRoot, pad.id))
+  } catch (err) {
+    console.warn('[capture] clipboard re-baseline failed:', err)
+  }
+  try {
     clipboardWatch?.start()
   } catch (err) {
     console.warn('[capture] clipboard resume failed:', err)
@@ -429,8 +490,10 @@ export function _resetForTest(): void {
   clipboardWatch = null
   screenshotWatch = null
   watchersArmed = false
+  clearOwnSequenceTimer()
   ownSequenceDepth = 0
   suppressDetectedUpTo = 0
+  ownSequenceCeilingMs = OWN_SEQUENCE_MAX_MS
   sharedLedger.ownWrites.clear()
   sharedLedger.claims.clear()
   scratchpadRoot = SCRATCHPAD_ROOT
