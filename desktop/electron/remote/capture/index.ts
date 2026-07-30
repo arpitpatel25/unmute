@@ -210,6 +210,23 @@ export function promoteSettledPad(): boolean {
  *  first thing the user's new pad contains. Arming DURING a capture
  *  (openSegmentId is set) keeps what is being said right now — the gesture.
  *
+ *  DISARMING SETTLES WHAT IS ALREADY HELD; it does not abandon it. In-session
+ *  held work does NOT live in `heldPad` — after an armed stop it sits in `pad`
+ *  with `armed = true`, and `heldPad` is written only by adoptPersistedPad and
+ *  by a restage into an occupied slot. So merely clearing the flag left that
+ *  pad live-but-unarmed: heldForSurface stopped returning it, the panel
+ *  emptied, and the files were destroyed at the next beginSegment or the next
+ *  arm's dropLivePad. That is silent loss of work the user explicitly chose to
+ *  keep, which is the one failure this feature exists to prevent. Moving it to
+ *  the settled slot keeps it on screen, deliverable (promoteSettledPad is not
+ *  behind the gate), discardable, and one arm away from being live again.
+ *
+ *  NOT mid-capture. Settling a pad the recorder is still writing into would
+ *  null the live slot under it, and every later attachTranscript and
+ *  recordInsert returns early on a null pad. Disarming during a capture keeps
+ *  its existing meaning: the pad stays live and unarmed and is delivered the
+ *  ordinary way at stop.
+ *
  *  The gate is evaluated FIRST so a refused arm has no side effects at all:
  *  promoting (or dropping) a pad for an arm that then fails would leave an
  *  unarmed live pad the next capture boundary throws away. */
@@ -221,6 +238,12 @@ export function armScratchpad(on: boolean): boolean {
     // spending itself clearing somebody else's words.
     if (pad && !openSegmentId) dropLivePad()
     if (!pad && heldPad) { pad = heldPad; heldPad = null }
+  }
+  if (!next && armed && pad && !openSegmentId && !isEmpty(pad)) {
+    const p = pad
+    pad = null
+    writePad(p)     // durable before anything else can go wrong
+    settlePad(p)
   }
   armed = next
   // Now that it is held, it becomes worth writing down.
@@ -505,9 +528,8 @@ export function commitDelivery(): void { inFlight = null }
  *  place a pad from a previous run waits, one arm away.
  *
  *  Two pads can want the settled slot at once (a pad from a previous run that
- *  has not been brought back yet). NEITHER IS DELETED: both are on disk by the
- *  time this returns, the more recently touched one is what arming brings back,
- *  and the other's directory is logged. */
+ *  has not been brought back yet) — settlePad owns that rule, and a disarm
+ *  reaches it too. Nothing is deleted either way. */
 export function restageDelivery(): Pad | null {
   const p = inFlight
   inFlight = null
@@ -518,6 +540,20 @@ export function restageDelivery(): Pad | null {
     armed = true
     return p
   }
+  settlePad(p)
+  return p
+}
+
+/** Park a pad in the SETTLED slot, where arming brings it back from.
+ *
+ *  Two pads can want that slot at once — a restage or a disarm meeting a pad
+ *  from a previous run that has not been brought back yet. NEITHER IS DELETED:
+ *  both are on disk by the time this returns, the more recently touched one is
+ *  what arming brings back, and the other's directory is logged so it can be
+ *  recovered by hand.
+ *
+ *  Callers persist first (see writePad) — this only decides the slot. */
+function settlePad(p: Pad): void {
   const waiting = heldPad
   if (!waiting || p.updatedAt >= waiting.updatedAt) {
     heldPad = p
@@ -525,7 +561,6 @@ export function restageDelivery(): Pad | null {
   } else {
     console.warn(`[capture] a second pad is waiting on disk: ${padDirFor(scratchpadRoot, p.id)}`)
   }
-  return p
 }
 
 /** Where a pad's state lives, so a failure can be logged as a recoverable

@@ -2902,13 +2902,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('scratchpad-enabled-set', { on: !!on })
     // Turning it OFF cannot leave an armed pad behind: armScratchpad refuses
     // while disabled, so the surface would keep showing an armed icon it could
-    // no longer act on. Disarming through the same gate settles it instead.
+    // no longer act on. Disarming through the same gate SETTLES a pad that is
+    // holding work — armScratchpad moves it into the settled slot rather than
+    // just clearing the flag, which is what makes the next sentence true.
     //
-    // AND IT MUST NOT STRAND WHAT IS ALREADY HELD. Turning the feature off
-    // removes the ICON, not the user's work: the panel stays reachable for a
-    // pad that is already on disk (see ScratchpadModel.visible), and delivery
-    // stays possible because promoteSettledPad is not behind the gate. Off
-    // means "hold nothing NEW", never "you can no longer reach what you held".
+    // IT MUST NOT STRAND WHAT IS ALREADY HELD. Turning the feature off removes
+    // the ICON, not the user's work: the pad stays on screen (see
+    // ScratchpadModel.visible, which is content-gated and not enabled-gated),
+    // stays deliverable (promoteSettledPad is deliberately not behind the
+    // gate), and stays discardable. Off means "hold nothing NEW", never "you
+    // can no longer reach what you held".
     if (!on) {
       armScratchpadFrom(false)
       const stranded = snapshot().held

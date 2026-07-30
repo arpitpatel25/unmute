@@ -1349,3 +1349,122 @@ describe('the pad announces itself when the capture lifecycle moves it', () => {
     assert.doesNotThrow(() => endSegment(2000))
   })
 })
+
+// ── disarming settles; it does not abandon ──────────────────────────────
+//
+// IN-SESSION HELD WORK DOES NOT LIVE IN `heldPad`. After an armed stop it sits
+// in the LIVE slot with `armed = true` — heldPad is written only by
+// adoptPersistedPad and by a restage into an occupied slot. So a disarm that
+// only cleared the flag left the pad live-but-unarmed: heldForSurface stopped
+// returning it, the panel emptied, and beginSegment or the next arm then
+// destroyed the files. Silent loss of work the user explicitly chose to keep.
+
+describe('turning the scratchpad off cannot lose what is already held', () => {
+  /** arm → capture → stop. The work is now held in the LIVE slot. */
+  function holdSomeWork(text = 'the thing I am keeping'): string {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, text, 1500)
+    endSegment(2000)
+    return currentPad()!.id
+  }
+
+  test('the icon: disarming keeps the work reachable', () => {
+    const padId = holdSomeWork()
+    assert.equal(heldForSurface()?.id, padId)
+
+    armScratchpad(false)
+
+    assert.equal(isArmed(), false)
+    assert.equal(heldForSurface()?.id, padId, 'still on screen, not abandoned')
+    assert.equal(settledPad()?.id, padId, 'settled, where arming brings it back from')
+    assert.ok(existsSync(join(padDirFor(root, padId), 'pad.json')), 'and durable')
+  })
+
+  test('the setting: the same path, because both go through armScratchpad', () => {
+    // Disabling the feature calls armScratchpad(false) exactly like the icon.
+    const padId = holdSomeWork()
+    registerSettings(() => ({ scratchpadEnabled: false, captureEnabled: true }))
+
+    armScratchpad(false)
+
+    assert.equal(heldForSurface()?.id, padId, 'the work outlives the feature being switched off')
+    assert.equal(settledPad()?.id, padId)
+  })
+
+  test('and it is still DELIVERABLE after being switched off', async () => {
+    holdSomeWork('friday notes')
+    registerSettings(() => ({ scratchpadEnabled: false, captureEnabled: true }))
+    armScratchpad(false)
+
+    assert.equal(armScratchpad(true), false, 'arming stays refused — the gate still works')
+    assert.equal(promoteSettledPad(), true, 'but the work can still be got out')
+
+    let sent = ''
+    const r = await runDelivery('cursor', async (t) => { sent = t; return 'cursor' })
+    assert.equal(r.landed, 'cursor')
+    assert.match(sent, /friday notes/)
+    assert.equal(heldForSurface(), null, 'and it is gone once it lands')
+  })
+
+  test('the next dictation does not destroy it', () => {
+    // This was the destruction step: beginSegment drops an unarmed live pad.
+    const padId = holdSomeWork()
+    armScratchpad(false)
+
+    const id = beginSegment('cursor', 6000, true)
+    attachTranscript(id, 'something unrelated', 6500)
+    endSegment(7000)
+
+    assert.equal(settledPad()?.id, padId, 'survived the next capture')
+    assert.ok(existsSync(join(padDirFor(root, padId), 'pad.json')))
+  })
+
+  test('re-arming brings the very same pad back', () => {
+    const padId = holdSomeWork('half a thought')
+    armScratchpad(false)
+    assert.equal(armScratchpad(true), true)
+    assert.equal(currentPad()?.id, padId, 'the same pad, not a fresh one')
+    const seg = currentPad()!.entries.find((e) => e.type === 'segment')
+    assert.equal(seg?.type === 'segment' && seg.text, 'half a thought')
+  })
+
+  test('an EMPTY armed pad is not settled — there is nothing to keep', () => {
+    armScratchpad(true)
+    armScratchpad(false)
+    assert.equal(settledPad(), null, 'settling nothing would resurrect an empty pad at the next arm')
+  })
+
+  test('disarming MID-capture still leaves the pad live, to be delivered normally', () => {
+    // Unchanged, and load-bearing: settling a pad the recorder is writing into
+    // would null the live slot under it and everything after would go nowhere.
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'never mind, just paste it', 1200)
+
+    armScratchpad(false)
+
+    assert.ok(currentPad(), 'still live')
+    assert.equal(settledPad(), null, 'not settled out from under the capture')
+    attachTranscript(id, 'never mind, just paste it — and the rest', 1800)
+    const seg = currentPad()!.entries.find((e) => e.type === 'segment')
+    assert.equal(seg?.type === 'segment' && seg.text, 'never mind, just paste it — and the rest',
+      'the capture keeps working')
+  })
+
+  test('a settled disarm does not evict a pad from a previous run — both stay on disk', () => {
+    leaveOnDisk({ id: 'pad-old', updatedAt: 1, text: 'last week' })
+    adoptPersistedPad()
+    // Arm DURING a capture, so the settled pad is not promoted and both exist.
+    beginSegment('cursor', 1000, true)
+    armScratchpad(true)
+    attachTranscript(currentPad()!.entries[0].id, 'this week', 1500)
+    endSegment(2000)
+    const fresh = currentPad()!.id
+
+    armScratchpad(false)
+
+    assert.equal(settledPad()?.id, fresh, 'the more recently touched one wins the slot')
+    assert.ok(existsSync(join(padDirFor(root, 'pad-old'), 'pad.json')), 'the older one is NOT deleted')
+  })
+})
