@@ -345,6 +345,69 @@ into a nagging one. House precedent is that things decay unless deliberate
 hour) — a pad is deliberate, so the *content* persists while the *demand for
 attention* decays.
 
+## 9a. Feature gating
+
+**The two axes gate independently**, which is the point of keeping them separate
+(§2).
+
+| Setting | Default | Off means |
+|---|---|---|
+| `scratchpadEnabled` | on | No icon on the pill. Nothing can be armed. Stopping always drains. Any pad already on disk is left untouched, not deleted — turning the setting back on restores it. |
+| `captureEnabled` | on | No clipboard or screenshot observation at all. Speech only. (Replaces the existing `screenshotCapture` setting, widened to cover text.) |
+
+Capture does **not** depend on the scratchpad. With the scratchpad disabled, a
+copy made during a dictation still lands inline in the pasted text — that is the
+baseline behaviour, not a scratchpad feature.
+
+The reverse dependency does exist and is enforced: with `captureEnabled` off, a
+pad can still be built from speech alone.
+
+`scratchpadEnabled` off is checked at the single point where arming is
+requested, not scattered through the capture path, so the disabled state cannot
+half-apply.
+
+## 9b. Clipboard ownership and safety
+
+The pasteboard is a **contended, single-slot, global resource**, and Unmute is
+both a reader and a writer of it. Every historic bug in this area comes from
+treating it as storage. Four rules.
+
+**1. Rescue immediately; never read the clipboard twice.** The moment a
+`changeCount` move is detected, the content is copied into Unmute-owned storage
+(`~/.unmute/remote/scratchpad/<padId>/`) by the child process. From that instant
+the buffer refers to *our* file, never to the pasteboard. A user who copies A
+then B loses nothing: A was already rescued when B arrived.
+
+**2. One reader, one encoder.** Exactly one code path reads pasteboard image
+data — the `osascript` child. Two readers with different PNG encoders is the
+documented cause of the duplicated-paste bug, and re-introducing a second reader
+would reproduce it.
+
+**3. Deduplicate on content, across both detectors.** A screenshot tool
+configured to write a file *and* copy (CleanShot, Shottr) fires both detectors
+for one user action. Inserts are deduped by content hash within a window, so one
+action yields one insert. Dedup lives in `clipboardLedger` alongside the
+own-write skip set, because it is the same question: *have we already accounted
+for this?*
+
+**4. Never mutate the user's clipboard.** The current
+`secureAndClearClipboard()` *clears* the pasteboard after consuming an image.
+That is deleted. Because rule 1 means we no longer depend on the clipboard
+holding anything, there is no reason to clear it — and clearing it destroys the
+user's own content, for our convenience.
+
+The one place Unmute still writes the pasteboard is delivery (`injectOutput`),
+unchanged, including the existing pre-clear-and-verify pattern that guards the
+synthetic ⌘V race. Its write is registered in the skip set (§5.2) so it can
+never be observed as an insert.
+
+**Staleness cannot occur by construction.** Provenance is established by a
+`changeCount` *transition observed inside a consented window* — not by comparing
+against a snapshot of what was there before. An image sitting on the clipboard
+from an hour ago produces no transition, so it is never a candidate. The entire
+baseline-probe apparatus exists to answer that question by inference; it is
+deleted because the question stops being askable.
+
 ## 10. Module boundaries
 
 House style is pure, dependency-free, exhaustively-tested modules with thin
@@ -380,7 +443,9 @@ file of its own**):
 
 - `probeClipboardViaChild` baseline/`markOnly` machinery and `clipBaselined`
 - `knownClipSigs` / `sigOf` signature set
-- `secureAndClearClipboard` and the clipboard-clear-after-consume behaviour
+- `secureAndClearClipboard` and the clipboard-clear-after-consume behaviour —
+  §9b rule 4: we no longer depend on the clipboard retaining anything, so
+  destroying the user's clipboard content buys nothing
 - `stageRecentScreenshotFiles` mtime scanning and its 900ms interval — the
   *capability* survives, re-implemented event-driven (§5.1); the polling and the
   mtime-comparison heuristic do not
@@ -405,8 +470,12 @@ Table-driven unit tests on the pure modules, which is where the risk actually
 lives:
 
 - **`clipboardLedger`** — *the critical one.* Proves our own synthetic ⌘C and our
-  own output write are never observable. This is the entire bug class being
-  removed.
+  own output write are never observable, and that one user action produces
+  exactly one insert even when both detectors fire (§9b rule 3). This is the
+  entire bug class being removed.
+- **feature gating** — `scratchpadEnabled` off cannot arm and cannot show the
+  icon, while capture continues to interleave; `captureEnabled` off observes
+  nothing while a pad can still be built from speech (§9a).
 - **`insertClassify`** — nasty inputs: URLs with query strings and fragments,
   paths containing spaces, single lines at the 200-char boundary, content that
   is `\n`-only, unmatched content falling to `block`.
