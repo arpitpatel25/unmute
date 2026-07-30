@@ -24,7 +24,7 @@ import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
 import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, readReasoningLabel, setReasoning, readPendingConsent, answerConsent, type CodexConsent, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
-import { readThread, newestThreadIdSince, type CodexSnapshot } from './rollout'
+import { readThread, newestThreadIdSince, watchThread, type CodexSnapshot } from './rollout'
 
 const log = createLogger('codex-driver')
 
@@ -614,6 +614,17 @@ export class CodexDesktopDriver {
     if (!(await this.openThread(threadId, cdp, { background: true }))) return false
     await this.sleep(300)
     try { return await answerConsent(cdp, option) } catch { return false }
+  }
+
+  /**
+   * Call back the moment Codex appends to this thread's rollout.
+   *
+   * Purely a latency shortcut on top of polling — see watchThread(). Returns a
+   * disposer that is safe to call twice, and a no-op disposer when a watcher
+   * could not be started, so callers never branch on whether it worked.
+   */
+  async watch(threadId: string, onChange: () => void): Promise<() => void> {
+    return watchThread(threadId, onChange, this.sessionsDir)
   }
 
   async snapshot(threadId: string): Promise<CodexSnapshot> {

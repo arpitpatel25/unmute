@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseRollout } from './rollout'
+import { mkdtemp, mkdir, writeFile, appendFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { parseRollout, watchThread } from './rollout'
 
 // Shapes below are copied from REAL rollout files on a live machine
 // (~/.codex/sessions/2026/07/25/rollout-*.jsonl), not invented — the whole
@@ -284,4 +287,31 @@ test('several unclosed calls are all counted', () => {
   ].join('\n'))
   assert.equal(snap.pendingToolCalls, 1)
   assert.equal(snap.pendingToolName, 'shell')
+})
+
+// ── watchThread: latency shortcut, never a correctness dependency ────────────
+
+test('watching a thread with no transcript yet is a harmless no-op', async () => {
+  // A just-dispatched thread has no rollout. That must return a usable disposer
+  // rather than throwing into the poll loop.
+  const stop = await watchThread('no-such-thread', () => {}, '/nonexistent-sessions-dir')
+  assert.equal(typeof stop, 'function')
+  stop(); stop()          // idempotent
+})
+
+test('an append wakes the watcher', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'unmute-rollout-'))
+  const day = join(dir, '2026', '07', '30')
+  await mkdir(day, { recursive: true })
+  const id = '019fb306-3e84-7480-8d18-9a937b09293b'
+  const file = join(day, `rollout-2026-07-30T18-05-58-${id}.jsonl`)
+  await writeFile(file, line('task_started', { turn_id: 't1', started_at: 1784927426 }) + '\n')
+
+  let hits = 0
+  const stop = await watchThread(id, () => { hits++ }, dir, 20)
+  try {
+    await appendFile(file, line('user_message', { message: 'hello' }) + '\n')
+    for (let i = 0; i < 60 && hits === 0; i++) await new Promise((r) => setTimeout(r, 50))
+    assert.ok(hits > 0, 'appending to the rollout should have woken the watcher')
+  } finally { stop() }
 })

@@ -449,3 +449,51 @@ function stepTitle(code: string, fallback: string): string {
 function clip(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)}\n… (${s.length - n} more characters)` : s
 }
+
+/**
+ * Watch a thread's rollout and call back when Codex appends to it.
+ *
+ * WHY. Codex state was polled only: 1s while a turn runs, and every 10th tick
+ * (~10s) once a task is `ready`, because re-reading the JSONL for every
+ * finished task on the wall was costly (see the backoff in task-manager). The
+ * user-visible result was "Codex has already answered but unmute takes ages to
+ * show it" — up to 10s of dead air, and the 10s branch is exactly the case
+ * where the user is watching.
+ *
+ * A watcher removes the wait without removing the backoff: the poll stays as
+ * the correctness backstop (fs.watch is best-effort, coalesces, and can miss
+ * events), and this only makes the common case immediate.
+ *
+ * Deliberately cheap and forgiving:
+ *   * resolves the path once, then watches the FILE — no directory scan;
+ *   * debounced, because an append fires several change events;
+ *   * every failure is a no-op returning a usable disposer. A watcher that
+ *     cannot start must degrade to today's polling, never throw into the poll
+ *     loop.
+ */
+export async function watchThread(
+  threadId: string,
+  onChange: () => void,
+  sessionsDir = DEFAULT_SESSIONS_DIR,
+  debounceMs = 150,
+): Promise<() => void> {
+  const noop = () => {}
+  const path = await findRolloutPath(threadId, sessionsDir)
+  if (!path) return noop            // no transcript yet — the poll will find it
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let watcher: import('node:fs').FSWatcher | null = null
+  try {
+    const { watch } = await import('node:fs')
+    watcher = watch(path, { persistent: false }, () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => { timer = null; try { onChange() } catch { /* never break the watcher */ } }, debounceMs)
+    })
+    watcher.on('error', () => { try { watcher?.close() } catch { /* already gone */ } })
+  } catch {
+    return noop
+  }
+  return () => {
+    if (timer) { clearTimeout(timer); timer = null }
+    try { watcher?.close() } catch { /* already gone */ }
+  }
+}

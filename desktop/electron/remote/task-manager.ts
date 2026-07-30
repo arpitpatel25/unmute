@@ -315,6 +315,9 @@ export class TaskManager extends EventEmitter {
   /** threadIds whose pending approval matched no live task — logged once each,
    *  so a genuinely dropped request is visible without spamming every sweep. */
   private unmatchedApprovals = new Set<string>()
+  /** taskId → rollout watcher disposer. Best-effort: absent when the transcript
+   *  did not exist yet or fs.watch could not start; polling still covers it. */
+  private codexWatchers = new Map<string, () => void>()
   /** Resumes currently in flight (see resume) — a session is not `alive` until
    *  its PTY spawns, so this is what keeps a second call from building a second
    *  session in that window. */
@@ -761,6 +764,22 @@ export class TaskManager extends EventEmitter {
       if (n % 10 !== 0) return
     } else {
       this.codexIdleTicks.delete(id)
+    }
+
+    // Latency shortcut, attached lazily on the first poll that finds a
+    // transcript: Codex appending wakes us immediately instead of waiting for
+    // the next tick — which for a `ready` task is up to 10s away because of the
+    // backoff above, and `ready` is exactly when the user is watching. The poll
+    // remains the correctness backstop; fs.watch coalesces and can miss events,
+    // so this never becomes the only path.
+    if (!this.codexWatchers.has(id) && driver.watch) {
+      this.codexWatchers.set(id, () => {})   // claim the slot; no double-attach
+      void driver.watch(task.codexThreadId, () => { void this.pollCodexDesktop(id) })
+        .then((stop) => {
+          if (this.tasks.has(id)) this.codexWatchers.set(id, stop)
+          else stop()                        // task died while we were attaching
+        })
+        .catch(() => { this.codexWatchers.delete(id) })
     }
 
     const snap = await driver.snapshot(task.codexThreadId)
@@ -2253,6 +2272,8 @@ export class TaskManager extends EventEmitter {
     // rollout advanced, which silently disables the blocked-turn detection.
     this.codexIdleTicks.delete(id)
     this.codexLastSeenAt.delete(id)
+    const unwatch = this.codexWatchers.get(id)
+    if (unwatch) { unwatch(); this.codexWatchers.delete(id) }
     const ex = this.executors.get(id)
     if (ex?.alive) ex.kill() // the REPL won't exit on its own
     this.executors.delete(id)
