@@ -1,16 +1,17 @@
 import { test, describe, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  PERSIST_DEBOUNCE_MS, _resetForTest, armScratchpad, attachTranscript,
+  PERSIST_DEBOUNCE_MS, _resetForTest, adoptPersistedPad, armScratchpad, attachTranscript,
   beginOwnClipboardSequence, beginSegment, cancelOpenSegment, currentPad, deliver,
-  discard, endOwnClipboardSequence, endSegment, getCaptureSettings, initWatchers,
-  isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerPaste,
-  registerSettings, removeFromPad, setOwnSequenceCeiling, setScratchpadRoot, writePadNow,
+  discard, endOwnClipboardSequence, endSegment, formatForDelivery, getCaptureSettings,
+  initWatchers, isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerFormat,
+  registerPaste, registerSettings, removeFromPad, setOwnSequenceCeiling, setScratchpadRoot,
+  settledPad, snapshot, takeForDelivery, writePadNow,
 } from './index'
-import { deserialize, padDirFor } from './scratchpadStore'
+import { deserialize, padDirFor, serialize } from './scratchpadStore'
 import { createClipboardWatch } from './clipboardWatch'
 import type { createScreenshotWatch } from './screenshotWatch'
 
@@ -608,5 +609,257 @@ describe('persistence', () => {
 
     assert.equal(currentPad()?.entries.length, 1, 'the in-memory pad is untouched')
     assert.equal(readFileSync(good, 'utf8'), bytes, 'the last good write is not corrupted')
+  })
+})
+
+// ── Delivery ────────────────────────────────────────────────────────────
+
+/** A pad with one spoken segment and one pasted block, held and armed. */
+function heldWork(text = 'ship it'): void {
+  armScratchpad(true)
+  const id = beginSegment('cursor', 1000, true)
+  attachTranscript(id, text, 1500)
+  endSegment(2000)
+}
+
+describe('delivery formats for the cursor, and ONLY for the cursor', () => {
+  test('the cursor destination runs the registered formatter', async () => {
+    const seen: string[] = []
+    registerFormat((t) => { seen.push(t); return `«${t}»` })
+    heldWork()
+
+    const out = takeForDelivery('cursor')!
+    const ready = await formatForDelivery(out, 'cursor')
+    assert.deepEqual(seen, ['ship it'], 'the formatter saw the held text')
+    assert.equal(ready.text, '«ship it»')
+  })
+
+  test('a NEW TASK never reaches the formatter', async () => {
+    let calls = 0
+    registerFormat((t) => { calls++; return `«${t}»` })
+    heldWork()
+
+    const out = takeForDelivery('newTask')!
+    const ready = await formatForDelivery(out, 'newTask')
+    assert.equal(calls, 0, 'the formatter was not invoked at all')
+    assert.equal(ready.text, 'ship it', 'the agent gets what was said, verbatim')
+  })
+
+  test('the OPEN TASK never reaches the formatter either', async () => {
+    let calls = 0
+    registerFormat((t) => { calls++; return `«${t}»` })
+    heldWork()
+
+    const out = takeForDelivery('openTask')!
+    const ready = await formatForDelivery(out, 'openTask')
+    assert.equal(calls, 0, 'the formatter was not invoked at all')
+    assert.equal(ready.text, 'ship it')
+  })
+
+  test('no formatter registered: the cursor still gets its text', async () => {
+    heldWork()
+    const out = takeForDelivery('cursor')!
+    assert.equal((await formatForDelivery(out, 'cursor')).text, 'ship it')
+  })
+
+  test('a THROWING formatter delivers the text as captured — held work is never lost', async () => {
+    registerFormat(() => { throw new Error('groq is down') })
+    heldWork()
+    const out = takeForDelivery('cursor')!
+    const warn = console.warn
+    console.warn = () => {} // the failure IS logged; keep it out of test output
+    try {
+      assert.equal((await formatForDelivery(out, 'cursor')).text, 'ship it')
+    } finally {
+      console.warn = warn
+    }
+  })
+
+  test('a formatter that returns nothing usable is ignored, not obeyed', async () => {
+    registerFormat(() => '   ')
+    heldWork()
+    const out = takeForDelivery('cursor')!
+    assert.equal((await formatForDelivery(out, 'cursor')).text, 'ship it')
+  })
+
+  test('an async formatter is awaited', async () => {
+    registerFormat(async (t) => { await new Promise((r) => setTimeout(r, 1)); return t.toUpperCase() })
+    heldWork()
+    const out = takeForDelivery('cursor')!
+    assert.equal((await formatForDelivery(out, 'cursor')).text, 'SHIP IT')
+  })
+})
+
+describe('takeForDelivery renders for the target and clears', () => {
+  test('the cursor skips images; a task keeps them as attachments', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'this one', 1500)
+    recordInsert({ kind: 'image', content: '/tmp/shot.png', atMs: 1600 }, 1600)
+    endSegment(2000)
+
+    const cursor = takeForDelivery('cursor')!
+    assert.equal(cursor.text, 'this one', 'no path pasted into a text field')
+    assert.deepEqual(cursor.attachments, [])
+
+    armScratchpad(true)
+    const id2 = beginSegment('task', 1000, true)
+    attachTranscript(id2, 'this one', 1500)
+    recordInsert({ kind: 'image', content: '/tmp/shot2.png', atMs: 1600 }, 1600)
+    endSegment(2000)
+
+    const task = takeForDelivery('newTask')!
+    assert.deepEqual(task.attachments, ['/tmp/shot2.png'])
+  })
+
+  test('nothing to send returns null — and the pad is cleared anyway', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, '   ', 1500)
+    endSegment(2000)
+
+    assert.equal(takeForDelivery('cursor'), null)
+    assert.equal(currentPad(), null, 'the user committed it; it does not linger')
+    assert.equal(isArmed(), false)
+  })
+})
+
+// ── Startup adoption ────────────────────────────────────────────────────
+
+/** Write a pad straight to disk, as a previous run would have left it. */
+function leaveOnDisk(p: {
+  id: string; updatedAt: number; text?: string; raw?: string
+}): void {
+  const dir = padDirFor(root, p.id)
+  mkdirSync(dir, { recursive: true })
+  const body = p.raw ?? serialize({
+    id: p.id,
+    origin: 'cursor',
+    createdAt: 1000,
+    updatedAt: p.updatedAt,
+    entries: [{ type: 'segment', id: `${p.id}-s`, text: p.text ?? 'friday draft', startMs: 0, endMs: 0 }],
+  })
+  writeFileSync(join(dir, 'pad.json'), body, 'utf8')
+}
+
+describe('a pad on disk is adopted at startup', () => {
+  test('a valid pad is adopted UNARMED and SETTLED — the pill is not pinned open', () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000 })
+
+    const adopted = adoptPersistedPad()
+    assert.equal(adopted?.id, 'pad-a')
+    assert.equal(isArmed(), false, 'never armed on the user\'s behalf')
+    assert.equal(currentPad(), null, 'not live — nothing demands attention')
+    assert.equal(settledPad()?.id, 'pad-a', 'held, waiting')
+    assert.deepEqual(snapshot(), { pad: null, armed: false, held: adopted })
+  })
+
+  test('ARMING IS WHAT BRINGS IT BACK', () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+
+    assert.equal(armScratchpad(true), true)
+    assert.equal(currentPad()?.id, 'pad-a', 'the pad the user left is live again')
+    assert.equal(settledPad(), null, 'and is no longer waiting')
+    const e = currentPad()!.entries[0]
+    assert.equal(e.type === 'segment' && e.text, 'friday draft')
+  })
+
+  test('an ORDINARY DICTATION does not destroy a settled pad', async () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000 })
+    adoptPersistedPad()
+
+    // The whole unarmed fast path: capture, transcript, stop.
+    const id = beginSegment('cursor', 6000, true)
+    attachTranscript(id, 'unrelated dictation', 6500)
+    endSegment(7000)
+    assert.equal(settledPad()?.id, 'pad-a', 'still waiting')
+    assert.ok(existsSync(join(padDirFor(root, 'pad-a'), 'pad.json')), 'still on disk')
+
+    // …and the FIRST arm after that dictation is what brings it back — it must
+    // not spend itself clearing the leftover unarmed pad.
+    assert.equal(armScratchpad(true), true)
+    assert.equal(currentPad()?.id, 'pad-a')
+  })
+
+  test('a CORRUPT pad is discarded silently and never blocks startup', () => {
+    leaveOnDisk({ id: 'pad-bad', updatedAt: 5000, raw: '{ this is not json' })
+    assert.doesNotThrow(() => adoptPersistedPad())
+    assert.equal(settledPad(), null)
+    assert.equal(currentPad(), null)
+  })
+
+  test('a pad whose ENTRIES are half-shaped is refused too', () => {
+    // deserialize validates payloads, not just tags — a segment with no text
+    // would throw at render, which is the one thing the pad promises never
+    // happens. Prove the refusal reaches adoption.
+    leaveOnDisk({
+      id: 'pad-half',
+      updatedAt: 5000,
+      raw: JSON.stringify({
+        id: 'pad-half', origin: 'cursor', createdAt: 1, updatedAt: 5000,
+        entries: [{ type: 'segment', id: 's1' }],
+      }),
+    })
+    assert.equal(adoptPersistedPad(), null)
+    assert.equal(settledPad(), null)
+  })
+
+  test('NO pad on disk: nothing happens, nothing throws', () => {
+    assert.equal(adoptPersistedPad(), null)
+    assert.equal(settledPad(), null)
+  })
+
+  test('a missing scratchpad root is not an error', () => {
+    setScratchpadRoot(join(root, 'never-created'))
+    assert.doesNotThrow(() => adoptPersistedPad())
+    assert.equal(settledPad(), null)
+  })
+
+  test('an EMPTY pad is not worth bringing back', () => {
+    leaveOnDisk({
+      id: 'pad-empty',
+      updatedAt: 5000,
+      raw: JSON.stringify({ id: 'pad-empty', origin: 'cursor', createdAt: 1, updatedAt: 5000, entries: [] }),
+    })
+    assert.equal(adoptPersistedPad(), null)
+  })
+
+  test('the NEWEST pad wins when more than one run died holding work', () => {
+    leaveOnDisk({ id: 'pad-old', updatedAt: 1000, text: 'older' })
+    leaveOnDisk({ id: 'pad-new', updatedAt: 9000, text: 'newer' })
+    leaveOnDisk({ id: 'pad-bad', updatedAt: 99000, raw: 'nonsense' })
+
+    assert.equal(adoptPersistedPad()?.id, 'pad-new', 'a corrupt file cannot win by being newest')
+  })
+
+  test('adoption never clobbers a live pad', () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000 })
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'live work', 1500)
+
+    assert.equal(adoptPersistedPad(), null)
+    const e = currentPad()!.entries[0]
+    assert.equal(e.type === 'segment' && e.text, 'live work')
+  })
+
+  test('discard throws away the settled pad AND its files', () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000 })
+    adoptPersistedPad()
+
+    discard()
+    assert.equal(settledPad(), null)
+    assert.equal(existsSync(padDirFor(root, 'pad-a')), false, 'it cannot come back at the next arm')
+  })
+
+  test('a refused arm (feature off) leaves the settled pad exactly where it was', () => {
+    leaveOnDisk({ id: 'pad-a', updatedAt: 5000 })
+    adoptPersistedPad()
+    registerSettings(() => ({ scratchpadEnabled: false, captureEnabled: true }))
+
+    assert.equal(armScratchpad(true), false)
+    assert.equal(settledPad()?.id, 'pad-a', 'not promoted into a pad nothing will hold')
+    assert.equal(currentPad(), null)
   })
 })

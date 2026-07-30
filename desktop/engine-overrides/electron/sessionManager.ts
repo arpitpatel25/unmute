@@ -21,7 +21,8 @@ import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 import { dispatchFromCapture, hideNativePill } from './paywall/remote/init'
 import {
   attachTranscript, beginOwnClipboardSequence, beginSegment, cancelOpenSegment,
-  endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed, registerPaste,
+  endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed, registerFormat,
+  registerPaste,
 } from './paywall/remote/capture/index'
 import { canObserve } from './paywall/remote/capture/captureGate'
 import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
@@ -172,6 +173,22 @@ let remoteDispatchQueue: Promise<void> = Promise.resolve()
 // remote/init from clipboard.ts fails inside the bundled main). injectOutput
 // already lives here, so hand it over rather than importing it there.
 registerPaste(async (text: string) => { await injectOutput(text) })
+
+// FORMATTING BELONGS TO DELIVERY, NOT TO CAPTURE. The pad holds the CLEANED
+// transcript, because a held capture has no destination yet — the user picks
+// one at the end. So the output formatting every ordinary delivery site here
+// applies (formatOutputForUser: strip Whisper's leading space, honour the
+// lowercase preference) is handed to the façade and applied there, for the
+// CURSOR destination only. A task gets the text as-is: an agent does not need
+// punctuation polish, and putting an instruction through the formatter costs
+// latency and risks rewriting what the user actually asked for.
+//
+// The noise-routed LLM correction pass (maybeCleanupDictation) is deliberately
+// NOT part of this. Its gate is per-capture — it fires only when THIS capture's
+// audio was measured noisy — and a pad can hold several captures and outlive
+// all of them, so there is no capture whose noise verdict could be applied to
+// held text. Registered here, not imported there: same inversion as the paste.
+registerFormat((text: string) => formatOutputForUser(text))
 
 class SessionManager {
   private currentSession: SessionState | null = null

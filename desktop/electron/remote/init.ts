@@ -78,7 +78,9 @@ import { devlog, devEvent } from './curator-devlog'
 import { createClipboardWatch } from './capture/clipboardWatch'
 import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
-  claimShared, currentPad, initWatchers, recordInsert, registerSettings,
+  adoptPersistedPad, armScratchpad, claimShared, discard as discardPad, formatForDelivery,
+  initWatchers, pasteAtCursor, recordInsert, registerSettings, removeFromPad, snapshot,
+  takeForDelivery, type DeliveryTarget,
 } from './capture/index'
 import type { InsertKind } from './capture/types'
 
@@ -1329,12 +1331,32 @@ function notifyInsertDetected(): void {
   }
 }
 
-/** The pad changed. Inert until the pad panel exists (Task 14) — the channel
- *  is here so there is exactly one place that announces a pad change. */
+/** The pad changed. One snapshot, read once, so a surface can never see the pad
+ *  and the arm state from two different instants. Exactly one place announces a
+ *  pad change; the pad panel (Task 14) renders whatever lands here. */
 function broadcastScratchpad(): void {
-  const pad = currentPad()
+  const s = snapshot()
   for (const w of BrowserWindow.getAllWindows()) {
-    try { if (!w.isDestroyed()) w.webContents.send('scratchpad:changed', pad) } catch { /* window going away */ }
+    try { if (!w.isDestroyed()) w.webContents.send('scratchpad:changed', s) } catch { /* window going away */ }
+  }
+}
+
+/** The pad's destinations. THE SET IS DYNAMIC: "add to the open task" appears
+ *  only when a task is genuinely focused — the same orchestrateFocusId that
+ *  already short-circuits an utterance to a focused session — and only while
+ *  that task still exists. A task can end or be removed while a pad is held, so
+ *  the id alone is not enough; offering a destination that cannot receive is
+ *  worse than not offering it at all. */
+function scratchpadDestinations(): {
+  cursor: true
+  newTask: true
+  openTask: { id: string; name: string } | null
+} {
+  const focused = orchestrateFocusId ? manager?.get(orchestrateFocusId) : undefined
+  return {
+    cursor: true,
+    newTask: true,
+    openTask: focused ? { id: focused.id, name: focused.name ?? focused.intent } : null,
   }
 }
 
@@ -2237,6 +2259,21 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // it at the start of a recording.
   try { initCaptureWatchers() } catch (e) { log.warn('capture watchers unavailable', { error: (e as Error).message }) }
 
+  // Held work outlives the process that held it — that promise is the reason
+  // the pad is written to disk at all, and reading it back is what makes it
+  // true. Adopted UNARMED and SETTLED: a pad the user has forgotten must not
+  // pin the pill open, and arming on their behalf would silently swallow the
+  // next thing they say. Arming again is what brings it back.
+  //
+  // A corrupt pad is skipped in silence inside adoptPersistedPad — startup can
+  // never be blocked by a file we wrote.
+  try {
+    const held = adoptPersistedPad()
+    if (held) log.event('scratchpad-adopted', { padId: held.id, entries: held.entries.length, heldFor: Date.now() - held.updatedAt })
+  } catch (e) {
+    log.warn('scratchpad adoption skipped', { error: (e as Error).message })
+  }
+
   // DECIDED isolation: browser tasks run in a DEDICATED Chrome (its own profile)
   // so automation + the "debugging" banner never touch the user's real browser.
   // We do NOT launch it on boot — popping a Chrome window to the foreground every
@@ -2981,6 +3018,78 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Current terminal owner — lets a freshly-mounted overlay card learn it owns
   // nothing (or that the wall already owns its session) without waiting for an event.
   ipcMain.handle('remote:get-orchestrate-owner', async () => orchestrateFocusId)
+
+  // ── IPC: the scratchpad ──
+  // THE DESTINATION IS CHOSEN AT THE END. The trigger key sets the pad's origin
+  // as a default, but nothing about a held capture commits to where it lands
+  // until the user says so — which is the whole point of deferring delivery.
+  ipcMain.handle('scratchpad:get', async () => ({
+    ...snapshot(),
+    destinations: scratchpadDestinations(),
+  }))
+
+  // THE SINGLE GATE POINT. armScratchpad applies canArmScratchpad itself and
+  // returns the state that actually resulted, so a disabled scratchpad refuses
+  // in one place and cannot half-apply. Arming is also what brings a settled
+  // pad back from a previous run.
+  ipcMain.handle('scratchpad:arm', async (_e, on: boolean) => {
+    const armedNow = armScratchpad(!!on)
+    broadcastScratchpad()
+    log.event('scratchpad-arm', { requested: !!on, armed: armedNow })
+    return armedNow
+  })
+
+  ipcMain.handle('scratchpad:remove-entry', async (_e, id: string) => {
+    removeFromPad(String(id), Date.now())
+    broadcastScratchpad()
+    return true
+  })
+
+  ipcMain.handle('scratchpad:discard', async () => {
+    discardPad()
+    broadcastScratchpad()
+    return true
+  })
+
+  /** Send the pad. Returns where it landed ('cursor' or a task id), or null. */
+  ipcMain.handle('scratchpad:deliver', async (_e, dest: 'cursor' | 'newTask' | 'openTask') => {
+    const target: DeliveryTarget = dest === 'cursor' ? 'cursor' : dest === 'openTask' ? 'openTask' : 'newTask'
+    // Render + clear FIRST, then tell the surfaces: the pad is gone the instant
+    // the user commits it, not after a formatting round-trip.
+    const out = takeForDelivery(target)
+    broadcastScratchpad()
+    if (!out) { log.event('scratchpad-delivered', { to: target, landed: null, empty: true }); return null }
+
+    // FORMATTED FOR THE CURSOR AND ONLY THE CURSOR — see formatForDelivery. The
+    // pad holds the cleaned transcript; the polish that belongs to a
+    // destination is applied here, where the destination is finally known.
+    const ready = await formatForDelivery(out, target)
+
+    if (target === 'cursor') {
+      // pasteAtCursor, NOT a direct injectOutput import: clipboard.ts imports
+      // FROM this module, and its header records why that direction is one-way
+      // (a lazy require of remote/init fails inside the bundled main, swallowed
+      // by a fail-open catch). Importing it here would close exactly that loop.
+      const pasted = await pasteAtCursor(ready.text)
+      log.event('scratchpad-delivered', { to: 'cursor', landed: pasted ? 'cursor' : null })
+      return pasted ? 'cursor' : null
+    }
+
+    const mgr = manager
+    if (target === 'openTask' && orchestrateFocusId && mgr?.get(orchestrateFocusId)) {
+      const fid = orchestrateFocusId
+      if (mgr.followUp(fid, ready.text)) {
+        log.event('scratchpad-delivered', { to: 'open-task', landed: fid })
+        return fid
+      }
+      // It couldn't take it (terminal/gone) — fall through to a new task rather
+      // than dropping work the user already committed.
+      log.warn('focused task refused the pad — routing it as a new task', { taskId: fid })
+    }
+    const landed = await dispatchFromCapture(ready.text)
+    log.event('scratchpad-delivered', { to: 'new-task', landed })
+    return landed
+  })
   // Voice-as-doorbell toggle (§6.4) — read + set from the cockpit's 🔔 chip.
   ipcMain.handle('remote:get-voice-headlines', async () => settings.get('voiceHeadlines') !== false)
   ipcMain.handle('remote:set-voice-headlines', async (_e, on: boolean) => { settings.set('voiceHeadlines', !!on); return true })

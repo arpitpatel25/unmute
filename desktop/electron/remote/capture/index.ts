@@ -11,12 +11,13 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import {
-  closeSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, writeFileSync,
+  closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync,
+  statSync, writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Destination, InsertKind, Pad } from './types'
-import { padDirFor, serialize } from './scratchpadStore'
+import { deserialize, padDirFor, serialize } from './scratchpadStore'
 import { createClipboardWatch } from './clipboardWatch'
 import { createScreenshotWatch } from './screenshotWatch'
 import {
@@ -37,6 +38,16 @@ let pad: Pad | null = null
 let armed = false
 let openSegmentId: string | null = null
 let captureStartedAt = 0
+
+/** A pad a PREVIOUS RUN left on disk, deserialized at startup and waiting.
+ *
+ *  It is deliberately NOT the live pad. A settled pad must survive every
+ *  ordinary dictation that happens before the user comes back to it, and the
+ *  live slot cannot give it that: beginSegment drops an unarmed pad at each
+ *  capture boundary, and it would append the next unarmed utterance to it
+ *  besides. So held work waits HERE, out of the capture path entirely, and
+ *  arming promotes it back — see armScratchpad. */
+let heldPad: Pad | null = null
 
 // Both detectors claim against ONE ledger, because a tool set to write a file
 // AND copy fires each of them for a single user action. It lives HERE, not in
@@ -72,6 +83,16 @@ export async function pasteAtCursor(text: string): Promise<boolean> {
   return true
 }
 
+/** The output formatter, registered by the module that owns it (sessionManager,
+ *  which already applies it at every ordinary delivery site).
+ *
+ *  Same inversion as the paste effect, for the same reason: init.ts cannot
+ *  import sessionManager any more than it can import clipboard.ts. */
+type FormatFn = (text: string) => string | Promise<string>
+let formatFn: FormatFn | null = null
+
+export function registerFormat(fn: FormatFn): void { formatFn = fn }
+
 /** Read at capture start so a mid-capture settings change cannot make a
  *  half-observed window. Registered the same way, for the same reason. */
 type SettingsFn = () => CaptureSettings
@@ -89,20 +110,93 @@ export function getCaptureSettings(): CaptureSettings {
 
 export function isArmed(): boolean { return armed }
 export function currentPad(): Pad | null { return pad }
+/** The settled pad from a previous run, if one is waiting. Null once it has
+ *  been brought back (or if there never was one). */
+export function settledPad(): Pad | null { return heldPad }
+
+/** Everything a surface needs to render the scratchpad, read in one go so the
+ *  pad, the arm state and the settled pad can never be sampled out of step. */
+export interface ScratchpadSnapshot {
+  pad: Pad | null
+  armed: boolean
+  held: Pad | null
+}
+
+export function snapshot(): ScratchpadSnapshot {
+  return { pad, armed, held: heldPad }
+}
 
 /** Arm/disarm the scratchpad. Returns the resulting state — arming is refused
  *  when the feature is off, so callers see what actually happened.
  *
- *  Arming BETWEEN captures starts fresh: a pad left over from an unarmed
- *  capture is somebody else's dictation, and it must not become the first
- *  thing the user's new pad contains. Arming DURING a capture (openSegmentId
- *  is set) keeps what is being said right now — that is the whole gesture. */
+ *  ARMING IS ALSO WHAT BRINGS A SETTLED PAD BACK. A pad adopted from disk at
+ *  startup waits out of the capture path (see heldPad); arming with nothing
+ *  live promotes it, which is the "settle, do not nag" half of the design —
+ *  the pill stays normal until the user asks for the pad again.
+ *
+ *  Arming BETWEEN captures otherwise starts fresh: a pad left over from an
+ *  unarmed capture is somebody else's dictation, and it must not become the
+ *  first thing the user's new pad contains. Arming DURING a capture
+ *  (openSegmentId is set) keeps what is being said right now — the gesture.
+ *
+ *  The gate is evaluated FIRST so a refused arm has no side effects at all:
+ *  promoting (or dropping) a pad for an arm that then fails would leave an
+ *  unarmed live pad the next capture boundary throws away. */
 export function armScratchpad(on: boolean): boolean {
-  if (on && !armed && pad && !openSegmentId) discard()
-  armed = on ? canArmScratchpad(getCaptureSettings()) : false
+  const next = on ? canArmScratchpad(getCaptureSettings()) : false
+  if (next && !armed) {
+    // Order matters: the leftover goes first, so an arm that follows an
+    // ordinary dictation still brings the settled pad back rather than
+    // spending itself clearing somebody else's words.
+    if (pad && !openSegmentId) dropLivePad()
+    if (!pad && heldPad) { pad = heldPad; heldPad = null }
+  }
+  armed = next
   // Now that it is held, it becomes worth writing down.
   if (armed) schedulePersist()
   return armed
+}
+
+/** Adopt a pad a previous run left on disk. Called once, at startup.
+ *
+ *  UNARMED AND SETTLED, always. The pill must not be pinned open by a pad the
+ *  user has forgotten, and arming on their behalf would silently swallow their
+ *  next dictation into work they were not thinking about. Arming again is what
+ *  brings it back.
+ *
+ *  A pad that fails `deserialize` is skipped in silence — a corrupt file is a
+ *  reason to start fresh, never a reason to fail startup. Nothing here throws:
+ *  a missing root, an unreadable directory and a truncated file all mean the
+ *  same thing, which is "there is nothing held".
+ *
+ *  The NEWEST valid pad wins. More than one can only exist if more than one run
+ *  died holding work; the most recent is the one the user was in the middle of.
+ *  The files are left where they are — discard is the only thing that deletes a
+ *  pad, and that has not happened. */
+export function adoptPersistedPad(): Pad | null {
+  if (pad || heldPad) return null
+  let names: string[]
+  try {
+    names = readdirSync(scratchpadRoot)
+  } catch {
+    return null // no root yet — nothing has ever been held
+  }
+  let best: Pad | null = null
+  for (const name of names) {
+    let raw: string
+    try {
+      raw = readFileSync(join(padDirFor(scratchpadRoot, name), 'pad.json'), 'utf8')
+    } catch {
+      continue // not a pad directory, or its state is gone
+    }
+    const p = deserialize(raw)
+    // An empty pad holds nothing, so bringing it back would only be noise.
+    if (!p || isEmpty(p)) continue
+    if (!best || p.updatedAt > best.updatedAt) best = p
+  }
+  if (!best) return null
+  heldPad = best
+  return best
 }
 
 /** A capture began.
@@ -240,13 +334,78 @@ export function deliver(dest: Destination): RenderResult | null {
   return out
 }
 
-/** The user threw the pad away. Unlike deliver, this takes the files too. */
+/** The user threw the pad away. Unlike deliver, this takes the files too —
+ *  INCLUDING a settled pad's, because from the user's side there is only ever
+ *  one pad: if nothing is live, the pad they mean is the one waiting to come
+ *  back. Leaving it on disk would resurrect it at the next arm. */
 export function discard(): void {
+  dropLivePad()
+  const h = heldPad
+  heldPad = null
+  if (h) discardPadFiles(h)
+}
+
+/** Drop the LIVE pad only. Split out because arming-between-captures throws
+ *  away a leftover unarmed pad, and that must not take the settled pad with
+ *  it — arming is the gesture that asks for the settled pad back. */
+function dropLivePad(): void {
   const p = pad
   pad = null
   armed = false
   openSegmentId = null
   if (p) discardPadFiles(p)
+}
+
+// ── Delivery ────────────────────────────────────────────────────────────
+//
+// Two steps, on purpose. Taking the pad is synchronous so the surface can be
+// told it is empty the instant the user commits — before any formatting
+// round-trip — and formatting is awaited after.
+
+/** Where the user chose to send it. Wider than `Destination` because "a new
+ *  task" and "the task already on screen" are the same rendering but different
+ *  deliveries. */
+export type DeliveryTarget = 'cursor' | 'newTask' | 'openTask'
+
+function destinationFor(target: DeliveryTarget): Destination {
+  return target === 'cursor' ? 'cursor' : 'task'
+}
+
+/** Render for this target and clear the pad. Null when there was nothing to
+ *  send — the pad is cleared either way, because the user committed it. */
+export function takeForDelivery(target: DeliveryTarget): RenderResult | null {
+  const out = deliver(destinationFor(target))
+  if (!out || !out.text.trim()) return null
+  return out
+}
+
+/** FORMATTING HAPPENS HERE, AND ONLY FOR THE CURSOR.
+ *
+ *  The pad holds the CLEANED transcript; the destination is not known until the
+ *  user picks one, so the polish that belongs to a destination is applied at
+ *  the end rather than at capture time. Formatted once, where the destination
+ *  is finally known.
+ *
+ *  A TASK GETS THE TEXT AS-IS. An agent does not need punctuation polish, and
+ *  running an instruction through the formatter costs latency and risks the
+ *  model rewriting what the user actually asked for. So the registered
+ *  formatter is not called at all for a task target — not called and its result
+ *  ignored, but never invoked.
+ *
+ *  Every failure returns the text unchanged: held work has already been cleared
+ *  from the pad by this point, so losing it to a formatter is not an option. */
+export async function formatForDelivery(
+  out: RenderResult,
+  target: DeliveryTarget,
+): Promise<RenderResult> {
+  if (destinationFor(target) !== 'cursor' || !formatFn) return out
+  try {
+    const text = await formatFn(out.text)
+    return typeof text === 'string' && text.trim() ? { ...out, text } : out
+  } catch (err) {
+    console.warn('[capture] delivery formatting failed — sending as captured:', err)
+    return out
+  }
 }
 
 /** Drop the segment in progress without touching the rest of the pad. Escape
@@ -482,10 +641,12 @@ export function _resetForTest(): void {
   disarmWatchers()
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null }
   pad = null
+  heldPad = null
   armed = false
   openSegmentId = null
   captureStartedAt = 0
   pasteFn = null
+  formatFn = null
   settingsFn = null
   clipboardWatch = null
   screenshotWatch = null
