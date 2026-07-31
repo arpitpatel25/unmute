@@ -21,7 +21,7 @@
 
 /** Every backend Unmute can run work on. The values are wire/disk format — they
  *  appear in meta.json and in the notch IPC — so they are append-only. */
-export type ProviderId = 'claude' | 'codex' | 'codex-desktop'
+export type ProviderId = 'claude' | 'codex' | 'codex-desktop' | 'claude-code-desktop'
 
 export interface Provider {
   id: ProviderId
@@ -77,6 +77,25 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     label: 'Codex desktop',
     transport: 'driver',
     hasTerminal: false,
+    canResume: false,
+  },
+  // The id is 'claude-code-desktop', NOT 'claude-desktop', because that string
+  // was already written down in two places before this provider existed — the
+  // Swift legacyDesktopBackends set and this file's own comment above. Choosing
+  // it means the legacy IPC fallback classifies this backend correctly on an
+  // engine too old to send `terminal`, instead of handing a driver-backed task
+  // a terminal's frame. A prettier name would have made that path wrong.
+  'claude-code-desktop': {
+    id: 'claude-code-desktop',
+    vendor: 'Claude',
+    surface: 'desktop',
+    label: 'Claude desktop',
+    transport: 'driver',
+    hasTerminal: false,
+    // FALSE for the same reason as codex-desktop: resume is not implemented for
+    // a driver backend. Claude Desktop *can* continue a task — you open it and
+    // send another message — but until that path exists, offering the button
+    // would produce a dead control.
     canResume: false,
   },
 }

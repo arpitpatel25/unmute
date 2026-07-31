@@ -13,7 +13,7 @@ import type {
   NotchCommand, NotchEvent, NotchStateName, TaskStatusName,
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
 } from './notch-client'
-import { providerOf } from '../providers'
+import { providerOf, type ProviderId } from '../providers'
 import { createLogger } from '../log'
 
 const log = createLogger('notch-controller')
@@ -25,7 +25,10 @@ export interface TaskLite {
   name?: string | null
   cwd?: string
   kind?: 'oneoff' | 'session'
-  agent?: 'claude' | 'codex' | 'codex-desktop'
+  // ProviderId, not a hand-written copy of it. This was spelled out literally
+  // and so silently excluded the fourth backend the moment one was added —
+  // the exact drift providers.ts was created to end.
+  agent?: ProviderId
   codexProject?: string | null
   conversation?: TurnP[] | null
   /** Last message that did not reach the agent (NOT a task failure). */

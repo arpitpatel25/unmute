@@ -5,6 +5,8 @@
 
 import { ipcRenderer } from 'electron'
 import type { Proposal } from './remote/curator-store'
+// Type-only: erased at compile, so the preload bundle gains no dependency.
+import type { ProviderId } from './remote/providers'
 
 export interface RemoteTaskSnapshot {
   id: string
@@ -184,7 +186,7 @@ export const remotePreloadExtensions = {
   remoteGetSettings: (): Promise<RemoteSettingsSnapshot> => ipcRenderer.invoke('remote:get-settings'),
   remoteSetPermissionMode: (mode: 'prompt' | 'auto-approve'): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-permission-mode', mode),
-  remoteSetAgent: (agent: 'claude' | 'codex' | 'codex-desktop'): Promise<boolean> =>
+  remoteSetAgent: (agent: ProviderId): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-agent', agent),
   /** Backends that can take a task RIGHT NOW, for the pill's picker. Includes a
    *  per-option reason so the UI can distinguish "not installed" (hide it) from
