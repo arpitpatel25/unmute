@@ -880,7 +880,12 @@ export class TaskManager extends EventEmitter {
   async adoptClaudeDesktop(opts: { windowMs?: number; cap?: number; only?: ReadonlySet<string> } = {}): Promise<string[]> {
     const driver = this.opts.claudeDesktopDriver
     if (!driver) return []
-    const windowMs = opts.windowMs ?? 24 * 60 * 60_000
+    // SEVEN DAYS, not one. Measured on a real machine the day this shipped:
+    // 33 conversations, and ZERO with activity inside 24h — the newest was
+    // 32.8h old. A 24h window adopted nothing at all, so the feature rendered
+    // an empty wall on a machine with 33 real chats on it. Chats are picked up
+    // and put down across days; a day is not the unit people work in.
+    const windowMs = opts.windowMs ?? 7 * 24 * 60 * 60_000
     const cap = opts.cap ?? 12
     const now = this.clock()
 
@@ -956,11 +961,16 @@ export class TaskManager extends EventEmitter {
       this.startPolling(id)
     }
 
-    if (adopted.length) {
-      log.event('claude-desktop-adopted', {
-        adopted: adopted.length, scanned: found.length, windowMs, cap,
-      })
-    }
+    // Logged EVERY sweep, including the empty ones. The 24h-window bug above
+    // was invisible precisely because a zero-adoption sweep said nothing: the
+    // wall was empty and the log was silent, so there was no way to tell "no
+    // conversations" from "the sweep never ran".
+    log.event('claude-desktop-adopted', {
+      adopted: adopted.length, scanned: found.length,
+      skippedArchived: found.filter((t) => t.archived).length,
+      skippedStale: found.filter((t) => !t.archived && t.lastActivityAt > 0 && now - t.lastActivityAt > windowMs).length,
+      windowMs, cap,
+    })
     return adopted
   }
 

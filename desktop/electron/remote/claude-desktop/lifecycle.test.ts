@@ -603,3 +603,14 @@ test('an empty intent never touches the app', async () => {
   assert.equal(called, false)
   m.killAll(); m.stopMaintenance()
 })
+
+test('the default window is a week — a day adopted NOTHING on a real machine', async () => {
+  // Measured: 33 real conversations, 0 with activity inside 24h, newest 32.8h.
+  // A 24h default rendered an empty wall on a machine full of chats.
+  const base = await tmp()
+  const now = Date.now()
+  const m = await makeManager(
+    fakeDriver({ tasks: [{ lastActivityAt: now - 33 * 3600_000 }] }), base, () => now)
+  assert.equal((await m.adoptClaudeDesktop()).length, 1)
+  m.killAll(); m.stopMaintenance()
+})
