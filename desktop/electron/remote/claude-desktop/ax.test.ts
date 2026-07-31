@@ -240,3 +240,49 @@ test('a stub tree yields NO rows, so it cannot be read as "everything idle"', as
   })
   assert.deepEqual(await ax.sidebar(['Fix login']), [])
 })
+
+test('an ANSWERED question in the transcript is not a live prompt', () => {
+  // Observed live in a built app: this exact shape put a card into needs-user
+  // with nothing waiting on the user. The two "options" are hover chrome and
+  // the composer's Send button — different depths, sixteen nodes apart.
+  const n = (id: number, depth: number, role: string, label: string): AxNode =>
+    ({ id, depth, role, label, actions: role === 'AXButton' ? ['AXPress'] : [] })
+  const nodes = [
+    ...filler(200),
+    n(236, 31, 'AXStaticText', 'What do you enjoy most about summer?'),
+    n(237, 30, 'AXGroup', ''),
+    n(238, 31, 'AXStaticText', 'Outdoor adventures'),
+    n(240, 31, 'AXStaticText', 'Done! You prefer Summer'),
+    n(241, 30, 'AXButton', 'Show message actions'),
+    ...Array.from({ length: 14 }, (_, k) => n(242 + k, 25, 'AXGroup', '')),
+    n(257, 27, 'AXButton', 'Send'),
+  ]
+  assert.equal(readConsent(nodes), null)
+})
+
+test('real prompt options are consecutive siblings at one depth', () => {
+  const n = (id: number, depth: number, role: string, label: string): AxNode =>
+    ({ id, depth, role, label, actions: role === 'AXButton' ? ['AXPress'] : [] })
+  const nodes = [
+    ...filler(200),
+    n(300, 20, 'AXStaticText', 'Allow Claude to write unmute-keytest.txt?'),
+    n(301, 21, 'AXButton', 'Deny 1'),
+    n(302, 21, 'AXButton', 'Always allow 2'),
+    n(303, 21, 'AXButton', 'Allow once 3 ⌘ ⏎'),
+  ]
+  const c = readConsent(nodes)!
+  assert.deepEqual(c.options.map((o) => o.label), ['Deny 1', 'Always allow 2', 'Allow once 3 ⌘ ⏎'])
+})
+
+test('same-depth buttons scattered far apart are chrome, not options', () => {
+  const n = (id: number, depth: number, role: string, label: string): AxNode =>
+    ({ id, depth, role, label, actions: role === 'AXButton' ? ['AXPress'] : [] })
+  const nodes = [
+    ...filler(200),
+    n(400, 20, 'AXStaticText', 'Is this a question?'),
+    n(401, 21, 'AXButton', 'One'),
+    ...Array.from({ length: 10 }, (_, k) => n(402 + k, 25, 'AXGroup', '')),
+    n(420, 21, 'AXButton', 'Two'),
+  ]
+  assert.equal(readConsent(nodes), null)
+})

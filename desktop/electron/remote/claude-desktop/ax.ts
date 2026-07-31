@@ -160,32 +160,52 @@ function isQuestion(n: AxNode): boolean {
  */
 export function readConsent(nodes: AxNode[], opts: { maxOptions?: number; window?: number } = {}): ClaudeConsent | null {
   const maxOptions = opts.maxOptions ?? 6
-  // How far past the question we will look for its buttons. Generous because
-  // the tree interleaves anonymous groups, tight enough that a button belonging
-  // to some other part of the UI cannot be swept in.
+  // How far past the question to look. Generous because anonymous groups sit
+  // between the question and its buttons.
   const window = opts.window ?? 24
 
-  // Last question wins: if the transcript contains older questions as static
-  // text, the LIVE prompt is the one nearest the end of the document order.
   for (let i = nodes.length - 1; i >= 0; i--) {
     const q = nodes[i]
     if (!isQuestion(q)) continue
 
-    const options: Array<{ id: number; label: string }> = []
+    // Collect candidate buttons, keeping their depth and position.
+    const cands: Array<{ id: number; label: string; depth: number; at: number }> = []
     for (let j = i + 1; j < Math.min(nodes.length, i + 1 + window); j++) {
       const n = nodes[j]
-      if (n.role !== 'AXButton') continue
-      if (!n.label.trim()) continue
-      // A pressable button is the only thing that can answer a prompt.
+      if (n.role !== 'AXButton' || !n.label.trim()) continue
       if (n.actions.length && !n.actions.includes('AXPress')) continue
-      options.push({ id: n.id, label: n.label.trim() })
-      if (options.length > maxOptions) break
+      cands.push({ id: n.id, label: n.label.trim(), depth: n.depth, at: j })
+    }
+    if (cands.length < 2) continue
+
+    // THE OPTIONS OF ONE PROMPT ARE SIBLINGS: same depth, in a tight run.
+    //
+    // Without this the matcher fired on an ALREADY-ANSWERED question sitting in
+    // the conversation and swept up two unrelated controls — observed live in a
+    // built app:
+    //
+    //   question: "What do you enjoy most about summer?"   (old, answered)
+    //   options:  ["Show message actions", "Send"]         (hover chrome + composer)
+    //
+    // which put a card into needs-user with nothing waiting on the user. Those
+    // two sat at depths 30 and 27, sixteen nodes apart — siblings of nothing.
+    // A real prompt's buttons are consecutive children of one container, so
+    // grouping by depth and requiring a tight run rejects that shape without
+    // knowing a single English label.
+    const byDepth = new Map<number, Array<{ id: number; label: string; at: number }>>()
+    for (const c of cands) {
+      const list = byDepth.get(c.depth) ?? []
+      list.push({ id: c.id, label: c.label, at: c.at })
+      byDepth.set(c.depth, list)
     }
 
-    // Two is the minimum that is a CHOICE. One button is a dismissable notice,
-    // and more than a handful is a toolbar we have wandered into.
-    if (options.length >= 2 && options.length <= maxOptions) {
-      return { question: q.label.trim(), options }
+    for (const [, group] of [...byDepth.entries()].sort((a, b) => b[1].length - a[1].length)) {
+      if (group.length < 2 || group.length > maxOptions) continue
+      // Consecutive: no option more than a few nodes from the previous one.
+      // Real options are adjacent; scattered same-depth buttons are chrome.
+      const tight = group.every((g, k) => k === 0 || g.at - group[k - 1].at <= 6)
+      if (!tight) continue
+      return { question: q.label.trim(), options: group.map((g) => ({ id: g.id, label: g.label })) }
     }
   }
   return null
