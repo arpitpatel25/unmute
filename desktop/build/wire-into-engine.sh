@@ -683,6 +683,10 @@ run_build() {
     npx electron-builder --mac --publish never
 
     local rel="$engine/release"
+    # A stale alias from a previous run must never be mistaken for this build's
+    # output — it is a copy of the PREVIOUS version's DMG under a name that
+    # sorts adjacent to the real one.
+    rm -f "$rel/unmute-arm64.dmg"
     local dmg; dmg="$(ls "$rel"/*.dmg | head -1)"
     log "Notarizing + stapling the DMG itself (second notary trip) — so downloads aren't flagged 'damaged'"
     xcrun notarytool submit "$dmg" \
@@ -690,6 +694,19 @@ run_build() {
       --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
     xcrun stapler staple "$dmg"
     xcrun stapler validate "$dmg"  # aborts loudly (set -e) if the ticket didn't attach
+
+    # The landing page links at a VERSION-LESS asset name so the site never
+    # needs editing per release:
+    #   /releases/latest/download/unmute-arm64.dmg
+    # electron-builder only emits the versioned name, so ship a copy under the
+    # stable one as well. Without it, every "Get unmute" button on the site 404s
+    # the instant this release becomes `latest` — the site is fine, the asset it
+    # names simply isn't there. Copied AFTER stapling so the alias carries the
+    # notarization ticket, and re-validated because a download that skips the
+    # ticket is exactly the "unmute is damaged" report we staple to avoid.
+    # The publish globs below are *.dmg, so this uploads with everything else.
+    cp "$dmg" "$rel/unmute-arm64.dmg"
+    xcrun stapler validate "$rel/unmute-arm64.dmg"
 
     # Publish the STAPLED artifacts ourselves as a single draft. Doing it via gh
     # (instead of electron-builder --publish) also avoids electron-builder's parallel
