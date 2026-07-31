@@ -379,3 +379,93 @@ test('no AX reader configured ⇒ cards still work from disk', async () => {
   assert.equal(m.get(id)!.state, 'ready')
   m.killAll(); m.stopMaintenance()
 })
+
+// ── answering from Unmute ─────────────────────────────────────────────────
+
+function fakeActuator(ok = true) {
+  const answered: string[] = []
+  return {
+    answered,
+    answerConsent: async (_c: unknown, label: string) => {
+      answered.push(label)
+      return ok ? { ok: true } : { ok: false, reason: 'bridge-failed' as const }
+    },
+    send: async () => ({ ok: true }),
+  }
+}
+
+async function managerFull(driver: unknown, ax: unknown, act: unknown, baseDir: string) {
+  return new TaskManager({
+    executorFactory: () => { throw new Error('no executor') },
+    claudeDesktopDriver: driver as never,
+    claudeDesktopAx: ax as never,
+    claudeActuator: act as never,
+    baseDir, userKey: 'test', pollMs: 10_000,
+  })
+}
+
+test('the consent reaches the card, so the user can see what is being asked', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login', lastFocusedAt: Date.now() }], snapshots: [{ updatedAt: 5000 }] })
+  const ax = fakeAx({ consent: { question: 'Allow Claude to write a file?' } })
+  const m = await managerWithAx(d, ax, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  const t = m.get(id)!
+  assert.equal(t.claudeConsent?.question, 'Allow Claude to write a file?')
+  assert.deepEqual(t.claudeConsent?.options, ['Deny 1', 'Allow once 3'])
+  m.killAll(); m.stopMaintenance()
+})
+
+test('answering sends the LABEL the user saw, not an index', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login', lastFocusedAt: Date.now() }], snapshots: [{ updatedAt: 5000 }] })
+  const ax = fakeAx({ consent: { question: 'Allow Claude to write a file?' } })
+  const act = fakeActuator()
+  const m = await managerFull(d, ax, act, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  const r = await m.answerClaudeDesktop(id, 'Deny 1')
+  assert.equal(r.ok, true)
+  assert.deepEqual(act.answered, ['Deny 1'])
+  assert.equal(m.get(id)!.claudeConsent, undefined)
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a prompt already answered IN THE APP is refused, not typed at', async () => {
+  // Typing a digit at a prompt that is gone lands in the composer as text.
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login', lastFocusedAt: Date.now() }], snapshots: [{ updatedAt: 5000 }] })
+  let consent: { question: string } | null = { question: 'Allow Claude to write?' }
+  const ax = { nodes: async () => fakeAx({ consent }).nodes() }
+  const act = fakeActuator()
+  const m = await managerFull(d, ax, act, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  consent = null                                  // user answered it in Claude
+  const r = await m.answerClaudeDesktop(id, 'Deny 1')
+  assert.equal(r.ok, false)
+  assert.equal(r.reason, 'prompt-gone')
+  assert.deepEqual(act.answered, [], 'must not type at a prompt that is gone')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('answering a non-Claude-desktop task is refused', async () => {
+  const base = await tmp()
+  const m = await managerFull(fakeDriver({ tasks: [{}] }), fakeAx(), fakeActuator(), base)
+  const r = await m.answerClaudeDesktop('nope', 'Deny 1')
+  assert.equal(r.ok, false)
+  m.killAll(); m.stopMaintenance()
+})
+
+test('with no actuator the prompt is visible but honestly unanswerable', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login', lastFocusedAt: Date.now() }], snapshots: [{ updatedAt: 5000 }] })
+  const m = await managerWithAx(d, fakeAx({ consent: { question: 'Allow?' } }), base)
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  const r = await m.answerClaudeDesktop(id, 'Deny 1')
+  assert.equal(r.ok, false)
+  assert.equal(r.reason, 'no-actuator')
+  m.killAll(); m.stopMaintenance()
+})

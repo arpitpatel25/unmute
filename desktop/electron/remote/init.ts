@@ -33,6 +33,7 @@ import { providerOf, PROVIDERS, type ProviderId } from './providers'
 import { CodexDesktopDriver } from './codex/driver'
 import { ClaudeDesktopDriver } from './claude-desktop/driver'
 import { ClaudeDesktopAx } from './claude-desktop/ax'
+import { ClaudeActuator } from './claude-desktop/actuate'
 import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
@@ -339,6 +340,8 @@ let codexDriver: CodexDesktopDriver | null = null
 let claudeDesktopDriver: ClaudeDesktopDriver | null = null
 /** Claude desktop LIVE state — see claude-desktop/ax.ts. */
 let claudeDesktopAx: ClaudeDesktopAx | null = null
+/** Claude desktop focus-stealing actions — see claude-desktop/actuate.ts. */
+let claudeActuator: ClaudeActuator | null = null
 
 /** The minimum a probe needs from a desktop driver. Declared structurally so a
  *  second backend does not have to inherit CodexDesktopDriver to be probed. */
@@ -2041,11 +2044,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // means a dead accessibility tree costs the live signals only — cards, titles
   // and conversations keep working from disk.
   claudeDesktopAx = new ClaudeDesktopAx({})
+  // The only Claude-desktop component that steals focus. Serialized internally.
+  claudeActuator = new ClaudeActuator({})
   manager = new TaskManager({
     executorFactory,
     codexDriver,
     claudeDesktopDriver,
     claudeDesktopAx,
+    claudeActuator,
     // Read fresh per dispatch: the Codex composer's permission level is set from
     // the SAME user setting that decides --dangerously-skip-permissions for
     // Claude, so the two backends behave alike (capped by what the device

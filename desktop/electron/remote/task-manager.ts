@@ -48,6 +48,7 @@ import type { CodexDesktopDriver } from './codex/driver'
 import type { ClaudeDesktopDriver } from './claude-desktop/driver'
 import type { ClaudeDesktopAx, ClaudeSidebarRow } from './claude-desktop/ax'
 import { statusForTitle, readState as readAxState, readSidebarRows as readAxSidebar } from './claude-desktop/ax'
+import type { ClaudeActuator } from './claude-desktop/actuate'
 import type { ClaudeConsent as ClaudeConsentLite } from './claude-desktop/ax'
 import { beat, pendingApprovals, expireStaleApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
 import { devEvent } from './curator-devlog'
@@ -107,6 +108,11 @@ export interface Task {
    *  ever been observed, and inventing meaning for an unseen value is how a
    *  blocked task ends up looking fine. */
   claudeStatusChip?: string
+  /** The permission prompt this task is stopped on, as the window is showing
+   *  it. Present only while blocked — the card renders the question and the
+   *  option labels, and answering sends the label back verbatim so the choice
+   *  cannot drift onto a different button between showing and acting. */
+  claudeConsent?: { question: string; options: string[] }
   /** Last delivery problem — the message did not reach the agent. Distinct from
    *  `error`, which means the WORK failed; this one never settles the task. */
   deliveryError?: string
@@ -254,6 +260,9 @@ export interface TaskManagerOpts {
    *  on disk by design. Optional so the whole backend degrades rather than
    *  breaks when the accessibility tree is unavailable. */
   claudeDesktopAx?: ClaudeDesktopAx
+  /** Focus-stealing actions for Claude desktop. Absent ⇒ prompts are visible
+   *  but unanswerable from here, which is still better than not seeing them. */
+  claudeActuator?: ClaudeActuator
   /** The user's approval setting, read fresh so a settings change takes effect
    *  on the NEXT task rather than needing a restart. Feeds the Codex composer's
    *  permission level exactly as it feeds --dangerously-skip-permissions. */
@@ -409,8 +418,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'permissionMode' | 'codexReasoning'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'permissionMode' | 'codexReasoning'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -451,6 +460,7 @@ export class TaskManager extends EventEmitter {
       codexDriver: opts.codexDriver,
       claudeDesktopDriver: opts.claudeDesktopDriver,
       claudeDesktopAx: opts.claudeDesktopAx,
+      claudeActuator: opts.claudeActuator,
       permissionMode: opts.permissionMode,
       codexReasoning: opts.codexReasoning,
       reapSession: opts.reapSession,
@@ -949,6 +959,45 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
+   * Answer the permission prompt a Claude desktop task is stopped on.
+   *
+   * Takes the option LABEL the user was shown, not an index or a node id, so
+   * the choice cannot drift onto a different button between rendering the card
+   * and acting on it.
+   *
+   * This is the one call in this backend that steals focus. It is serialized
+   * inside the actuator, so two users of this method cannot fight over which
+   * app is frontmost or which conversation is open.
+   */
+  async answerClaudeDesktop(id: string, optionLabel: string): Promise<{ ok: boolean; reason?: string }> {
+    const task = this.tasks.get(id)
+    if (!task || task.agent !== 'claude-code-desktop') return { ok: false, reason: 'not-a-claude-desktop-task' }
+    const actuator = this.opts.claudeActuator
+    if (!actuator) return { ok: false, reason: 'no-actuator' }
+    const tlog = log.child({ taskId: id })
+
+    // Re-read rather than trusting the cached prompt: the user may have
+    // answered it in the app while the card sat on screen, and typing a digit
+    // at a prompt that is gone would land in the composer as text.
+    this.claudeAxCache = null
+    const ax = await this.claudeAx([])
+    if (!ax.treeAlive || !ax.consent) {
+      delete task.claudeConsent
+      tlog.event('claude-desktop-answer-stale', { treeAlive: ax.treeAlive })
+      return { ok: false, reason: 'prompt-gone' }
+    }
+
+    const res = await actuator.answerConsent(ax.consent, optionLabel)
+    if (res.ok) {
+      delete task.claudeConsent
+      this.transition(id, 'processing')
+    } else {
+      tlog.warn('claude-desktop-answer-failed', { reason: res.reason ?? 'unknown' })
+    }
+    return res.ok ? { ok: true } : { ok: false, reason: res.reason ?? 'failed' }
+  }
+
+  /**
    * One accessibility read per tick, shared by every Claude desktop card.
    *
    * Deduped two ways: a short TTL, and an in-flight promise so a burst of
@@ -1132,6 +1181,8 @@ export class TaskManager extends EventEmitter {
     // Blocked outranks every movement signal: a turn stopped for permission is
     // not 'processing', however recently the file grew before it stopped.
     if (blocked) {
+      const c = this.claudeAxCache?.consent
+      if (c) task.claudeConsent = { question: c.question, options: c.options.map((o) => o.label) }
       if (task.state !== 'needs-user') {
         tlog.event('claude-desktop-blocked', { question: this.claudeAxCache?.consent?.question?.slice(0, 80) ?? null })
         this.transition(id, 'needs-user')
@@ -1141,6 +1192,7 @@ export class TaskManager extends EventEmitter {
     // The prompt is gone: whoever answered it (in Unmute or in the app), this
     // card must not stay stuck on a question nobody is being asked any more.
     if (task.state === 'needs-user') {
+      delete task.claudeConsent
       tlog.event('claude-desktop-unblocked', {})
       this.transition(id, 'processing')
       return
