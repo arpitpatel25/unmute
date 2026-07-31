@@ -425,11 +425,22 @@ static Napi::Value GetTree(const Napi::CallbackInfo &info) {
 }
 
 /// press(app, id) → {ok, role, label} | {error}
+/// press(app, id, maxDepth?)
+///
+/// maxDepth MUST match the depth of the walk the caller took the id from.
+/// Node ids are POSITIONAL within a walk, so a walk of a different depth
+/// produces different ids for the same elements — pressing id 42 from a
+/// depth-40 read against this default-14 walk silently actuates a DIFFERENT
+/// control, or reports out-of-range. Deep Electron UIs make this routine
+/// rather than exotic: Claude Desktop's Send button sits at depth 28 and its
+/// permission buttons around 20, so a depth-14 walk cannot even see them.
+/// Defaulted to 14 so existing callers are unaffected.
 static Napi::Value Press(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   std::string app = info[0].As<Napi::String>();
   int target = info[1].As<Napi::Number>().Int32Value();
-  return withNodes(env, app, 0, 14, 4000, [&](ResolvedApp &r, std::vector<Node> &nodes) -> Napi::Value {
+  int maxDepth = info.Length() > 2 && info[2].IsNumber() ? info[2].As<Napi::Number>().Int32Value() : 14;
+  return withNodes(env, app, 0, maxDepth, 4000, [&](ResolvedApp &r, std::vector<Node> &nodes) -> Napi::Value {
     Napi::Object out = Napi::Object::New(env);
     if (target < 0 || target >= (int)nodes.size()) {
       out.Set("error", Napi::String::New(env, "id out of range (max " + std::to_string(nodes.size() - 1) + "). The tree may have changed — re-run find."));
@@ -486,12 +497,16 @@ static AXError axTypeInto(AXUIElementRef el, const std::string &text, bool repla
 }
 
 /// setValue(app, id, text) → {ok, role, label} | {error}
+/// setValue(app, id, text, maxDepth?) — see the note on Press about maxDepth;
+/// the same positional-id hazard applies, and writing text into the wrong
+/// element is just as damaging as pressing the wrong button.
 static Napi::Value SetValue(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   std::string app = info[0].As<Napi::String>();
   int target = info[1].As<Napi::Number>().Int32Value();
   std::string text = info[2].As<Napi::String>();
-  return withNodes(env, app, 0, 14, 4000, [&](ResolvedApp &r, std::vector<Node> &nodes) -> Napi::Value {
+  int maxDepth = info.Length() > 3 && info[3].IsNumber() ? info[3].As<Napi::Number>().Int32Value() : 14;
+  return withNodes(env, app, 0, maxDepth, 4000, [&](ResolvedApp &r, std::vector<Node> &nodes) -> Napi::Value {
     Napi::Object out = Napi::Object::New(env);
     if (target < 0 || target >= (int)nodes.size()) {
       out.Set("error", Napi::String::New(env, "id out of range. The tree may have changed — re-run find."));

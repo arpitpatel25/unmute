@@ -469,3 +469,71 @@ test('with no actuator the prompt is visible but honestly unanswerable', async (
   assert.equal(r.reason, 'no-actuator')
   m.killAll(); m.stopMaintenance()
 })
+
+// ── sending into an existing conversation ─────────────────────────────────
+
+function fakeActuatorFull(res: { ok: boolean; reason?: string } = { ok: true }) {
+  const sent: Array<{ title: string; text: string }> = []
+  return {
+    sent,
+    answerConsent: async () => ({ ok: true }),
+    sendTo: async (title: string, text: string) => { sent.push({ title, text }); return res },
+    send: async () => res,
+    openConversation: async () => ({ ok: true }),
+  }
+}
+
+test('sending addresses the conversation by title, in one intent', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login' }], snapshots: [{ updatedAt: 5000, lastAgentMessage: 'ok' }] })
+  const act = fakeActuatorFull()
+  const m = await managerFull(d, fakeAx(), act, base)
+  const [id] = await m.adoptClaudeDesktop()
+  const r = await m.sendClaudeDesktop(id, 'try the other branch')
+  assert.equal(r.ok, true)
+  assert.deepEqual(act.sent, [{ title: 'Fix login', text: 'try the other branch' }])
+  assert.equal(m.get(id)!.state, 'processing')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a delivery failure is NOT a task failure', async () => {
+  // The conversation is fine; our message did not arrive. Same distinction the
+  // PTY backends draw with deliveryError.
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login' }], snapshots: [{ updatedAt: 5000 }] })
+  const m = await managerFull(d, fakeAx(), fakeActuatorFull({ ok: false, reason: 'row-not-found' }), base)
+  const [id] = await m.adoptClaudeDesktop()
+  const r = await m.sendClaudeDesktop(id, 'hello')
+  assert.equal(r.ok, false)
+  assert.equal(m.get(id)!.deliveryError, 'row-not-found')
+  assert.notEqual(m.get(id)!.state, 'failed')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('sending is refused while the task is blocked on a prompt', async () => {
+  // Typing prose at a permission prompt puts it somewhere unpredictable and
+  // leaves the prompt unanswered.
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login', lastFocusedAt: Date.now() }], snapshots: [{ updatedAt: 5000 }] })
+  const act = fakeActuatorFull()
+  const m = await managerFull(d, fakeAx({ consent: { question: 'Allow Claude to write?' } }), act, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  assert.equal(m.get(id)!.state, 'needs-user')
+  const r = await m.sendClaudeDesktop(id, 'hello')
+  assert.equal(r.ok, false)
+  assert.equal(r.reason, 'answer-the-prompt-first')
+  assert.deepEqual(act.sent, [])
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a task with no title cannot be addressed, and says so', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: null }], snapshots: [{ updatedAt: 5000 }] })
+  const m = await managerFull(d, fakeAx(), fakeActuatorFull(), base)
+  const [id] = await m.adoptClaudeDesktop()
+  const r = await m.sendClaudeDesktop(id, 'hello')
+  assert.equal(r.ok, false)
+  assert.equal(r.reason, 'no-title-to-address')
+  m.killAll(); m.stopMaintenance()
+})

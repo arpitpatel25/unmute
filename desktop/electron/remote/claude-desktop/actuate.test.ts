@@ -163,3 +163,86 @@ test('empty text is refused before any focus is stolen', async () => {
   assert.equal(r.ok, false)
   assert.deepEqual(h.focus, [], 'must not front the app to send nothing')
 })
+
+// ── opening the right conversation ────────────────────────────────────────
+
+/** A bridge whose getTree returns scripted trees, one per successive call. */
+function treeBridge(trees: Array<Array<{ id: number; role: string; label: string }>>, pressResult: unknown = { ok: true }) {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  let i = 0
+  return {
+    calls,
+    bridge: {
+      call: async (m: string, a: unknown[]) => {
+        calls.push({ fn: m, args: a })
+        if (m === 'getTree') {
+          const t = trees[Math.min(i++, trees.length - 1)]
+          return { nodes: t.map((n) => ({ depth: 19, actions: ['AXPress'], ...n })) }
+        }
+        if (m === 'press') return pressResult
+        return {}
+      },
+      trusted: async () => true, dispose: () => {},
+    } as never,
+  }
+}
+const live = (rows: Array<{ id: number; label: string }>) =>
+  [{ id: 0, role: 'AXWebArea', label: '' }, ...rows.map((r) => ({ id: r.id, role: 'AXButton', label: r.label }))]
+
+function actuatorWith(bridge: unknown) {
+  return new ClaudeActuator({
+    frontmost: async () => 'com.user.previousapp',
+    activate: async () => true,
+    bridge: bridge as never,
+  })
+}
+
+test('opening presses the row whose label ends with the title', async () => {
+  const t = live([{ id: 7, label: 'Idle Fix login' }])
+  const h = treeBridge([t, t])
+  const r = await actuatorWith(h.bridge).openConversation('Fix login')
+  assert.equal(r.ok, true)
+  const press = h.calls.find((c) => c.fn === 'press')!
+  assert.equal(press.args[1], 7)
+})
+
+test('the press uses the SAME depth as the read, or it addresses another node', async () => {
+  const t = live([{ id: 7, label: 'Idle Fix login' }])
+  const h = treeBridge([t, t])
+  await actuatorWith(h.bridge).openConversation('Fix login')
+  const read = h.calls.find((c) => c.fn === 'getTree')!
+  const press = h.calls.find((c) => c.fn === 'press')!
+  assert.equal(press.args[2], read.args[3], 'press depth must equal read depth')
+})
+
+test('a row that MOVED between read and press is refused, not pressed', async () => {
+  // Positions were observed shifting between renders with no user interaction.
+  const before = live([{ id: 7, label: 'Idle Fix login' }])
+  const after = live([{ id: 7, label: 'Idle Something else entirely' }])
+  const h = treeBridge([before, after])
+  const r = await actuatorWith(h.bridge).openConversation('Fix login')
+  assert.deepEqual(r, { ok: false, reason: 'row-moved' })
+  assert.equal(h.calls.filter((c) => c.fn === 'press').length, 0)
+})
+
+test('a conversation not in the windowed sidebar says so', async () => {
+  const t = live([{ id: 7, label: 'Idle Another chat' }])
+  const h = treeBridge([t, t])
+  const r = await actuatorWith(h.bridge).openConversation('Fix login')
+  assert.deepEqual(r, { ok: false, reason: 'row-not-found' })
+})
+
+test('a dead tree never presses anything', async () => {
+  const stub = [{ id: 1, role: 'AXGroup', label: '' }]
+  const h = treeBridge([stub, stub])
+  const r = await actuatorWith(h.bridge).openConversation('Fix login')
+  assert.deepEqual(r, { ok: false, reason: 'tree-dead' })
+  assert.equal(h.calls.filter((c) => c.fn === 'press').length, 0)
+})
+
+test('a press that reports failure is not reported as success', async () => {
+  const t = live([{ id: 7, label: 'Idle Fix login' }])
+  const h = treeBridge([t, t], { ok: false })
+  const r = await actuatorWith(h.bridge).openConversation('Fix login')
+  assert.equal(r.ok, false)
+})

@@ -959,6 +959,49 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
+   * Send a message to a Claude desktop conversation.
+   *
+   * Addressed by the task's TITLE, because that is what the sidebar row carries
+   * and the sidebar is the only way to select a conversation. The actuator
+   * opens and sends as one intent so nothing can re-target the app in between.
+   *
+   * Refuses while the task is blocked: typing prose at a permission prompt puts
+   * the text somewhere unpredictable and leaves the prompt unanswered.
+   */
+  async sendClaudeDesktop(id: string, text: string): Promise<{ ok: boolean; reason?: string }> {
+    const task = this.tasks.get(id)
+    if (!task || task.agent !== 'claude-code-desktop') return { ok: false, reason: 'not-a-claude-desktop-task' }
+    const actuator = this.opts.claudeActuator
+    if (!actuator) return { ok: false, reason: 'no-actuator' }
+    if (task.state === 'needs-user') return { ok: false, reason: 'answer-the-prompt-first' }
+    const title = task.name
+    if (!title) return { ok: false, reason: 'no-title-to-address' }
+
+    const tlog = log.child({ taskId: id })
+    task.sending = true
+    this.emit('updated', task)
+    try {
+      const res = await actuator.sendTo(title, text)
+      if (!res.ok) {
+        // A delivery failure is NOT a task failure: the conversation is fine,
+        // our message simply did not arrive. Same distinction the PTY backends
+        // draw with deliveryError.
+        task.deliveryError = res.reason ?? 'failed'
+        tlog.warn('claude-desktop-send-failed', { reason: res.reason ?? 'unknown' })
+        return { ok: false, reason: res.reason ?? 'failed' }
+      }
+      delete task.deliveryError
+      this.claudeAxCache = null          // the UI just changed; do not serve a stale read
+      this.transition(id, 'processing')
+      tlog.event('claude-desktop-sent', { chars: text.length })
+      return { ok: true }
+    } finally {
+      task.sending = false
+      this.emit('updated', task)
+    }
+  }
+
+  /**
    * Answer the permission prompt a Claude desktop task is stopped on.
    *
    * Takes the option LABEL the user was shown, not an index or a node id, so

@@ -53,15 +53,27 @@
 import { execFile } from 'node:child_process'
 import { getAxBridge, type AxBridge } from '../ax/ax-bridge'
 import { createLogger } from '../log'
-import { CLAUDE_BUNDLE_ID, type ClaudeConsent } from './ax'
+import { CLAUDE_BUNDLE_ID, readSidebarRows, isTreeAlive, type ClaudeConsent, type AxNode } from './ax'
 
 const log = createLogger('claude-desktop-actuate')
 
 export interface ActuateResult {
   ok: boolean
-  /** Why not. 'no-shortcut' = the option carried no digit to type. */
+  /** Why not. 'no-shortcut' = the option carried no digit to type.
+   *  'row-not-found' = that conversation is not in the (windowed) sidebar.
+   *  'row-moved' = the tree shifted between locating the row and pressing it. */
   reason?: 'not-running' | 'no-shortcut' | 'activate-failed' | 'bridge-failed'
+    | 'tree-dead' | 'row-not-found' | 'row-moved'
 }
+
+/**
+ * Depth for every read AND every press in this module.
+ *
+ * These must be the SAME number. Node ids are positional within a walk, so a
+ * press performed at a different depth than the read that produced the id
+ * actuates a different control. Sharing one constant is what keeps that true.
+ */
+export const ACTUATE_DEPTH = 40
 
 /**
  * The digit Claude Desktop assigns to a prompt option.
@@ -174,6 +186,76 @@ export class ClaudeActuator {
       log.event('claude-desktop-consent-answered', { option: option.label, digit })
       return { ok: true }
     }, { ok: false, reason: 'activate-failed' })
+  }
+
+  /**
+   * Open one conversation by title, so a later action lands in the right chat.
+   *
+   * Everything else in this module acts on "the open conversation", and only
+   * ONE is ever addressable on this app (AXWindows is empty) — so this is the
+   * step that decides which task an action belongs to. Getting it wrong sends
+   * one task's message to another task's thread.
+   *
+   * GUARDED AGAINST TREE DRIFT. The tree is re-read immediately before the
+   * press and the row must still carry the same label at the same id. Positions
+   * were observed shifting between renders with no user interaction, and an id
+   * that has moved would press whatever is now sitting there. The spike's rule
+   * exactly: resolve fresh, re-check the label, then act.
+   */
+  async openConversation(title: string): Promise<ActuateResult> {
+    if (!title.trim()) return { ok: false, reason: 'row-not-found' }
+    return this.run<ActuateResult>('openConversation', async () => {
+      const bridge = this.bridge()
+      const read = async (): Promise<AxNode[]> => {
+        const out = await bridge.call('getTree', [this.bundleId, 0, '', ACTUATE_DEPTH, true])
+        if (!out || out.error) return []
+        return (out.nodes ?? []) as AxNode[]
+      }
+
+      const first = await read()
+      if (!isTreeAlive(first)) return { ok: false, reason: 'tree-dead' }
+      const row = readSidebarRows(first, [title]).find((r) => r.title === title)
+      if (!row) {
+        // The sidebar is windowed — a conversation can be real and simply not
+        // listed. Saying so beats pressing something adjacent.
+        log.warn('open-row-not-found', { title: title.slice(0, 60) })
+        return { ok: false, reason: 'row-not-found' }
+      }
+
+      // Re-read and confirm the id still means the same row.
+      const second = await read()
+      const stillThere = second.find((n) => n.id === row.id)
+      if (!stillThere || !stillThere.label.endsWith(title)) {
+        log.warn('open-row-moved', { title: title.slice(0, 60) })
+        return { ok: false, reason: 'row-moved' }
+      }
+
+      const out = await bridge.call('press', [this.bundleId, row.id, ACTUATE_DEPTH])
+      if (out?.error || out?.ok === false) {
+        log.warn('open-press-failed', { error: out?.error ?? 'press reported false' })
+        return { ok: false, reason: 'bridge-failed' }
+      }
+      log.event('claude-desktop-opened', { title: title.slice(0, 60) })
+      return { ok: true }
+    }, { ok: false, reason: 'activate-failed' })
+  }
+
+  /**
+   * Open a conversation and send into it, as ONE actuation.
+   *
+   * These must not be two calls from outside. Between an open and a send the
+   * queue could admit another intent, re-open a different conversation, and
+   * the message would land in the wrong thread — the single worst outcome this
+   * backend can produce, and completely silent when it happens.
+   *
+   * Runs inside a single fronting, so it is also one focus switch rather than
+   * two.
+   */
+  async sendTo(title: string, text: string): Promise<ActuateResult> {
+    if (!text.trim()) return { ok: false, reason: 'no-shortcut' }
+    const opened = await this.openConversation(title)
+    if (!opened.ok) return opened
+    return this.send(text)
   }
 
   /**
