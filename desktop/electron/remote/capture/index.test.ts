@@ -1556,12 +1556,53 @@ describe('an unarmed stop delivers what was captured, not the speech alone', () 
     assert.equal(JSON.stringify(snapshot().pad), before, 'no segment text, no persist, no announce')
   })
 
-  test('a blank transcript contributes no segment, not the word [BLANK_AUDIO]', () => {
+  // ── A capture with NO USABLE SPEECH delivers nothing ──────────────────
+  //
+  // Composing is a REFINEMENT of speech that is already being delivered: an
+  // insert lands "at the point it happened", and with nothing said there is no
+  // point. The regression these cover is real and was live: the sequential
+  // dictation flow's quiet-miss sets `output = ''` and FALLS THROUGH to its
+  // delivery site, so the composer was reached with an empty transcript and a
+  // pad holding a URL — it rendered the insert alone and `if (output)` pasted
+  // the bare URL. Before universal capture, a quiet miss pasted nothing.
+
+  test('a QUIET MISS with an insert on the pad pastes NOTHING, not the bare URL', () => {
     const id = beginSegment('cursor', 1000, true)
     recordInsert({ kind: 'url', content: 'https://example.com', atMs: 2000 }, 2000)
     endSegment(3000)
 
-    assert.equal(delivered(id, '[BLANK_AUDIO]'), 'https://example.com')
+    assert.equal(composeWithInserts(id, '', 'cursor'), null, 'no speech ⇒ nothing to compose')
+    assert.equal(delivered(id, ''), '', 'so the delivery site has nothing to inject')
+  })
+
+  test('the same for a TASK — a quiet miss dispatches nothing', () => {
+    // dispatchRemoteAndFinish composes too, and its `if (cmd)` guard would have
+    // sent a task whose entire content was a link the user had merely copied.
+    const id = beginSegment('task', 1000, true)
+    recordInsert({ kind: 'url', content: 'https://example.com', atMs: 2000 }, 2000)
+    endSegment(3000)
+
+    assert.equal(composeWithInserts(id, '', 'task'), null)
+    assert.equal(delivered(id, '', 'task'), '')
+  })
+
+  test('whitespace-only speech is no speech', () => {
+    const id = beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'url', content: 'https://example.com', atMs: 2000 }, 2000)
+    endSegment(3000)
+
+    assert.equal(composeWithInserts(id, '   \n  ', 'cursor'), null)
+  })
+
+  test('a blank transcript is no speech either — not the insert alone', () => {
+    // '[BLANK_AUDIO]' is normalised to nothing (the same rule holdIfArmed
+    // applies when holding), and nothing said is nothing delivered.
+    const id = beginSegment('cursor', 1000, true)
+    recordInsert({ kind: 'url', content: 'https://example.com', atMs: 2000 }, 2000)
+    endSegment(3000)
+
+    assert.equal(composeWithInserts(id, '[BLANK_AUDIO]', 'cursor'), null)
+    assert.equal(delivered(id, '[BLANK_AUDIO]'), '[BLANK_AUDIO]', 'left for the caller to discard, as it does')
   })
 
   test('an unknown segment id still delivers the speech — a cancelled+undone capture', () => {

@@ -2055,6 +2055,13 @@ class SessionManager {
             if (this.quietMiss(session, output)) {
               session.errorMessage = 'quiet-miss'
               output = ''
+              // AND IT FALLS THROUGH — deliberately, so the shared cleanup and
+              // telemetry below run once. Nothing is delivered because `output`
+              // is empty and every site below is guarded on it. That includes
+              // composeCaptured: composeWithInserts refuses a compose with no
+              // usable speech, so a quiet miss during which the user copied a
+              // URL pastes nothing rather than the bare URL. The guard is in
+              // the composer, not here, because this is one of four sites.
             }
             // Remote commands are dispatched verbatim — never run the LLM
             // polish pass on them.

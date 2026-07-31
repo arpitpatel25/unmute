@@ -781,7 +781,24 @@ export async function formatForDelivery(
  *  never been formatted.
  *
  *  A blank or junk transcript contributes NO segment rather than the literal
- *  word "[BLANK_AUDIO]" — the same rule holdIfArmed applies when holding. */
+ *  word "[BLANK_AUDIO]" — the same rule holdIfArmed applies when holding.
+ *
+ *  NO SPEECH MEANS NO DELIVERY, AND THAT RULE LIVES HERE. Every caller reached
+ *  this function on a path where the transcript could turn out to be nothing:
+ *  the sequential dictation flow's quiet-miss sets `output = ''` and FALLS
+ *  THROUGH to its delivery site, so a dictation that captured no usable speech
+ *  but during which the user copied a URL rendered the insert on its own and
+ *  pasted the bare URL. Before universal capture, nothing was pasted at all.
+ *
+ *  Composing is only ever a REFINEMENT of speech that is already being
+ *  delivered (§2 — an insert lands "at the point it happened", and with nothing
+ *  said there is no point). So a caller with nothing to say gets `null` and
+ *  delivers exactly what it had, which is nothing.
+ *
+ *  It is guarded here rather than at each call site on purpose: there are four
+ *  delivery sites, each with its own junk/quiet-miss handling, and one of them
+ *  already got it wrong. A guard at the composer cannot be bypassed by the
+ *  fifth. */
 export function composeWithInserts(
   segmentId: string | null,
   text: string,
@@ -791,6 +808,7 @@ export function composeWithInserts(
   if (!pad.entries.some((e) => e.type === 'insert')) return null
   const spoken = (text || '').trim()
   const said = spoken && spoken !== '[BLANK_AUDIO]' ? spoken : ''
+  if (!said) return null
   const known = !!segmentId
     && pad.entries.some((e) => e.type === 'segment' && e.id === segmentId)
   const composed = known
