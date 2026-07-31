@@ -31,6 +31,7 @@ import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor'
 import { providerOf, PROVIDERS, type ProviderId } from './providers'
 import { CodexDesktopDriver } from './codex/driver'
+import { ClaudeDesktopDriver } from './claude-desktop/driver'
 import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
@@ -333,6 +334,8 @@ async function getSetupStatus() {
 let manager: TaskManager | null = null
 /** Codex desktop backend — inert until a task targets it (see codex/driver.ts). */
 let codexDriver: CodexDesktopDriver | null = null
+/** Claude desktop backend, READ half — see claude-desktop/driver.ts. */
+let claudeDesktopDriver: ClaudeDesktopDriver | null = null
 
 /** The minimum a probe needs from a desktop driver. Declared structurally so a
  *  second backend does not have to inherit CodexDesktopDriver to be probed. */
@@ -348,11 +351,13 @@ interface ProbeableDriver {
  * from correct while Codex was the only driven app — and silently wrong the
  * moment a second one was registered.
  *
- * claude-code-desktop is deliberately absent: its driver is not built yet, so
- * it reports not-installed rather than borrowing Codex's availability.
+ * A backend with no driver yet stays absent here on purpose, so it reports
+ * not-installed rather than borrowing another backend's availability.
  */
 function driverForProvider(id: ProviderId): ProbeableDriver | null {
-  return id === 'codex-desktop' ? codexDriver : null
+  if (id === 'codex-desktop') return codexDriver
+  if (id === 'claude-code-desktop') return claudeDesktopDriver
+  return null
 }
 
 /**
@@ -2022,6 +2027,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // task actually targets it) so availability can be probed for the picker even
   // when the user has never used Codex.
   codexDriver = new CodexDesktopDriver({})
+  // The Claude desktop backend, on the same terms: inert until used, and
+  // constructed unconditionally so the setup card can report the truth. Its
+  // read half touches only files, so building it costs nothing and it works
+  // even with Claude Desktop shut.
+  claudeDesktopDriver = new ClaudeDesktopDriver({})
   manager = new TaskManager({
     executorFactory,
     codexDriver,
