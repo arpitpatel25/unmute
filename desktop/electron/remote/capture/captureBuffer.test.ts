@@ -2,7 +2,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert'
 import {
-  emptyPad, addSegment, addInsert, removeEntry, ordered, isEmpty, setSegmentText,
+  emptyPad, addSegment, addInsert, removeEntry, ordered, isEmpty, setSegmentEnd, setSegmentText,
 } from './captureBuffer'
 
 const pad0 = () => emptyPad('pad1', 'task', 1000)
@@ -106,6 +106,33 @@ describe('setSegmentText', () => {
   test('an unknown id is a no-op', () => {
     const p = setSegmentText(pad0(), 'nope', 'x')
     assert.equal(p.entries.length, 0)
+  })
+})
+
+describe('setSegmentEnd', () => {
+  // The end is known the instant the mic goes cold; the text lands 30-45s
+  // later. Two writes, two moments, so two functions.
+  test('stamps the end without disturbing the text', () => {
+    let p = pad0()
+    p = addSegment(p, { id: 's1', text: 'said', startMs: 4_000, endMs: 0 })
+    p = setSegmentEnd(p, 's1', 18_000)
+    const s = ordered(p)[0]
+    assert.equal(s.type === 'segment' && s.endMs, 18_000)
+    assert.equal(s.type === 'segment' && s.text, 'said')
+    assert.equal(s.type === 'segment' && s.startMs, 4_000, 'and the start is where it was')
+  })
+
+  test('an unknown id is a no-op — Escape can have removed the segment already', () => {
+    const p = setSegmentEnd(pad0(), 'nope', 5)
+    assert.equal(p.entries.length, 0)
+  })
+
+  test('it does not reorder — the start is the sort key, not the end', () => {
+    let p = pad0()
+    p = addSegment(p, { id: 's1', text: 'first', startMs: 0, endMs: 0 })
+    p = addInsert(p, { id: 'i1', kind: 'url', content: 'https://a.com', atMs: 2_000 })
+    p = setSegmentEnd(p, 's1', 30_000)
+    assert.deepEqual(ordered(p).map((e) => e.id), ['s1', 'i1'])
   })
 })
 

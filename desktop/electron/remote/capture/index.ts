@@ -21,7 +21,7 @@ import { deserialize, padDirFor, serialize, shouldSettle } from './scratchpadSto
 import { createClipboardWatch } from './clipboardWatch'
 import { createScreenshotWatch } from './screenshotWatch'
 import {
-  addInsert, addSegment, emptyPad, isEmpty, removeEntry, setSegmentText,
+  addInsert, addSegment, emptyPad, isEmpty, removeEntry, setSegmentEnd, setSegmentText,
 } from './captureBuffer'
 import { render, type RenderResult } from './insertRender'
 import { canArmScratchpad, type CaptureSettings } from './captureGate'
@@ -37,7 +37,6 @@ export function setScratchpadRoot(root: string): void { scratchpadRoot = root }
 let pad: Pad | null = null
 let armed = false
 let openSegmentId: string | null = null
-let captureStartedAt = 0
 
 /** A pad a PREVIOUS RUN left on disk, deserialized at startup and waiting.
  *
@@ -337,12 +336,15 @@ export function beginSegment(origin: Destination, now: number, observe: boolean)
   if (pad && !armed) discardPadFiles(pad)
   if (!armed) pad = null
   if (!pad) pad = emptyPad(randomUUID(), origin, now)
-  captureStartedAt = now
   openSegmentId = randomUUID()
   clearOwnSequenceTimer()
   ownSequenceDepth = 0
   suppressDetectedUpTo = 0
-  pad = addSegment(pad, { id: openSegmentId, text: '', startMs: 0, endMs: 0, now })
+  // PAD-RELATIVE, not capture-relative — see types.ts. A fresh pad was created
+  // with createdAt === now, so an unarmed capture still stamps 0 and the fast
+  // path is unmoved; an ARMED pad carried over from an earlier capture stamps
+  // the real offset, which is the whole point.
+  pad = addSegment(pad, { id: openSegmentId, text: '', startMs: now - pad.createdAt, endMs: 0, now })
   armWatchers(padDirFor(scratchpadRoot, pad.id), observe)
   schedulePersist()
   return openSegmentId
@@ -350,13 +352,27 @@ export function beginSegment(origin: Destination, now: number, observe: boolean)
 
 export function endSegment(now: number): void {
   disarmWatchers()
+  const closing = openSegmentId
   openSegmentId = null
   // The claims map is per-capture: it exists to merge two detectors reporting
   // ONE user action within a 2s window, and that question dies with the
   // window. Without this it is a Map that only ever grows, for the lifetime of
   // the main process.
   sharedClaims.claims.clear()
-  if (pad) { pad = { ...pad, updatedAt: now }; schedulePersist() }
+  if (pad) {
+    // The stretch is over, so its end is known — on the pad's clock, so a
+    // surface can show a duration (`endMs - startMs`) for a segment from ANY
+    // capture in the pad. It was written as a literal 0 and never touched
+    // again, which made every segment's duration unknowable.
+    //
+    // updatedAt is bumped FIRST and unconditionally: setSegmentEnd is a silent
+    // no-op on a segment that is already gone (Escape), and the pad was
+    // touched by this capture either way.
+    const endedAt = now - pad.createdAt
+    pad = { ...pad, updatedAt: now }
+    if (closing) pad = setSegmentEnd(pad, closing, endedAt, now)
+    schedulePersist()
+  }
   // An ARMED stop settles the pad instead of delivering it — this is the moment
   // the panel is supposed to appear holding it.
   announcePad()
@@ -375,15 +391,22 @@ export function attachTranscript(segmentId: string | null, text: string, now: nu
     && pad.entries.some((e) => e.type === 'segment' && e.id === segmentId)
   pad = known
     ? setSegmentText(pad, segmentId as string, text, now)
-    : addSegment(pad, { id: randomUUID(), text, startMs: 0, endMs: 0, now })
+    // The segment this text belonged to is gone, so its real start is gone
+    // with it. `now` is the closest honest stamp there is — it puts the
+    // recovered speech at the END of the pad, which for a multi-capture pad is
+    // far nearer the truth than the literal 0 that used to be written here
+    // (that put re-processed audio in front of everything said before it).
+    : addSegment(pad, { id: randomUUID(), text, startMs: now - pad.createdAt, endMs: now - pad.createdAt, now })
   schedulePersist()
   // The words arrive 30-45s after the audio. Without this the panel would sit
   // on "Still transcribing…" forever — the pad's whole content, never shown.
   announcePad()
 }
 
-/** An insert arrived from either watcher. Position is relative to capture
- *  start, so it sorts against segment times on the same clock.
+/** An insert arrived from either watcher. Position is relative to the PAD's
+ *  creation, so it sorts against every segment and every other insert in the
+ *  pad on one clock — including ones from earlier captures. See types.ts for
+ *  why a per-capture origin does not compose.
  *
  *  THIS IS ALSO THE CROSS-DETECTOR DEDUP POINT, and it has to be — the two
  *  watchers cannot dedup against each other from where they sit. A tool set to
@@ -418,6 +441,11 @@ export function recordInsert(
   // not on arrival, so a rescue that outlives the sequence is refused too.
   // screenshotWatch is NOT suspended and fires synchronously, so this is a
   // reachable path, not a theoretical one.
+  //
+  // BOTH SIDES ARE WALL-CLOCK HERE, and must stay that way: `i.atMs` is what a
+  // watcher's `now()` returned and `suppressDetectedUpTo` is a `Date.now()`.
+  // The conversion to the pad's clock happens strictly BELOW this comparison —
+  // moving it above would silently change the units under the floor.
   if (ownSequenceDepth > 0 || i.atMs <= suppressDetectedUpTo) return false
   if (i.kind === 'image') {
     const sig = imageSignature(i.content)
@@ -428,7 +456,7 @@ export function recordInsert(
   }
   pad = addInsert(pad, {
     id: randomUUID(), kind: i.kind, content: i.content,
-    atMs: i.atMs - captureStartedAt, now,
+    atMs: i.atMs - pad.createdAt, now,
   })
   schedulePersist()
   return true
@@ -813,6 +841,9 @@ export function composeWithInserts(
     && pad.entries.some((e) => e.type === 'segment' && e.id === segmentId)
   const composed = known
     ? setSegmentText(pad, segmentId as string, said)
+    // startMs 0 is exact here, not a guess: this runs only while UNARMED, and
+    // beginSegment builds a fresh pad for every unarmed capture — so the pad
+    // was created at this capture's start and its clock origin IS that start.
     : addSegment(pad, { id: randomUUID(), text: said, startMs: 0, endMs: 0 })
   const out = render(composed, dest)
   // Nothing renderable came of it (an image-only pad at the cursor, which skips
@@ -1063,7 +1094,6 @@ export function _resetForTest(): void {
   inFlight = null
   armed = false
   openSegmentId = null
-  captureStartedAt = 0
   pasteFn = null
   formatFn = null
   settingsFn = null

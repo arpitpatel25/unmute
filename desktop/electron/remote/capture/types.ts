@@ -8,9 +8,25 @@ export type InsertKind = 'url' | 'path' | 'line' | 'block' | 'image'
  *  the capture; overridable on the pad. */
 export type Destination = 'cursor' | 'task'
 
+// THE PAD'S CLOCK IS THE PAD'S OWN. Every `startMs`, `endMs` and `atMs` below
+// is milliseconds since `Pad.createdAt` — NOT since the capture the entry
+// happened in.
+//
+// It has to be. A pad accumulates across captures (that is the scratchpad), and
+// a per-capture origin gives each capture its own coordinate system: two
+// captures' segments both sit at 0 while their inserts carry offsets into
+// different zeroes, so nothing composes. Measured, before the fix: a pad with
+// speech and one copy in each of two captures rendered ALL the speech first and
+// then both inserts in the wrong order relative to each other — an insert two
+// seconds into capture 2 came out after one ten seconds into capture 1.
+//
+// One origin per pad makes ordering a plain numeric sort again, which is what
+// `ordered` has always assumed and what §2.1 says carries almost all the value.
+
 /** One press-to-pause stretch of speech. `text` is '' until transcription
  *  lands — the segment exists from the moment recording starts so inserts can
- *  be positioned against it. */
+ *  be positioned against it. Both times are pad-relative (see above); `endMs`
+ *  is 0 until the mic goes cold. */
 export interface Segment {
   type: 'segment'
   id: string
@@ -20,7 +36,8 @@ export interface Segment {
 }
 
 /** Something the user copied or captured during a hot mic. `content` is the
- *  text for url/path/line/block, and an absolute file path for image. */
+ *  text for url/path/line/block, and an absolute file path for image. `atMs` is
+ *  pad-relative (see above). */
 export interface Insert {
   type: 'insert'
   id: string

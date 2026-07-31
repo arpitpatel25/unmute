@@ -81,3 +81,21 @@ export function setSegmentText(pad: Pad, id: string, text: string, now?: number)
   })
   return found ? withEntries(pad, entries, now) : pad
 }
+
+/** A segment's speech is over. Stamped when the mic goes cold, on the same
+ *  PAD-RELATIVE clock as `startMs`, so `endMs - startMs` is the stretch's real
+ *  duration whichever capture in the pad it came from.
+ *
+ *  Separate from setSegmentText because the two land at completely different
+ *  moments: the end is known the instant recording stops, the text 30-45s
+ *  later. A silent no-op on an unknown id, like setSegmentText, because the
+ *  segment can be gone (Escape cancels it). */
+export function setSegmentEnd(pad: Pad, id: string, endMs: number, now?: number): Pad {
+  let found = false
+  const entries = pad.entries.map((e) => {
+    if (e.type !== 'segment' || e.id !== id) return e
+    found = true
+    return { ...e, endMs }
+  })
+  return found ? withEntries(pad, entries, now) : pad
+}

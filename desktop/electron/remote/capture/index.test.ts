@@ -445,7 +445,7 @@ describe('transcripts land on the right segment', () => {
 })
 
 describe('inserts', () => {
-  test('are positioned relative to the start of the capture', () => {
+  test('are positioned on the pad\'s clock — which for a fresh pad IS the capture start', () => {
     beginSegment('cursor', 10_000, true)
     recordInsert({ kind: 'url', content: 'https://a.com', atMs: 12_500 }, 12_500)
     const i = inserts()[0]
@@ -492,6 +492,101 @@ describe('inserts', () => {
     removeFromPad(id, 1200)
     assert.equal(inserts().length, 0)
     assert.equal(segs().length, 1)
+  })
+})
+
+// ── One clock per pad ───────────────────────────────────────────────────
+//
+// §2.1: "Order carries almost all of that value." It only carries it if every
+// entry in the pad is measured from the same origin. Segments used to be
+// written with a literal startMs: 0 while inserts carried an offset into the
+// capture they happened in — so across two captures the segments piled up at
+// zero and the inserts sorted against different zeroes, and the render came out
+// with all the speech first and the inserts in the wrong order relative to each
+// other. Stamping everything against pad.createdAt makes ordering a plain
+// numeric sort again.
+
+describe('one clock per pad — order composes ACROSS captures', () => {
+  /** Two armed captures a minute apart, each with one copy in it. */
+  function twoCaptures(): void {
+    armScratchpad(true)
+    const a = beginSegment('task', 100_000, true)
+    recordInsert({ kind: 'url', content: 'https://LATE-in-capture-1', atMs: 110_000 }, 110_000)
+    attachTranscript(a, 'first utterance', 120_000)
+    endSegment(120_000)
+
+    const b = beginSegment('task', 180_000, true)
+    recordInsert({ kind: 'url', content: 'https://EARLY-in-capture-2', atMs: 182_000 }, 182_000)
+    attachTranscript(b, 'second utterance', 190_000)
+    endSegment(190_000)
+  }
+
+  test('an insert EARLY in capture 2 renders AFTER one LATE in capture 1', () => {
+    // The exact failure, reproduced end to end. Before: "first utterance second
+    // utterance https://EARLY-in-capture-2 https://LATE-in-capture-1".
+    twoCaptures()
+    assert.equal(
+      render(snapshot().pad!, 'task').text,
+      'first utterance https://LATE-in-capture-1 second utterance https://EARLY-in-capture-2',
+    )
+  })
+
+  test('every entry is stamped from the pad\'s creation, not its capture\'s start', () => {
+    twoCaptures()
+    const times = snapshot().pad!.entries.map((e) => (e.type === 'segment' ? e.startMs : e.atMs))
+    assert.deepEqual(times, [0, 10_000, 80_000, 82_000], 'seg1, insert1, seg2, insert2')
+  })
+
+  test('a segment knows when it ENDED, so it has a real duration', () => {
+    // endMs was written as a literal 0 and never touched again, so the pad
+    // panel could never show the "0:14" its own design calls for.
+    armScratchpad(true)
+    beginSegment('cursor', 100_000, true)
+    endSegment(114_000)
+    const s = segs()[0]
+    assert.equal(s.type === 'segment' && s.startMs, 0)
+    assert.equal(s.type === 'segment' && s.endMs, 14_000)
+  })
+
+  test('and so does a segment from a LATER capture in the same pad', () => {
+    twoCaptures()
+    const [first, second] = segs()
+    assert.deepEqual(
+      [first.type === 'segment' && first.endMs, second.type === 'segment' && second.endMs],
+      [20_000, 90_000],
+    )
+    assert.equal(
+      (second.type === 'segment' ? second.endMs - second.startMs : 0), 10_000,
+      'the duration is right even though the origin is not this capture\'s start',
+    )
+  })
+
+  test('THE SUPPRESSION FLOOR STILL SPEAKS WALL-CLOCK — the units under it did not move', () => {
+    // suppressDetectedUpTo is a Date.now(), and it is compared against the raw
+    // detection instant. The conversion to pad time happens strictly below it.
+    // A second capture is what makes a units mix-up visible: the pad's origin
+    // and this capture's start are 100s apart.
+    armScratchpad(true)
+    beginSegment('cursor', 100_000, true)
+    endSegment(110_000)
+    beginSegment('cursor', 200_000, true)
+
+    beginOwnClipboardSequence()
+    assert.equal(
+      recordInsert({ kind: 'url', content: 'https://ours', atMs: 200_100 }, 200_100), false,
+      'refused during the sequence',
+    )
+    endOwnClipboardSequence(200_200)
+    assert.equal(
+      recordInsert({ kind: 'url', content: 'https://stale', atMs: 200_200 }, 200_200), false,
+      'and a rescue that only resolves after it is still refused',
+    )
+    assert.equal(
+      recordInsert({ kind: 'url', content: 'https://theirs', atMs: 200_300 }, 200_300), true,
+      'a genuine copy after the sequence is admitted',
+    )
+    const i = inserts()[0]
+    assert.equal(i.type === 'insert' && i.atMs, 100_300, 'and positioned on the PAD\'s clock')
   })
 })
 
