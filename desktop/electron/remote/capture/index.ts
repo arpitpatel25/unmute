@@ -547,6 +547,45 @@ function dropLivePad(): void {
  *  deliveries. */
 export type DeliveryTarget = 'cursor' | 'newTask' | 'openTask'
 
+/** Whether a delivery may proceed, and if not, why. */
+export type DeliveryGate = 'ok' | 'capture-in-progress' | 'nothing-showing' | 'live-slot-taken'
+
+/** MAY A DELIVERY TAKE THE PAD RIGHT NOW — decided here, where it is testable,
+ *  rather than in the untestable handler that used to own it.
+ *
+ *  Three refusals, and the middle one is why this moved. The rule the surface
+ *  was drawn from is `heldForSurface`, and it returns NULL for a pad that has
+ *  settled past the idle threshold — so once a pad settles, `showing` is null,
+ *  the `showing && …` guard is skipped entirely, and delivery proceeds against
+ *  whatever is in the LIVE slot. That could be a finished unarmed dictation's
+ *  leftover buffer: a different dictation from the one the user meant, sent
+ *  with no confirmation. Not reachable through the panel today (it hides at the
+ *  same instant the pad settles) but this is a registered handler, and "the
+ *  surface happens not to call it" is not a guarantee.
+ *
+ *  NOTHING SHOWING IS NOTHING TO SEND. It is the same rule the panel is drawn
+ *  from, asked the same way, so a delivery can only ever move a pad the user
+ *  was actually looking at.
+ *
+ *  It PROMOTES on the way through when the pad on screen is a settled one: the
+ *  delivery seam only ever reads the live slot, so without that every
+ *  destination button on a settled pad would be inert. */
+export function gateDelivery(now: number = Date.now()): DeliveryGate {
+  // Asked directly rather than inferred from `showing !== pad`: an ARMED pad
+  // delivered mid-capture has `showing === pad`, so an identity test lets it
+  // through — nulling the live slot with `openSegmentId` still set and leaving
+  // every later attachTranscript and recordInsert writing into nothing.
+  if (segmentOpen()) return 'capture-in-progress'
+  const before = snapshot()
+  const showing = heldForSurface(before, now)
+  if (!showing) return 'nothing-showing'
+  // The live slot is taken by a pad that is not the one on screen. Refusing is
+  // the only honest answer: delivering the live pad would send somebody else's
+  // utterance. The pad on screen is untouched on disk.
+  if (showing !== before.pad && !promoteSettledPad()) return 'live-slot-taken'
+  return 'ok'
+}
+
 function destinationFor(target: DeliveryTarget): Destination {
   return target === 'cursor' ? 'cursor' : 'task'
 }
@@ -893,7 +932,8 @@ export function writePadNow(): void {
 }
 
 /** Atomic write of ANY pad, not only the live one — restaging a failed delivery
- *  has to put a pad back on disk that is no longer in the live slot. */
+ *  has to put a pad back on disk that is no longer in the live slot.
+ */
 function writePad(p: Pad): void {
   try {
     const dir = padDirFor(scratchpadRoot, p.id)

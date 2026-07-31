@@ -9,7 +9,7 @@ import {
   discard, endOwnClipboardSequence, endSegment, formatForDelivery, getCaptureSettings,
   initWatchers, isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerFormat,
   deliveryInFlight, heldForSurface, promoteSettledPad, registerPadObserver, registerPaste,
-  commitDelivery, registerSettings, removeFromPad, runDelivery,
+  commitDelivery, gateDelivery, registerSettings, removeFromPad, runDelivery,
   segmentOpen, setOwnSequenceCeiling, setScratchpadRoot, snapshot, takeForDelivery,
   writePadNow,
 } from './index'
@@ -1854,5 +1854,90 @@ describe('a capture in progress is not deliverable', () => {
     // sees no difference and lets the delivery through.
     assert.equal(heldForSurface(snapshot(), 1300), snapshot().pad)
     assert.equal(segmentOpen(), true, 'which is why the seam asks this instead')
+  })
+})
+
+// ── May a delivery run at all ───────────────────────────────────────────
+//
+// The rule lived in init.ts's deliverScratchpad, which has no test file, and it
+// had a hole: both guards were written as `showing && …`, and `showing` is null
+// for a pad that has settled past the idle threshold. So delivery fell through
+// both of them and ran against whatever was in the LIVE slot.
+
+describe('a delivery may only ever move the pad the user was looking at', () => {
+  const past = 5000 + SETTLE_IDLE_MS + 1
+
+  test('nothing held and nothing live: nothing to send', () => {
+    assert.equal(gateDelivery(5000), 'nothing-showing')
+  })
+
+  test('THE HOLE: past the settle threshold, delivery ran against a LEFTOVER pad', () => {
+    // A settled pad from a previous run, plus the buffer of a finished unarmed
+    // dictation still sitting in the live slot waiting for the next capture
+    // boundary to drop it.
+    leaveOnDisk({ id: 'pad-old', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+    const id = beginSegment('cursor', 6000, true)
+    attachTranscript(id, 'someone else\'s dictation', 6500)
+    endSegment(7000)
+
+    const before = snapshot()
+    const showing = heldForSurface(before, past)
+    assert.equal(showing, null, 'the panel shows nothing — the pad has settled')
+
+    // The pre-fix guard, verbatim. `showing` is null, so BOTH `showing && …`
+    // tests short-circuit to false and delivery proceeded.
+    const preFixWouldRefuse = !!(showing && showing !== before.pad && !promoteSettledPad())
+    assert.equal(preFixWouldRefuse, false, 'the old guard did not fire')
+    assert.equal(
+      before.pad?.entries.some((e) => e.type === 'segment' && e.text === 'someone else\'s dictation'),
+      true,
+      'and THIS is what it would have sent',
+    )
+
+    assert.equal(gateDelivery(past), 'nothing-showing', 'the gate refuses')
+    assert.equal(snapshot().pad, before.pad, 'and moves nothing — the leftover is untouched')
+    assert.equal(snapshot().held?.id, 'pad-old', 'the settled pad is still waiting')
+  })
+
+  test('a capture in progress refuses, whatever is on screen', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'still speaking', 1500)
+    assert.equal(gateDelivery(2000), 'capture-in-progress')
+  })
+
+  test('a live ARMED pad is deliverable', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'held work', 1500)
+    endSegment(2000)
+    assert.equal(gateDelivery(2500), 'ok')
+  })
+
+  test('a settled pad INSIDE the window is promoted so its buttons work', () => {
+    leaveOnDisk({ id: 'pad-old', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+    assert.equal(gateDelivery(5001), 'ok')
+    assert.equal(snapshot().pad?.id, 'pad-old', 'promoted into the live slot')
+    assert.equal(snapshot().held, null)
+  })
+
+  test('a settled pad the live slot will not make room for is refused, not swapped', () => {
+    leaveOnDisk({ id: 'pad-old', updatedAt: 5000, text: 'friday draft' })
+    adoptPersistedPad()
+    const id = beginSegment('cursor', 6000, true)
+    attachTranscript(id, 'someone else\'s dictation', 6500)
+    endSegment(7000)
+
+    assert.equal(gateDelivery(5001), 'live-slot-taken')
+    assert.equal(snapshot().held?.id, 'pad-old', 'untouched, and still on disk')
+  })
+
+  test('a held pad with nothing IN it is nothing to send', () => {
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    endSegment(2000)   // an armed tap that said nothing
+    assert.equal(gateDelivery(2500), 'nothing-showing')
   })
 })

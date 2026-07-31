@@ -79,8 +79,8 @@ import { createClipboardWatch } from './capture/clipboardWatch'
 import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
   adoptPersistedPad, armScratchpad, claimShared, deliveryInFlight, discard as discardPad,
-  heldForSurface, initWatchers, padDirOf, pasteAtCursor, promoteSettledPad, recordInsert,
-  registerPadObserver, registerSettings, removeFromPad, runDelivery, segmentOpen, snapshot,
+  gateDelivery, heldForSurface, initWatchers, padDirOf, pasteAtCursor, recordInsert,
+  registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot,
   type DeliveryTarget,
 } from './capture/index'
 import { SETTLE_IDLE_MS } from './capture/scratchpadStore'
@@ -1301,40 +1301,25 @@ function discardScratchpad(): void {
  *
  *  A DESTINATION BUTTON THAT IS SHOWN MUST WORK. The panel can be showing a
  *  SETTLED pad — one a previous run left behind — and the delivery seam only
- *  ever reads the LIVE slot, so without the promotion below every button on
- *  such a pad was inert: `deliver()` saw a null pad, returned null, and this
- *  logged `empty: true` while nothing happened and nothing on screen changed.
- *  The only button that worked was the destructive one. */
+ *  ever reads the LIVE slot, so without a promotion every button on such a pad
+ *  was inert: `deliver()` saw a null pad, returned null, and this logged
+ *  `empty: true` while nothing happened and nothing on screen changed. The only
+ *  button that worked was the destructive one.
+ *
+ *  WHETHER IT MAY RUN AT ALL IS `gateDelivery`, in capture/, where it can be
+ *  unit-tested. This handler owns the log line and the toast; the rule is not
+ *  its to keep. */
 async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promise<string | null> {
   const target: DeliveryTarget = dest === 'cursor' ? 'cursor' : dest === 'openTask' ? 'openTask' : 'newTask'
 
-  // Exactly what the panel offered — the same rule it was drawn from, so this
-  // can never deliver a pad the user was not looking at.
-  const before = snapshot()
-  const showing = heldForSurface(before)
-
-  // A CAPTURE IS RUNNING, so nothing is deliverable — asked directly rather
-  // than inferred from `showing !== before.pad`. That inference covers a
-  // SETTLED pad meeting a live slot, and misses the case it shares a shape
-  // with: an ARMED pad delivered mid-capture is `showing === before.pad`, so it
-  // sailed through, nulled `pad` with `openSegmentId` still set, and left every
-  // later attachTranscript and recordInsert writing into nothing — the
-  // utterance in progress silently destroyed. Latent through the notch (the
-  // panel is suppressed while the pill is up) and live through the registered
-  // IPC path, which is exactly the kind of door that gets opened later.
-  if (segmentOpen()) {
-    log.event('scratchpad-deliver-refused', { to: target, reason: 'capture-in-progress' })
-    notchController?.toast('finish the recording first — the pad is still held')
-    return null
-  }
-  if (showing && showing !== before.pad && !promoteSettledPad()) {
-    // The live slot is taken by a pad that is not the one on screen — a
-    // finished unarmed dictation's buffer, waiting for the next capture
-    // boundary to drop it. Refusing is the only honest answer: delivering the
-    // live pad would send somebody else's utterance, and silently doing nothing
-    // is what this whole change exists to stop. The pad is untouched on disk.
-    log.event('scratchpad-deliver-refused', { to: target, reason: 'live-slot-taken' })
-    notchController?.toast('finish the recording first — the pad is still held')
+  const gate = gateDelivery()
+  if (gate !== 'ok') {
+    log.event('scratchpad-deliver-refused', { to: target, reason: gate })
+    // No toast for 'nothing-showing': there is no panel on screen to explain
+    // it, and a message about "the pad" when the user can see no pad is noise.
+    if (gate !== 'nothing-showing') {
+      notchController?.toast('finish the recording first — the pad is still held')
+    }
     return null
   }
 
@@ -2435,7 +2420,15 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       })
       // Seed the pad panel. Without this a pad adopted from a previous run is
       // invisible until something else happens to change it.
-      try { notchController.notifyScratchpad(scratchpadPayload()) } catch { /* helper starting */ }
+      //
+      // THROUGH broadcastScratchpad, not a direct notifyScratchpad. The direct
+      // call drew the panel and skipped scheduleSettleRebroadcast, so a pad
+      // adopted less than the threshold stale showed at launch and then never
+      // settled on schedule — it sat there until some unrelated broadcast
+      // happened to re-evaluate it, which for a user who is not dictating is
+      // never. It is the same push with the timer attached, and it is
+      // internally try/caught for the same "helper still starting" reason.
+      broadcastScratchpad()
 
       // ── The input surface ──
       //
