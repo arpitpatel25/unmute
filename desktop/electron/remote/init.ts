@@ -2035,6 +2035,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   manager = new TaskManager({
     executorFactory,
     codexDriver,
+    claudeDesktopDriver,
     // Read fresh per dispatch: the Codex composer's permission level is set from
     // the SAME user setting that decides --dangerously-skip-permissions for
     // Claude, so the two backends behave alike (capped by what the device

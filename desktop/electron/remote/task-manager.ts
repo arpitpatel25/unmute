@@ -45,6 +45,7 @@ import type { AgentExecutor, ExecutorFactory } from './executor'
 import { settleRepl } from './repl-settle'
 import { type AgentKind, isExternalAgent } from './codex-executor'
 import type { CodexDesktopDriver } from './codex/driver'
+import type { ClaudeDesktopDriver } from './claude-desktop/driver'
 import { beat, pendingApprovals, expireStaleApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
 import { devEvent } from './curator-devlog'
 
@@ -90,6 +91,14 @@ export interface Task {
    *  unambiguous — and used to find the thread's status chip during its first
    *  turn, which is exactly when Computer Use consents fire. */
   codexDomThreadId?: string
+  /** For 'claude-code-desktop': the Claude Desktop task this card mirrors.
+   *
+   *  This is `sessionId` from the app's own store — measured unique across the
+   *  whole store, unlike `cliSessionId`, which COLLIDES (one id shared by two
+   *  different tasks) and is only ever a lookup handle for the transcript.
+   *  Keying a card on cliSessionId renders one task's conversation under
+   *  another task's title. */
+  claudeDesktopSessionId?: string
   /** Last delivery problem — the message did not reach the agent. Distinct from
    *  `error`, which means the WORK failed; this one never settles the task. */
   deliveryError?: string
@@ -123,7 +132,29 @@ export interface Task {
    *  so the conversation itself has to be what the panel carries. Kept to the
    *  last few turns deliberately — enough to re-enter, never a re-implementation
    *  of the other app's chat (ORCHESTRATE-VISION §3, the delete-the-wall test). */
-  conversation?: Array<{ role: 'user' | 'assistant'; text: string }>
+  /** A driven backend's conversation — this is what a desktop task has INSTEAD
+   *  of a terminal.
+   *
+   *  Widened from `{role: 'user'|'assistant'}` to the shape the drivers actually
+   *  emit. That narrow type predated the Codex backend and never matched it:
+   *  pollCodexDesktop has been assigning CodexTurn[] here, which is one of the
+   *  standing typecheck errors. Both drivers already produce this superset
+   *  (ClaudeTurn is CodexTurn minus 'work'), so naming it honestly costs
+   *  nothing and stops the next backend inheriting the same lie. */
+  conversation?: Array<{
+    role: 'user' | 'assistant' | 'commentary' | 'tool' | 'work'
+    text: string
+    /** tool: the step's own label. */
+    title?: string
+    /** tool: the code/command/input it ran. */
+    code?: string
+    /** tool: what came back (truncated). */
+    output?: string
+    /** tool: wall time, when the backend reports one. */
+    durationMs?: number
+    /** tool: false when the step errored. */
+    ok?: boolean
+  }>
   /** Workspace group — "what is this work about" ("unmute", "launch video",
    *  "on-call"). Assigned ONCE by the router (user's own words win), mutated
    *  only by user curation. Live groups = distinct values across live tasks;
@@ -205,6 +236,11 @@ export interface TaskManagerOpts {
    *  fast with a typed reason instead of silently falling back to Claude, which
    *  would put the task in an app the user never asked for. */
   codexDriver?: CodexDesktopDriver
+  /** Backend for `agent: 'claude-code-desktop'` tasks. Read-only today: it
+   *  serves cards from Claude Desktop's own files, so it works with the app
+   *  closed and can be polled freely. Absent ⇒ those tasks simply do not
+   *  update, rather than being polled by another backend's poller. */
+  claudeDesktopDriver?: ClaudeDesktopDriver
   /** The user's approval setting, read fresh so a settings change takes effect
    *  on the NEXT task rather than needing a restart. Feeds the Codex composer's
    *  permission level exactly as it feeds --dangerously-skip-permissions. */
@@ -317,6 +353,8 @@ export class TaskManager extends EventEmitter {
   private purgeTimer: ReturnType<typeof setInterval> | null = null
   // Codex approval inbox sweep (null until startMaintenance()).
   private approvalTimer: ReturnType<typeof setInterval> | null = null
+  // Claude Desktop adoption sweep (null until startMaintenance()).
+  private claudeAdoptTimer: ReturnType<typeof setInterval> | null = null
   /** threadId → the request we have already surfaced, so we transition once. */
   private surfacedApprovals = new Map<string, number>()
   /** Poll decimation for settled Codex tasks (see pollCodexDesktop). */
@@ -330,6 +368,12 @@ export class TaskManager extends EventEmitter {
   /** taskId → rollout watcher disposer. Best-effort: absent when the transcript
    *  did not exist yet or fs.watch could not start; polling still covers it. */
   private codexWatchers = new Map<string, () => void>()
+  /** Same three, for Claude desktop. Kept separate rather than shared: the two
+   *  backends key on different ids (Codex thread vs Claude sessionId) and a
+   *  single map would silently collide the day the id spaces overlap. */
+  private claudeIdleTicks = new Map<string, number>()
+  private claudeLastSeenAt = new Map<string, number>()
+  private claudeWatchers = new Map<string, () => void>()
   /** One sidebar read serves EVERY task on a tick. Ten blocked tasks polling
    *  independently would be ten CDP round-trips for one identical answer. */
   private codexChipCache: { at: number; rows: Array<{ id: string; title?: string; active: boolean; chip: string | null }> } | null = null
@@ -346,8 +390,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'permissionMode' | 'codexReasoning'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'permissionMode' | 'codexReasoning'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'permissionMode' | 'codexReasoning'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'permissionMode' | 'codexReasoning'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -386,6 +430,7 @@ export class TaskManager extends EventEmitter {
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
       codexDriver: opts.codexDriver,
+      claudeDesktopDriver: opts.claudeDesktopDriver,
       permissionMode: opts.permissionMode,
       codexReasoning: opts.codexReasoning,
       reapSession: opts.reapSession,
@@ -779,6 +824,220 @@ export class TaskManager extends EventEmitter {
    * a status file the agent writes. Same cadence, same transitions, same stuck
    * backstop — only the source differs.
    */
+  /**
+   * Bring Claude Desktop's own tasks onto the wall as cards.
+   *
+   * This is the one structural difference from every other backend. Claude
+   * (CLI) and Codex tasks exist because Unmute created them. A Claude Desktop
+   * conversation exists because the USER started it in another app, and its
+   * whole value is being able to see and answer it from here — so this backend
+   * ADOPTS rather than dispatches.
+   *
+   * The policy is deliberately narrow, because the store is not small (33 tasks
+   * on a real machine, most of them long dead) and the wall is a working
+   * surface, not an archive:
+   *
+   *   - archived tasks are skipped: the user already filed them away
+   *   - anything last active more than `windowMs` ago is skipped
+   *   - at most `cap` are adopted per sweep, newest first
+   *
+   * Idempotent: a task already on the wall is left exactly as it is, so a sweep
+   * can run on a timer without ever disturbing a card the user is looking at.
+   * Adoption is also one-way here — a card is never auto-removed when it ages
+   * out of the window, because removing something the user can see is a much
+   * worse failure than showing one card too many.
+   */
+  async adoptClaudeDesktop(opts: { windowMs?: number; cap?: number } = {}): Promise<string[]> {
+    const driver = this.opts.claudeDesktopDriver
+    if (!driver) return []
+    const windowMs = opts.windowMs ?? 24 * 60 * 60_000
+    const cap = opts.cap ?? 12
+    const now = this.clock()
+
+    let found: Awaited<ReturnType<ClaudeDesktopDriver['list']>>
+    try {
+      found = await driver.list()
+    } catch {
+      return []   // store unreadable this sweep; try again next time
+    }
+
+    // Already-adopted session ids, so a re-run is a no-op.
+    const known = new Set(
+      [...this.tasks.values()].map((t) => t.claudeDesktopSessionId).filter((x): x is string => !!x),
+    )
+
+    const adopted: string[] = []
+    for (const meta of found) {
+      if (adopted.length >= cap) break
+      if (meta.archived) continue
+      if (known.has(meta.sessionId)) continue
+      if (meta.lastActivityAt > 0 && now - meta.lastActivityAt > windowMs) continue
+
+      const id = randomUUID()
+      const dir = join(this.opts.baseDir, this.opts.userKey ?? 'local', id)
+      await fs.mkdir(dir, { recursive: true }).catch(() => {})
+
+      const task: Task = {
+        id,
+        // The user never typed an intent at Unmute — the app's own title is the
+        // closest honest thing, and an untitled task shows its cwd rather than
+        // an invented sentence.
+        intent: meta.title ?? meta.cwd ?? 'Claude Desktop task',
+        ...(meta.title ? { name: meta.title } : {}),
+        sessionId: meta.sessionId,
+        agent: 'claude-code-desktop',
+        claudeDesktopSessionId: meta.sessionId,
+        // A conversation the user owns in another app is persistent by nature:
+        // never idle-killed, never auto-purged. 'oneoff' would let the reaper
+        // delete a card for a chat that is still very much alive.
+        kind: 'session',
+        // Adopted as `ready`, not `processing`. We have not looked at the
+        // transcript yet, and claiming work is in flight would light up the wall
+        // with spinners for conversations that finished days ago. The first
+        // poll promotes it if the file is actually moving.
+        state: 'ready',
+        createdAt: meta.createdAt || now,
+        updatedAt: now,
+        cwd: meta.cwd || dir,
+        home: dir,
+        statusPath: join(dir, 'status.json'),
+        recipeScratchPath: join(dir, 'recipe.json'),
+        lastMtimeMs: 0,
+        lastHeartbeatMs: meta.lastActivityAt || now,
+        mode: 'managed',
+      } as Task
+      this.tasks.set(id, task)
+
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
+        id, intent: task.intent, sessionId: meta.sessionId, kind: 'session',
+        createdAt: task.createdAt, mode: 'managed',
+        agent: 'claude-code-desktop', claudeDesktopSessionId: meta.sessionId,
+        state: 'ready', updatedAt: now,
+      })).catch(() => {})
+
+      this.emit('created', task)
+      adopted.push(id)
+      this.startPolling(id)
+    }
+
+    if (adopted.length) {
+      log.event('claude-desktop-adopted', {
+        adopted: adopted.length, scanned: found.length, windowMs, cap,
+      })
+    }
+    return adopted
+  }
+
+  /**
+   * Refresh one Claude desktop card from disk.
+   *
+   * Shaped like pollCodexDesktop on purpose — same backoff, same watcher-as-
+   * shortcut, same "ready is a resting state, not a terminal one" rule, because
+   * a Claude Desktop conversation outlives our card in exactly the same way:
+   * the user can keep talking to it in the app, and a new turn there has to
+   * re-open the card rather than being invisible.
+   *
+   * WHAT THIS CAN AND CANNOT KNOW. Everything here comes from files, so it can
+   * see that work happened and what was said. It CANNOT see that a turn is
+   * blocked on a permission prompt — Claude Desktop never writes the pending
+   * request to disk, exactly like Codex and its Computer Use consents. So state
+   * is derived conservatively from movement:
+   *
+   *   the transcript grew            -> processing
+   *   quiet, and it has spoken       -> ready
+   *   quiet, and it never spoke      -> leave alone (it may never have started)
+   *
+   * `pendingToolCalls` is deliberately NOT treated as blocked here. An unmatched
+   * tool call is what a permission prompt looks like on disk, but a slow build
+   * looks identical, and guessing produced the stuck/processing strobe on the
+   * Codex side. The real signal lives in the accessibility tree, where the
+   * prompt actually exists; this poller stays quiet until that lands rather
+   * than inventing a state it cannot support.
+   */
+  private async pollClaudeDesktop(id: string, force = false): Promise<void> {
+    const task = this.tasks.get(id)
+    if (!task || !task.claudeDesktopSessionId || task.state === 'done' || task.state === 'failed') return
+    const driver = this.opts.claudeDesktopDriver
+    if (!driver) return
+    const tlog = log.child({ taskId: id })
+
+    // Back off hard once settled. Reading is cheap but not free, and a wall of
+    // finished cards re-reading their transcripts every second is the same
+    // waste that was measured on the Codex side in the field.
+    //
+    // But NEVER before the first read. Adoption starts a card at `ready` (it has
+    // not been looked at yet), so applying the decimation immediately made the
+    // first nine polls no-ops — a conversation that was actively moving when we
+    // adopted it sat untouched for ~10 ticks before anyone read the file. The
+    // Codex poller never hit this because its tasks start `processing`.
+    if (!force && task.state === 'ready' && this.claudeLastSeenAt.has(id)) {
+      const n = (this.claudeIdleTicks.get(id) ?? 0) + 1
+      this.claudeIdleTicks.set(id, n)
+      if (n % 10 !== 0) return
+    } else {
+      this.claudeIdleTicks.delete(id)
+    }
+
+    // Latency shortcut, attached lazily once a transcript exists. fs.watch
+    // coalesces and can miss events, so the poll above stays the correctness
+    // backstop and this never becomes the only path.
+    if (!this.claudeWatchers.has(id)) {
+      this.claudeWatchers.set(id, () => {})   // claim the slot; no double-attach
+      // force: a watcher event is PROOF the file changed, so it must never be
+      // dropped by the idle decimation above. Without this the shortcut was
+      // useless exactly when it mattered — a chat continued inside Claude
+      // Desktop woke us and we skipped the read anyway.
+      void driver.watch(task.claudeDesktopSessionId, () => { void this.pollClaudeDesktop(id, true) })
+        .then((stop) => {
+          if (this.tasks.has(id)) this.claudeWatchers.set(id, stop)
+          else stop()
+        })
+        .catch(() => { this.claudeWatchers.delete(id) })
+    }
+
+    const view = await driver.snapshot(task.claudeDesktopSessionId)
+    if (!view) {
+      // The task is gone from Claude Desktop's store — the user deleted it
+      // there. Nothing to poll; leave the card's last known state rather than
+      // inventing a failure the user never saw.
+      tlog.debug('claude-desktop-poll', { gone: true })
+      return
+    }
+
+    const { task: meta, snapshot: snap } = view
+    const advanced = snap.updatedAt > (this.claudeLastSeenAt.get(id) ?? 0)
+    if (advanced) this.claudeLastSeenAt.set(id, snap.updatedAt)
+    if (snap.updatedAt > task.lastHeartbeatMs) task.lastHeartbeatMs = snap.updatedAt
+
+    // The app's own title beats our generated name once it exists — it is what
+    // the user sees in Claude Desktop, so showing something else in Unmute
+    // makes the two lists impossible to line up.
+    if (meta.title && meta.title !== task.name) task.name = meta.title
+    if (snap.lastAgentMessage && snap.lastAgentMessage !== task.threadContext) {
+      task.threadContext = snap.lastAgentMessage
+    }
+    if (snap.turns.length) task.conversation = snap.turns
+
+    tlog.debug('claude-desktop-poll', {
+      advanced, turns: snap.turns.length, userMessages: snap.userMessages,
+      pendingToolCalls: snap.pendingToolCalls, taskState: task.state,
+    })
+
+    if (advanced && task.state === 'ready') {
+      tlog.event('claude-desktop-reopened', { note: 'continued inside Claude Desktop' })
+      this.transition(id, 'processing')
+      return
+    }
+    if (advanced && task.state !== 'processing') {
+      this.transition(id, 'processing')
+      return
+    }
+    // Settled: it has spoken and nothing has moved since the previous poll.
+    if (!advanced && task.state === 'processing' && snap.lastAgentMessage) {
+      this.transition(id, 'ready')
+    }
+  }
+
   private async pollCodexDesktop(id: string): Promise<void> {
     const task = this.tasks.get(id)
     // NOTE: `ready` is deliberately NOT terminal for this backend — the Codex
@@ -1089,7 +1348,17 @@ export class TaskManager extends EventEmitter {
     // and (unlike a PTY task) a `ready` one is still worth watching because the
     // user can continue the thread in the other app. pollCodexDesktop owns its
     // own stop condition.
-    if (task && isExternalAgent(task.agent)) return this.pollCodexDesktop(id)
+    // Route to the poller for THIS backend. isExternalAgent is true for every
+    // driver-transport provider, so sending them all to pollCodexDesktop was
+    // correct only while Codex was the only one — a Claude desktop task would
+    // have fallen into the Codex poller, been dropped by its `!codexThreadId`
+    // guard, and then never polled again: a card frozen at its first state with
+    // nothing logged. Same shape as the setup-probe bug, one layer down.
+    if (task && isExternalAgent(task.agent)) {
+      return task.agent === 'claude-code-desktop'
+        ? this.pollClaudeDesktop(id)
+        : this.pollCodexDesktop(id)
+    }
     if (!task || TERMINAL.includes(task.state)) return
     const tlog = log.child({ taskId: id })
 
@@ -1544,6 +1813,15 @@ export class TaskManager extends EventEmitter {
       void this.sweepApprovals()
     }, this.opts.approvalSweepMs)
     ;(this.approvalTimer as { unref?: () => void }).unref?.()
+    // Claude Desktop conversations arrive by ADOPTION, not dispatch — the user
+    // starts them in the app, so nothing here ever gets told. Sweeping is the
+    // only way they appear. Slow on purpose: a chat the user just opened does
+    // not need sub-second discovery, and each sweep reads the whole store.
+    if (this.opts.claudeDesktopDriver) {
+      void this.adoptClaudeDesktop()
+      this.claudeAdoptTimer = setInterval(() => { void this.adoptClaudeDesktop() }, 30_000)
+      ;(this.claudeAdoptTimer as { unref?: () => void }).unref?.()
+    }
     log.event('maintenance-started', { purgeAgeMs: this.opts.purgeAgeMs, purgeSweepMs: this.opts.purgeSweepMs })
   }
 
@@ -1551,6 +1829,7 @@ export class TaskManager extends EventEmitter {
   stopMaintenance(): void {
     if (this.purgeTimer) { clearInterval(this.purgeTimer); this.purgeTimer = null }
     if (this.approvalTimer) { clearInterval(this.approvalTimer); this.approvalTimer = null }
+    if (this.claudeAdoptTimer) { clearInterval(this.claudeAdoptTimer); this.claudeAdoptTimer = null }
   }
 
   /**
@@ -2423,6 +2702,13 @@ export class TaskManager extends EventEmitter {
     this.codexLastSeenAt.delete(id)
     const unwatch = this.codexWatchers.get(id)
     if (unwatch) { unwatch(); this.codexWatchers.delete(id) }
+    // Same for Claude desktop, and for the same reason the Codex leak was
+    // fixed: an fs.watch handle outliving its task keeps the event loop alive
+    // forever. Omitting this hung the test run with no output at all.
+    this.claudeIdleTicks.delete(id)
+    this.claudeLastSeenAt.delete(id)
+    const unwatchClaude = this.claudeWatchers.get(id)
+    if (unwatchClaude) { unwatchClaude(); this.claudeWatchers.delete(id) }
     const ex = this.executors.get(id)
     if (ex?.alive) ex.kill() // the REPL won't exit on its own
     this.executors.delete(id)
