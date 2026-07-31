@@ -656,10 +656,17 @@ export function commitDelivery(): void {
  *  Two pads can want the settled slot at once (a pad from a previous run that
  *  has not been brought back yet) — settlePad owns that rule, and a disarm
  *  reaches it too. Nothing is deleted either way. */
-export function restageDelivery(): Pad | null {
-  const p = inFlight
+export function restageDelivery(now: number = Date.now()): Pad | null {
+  const taken = inFlight
   inFlight = null
-  if (!p) return null
+  if (!taken) return null
+  // TOUCHED, because the user just touched it. `updatedAt` is what the settle
+  // rule measures idleness against, and a restage that left it alone made a pad
+  // idle past the threshold vanish from the screen at the exact moment the user
+  // pressed Send on it — the one moment they are demonstrably engaged with it.
+  // It is also the tie-break between two settled pads, and the one somebody
+  // just tried to send should be the one arming brings back.
+  const p = { ...taken, updatedAt: now }
   writePad(p) // durable again before anything else can go wrong
   if (!pad) {
     pad = p
@@ -933,8 +940,29 @@ export function writePadNow(): void {
 
 /** Atomic write of ANY pad, not only the live one — restaging a failed delivery
  *  has to put a pad back on disk that is no longer in the live slot.
- */
+ *
+ *  AN EMPTY PAD IS NOT WRITTEN — IT IS REMOVED. An armed tap on silence writes
+ *  pad.json while the segment is still open, then the blank transcript comes
+ *  back and the segment is dropped, leaving a pad.json holding zero entries.
+ *  adoptPersistedPad skips it (isEmpty), so nothing ever reads it again and
+ *  nothing ever deletes it: one directory of cruft under ~/.unmute per silent
+ *  armed tap, forever. There is nothing in it to keep, so it should not be
+ *  there — and taking the directory also sweeps up any image a REFUSED insert's
+ *  rescue child left behind in it.
+ *
+ *  ONLY BETWEEN CAPTURES. During one, a rescue child may be writing into this
+ *  very directory, and pulling it out from under an in-flight osascript would
+ *  lose an image the user deliberately captured. So while a segment is open an
+ *  empty pad is simply not written — it holds nothing, so there is nothing to
+ *  survive a crash — and the removal happens at the next persist after the mic
+ *  goes cold, when both watchers are disarmed. (The check reads the live
+ *  capture's state; the non-live callers, restage and settle, only ever pass a
+ *  pad that is non-empty by construction.) */
 function writePad(p: Pad): void {
+  if (isEmpty(p)) {
+    if (!openSegmentId) discardPadFiles(p)
+    return
+  }
   try {
     const dir = padDirFor(scratchpadRoot, p.id)
     mkdirSync(dir, { recursive: true })

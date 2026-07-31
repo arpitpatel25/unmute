@@ -9,7 +9,7 @@ import {
   discard, endOwnClipboardSequence, endSegment, formatForDelivery, getCaptureSettings,
   initWatchers, isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerFormat,
   deliveryInFlight, heldForSurface, promoteSettledPad, registerPadObserver, registerPaste,
-  commitDelivery, gateDelivery, registerSettings, removeFromPad, runDelivery,
+  commitDelivery, gateDelivery, registerSettings, removeFromPad, restageDelivery, runDelivery,
   segmentOpen, setOwnSequenceCeiling, setScratchpadRoot, snapshot, takeForDelivery,
   writePadNow,
 } from './index'
@@ -657,7 +657,10 @@ describe('persistence', () => {
 
   test('discard takes the pad directory with it', () => {
     armScratchpad(true)
-    beginSegment('cursor', 1000, true)
+    // Held work, not a blank segment: an EMPTY pad is deliberately never on
+    // disk (see writePad), so there would be no directory to take.
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'held work', 1500)
     writePadNow()
     const dir = padDirFor(root, snapshot().pad!.id)
     assert.ok(existsSync(dir))
@@ -1939,5 +1942,116 @@ describe('a delivery may only ever move the pad the user was looking at', () => 
     beginSegment('cursor', 1000, true)
     endSegment(2000)   // an armed tap that said nothing
     assert.equal(gateDelivery(2500), 'nothing-showing')
+  })
+})
+
+// ── Two nits with real edges ────────────────────────────────────────────
+
+describe('a restage counts as touching the pad', () => {
+  test('a pad the user JUST tried to send does not settle out from under them', () => {
+    // updatedAt is what the settle rule measures idleness against. Restaging
+    // into an occupied slot used to leave it alone, so a pad that had been idle
+    // past the threshold became invisible at the exact moment the user pressed
+    // Send on it — the one moment they are demonstrably engaged with it.
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'friday draft', 1500)
+    endSegment(2000)
+    const stale = snapshot().pad!.updatedAt
+    assert.ok(stale <= 2000)
+
+    takeForDelivery('newTask')
+    // A new capture claims the live slot before the destination answers, so
+    // the restage has to settle rather than go live.
+    beginSegment('cursor', 3000, true)
+    endSegment(3500)
+
+    const back = restageDelivery(2000 + SETTLE_IDLE_MS)!
+    assert.equal(back.updatedAt, 2000 + SETTLE_IDLE_MS, 'stamped at the attempt')
+    assert.equal(snapshot().held?.id, back.id, 'and it settled, as expected')
+    assert.ok(
+      heldForSurface(snapshot(), 2000 + SETTLE_IDLE_MS + 10),
+      'still on screen — it would have vanished on the old timestamp',
+    )
+  })
+
+  test('a restage into a FREE slot is stamped too — it is the same gesture', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'friday draft', 1500)
+    endSegment(2000)
+
+    takeForDelivery('cursor')
+    const back = restageDelivery(99_000)!
+    assert.equal(back.updatedAt, 99_000)
+    assert.equal(snapshot().pad?.updatedAt, 99_000, 'the live slot holds the stamped pad')
+  })
+})
+
+describe('an empty pad leaves nothing behind on disk', () => {
+  test('an armed tap on silence does not leave a directory forever', async () => {
+    // Written while armed, emptied when the blank transcript lands, then
+    // skipped by adoptPersistedPad (isEmpty) and never cleaned: one directory
+    // of cruft under ~/.unmute per silent armed tap.
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    const dir = padDirFor(root, snapshot().pad!.id)
+    endSegment(2000)
+    removeFromPad(id, 2100)   // what holdIfArmed does on a blank transcript
+
+    await new Promise((r) => setTimeout(r, PERSIST_DEBOUNCE_MS + 120))
+    assert.equal(existsSync(dir), false, 'no pad.json, and no directory either')
+  })
+
+  test('it also sweeps up what a REFUSED insert\'s rescue left in the directory', () => {
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    const dir = padDirFor(root, snapshot().pad!.id)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'insert-1.png'), 'ORPHAN')   // rescued, then refused
+    endSegment(2000)
+
+    writePadNow()
+    assert.equal(existsSync(dir), false)
+  })
+
+  test('but a pad WITH CONTENT is written, not swept', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1000, true)
+    attachTranscript(id, 'real work', 1500)
+    endSegment(2000)
+
+    writePadNow()
+    assert.ok(existsSync(join(padDirFor(root, snapshot().pad!.id), 'pad.json')))
+  })
+
+  test('and a pad holding only a COPY is content — its rescued image survives', () => {
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    const dir = padDirFor(root, snapshot().pad!.id)
+    mkdirSync(dir, { recursive: true })
+    const shot = join(dir, 'insert-1.png')
+    writeFileSync(shot, 'PNG')
+    recordInsert({ kind: 'image', content: shot, atMs: 1500 }, 1500)
+    endSegment(2000)
+
+    writePadNow()
+    assert.ok(existsSync(join(dir, 'pad.json')), 'nothing was said, but something was captured')
+    assert.ok(existsSync(shot))
+  })
+
+  test('MID-CAPTURE it never touches the directory — a rescue may be writing into it', () => {
+    // Removing the directory here would pull it out from under an in-flight
+    // osascript and lose an image the user deliberately captured.
+    armScratchpad(true)
+    beginSegment('cursor', 1000, true)
+    const dir = padDirFor(root, snapshot().pad!.id)
+    mkdirSync(dir, { recursive: true })
+    const inflight = join(dir, 'insert-1.png')
+    writeFileSync(inflight, 'BEING-RESCUED')
+
+    writePadNow()   // the pad is empty, but the mic is still hot
+    assert.ok(existsSync(inflight), 'the rescue in progress is left alone')
+    assert.equal(existsSync(join(dir, 'pad.json')), false, 'and an empty pad is still not written')
   })
 })
