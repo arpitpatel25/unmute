@@ -29,7 +29,7 @@ import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor'
-import { providerOf, PROVIDERS } from './providers'
+import { providerOf, PROVIDERS, type ProviderId } from './providers'
 import { CodexDesktopDriver } from './codex/driver'
 import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
@@ -293,9 +293,18 @@ async function probeBackends(): Promise<BackendProbe[]> {
     }
     // A driven app: installed is not enough — it has to be reachable as well,
     // which is the state the user has no other way of discovering.
-    if (!codexDriver) { out.push({ id: p.id, label: p.label, installed: false, ready: false, reason: 'not-installed' }); continue }
+    //
+    // Ask the driver that serves THIS provider. This used to read `codexDriver`
+    // for every driver-transport backend, which was correct only while exactly
+    // one existed. The moment a second was registered, the new backend reported
+    // CODEX's readiness as its own — so a connected Codex would have shown
+    // Claude desktop as ready and selectable with nothing behind it. A backend
+    // with no driver yet is honestly "not installed" rather than borrowing
+    // someone else's answer.
+    const driver = driverForProvider(p.id)
+    if (!driver) { out.push({ id: p.id, label: p.label, installed: false, ready: false, reason: 'not-installed' }); continue }
     try {
-      const a = await codexDriver.availability()
+      const a = await driver.availability()
       const installed = a.ok || a.reason !== 'not-installed'
       out.push({ id: p.id, label: p.label, installed, ready: a.ok, ...(a.ok ? {} : { reason: a.reason }) })
     } catch {
@@ -324,6 +333,27 @@ async function getSetupStatus() {
 let manager: TaskManager | null = null
 /** Codex desktop backend — inert until a task targets it (see codex/driver.ts). */
 let codexDriver: CodexDesktopDriver | null = null
+
+/** The minimum a probe needs from a desktop driver. Declared structurally so a
+ *  second backend does not have to inherit CodexDesktopDriver to be probed. */
+interface ProbeableDriver {
+  availability(): Promise<{ ok: boolean; reason?: string }>
+}
+
+/**
+ * Which driver serves a backend, or null if it has none yet.
+ *
+ * Exists so "is this backend ready" is answered by ITS OWN driver. The probe
+ * loop previously reached straight for codexDriver, which was indistinguishable
+ * from correct while Codex was the only driven app — and silently wrong the
+ * moment a second one was registered.
+ *
+ * claude-code-desktop is deliberately absent: its driver is not built yet, so
+ * it reports not-installed rather than borrowing Codex's availability.
+ */
+function driverForProvider(id: ProviderId): ProbeableDriver | null {
+  return id === 'codex-desktop' ? codexDriver : null
+}
 
 /**
  * Which backends can take a task this instant, plus the user's default.
