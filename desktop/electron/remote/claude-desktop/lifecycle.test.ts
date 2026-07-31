@@ -151,12 +151,29 @@ test('no driver configured ⇒ no adoption, and no crash', async () => {
 
 // ── polling ───────────────────────────────────────────────────────────────
 
-test('a growing transcript moves the card to processing', async () => {
+test('the FIRST poll seeds the baseline — an old chat must not light up as working', async () => {
+  // Caught against the real store: every one of 8 adopted conversations, all
+  // finished days earlier, showed `processing` because the first read compared
+  // updatedAt against a default of 0 and called it growth.
   const base = await tmp()
-  const d = fakeDriver({ tasks: [{}], snapshots: [{ updatedAt: 5000, turns: [{ role: 'user', text: 'hi' }] }] })
+  const d = fakeDriver({ tasks: [{}], snapshots: [{ updatedAt: 1_700_000_000_000, lastAgentMessage: 'done long ago' }] })
   const m = await makeManager(d, base)
   const [id] = await m.adoptClaudeDesktop()
   await poll(m, id)
+  assert.equal(m.get(id)!.state, 'ready')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a growing transcript moves the card to processing', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{}], snapshots: [
+    { updatedAt: 5000, turns: [{ role: 'user', text: 'hi' }] },
+    { updatedAt: 9000, turns: [{ role: 'user', text: 'hi' }] },   // grew
+  ] })
+  const m = await makeManager(d, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await poll(m, id)                       // seeds the baseline only
+  await pollForced(m, id)                 // now it has genuinely grown
   assert.equal(m.get(id)!.state, 'processing')
   m.killAll(); m.stopMaintenance()
 })
@@ -169,9 +186,10 @@ test('quiet AND it has spoken ⇒ ready', async () => {
   ] })
   const m = await makeManager(d, base)
   const [id] = await m.adoptClaudeDesktop()
-  await poll(m, id)                       // grew -> processing
-  assert.equal(m.get(id)!.state, 'processing')
-  await poll(m, id)                       // no growth, has spoken -> ready
+  await poll(m, id)                       // seeds baseline -> stays ready
+  // Forced = the tick that actually reads. A settled card is decimated 10:1,
+  // so in production this is either every 10th tick or a watcher wake.
+  await pollForced(m, id)                 // no growth, has spoken -> ready
   assert.equal(m.get(id)!.state, 'ready')
   assert.equal(m.get(id)!.threadContext, 'all done')
   m.killAll(); m.stopMaintenance()
@@ -198,13 +216,14 @@ test('an unmatched tool call is NOT reported as blocked', async () => {
 test('a new turn re-opens a settled card — the chat outlives our card', async () => {
   const base = await tmp()
   const d = fakeDriver({ tasks: [{}], snapshots: [
-    { updatedAt: 1000, lastAgentMessage: 'done' },
-    { updatedAt: 1000, lastAgentMessage: 'done' },   // settles to ready
+    { updatedAt: 1000, lastAgentMessage: 'done' },   // seeds the baseline
+    { updatedAt: 1000, lastAgentMessage: 'done' },   // quiet -> stays ready
     { updatedAt: 9000, lastAgentMessage: 'done' },   // user replied inside Claude
   ] })
   const m = await makeManager(d, base)
   const [id] = await m.adoptClaudeDesktop()
-  await poll(m, id); await poll(m, id)
+  await poll(m, id)                       // seeds the baseline
+  await pollForced(m, id)                 // quiet -> still ready
   assert.equal(m.get(id)!.state, 'ready')
   // The watcher path: proof the file moved, so it must not be decimated.
   await pollForced(m, id)

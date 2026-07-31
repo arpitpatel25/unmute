@@ -1005,8 +1005,17 @@ export class TaskManager extends EventEmitter {
     }
 
     const { task: meta, snapshot: snap } = view
-    const advanced = snap.updatedAt > (this.claudeLastSeenAt.get(id) ?? 0)
-    if (advanced) this.claudeLastSeenAt.set(id, snap.updatedAt)
+
+    // "Advanced" must mean GREW SINCE WE LAST LOOKED, and the first look has no
+    // last. Comparing against a default of 0 made every freshly adopted card
+    // look like it had just moved, so the whole wall lit up as `processing` —
+    // verified against the real store: 8 of 8 adopted conversations, every one
+    // of them finished days earlier. Seed the baseline instead, and let the
+    // NEXT poll decide. A conversation genuinely in flight is then one tick
+    // late, which is invisible; a dead one never lies.
+    const seeded = this.claudeLastSeenAt.has(id)
+    const advanced = seeded && snap.updatedAt > (this.claudeLastSeenAt.get(id) ?? 0)
+    if (!seeded || advanced) this.claudeLastSeenAt.set(id, snap.updatedAt)
     if (snap.updatedAt > task.lastHeartbeatMs) task.lastHeartbeatMs = snap.updatedAt
 
     // The app's own title beats our generated name once it exists — it is what
