@@ -35,11 +35,13 @@ WORK="$ROOT/work"
 # production build ships empty/localhost URLs and sign-in (Supabase OAuth)
 # breaks. Sourcing here makes `build` and `compile` correct by default instead
 # of relying on the caller to export them.
+ENV_DEV_FOUND=0
 if [[ -f "$ROOT/.env.dev" ]]; then
   set -a
   # shellcheck disable=SC1091
   source "$ROOT/.env.dev"
   set +a
+  ENV_DEV_FOUND=1
 fi
 ENGINE_TAG="${ENGINE_TAG:-v1.3.6}"
 OSS_REPO="${OSS_REPO:-https://github.com/arpitpatel25/unmute-dictation.git}"
@@ -53,6 +55,26 @@ fatal() { log "ERROR: $*"; exit 1; }
 # ─── Sanity ────────────────────────────────────────────────────
 command -v git >/dev/null  || fatal "git required"
 command -v npm >/dev/null  || fatal "npm required"
+
+# A packaged build with no .env.dev bakes localhost:54321 as the auth server.
+# The app then installs, launches, looks completely normal — and cannot sign
+# anyone in, because it is talking to a server that does not exist. Nothing in
+# the build output says so, and the failure surfaces much later as "why am I
+# signed out", which is exactly how it played out on 2026-08-01: three dev
+# builds shipped from a worktree, each silently pointed at localhost.
+#
+# .env.dev is git-ignored, so it does NOT travel to a worktree — which makes
+# building from one the normal way to hit this, not an exotic mistake.
+#
+# Fatal for `build` only. `compile` is a typecheck gate that never gets
+# installed, so it has no auth to break.
+if [[ "$MODE" == "build" && "$ENV_DEV_FOUND" == "0" ]]; then
+  fatal "desktop/.env.dev not found — refusing to build.
+    A packaged build without it bakes localhost:54321 as the auth server, so
+    the installed app cannot sign in and NOTHING reports why.
+    Building from a worktree? .env.dev is git-ignored and does not travel:
+      cp <main-checkout>/desktop/.env.dev $ROOT/.env.dev"
+fi
 
 # ─── Stage 1: Pull OSS engine ───────────────────────────────────
 
