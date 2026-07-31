@@ -2522,10 +2522,10 @@ class SessionManager {
     // OBSERVATION IS SUSPENDED FOR THE WHOLE SEQUENCE, not corrected after it.
     // captureSelectedText clears the pasteboard, has osascript copy into it,
     // and restores it; the middle change cannot be announced until the child's
-    // callback runs, so a poll landing in between would insert the user's own
-    // selection — and, through capture:insert-detected, move the fast path's
-    // chunking. Suspending around the sequence makes that unobservable by
-    // construction. MUST wrap the whole call, including its error paths.
+    // callback runs, so a poll landing in between would put the user's own
+    // selection at the top of the dictation — on the fast path, silently.
+    // Suspending around the sequence makes that unobservable by construction.
+    // MUST wrap the whole call, including its error paths.
     beginOwnClipboardSequence()
     try {
       const useClipboardFallback = mode === 'instruction'

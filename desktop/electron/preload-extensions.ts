@@ -277,17 +277,6 @@ export const paywallPreloadExtensions = {
   pillPushLevel: (level: number, elapsed?: number): void =>
     ipcRenderer.send('pill:level', level, elapsed),
   pillHide: (): void => ipcRenderer.send('pill:hide'),
-  /** Main detected a copy/screenshot during a hot mic. The recorder sets
-   *  insertPendingRef so decideCut MAY take an early chunk boundary, landing
-   *  the insert near where it actually happened. The listener side already
-   *  exists (useAudioRecorder) and its name is fixed — this is the sender's
-   *  half of the same contract. */
-  onInsertDetected: (cb: () => void): (() => void) => {
-    const h = () => cb()
-    ipcRenderer.on('capture:insert-detected', h)
-    return () => ipcRenderer.removeListener('capture:insert-detected', h)
-  },
-
   onPillEvent: (cb: (e: { type: string; value?: unknown }) => void): (() => void) => {
     const h = (_e: unknown, payload: { type: string; value?: unknown }) => cb(payload)
     ipcRenderer.on('pill:event', h as never)

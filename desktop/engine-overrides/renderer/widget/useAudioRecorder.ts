@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { getWarmStream, warmIsHot, disconnectWarmMic, setWarmBusy, warmState, setCaptureInFlight } from './micWarm'
 import { effectiveSilenceThreshold, decideCut } from './vadPolicy'
 
@@ -195,13 +195,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const chunkedModeEnabledRef = useRef<boolean>(false)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const vadDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // A clipboard insert was detected and hasn't yet been given a chunk boundary
-  // to land near. Set by a 'capture:insert-detected' push from main (the
-  // sender is wired in a later task — this listener is inert until then) and
-  // cleared the moment ANY cut is taken, so a stale flag can't leak into the
-  // next chunk. See vadPolicy.ts's 'insert' branch: this only PERMITS an
-  // early cut, never forces one.
-  const insertPendingRef = useRef<boolean>(false)
   // Track if we're in the middle of emitting a chunk (MediaRecorder stop/restart cycle)
   const isEmittingChunkRef = useRef<boolean>(false)
   // Key-release arrived DURING a VAD chunk-cut (recorder mid-swap). Natural
@@ -231,19 +224,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const silenceDurationMsRef = useRef<number>(DEFAULT_SILENCE_DURATION_MS)
   const hardChunkCapMsRef = useRef<number>(DEFAULT_HARD_CHUNK_CAP_MS)
   const vadPollIntervalMsRef = useRef<number>(DEFAULT_VAD_POLL_INTERVAL_MS)
-
-  // Subscribe once to main's insert-detected push. LIVE: main sends
-  // 'capture:insert-detected' from the capture seam whenever a watcher records
-  // an insert during a hot mic, so this flag really does reach decideCut's
-  // 'insert' branch and really can move a chunk boundary. It only ever PERMITS
-  // an earlier cut (never forces one), and it is cleared on any cut — but it
-  // is on the dictation path, so a false insert upstream is a real cost.
-  useEffect(() => {
-    const api = window.electronAPI as unknown as {
-      onInsertDetected?: (cb: () => void) => (() => void) | void
-    }
-    return api.onInsertDetected?.(() => { insertPendingRef.current = true }) ?? undefined
-  }, [])
 
   const cleanupStream = useCallback(() => {
     setCaptureInFlight(false)
@@ -292,7 +272,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
    * Emit a macro chunk: stop MediaRecorder → assemble valid WebM blob → send via IPC → restart.
    * The gap falls on a detected silence period, so no audible audio loss.
    */
-  const emitChunk = useCallback(async (reason: 'silence' | 'soft-cap' | 'hard-cap' | 'insert'): Promise<void> => {
+  const emitChunk = useCallback(async (reason: 'silence' | 'soft-cap' | 'hard-cap'): Promise<void> => {
     const recorder = mediaRecorderRef.current
     const stream = streamRef.current
     if (!recorder || recorder.state === 'inactive' || !stream) return
@@ -553,11 +533,9 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         hardCapMs: hardChunkCapMsRef.current,
         softCapWindowMs: 5_000,
         threshold,
-        insertPending: insertPendingRef.current,
       })
       if (decision !== 'none') {
         console.log(`[audio:vad] cut=${decision} at ${chunkElapsed}ms (rms=${rms.toFixed(4)}, threshold=${threshold.toFixed(4)}, floor=${(noiseFloorRef.current ?? 0).toFixed(4)})`)
-        insertPendingRef.current = false
         emitChunk(decision)
       }
     }, vadPollIntervalMsRef.current)
@@ -742,7 +720,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     vadActivatedRef.current = false
     chunkedModeEnabledRef.current = false
     isEmittingChunkRef.current = false
-    insertPendingRef.current = false
 
     // Check if chunked transcription is enabled (only for dictation mode)
     if (frozenModeRef.current === 'dictation') {

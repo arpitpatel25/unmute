@@ -426,11 +426,10 @@ export function attachTranscript(segmentId: string | null, text: string, now: nu
  *  the heavy work that corrupts audio; reading 4KB is microseconds.
  *
  *  RETURNS WHETHER IT RECORDED, and callers must respect that. Every refusal
- *  path here is a decision that this insert does not exist — but the caller
- *  also broadcasts the pad and pushes capture:insert-detected, and that second
- *  one reaches insertPendingRef → decideCut, i.e. THE FAST PATH'S CHUNKING. If
- *  the siblings fire unconditionally, a refused insert still moves a chunk
- *  boundary, and the pad and the signal disagree about what happened. */
+ *  path here is a decision that this insert does not exist, so anything the
+ *  caller does about an insert — announcing it to a surface, above all — has to
+ *  be gated on the answer, or the pad and the screen disagree about what
+ *  happened. */
 export function recordInsert(
   i: { kind: InsertKind; content: string; atMs: number },
   now: number,
@@ -978,9 +977,8 @@ function disarmWatchers(): void {
 //          inserts THE USER'S OWN SELECTION
 //   T+260  execFile's callback finally lets us record that counter — too late
 //
-// And the damage is not confined to the pad: that insert also pushes
-// capture:insert-detected, which sets insertPendingRef, which permits an
-// earlier chunk boundary — so it MOVES THE UNARMED FAST PATH'S CHUNKING.
+// The result is the user's own selection at the top of every dictation that
+// started from a selection — silently, and on the fast path.
 //
 // Re-baselining after the fact cannot fix this: a tick that already fired
 // cannot be retracted. So observation is suspended for the DURATION of the

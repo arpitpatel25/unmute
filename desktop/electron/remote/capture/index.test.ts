@@ -126,11 +126,10 @@ describe('the capture window is the recording window', () => {
 })
 
 // The failure this exists to prevent: our own synthesised ⌘C read back as a
-// user copy. That would put the user's selection at the top of every dictation
-// AND — through capture:insert-detected → insertPendingRef → decideCut — move
-// the unarmed fast path's chunking. These tests drive the REAL clipboardWatch,
-// because the guarantee is about what a tick can observe, not about what the
-// façade remembers.
+// user copy, which would put the user's own selection at the top of every
+// dictation that started from a selection — on the fast path, silently. These
+// tests drive the REAL clipboardWatch, because the guarantee is about what a
+// tick can observe, not about what the façade remembers.
 describe('our own pasteboard sequences are unobservable', () => {
   /** Wires a real clipboardWatch over a fake pasteboard. */
   function realWatch(state: { counter: number; text: string }) {
@@ -288,15 +287,13 @@ describe('our own pasteboard sequences are unobservable', () => {
 
   // init.ts is not unit-testable (it pulls in the whole remote stack), so this
   // mirrors its onInsertRecorded helper exactly — `if (!recordInsert(…)) return`
-  // — and asserts the property that matters: the pad and the two siblings can
-  // never disagree about whether an insert happened.
-  test('BOTH siblings are gated: refused fires neither, recorded fires both', () => {
+  // — and asserts the property that matters: the pad and the screen can never
+  // disagree about whether an insert happened.
+  test('the announce is gated: a refused insert is never drawn', () => {
     const broadcasts: number[] = []
-    const detects: number[] = []
     const onInsertRecorded = (i: { kind: 'url' | 'image'; content: string; atMs: number }) => {
       if (!recordInsert(i, Date.now())) return
       broadcasts.push(i.atMs)
-      detects.push(i.atMs)
     }
 
     beginSegment('cursor', 1000, true)
@@ -304,13 +301,11 @@ describe('our own pasteboard sequences are unobservable', () => {
     beginOwnClipboardSequence()
     onInsertRecorded({ kind: 'image', content: join(root, 'mid.png'), atMs: 1100 })
     assert.deepEqual(broadcasts, [], 'no pad broadcast for a refused insert')
-    assert.deepEqual(detects, [], 'and NO capture:insert-detected — chunking is untouched')
     endOwnClipboardSequence(1200)
 
     onInsertRecorded({ kind: 'url', content: 'https://a.com', atMs: 1300 })
     assert.deepEqual(broadcasts, [1300])
-    assert.deepEqual(detects, [1300])
-    assert.equal(inserts().length, 1, 'the pad agrees with the signals')
+    assert.equal(inserts().length, 1, 'the pad agrees with the surface')
   })
 })
 

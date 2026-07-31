@@ -12,7 +12,25 @@
 //     words when at all possible.
 // Pure module: no DOM, no React — unit-tested by vadPolicy.test.ts.
 
-export type CutDecision = 'none' | 'silence' | 'soft-cap' | 'hard-cap' | 'insert'
+// TRIED AND REMOVED: an insert-triggered cut. A clipboard event used to PERMIT
+// an early boundary ('insert', gated on sustained silence past a ~9s floor) so
+// a copy could be placed precisely inside the transcript. It bought nothing and
+// was not free.
+//
+// Nothing: a chunk boundary is not a segment boundary. beginSegment opens
+// exactly ONE segment per capture and the transcript attaches to it in one go,
+// so where the audio was cut never reached the buffer at all — no arrangement
+// of chunk boundaries could move an insert by a single character.
+//
+// Not free: it moves a real STT boundary, and the 2026-07-14 investigation
+// established that cutting badly is the primary source of garbled transcripts.
+// Order already carries almost all the value of interleaving (spec §2.1), so
+// exactness was never worth paying accuracy for even when it worked.
+//
+// Do not add it back without first making chunk boundaries actually produce
+// segment boundaries.
+
+export type CutDecision = 'none' | 'silence' | 'soft-cap' | 'hard-cap'
 
 export interface CutInput {
   rms: number
@@ -24,9 +42,6 @@ export interface CutInput {
   hardCapMs: number
   softCapWindowMs: number
   threshold: number
-  /** An insert was detected and has not yet been given a boundary. */
-  insertPending?: boolean
-  insertFloorMs?: number
 }
 
 /** Ceiling: above this, "silence" would overlap real speech rms. */
@@ -36,13 +51,6 @@ const FLOOR_MARGIN = 1.6
 /** Soft-cap accepts a dip that isn't full silence — 1.5x the silence bar. */
 const SOFT_CAP_DIP = 1.5
 
-/** A clipboard event PERMITS an early cut, so an insert lands close to where it
- *  happened. It never FORCES one: forcing a cut on every copy would slice
- *  mid-word, which the 2026-07-14 investigation identified as the primary
- *  source of garbled transcripts. Order already carries most of the value of
- *  interleaving, so exactness is not worth the accuracy. */
-export const INSERT_FLOOR_MS = 9000
-
 export function effectiveSilenceThreshold(configured: number, floorP20: number | null): number {
   if (floorP20 == null) return configured
   return Math.min(Math.max(configured, floorP20 * FLOOR_MARGIN), THRESHOLD_CAP)
@@ -50,21 +58,6 @@ export function effectiveSilenceThreshold(configured: number, floorP20: number |
 
 export function decideCut(input: CutInput): CutDecision {
   if (input.chunkElapsedMs >= input.hardCapMs) return 'hard-cap'
-
-  // Below minChunkMs on purpose — but only in real, sustained silence, so this
-  // can never land mid-word, and only past a floor, so the chunk still has
-  // enough audio to transcribe well.
-  if (
-    input.insertPending &&
-    input.chunkElapsedMs < input.minChunkMs &&
-    input.chunkElapsedMs >= (input.insertFloorMs ?? INSERT_FLOOR_MS) &&
-    input.rms < input.threshold &&
-    input.silenceSinceMs != null &&
-    input.silenceSinceMs >= input.silenceDurationMs
-  ) {
-    return 'insert'
-  }
-
   if (input.chunkElapsedMs < input.minChunkMs) return 'none'
   if (
     input.chunkElapsedMs >= input.hardCapMs - input.softCapWindowMs &&

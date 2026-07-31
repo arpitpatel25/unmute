@@ -1183,14 +1183,6 @@ function clipboardChangeCount(): number {
   try { return nativeClipCounter?.clipboardChangeCount() ?? -1 } catch { return -1 }
 }
 
-/** Tell the recorder an insert is pending so decideCut may take an early cut
- *  (Task 5). Best-effort: a missed push only costs positional precision. */
-function notifyInsertDetected(): void {
-  for (const w of BrowserWindow.getAllWindows()) {
-    try { if (!w.isDestroyed()) w.webContents.send('capture:insert-detected') } catch { /* window going away */ }
-  }
-}
-
 /** The pad changed. One snapshot, read once, so a surface can never see the pad
  *  and the arm state from two different instants. Exactly one place announces a
  *  pad change; the pad panel (Task 14) renders whatever lands here. */
@@ -1439,20 +1431,17 @@ function rescueClipboardImageViaChild(padDir: string): Promise<string | null> {
 
 /** THE ONE PLACE AN INSERT BECOMES VISIBLE.
  *
- *  Both siblings are gated on whether the buffer actually RECORDED it.
- *  recordInsert refuses inserts that were detected while Unmute owned the
- *  pasteboard, and it dedups images across the two detectors — and
- *  notifyInsertDetected reaches insertPendingRef → decideCut, which can move a
- *  CHUNK BOUNDARY on the unarmed fast path. Firing it for an insert the pad
- *  rejected would leave the pad and the chunking signal disagreeing about what
- *  happened, which is the same invariant the suppression exists to protect.
+ *  Announcing is gated on whether the buffer actually RECORDED it. recordInsert
+ *  refuses inserts detected while Unmute owned the pasteboard, and it dedups
+ *  images across the two detectors; a surface drawn for an insert the pad
+ *  rejected would show work that is not in the pad.
  *
  *  screenshotWatch is synchronous and is NOT suspended during our own
- *  pasteboard sequences, so this is a reachable path, not a theoretical one. */
+ *  pasteboard sequences, so a refusal here is a reachable path, not a
+ *  theoretical one. */
 function onInsertRecorded(i: { kind: InsertKind; content: string; atMs: number }): void {
   if (!recordInsert(i, Date.now())) return
   broadcastScratchpad()
-  notifyInsertDetected()
 }
 
 /** Construct both watchers and hand them to the façade. Idempotent. */
