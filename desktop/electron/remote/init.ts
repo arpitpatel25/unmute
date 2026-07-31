@@ -3347,6 +3347,36 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Explicit "Connect Codex": quits and relaunches Codex WITH the debug port,
   // in the background (`open -g`). This is the one interruption in the Codex
   // lane, so it is always user-initiated and never happens mid-utterance.
+  // ── Claude desktop ──────────────────────────────────────────────────────
+  // Three verbs, matching the three things the spike scoped: answer a prompt,
+  // send into an existing conversation, start a new one. Each returns a typed
+  // reason on failure rather than a bare false, because every failure here is
+  // something the user can act on ("open Claude Desktop", "answer it in the
+  // app") and a silent false gives them nothing.
+  ipcMain.handle('remote:claude-desktop-answer', async (_e, taskId: unknown, option: unknown) => {
+    if (!manager) return { ok: false, reason: 'not-ready' }
+    if (typeof taskId !== 'string' || typeof option !== 'string') return { ok: false, reason: 'bad-args' }
+    const out = await manager.answerClaudeDesktop(taskId, option).catch((e) => ({ ok: false, reason: (e as Error).message }))
+    log.event('claude-desktop-answer-requested', { ok: out.ok, reason: out.reason ?? null })
+    return out
+  })
+
+  ipcMain.handle('remote:claude-desktop-send', async (_e, taskId: unknown, text: unknown) => {
+    if (!manager) return { ok: false, reason: 'not-ready' }
+    if (typeof taskId !== 'string' || typeof text !== 'string') return { ok: false, reason: 'bad-args' }
+    const out = await manager.sendClaudeDesktop(taskId, text).catch((e) => ({ ok: false, reason: (e as Error).message }))
+    log.event('claude-desktop-send-requested', { ok: out.ok, reason: out.reason ?? null })
+    return out
+  })
+
+  ipcMain.handle('remote:claude-desktop-create', async (_e, intent: unknown) => {
+    if (!manager) return { ok: false, reason: 'not-ready' }
+    if (typeof intent !== 'string') return { ok: false, reason: 'bad-args' }
+    const out = await manager.createClaudeDesktop(intent).catch((e) => ({ ok: false, reason: (e as Error).message }))
+    log.event('claude-desktop-create-requested', { ok: out.ok, reason: out.reason ?? null })
+    return out
+  })
+
   ipcMain.handle('remote:codex-connect', async () => {
     if (!codexDriver) return { ok: false, reason: 'not-configured' }
     const cdp = await codexDriver.connect({ autoArm: true }).catch(() => null)

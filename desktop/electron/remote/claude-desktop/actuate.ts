@@ -241,6 +241,49 @@ export class ClaudeActuator {
   }
 
   /**
+   * Start a new conversation and send the first message into it.
+   *
+   * Pressing New, waiting for the composer, typing and submitting is ONE
+   * actuation for the same reason open+send is: anything admitted in between
+   * could re-target the app, and the first message of a task is exactly the
+   * moment where landing in the wrong conversation is least recoverable.
+   *
+   * The caller resolves which task was created by diffing the store afterwards
+   * — the UI gives us no id at creation, and guessing "the newest" without a
+   * before-set is how the Codex backend once bound two cards to one thread.
+   */
+  async createTask(text: string, opts: { newLabel?: string; settleMs?: number } = {}): Promise<ActuateResult> {
+    if (!text.trim()) return { ok: false, reason: 'no-shortcut' }
+    const newLabel = opts.newLabel ?? 'New'
+    const settleMs = opts.settleMs ?? 2500
+    return this.run<ActuateResult>('createTask', async () => {
+      const bridge = this.bridge()
+      const out = await bridge.call('getTree', [this.bundleId, 0, '', ACTUATE_DEPTH, true])
+      const nodes = ((out?.nodes ?? []) as AxNode[])
+      if (!isTreeAlive(nodes)) return { ok: false, reason: 'tree-dead' }
+
+      // Exact label match, not a prefix: 'New' must not resolve to a row whose
+      // title merely begins with it.
+      const btn = nodes.find((n) => n.role === 'AXButton' && n.label.trim() === newLabel)
+      if (!btn) {
+        log.warn('create-no-new-button', { newLabel })
+        return { ok: false, reason: 'row-not-found' }
+      }
+      const pressed = await bridge.call('press', [this.bundleId, btn.id, ACTUATE_DEPTH])
+      if (pressed?.error || pressed?.ok === false) return { ok: false, reason: 'bridge-failed' }
+
+      // The composer takes a moment to mount (~2.5s observed in the spike).
+      // Typing before it exists drops the message on the floor silently.
+      await new Promise((r) => setTimeout(r, settleMs))
+
+      const typed = await bridge.call('typeText', [this.bundleId, text, false, true])
+      if (typed?.error) return { ok: false, reason: 'bridge-failed' }
+      log.event('claude-desktop-created', { chars: text.length })
+      return { ok: true }
+    }, { ok: false, reason: 'activate-failed' })
+  }
+
+  /**
    * Open a conversation and send into it, as ONE actuation.
    *
    * These must not be two calls from outside. Between an open and a send the

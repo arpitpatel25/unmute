@@ -23,6 +23,15 @@ function fakeDriver(script: {
   }))
   return {
     calls,
+    /** Simulate Claude Desktop writing a NEW conversation into the store. */
+    push: (t: Record<string, unknown>) => {
+      tasks.push({
+        sessionId: `local_new${tasks.length}`, cliSessionId: `cliN${tasks.length}`, title: null,
+        model: null, cwd: '/w', originCwd: null, worktreePath: null, permissionMode: null,
+        completedTurns: 0, createdAt: 0, lastActivityAt: Date.now(), lastFocusedAt: 0,
+        archived: false, transcriptUnavailable: false, ...t,
+      } as ClaudeDesktopTask)
+    },
     /** Simulate the user renaming a chat inside Claude Desktop. */
     rename: (id: string, title: string) => {
       const t = tasks.find((x) => x.sessionId === id)
@@ -535,5 +544,62 @@ test('a task with no title cannot be addressed, and says so', async () => {
   const r = await m.sendClaudeDesktop(id, 'hello')
   assert.equal(r.ok, false)
   assert.equal(r.reason, 'no-title-to-address')
+  m.killAll(); m.stopMaintenance()
+})
+
+// ── creating a new conversation ───────────────────────────────────────────
+
+test('the new task is found by DIFFING the store, never by taking "the newest"', async () => {
+  // Taking the newest without a before-set is how the Codex backend once bound
+  // two cards to one thread.
+  const base = await tmp()
+  const existing = { title: 'Old chat' }
+  const d = fakeDriver({ tasks: [existing], snapshots: [{ updatedAt: 1 }] })
+  const act = {
+    ...fakeActuatorFull(),
+    createTask: async () => {
+      // The app writes the new conversation to the store.
+      ;(d as unknown as { push(t: Record<string, unknown>): void }).push({ title: 'Brand new' })
+      return { ok: true as const }
+    },
+  }
+  const m = await managerFull(d, fakeAx(), act, base)
+  const r = await m.createClaudeDesktop('do the thing')
+  assert.equal(r.ok, true)
+  const created = m.list().find((t) => t.name === 'Brand new')
+  assert.ok(created, 'the NEW conversation must be the one adopted')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a creation whose id never appears still reports ok — the work DID start', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [] })
+  const act = { ...fakeActuatorFull(), createTask: async () => ({ ok: true as const }) }
+  const m = await managerFull(d, fakeAx(), act, base)
+  const r = await m.createClaudeDesktop('do the thing', { tries: 1, waitMs: 1 })
+  assert.equal(r.ok, true)
+  assert.equal(r.reason, 'id-unresolved')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a failed creation is reported as failed, not silently ok', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [] })
+  const act = { ...fakeActuatorFull(), createTask: async () => ({ ok: false as const, reason: 'tree-dead' as const }) }
+  const m = await managerFull(d, fakeAx(), act, base)
+  const r = await m.createClaudeDesktop('do the thing')
+  assert.equal(r.ok, false)
+  assert.equal(r.reason, 'tree-dead')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('an empty intent never touches the app', async () => {
+  const base = await tmp()
+  let called = false
+  const act = { ...fakeActuatorFull(), createTask: async () => { called = true; return { ok: true as const } } }
+  const m = await managerFull(fakeDriver({ tasks: [] }), fakeAx(), act, base)
+  const r = await m.createClaudeDesktop('   ')
+  assert.equal(r.ok, false)
+  assert.equal(called, false)
   m.killAll(); m.stopMaintenance()
 })

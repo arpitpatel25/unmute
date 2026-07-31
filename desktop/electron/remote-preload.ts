@@ -186,6 +186,18 @@ export const remotePreloadExtensions = {
   remoteGetSettings: (): Promise<RemoteSettingsSnapshot> => ipcRenderer.invoke('remote:get-settings'),
   remoteSetPermissionMode: (mode: 'prompt' | 'auto-approve'): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-permission-mode', mode),
+  // ── Claude desktop ──────────────────────────────────────────────────────
+  /** Answer the permission prompt a task is stopped on. `option` is the LABEL
+   *  the card displayed — not an index — so the choice cannot drift onto a
+   *  different button between rendering and acting. */
+  remoteClaudeDesktopAnswer: (taskId: string, option: string): Promise<{ ok: boolean; reason?: string }> =>
+    ipcRenderer.invoke('remote:claude-desktop-answer', taskId, option),
+  /** Send a message into an existing Claude Desktop conversation. */
+  remoteClaudeDesktopSend: (taskId: string, text: string): Promise<{ ok: boolean; reason?: string }> =>
+    ipcRenderer.invoke('remote:claude-desktop-send', taskId, text),
+  /** Start a new Claude Desktop conversation. */
+  remoteClaudeDesktopCreate: (intent: string): Promise<{ ok: boolean; id?: string; reason?: string }> =>
+    ipcRenderer.invoke('remote:claude-desktop-create', intent),
   remoteSetAgent: (agent: ProviderId): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-agent', agent),
   /** Backends that can take a task RIGHT NOW, for the pill's picker. Includes a

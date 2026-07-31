@@ -877,7 +877,7 @@ export class TaskManager extends EventEmitter {
    * out of the window, because removing something the user can see is a much
    * worse failure than showing one card too many.
    */
-  async adoptClaudeDesktop(opts: { windowMs?: number; cap?: number } = {}): Promise<string[]> {
+  async adoptClaudeDesktop(opts: { windowMs?: number; cap?: number; only?: ReadonlySet<string> } = {}): Promise<string[]> {
     const driver = this.opts.claudeDesktopDriver
     if (!driver) return []
     const windowMs = opts.windowMs ?? 24 * 60 * 60_000
@@ -899,9 +899,15 @@ export class TaskManager extends EventEmitter {
     const adopted: string[] = []
     for (const meta of found) {
       if (adopted.length >= cap) break
+      // `only` names EXACTLY which conversations to take. Used by creation,
+      // where the task has already been identified by diffing the store — an
+      // unfiltered sweep would adopt whatever happened to sort first instead,
+      // which is the same "take the newest" mistake the diff exists to avoid.
+      if (opts.only && !opts.only.has(meta.sessionId)) continue
       if (meta.archived) continue
       if (known.has(meta.sessionId)) continue
-      if (meta.lastActivityAt > 0 && now - meta.lastActivityAt > windowMs) continue
+      // A conversation we were told to take is wanted regardless of age.
+      if (!opts.only && meta.lastActivityAt > 0 && now - meta.lastActivityAt > windowMs) continue
 
       const id = randomUUID()
       const dir = join(this.opts.baseDir, this.opts.userKey ?? 'local', id)
@@ -956,6 +962,48 @@ export class TaskManager extends EventEmitter {
       })
     }
     return adopted
+  }
+
+  /**
+   * Start a new Claude Desktop conversation from Unmute.
+   *
+   * The app gives us no id at creation, so the new task is identified by
+   * DIFFING the store: snapshot the session ids first, create, then look for
+   * one that was not there. Taking "the newest" without a before-set is exactly
+   * how the Codex backend once bound two cards to a single thread.
+   */
+  async createClaudeDesktop(intent: string, opts: { tries?: number; waitMs?: number } = {}): Promise<{ ok: boolean; id?: string; reason?: string }> {
+    const driver = this.opts.claudeDesktopDriver
+    const actuator = this.opts.claudeActuator
+    if (!driver || !actuator) return { ok: false, reason: 'no-backend' }
+    if (!intent.trim()) return { ok: false, reason: 'empty-intent' }
+
+    const before = new Set((await driver.list()).map((t) => t.sessionId))
+    const res = await actuator.createTask(intent)
+    if (!res.ok) {
+      log.warn('claude-desktop-create-failed', { reason: res.reason ?? 'unknown' })
+      return { ok: false, reason: res.reason ?? 'failed' }
+    }
+
+    // The store is written asynchronously, so poll rather than read once.
+    const tries = opts.tries ?? 10
+    const waitMs = opts.waitMs ?? 500
+    for (let i = 0; i < tries; i++) {
+      const fresh = (await driver.list()).filter((t) => !before.has(t.sessionId))
+      if (fresh.length) {
+        // Newest by activity among the genuinely NEW ones — the before-set has
+        // already excluded every pre-existing conversation.
+        const created = fresh.sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0]
+        const [id] = await this.adoptClaudeDesktop({ only: new Set([created.sessionId]), cap: 1 })
+        log.event('claude-desktop-create-resolved', { sessionId: created.sessionId, attempts: i + 1, adopted: !!id })
+        return { ok: true, id }
+      }
+      await new Promise((r) => setTimeout(r, waitMs))
+    }
+    // The conversation was almost certainly created — we just cannot name it.
+    // Saying so beats claiming failure for work that DID start.
+    log.warn('claude-desktop-create-unresolved', {})
+    return { ok: true, reason: 'id-unresolved' }
   }
 
   /**
