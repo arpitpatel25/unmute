@@ -396,6 +396,19 @@ export class TaskManager extends EventEmitter {
   private claudeIdleTicks = new Map<string, number>()
   private claudeLastSeenAt = new Map<string, number>()
   private claudeWatchers = new Map<string, () => void>()
+  /**
+   * Claude Desktop conversations the user has DISMISSED from the wall.
+   *
+   * Adoption re-adds any conversation not currently in `tasks`, and removing a
+   * card takes it out of `tasks` — so without this the next 30s sweep brings it
+   * straight back. Observed live: removed at 21:28:49, re-adopted at 21:29:07,
+   * removed again at 21:29:43, back at 21:30:07. A card the user cannot get rid
+   * of is worse than one that never appeared.
+   *
+   * Persisted, because the conversation still exists in Claude Desktop: an
+   * in-memory set would resurrect everything on the next app start.
+   */
+  private claudeDismissed = new Set<string>()
   /** ONE accessibility read serves every Claude desktop card on a tick. The
    *  tree is ~470 nodes and the sidebar answers all tasks at once, so per-task
    *  reads would be N walks for one identical answer — the same waste the
@@ -877,6 +890,30 @@ export class TaskManager extends EventEmitter {
    * out of the window, because removing something the user can see is a much
    * worse failure than showing one card too many.
    */
+  /** Where dismissals live. One file, next to the task dirs. */
+  private claudeDismissedPath(): string {
+    return join(this.opts.baseDir, this.opts.userKey ?? 'local', 'claude-desktop-dismissed.json')
+  }
+
+  private async loadClaudeDismissed(): Promise<void> {
+    try {
+      const raw = JSON.parse(await fs.readFile(this.claudeDismissedPath(), 'utf8')) as unknown
+      if (Array.isArray(raw)) this.claudeDismissed = new Set(raw.filter((x): x is string => typeof x === 'string'))
+    } catch {
+      // No file yet, or unreadable. An empty set is the correct default: it
+      // adopts, which the user can undo. Failing closed would hide their chats.
+    }
+  }
+
+  private async saveClaudeDismissed(): Promise<void> {
+    try {
+      await fs.mkdir(join(this.opts.baseDir, this.opts.userKey ?? 'local'), { recursive: true })
+      await fs.writeFile(this.claudeDismissedPath(), JSON.stringify([...this.claudeDismissed]))
+    } catch (e) {
+      log.warn('claude-dismissed-save-failed', { error: (e as Error).message })
+    }
+  }
+
   async adoptClaudeDesktop(opts: { windowMs?: number; cap?: number; only?: ReadonlySet<string> } = {}): Promise<string[]> {
     const driver = this.opts.claudeDesktopDriver
     if (!driver) return []
@@ -888,6 +925,8 @@ export class TaskManager extends EventEmitter {
     const windowMs = opts.windowMs ?? 7 * 24 * 60 * 60_000
     const cap = opts.cap ?? 12
     const now = this.clock()
+
+    if (!this.claudeDismissed.size) await this.loadClaudeDismissed()
 
     let found: Awaited<ReturnType<ClaudeDesktopDriver['list']>>
     try {
@@ -909,6 +948,8 @@ export class TaskManager extends EventEmitter {
       // unfiltered sweep would adopt whatever happened to sort first instead,
       // which is the same "take the newest" mistake the diff exists to avoid.
       if (opts.only && !opts.only.has(meta.sessionId)) continue
+      // The user threw this card away. Adoption must never overrule that.
+      if (this.claudeDismissed.has(meta.sessionId)) continue
       if (meta.archived) continue
       if (known.has(meta.sessionId)) continue
       // A conversation we were told to take is wanted regardless of age.
@@ -969,6 +1010,7 @@ export class TaskManager extends EventEmitter {
       adopted: adopted.length, scanned: found.length,
       skippedArchived: found.filter((t) => t.archived).length,
       skippedStale: found.filter((t) => !t.archived && t.lastActivityAt > 0 && now - t.lastActivityAt > windowMs).length,
+      skippedDismissed: found.filter((t) => this.claudeDismissed.has(t.sessionId)).length,
       windowMs, cap,
     })
     return adopted
@@ -1927,6 +1969,12 @@ export class TaskManager extends EventEmitter {
     tlog.ui('task-row.removed', {})
     const task = this.tasks.get(id)
     if (task?.codexThreadId) { this.surfacedApprovals.delete(task.codexThreadId); void clearApproval(task.codexThreadId) }
+    // Remember the dismissal BEFORE the task leaves the map, or the adoption
+    // sweep puts this conversation straight back (see claudeDismissed).
+    if (task?.claudeDesktopSessionId) {
+      this.claudeDismissed.add(task.claudeDesktopSessionId)
+      void this.saveClaudeDismissed()
+    }
     this.hardKill(id) // terminate session (PTY + tmux kill-session)
     this.tasks.delete(id)
     this.outputBuffers.delete(id)

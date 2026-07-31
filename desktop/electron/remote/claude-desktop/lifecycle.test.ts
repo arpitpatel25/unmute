@@ -614,3 +614,45 @@ test('the default window is a week — a day adopted NOTHING on a real machine',
   assert.equal((await m.adoptClaudeDesktop()).length, 1)
   m.killAll(); m.stopMaintenance()
 })
+
+// ── dismissal ─────────────────────────────────────────────────────────────
+
+test('a removed card does NOT come back on the next sweep', async () => {
+  // Observed live: removed 21:28:49, re-adopted 21:29:07, removed 21:29:43,
+  // back 21:30:07. A card the user cannot get rid of is worse than one that
+  // never appeared.
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login' }] })
+  const m = await makeManager(d, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await m.remove(id)
+  assert.deepEqual(await m.adoptClaudeDesktop(), [], 'the sweep must not overrule the user')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('the dismissal SURVIVES a restart — the conversation still exists in the app', async () => {
+  const base = await tmp()
+  const mk = async () => makeManager(fakeDriver({ tasks: [{ title: 'Fix login' }] }), base)
+  const m1 = await mk()
+  const [id] = await m1.adoptClaudeDesktop()
+  await m1.remove(id)
+  m1.killAll(); m1.stopMaintenance()
+
+  const m2 = await mk()                       // fresh manager, same baseDir
+  assert.deepEqual(await m2.adoptClaudeDesktop(), [], 'an in-memory set would resurrect it')
+  m2.killAll(); m2.stopMaintenance()
+})
+
+test('dismissing one conversation does not hide the others', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'One' }, { title: 'Two' }] })
+  const m = await makeManager(d, base)
+  const ids = await m.adoptClaudeDesktop()
+  const one = ids.map((i) => m.get(i)!).find((t) => t.name === 'One')!
+  await m.remove(one.id)
+  const again = await m.adoptClaudeDesktop()
+  assert.deepEqual(again, [], 'Two is still adopted, so nothing new to take')
+  assert.equal(m.list().filter((t) => t.agent === 'claude-code-desktop').length, 1)
+  assert.equal(m.list().find((t) => t.agent === 'claude-code-desktop')!.name, 'Two')
+  m.killAll(); m.stopMaintenance()
+})
