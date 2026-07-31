@@ -508,3 +508,32 @@ test('parseDecision: skill_feedback requires a known skill, else failsafe', () =
   const bad = parseDecision(JSON.stringify({ action: 'skill_feedback', intent: 'x', skill: 'unknown' }), 'x', [], [], [], [], [], ['pr-review'])
   assert.equal(bad.action, 'new')                      // failsafe — never invent a feedback target
 })
+
+// ── backend scoping: the guarantee RoutableTask.agent exists to provide ──────
+// Broken twice in the field. The second time (2026-07-31) a finished CODEX task
+// reached the CLAUDE router because the `finished` list was built by a
+// hand-rolled literal that omitted `agent`, and the filter's `?? 'claude'`
+// turned that absence into a positive claim. A Claude request then resumed a
+// Codex thread. These pin the filter itself, independent of who builds the list.
+
+/** The scoping predicate as init.ts applies it — no defaulting, by design. */
+const mine = (t: { agent?: string }, useCodex: boolean) =>
+  t.agent === (useCodex ? 'codex-desktop' : 'claude')
+
+test('a codex task is never offered to the claude router', () => {
+  assert.equal(mine({ agent: 'codex-desktop' }, false), false)
+  assert.equal(mine({ agent: 'codex-desktop' }, true), true)
+})
+
+test('a claude task is never offered to the codex router', () => {
+  assert.equal(mine({ agent: 'claude' }, true), false)
+  assert.equal(mine({ agent: 'claude' }, false), true)
+})
+
+test('a task with NO agent goes to neither router, not to claude by default', () => {
+  // The exact defect: `(t.agent ?? 'claude')` made an unknown backend read as
+  // Claude's, so anything built without the field leaked one way and vanished
+  // the other. Unknown must mean unknown.
+  assert.equal(mine({}, false), false, 'must not fall through to the claude router')
+  assert.equal(mine({}, true), false, 'and must not reach the codex router either')
+})

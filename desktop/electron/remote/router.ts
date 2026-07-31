@@ -64,8 +64,15 @@ export interface RoutableTask {
    * propose resuming one, which is a stronger guarantee than a rule saying it
    * must not: rules are what failed when a resume decision reached a Codex
    * thread and spawned `claude --continue` against it.
+   *
+   * REQUIRED, deliberately. It was optional, and that is precisely how the
+   * guarantee above was broken a second time (2026-07-31): the `finished` list
+   * was built by a hand-rolled literal that omitted this field, the compiler
+   * had nothing to say about it, and the filter's `?? 'claude'` turned the
+   * missing value into a positive claim. Making it required means the next
+   * mapper that forgets is a build error, not a silent misroute.
    */
-  agent?: 'claude' | 'codex-desktop'
+  agent: 'claude' | 'codex-desktop'
 }
 
 /** What the host can actually run a task on RIGHT NOW. Passed in per-utterance

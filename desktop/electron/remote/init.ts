@@ -1599,11 +1599,13 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // the song" still resolves — as a self-contained NEW intent, never a
       // resurrection.
       const nowMs = Date.now()
-      const finished = manager.recentlyFinished().map((t) => ({
-        id: t.id, intent: t.intent, name: t.name ?? null, state: t.state,
-        kind: t.kind ?? 'oneoff', category: t.category ?? null,
-        ageSec: Math.max(0, Math.round((nowMs - t.updatedAt) / 1000)),
-      }))
+      // snapshotOf, NOT a hand-rolled literal. This list used to be built inline
+      // and silently omitted `agent`, which was the whole of the 2026-07-31
+      // cross-backend misroute: a finished CODEX task arrived with no backend,
+      // the `mine` filter defaulted it to 'claude', the Claude router was shown
+      // it as one of its own, and resuming it continued a Codex thread. Every
+      // other list already went through snapshotOf; this one had drifted.
+      const finished = manager.recentlyFinished().map((t) => snapshotOf(t, nowMs, false))
       const { targetable, coldSessions } = partitionRoutable(nowMs)
       // THE WALL for curation: everything the user can currently SEE (mirrors
       // the renderer's visibleOnWall: non-shelved sessions always; active
@@ -1647,8 +1649,13 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // the two may legitimately be absent (no Claude CLI, or no Codex app).
       const useCodex = (avail.preferred === 'codex-desktop' || !router) && !!codexRouter
       const activeRouter = useCodex ? codexRouter! : router!
+      // NO DEFAULTING. `?? 'claude'` used to sit here, and it is what turned a
+      // missing backend into a positive claim: an agent-less task was asserted
+      // to be Claude's and handed to the Claude router. Absence of information
+      // is not evidence of Claude — a task whose backend we cannot name belongs
+      // to NEITHER router, so it is simply not offered to either.
       const mine = (t: RoutableTask) =>
-        (t.agent ?? 'claude') === (useCodex ? 'codex-desktop' : 'claude')
+        t.agent === (useCodex ? 'codex-desktop' : 'claude')
       log.event('router-selected', {
         engine: useCodex ? 'codex' : 'claude',
         preferred: avail.preferred,
