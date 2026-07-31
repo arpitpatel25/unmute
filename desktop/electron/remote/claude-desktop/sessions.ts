@@ -67,6 +67,14 @@ export interface ClaudeDesktopTask {
   completedTurns: number
   createdAt: number
   lastActivityAt: number
+  /** When the user last had this conversation OPEN in Claude Desktop.
+   *
+   *  The newest one across the store is the conversation on screen right now,
+   *  which is the only way to attribute a permission prompt to a task: the
+   *  prompt exists in the window, not on disk, and only one conversation is
+   *  ever addressable (AXWindows is empty on this app). Absent on tasks never
+   *  opened — 14 of 33 carry it. */
+  lastFocusedAt: number
   archived: boolean
   /** The app's own assertion that no transcript exists. Honoured as a negative. */
   transcriptUnavailable: boolean
@@ -157,6 +165,7 @@ export function toTask(raw: Record<string, unknown>): ClaudeDesktopTask | null {
     completedTurns: num(raw.completedTurns),
     createdAt: num(raw.createdAt),
     lastActivityAt: num(raw.lastActivityAt),
+    lastFocusedAt: num(raw.lastFocusedAt),
     archived: raw.isArchived === true,
     transcriptUnavailable: raw.transcriptUnavailable === true,
   }

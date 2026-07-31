@@ -32,6 +32,7 @@ import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor
 import { providerOf, PROVIDERS, type ProviderId } from './providers'
 import { CodexDesktopDriver } from './codex/driver'
 import { ClaudeDesktopDriver } from './claude-desktop/driver'
+import { ClaudeDesktopAx } from './claude-desktop/ax'
 import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
@@ -336,6 +337,8 @@ let manager: TaskManager | null = null
 let codexDriver: CodexDesktopDriver | null = null
 /** Claude desktop backend, READ half — see claude-desktop/driver.ts. */
 let claudeDesktopDriver: ClaudeDesktopDriver | null = null
+/** Claude desktop LIVE state — see claude-desktop/ax.ts. */
+let claudeDesktopAx: ClaudeDesktopAx | null = null
 
 /** The minimum a probe needs from a desktop driver. Declared structurally so a
  *  second backend does not have to inherit CodexDesktopDriver to be probed. */
@@ -2032,10 +2035,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // read half touches only files, so building it costs nothing and it works
   // even with Claude Desktop shut.
   claudeDesktopDriver = new ClaudeDesktopDriver({})
+  // Live UI reader. Separate from the driver because it has a completely
+  // different failure mode: the driver reads files and works with the app shut,
+  // this needs a running app whose renderer has attached. Keeping them apart
+  // means a dead accessibility tree costs the live signals only — cards, titles
+  // and conversations keep working from disk.
+  claudeDesktopAx = new ClaudeDesktopAx({})
   manager = new TaskManager({
     executorFactory,
     codexDriver,
     claudeDesktopDriver,
+    claudeDesktopAx,
     // Read fresh per dispatch: the Codex composer's permission level is set from
     // the SAME user setting that decides --dangerously-skip-permissions for
     // Claude, so the two backends behave alike (capped by what the device

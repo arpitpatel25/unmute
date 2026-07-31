@@ -106,6 +106,22 @@ export class ClaudeDesktopDriver {
     return listTasks(this.sessionsDir)
   }
 
+  /**
+   * The conversation Claude Desktop currently has OPEN, by newest lastFocusedAt.
+   *
+   * Needed because a permission prompt lives in the window and names no task.
+   * Only one conversation is addressable at a time, so the focused one is the
+   * only task a visible prompt can belong to. Null when nothing in the store
+   * has ever been focused, which is honest rather than a guess.
+   */
+  async focused(): Promise<ClaudeDesktopTask | null> {
+    let best: ClaudeDesktopTask | null = null
+    for (const t of await this.list()) {
+      if (t.lastFocusedAt > 0 && (!best || t.lastFocusedAt > best.lastFocusedAt)) best = t
+    }
+    return best
+  }
+
   /** One task by its primary key, or null if it is gone from the store. */
   async find(sessionId: string): Promise<ClaudeDesktopTask | null> {
     const all = await this.list()

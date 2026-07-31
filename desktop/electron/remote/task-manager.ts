@@ -46,6 +46,9 @@ import { settleRepl } from './repl-settle'
 import { type AgentKind, isExternalAgent } from './codex-executor'
 import type { CodexDesktopDriver } from './codex/driver'
 import type { ClaudeDesktopDriver } from './claude-desktop/driver'
+import type { ClaudeDesktopAx, ClaudeSidebarRow } from './claude-desktop/ax'
+import { statusForTitle, readState as readAxState, readSidebarRows as readAxSidebar } from './claude-desktop/ax'
+import type { ClaudeConsent as ClaudeConsentLite } from './claude-desktop/ax'
 import { beat, pendingApprovals, expireStaleApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
 import { devEvent } from './curator-devlog'
 
@@ -99,6 +102,11 @@ export interface Task {
    *  Keying a card on cliSessionId renders one task's conversation under
    *  another task's title. */
   claudeDesktopSessionId?: string
+  /** Claude Desktop's OWN status word for this task, read from its sidebar and
+   *  shown verbatim. Deliberately not mapped onto our states: only 'Idle' has
+   *  ever been observed, and inventing meaning for an unseen value is how a
+   *  blocked task ends up looking fine. */
+  claudeStatusChip?: string
   /** Last delivery problem — the message did not reach the agent. Distinct from
    *  `error`, which means the WORK failed; this one never settles the task. */
   deliveryError?: string
@@ -241,6 +249,11 @@ export interface TaskManagerOpts {
    *  closed and can be polled freely. Absent ⇒ those tasks simply do not
    *  update, rather than being polled by another backend's poller. */
   claudeDesktopDriver?: ClaudeDesktopDriver
+  /** Live UI reader for Claude desktop. Absent ⇒ cards still work from disk,
+   *  they just cannot report a pending permission prompt — which is invisible
+   *  on disk by design. Optional so the whole backend degrades rather than
+   *  breaks when the accessibility tree is unavailable. */
+  claudeDesktopAx?: ClaudeDesktopAx
   /** The user's approval setting, read fresh so a settings change takes effect
    *  on the NEXT task rather than needing a restart. Feeds the Codex composer's
    *  permission level exactly as it feeds --dangerously-skip-permissions. */
@@ -374,6 +387,12 @@ export class TaskManager extends EventEmitter {
   private claudeIdleTicks = new Map<string, number>()
   private claudeLastSeenAt = new Map<string, number>()
   private claudeWatchers = new Map<string, () => void>()
+  /** ONE accessibility read serves every Claude desktop card on a tick. The
+   *  tree is ~470 nodes and the sidebar answers all tasks at once, so per-task
+   *  reads would be N walks for one identical answer — the same waste the
+   *  Codex chip cache exists to avoid. */
+  private claudeAxCache: { at: number; rows: ClaudeSidebarRow[]; consent: ClaudeConsentLite | null; treeAlive: boolean } | null = null
+  private claudeAxInflight: Promise<void> | null = null
   /** One sidebar read serves EVERY task on a tick. Ten blocked tasks polling
    *  independently would be ten CDP round-trips for one identical answer. */
   private codexChipCache: { at: number; rows: Array<{ id: string; title?: string; active: boolean; chip: string | null }> } | null = null
@@ -390,8 +409,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'permissionMode' | 'codexReasoning'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'permissionMode' | 'codexReasoning'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'permissionMode' | 'codexReasoning'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'permissionMode' | 'codexReasoning'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -431,6 +450,7 @@ export class TaskManager extends EventEmitter {
       librarian: opts.librarian,
       codexDriver: opts.codexDriver,
       claudeDesktopDriver: opts.claudeDesktopDriver,
+      claudeDesktopAx: opts.claudeDesktopAx,
       permissionMode: opts.permissionMode,
       codexReasoning: opts.codexReasoning,
       reapSession: opts.reapSession,
@@ -929,6 +949,48 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
+   * One accessibility read per tick, shared by every Claude desktop card.
+   *
+   * Deduped two ways: a short TTL, and an in-flight promise so a burst of
+   * cards on the same tick awaits ONE walk rather than starting N. Failure is
+   * absorbed into `treeAlive: false`, which callers must read as "we know
+   * nothing" — never as "nothing is wrong".
+   */
+  private async claudeAx(titles: string[], ttlMs = 1500): Promise<{ rows: ClaudeSidebarRow[]; consent: ClaudeConsentLite | null; treeAlive: boolean }> {
+    const ax = this.opts.claudeDesktopAx
+    if (!ax) return { rows: [], consent: null, treeAlive: false }
+    const now = this.clock()
+    if (this.claudeAxCache && now - this.claudeAxCache.at < ttlMs) {
+      const c = this.claudeAxCache
+      return { rows: c.rows, consent: c.consent, treeAlive: c.treeAlive }
+    }
+    if (this.claudeAxInflight) {
+      await this.claudeAxInflight
+      const c = this.claudeAxCache
+      return c ? { rows: c.rows, consent: c.consent, treeAlive: c.treeAlive } : { rows: [], consent: null, treeAlive: false }
+    }
+    this.claudeAxInflight = (async () => {
+      try {
+        const nodes = await ax.nodes()
+        const state = readAxState(nodes)
+        this.claudeAxCache = {
+          at: this.clock(),
+          treeAlive: state.treeAlive,
+          consent: state.consent,
+          rows: state.treeAlive ? readAxSidebar(nodes, titles) : [],
+        }
+      } catch {
+        this.claudeAxCache = { at: this.clock(), rows: [], consent: null, treeAlive: false }
+      } finally {
+        this.claudeAxInflight = null
+      }
+    })()
+    await this.claudeAxInflight
+    const c = this.claudeAxCache
+    return c ? { rows: c.rows, consent: c.consent, treeAlive: c.treeAlive } : { rows: [], consent: null, treeAlive: false }
+  }
+
+  /**
    * Refresh one Claude desktop card from disk.
    *
    * Shaped like pollCodexDesktop on purpose — same backoff, same watcher-as-
@@ -1027,10 +1089,62 @@ export class TaskManager extends EventEmitter {
     }
     if (snap.turns.length) task.conversation = snap.turns
 
+    // ── LIVE state, the part disk cannot supply ──────────────────────────
+    //
+    // A permission prompt is never written to disk; it exists only in the
+    // window. So a task stopped on one looks, on disk, exactly like a task
+    // whose last tool call is slow — which is why the poller refused to guess
+    // from pendingToolCalls alone. This is where that guess gets replaced by
+    // an actual observation.
+    let axStatus: string | null = null
+    let blocked = false
+    if (this.opts.claudeDesktopAx) {
+      const titles = [...this.tasks.values()]
+        .map((t) => t.name)
+        .filter((t): t is string => !!t)
+      const ax = await this.claudeAx(titles)
+      if (ax.treeAlive) {
+        // The app's own word for this task, shown verbatim. No vocabulary is
+        // interpreted here — only 'Idle' has ever been observed, and mapping
+        // an unseen value onto a state would be inventing meaning.
+        axStatus = meta.title ? statusForTitle(ax.rows, meta.title) : null
+
+        // A visible prompt names no task, and only ONE conversation is
+        // addressable on this app — so it can only belong to the focused one.
+        // Attributing it to any other card would light up the wrong task.
+        if (ax.consent) {
+          const focused = await driver.focused()
+          blocked = !!focused && focused.sessionId === task.claudeDesktopSessionId
+          if (ax.consent && !focused) {
+            tlog.debug('claude-desktop-consent-unattributed', { question: ax.consent.question.slice(0, 60) })
+          }
+        }
+      }
+    }
+    if (axStatus !== null && axStatus !== task.claudeStatusChip) task.claudeStatusChip = axStatus
+
     tlog.debug('claude-desktop-poll', {
       advanced, turns: snap.turns.length, userMessages: snap.userMessages,
       pendingToolCalls: snap.pendingToolCalls, taskState: task.state,
+      axStatus, blocked,
     })
+
+    // Blocked outranks every movement signal: a turn stopped for permission is
+    // not 'processing', however recently the file grew before it stopped.
+    if (blocked) {
+      if (task.state !== 'needs-user') {
+        tlog.event('claude-desktop-blocked', { question: this.claudeAxCache?.consent?.question?.slice(0, 80) ?? null })
+        this.transition(id, 'needs-user')
+      }
+      return
+    }
+    // The prompt is gone: whoever answered it (in Unmute or in the app), this
+    // card must not stay stuck on a question nobody is being asked any more.
+    if (task.state === 'needs-user') {
+      tlog.event('claude-desktop-unblocked', {})
+      this.transition(id, 'processing')
+      return
+    }
 
     if (advanced && task.state === 'ready') {
       tlog.event('claude-desktop-reopened', { note: 'continued inside Claude Desktop' })

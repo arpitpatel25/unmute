@@ -18,7 +18,7 @@ function fakeDriver(script: {
   const tasks: ClaudeDesktopTask[] = (script.tasks ?? []).map((t, n) => ({
     sessionId: `local_s${n}`, cliSessionId: `cli${n}`, title: null, model: null,
     cwd: '/w', originCwd: null, worktreePath: null, permissionMode: null,
-    completedTurns: 0, createdAt: 0, lastActivityAt: Date.now(), archived: false,
+    completedTurns: 0, createdAt: 0, lastActivityAt: Date.now(), lastFocusedAt: 0, archived: false,
     transcriptUnavailable: false, ...t,
   }))
   return {
@@ -30,6 +30,12 @@ function fakeDriver(script: {
     },
     list: async () => { calls.push('list'); return tasks },
     find: async (id: string) => tasks.find((t) => t.sessionId === id) ?? null,
+    /** Newest lastFocusedAt = the conversation Claude Desktop has open. */
+    focused: async () => {
+      let best: ClaudeDesktopTask | null = null
+      for (const t of tasks) if (t.lastFocusedAt > 0 && (!best || t.lastFocusedAt > best.lastFocusedAt)) best = t
+      return best
+    },
     snapshot: async (id: string): Promise<ClaudeTaskView | null> => {
       calls.push('snapshot')
       const task = tasks.find((t) => t.sessionId === id)
@@ -265,5 +271,111 @@ test('the conversation is kept current — it is this backend terminal', async (
   const [id] = await m.adoptClaudeDesktop()
   await poll(m, id)
   assert.deepEqual(m.get(id)!.conversation, turns)
+  m.killAll(); m.stopMaintenance()
+})
+
+// ── blocked: the state only the live UI can supply ────────────────────────
+
+/** A fake AX reader. `consent` present ⇒ a prompt is on screen. */
+function fakeAx(script: { treeAlive?: boolean; consent?: { question: string } | null; rows?: Array<{ title: string; status: string; id: number }> } = {}) {
+  const alive = script.treeAlive ?? true
+  // readState/readSidebarRows run for real over these nodes, so the fake
+  // exercises the actual parsers rather than stubbing their answers.
+  const nodes: Array<{ id: number; depth: number; role: string; label: string; actions: string[] }> = []
+  let id = 1
+  if (alive) nodes.push({ id: id++, depth: 1, role: 'AXWebArea', label: '', actions: [] })
+  for (const r of script.rows ?? []) {
+    nodes.push({ id: id++, depth: 19, role: 'AXButton', label: `${r.status} ${r.title}`.trim(), actions: ['AXPress'] })
+  }
+  if (script.consent) {
+    nodes.push({ id: id++, depth: 20, role: 'AXStaticText', label: script.consent.question, actions: [] })
+    nodes.push({ id: id++, depth: 21, role: 'AXButton', label: 'Deny 1', actions: ['AXPress'] })
+    nodes.push({ id: id++, depth: 21, role: 'AXButton', label: 'Allow once 3', actions: ['AXPress'] })
+  }
+  return { nodes: async () => nodes }
+}
+
+async function managerWithAx(driver: unknown, ax: unknown, baseDir: string) {
+  return new TaskManager({
+    executorFactory: () => { throw new Error('no executor for a driven backend') },
+    claudeDesktopDriver: driver as never,
+    claudeDesktopAx: ax as never,
+    baseDir, userKey: 'test', pollMs: 10_000,
+  })
+}
+
+test('a visible prompt on the FOCUSED conversation blocks that card', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login', lastFocusedAt: Date.now() }], snapshots: [{ updatedAt: 5000 }] })
+  const ax = fakeAx({ consent: { question: 'Allow Claude to write a file?' } })
+  const m = await managerWithAx(d, ax, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  assert.equal(m.get(id)!.state, 'needs-user')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('the prompt is NOT attributed to an unfocused card', async () => {
+  // Only one conversation is addressable, so a prompt can only belong to the
+  // focused one. Lighting up the wrong card is worse than lighting up none.
+  const base = await tmp()
+  const d = fakeDriver({
+    tasks: [{ title: 'Not focused', lastFocusedAt: 0 }, { title: 'Focused', lastFocusedAt: Date.now() }],
+    snapshots: [{ updatedAt: 5000 }],
+  })
+  const ax = fakeAx({ consent: { question: 'Allow Claude to run this?' } })
+  const m = await managerWithAx(d, ax, base)
+  const ids = await m.adoptClaudeDesktop()
+  const unfocused = ids.map((i) => m.get(i)!).find((t) => t.name === 'Not focused')!
+  await pollForced(m, unfocused.id)
+  assert.notEqual(m.get(unfocused.id)!.state, 'needs-user')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a dead tree never blocks — no information is not a prompt', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login', lastFocusedAt: Date.now() }], snapshots: [{ updatedAt: 5000 }] })
+  const ax = fakeAx({ treeAlive: false, consent: { question: 'Allow Claude to write?' } })
+  const m = await managerWithAx(d, ax, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  assert.notEqual(m.get(id)!.state, 'needs-user')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('answering the prompt anywhere un-blocks the card', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login', lastFocusedAt: Date.now() }], snapshots: [{ updatedAt: 5000 }] })
+  let consent: { question: string } | null = { question: 'Allow Claude to write a file?' }
+  const ax = { nodes: async () => fakeAx({ consent }).nodes() }
+  const m = await managerWithAx(d, ax, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  assert.equal(m.get(id)!.state, 'needs-user')
+  consent = null                                  // answered, in Unmute or in the app
+  ;(m as unknown as { claudeAxCache: unknown }).claudeAxCache = null   // expire the shared read
+  await pollForced(m, id)
+  assert.notEqual(m.get(id)!.state, 'needs-user')
+  m.killAll(); m.stopMaintenance()
+})
+
+test("the app's own status word is shown verbatim, not mapped to a state", async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login', lastFocusedAt: Date.now() }], snapshots: [{ updatedAt: 5000 }] })
+  const ax = fakeAx({ rows: [{ title: 'Fix login', status: 'Idle', id: 1 }] })
+  const m = await managerWithAx(d, ax, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  assert.equal(m.get(id)!.claudeStatusChip, 'Idle')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('no AX reader configured ⇒ cards still work from disk', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login' }], snapshots: [{ updatedAt: 5000, lastAgentMessage: 'hi' }] })
+  const m = await makeManager(d, base)          // no ax
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  assert.equal(m.get(id)!.state, 'ready')
   m.killAll(); m.stopMaintenance()
 })
