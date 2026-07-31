@@ -246,3 +246,18 @@ test('a press that reports failure is not reported as success', async () => {
   const r = await actuatorWith(h.bridge).openConversation('Fix login')
   assert.equal(r.ok, false)
 })
+
+test('press echoes what it actuated — a mismatch is caught AFTER the fact', async () => {
+  // Verified live: press returns {"ok":true,"label":"Idle Season preference questions"}.
+  // The pre-check says what we intended; this says what happened.
+  const t = live([{ id: 7, label: 'Idle Fix login' }])
+  const h = treeBridge([t, t], { ok: true, label: 'Idle A completely different chat' })
+  const r = await actuatorWith(h.bridge).openConversation('Fix login')
+  assert.deepEqual(r, { ok: false, reason: 'row-moved' })
+})
+
+test('a press that echoes the expected row succeeds', async () => {
+  const t = live([{ id: 7, label: 'Idle Fix login' }])
+  const h = treeBridge([t, t], { ok: true, label: 'Idle Fix login' })
+  assert.equal((await actuatorWith(h.bridge).openConversation('Fix login')).ok, true)
+})

@@ -235,6 +235,17 @@ export class ClaudeActuator {
         log.warn('open-press-failed', { error: out?.error ?? 'press reported false' })
         return { ok: false, reason: 'bridge-failed' }
       }
+      // press() echoes the label of what it ACTUALLY actuated (verified live:
+      // {"ok":true,"role":"AXButton","label":"Idle Season preference questions"}).
+      // That is authoritative in a way no pre-check can be — the pre-check says
+      // what we intended, this says what happened. If they disagree the tree
+      // moved between the two reads and we pressed the wrong row, which the
+      // caller must know rather than proceed to type into it.
+      const pressedLabel = typeof out?.label === 'string' ? out.label : null
+      if (pressedLabel !== null && !pressedLabel.endsWith(title)) {
+        log.warn('open-pressed-wrong-row', { wanted: title.slice(0, 40), got: pressedLabel.slice(0, 40) })
+        return { ok: false, reason: 'row-moved' }
+      }
       log.event('claude-desktop-opened', { title: title.slice(0, 60) })
       return { ok: true }
     }, { ok: false, reason: 'activate-failed' })
