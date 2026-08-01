@@ -840,3 +840,42 @@ test('the dedupe still holds while the surface keeps showing the same task', () 
   h.flush(); h.flush()
   assert.equal(h.client.ofType('stageDetail').length, n)
 })
+
+test('a Claude desktop card carries its conversation, exactly like a Codex one', () => {
+  // This is why Claude Desktop cards rendered EMPTY: `external` was
+  // `agent === 'codex-desktop'`, so the branch that sends the conversation
+  // never ran and the card had nothing to draw. The registry decides now.
+  const h = setup()
+  put(h, makeTask({
+    id: 'cd1', state: 'ready', agent: 'claude-code-desktop',
+    conversation: [
+      { role: 'user', text: 'which season?' },
+      { role: 'tool', text: '', title: 'AskUserQuestion', code: '{}', output: 'Summer' },
+      { role: 'assistant', text: 'You prefer Summer.' },
+    ],
+  }))
+  h.client.fire({ type: 'focusTask', id: 'cd1' })
+  h.flush()
+  const d = h.client.last('stageDetail')!.task
+  assert.equal(d.backend, 'claude-code-desktop', 'the backend must be named, not left undefined')
+  assert.deepEqual(d.conversation!.map((c) => c.role), ['user', 'tool', 'assistant'])
+})
+
+test('a driven backend is never reported dead — its chat lives in the other app', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'cd2', state: 'ready', agent: 'claude-code-desktop', alive: false }))
+  h.client.fire({ type: 'focusTask', id: 'cd2' })
+  h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.alive, true)
+})
+
+test('a PTY task is unaffected by the generalisation', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'p1', state: 'ready', agent: 'claude', alive: false }))
+  h.client.fire({ type: 'focusTask', id: 'p1' })
+  h.flush()
+  const d = h.client.last('stageDetail')!.task
+  assert.equal(d.backend, undefined, 'a PTY backend names no backend')
+  assert.equal(d.alive, false)
+  assert.equal(d.conversation, undefined, 'and renders a terminal, not a conversation')
+})

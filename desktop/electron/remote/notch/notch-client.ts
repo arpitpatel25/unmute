@@ -6,6 +6,7 @@
 // process (Unmute's signed Electron main) so its window carries the app's
 // identity. Fire-and-forget send(); helper pushes user intents back as events.
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import type { ProviderId } from '../providers'
 import { createInterface, type Interface } from 'node:readline'
 import { EventEmitter } from 'node:events'
 import { createLogger } from '../log'
@@ -54,7 +55,7 @@ export interface TaskDetailP {
   mcpGap?: McpGapP
   /** Which backend runs this task; drives whether the panel shows a terminal
    *  (Claude, PTY) or the conversation (Codex, no PTY). */
-  backend?: 'claude' | 'codex-desktop'
+  backend?: ProviderId
   /** Does this task have a live terminal? Resolved from the provider registry
    *  (providers.ts) and SENT, so the Swift side stops deriving it from its own
    *  list of desktop backends — the two lists had already drifted. Optional: an
@@ -85,7 +86,7 @@ export interface CardP {
   agent?: boolean
   /** WHICH backend runs this task — 'claude' (owned PTY) or 'codex-desktop'
    *  (the Codex app). Rendered as a small tag so a mixed wall is unambiguous. */
-  backend?: 'claude' | 'codex-desktop'
+  backend?: ProviderId
   /** Codex project name, when backend is 'codex-desktop'. */
   project?: string
   note?: string

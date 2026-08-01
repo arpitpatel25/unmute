@@ -721,7 +721,11 @@ export class NotchController {
       qpos: qpos.get(t.id),
       promoted: (this.promotedUntil.get(t.id) ?? 0) > now || undefined,
       agent: t.spawnedBy ? true : undefined,
-      backend: t.agent === 'codex-desktop' ? 'codex-desktop' : undefined,
+      // Driven by the registry, not by naming one backend. Written as
+      // `=== 'codex-desktop'` these silently excluded the next driver backend:
+      // a Claude Desktop card arrived with no backend, so the Swift side read
+      // it as a PTY task and gave it a terminal's frame with nothing in it.
+      backend: providerOf(t.agent).transport === 'driver' ? t.agent : undefined,
       project: t.agent === 'codex-desktop' ? (t.codexProject ?? undefined) : undefined,
       note: t.note ?? undefined,
       // A CODEX THREAD IS NEVER DEAD. `alive` means "has a live PTY", and every
@@ -730,13 +734,17 @@ export class NotchController {
       // deletes it there. Reporting false is what put a finished Codex chat
       // behind "resume — continue with full context" / "re-run fresh", offering
       // to revive something that had never stopped.
-      alive: t.agent === 'codex-desktop' ? true : (t.alive ?? false),
+      alive: providerOf(t.agent).transport === 'driver' ? true : (t.alive ?? false),
     }
   }
 
   private toDetail(t: TaskLite): TaskDetailP {
     const now = Date.now()
-    const external = t.agent === 'codex-desktop'
+    // ANY driver backend, not just Codex. This one line is why Claude Desktop
+    // cards rendered with an empty body: `external` was false, so the branch
+    // below — the branch that sends the CONVERSATION — never ran, and the card
+    // had literally nothing to draw.
+    const external = providerOf(t.agent).transport === 'driver'
     return {
       id: t.id,
       title: t.name ?? truncate(t.intent),
@@ -751,7 +759,7 @@ export class NotchController {
       // where a Claude task renders its terminal. Both are "the real thing,
       // shown raw" — neither is a re-implementation of the other app's UI.
       ...(external ? {
-        backend: 'codex-desktop' as const,
+        backend: t.agent,
         // The whole thread. The old windows here (6, then 40) were both
         // downstream of a 6-item cut at the parse layer, so neither ever had
         // anything to trim — widening this alone did nothing, which is exactly
