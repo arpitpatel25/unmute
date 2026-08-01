@@ -2009,13 +2009,55 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; codexThreadId?: string; codexDomThreadId?: string; codexProject?: string | null }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; codexThreadId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       // EXTERNAL BACKEND: a Codex thread lives in Codex, so an Unmute restart
       // does not interrupt it — the work may well have finished while we were
       // gone. Rebuild the record and let the poller read the true state off the
       // rollout, instead of the 'failed / interrupted' verdict a PTY task gets.
+      // Same reasoning for Claude desktop, and it MUST be restored or the card
+      // is broken twice over:
+      //
+      //   1. pollClaudeDesktop bails without claudeDesktopSessionId, so the
+      //      rehydrated card never updates again — a permanent tombstone that
+      //      still takes up space on the wall;
+      //   2. adoptClaudeDesktop dedupes on that same field, so with it missing
+      //      every launch adopts the whole store AGAIN. Measured after four
+      //      installs: 18 cards for 6 conversations, exactly 3 duplicates each,
+      //      one set per launch that ran a sweep.
+      //
+      // The conversation lives in Claude Desktop and outlives our process, so
+      // like Codex this is rebuilt rather than marked interrupted.
+      if (meta.agent === 'claude-code-desktop' && meta.claudeDesktopSessionId) {
+        const now0 = this.clock()
+        const ctask: Task = {
+          id,
+          intent: meta.intent,
+          name: meta.name,
+          sessionId: meta.claudeDesktopSessionId,
+          agent: 'claude-code-desktop',
+          claudeDesktopSessionId: meta.claudeDesktopSessionId,
+          kind: meta.kind ?? 'session',
+          state: (meta.state as UiTaskState | undefined) ?? 'ready',
+          createdAt: meta.createdAt ?? now0,
+          updatedAt: meta.updatedAt ?? now0,
+          cwd: meta.cwd ?? dir,
+          home: dir,
+          statusPath: join(dir, 'status.json'),
+          recipeScratchPath: join(dir, 'recipe.json'),
+          lastMtimeMs: 0,
+          lastHeartbeatMs: meta.updatedAt ?? now0,
+          mode: meta.mode ?? 'managed',
+          ...(meta.shelved ? { shelved: true } : {}),
+          ...(meta.note ? { note: meta.note } : {}),
+          ...(meta.group ? { group: meta.group } : {}),
+        } as Task
+        this.tasks.set(id, ctask)
+        restored++
+        this.startPolling(id)
+        continue
+      }
       if (meta.agent === 'codex-desktop' && meta.codexThreadId) {
         const now0 = this.clock()
         const ctask: Task = {

@@ -656,3 +656,44 @@ test('dismissing one conversation does not hide the others', async () => {
   assert.equal(m.list().find((t) => t.agent === 'claude-code-desktop')!.name, 'Two')
   m.killAll(); m.stopMaintenance()
 })
+
+// ── surviving a restart ───────────────────────────────────────────────────
+
+test('a rehydrated card keeps its session id — without it, duplicates every launch', async () => {
+  // Measured after four installs: 18 cards for 6 conversations, exactly 3
+  // duplicates each. Rehydrate rebuilt the cards WITHOUT claudeDesktopSessionId,
+  // so adoption's dedupe saw nothing and re-adopted the whole store each time.
+  const base = await tmp()
+  const mk = async () => makeManager(fakeDriver({ tasks: [{ title: 'Fix login' }] }), base)
+
+  const m1 = await mk()
+  assert.equal((await m1.adoptClaudeDesktop()).length, 1)
+  m1.killAll(); m1.stopMaintenance()
+
+  const m2 = await mk()          // fresh manager, same baseDir = an app restart
+  await m2.rehydrate()
+  const restored = m2.list().filter((t) => t.agent === 'claude-code-desktop')
+  assert.equal(restored.length, 1, 'the card must come back')
+  assert.ok(restored[0].claudeDesktopSessionId, 'and must keep its session id')
+
+  assert.deepEqual(await m2.adoptClaudeDesktop(), [], 'so the sweep adds no duplicate')
+  assert.equal(m2.list().filter((t) => t.agent === 'claude-code-desktop').length, 1)
+  m2.killAll(); m2.stopMaintenance()
+})
+
+test('a rehydrated card can still poll', async () => {
+  // Without the session id pollClaudeDesktop bails immediately, leaving a card
+  // that never updates again.
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login' }], snapshots: [{ updatedAt: 5000, lastAgentMessage: 'hi' }] })
+  const m1 = await makeManager(d, base)
+  await m1.adoptClaudeDesktop()
+  m1.killAll(); m1.stopMaintenance()
+
+  const m2 = await makeManager(d, base)
+  await m2.rehydrate()
+  const id = m2.list().find((t) => t.agent === 'claude-code-desktop')!.id
+  await pollForced(m2, id)
+  assert.equal(m2.get(id)!.threadContext, 'hi', 'the poll must have run')
+  m2.killAll(); m2.stopMaintenance()
+})
