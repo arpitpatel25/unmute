@@ -88,6 +88,11 @@ export interface ClaudeModel {
   /** The app's own ordering hint; higher = more capable. 0 when absent — not
    *  every entry carries one, and requiring it silently dropped real models. */
   rank: number
+  /** Position in the bundle, oldest-first. The tiebreak within a family: three
+   *  Opus models share advisor_rank 4, so rank alone cannot say which is
+   *  newest, and sorting by label makes "Opus 4.7" beat "Opus 5" alphabetically.
+   *  Source order is the app's own answer and needs no version parsing. */
+  order: number
   /** Every id this model is ALSO known by — the dated and per-provider forms
    *  from `provider_ids`. The session store records the dated one
    *  ('claude-opus-4-5-20251101'), so without these the label never resolves. */
@@ -160,6 +165,7 @@ export function parseCatalog(source: string): ClaudeModel[] {
       id: s0.id,
       label: s0.label,
       family: s0.family,
+      order: i,
       effortLevels: effortFor(capabilities),
       defaultEffort: deff ? deff[1] : null,
       rank: rank ? Number(rank[1]) : 0,
@@ -252,9 +258,15 @@ export function newestPerFamily(models: readonly ClaudeModel[]): ClaudeModel[] {
   const best = new Map<string, ClaudeModel>()
   for (const m of models) {
     const cur = best.get(m.family)
-    if (!cur || m.rank > cur.rank) best.set(m.family, m)
+    // Rank first, then SOURCE ORDER — not label. Opus 4.7, Opus 4.8 and Opus 5
+    // all carry advisor_rank 4, so rank alone cannot separate them, and an
+    // alphabetical tiebreak picks "Opus 4.7" over "Opus 5". That put the wrong
+    // Opus in the picker and shifted every position after it.
+    if (!cur || m.rank > cur.rank || (m.rank === cur.rank && m.order > cur.order)) {
+      best.set(m.family, m)
+    }
   }
-  return [...best.values()].sort((a, b) => b.rank - a.rank || a.label.localeCompare(b.label))
+  return [...best.values()].sort((a, b) => b.rank - a.rank || b.order - a.order)
 }
 
 /** Reset the cache. Tests only. *//** Reset the cache. Tests only. */

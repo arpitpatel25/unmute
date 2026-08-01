@@ -452,31 +452,41 @@ async function setClaudeDesktopModel(id: string): Promise<void> {
   if (!target) { log.warn('claude-desktop-model-unknown', { id }); return }
 
   const learned = claudeModelPositions()
-  // Learned position if we have one; otherwise its place in the offered order.
-  const guess = learned[target.label] ?? (offered.findIndex((m) => m.id === id) + 1)
+  const indexOf = (label: string) => offered.findIndex((m) => m.label === label) + 1
+  const guess = learned[target.label] ?? indexOf(target.label)
 
   const res = await claudeActuator.setModel(guess, target.label).catch(() => ({ ok: false as const, reason: 'threw' }))
-  if (res.ok) {
-    learnClaudeModelPosition(target.label, guess)
-    void pushPillChips()
-    return
-  }
+  if (res.ok) { learnClaudeModelPosition(target.label, guess); void pushPillChips(); return }
 
-  // A miss still teaches: we now know which model sits at `guess`.
   const landed = (res as { landedOn?: string }).landedOn
-  if (landed) {
-    learnClaudeModelPosition(landed, guess)
-    const known = claudeModelPositions()[target.label]
-    if (known && known !== guess) {
-      const retry = await claudeActuator.setModel(known, target.label).catch(() => ({ ok: false as const }))
-      if (retry.ok) { void pushPillChips(); return }
-    }
-  } else {
-    // Nothing landed at all — the app never offered it. Stop offering it too.
+  if (!landed) {
+    // Nothing landed — the app never offered it. Stop offering it too.
     const dead = new Set((settings.get('claudeDesktopUnavailableModels' as never) as string[] | undefined) ?? [])
     dead.add(target.label)
     settings.set('claudeDesktopUnavailableModels' as never, [...dead] as never)
     log.warn('claude-desktop-model-unavailable', { label: target.label, note: 'in the bundle, not in the menu — no longer offered' })
+    void pushPillChips()
+    return
+  }
+
+  learnClaudeModelPosition(landed, guess)
+
+  // ONE OBSERVATION CALIBRATES THE WHOLE LIST.
+  //
+  // The menu is our offered list with some entries MISSING and the rest in the
+  // same order — the bundle lists models the menu does not (Mythos 5 is in one
+  // and not the other, with nothing on disk to say why). So a single confirmed
+  // pairing gives the offset for everything below it: landing on `landed` at
+  // position `guess` means the menu is shifted by `guess - indexOf(landed)`.
+  //
+  // Without this, each wrong pick teaches exactly one position and the user
+  // pays for the whole list one failure at a time.
+  const delta = guess - indexOf(landed)
+  const corrected = learned[target.label] ?? (indexOf(target.label) + delta)
+  if (corrected !== guess && corrected >= 1) {
+    log.event('claude-desktop-model-recalibrated', { landed, guess, delta, retryAt: corrected })
+    const retry = await claudeActuator.setModel(corrected, target.label).catch(() => ({ ok: false as const }))
+    if (retry.ok) { learnClaudeModelPosition(target.label, corrected); void pushPillChips(); return }
   }
   void pushPillChips()
 }
