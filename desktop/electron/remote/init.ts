@@ -34,7 +34,7 @@ import { CodexDesktopDriver } from './codex/driver'
 import { ClaudeDesktopDriver } from './claude-desktop/driver'
 import { ClaudeDesktopAx } from './claude-desktop/ax'
 import { ClaudeActuator } from './claude-desktop/actuate'
-import { readCatalog as readClaudeCatalog, newestPerFamily as offeredClaudeModels } from './claude-desktop/catalog'
+import { readCatalog as readClaudeCatalog, offeredModels as offeredClaudeModels } from './claude-desktop/catalog'
 import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
@@ -419,74 +419,34 @@ async function offeredClaudeDesktopModels(): Promise<Array<{ id: string; label: 
 }
 
 /**
- * Positions we have CONFIRMED in Claude Desktop's model menu.
+ * Switch Claude Desktop's model.
  *
- * The menu cannot be read — it is invisible to accessibility — so a position is
- * a hypothesis derived from the offered order, and the popup label afterwards
- * is the answer. Every attempt teaches something: a success confirms a
- * position, and a miss reveals which model that position actually holds. Both
- * are recorded, so the mapping converges on the truth after a pick or two
- * rather than staying a guess forever.
- */
-function claudeModelPositions(): Record<string, number> {
-  return (settings.get('claudeDesktopModelPositions' as never) as Record<string, number> | undefined) ?? {}
-}
-function learnClaudeModelPosition(label: string, position: number): void {
-  const map = claudeModelPositions()
-  if (map[label] === position) return
-  map[label] = position
-  settings.set('claudeDesktopModelPositions' as never, map as never)
-  log.event('claude-desktop-model-position-learned', { label, position })
-}
-
-/**
- * Switch Claude Desktop's model, learning the menu as we go.
+ * Addressed BY NAME — the actuator types the model's own label at the menu, so
+ * nothing here depends on menu order or position. That replaced a
+ * position-counting scheme plus an offset-calibration step, both of which
+ * existed only because we could not read the menu; type-ahead means we no
+ * longer have to.
  *
- * Steals focus — unavoidable: the popup opens only for a real click, and its
- * menu is driven by arrow keys. Reading stays free; this is the one write.
+ * Steals focus, unavoidably: the popup opens only for a real click.
  */
 async function setClaudeDesktopModel(id: string): Promise<void> {
   if (!claudeActuator) return
-  const offered = await offeredClaudeDesktopModels()
-  const target = offered.find((m) => m.id === id)
+  const target = (await offeredClaudeDesktopModels()).find((m) => m.id === id)
   if (!target) { log.warn('claude-desktop-model-unknown', { id }); return }
 
-  const learned = claudeModelPositions()
-  const indexOf = (label: string) => offered.findIndex((m) => m.label === label) + 1
-  const guess = learned[target.label] ?? indexOf(target.label)
-
-  const res = await claudeActuator.setModel(guess, target.label).catch(() => ({ ok: false as const, reason: 'threw' }))
-  if (res.ok) { learnClaudeModelPosition(target.label, guess); void pushPillChips(); return }
-
-  const landed = (res as { landedOn?: string }).landedOn
-  if (!landed) {
-    // Nothing landed — the app never offered it. Stop offering it too.
+  const res = await claudeActuator.setModel(target.label).catch(() => ({ ok: false as const, reason: 'threw' }))
+  if (!res.ok) {
+    // Offered by the bundle, refused by the app — the gap the bundle cannot
+    // describe (a plan-gated model looks identical on disk). Stop offering it
+    // rather than letting the user meet the same dead row again.
     const dead = new Set((settings.get('claudeDesktopUnavailableModels' as never) as string[] | undefined) ?? [])
     dead.add(target.label)
     settings.set('claudeDesktopUnavailableModels' as never, [...dead] as never)
-    log.warn('claude-desktop-model-unavailable', { label: target.label, note: 'in the bundle, not in the menu — no longer offered' })
-    void pushPillChips()
-    return
-  }
-
-  learnClaudeModelPosition(landed, guess)
-
-  // ONE OBSERVATION CALIBRATES THE WHOLE LIST.
-  //
-  // The menu is our offered list with some entries MISSING and the rest in the
-  // same order — the bundle lists models the menu does not (Mythos 5 is in one
-  // and not the other, with nothing on disk to say why). So a single confirmed
-  // pairing gives the offset for everything below it: landing on `landed` at
-  // position `guess` means the menu is shifted by `guess - indexOf(landed)`.
-  //
-  // Without this, each wrong pick teaches exactly one position and the user
-  // pays for the whole list one failure at a time.
-  const delta = guess - indexOf(landed)
-  const corrected = learned[target.label] ?? (indexOf(target.label) + delta)
-  if (corrected !== guess && corrected >= 1) {
-    log.event('claude-desktop-model-recalibrated', { landed, guess, delta, retryAt: corrected })
-    const retry = await claudeActuator.setModel(corrected, target.label).catch(() => ({ ok: false as const }))
-    if (retry.ok) { learnClaudeModelPosition(target.label, corrected); void pushPillChips(); return }
+    log.warn('claude-desktop-model-unavailable', {
+      label: target.label,
+      landedOn: (res as { landedOn?: string }).landedOn ?? null,
+      note: 'in the bundle, not selectable in the app — no longer offered',
+    })
   }
   void pushPillChips()
 }

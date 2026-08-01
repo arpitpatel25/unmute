@@ -88,6 +88,9 @@ export interface ClaudeModel {
   /** The app's own ordering hint; higher = more capable. 0 when absent — not
    *  every entry carries one, and requiring it silently dropped real models. */
   rank: number
+  /** Everything the bundle says this model can do. Emptiness is meaningful:
+   *  a model with NO capabilities is not offered by the app. */
+  capabilities: string[]
   /** Position in the bundle, oldest-first. The tiebreak within a family: three
    *  Opus models share advisor_rank 4, so rank alone cannot say which is
    *  newest, and sorting by label makes "Opus 4.7" beat "Opus 5" alphabetically.
@@ -166,6 +169,7 @@ export function parseCatalog(source: string): ClaudeModel[] {
       label: s0.label,
       family: s0.family,
       order: i,
+      capabilities,
       effortLevels: effortFor(capabilities),
       defaultEffort: deff ? deff[1] : null,
       rank: rank ? Number(rank[1]) : 0,
@@ -234,39 +238,39 @@ export function labelFor(models: readonly ClaudeModel[], id: string | null | und
 }
 
 /**
- * The models worth offering: the NEWEST of each family.
+ * The models the app actually offers — matched exactly, not guessed.
  *
- * Derived by matching the real menu, not by reasoning. Claude Desktop's own
- * dropdown was read off-screen and shows exactly four:
+ * Claude Desktop's own menu was read off-screen and holds EIGHT: four at the
+ * top level and four behind "More models >".
  *
- *     Fable 5    Opus 5    Sonnet 5    Haiku 4.5
+ *     Fable 5  Opus 5  Sonnet 5  Haiku 4.5
+ *     More models >  Opus 4.8  Opus 4.7  Opus 4.6  Sonnet 4.6
  *
- * which is one per family, highest rank within it. The bundle lists 17,
- * including versions the app has merely heard of (Sonnet 3.5, Opus 4, Opus 4.1)
- * — showing those buries the current ones and offers models it no longer runs.
+ * Two fields reproduce that set exactly across all 17 in the bundle — nothing
+ * missing, nothing extra:
  *
- * A top-TWO-RANKS cut was tried first and the app disagreed with it: it offered
- * Opus 4.7 and Opus 4.8, which are not in the menu, and HID Sonnet 5 and
- * Haiku 4.5, which are. Per-family matches on all four.
+ *   advisor_rank >= 1       drops the legacy models (Sonnet 3.5, Opus 4,
+ *                           Opus 4.1, Opus 4.5, Sonnet 4, Sonnet 4.5,
+ *                           Haiku 3.5 — all rank 0)
+ *   capabilities non-empty  drops Mythos 5, which is rank 5 with an EMPTY
+ *                           capabilities array. It is the one model in the
+ *                           bundle and not in the menu, and this is the field
+ *                           that distinguishes it.
  *
- * It is still one model out. This also yields Mythos 5 (its own family, rank 5)
- * which the menu does NOT show — presumably plan-gated, and nothing on disk
- * says so. That is why picking verifies and why a model that fails to select is
- * remembered as unavailable rather than offered forever.
+ * Three earlier rules were wrong and the app disagreed with each: top-two-ranks
+ * (offered Opus 4.7/4.8 while hiding Sonnet 5 and Haiku 4.5), newest-per-family
+ * (hid five real models — Opus 4.8/4.7/4.6 and Sonnet 4.6 are real, just behind
+ * the submenu), and an alphabetical tiebreak (picked Opus 4.7 over Opus 5).
+ * This one was derived the other way round: read the menu first, then find the
+ * fields that reproduce it.
+ *
+ * If a future build disagrees again, re-read the menu — do not add a third
+ * condition here.
  */
-export function newestPerFamily(models: readonly ClaudeModel[]): ClaudeModel[] {
-  const best = new Map<string, ClaudeModel>()
-  for (const m of models) {
-    const cur = best.get(m.family)
-    // Rank first, then SOURCE ORDER — not label. Opus 4.7, Opus 4.8 and Opus 5
-    // all carry advisor_rank 4, so rank alone cannot separate them, and an
-    // alphabetical tiebreak picks "Opus 4.7" over "Opus 5". That put the wrong
-    // Opus in the picker and shifted every position after it.
-    if (!cur || m.rank > cur.rank || (m.rank === cur.rank && m.order > cur.order)) {
-      best.set(m.family, m)
-    }
-  }
-  return [...best.values()].sort((a, b) => b.rank - a.rank || b.order - a.order)
+export function offeredModels(models: readonly ClaudeModel[]): ClaudeModel[] {
+  return models
+    .filter((m) => m.rank >= 1 && m.capabilities.length > 0)
+    .sort((a, b) => b.rank - a.rank || b.order - a.order)
 }
 
 /** Reset the cache. Tests only. *//** Reset the cache. Tests only. */

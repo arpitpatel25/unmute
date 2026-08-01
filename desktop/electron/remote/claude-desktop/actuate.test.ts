@@ -264,25 +264,42 @@ test('a press that echoes the expected row succeeds', async () => {
 
 // ── setting the model ─────────────────────────────────────────────────────
 
-/** A composer whose model popup reports `label`, changing to `after` once the
- *  arrow keys are sent — i.e. a fake that models the REAL loop. */
-function modelBridge(before: string, after: string, opts: { geometry?: boolean } = {}) {
+/** A composer whose model popup changes to `after` once the label is typed —
+ *  i.e. a fake that models the real type-ahead loop. */
+function modelBridge(before: string, opts: { topLevel?: string[]; submenu?: string[] } = {}) {
   const calls: Array<{ fn: string; args: unknown[] }> = []
+  const top = opts.topLevel ?? ['Opus 5', 'Sonnet 5']
+  const sub = opts.submenu ?? ['Opus 4.6']
   let current = before
+  let inSubmenu = false
+  let typed = ''
   const pops = (m: string) => [
-    { id: 1, depth: 25, role: 'AXPopUpButton', label: 'Manual', actions: ['AXPress'], x: 1, y: 1, w: 10, h: 10 },
-    { id: 2, depth: 25, role: 'AXPopUpButton', label: m, actions: ['AXPress'],
-      ...(opts.geometry === false ? {} : { x: 100, y: 200, w: 50, h: 20 }) },
-    { id: 3, depth: 25, role: 'AXPopUpButton', label: 'Effort: High', actions: ['AXPress'], x: 1, y: 1, w: 10, h: 10 },
-    { id: 4, depth: 25, role: 'AXPopUpButton', label: 'Usage: context 5%', actions: ['AXPress'], x: 1, y: 1, w: 10, h: 10 },
+    { id: 0, depth: 1, role: 'AXWebArea', label: '', actions: [] },
+    { id: 2, depth: 25, role: 'AXPopUpButton', label: m, actions: ['AXPress'], x: 100, y: 200, w: 50, h: 20 },
+    { id: 3, depth: 25, role: 'AXPopUpButton', label: 'Effort: High', actions: ['AXPress'], x: 1, y: 1, w: 9, h: 9 },
+    { id: 4, depth: 25, role: 'AXPopUpButton', label: 'Usage: 5%', actions: ['AXPress'], x: 1, y: 1, w: 9, h: 9 },
   ]
   return {
     calls,
     bridge: {
       call: async (m: string, a: unknown[]) => {
         calls.push({ fn: m, args: a })
-        if (m === 'getTree') return { nodes: [{ id: 0, depth: 1, role: 'AXWebArea', label: '', actions: [] }, ...pops(current)] }
-        if (m === 'sendKeys') { current = after; return { ok: true } }
+        if (m === 'getTree') return { nodes: pops(current) }
+        if (m === 'clickPoint') { inSubmenu = false; typed = ''; return { ok: true } }
+        if (m === 'typeText') { typed = String(a[1]); return { ok: true } }
+        if (m === 'sendKeys') {
+          const keys = a[0] as number[]
+          if (keys.includes(124)) { inSubmenu = typed === 'More'; return { ok: true } }
+          if (keys.includes(36)) {
+            const pool = inSubmenu ? sub : top
+            const hit = pool.find((x) => x === typed)
+            // Type-ahead prefix behaviour: falls back to the first prefix match,
+            // which is how asking for "Opus 4.8" silently selected Opus 5.
+            const prefix = pool.find((x) => typed && x.startsWith(typed.split(' ')[0]))
+            current = hit ?? prefix ?? current
+          }
+          return { ok: true }
+        }
         return { ok: true }
       },
       trusted: async () => true, dispose: () => {},
@@ -293,47 +310,46 @@ const actuatorFor = (bridge: unknown) => new ClaudeActuator({
   frontmost: async () => 'prev', activate: async () => true, bridge: bridge as never,
 })
 
-test('setting the model VERIFIES by reading the popup back', async () => {
-  const h = modelBridge('Opus 5', 'Sonnet 5')
-  const r = await actuatorFor(h.bridge).setModel(3, 'Sonnet 5')
-  assert.deepEqual(r, { ok: true })
+test('a top-level model is selected by typing its NAME', async () => {
+  const h = modelBridge('Opus 5')
+  assert.deepEqual(await actuatorFor(h.bridge).setModel('Sonnet 5'), { ok: true })
+  const typed = h.calls.filter((c) => c.fn === 'typeText').map((c) => c.args[1])
+  assert.ok(typed.includes('Sonnet 5'))
 })
 
-test('a mismatch reports WHAT we landed on — the mapping we cannot read', async () => {
-  // We cannot see the menu, so a position is a hypothesis. When it is wrong the
-  // caller must learn which model that position actually is.
-  const h = modelBridge('Opus 5', 'Haiku 4.5')
-  const r = await actuatorFor(h.bridge).setModel(3, 'Sonnet 5')
+test('nothing depends on menu POSITION', async () => {
+  // Position-counting could not survive a reorder and could not reach the
+  // submenu at all. No arrow-key navigation should appear for a top-level pick.
+  const h = modelBridge('Opus 5')
+  await actuatorFor(h.bridge).setModel('Sonnet 5')
+  const downs = h.calls.filter((c) => c.fn === 'sendKeys').flatMap((c) => c.args[0] as number[]).filter((k) => k === 125)
+  assert.equal(downs.length, 0, 'no Down-arrow counting')
+})
+
+test('a model behind "More models" is reached through the submenu', async () => {
+  const h = modelBridge('Opus 5')
+  assert.deepEqual(await actuatorFor(h.bridge).setModel('Opus 4.6'), { ok: true })
+  const typed = h.calls.filter((c) => c.fn === 'typeText').map((c) => c.args[1])
+  assert.ok(typed.includes('More'), 'must step into the submenu')
+})
+
+test('a prefix mis-hit is caught, not accepted', async () => {
+  // Asking for "Opus 4.8" at the top level matches the prefix "Opus" and
+  // silently lands on Opus 5. The read-back is what notices.
+  const h = modelBridge('Sonnet 5', { topLevel: ['Opus 5', 'Sonnet 5'], submenu: [] })
+  const r = await actuatorFor(h.bridge).setModel('Opus 4.8')
   assert.equal(r.ok, false)
-  assert.equal(r.landedOn, 'Haiku 4.5')
+  assert.equal(r.landedOn, 'Opus 5', 'reports what it actually selected')
 })
 
-test('it clicks — AXPress and AXShowMenu do not open this control', async () => {
-  const h = modelBridge('Opus 5', 'Sonnet 5')
-  await actuatorFor(h.bridge).setModel(3, 'Sonnet 5')
-  const click = h.calls.find((c) => c.fn === 'clickPoint')
-  assert.ok(click, 'must use a real click')
-  assert.deepEqual(click.args, [125, 210], 'at the popup centre')
-  assert.equal(h.calls.some((c) => c.fn === 'press'), false, 'press does not work on it')
+test('already on the model ⇒ nothing is touched at all', async () => {
+  const h = modelBridge('Opus 5')
+  assert.deepEqual(await actuatorFor(h.bridge).setModel('Opus 5'), { ok: true })
+  assert.equal(h.calls.some((c) => c.fn === 'clickPoint'), false, 'no menu, no focus churn')
 })
 
-test('arrows and Return, never the shortcut digit', async () => {
-  // Typing "3" at this menu lands in the composer as text.
-  const h = modelBridge('Opus 5', 'Sonnet 5')
-  await actuatorFor(h.bridge).setModel(3, 'Sonnet 5')
-  const keys = h.calls.find((c) => c.fn === 'sendKeys')!.args[0] as number[]
-  assert.deepEqual(keys, [125, 125, 125, 36], 'Down x3 then Return')
-})
-
-test('a popup with no geometry cannot be clicked, and says so', async () => {
-  const h = modelBridge('Opus 5', 'Sonnet 5', { geometry: false })
-  const r = await actuatorFor(h.bridge).setModel(3, 'Sonnet 5')
-  assert.deepEqual(r, { ok: false, reason: 'row-not-found' })
-})
-
-test('an absurd position is refused before any focus is stolen', async () => {
-  const h = modelBridge('Opus 5', 'Sonnet 5')
-  const r = await actuatorFor(h.bridge).setModel(0, 'x')
-  assert.equal(r.ok, false)
+test('an empty label never steals focus', async () => {
+  const h = modelBridge('Opus 5')
+  assert.equal((await actuatorFor(h.bridge).setModel('   ')).ok, false)
   assert.equal(h.calls.length, 0)
 })

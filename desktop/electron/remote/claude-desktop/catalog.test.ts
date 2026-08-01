@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { parseCatalog, readCatalog, labelFor, newestPerFamily, __resetCatalogCache } from './catalog'
+import { parseCatalog, readCatalog, labelFor, offeredModels, __resetCatalogCache } from './catalog'
 
 // A REAL excerpt from /Applications/Claude.app/Contents/Resources/app.asar,
 // not an invention — the entire value of this parser is that it matches what
@@ -91,61 +91,38 @@ test('the parse is cached until the bundle itself changes', async () => {
 // ── the offered set ───────────────────────────────────────────────────────
 
 let ord = 0
-const mk = (label: string, family: string, rank: number, order = ord++) =>
-  ({ id: `id-${label}`, label, family, effortLevels: [], defaultEffort: null, rank, order, aliases: [] })
+const mk = (label: string, family: string, rank: number, caps = 1, order = ord++) =>
+  ({ id: `id-${label}`, label, family, effortLevels: [], defaultEffort: null, rank, order,
+     capabilities: Array.from({ length: caps }, (_, i) => `cap${i}`), aliases: [] })
 
-test('offers the newest of each family — matching the real menu', () => {
-  // Read off-screen from Claude Desktop's own dropdown: Fable 5, Opus 5,
-  // Sonnet 5, Haiku 4.5. One per family, highest rank within it.
-  // Orders mirror the bundle: oldest first within a family.
-  const got = newestPerFamily([
-    mk('Opus 4.1', 'opus', 0, 0), mk('Opus 4.8', 'opus', 4, 1), mk('Opus 5', 'opus', 4, 2),
-    mk('Sonnet 3.5', 'sonnet', 0, 3), mk('Sonnet 5', 'sonnet', 3, 4),
-    mk('Haiku 3.5', 'haiku', 0, 5), mk('Haiku 4.5', 'haiku', 1, 6),
-    mk('Fable 5', 'fable', 5, 7),
-  ])
-  assert.deepEqual(got.map((m) => m.label), ['Fable 5', 'Opus 5', 'Sonnet 5', 'Haiku 4.5'])
-})
-
-test('a top-two-RANKS cut is wrong, and this is why', () => {
-  // Tried first; the app disagreed. Ranks 5 and 4 keep Opus 4.8 (not in the
-  // menu) and drop Sonnet 5 and Haiku 4.5 (both in it).
-  const all = [
-    mk('Fable 5', 'fable', 5, 0), mk('Opus 4.8', 'opus', 4, 1), mk('Opus 5', 'opus', 4, 2),
-    mk('Sonnet 5', 'sonnet', 3, 3), mk('Haiku 4.5', 'haiku', 1, 4),
-  ]
-  const byFamily = newestPerFamily(all).map((m) => m.label)
-  assert.ok(byFamily.includes('Sonnet 5') && byFamily.includes('Haiku 4.5'))
-  assert.ok(!byFamily.includes('Opus 4.8'), 'a second model from one family is not offered')
-})
-
-test('a rank TIE inside a family is broken by recency, not the alphabet', () => {
-  // Opus 4.7, Opus 4.8 and Opus 5 all carry advisor_rank 4. Sorting by label
-  // makes "Opus 4.7" win, which is what put the wrong Opus in the picker and
-  // shifted every position after it.
-  const got = newestPerFamily([
-    mk('Opus 4.7', 'opus', 4, 0), mk('Opus 4.8', 'opus', 4, 1), mk('Opus 5', 'opus', 4, 2),
-  ])
+test('rank 0 is legacy and not offered', () => {
+  // Sonnet 3.5, Opus 4, Opus 4.1, Opus 4.5, Haiku 3.5 — all rank 0, none in the menu.
+  const got = offeredModels([mk('Opus 5', 'opus', 4), mk('Opus 4.1', 'opus', 0)])
   assert.deepEqual(got.map((m) => m.label), ['Opus 5'])
 })
 
-test('the REAL bundle offers the models the menu actually shows', async () => {
-  __resetCatalogCache()
-  const all = await readCatalog()
-  if (!all.length) return
-  const labels = newestPerFamily(all).map((m) => m.label)
-  // Read off-screen from Claude Desktop's own dropdown.
-  for (const want of ['Fable 5', 'Opus 5', 'Sonnet 5', 'Haiku 4.5']) {
-    assert.ok(labels.includes(want), `menu shows ${want}; offer was ${labels.join(', ')}`)
-  }
-  assert.ok(!labels.includes('Opus 4.7'), 'Opus 4.7 is not in the menu')
+test('an EMPTY capabilities array means the app does not offer it', () => {
+  // Mythos 5: advisor_rank 5, capabilities []. The one model in the bundle and
+  // not in the menu, and this is the field that says so.
+  const got = offeredModels([mk('Fable 5', 'fable', 5, 10), mk('Mythos 5', 'mythos', 5, 0)])
+  assert.deepEqual(got.map((m) => m.label), ['Fable 5'])
 })
 
-test('the REAL bundle narrows to a short list', async () => {
+test('several models from ONE family are all offered', () => {
+  // newest-per-family hid these: Opus 4.8/4.7/4.6 are real, just behind
+  // "More models ›".
+  const got = offeredModels([
+    mk('Opus 5', 'opus', 4), mk('Opus 4.8', 'opus', 4), mk('Opus 4.6', 'opus', 3),
+  ])
+  assert.equal(got.length, 3)
+})
+
+test('the REAL bundle reproduces the menu exactly', async () => {
   __resetCatalogCache()
   const all = await readCatalog()
-  if (!all.length) return           // no Claude Desktop on this machine
-  const top = newestPerFamily(all)
-  assert.ok(top.length < all.length)
-  assert.ok(top.length <= 6, `expected a short list, got ${top.length}`)
+  if (!all.length) return                 // no Claude Desktop on this machine
+  const labels = offeredModels(all).map((m) => m.label).sort()
+  // Read off-screen from Claude Desktop's own menu, including its submenu.
+  assert.deepEqual(labels, ['Fable 5', 'Haiku 4.5', 'Opus 4.6', 'Opus 4.7',
+                            'Opus 4.8', 'Opus 5', 'Sonnet 4.6', 'Sonnet 5'].sort())
 })

@@ -99,6 +99,8 @@ export interface ActuatorDeps {
   activate?: (bundleId: string) => Promise<boolean>
   /** Who was in front before we started. */
   frontmost?: () => Promise<string | null>
+  /** Text that opens the nested model list. Defaults to 'More'. */
+  moreModelsLabel?: string
 }
 
 /** Default activation: LaunchServices, by bundle id. */
@@ -120,8 +122,14 @@ export class ClaudeActuator {
   private readonly bundleId: string
   private chain: Promise<unknown> = Promise.resolve()
 
+  /** The submenu's own label. English UI copy, so it is a constructor knob
+   *  rather than a literal buried in the method — a localized build needs this
+   *  changed, and it should be one obvious place. */
+  private readonly moreLabel: string
+
   constructor(private readonly deps: ActuatorDeps = {}) {
     this.bundleId = deps.bundleId ?? CLAUDE_BUNDLE_ID
+    this.moreLabel = deps.moreModelsLabel ?? 'More'
   }
 
   private bridge(): AxBridge {
@@ -252,65 +260,95 @@ export class ClaudeActuator {
   }
 
   /**
-   * Switch the composer's model.
+   * Switch the composer's model, BY NAME.
    *
-   * ── Why it is shaped like this, all measured 2026-08-01 ──────────────────
+   * ── What the app does, all measured 2026-08-01 ───────────────────────────
    *
-   * The model popup ignores AXPress AND AXShowMenu — both return success and do
-   * nothing. It opens only for a REAL synthetic click at its position.
+   *   AXPress / AXShowMenu on the popup   success, opens nothing
+   *   a REAL synthetic click              opens the menu
+   *   the open menu, in the AX tree       invisible — AXWindows still 1
+   *   the shortcut digits it shows        do NOT work; "3" lands in the
+   *                                       composer as text
+   *   arrows + Return                     selects
+   *   TYPE-AHEAD + Return                 selects, by name
    *
-   * The menu it opens is invisible to accessibility: AXWindows still reports
-   * one window and nothing named after any model appears anywhere in the tree.
-   * So we cannot read what it offers, or where our target sits in it.
+   * ── Why by name and not by position ──────────────────────────────────────
    *
-   * The shortcut digits shown beside each row do NOT work — typing "3" lands in
-   * the composer as text. Arrows and Return are the mechanism.
+   * Counting keypresses couples us to a layout we cannot see: a reordered menu,
+   * an inserted row, a new model, and every mapping silently shifts. It also
+   * cannot reach the four models behind "More models >" at all. Type-ahead
+   * addresses a row by its own text, so the app can rearrange freely.
    *
-   * ── Which is why this VERIFIES rather than trusts ────────────────────────
+   * TWO LEVELS. Typing at the top level reaches four models; the rest live in a
+   * submenu. Type-ahead there matches only what is on the CURRENT level and
+   * fails DANGEROUSLY rather than loudly — asking for "Opus 4.8" matched the
+   * prefix "Opus" and silently selected Opus 5. So the top level is tried
+   * first, and on a wrong landing we step into the submenu ("More", then Right)
+   * and try again there.
    *
-   * We cannot see the menu, but we can read the popup's label afterwards. So a
-   * position is a HYPOTHESIS and the label is the answer: on success the caller
-   * learns the position was right, and on a mismatch it learns which model that
-   * position actually is — which is worth recording, because it is exactly the
-   * mapping we could not read.
-   *
-   * Never silently wrong: a mismatch returns the label we landed on.
+   * Either way the popup label is read back afterwards. It is the only thing
+   * that knows what actually happened.
    */
-  async setModel(position: number, expectLabel: string): Promise<ActuateResult & { landedOn?: string }> {
-    if (!Number.isInteger(position) || position < 1 || position > 12) {
-      return { ok: false, reason: 'no-shortcut' }
-    }
+  async setModel(label: string): Promise<ActuateResult & { landedOn?: string }> {
+    if (!label.trim()) return { ok: false, reason: 'no-shortcut' }
     return this.run<ActuateResult & { landedOn?: string }>('setModel', async () => {
       const bridge = this.bridge()
+      const RETURN = 36, RIGHT = 124, ESCAPE = 53
       const read = async (): Promise<AxNode[]> => {
         const out = await bridge.call('getTree', [this.bundleId, 0, '', ACTUATE_DEPTH, true])
         return (!out || out.error) ? [] : ((out.nodes ?? []) as AxNode[])
       }
+      const current = async (): Promise<string | null> => modelPopup(await read())?.label?.trim() ?? null
 
-      const before = read().then((n) => modelPopup(n))
-      const pop = await before
-      if (!pop || pop.x === undefined || pop.w === undefined) {
-        return { ok: false, reason: 'row-not-found' }
-      }
+      const pop = modelPopup(await read())
+      if (!pop || pop.x === undefined || pop.w === undefined) return { ok: false, reason: 'row-not-found' }
       const wasOn = pop.label.trim()
+      if (wasOn === label) return { ok: true }          // already there; touch nothing
 
-      const clicked = await bridge.call('clickPoint', [pop.x + pop.w / 2, (pop.y ?? 0) + (pop.h ?? 0) / 2])
-      if (clicked?.error) return { ok: false, reason: 'bridge-failed' }
-      await new Promise((r) => setTimeout(r, 700))   // the menu takes a beat to mount
+      const openMenu = async (): Promise<boolean> => {
+        const c = await bridge.call('clickPoint', [pop.x! + pop.w! / 2, (pop.y ?? 0) + (pop.h ?? 0) / 2])
+        if (c?.error) return false
+        await new Promise((r) => setTimeout(r, 700))    // the menu takes a beat to mount
+        return true
+      }
 
-      const DOWN = 125, RETURN = 36
-      const keys = [...Array(position).fill(DOWN), RETURN]
-      const typed = await bridge.call('sendKeys', [keys, 110])
-      if (typed?.error) return { ok: false, reason: 'bridge-failed' }
+      // ── attempt 1: the top level ──
+      if (!(await openMenu())) return { ok: false, reason: 'bridge-failed' }
+      await bridge.call('typeText', [this.bundleId, label, false, false])
+      await new Promise((r) => setTimeout(r, 400))
+      await bridge.call('sendKeys', [[RETURN], 120])
       await new Promise((r) => setTimeout(r, 900))
 
-      const landed = modelPopup(await read())?.label?.trim() ?? null
-      if (landed === expectLabel) {
-        log.event('claude-desktop-model-set', { from: wasOn, to: landed, position })
+      let landed = await current()
+      if (landed === label) {
+        log.event('claude-desktop-model-set', { from: wasOn, to: landed, via: 'top-level' })
         return { ok: true }
       }
-      log.warn('claude-desktop-model-mismatch', { wanted: expectLabel, landedOn: landed, position, wasOn })
-      return { ok: false, reason: 'row-moved', ...(landed ? { landedOn: landed } : {}) }
+
+      // ── attempt 2: inside "More models" ──
+      // A miss here is expected for the four nested models, and is NOT a
+      // failure yet — but it may have moved us, which the final read settles.
+      if (!(await openMenu())) return { ok: false, reason: 'bridge-failed' }
+      await bridge.call('typeText', [this.bundleId, this.moreLabel, false, false])
+      await new Promise((r) => setTimeout(r, 400))
+      await bridge.call('sendKeys', [[RIGHT], 150])
+      await new Promise((r) => setTimeout(r, 500))
+      await bridge.call('typeText', [this.bundleId, label, false, false])
+      await new Promise((r) => setTimeout(r, 400))
+      await bridge.call('sendKeys', [[RETURN], 120])
+      await new Promise((r) => setTimeout(r, 900))
+
+      landed = await current()
+      if (landed === label) {
+        log.event('claude-desktop-model-set', { from: wasOn, to: landed, via: 'submenu' })
+        return { ok: true }
+      }
+
+      // Neither level had it. Close anything still open so the user is not left
+      // staring at a menu we abandoned.
+      await bridge.call('sendKeys', [[ESCAPE], 80])
+      log.warn('claude-desktop-model-not-found', { wanted: label, landedOn: landed, wasOn })
+      return { ok: false, reason: 'row-not-found', ...(landed ? { landedOn: landed } : {}) }
     }, { ok: false, reason: 'activate-failed' })
   }
 
