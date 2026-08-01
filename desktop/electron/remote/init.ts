@@ -29,7 +29,7 @@ import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor'
-import { providerOf, PROVIDERS, type ProviderId } from './providers'
+import { providerOf, PROVIDERS, isDispatchable, type ProviderId } from './providers'
 import { CodexDesktopDriver } from './codex/driver'
 import { ClaudeDesktopDriver } from './claude-desktop/driver'
 import { ClaudeDesktopAx } from './claude-desktop/ax'
@@ -2349,11 +2349,20 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // otherwise, which reads exactly like a dead control.
           void pushPillChips()
         },
-        // The agent control CYCLES — there are only ever two, and the original
-        // made it a tap rather than a list.
-        cycleAgent: () => {
+        // The agent chip CYCLES on tap (the dropdown is the other way in).
+        //
+        // "there are only ever two" stopped being true. Written as a flip
+        // between claude and codex-desktop, tapping the chip could never reach
+        // a third backend and would silently kick you OFF it — select Claude
+        // desktop from the list, tap the chip once, and you are on Codex.
+        cycleAgent: async () => {
           const now = (settings.get('agent') as AgentKind) ?? 'claude'
-          const next: AgentKind = now === 'codex-desktop' ? 'claude' : 'codex-desktop'
+          // Cycle through what is actually offered, in the order the picker
+          // shows, so the chip and the list agree.
+          const offered = (await probeBackends()).filter((b) => b.ready).map((b) => b.id as AgentKind)
+          const order = offered.length ? offered : (['claude'] as AgentKind[])
+          const i = order.indexOf(now)
+          const next: AgentKind = order[(i + 1) % order.length]
           settings.set('agent', next)
           for (const w of BrowserWindow.getAllWindows()) {
             if (!w.isDestroyed()) w.webContents.send('remote:agent-changed', next)
@@ -2418,10 +2427,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
             .catch((e) => log.warn('codex-pick-done', { axis, value, ok: false, stage: 'threw', error: (e as Error).message }))
         },
         pickAgent: (a) => {
-          // Only ever a backend this host can actually dispatch to — the same
-          // guard the picker itself applies, repeated here because an event can
-          // arrive from a surface whose options are a moment stale.
-          if (a !== 'claude' && a !== 'codex-desktop') return
+          // Only ever a backend this host can actually dispatch to — an event
+          // can arrive from a surface whose options are a moment stale.
+          //
+          // Registry-driven, not a literal pair. Spelled out, this guard
+          // silently DROPPED claude-code-desktop: the row rendered, the tap
+          // landed here, and nothing happened — no selection, no log, no error.
+          if (!isDispatchable(a)) { log.warn('pick-agent-rejected', { agent: a }); return }
           settings.set('agent', a)
           for (const w of BrowserWindow.getAllWindows()) {
             if (!w.isDestroyed()) w.webContents.send('remote:agent-changed', a)

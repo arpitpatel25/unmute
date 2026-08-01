@@ -100,6 +100,24 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
   },
 }
 
+/**
+ * Can a task actually be dispatched to this backend?
+ *
+ * Exists because the rule kept being re-spelled as a literal allowlist at each
+ * call site — `a !== 'claude' && a !== 'codex-desktop'` — which silently
+ * DROPPED any newer backend rather than failing loudly. A tap that does nothing
+ * and logs nothing is the worst version of that: the option is visible, the
+ * click lands, and the app simply ignores it.
+ *
+ * 'codex' (the CLI adapter) is the one real exclusion: it is unwired, and
+ * startup migrates a stored 'codex' back to 'claude'. Everything else in the
+ * registry is dispatchable — whether it is REACHABLE right now is a separate
+ * question, answered by each backend's own driver.
+ */
+export function isDispatchable(id: unknown): id is ProviderId {
+  return typeof id === 'string' && id !== 'codex' && Object.hasOwn(PROVIDERS, id)
+}
+
 /** Look up a provider, defaulting an absent/unknown id to Claude.
  *
  *  This is the ONLY place `undefined ⇒ claude` is expressed. Call it instead of

@@ -96,7 +96,7 @@ export interface PillControllerDeps {
   /** Switch the backend the next task runs on. */
   pickAgent(id: string): void
   /** Tap the agent half — there are only ever two, so it cycles. */
-  cycleAgent(): void
+  cycleAgent(): void | Promise<void>
   /** Codex only: set one reasoning axis (Model / Effort / Speed). */
   pickAxis(axis: string, value: string): void
   /** Switch capture source. */
@@ -166,7 +166,7 @@ export class PillController {
       case 'pillAcceptDraft': this.deps.acceptDraft(); break
       case 'pillPickModel':   if (value) this.deps.pickModel(value); break
       case 'pillPickAgent':   if (value) this.deps.pickAgent(value); break
-      case 'pillCycleAgent':  this.deps.cycleAgent(); break
+      case 'pillCycleAgent':  void this.deps.cycleAgent(); break
       case 'pillPickAxis': {
         const axis = typeof e.axis === 'string' ? e.axis : ''
         if (axis && value) this.deps.pickAxis(axis, value)

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PROVIDERS, providerOf, type ProviderId } from './providers.ts'
+import { PROVIDERS, providerOf, isDispatchable, type ProviderId } from './providers.ts'
 
 // THE PROVIDER REGISTRY
 //
@@ -70,5 +70,29 @@ test('every provider carries a human label for the task card', () => {
   assert.equal(providerOf('codex-desktop').label, 'Codex desktop')
   for (const p of Object.values(PROVIDERS)) {
     assert.ok(p.label.length > 0, `${p.id} needs a label — the card renders it`)
+  }
+})
+
+test('every registered backend is dispatchable except the unwired CLI adapter', () => {
+  // The rule this replaces was written as a literal pair at each call site, so
+  // a newly registered backend was silently dropped — the pill row rendered,
+  // the tap landed, and nothing happened.
+  assert.equal(isDispatchable('claude'), true)
+  assert.equal(isDispatchable('codex-desktop'), true)
+  assert.equal(isDispatchable('claude-code-desktop'), true)
+  assert.equal(isDispatchable('codex'), false, 'the CLI adapter is unwired')
+})
+
+test('an unknown or malformed id is refused', () => {
+  assert.equal(isDispatchable('not-a-backend'), false)
+  assert.equal(isDispatchable(undefined), false)
+  assert.equal(isDispatchable(null), false)
+  assert.equal(isDispatchable(42), false)
+})
+
+test('every provider in the registry is covered by the rule', () => {
+  // So adding a provider cannot leave it undecidable.
+  for (const id of Object.keys(PROVIDERS)) {
+    assert.equal(typeof isDispatchable(id), 'boolean')
   }
 })
