@@ -52,6 +52,11 @@ const PING_ID = -1
 export type AxMethod =
   | 'isTrusted' | 'processInfo' | 'listApps' | 'frontmostApp'
   | 'find' | 'getTree' | 'press' | 'setValue' | 'typeText' | 'fillForm' | 'menuAction' | 'captureWindow'
+  // Real synthetic input. Needed for controls that answer to nothing else:
+  // Claude Desktop's model popup ignores AXPress AND AXShowMenu, and the menu
+  // it opens is invisible to accessibility, so it is driven by a click at its
+  // position followed by arrow keys.
+  | 'clickPoint' | 'sendKeys'
 
 export interface AxBridge {
   call(method: AxMethod, args: unknown[]): Promise<any>

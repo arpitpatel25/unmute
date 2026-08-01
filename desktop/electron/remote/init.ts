@@ -34,7 +34,7 @@ import { CodexDesktopDriver } from './codex/driver'
 import { ClaudeDesktopDriver } from './claude-desktop/driver'
 import { ClaudeDesktopAx } from './claude-desktop/ax'
 import { ClaudeActuator } from './claude-desktop/actuate'
-import { readCatalog as readClaudeCatalog } from './claude-desktop/catalog'
+import { readCatalog as readClaudeCatalog, topRanked as topRankedClaudeModels } from './claude-desktop/catalog'
 import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
@@ -1055,7 +1055,7 @@ async function pushPillChips(): Promise<void> {
       // through to Claude Code's list below would offer aliases ('opus',
       // 'opusplan') that this app does not use — the same wrong-list bug the
       // Codex branch above exists to prevent, one backend later.
-      const models = await readClaudeCatalog()
+      const models = topRankedClaudeModels(await readClaudeCatalog())
       chips.modelOptions = models.map((m) => ({
         id: m.id,
         label: m.label,
@@ -2344,6 +2344,20 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         dismissOffline:    () => toWidget('dismissOffline'),
         openBillingPortal: () => toWidget('openBillingPortal'),
         pickModel: (m) => {
+          // CLAUDE DESKTOP HAS NO WRITE PATH. Its model lives in a popup that
+          // is not reachable over accessibility (pressing it yields zero new
+          // nodes, backgrounded AND frontmost — measured). So a tap cannot take
+          // effect there.
+          //
+          // What it MUST NOT do is fall through to the line below, where
+          // isSelectableModel() rejects a Claude Desktop id and quietly writes
+          // the CLAUDE CODE model setting instead — changing the model your CLI
+          // tasks run on, from a menu that was showing a different backend.
+          if ((settings.get('agent') as AgentKind) === 'claude-code-desktop') {
+            log.event('model-pick-ignored', { model: m, agent: 'claude-code-desktop', reason: 'no write path to the app' })
+            void pushPillChips()
+            return
+          }
           const model = isSelectableModel(m) ? m : (settings.get('model') || getModels().doerDefault)
           settings.set('model', model)
           settings.set('modelUserSet', true) // explicit choice — never auto-migrate it

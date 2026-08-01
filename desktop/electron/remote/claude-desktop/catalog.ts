@@ -227,5 +227,31 @@ export function labelFor(models: readonly ClaudeModel[], id: string | null | und
   return hit?.label ?? null
 }
 
+/**
+ * The models worth offering: everything at the TOP TWO distinct ranks.
+ *
+ * The bundle lists 17, including models the app has merely heard of — Sonnet
+ * 3.5, Opus 4, Opus 4.1. Showing all of them buries the current ones and
+ * offers versions this app almost certainly no longer runs.
+ *
+ * Top-two DISTINCT ranks rather than a fixed number or a hardcoded floor, so it
+ * follows the app: when ranks move up (7s and 8s), the cut moves with them and
+ * nothing here needs editing. That is the same property the catalogue itself
+ * has, which is the whole reason we read it instead of writing a list.
+ *
+ * CAVEAT, and it is not small: `advisor_rank` is Anthropic's field and the app
+ * never visibly consumes it, so its exact meaning is inferred. Ranks correlate
+ * with recency and capability (Haiku 4.5 at 1 outranks Opus 4.5 at 0, which is
+ * hard to read as pure capability). Treat this as a sensible cut, not a
+ * statement about what the app offers — only its own menu can say that, and
+ * that menu is not reachable over accessibility.
+ */
+export function topRanked(models: readonly ClaudeModel[]): ClaudeModel[] {
+  const ranks = [...new Set(models.map((m) => m.rank))].sort((a, b) => b - a)
+  if (ranks.length <= 2) return [...models]
+  const keep = new Set(ranks.slice(0, 2))
+  return models.filter((m) => keep.has(m.rank))
+}
+
 /** Reset the cache. Tests only. */
 export function __resetCatalogCache(): void { cache = null }

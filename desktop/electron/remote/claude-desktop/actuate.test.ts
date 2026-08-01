@@ -261,3 +261,79 @@ test('a press that echoes the expected row succeeds', async () => {
   const h = treeBridge([t, t], { ok: true, label: 'Idle Fix login' })
   assert.equal((await actuatorWith(h.bridge).openConversation('Fix login')).ok, true)
 })
+
+// ── setting the model ─────────────────────────────────────────────────────
+
+/** A composer whose model popup reports `label`, changing to `after` once the
+ *  arrow keys are sent — i.e. a fake that models the REAL loop. */
+function modelBridge(before: string, after: string, opts: { geometry?: boolean } = {}) {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  let current = before
+  const pops = (m: string) => [
+    { id: 1, depth: 25, role: 'AXPopUpButton', label: 'Manual', actions: ['AXPress'], x: 1, y: 1, w: 10, h: 10 },
+    { id: 2, depth: 25, role: 'AXPopUpButton', label: m, actions: ['AXPress'],
+      ...(opts.geometry === false ? {} : { x: 100, y: 200, w: 50, h: 20 }) },
+    { id: 3, depth: 25, role: 'AXPopUpButton', label: 'Effort: High', actions: ['AXPress'], x: 1, y: 1, w: 10, h: 10 },
+    { id: 4, depth: 25, role: 'AXPopUpButton', label: 'Usage: context 5%', actions: ['AXPress'], x: 1, y: 1, w: 10, h: 10 },
+  ]
+  return {
+    calls,
+    bridge: {
+      call: async (m: string, a: unknown[]) => {
+        calls.push({ fn: m, args: a })
+        if (m === 'getTree') return { nodes: [{ id: 0, depth: 1, role: 'AXWebArea', label: '', actions: [] }, ...pops(current)] }
+        if (m === 'sendKeys') { current = after; return { ok: true } }
+        return { ok: true }
+      },
+      trusted: async () => true, dispose: () => {},
+    } as never,
+  }
+}
+const actuatorFor = (bridge: unknown) => new ClaudeActuator({
+  frontmost: async () => 'prev', activate: async () => true, bridge: bridge as never,
+})
+
+test('setting the model VERIFIES by reading the popup back', async () => {
+  const h = modelBridge('Opus 5', 'Sonnet 5')
+  const r = await actuatorFor(h.bridge).setModel(3, 'Sonnet 5')
+  assert.deepEqual(r, { ok: true })
+})
+
+test('a mismatch reports WHAT we landed on — the mapping we cannot read', async () => {
+  // We cannot see the menu, so a position is a hypothesis. When it is wrong the
+  // caller must learn which model that position actually is.
+  const h = modelBridge('Opus 5', 'Haiku 4.5')
+  const r = await actuatorFor(h.bridge).setModel(3, 'Sonnet 5')
+  assert.equal(r.ok, false)
+  assert.equal(r.landedOn, 'Haiku 4.5')
+})
+
+test('it clicks — AXPress and AXShowMenu do not open this control', async () => {
+  const h = modelBridge('Opus 5', 'Sonnet 5')
+  await actuatorFor(h.bridge).setModel(3, 'Sonnet 5')
+  const click = h.calls.find((c) => c.fn === 'clickPoint')
+  assert.ok(click, 'must use a real click')
+  assert.deepEqual(click.args, [125, 210], 'at the popup centre')
+  assert.equal(h.calls.some((c) => c.fn === 'press'), false, 'press does not work on it')
+})
+
+test('arrows and Return, never the shortcut digit', async () => {
+  // Typing "3" at this menu lands in the composer as text.
+  const h = modelBridge('Opus 5', 'Sonnet 5')
+  await actuatorFor(h.bridge).setModel(3, 'Sonnet 5')
+  const keys = h.calls.find((c) => c.fn === 'sendKeys')!.args[0] as number[]
+  assert.deepEqual(keys, [125, 125, 125, 36], 'Down x3 then Return')
+})
+
+test('a popup with no geometry cannot be clicked, and says so', async () => {
+  const h = modelBridge('Opus 5', 'Sonnet 5', { geometry: false })
+  const r = await actuatorFor(h.bridge).setModel(3, 'Sonnet 5')
+  assert.deepEqual(r, { ok: false, reason: 'row-not-found' })
+})
+
+test('an absurd position is refused before any focus is stolen', async () => {
+  const h = modelBridge('Opus 5', 'Sonnet 5')
+  const r = await actuatorFor(h.bridge).setModel(0, 'x')
+  assert.equal(r.ok, false)
+  assert.equal(h.calls.length, 0)
+})

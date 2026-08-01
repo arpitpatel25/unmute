@@ -53,7 +53,7 @@
 import { execFile } from 'node:child_process'
 import { getAxBridge, type AxBridge } from '../ax/ax-bridge'
 import { createLogger } from '../log'
-import { CLAUDE_BUNDLE_ID, readSidebarRows, isTreeAlive, type ClaudeConsent, type AxNode } from './ax'
+import { CLAUDE_BUNDLE_ID, readSidebarRows, isTreeAlive, modelPopup, type ClaudeConsent, type AxNode } from './ax'
 
 const log = createLogger('claude-desktop-actuate')
 
@@ -248,6 +248,69 @@ export class ClaudeActuator {
       }
       log.event('claude-desktop-opened', { title: title.slice(0, 60) })
       return { ok: true }
+    }, { ok: false, reason: 'activate-failed' })
+  }
+
+  /**
+   * Switch the composer's model.
+   *
+   * ── Why it is shaped like this, all measured 2026-08-01 ──────────────────
+   *
+   * The model popup ignores AXPress AND AXShowMenu — both return success and do
+   * nothing. It opens only for a REAL synthetic click at its position.
+   *
+   * The menu it opens is invisible to accessibility: AXWindows still reports
+   * one window and nothing named after any model appears anywhere in the tree.
+   * So we cannot read what it offers, or where our target sits in it.
+   *
+   * The shortcut digits shown beside each row do NOT work — typing "3" lands in
+   * the composer as text. Arrows and Return are the mechanism.
+   *
+   * ── Which is why this VERIFIES rather than trusts ────────────────────────
+   *
+   * We cannot see the menu, but we can read the popup's label afterwards. So a
+   * position is a HYPOTHESIS and the label is the answer: on success the caller
+   * learns the position was right, and on a mismatch it learns which model that
+   * position actually is — which is worth recording, because it is exactly the
+   * mapping we could not read.
+   *
+   * Never silently wrong: a mismatch returns the label we landed on.
+   */
+  async setModel(position: number, expectLabel: string): Promise<ActuateResult & { landedOn?: string }> {
+    if (!Number.isInteger(position) || position < 1 || position > 12) {
+      return { ok: false, reason: 'no-shortcut' }
+    }
+    return this.run<ActuateResult & { landedOn?: string }>('setModel', async () => {
+      const bridge = this.bridge()
+      const read = async (): Promise<AxNode[]> => {
+        const out = await bridge.call('getTree', [this.bundleId, 0, '', ACTUATE_DEPTH, true])
+        return (!out || out.error) ? [] : ((out.nodes ?? []) as AxNode[])
+      }
+
+      const before = read().then((n) => modelPopup(n))
+      const pop = await before
+      if (!pop || pop.x === undefined || pop.w === undefined) {
+        return { ok: false, reason: 'row-not-found' }
+      }
+      const wasOn = pop.label.trim()
+
+      const clicked = await bridge.call('clickPoint', [pop.x + pop.w / 2, (pop.y ?? 0) + (pop.h ?? 0) / 2])
+      if (clicked?.error) return { ok: false, reason: 'bridge-failed' }
+      await new Promise((r) => setTimeout(r, 700))   // the menu takes a beat to mount
+
+      const DOWN = 125, RETURN = 36
+      const keys = [...Array(position).fill(DOWN), RETURN]
+      const typed = await bridge.call('sendKeys', [keys, 110])
+      if (typed?.error) return { ok: false, reason: 'bridge-failed' }
+      await new Promise((r) => setTimeout(r, 900))
+
+      const landed = modelPopup(await read())?.label?.trim() ?? null
+      if (landed === expectLabel) {
+        log.event('claude-desktop-model-set', { from: wasOn, to: landed, position })
+        return { ok: true }
+      }
+      log.warn('claude-desktop-model-mismatch', { wanted: expectLabel, landedOn: landed, position, wasOn })
+      return { ok: false, reason: 'row-moved', ...(landed ? { landedOn: landed } : {}) }
     }, { ok: false, reason: 'activate-failed' })
   }
 

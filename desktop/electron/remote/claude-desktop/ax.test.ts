@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   isTreeAlive, readRunning, readConsent, readState, ClaudeDesktopAx,
-  readSidebarRows, statusForTitle, readComposerSettings, STUB_NODE_CEILING, type AxNode,
+  readSidebarRows, statusForTitle, readComposerSettings, modelPopup, STUB_NODE_CEILING, type AxNode,
 } from './ax'
 
 // Node shapes match what the native addon actually returns (see native-ax
@@ -289,37 +289,46 @@ test('same-depth buttons scattered far apart are chrome, not options', () => {
 
 // ── the composer's current settings ───────────────────────────────────────
 
-test('reads the model and effort popups — real labels from a live window', () => {
-  // Captured from the running app: the composer row carries these four popups.
-  const n = (role: string, label: string): AxNode =>
-    ({ id: nextId++, depth: 25, role, label, actions: ['AXPress'] })
-  const s = readComposerSettings([
-    n('AXPopUpButton', 'Manual'),
-    n('AXPopUpButton', 'Opus 5'),
-    n('AXPopUpButton', 'Effort: High'),
-    n('AXPopUpButton', 'Usage: context 5%, plan 36%'),
-  ])
-  assert.equal(s.effort, 'High')
-  assert.ok(s.model === 'Opus 5' || s.model === 'Manual', `got ${s.model}`)
+/** The composer row as the real app lays it out, in document order. */
+const composer = (model: string, withEffort = true): AxNode[] => {
+  const p = (label: string): AxNode =>
+    ({ id: nextId++, depth: 25, role: 'AXPopUpButton', label, actions: ['AXPress'], x: 10, y: 20, w: 50, h: 20 })
+  return [
+    p('Arpit \u00b7 Max'),            // the sidebar account row — NOT the model
+    p('Manual'), p('Add'), p('Dictation settings'),
+    p(model),
+    ...(withEffort ? [p('Effort: High')] : []),
+    p('Usage: context 5%, plan 36%'),
+  ]
+}
+
+test('the model popup is anchored, not the first bare label', () => {
+  // A "first bare popup" heuristic picked the account row instead.
+  assert.equal(modelPopup(composer('Opus 5'))?.label, 'Opus 5')
 })
 
-test('labelled controls are never mistaken for the model', () => {
-  const n = (label: string): AxNode =>
+test('it still resolves when the model has NO effort axis', () => {
+  // Selecting Haiku 4.5 removes the Effort control entirely — which broke an
+  // Effort-anchored selector mid-test, leaving no way to read or restore.
+  assert.equal(modelPopup(composer('Haiku 4.5', false))?.label, 'Haiku 4.5')
+})
+
+test('reads model and effort together', () => {
+  assert.deepEqual(readComposerSettings(composer('Opus 5')), { model: 'Opus 5', effort: 'High' })
+})
+
+test('no effort axis reports null effort, not a stale value', () => {
+  assert.deepEqual(readComposerSettings(composer('Haiku 4.5', false)), { model: 'Haiku 4.5', effort: null })
+})
+
+test('no model names are hardcoded — an unseen model reads straight through', () => {
+  assert.equal(modelPopup(composer('Something 9'))?.label, 'Something 9')
+})
+
+test('without the Usage anchor there is no answer, rather than a wrong one', () => {
+  const p = (label: string): AxNode =>
     ({ id: nextId++, depth: 25, role: 'AXPopUpButton', label, actions: ['AXPress'] })
-  const s = readComposerSettings([
-    n('More options for Season preference questions'),
-    n('Filter'),
-    n('Dictation settings'),
-    n('Usage: context 5%, plan 36%'),
-  ])
-  assert.equal(s.model, null, 'no bare popup ⇒ no model, rather than a wrong one')
-})
-
-test('no model names are hardcoded — an unseen model is read straight through', () => {
-  const s = readComposerSettings([
-    { id: 1, depth: 25, role: 'AXPopUpButton', label: 'Something 9', actions: ['AXPress'] },
-  ])
-  assert.equal(s.model, 'Something 9')
+  assert.equal(modelPopup([p('Manual'), p('Opus 5')]), null)
 })
 
 test('a dead tree yields nulls, not a stale guess', async () => {

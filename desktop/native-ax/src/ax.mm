@@ -97,6 +97,25 @@ static std::vector<std::string> axActions(AXUIElementRef el) {
 }
 
 /// The label an LLM should see. Falls back through the usual attributes.
+/// Screen rect of an element, or a zero rect. Needed because some controls can
+/// only be driven by a real click at their position — an Electron popup menu
+/// among them: it responds to a synthetic click and to nothing else we can send.
+static CGRect axFrame(AXUIElementRef el) {
+  CFTypeRef pRef = NULL, sRef = NULL;
+  CGPoint pt = CGPointZero; CGSize sz = CGSizeZero;
+  if (AXUIElementCopyAttributeValue(el, kAXPositionAttribute, &pRef) == kAXErrorSuccess && pRef) {
+    if (CFGetTypeID(pRef) == AXValueGetTypeID())
+      AXValueGetValue((AXValueRef)pRef, (AXValueType)kAXValueCGPointType, &pt);
+    CFRelease(pRef);
+  }
+  if (AXUIElementCopyAttributeValue(el, kAXSizeAttribute, &sRef) == kAXErrorSuccess && sRef) {
+    if (CFGetTypeID(sRef) == AXValueGetTypeID())
+      AXValueGetValue((AXValueRef)sRef, (AXValueType)kAXValueCGSizeType, &sz);
+    CFRelease(sRef);
+  }
+  return CGRectMake(pt.x, pt.y, sz.width, sz.height);
+}
+
 static std::string axLabel(AXUIElementRef el) {
   static CFStringRef keys[] = {
     kAXTitleAttribute, kAXDescriptionAttribute,
@@ -185,6 +204,7 @@ static ResolvedApp resolveApp(const std::string &query) {
 struct Node {
   int id;
   int depth;
+  CGRect frame;
   AXUIElementRef el; // borrowed during walk; retained copies kept in vector
   std::string role;
   std::string label;
@@ -205,6 +225,7 @@ static std::vector<Node> walkTree(AXUIElementRef root, int maxDepth, int maxNode
     node.el = el;
     node.role = axStr(el, kAXRoleAttribute);
     node.label = axLabel(el);
+    node.frame = axFrame(el);
     node.actions = axActions(el);
     out.push_back(node);
     @autoreleasepool {
@@ -232,6 +253,61 @@ static bool isInteresting(const Node &n) {
 }
 
 // ───────────────────────── N-API surface ─────────────────────────
+
+/// clickPoint(x, y) — a REAL synthetic mouse click at a screen point.
+///
+/// Exists because some controls answer to nothing else. Claude Desktop's model
+/// popup ignores AXPress and AXShowMenu (both return success and do nothing)
+/// and opens only for an actual click; the menu it opens is then invisible to
+/// accessibility entirely. Measured 2026-08-01.
+///
+/// Requires the target app to be FRONTMOST, like every other actuation on that
+/// app — four backgrounded routes were tested and all failed silently.
+static Napi::Value ClickPoint(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  double x = info[0].As<Napi::Number>().DoubleValue();
+  double y = info[1].As<Napi::Number>().DoubleValue();
+  CGPoint p = CGPointMake(x, y);
+  CGEventSourceRef src = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
+  CGEventRef down = CGEventCreateMouseEvent(src, kCGEventLeftMouseDown, p, kCGMouseButtonLeft);
+  CGEventRef up   = CGEventCreateMouseEvent(src, kCGEventLeftMouseUp,   p, kCGMouseButtonLeft);
+  CGEventPost(kCGHIDEventTap, down);
+  usleep(50000);
+  CGEventPost(kCGHIDEventTap, up);
+  if (down) CFRelease(down);
+  if (up) CFRelease(up);
+  if (src) CFRelease(src);
+  Napi::Object o = Napi::Object::New(env);
+  o.Set("ok", Napi::Boolean::New(env, true));
+  return o;
+}
+
+/// sendKeys([keycode, ...], delayMs) — synthetic key presses, in order.
+///
+/// Menu navigation is arrows + Return: typing a shortcut DIGIT at Claude
+/// Desktop's model menu lands in the composer as text instead of selecting.
+static Napi::Value SendKeys(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  Napi::Array keys = info[0].As<Napi::Array>();
+  int delayMs = info.Length() > 1 && info[1].IsNumber() ? info[1].As<Napi::Number>().Int32Value() : 120;
+  CGEventSourceRef src = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
+  for (uint32_t i = 0; i < keys.Length(); i++) {
+    CGKeyCode k = (CGKeyCode)keys.Get(i).As<Napi::Number>().Int32Value();
+    CGEventRef d = CGEventCreateKeyboardEvent(src, k, true);
+    CGEventRef u = CGEventCreateKeyboardEvent(src, k, false);
+    CGEventPost(kCGHIDEventTap, d);
+    usleep(40000);
+    CGEventPost(kCGHIDEventTap, u);
+    if (d) CFRelease(d);
+    if (u) CFRelease(u);
+    usleep(delayMs * 1000);
+  }
+  if (src) CFRelease(src);
+  Napi::Object o = Napi::Object::New(env);
+  o.Set("ok", Napi::Boolean::New(env, true));
+  o.Set("count", Napi::Number::New(env, keys.Length()));
+  return o;
+}
 
 static Napi::Value IsTrusted(const Napi::CallbackInfo &info) {
   return Napi::Boolean::New(info.Env(), AXIsProcessTrusted() == true);
@@ -345,6 +421,10 @@ static Napi::Object nodeToJs(Napi::Env env, const Node &n) {
   for (uint32_t i = 0; i < n.actions.size(); i++)
     acts.Set(i, Napi::String::New(env, n.actions[i]));
   o.Set("actions", acts);
+  o.Set("x", Napi::Number::New(env, n.frame.origin.x));
+  o.Set("y", Napi::Number::New(env, n.frame.origin.y));
+  o.Set("w", Napi::Number::New(env, n.frame.size.width));
+  o.Set("h", Napi::Number::New(env, n.frame.size.height));
   return o;
 }
 
@@ -1040,6 +1120,8 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("isTrusted", Napi::Function::New(env, IsTrusted));
   exports.Set("processInfo", Napi::Function::New(env, ProcessInfoFn));
   exports.Set("listApps", Napi::Function::New(env, ListApps));
+  exports.Set("clickPoint", Napi::Function::New(env, ClickPoint));
+  exports.Set("sendKeys", Napi::Function::New(env, SendKeys));
   exports.Set("frontmostApp", Napi::Function::New(env, FrontmostApp));
   exports.Set("find", Napi::Function::New(env, Find));
   exports.Set("getTree", Napi::Function::New(env, GetTree));

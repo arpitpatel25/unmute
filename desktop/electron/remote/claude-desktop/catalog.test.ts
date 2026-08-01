@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { parseCatalog, readCatalog, labelFor, __resetCatalogCache } from './catalog'
+import { parseCatalog, readCatalog, labelFor, topRanked, __resetCatalogCache } from './catalog'
 
 // A REAL excerpt from /Applications/Claude.app/Contents/Resources/app.asar,
 // not an invention — the entire value of this parser is that it matches what
@@ -86,4 +86,37 @@ test('the parse is cached until the bundle itself changes', async () => {
   await writeFile(p, REAL.split('\n').slice(0, 3).join('\n'))
   const after = await readCatalog(p)
   assert.ok(after.length < 4, 'a changed bundle must be re-read')
+})
+
+// ── the offered set ───────────────────────────────────────────────────────
+
+test('offers the top TWO distinct ranks, not a fixed count', () => {
+  const m = (label: string, rank: number) =>
+    ({ id: `id-${label}`, label, family: 'f', effortLevels: [], defaultEffort: null, rank, aliases: [] })
+  const got = topRanked([m('a', 5), m('b', 5), m('c', 4), m('d', 3), m('e', 0)])
+  assert.deepEqual(got.map((x) => x.label), ['a', 'b', 'c'])
+})
+
+test('the cut FOLLOWS the app — 7s and 8s work with no edit here', () => {
+  // The point of ranking on distinct values rather than a hardcoded floor.
+  const m = (label: string, rank: number) =>
+    ({ id: `id-${label}`, label, family: 'f', effortLevels: [], defaultEffort: null, rank, aliases: [] })
+  const got = topRanked([m('new', 8), m('also', 7), m('old', 5), m('older', 4)])
+  assert.deepEqual(got.map((x) => x.label), ['new', 'also'])
+})
+
+test('two or fewer ranks means everything is offered', () => {
+  const m = (label: string, rank: number) =>
+    ({ id: `id-${label}`, label, family: 'f', effortLevels: [], defaultEffort: null, rank, aliases: [] })
+  assert.equal(topRanked([m('a', 1), m('b', 0)]).length, 2)
+  assert.equal(topRanked([]).length, 0)
+})
+
+test('the REAL bundle narrows to a short current list', async () => {
+  __resetCatalogCache()
+  const all = await readCatalog()
+  if (!all.length) return           // no Claude Desktop on this machine
+  const top = topRanked(all)
+  assert.ok(top.length < all.length, 'the whole catalogue is not the offer')
+  assert.ok(top.length <= 8, `expected a short list, got ${top.length}`)
 })

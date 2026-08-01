@@ -58,6 +58,12 @@ export interface AxNode {
   role: string
   label: string
   actions: string[]
+  /** Screen rect. Present since the addon gained geometry — needed because
+   *  some controls answer only to a real click at their position. */
+  x?: number
+  y?: number
+  w?: number
+  h?: number
 }
 
 /** A permission prompt as the UI is presenting it right now. */
@@ -237,23 +243,38 @@ export interface ClaudeComposerSettings {
  * the hardcoded catalogue this backend exists to avoid.
  */
 export function readComposerSettings(nodes: AxNode[]): ClaudeComposerSettings {
-  let model: string | null = null
-  let effort: string | null = null
-  for (const n of nodes) {
-    if (n.role !== 'AXPopUpButton') continue
-    const l = n.label.trim()
-    if (!l) continue
-    // 'Effort: High' — the app labels this axis explicitly.
-    const eff = /^Effort:\s*(.+)$/i.exec(l)
-    if (eff) { effort ??= eff[1].trim(); continue }
-    // Everything else with a colon or a known prefix is another control
-    // ('Usage: context 5%…', 'More options for …', 'Dictation settings').
-    if (l.includes(':') || /^(More|Filter|Dictation)\b/i.test(l)) continue
-    // The composer's own controls sit deep, beside the text area; the sidebar's
-    // row menus sit shallower. Take the FIRST bare popup at composer depth.
-    model ??= l
+  const pop = modelPopup(nodes)
+  const effort = nodes.find((n) => n.role === 'AXPopUpButton' && /^Effort:/i.test(n.label.trim()))
+  return {
+    model: pop ? pop.label.trim() : null,
+    effort: effort ? effort.label.trim().replace(/^Effort:\s*/i, '') : null,
   }
-  return { model, effort }
+}
+
+/**
+ * The composer's MODEL popup, anchored on its labelled neighbours.
+ *
+ * ANCHORED, not guessed. A "first popup with a bare label" heuristic picked the
+ * sidebar's account row ("Arpit · Max") instead — the model popup carries no
+ * label of its own beyond the model name, so there is nothing intrinsic to
+ * match on.
+ *
+ * The composer row is, in order: permission mode, Add, Dictation settings,
+ * MODEL, [Effort: …], Usage: …. So: find 'Usage:', step back one, and step back
+ * again ONLY if that is 'Effort:'.
+ *
+ * The optional step matters. Effort DISAPPEARS for models that have no effort
+ * axis — selecting Haiku 4.5 removes the control entirely — and an
+ * Effort-anchored selector broke mid-test the moment that happened, leaving no
+ * way to read or restore the model.
+ */
+export function modelPopup(nodes: AxNode[]): AxNode | null {
+  const pops = nodes.filter((n) => n.role === 'AXPopUpButton')
+  let i = pops.findIndex((p) => /^Usage:/i.test(p.label.trim()))
+  if (i < 0) return null
+  i -= 1
+  if (i >= 0 && /^Effort:/i.test(pops[i].label.trim())) i -= 1
+  return i >= 0 ? pops[i] : null
 }
 
 /** One sidebar row: a task, and whatever status the app is showing beside it. */
