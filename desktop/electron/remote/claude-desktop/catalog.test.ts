@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { parseCatalog, readCatalog, labelFor, topRanked, __resetCatalogCache } from './catalog'
+import { parseCatalog, readCatalog, labelFor, newestPerFamily, __resetCatalogCache } from './catalog'
 
 // A REAL excerpt from /Applications/Claude.app/Contents/Resources/app.asar,
 // not an invention — the entire value of this parser is that it matches what
@@ -90,33 +90,38 @@ test('the parse is cached until the bundle itself changes', async () => {
 
 // ── the offered set ───────────────────────────────────────────────────────
 
-test('offers the top TWO distinct ranks, not a fixed count', () => {
-  const m = (label: string, rank: number) =>
-    ({ id: `id-${label}`, label, family: 'f', effortLevels: [], defaultEffort: null, rank, aliases: [] })
-  const got = topRanked([m('a', 5), m('b', 5), m('c', 4), m('d', 3), m('e', 0)])
-  assert.deepEqual(got.map((x) => x.label), ['a', 'b', 'c'])
+const mk = (label: string, family: string, rank: number) =>
+  ({ id: `id-${label}`, label, family, effortLevels: [], defaultEffort: null, rank, aliases: [] })
+
+test('offers the newest of each family — matching the real menu', () => {
+  // Read off-screen from Claude Desktop's own dropdown: Fable 5, Opus 5,
+  // Sonnet 5, Haiku 4.5. One per family, highest rank within it.
+  const got = newestPerFamily([
+    mk('Opus 5', 'opus', 4), mk('Opus 4.8', 'opus', 4), mk('Opus 4.1', 'opus', 0),
+    mk('Sonnet 5', 'sonnet', 3), mk('Sonnet 3.5', 'sonnet', 0),
+    mk('Haiku 4.5', 'haiku', 1), mk('Haiku 3.5', 'haiku', 0),
+    mk('Fable 5', 'fable', 5),
+  ])
+  assert.deepEqual(got.map((m) => m.label), ['Fable 5', 'Opus 5', 'Sonnet 5', 'Haiku 4.5'])
 })
 
-test('the cut FOLLOWS the app — 7s and 8s work with no edit here', () => {
-  // The point of ranking on distinct values rather than a hardcoded floor.
-  const m = (label: string, rank: number) =>
-    ({ id: `id-${label}`, label, family: 'f', effortLevels: [], defaultEffort: null, rank, aliases: [] })
-  const got = topRanked([m('new', 8), m('also', 7), m('old', 5), m('older', 4)])
-  assert.deepEqual(got.map((x) => x.label), ['new', 'also'])
+test('a top-two-RANKS cut is wrong, and this is why', () => {
+  // Tried first; the app disagreed. Ranks 5 and 4 keep Opus 4.8 (not in the
+  // menu) and drop Sonnet 5 and Haiku 4.5 (both in it).
+  const all = [
+    mk('Fable 5', 'fable', 5), mk('Opus 5', 'opus', 4), mk('Opus 4.8', 'opus', 4),
+    mk('Sonnet 5', 'sonnet', 3), mk('Haiku 4.5', 'haiku', 1),
+  ]
+  const byFamily = newestPerFamily(all).map((m) => m.label)
+  assert.ok(byFamily.includes('Sonnet 5') && byFamily.includes('Haiku 4.5'))
+  assert.ok(!byFamily.includes('Opus 4.8'), 'a second model from one family is not offered')
 })
 
-test('two or fewer ranks means everything is offered', () => {
-  const m = (label: string, rank: number) =>
-    ({ id: `id-${label}`, label, family: 'f', effortLevels: [], defaultEffort: null, rank, aliases: [] })
-  assert.equal(topRanked([m('a', 1), m('b', 0)]).length, 2)
-  assert.equal(topRanked([]).length, 0)
-})
-
-test('the REAL bundle narrows to a short current list', async () => {
+test('the REAL bundle narrows to a short list', async () => {
   __resetCatalogCache()
   const all = await readCatalog()
   if (!all.length) return           // no Claude Desktop on this machine
-  const top = topRanked(all)
-  assert.ok(top.length < all.length, 'the whole catalogue is not the offer')
-  assert.ok(top.length <= 8, `expected a short list, got ${top.length}`)
+  const top = newestPerFamily(all)
+  assert.ok(top.length < all.length)
+  assert.ok(top.length <= 6, `expected a short list, got ${top.length}`)
 })

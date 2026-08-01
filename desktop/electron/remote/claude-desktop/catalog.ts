@@ -228,30 +228,34 @@ export function labelFor(models: readonly ClaudeModel[], id: string | null | und
 }
 
 /**
- * The models worth offering: everything at the TOP TWO distinct ranks.
+ * The models worth offering: the NEWEST of each family.
  *
- * The bundle lists 17, including models the app has merely heard of — Sonnet
- * 3.5, Opus 4, Opus 4.1. Showing all of them buries the current ones and
- * offers versions this app almost certainly no longer runs.
+ * Derived by matching the real menu, not by reasoning. Claude Desktop's own
+ * dropdown was read off-screen and shows exactly four:
  *
- * Top-two DISTINCT ranks rather than a fixed number or a hardcoded floor, so it
- * follows the app: when ranks move up (7s and 8s), the cut moves with them and
- * nothing here needs editing. That is the same property the catalogue itself
- * has, which is the whole reason we read it instead of writing a list.
+ *     Fable 5    Opus 5    Sonnet 5    Haiku 4.5
  *
- * CAVEAT, and it is not small: `advisor_rank` is Anthropic's field and the app
- * never visibly consumes it, so its exact meaning is inferred. Ranks correlate
- * with recency and capability (Haiku 4.5 at 1 outranks Opus 4.5 at 0, which is
- * hard to read as pure capability). Treat this as a sensible cut, not a
- * statement about what the app offers — only its own menu can say that, and
- * that menu is not reachable over accessibility.
+ * which is one per family, highest rank within it. The bundle lists 17,
+ * including versions the app has merely heard of (Sonnet 3.5, Opus 4, Opus 4.1)
+ * — showing those buries the current ones and offers models it no longer runs.
+ *
+ * A top-TWO-RANKS cut was tried first and the app disagreed with it: it offered
+ * Opus 4.7 and Opus 4.8, which are not in the menu, and HID Sonnet 5 and
+ * Haiku 4.5, which are. Per-family matches on all four.
+ *
+ * It is still one model out. This also yields Mythos 5 (its own family, rank 5)
+ * which the menu does NOT show — presumably plan-gated, and nothing on disk
+ * says so. That is why picking verifies and why a model that fails to select is
+ * remembered as unavailable rather than offered forever.
  */
-export function topRanked(models: readonly ClaudeModel[]): ClaudeModel[] {
-  const ranks = [...new Set(models.map((m) => m.rank))].sort((a, b) => b - a)
-  if (ranks.length <= 2) return [...models]
-  const keep = new Set(ranks.slice(0, 2))
-  return models.filter((m) => keep.has(m.rank))
+export function newestPerFamily(models: readonly ClaudeModel[]): ClaudeModel[] {
+  const best = new Map<string, ClaudeModel>()
+  for (const m of models) {
+    const cur = best.get(m.family)
+    if (!cur || m.rank > cur.rank) best.set(m.family, m)
+  }
+  return [...best.values()].sort((a, b) => b.rank - a.rank || a.label.localeCompare(b.label))
 }
 
-/** Reset the cache. Tests only. */
+/** Reset the cache. Tests only. *//** Reset the cache. Tests only. */
 export function __resetCatalogCache(): void { cache = null }

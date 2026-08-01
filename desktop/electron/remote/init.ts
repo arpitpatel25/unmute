@@ -34,7 +34,7 @@ import { CodexDesktopDriver } from './codex/driver'
 import { ClaudeDesktopDriver } from './claude-desktop/driver'
 import { ClaudeDesktopAx } from './claude-desktop/ax'
 import { ClaudeActuator } from './claude-desktop/actuate'
-import { readCatalog as readClaudeCatalog, topRanked as topRankedClaudeModels } from './claude-desktop/catalog'
+import { readCatalog as readClaudeCatalog, newestPerFamily as offeredClaudeModels } from './claude-desktop/catalog'
 import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
@@ -401,6 +401,84 @@ export async function claudeCliAvailable(): Promise<boolean> {
   if (claudeCliCache?.ok !== ok) log.event('claude-cli-availability', { ok })
   claudeCliCache = { at: Date.now(), ok }
   return ok
+}
+
+/**
+ * The Claude Desktop models to OFFER, minus any proven unavailable.
+ *
+ * Per-family matches the real menu for four of five. The fifth — Mythos 5 —
+ * is in the bundle and not in the menu, and nothing on disk says which. So a
+ * model that FAILS to select is remembered and stops being offered: the list
+ * corrects itself from what the app actually does, instead of us guessing which
+ * entries are plan-gated.
+ */
+async function offeredClaudeDesktopModels(): Promise<Array<{ id: string; label: string; effortLevels: string[]; defaultEffort: string | null }>> {
+  const all = offeredClaudeModels(await readClaudeCatalog())
+  const dead = new Set((settings.get('claudeDesktopUnavailableModels' as never) as string[] | undefined) ?? [])
+  return all.filter((m) => !dead.has(m.label))
+}
+
+/**
+ * Positions we have CONFIRMED in Claude Desktop's model menu.
+ *
+ * The menu cannot be read — it is invisible to accessibility — so a position is
+ * a hypothesis derived from the offered order, and the popup label afterwards
+ * is the answer. Every attempt teaches something: a success confirms a
+ * position, and a miss reveals which model that position actually holds. Both
+ * are recorded, so the mapping converges on the truth after a pick or two
+ * rather than staying a guess forever.
+ */
+function claudeModelPositions(): Record<string, number> {
+  return (settings.get('claudeDesktopModelPositions' as never) as Record<string, number> | undefined) ?? {}
+}
+function learnClaudeModelPosition(label: string, position: number): void {
+  const map = claudeModelPositions()
+  if (map[label] === position) return
+  map[label] = position
+  settings.set('claudeDesktopModelPositions' as never, map as never)
+  log.event('claude-desktop-model-position-learned', { label, position })
+}
+
+/**
+ * Switch Claude Desktop's model, learning the menu as we go.
+ *
+ * Steals focus — unavoidable: the popup opens only for a real click, and its
+ * menu is driven by arrow keys. Reading stays free; this is the one write.
+ */
+async function setClaudeDesktopModel(id: string): Promise<void> {
+  if (!claudeActuator) return
+  const offered = await offeredClaudeDesktopModels()
+  const target = offered.find((m) => m.id === id)
+  if (!target) { log.warn('claude-desktop-model-unknown', { id }); return }
+
+  const learned = claudeModelPositions()
+  // Learned position if we have one; otherwise its place in the offered order.
+  const guess = learned[target.label] ?? (offered.findIndex((m) => m.id === id) + 1)
+
+  const res = await claudeActuator.setModel(guess, target.label).catch(() => ({ ok: false as const, reason: 'threw' }))
+  if (res.ok) {
+    learnClaudeModelPosition(target.label, guess)
+    void pushPillChips()
+    return
+  }
+
+  // A miss still teaches: we now know which model sits at `guess`.
+  const landed = (res as { landedOn?: string }).landedOn
+  if (landed) {
+    learnClaudeModelPosition(landed, guess)
+    const known = claudeModelPositions()[target.label]
+    if (known && known !== guess) {
+      const retry = await claudeActuator.setModel(known, target.label).catch(() => ({ ok: false as const }))
+      if (retry.ok) { void pushPillChips(); return }
+    }
+  } else {
+    // Nothing landed at all — the app never offered it. Stop offering it too.
+    const dead = new Set((settings.get('claudeDesktopUnavailableModels' as never) as string[] | undefined) ?? [])
+    dead.add(target.label)
+    settings.set('claudeDesktopUnavailableModels' as never, [...dead] as never)
+    log.warn('claude-desktop-model-unavailable', { label: target.label, note: 'in the bundle, not in the menu — no longer offered' })
+  }
+  void pushPillChips()
 }
 
 async function agentAvailability(): Promise<AgentAvailability> {
@@ -1055,7 +1133,7 @@ async function pushPillChips(): Promise<void> {
       // through to Claude Code's list below would offer aliases ('opus',
       // 'opusplan') that this app does not use — the same wrong-list bug the
       // Codex branch above exists to prevent, one backend later.
-      const models = topRankedClaudeModels(await readClaudeCatalog())
+      const models = await offeredClaudeDesktopModels()
       chips.modelOptions = models.map((m) => ({
         id: m.id,
         label: m.label,
@@ -2354,8 +2432,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // the CLAUDE CODE model setting instead — changing the model your CLI
           // tasks run on, from a menu that was showing a different backend.
           if ((settings.get('agent') as AgentKind) === 'claude-code-desktop') {
-            log.event('model-pick-ignored', { model: m, agent: 'claude-code-desktop', reason: 'no write path to the app' })
-            void pushPillChips()
+            void setClaudeDesktopModel(m)
             return
           }
           const model = isSelectableModel(m) ? m : (settings.get('model') || getModels().doerDefault)
