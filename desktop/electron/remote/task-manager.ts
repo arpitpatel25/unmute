@@ -1059,6 +1059,42 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
+   * One composer, two meanings — the same rule Codex already follows.
+   *
+   * If the task is stopped on a permission prompt, what the user typed is an
+   * ANSWER to that prompt and must be pressed there. Sending it as a message
+   * would leave the dialog still waiting AND drop a stray line into their
+   * conversation.
+   *
+   * Matching is done against the option labels the CARD showed, case- and
+   * shortcut-insensitive, because the labels carry their own digits ("Deny 1",
+   * "Allow once 3 ⌘ ⏎") and nobody types those. Anything that is not one of the
+   * offered options is treated as an ordinary reply — a user answering "no, do
+   * it differently" must not be silently mapped onto "Deny".
+   */
+  private async answerOrSendClaudeDesktop(id: string, text: string): Promise<void> {
+    const task = this.tasks.get(id)
+    if (!task) return
+    const tlog = log.child({ taskId: id })
+    const consent = task.claudeConsent
+
+    if (consent?.options.length) {
+      const said = text.trim().toLowerCase()
+      const match = consent.options.find((label) => {
+        const bare = label.toLowerCase().replace(/[0-9⌘⏎]/g, '').replace(/\s+/g, ' ').trim()
+        return bare === said || (said.length >= 3 && bare.startsWith(said))
+      })
+      if (match) {
+        tlog.event('claude-desktop-answer-from-composer', { option: match })
+        await this.answerClaudeDesktop(id, match)
+        return
+      }
+      tlog.event('claude-desktop-reply-while-blocked', { note: 'not one of the offered options' })
+    }
+    await this.sendClaudeDesktop(id, text)
+  }
+
+  /**
    * Send a message to a Claude desktop conversation.
    *
    * Addressed by the task's TITLE, because that is what the sidebar row carries
@@ -1893,6 +1929,15 @@ export class TaskManager extends EventEmitter {
     // exists in the app). followUpCodexDesktop already does the send, the
     // consent clock, and the optimistic transition.
     const target = this.tasks.get(id)
+    // Claude desktop FIRST. isExternalAgent is true for every driver backend,
+    // so without this a Claude Desktop reply fell into the Codex path below and
+    // was dropped by its `!codexThreadId` guard — the user types, nothing
+    // happens, nothing is logged. Same shape as the poll and probe bugs.
+    if (target && target.agent === 'claude-code-desktop') {
+      tlog.ui('task-row.answer-submitted', { answer: userAnswer })
+      void this.answerOrSendClaudeDesktop(id, userAnswer)
+      return
+    }
     if (target && isExternalAgent(target.agent)) {
       tlog.ui('task-row.answer-submitted', { answer: userAnswer })
       // An outstanding APPROVAL is answered through the hook, not the composer:

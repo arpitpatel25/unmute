@@ -697,3 +697,71 @@ test('a rehydrated card can still poll', async () => {
   assert.equal(m2.get(id)!.threadContext, 'hi', 'the poll must have run')
   m2.killAll(); m2.stopMaintenance()
 })
+
+// ── the composer: reply vs answer ─────────────────────────────────────────
+
+async function blockedManager(base: string) {
+  const d = fakeDriver({ tasks: [{ title: 'Fix login', lastFocusedAt: Date.now() }], snapshots: [{ updatedAt: 5000 }] })
+  const act = fakeActuatorFull()
+  const answered: string[] = []
+  ;(act as unknown as { answerConsent: unknown }).answerConsent =
+    async (_c: unknown, label: string) => { answered.push(label); return { ok: true } }
+  const m = await managerFull(d, fakeAx({ consent: { question: 'Allow Claude to write a file?' } }), act, base)
+  const [id] = await m.adoptClaudeDesktop()
+  await pollForced(m, id)
+  return { m, id, act, answered }
+}
+
+test('typing an option label while blocked ANSWERS the prompt', async () => {
+  // Sending it as a message would leave the dialog waiting AND add a stray
+  // line to the user's conversation.
+  const { m, id, act, answered } = await blockedManager(await tmp())
+  assert.equal(m.get(id)!.state, 'needs-user')
+  m.answer(id, 'deny')                       // no digit, lowercase — as a human types
+  await new Promise((r) => setTimeout(r, 30))
+  assert.deepEqual(answered, ['Deny 1'], 'matched to the real option label')
+  assert.deepEqual(act.sent, [], 'and NOT sent as a message')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('typing something else while blocked is a REPLY, not a forced Deny', async () => {
+  // "no, do it differently" must never be silently mapped onto an option.
+  const { m, id, answered } = await blockedManager(await tmp())
+  m.answer(id, 'no, do it differently')
+  await new Promise((r) => setTimeout(r, 30))
+  assert.deepEqual(answered, [], 'must not press anything')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a reply on an unblocked task is sent as a message', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login' }], snapshots: [{ updatedAt: 5000 }] })
+  const act = fakeActuatorFull()
+  const m = await managerFull(d, fakeAx(), act, base)
+  const [id] = await m.adoptClaudeDesktop()
+  m.answer(id, 'try the other branch')
+  await new Promise((r) => setTimeout(r, 30))
+  assert.deepEqual(act.sent, [{ title: 'Fix login', text: 'try the other branch' }])
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a Claude desktop reply never reaches the Codex path', async () => {
+  // isExternalAgent is true for BOTH driver backends, so without explicit
+  // routing the reply fell into followUpCodexDesktop and was dropped silently.
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login' }], snapshots: [{ updatedAt: 5000 }] })
+  const act = fakeActuatorFull()
+  const m = new TaskManager({
+    executorFactory: () => { throw new Error('no executor') },
+    claudeDesktopDriver: d as never,
+    claudeDesktopAx: fakeAx() as never,
+    claudeActuator: act as never,
+    codexDriver: { snapshot: async () => { throw new Error('CODEX PATH — must not be reached') } } as never,
+    baseDir: base, userKey: 'test', pollMs: 10_000,
+  })
+  const [id] = await m.adoptClaudeDesktop()
+  m.answer(id, 'hello')
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(act.sent.length, 1, 'went to the Claude actuator')
+  m.killAll(); m.stopMaintenance()
+})
