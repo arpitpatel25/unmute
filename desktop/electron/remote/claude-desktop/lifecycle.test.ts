@@ -765,3 +765,37 @@ test('a Claude desktop reply never reaches the Codex path', async () => {
   assert.equal(act.sent.length, 1, 'went to the Claude actuator')
   m.killAll(); m.stopMaintenance()
 })
+
+// ── dispatch ──────────────────────────────────────────────────────────────
+
+test('dispatching to claude-code-desktop NEVER touches the Codex path', async () => {
+  // isExternalAgent is true for both driver backends, so without explicit
+  // routing this went to dispatchCodexDesktop and tried to talk to Codex over
+  // CDP about a conversation that does not exist there.
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [] })
+  const act = { ...fakeActuatorFull(), createTask: async () => {
+    ;(d as unknown as { push(t: Record<string, unknown>): void }).push({ title: 'From Unmute' })
+    return { ok: true as const }
+  } }
+  const m = new TaskManager({
+    executorFactory: () => { throw new Error('no PTY for a driven backend') },
+    claudeDesktopDriver: d as never,
+    claudeDesktopAx: fakeAx() as never,
+    claudeActuator: act as never,
+    codexDriver: { createTask: async () => { throw new Error('CODEX PATH — must not be reached') } } as never,
+    baseDir: base, userKey: 'test', pollMs: 10_000,
+  })
+  const id = await m.dispatch('do the thing', { agent: 'claude-code-desktop' })
+  assert.equal(m.get(id)!.agent, 'claude-code-desktop')
+  assert.equal(m.get(id)!.name, 'From Unmute')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a failed creation throws a typed reason rather than a silent success', async () => {
+  const base = await tmp()
+  const act = { ...fakeActuatorFull(), createTask: async () => ({ ok: false as const, reason: 'tree-dead' as const }) }
+  const m = await managerFull(fakeDriver({ tasks: [] }), fakeAx(), act, base)
+  await assert.rejects(() => m.dispatch('x', { agent: 'claude-code-desktop' }), /CLAUDE_DESKTOP_UNAVAILABLE: tree-dead/)
+  m.killAll(); m.stopMaintenance()
+})

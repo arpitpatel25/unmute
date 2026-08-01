@@ -520,6 +520,19 @@ export class TaskManager extends EventEmitter {
     // dispatch payload — presumes Unmute spawns and owns the process. Codex
     // desktop is an app we drive, so it takes a different path entirely rather
     // than threading conditionals through 200 lines of PTY setup.
+    // Claude desktop is a different app again: there is no thread to create via
+    // an API, only a window to drive. Routing it here rather than letting
+    // isExternalAgent send it to dispatchCodexDesktop, which would try to talk
+    // to Codex over CDP about a conversation that does not exist there.
+    if (opts.agent === 'claude-code-desktop') {
+      const res = await this.createClaudeDesktop(intent)
+      if (!res.ok) throw new Error(`CLAUDE_DESKTOP_UNAVAILABLE: ${res.reason ?? 'unknown'}`)
+      if (res.id) return res.id
+      // Created, but the store had not written it yet. The work HAS started —
+      // saying otherwise is what produced a duplicate run on the Codex side —
+      // so surface the same typed reason instead of a false failure.
+      throw new Error('CLAUDE_DESKTOP_ID_UNRESOLVED')
+    }
     if (isExternalAgent(opts.agent)) return this.dispatchCodexDesktop(intent, opts)
     const id = randomUUID()
     // Mint the Claude session id up front so we own a stable handle to the

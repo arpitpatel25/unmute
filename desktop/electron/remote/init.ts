@@ -403,7 +403,7 @@ export async function claudeCliAvailable(): Promise<boolean> {
 }
 
 async function agentAvailability(): Promise<AgentAvailability> {
-  const agents: Array<'claude' | 'codex-desktop'> = []
+  const agents: ProviderId[] = []
   if (await claudeCliAvailable()) agents.push('claude')
   let codexProjects: string[] | undefined
   if (codexDriver) {
@@ -415,13 +415,26 @@ async function agentAvailability(): Promise<AgentAvailability> {
       }
     } catch { /* availability is best-effort; absence just means "not offered" */ }
   }
+  // Claude desktop, on the same terms: offered only when its own driver says it
+  // is reachable. This list used to be a two-member literal with two pushes, so
+  // a third backend could never appear in the picker however ready it was —
+  // which is why the only way to get a Claude Desktop task was to start the
+  // chat in that app and wait for the adoption sweep.
+  if (claudeDesktopDriver) {
+    try {
+      if ((await claudeDesktopDriver.availability()).ok) agents.push('claude-code-desktop')
+    } catch { /* same best-effort contract as above */ }
+  }
   // Prefer what the user chose, but never offer a backend they cannot run. With
   // neither present we still report 'claude' so the caller has something to
   // name in an error — reporting an empty list would read as "no agents" to
   // every consumer and hide the real problem.
-  const stored = settings.get('agent')
-  const preferred: 'claude' | 'codex-desktop' =
-    stored === 'codex-desktop' && agents.includes('codex-desktop') ? 'codex-desktop'
+  // Honour the stored choice whenever that backend is actually reachable —
+  // written per-backend, this needed a new clause for every provider and
+  // silently ignored the stored value for any backend nobody had added one for.
+  const stored = settings.get('agent') as ProviderId | undefined
+  const preferred: ProviderId =
+    stored && stored !== 'claude' && agents.includes(stored) ? stored
       : agents.includes('claude') ? 'claude'
       : agents[0] ?? 'claude'
   return { agents, preferred, ...(codexProjects?.length ? { codexProjects } : {}) }

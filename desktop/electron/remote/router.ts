@@ -20,6 +20,7 @@
 // action:'new' with the raw transcript — routing can never block or mis-inject.
 
 import { join } from 'node:path'
+import type { ProviderId } from './providers'
 import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { createLogger } from './log'
@@ -80,10 +81,13 @@ export interface RoutableTask {
  *  may only ever name a backend that appears here — everything else is dropped
  *  at parse, so the user can never be told their task went somewhere it didn't. */
 export interface AgentAvailability {
-  /** Backends the host can dispatch to this instant. */
-  agents: Array<'claude' | 'codex-desktop'>
+  /** Backends the host can dispatch to this instant. ProviderId, not a
+   *  hand-written copy — spelled literally, this list could never grow past the
+   *  two backends it named, which is why a third stayed invisible to the picker
+   *  no matter how ready it was. */
+  agents: ProviderId[]
   /** The user's current picker default — used when they don't name one. */
-  preferred: 'claude' | 'codex-desktop'
+  preferred: ProviderId
   /** Live Codex project names, for "put it in the unmute project". */
   codexProjects?: string[]
 }
