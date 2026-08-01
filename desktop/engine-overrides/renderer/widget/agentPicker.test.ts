@@ -121,3 +121,49 @@ describe('the picker moved to the model control, and the rules moved with it', (
     assert.equal(nextAgentId({ ...BOTH, current: 'codex-desktop' }), 'claude')
   })
 })
+
+describe('a third backend', () => {
+// ── a third backend ───────────────────────────────────────────────────────
+
+const THREE = {
+  current: 'claude',
+  options: [
+    { id: 'claude', label: 'Claude Code', available: true, installed: true },
+    { id: 'codex-desktop', label: 'Codex', available: true, installed: true },
+    { id: 'claude-code-desktop', label: 'Claude desktop', available: true, installed: true },
+  ],
+}
+
+it('a third backend is offered — the picker is not a two-way toggle', () => {
+  assert.deepEqual(offeredAgents(THREE).map((o) => o.id),
+    ['claude', 'codex-desktop', 'claude-code-desktop'])
+})
+
+it('cycling visits every backend and wraps', () => {
+  // nextAgentId is what the chip tap uses; with three it must not stop at two.
+  assert.equal(nextAgentId(THREE), 'codex-desktop')
+  assert.equal(nextAgentId({ ...THREE, current: 'codex-desktop' }), 'claude-code-desktop')
+  assert.equal(nextAgentId({ ...THREE, current: 'claude-code-desktop' }), 'claude')
+})
+
+it('the label follows the selected backend', () => {
+  assert.equal(currentAgentLabel({ ...THREE, current: 'claude-code-desktop' }), 'Claude desktop')
+})
+
+it('an installed-but-unavailable third backend is still offered, so it can be connected', () => {
+  const s = { current: 'claude', options: [
+    ...THREE.options.slice(0, 2),
+    { id: 'claude-code-desktop', label: 'Claude desktop', available: false, installed: true },
+  ] }
+  assert.ok(offeredAgents(s).some((o) => o.id === 'claude-code-desktop'))
+  assert.equal(currentAgentConnected({ ...s, current: 'claude-code-desktop' }), false)
+})
+
+it('a backend that is neither available nor installed is hidden', () => {
+  const s = { current: 'claude', options: [
+    ...THREE.options.slice(0, 2),
+    { id: 'claude-code-desktop', label: 'Claude desktop', available: false, installed: false },
+  ] }
+  assert.equal(offeredAgents(s).length, 2)
+})
+})

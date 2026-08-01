@@ -34,6 +34,7 @@ import { CodexDesktopDriver } from './codex/driver'
 import { ClaudeDesktopDriver } from './claude-desktop/driver'
 import { ClaudeDesktopAx } from './claude-desktop/ax'
 import { ClaudeActuator } from './claude-desktop/actuate'
+import { readCatalog as readClaudeCatalog } from './claude-desktop/catalog'
 import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
@@ -3330,31 +3331,63 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // Logged because this decides whether the picker is visible AT ALL, and a
     // silent empty result is indistinguishable from "feature missing" (field
     // report 2026-07-25: chip never appeared, nothing in any log to say why).
-    const installed = codexDriver ? await codexDriver.isInstalled().catch(() => false) : false
-    const avail = codexDriver ? await codexDriver.availability().catch(() => ({ ok: false, reason: 'not-installed' as const })) : { ok: false, reason: 'not-installed' as const }
+    //
+    // Built from probeBackends() — the SAME probe the setup card uses, which
+    // walks the provider registry and asks each backend's own driver. This used
+    // to be a hand-written two-entry array, so a third backend was invisible
+    // here even once it was registered, installed and ready. One probe, one
+    // answer, and a new provider appears in both places or neither.
+    const probes = await probeBackends()
     const result = {
       current: (settings.get('agent') as AgentKind) ?? 'claude',
-      options: [
-        { id: 'claude', label: 'Claude Code', available: true },
-        {
-          id: 'codex-desktop',
-          label: 'Codex',
-          // Only offered when it can actually take work right now.
-          available: avail.ok,
-          installed,
-          // 'not-armed' is the actionable one — the app is there, it just wasn't
-          // launched with the debug port, so we can't drive it until it relaunches.
-          reason: avail.ok ? undefined : ('reason' in avail ? avail.reason : 'not-installed'),
-        },
-      ],
+      options: probes.map((p) => ({
+        id: p.id,
+        label: p.label,
+        // Only offered when it can actually take work right now.
+        available: p.ready,
+        installed: p.installed,
+        // 'not-armed' is the actionable one — the app is there, it just wasn't
+        // launched the way we need, so we can't drive it until it relaunches.
+        ...(p.ready ? {} : { reason: p.reason ?? 'not-installed' }),
+      })),
     }
     log.event('agent-options', {
       current: result.current,
-      installed,
-      codexAvailable: avail.ok,
       offered: result.options.filter((o) => o.available || o.installed).length,
+      backends: result.options.map((o) => ({ id: o.id, available: o.available, reason: o.reason ?? null })),
     })
     return result
+  })
+
+  /**
+   * Models for ONE backend, in that backend's own vocabulary.
+   *
+   * Deliberately per-backend rather than one global list: Claude Code's aliases
+   * ('opus', 'opusplan') and Claude Desktop's display names ('Opus 5', with
+   * effort as a separate axis) are different vocabularies for different apps.
+   * Offering either app the other's list is a picker that lies — pick a model
+   * the target does not have and you silently get something else.
+   */
+  ipcMain.handle('remote:model-options', async (_e, agent: unknown) => {
+    const id = (typeof agent === 'string' ? agent : 'claude') as ProviderId
+    if (id === 'claude-code-desktop') {
+      const models = await readClaudeCatalog()
+      // EMPTY means the bundle could not be read or understood. Falling back to
+      // the Claude Code catalogue here would be the exact lie this avoids, so
+      // the picker shows nothing selectable and the task keeps whatever the
+      // composer is already set to.
+      log.event('model-options', { agent: id, models: models.length })
+      return {
+        agent: id,
+        models: models.map((m) => ({
+          id: m.id, label: m.label, family: m.family,
+          effortLevels: m.effortLevels, defaultEffort: m.defaultEffort,
+        })),
+      }
+    }
+    const catalog = getModelCatalog()
+    log.event('model-options', { agent: id, models: catalog.length })
+    return { agent: id, models: catalog.map((m) => ({ id: m.id, label: m.label, description: m.description })) }
   })
 
   // Explicit "Connect Codex": quits and relaunches Codex WITH the debug port,

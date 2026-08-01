@@ -100,6 +100,8 @@ function remoteModelApi() {
     remoteSetModel?: (m: string) => Promise<string>
     remoteOnModelChanged?: (cb: (model: string) => void) => () => void
     remoteGetModelCatalog?: () => Promise<ModelChoice[]>
+    /** Models for ONE backend, in that backend's own vocabulary. */
+    remoteModelOptions?: (agent: string) => Promise<{ agent: string; models: ModelChoice[] }>
     paywallSetHUDHeight?: (height: number, opts?: { upward?: boolean }) => Promise<boolean>
   }
 }
@@ -171,6 +173,11 @@ function RemoteBadge({ picker, onPickAgent }: {
   // WidgetApp (loaded on capture, updated on tap, refreshed after connect), so
   // the second copy was redundant as well as wrong.
   const isCodex = (picker?.current ?? 'claude') === 'codex-desktop'
+  // WHICH backend's models to ask for. The flat catalogue used to be Claude
+  // Code's, unconditionally — so selecting any other flat-list backend showed
+  // Claude Code's aliases ('opus', 'opusplan'), models that backend may not
+  // have. Asking per-agent is what keeps the list honest.
+  const agentId = picker?.current ?? 'claude'
 
   // Codex's own axes, served from cache so they are there IMMEDIATELY. Reading
   // them live walks Codex's menus (~3s) — a capture is often over before that
@@ -200,10 +207,15 @@ function RemoteBadge({ picker, onPickAgent }: {
     // to 'sonnet', so a pinned / opusplan / default pick showed the WRONG badge
     // while the task actually ran on the real model.)
     void api.remoteGetModel?.().then((m) => { if (typeof m === 'string' && m) setModel(m) })
-    void api.remoteGetModelCatalog?.().then((c) => { if (c && c.length) setCatalog(c) })
+    // Per-backend. An EMPTY list is a real answer meaning "we cannot know what
+    // this app offers" — leave the catalogue empty and show nothing selectable
+    // rather than falling back to another backend's models.
+    void api.remoteModelOptions?.(agentId)
+      .then((r) => setCatalog(r?.models?.length ? r.models as ModelChoice[] : []))
+      .catch(() => setCatalog([]))
     const off = api.remoteOnModelChanged?.((m) => { if (typeof m === 'string' && m) setModel(m) })
     return () => off?.()
-  }, [isCodex])
+  }, [isCodex, agentId])
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current) }, [])
 
   /**

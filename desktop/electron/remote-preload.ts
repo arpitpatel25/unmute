@@ -186,6 +186,13 @@ export const remotePreloadExtensions = {
   remoteGetSettings: (): Promise<RemoteSettingsSnapshot> => ipcRenderer.invoke('remote:get-settings'),
   remoteSetPermissionMode: (mode: 'prompt' | 'auto-approve'): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-permission-mode', mode),
+  /** Models for ONE backend, in that backend's own vocabulary. Claude Desktop
+   *  answers from its own app bundle; Claude Code from the runtime catalogue.
+   *  An empty list means "we cannot know" — show nothing selectable rather than
+   *  another backend's models. */
+  remoteModelOptions: (agent: ProviderId): Promise<{ agent: string; models: Array<{ id: string; label: string; family?: string; description?: string; effortLevels?: string[]; defaultEffort?: string | null }> }> =>
+    ipcRenderer.invoke('remote:model-options', agent),
+
   // ── Claude desktop ──────────────────────────────────────────────────────
   /** Answer the permission prompt a task is stopped on. `option` is the LABEL
    *  the card displayed — not an index — so the choice cannot drift onto a
