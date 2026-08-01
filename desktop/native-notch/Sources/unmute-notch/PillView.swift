@@ -587,7 +587,13 @@ private struct SelectorPanel: View {
     @Binding var open: Bool
 
     private var axes: [PillAxis] { state.modelAxes ?? [] }
-    private var isCodex: Bool { (state.agent ?? "") == "Codex" }
+    /// The SELECTED backend's id, resolved through the options the engine sent.
+    /// Was a label comparison against the literal "Codex", which is both a
+    /// display string and unable to name a third backend.
+    private var agentId: String {
+        state.agentOptions?.first(where: { $0.label == (state.agent ?? "") })?.id ?? "claude"
+    }
+    private var isCodex: Bool { agentId == "codex-desktop" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -598,9 +604,15 @@ private struct SelectorPanel: View {
                 .padding(.horizontal, 10).padding(.top, 3)
 
             HStack(alignment: .top, spacing: 14) {
-                column("Agent", rows: [("Codex", isCodex), ("Claude Code", !isCodex)]) { label in
-                    let want = label == "Codex" ? "codex-desktop" : "claude"
-                    model.emit(.pickAgent(want))
+                // FROM THE ENGINE, not two literals. Written as a fixed pair
+                // this column could never show a third backend however ready it
+                // was — the engine had been offering three for a whole build
+                // and this drew two. Same shape as the Model column below.
+                let agents = state.agentOptions ?? []
+                column("Agent", rows: agents.map { ($0.label, $0.id == agentId) }) { label in
+                    if let o = agents.first(where: { $0.label == label }) {
+                        model.emit(.pickAgent(o.id))
+                    }
                 }
 
                 if isCodex && axes.isEmpty {

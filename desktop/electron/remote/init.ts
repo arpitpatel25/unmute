@@ -963,13 +963,18 @@ async function pushPillChips(): Promise<void> {
     // offering Claude models while Codex was selected. The renderer already
     // solved this with an `isCodex` gate; this is the same gate, on the side
     // that now owns the data.
+    // EVERY reachable backend, from the same probe the picker and setup card
+    // use. This was a two-entry literal, so the pill could not show a third
+    // backend even while agent-options was already offering it.
+    const probes = await probeBackends()
+    const agentOptions = probes.map((p) => ({ id: p.id, label: p.label, available: p.ready }))
+    const selected = agentOptions.find((o) => o.id === agent)
     const chips: PillStateP = {
-      agent: isCodex ? 'Codex' : 'Claude Code',
-      agentConnected: isCodex ? codexOk : true,
-      agentOptions: [
-        { id: 'claude', label: 'Claude Code', available: true },
-        { id: 'codex-desktop', label: 'Codex', available: codexOk },
-      ],
+      // The LABEL comes from the registry rather than a ternary, so a new
+      // backend names itself instead of falling through to "Claude Code".
+      agent: selected?.label ?? providerOf(agent).label,
+      agentConnected: selected?.available ?? true,
+      agentOptions,
       stagedCount: stagedAttachments.length + pendingClipboardCount,
     }
 
@@ -1044,6 +1049,24 @@ async function pushPillChips(): Promise<void> {
       // RAW is not offered on Codex at all — dispatchCodexDesktop returns before
       // `mode` is ever read and then records 'managed', so there is nothing for
       // raw to skip. A control that cannot act is worse than no control.
+      chips.raw = null
+    } else if (agent === 'claude-code-desktop') {
+      // Claude desktop's OWN catalogue, read from its app bundle. Falling
+      // through to Claude Code's list below would offer aliases ('opus',
+      // 'opusplan') that this app does not use — the same wrong-list bug the
+      // Codex branch above exists to prevent, one backend later.
+      const models = await readClaudeCatalog()
+      chips.modelOptions = models.map((m) => ({
+        id: m.id,
+        label: m.label,
+        detail: m.effortLevels.length ? `effort: ${m.effortLevels.join(' · ')}` : '',
+      }))
+      // An EMPTY catalogue means the bundle could not be parsed. Show nothing
+      // selectable and keep whatever the composer is already set to — a wrong
+      // list is worse than no list.
+      chips.model = models.length ? '' : 'From Claude Desktop'
+      chips.modelAxes = []
+      // Unmute owns no process here, so there is no injection for raw to skip.
       chips.raw = null
     } else {
       const catalog = getModelCatalog()
