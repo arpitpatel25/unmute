@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   isTreeAlive, readRunning, readConsent, readState, ClaudeDesktopAx,
-  readSidebarRows, statusForTitle, STUB_NODE_CEILING, type AxNode,
+  readSidebarRows, statusForTitle, readComposerSettings, STUB_NODE_CEILING, type AxNode,
 } from './ax'
 
 // Node shapes match what the native addon actually returns (see native-ax
@@ -285,4 +285,46 @@ test('same-depth buttons scattered far apart are chrome, not options', () => {
     n(420, 21, 'AXButton', 'Two'),
   ]
   assert.equal(readConsent(nodes), null)
+})
+
+// ── the composer's current settings ───────────────────────────────────────
+
+test('reads the model and effort popups — real labels from a live window', () => {
+  // Captured from the running app: the composer row carries these four popups.
+  const n = (role: string, label: string): AxNode =>
+    ({ id: nextId++, depth: 25, role, label, actions: ['AXPress'] })
+  const s = readComposerSettings([
+    n('AXPopUpButton', 'Manual'),
+    n('AXPopUpButton', 'Opus 5'),
+    n('AXPopUpButton', 'Effort: High'),
+    n('AXPopUpButton', 'Usage: context 5%, plan 36%'),
+  ])
+  assert.equal(s.effort, 'High')
+  assert.ok(s.model === 'Opus 5' || s.model === 'Manual', `got ${s.model}`)
+})
+
+test('labelled controls are never mistaken for the model', () => {
+  const n = (label: string): AxNode =>
+    ({ id: nextId++, depth: 25, role: 'AXPopUpButton', label, actions: ['AXPress'] })
+  const s = readComposerSettings([
+    n('More options for Season preference questions'),
+    n('Filter'),
+    n('Dictation settings'),
+    n('Usage: context 5%, plan 36%'),
+  ])
+  assert.equal(s.model, null, 'no bare popup ⇒ no model, rather than a wrong one')
+})
+
+test('no model names are hardcoded — an unseen model is read straight through', () => {
+  const s = readComposerSettings([
+    { id: 1, depth: 25, role: 'AXPopUpButton', label: 'Something 9', actions: ['AXPress'] },
+  ])
+  assert.equal(s.model, 'Something 9')
+})
+
+test('a dead tree yields nulls, not a stale guess', async () => {
+  const ax = new ClaudeDesktopAx({
+    bridge: fakeBridge(() => ({ nodes: filler(10) })) as never,
+  })
+  assert.deepEqual(await ax.composer(), { model: null, effort: null })
 })

@@ -42,8 +42,33 @@
 // select. Where the catalogue and the live composer disagree, the composer wins
 // — it is the only thing that knows what actually happened.
 
-import { promises as fs } from 'node:fs'
+import { promises as nodeFs } from 'node:fs'
 import { createLogger } from '../log'
+
+/**
+ * Unpatched fs, because the file we read IS an .asar.
+ *
+ * Electron patches `fs` so any path containing `.asar` is treated as an ARCHIVE
+ * TO LOOK INSIDE rather than a file to read. Reading Claude Desktop's bundle
+ * with the normal fs therefore asks for an empty path *within* that archive and
+ * fails:
+ *
+ *   ENOENT,  not found in /Applications/Claude.app/Contents/Resources/app.asar
+ *
+ * `original-fs` is Electron's own escape hatch and is unpatched. Resolved
+ * through a variable so a bundler cannot try to follow it, and falling back to
+ * node:fs outside Electron — which is exactly where the tests run, and why this
+ * bug could not surface until the code was inside a packaged app.
+ */
+function archiveFs(): typeof nodeFs {
+  try {
+    const req = eval('require') as NodeRequire
+    const mod = req('original-fs') as { promises: typeof nodeFs }
+    return mod.promises ?? nodeFs
+  } catch {
+    return nodeFs
+  }
+}
 
 const log = createLogger('claude-desktop-catalog')
 
@@ -155,6 +180,7 @@ let cache: { key: string; models: ClaudeModel[] } | null = null
  * must degrade to raw ids rather than substituting a list of their own.
  */
 export async function readCatalog(asarPath = DEFAULT_ASAR_PATH): Promise<ClaudeModel[]> {
+  const fs = archiveFs()
   let key: string
   try {
     const st = await fs.stat(asarPath)

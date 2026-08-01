@@ -1064,7 +1064,14 @@ async function pushPillChips(): Promise<void> {
       // An EMPTY catalogue means the bundle could not be parsed. Show nothing
       // selectable and keep whatever the composer is already set to — a wrong
       // list is worse than no list.
-      chips.model = models.length ? '' : 'From Claude Desktop'
+      // The pill shows what a NEW task will actually start on: the composer's
+      // own current setting, read live and backgrounded. Falling back to a
+      // placeholder only when the app is not readable — an empty chip would
+      // read as "no model", which is never true here.
+      const composer = claudeDesktopAx ? await claudeDesktopAx.composer().catch(() => ({ model: null, effort: null })) : { model: null, effort: null }
+      chips.model = composer.model
+        ? (composer.effort ? `${composer.model} · ${composer.effort}` : composer.model)
+        : 'From Claude Desktop'
       chips.modelAxes = []
       // Unmute owns no process here, so there is no injection for raw to skip.
       chips.raw = null

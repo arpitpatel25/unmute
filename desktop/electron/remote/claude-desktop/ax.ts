@@ -211,6 +211,51 @@ export function readConsent(nodes: AxNode[], opts: { maxOptions?: number; window
   return null
 }
 
+/** What the composer is currently set to — the settings a NEW conversation
+ *  inherits. Null for either when the control is not on screen. */
+export interface ClaudeComposerSettings {
+  /** e.g. 'Opus 5' — the app's own display name, verbatim. */
+  model: string | null
+  /** e.g. 'High' — effort is a SEPARATE axis here, unlike the Claude Code CLI. */
+  effort: string | null
+}
+
+/**
+ * Read the composer's model and effort popups.
+ *
+ * Free and backgrounded — these are just labels on controls already in the tree
+ * we walk every poll. No press, no focus, no menu.
+ *
+ * SCOPE: these belong to the conversation Claude Desktop currently has OPEN,
+ * because only one is ever addressable. That makes them right for "what will a
+ * NEW task start on" and wrong for a per-card chip — a card's own model comes
+ * from the session store instead. Attributing the focused conversation's model
+ * to every card is the same mistake as attributing its permission prompt.
+ *
+ * Matched by SHAPE, not by model name: the model popup is the one whose label
+ * is neither prefixed nor a known control. Listing model names here would be
+ * the hardcoded catalogue this backend exists to avoid.
+ */
+export function readComposerSettings(nodes: AxNode[]): ClaudeComposerSettings {
+  let model: string | null = null
+  let effort: string | null = null
+  for (const n of nodes) {
+    if (n.role !== 'AXPopUpButton') continue
+    const l = n.label.trim()
+    if (!l) continue
+    // 'Effort: High' — the app labels this axis explicitly.
+    const eff = /^Effort:\s*(.+)$/i.exec(l)
+    if (eff) { effort ??= eff[1].trim(); continue }
+    // Everything else with a colon or a known prefix is another control
+    // ('Usage: context 5%…', 'More options for …', 'Dictation settings').
+    if (l.includes(':') || /^(More|Filter|Dictation)\b/i.test(l)) continue
+    // The composer's own controls sit deep, beside the text area; the sidebar's
+    // row menus sit shallower. Take the FIRST bare popup at composer depth.
+    model ??= l
+  }
+  return { model, effort }
+}
+
 /** One sidebar row: a task, and whatever status the app is showing beside it. */
 export interface ClaudeSidebarRow {
   /** The task title, as matched against the store. */
@@ -342,6 +387,13 @@ export class ClaudeDesktopAx {
   /** Live state, or a treeAlive:false snapshot meaning "we know nothing". */
   async state(): Promise<ClaudeAxState> {
     return readState(await this.nodes())
+  }
+
+  /** The composer's current model/effort, or nulls when the tree is not alive. */
+  async composer(): Promise<ClaudeComposerSettings> {
+    const nodes = await this.nodes()
+    if (!isTreeAlive(nodes)) return { model: null, effort: null }
+    return readComposerSettings(nodes)
   }
 
   /** Per-task status for every supplied title, from ONE read. Empty when the
