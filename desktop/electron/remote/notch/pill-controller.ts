@@ -22,7 +22,7 @@ import { createLogger } from '../log'
 const log = createLogger('pill-controller')
 
 export type PillPhase =
-  | 'hidden' | 'recording' | 'processing' | 'output' | 'output-fallback' | 'too-short' | 'cancelled' | 'error'
+  | 'hidden' | 'recording' | 'paused' | 'processing' | 'output' | 'output-fallback' | 'too-short' | 'cancelled' | 'error'
 export type PillKind = 'dictation' | 'remote'
 export type PillOfflineReason =
   | 'not_signed_in' | 'no_subscription' | 'payment_failed'
@@ -146,6 +146,15 @@ export class PillController {
       state: { ...this.last, level, ...(elapsed !== undefined ? { elapsed } : {}) },
     })
   }
+
+  /** What the surface is showing RIGHT NOW.
+   *
+   *  Read by exactly one caller: the scratchpad's broadcast, which takes a
+   *  'paused' pill back down once the pad it was announcing is gone. It has to
+   *  ask rather than remember, because the capture renderer pushes phases
+   *  through the same controller — a caller keeping its own flag would happily
+   *  hide a live recording. */
+  get phase(): PillPhase | undefined { return this.last.phase }
 
   /** Tear the surface down. */
   hide(): void {

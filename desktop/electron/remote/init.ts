@@ -1196,6 +1196,16 @@ function broadcastScratchpad(): void {
   // the preload group behind it: a second shape of the same concept, reachable
   // and unfiltered, is how the filtered one gets bypassed later.
   try { notchController?.notifyScratchpad(scratchpadPayload(s)) } catch { /* helper going away */ }
+  // A PAUSED PILL OUTLIVES THE PAD IT WAS ANNOUNCING UNLESS SOMETHING TAKES IT
+  // DOWN. Nothing calls hideNativePill on a delivery, a discard or a disarm —
+  // those end through here — so a pill left saying "Paused" over an empty
+  // screen would be the same lie in the other direction. Only ever touched when
+  // the pill is ACTUALLY showing paused: the renderer pushes recording and
+  // processing through the same controller, and hiding one of those would kill
+  // a live capture's surface.
+  try {
+    if (pillController?.phase === 'paused' && !pausedPillWanted()) pillController.hide()
+  } catch { /* helper going away */ }
   scheduleSettleRebroadcast(s)
 }
 
@@ -1510,9 +1520,51 @@ function initCaptureWatchers(): void {
  * sessionManager funnels through here — which matters, because there are more
  * than twenty of them (timeouts, cancels, undo expiry, quiet-miss, engine
  * failures) and the renderer only models a subset.
+ *
+ * EXCEPT WHEN THE SESSION IS PAUSED, NOT OVER. An armed stop holds the work on
+ * the pad and the same key resumes the same dictation — but the pill vanished
+ * 1.5s later like every other terminal state, which reads as "session over" for
+ * something that is a pause. So this one hide is answered with a 'paused' pill
+ * instead: same surface, clock swapped for the word, dot amber. Nothing about
+ * the capture changes; only the surface stops lying.
+ *
+ * IT IS DECIDED HERE rather than at the call site because there are twenty-odd
+ * call sites and only one of them knows about the scratchpad. The condition is
+ * the same one that decides whether a pad is on screen at all (heldForSurface),
+ * so the pill and the pad can never disagree about whether there is work.
  */
 export function hideNativePill(): void {
+  if (pausedPillWanted()) {
+    // The transient narration of the capture that just ended goes with it —
+    // coaching about a room the user has stopped speaking into, a timer that is
+    // no longer running. The model/agent/mic chips are left exactly as they
+    // were: they describe where the NEXT stretch will go, which is still true.
+    pillController?.push({
+      phase: 'paused',
+      level: 0,
+      coaching: null,
+      offline: null,
+      micStatus: null,
+      draftOffer: false,
+      engineNotice: false,
+      showDiscardHint: false,
+    })
+    return
+  }
   pillController?.hide()
+}
+
+/** Is there held work behind a paused pill? EXACTLY the rule that decides
+ *  whether the pad is drawn — `heldForSurface` — so the two surfaces cannot
+ *  disagree, plus `armed`, because the pill claims the session is resumable and
+ *  a disarmed pad is not. Never throws: a broken read means the ordinary hide. */
+function pausedPillWanted(): boolean {
+  try {
+    const s = snapshot()
+    return s.armed && heldForSurface(s) !== null
+  } catch {
+    return false
+  }
 }
 
 // ── Voice-as-doorbell (§6.4): one terse spoken headline when a task becomes

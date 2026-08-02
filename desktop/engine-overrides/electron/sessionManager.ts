@@ -1094,6 +1094,13 @@ class SessionManager {
     console.log('[session] 📌 SCRATCHPAD ARMED — holding, not delivering')
     session.status = 'done'
     session.output = null
+    // THE SAME AUTO-HIDE AS EVERY OTHER TERMINAL PATH, DELIBERATELY UNCHANGED.
+    // The tray and the HUD still stand down at 1.5s; what differs is that
+    // hideNativePill answers this one with a 'paused' pill instead of taking
+    // the surface away, because the work is on the pad and the same key resumes
+    // the same dictation. The rule lives there, at the single choke point that
+    // knows about the scratchpad — not here, where it would be one of twenty
+    // copies.
     this.scheduleAutoHide(1500)
     clearTimeout(apiTimeout)
     this.abortController = null

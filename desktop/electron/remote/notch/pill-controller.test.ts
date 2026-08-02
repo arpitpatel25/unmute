@@ -154,3 +154,48 @@ describe('PillController.hide', () => {
     assert.equal(h.state()?.model, undefined)
   })
 })
+
+describe('PillController.phase', () => {
+  // The scratchpad's broadcast takes a PAUSED pill back down when the pad it
+  // was announcing is gone, and it must ask the controller rather than remember
+  // — the capture renderer pushes phases through the same object, so a caller
+  // keeping its own flag would happily hide a live recording.
+  test('reports whatever was last pushed, including by the renderer', () => {
+    const h = harness()
+    assert.equal(h.c.phase, undefined)
+    h.c.push({ phase: 'paused', model: 'Opus' })
+    assert.equal(h.c.phase, 'paused')
+    h.c.push({ phase: 'recording' })
+    assert.equal(h.c.phase, 'recording')
+  })
+
+  test('hide() resets it, so a paused pill cannot be taken down twice', () => {
+    const h = harness()
+    h.c.push({ phase: 'paused' })
+    h.c.hide()
+    assert.equal(h.c.phase, 'hidden')
+  })
+
+  // A paused pill keeps the chips it was pushed with — they describe where the
+  // NEXT stretch goes, which is still true — while the narration of the capture
+  // that just ended goes with it.
+  test('a paused push merges over the recording state rather than replacing it', () => {
+    const h = harness()
+    h.c.push({ phase: 'recording', model: 'Opus', agent: 'Codex', coaching: { condition: 'Noisy spot' }, elapsed: 12 })
+    h.c.push({ phase: 'paused', coaching: null, level: 0 })
+    assert.equal(h.state()?.phase, 'paused')
+    assert.equal(h.state()?.model, 'Opus')
+    assert.equal(h.state()?.agent, 'Codex')
+    assert.equal(h.state()?.coaching, null)
+  })
+
+  // level() is the per-frame path. It must stay silent once the capture is
+  // paused, or the meter would go on ticking against work that is not running.
+  test('level() is a no-op while paused', () => {
+    const h = harness()
+    h.c.push({ phase: 'paused' })
+    const n = h.sent.length
+    h.c.level(0.7, 5)
+    assert.equal(h.sent.length, n)
+  })
+})
