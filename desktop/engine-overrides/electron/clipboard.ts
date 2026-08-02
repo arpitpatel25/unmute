@@ -427,15 +427,22 @@ function verifyPasteboardServesPNG(expectedBytes: number, timeoutMs: number): Pr
  *  watcher read our own write as a user copy. */
 async function deliverImagesAfterText(images: readonly string[], padded: string): Promise<void> {
   const t0 = Date.now()
-  const pasted = await handOffImages({
-    pngBytes: (p: string) => {
+  const pasted = await handOffImages<Electron.NativeImage>({
+    // ONE DECODE PER IMAGE, and it happens here — before the pre-clear, and
+    // outside the clear→write window. The SAME NativeImage is measured and
+    // written, exactly as adb845f did it, so the byte count handed to the
+    // verifier and the bytes handed to the pasteboard cannot disagree. A second
+    // createFromPath between the clear and the write would leave the system
+    // pasteboard empty for the length of a Retina decode, and any encoding
+    // difference between the two decodes would make the verify unmatchable —
+    // every image burning the full timeout before pasting anyway.
+    prepareImage: (p: string) => {
       const img = nativeImage.createFromPath(p)
-      return img.isEmpty() ? null : img.toPNG().length
+      if (img.isEmpty()) return null
+      return { image: img, bytes: img.toPNG().length }
     },
     clearAndRecord: () => { clipboard.clear(); noteOurWrite() },
-    writeImageAndRecord: (p: string) => {
-      clipboard.writeImage(nativeImage.createFromPath(p)); noteOurWrite()
-    },
+    writeImageAndRecord: (img: Electron.NativeImage) => { clipboard.writeImage(img); noteOurWrite() },
     writeTextAndRecord: (t: string) => { clipboard.writeText(t); noteOurWrite() },
     verifyServesPNG: (bytes: number) => verifyPasteboardServesPNG(bytes, VERIFY_TIMEOUT_MS),
     paste: () => simulateKeyCombo('v', 'command'),

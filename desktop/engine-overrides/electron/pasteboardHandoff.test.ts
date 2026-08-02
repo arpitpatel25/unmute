@@ -2,14 +2,23 @@ import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { handOffImages, SETTLE_MS, type HandoffDeps } from './pasteboardHandoff'
 
+/** The decoded-image handle a real `prepareImage` would return. Opaque to the
+ *  module; carried straight through to the write. */
+interface FakeImage { from: string }
+
 /** Every effect, in the order it happened. The contract IS the order. */
-function recorder(overrides: Partial<HandoffDeps> = {}) {
+function recorder(overrides: Partial<HandoffDeps<FakeImage>> = {}) {
   const trace: string[] = []
   const warnings: string[] = []
-  const deps: HandoffDeps = {
-    pngBytes: (p) => (p.endsWith('.png') ? p.length * 100 : null),
+  const decodes: string[] = []
+  const deps: HandoffDeps<FakeImage> = {
+    prepareImage: (p) => {
+      decodes.push(p)
+      trace.push(`prepare(${p})`)
+      return p.endsWith('.png') ? { image: { from: p }, bytes: p.length * 100 } : null
+    },
     clearAndRecord: () => { trace.push('clear+record') },
-    writeImageAndRecord: (p) => { trace.push(`writeImage(${p})+record`) },
+    writeImageAndRecord: (img) => { trace.push(`writeImage(${img.from})+record`) },
     writeTextAndRecord: (t) => { trace.push(`writeText(${t})+record`) },
     verifyServesPNG: async (b) => { trace.push(`verify(${b})`); return true },
     paste: async () => { trace.push('paste') },
@@ -17,7 +26,7 @@ function recorder(overrides: Partial<HandoffDeps> = {}) {
     warn: (m) => { warnings.push(m) },
     ...overrides,
   }
-  return { trace, warnings, deps }
+  return { trace, warnings, decodes, deps }
 }
 
 describe('nothing to hand over costs nothing', () => {
@@ -29,7 +38,7 @@ describe('nothing to hand over costs nothing', () => {
 })
 
 describe('the pasteboard race is closed by ORDER, not by hope', () => {
-  test('one image: settle, pre-clear, write, child-verify, paste, settle, restore', async () => {
+  test('one image: settle, decode, pre-clear, write, child-verify, paste, settle, restore', async () => {
     const { trace, deps } = recorder()
     const pasted = await handOffImages(deps, ['/pad/a.png'], ' the words ')
 
@@ -37,6 +46,8 @@ describe('the pasteboard race is closed by ORDER, not by hope', () => {
     assert.deepEqual(trace, [
       // The text's ⌘V has been POSTED, not served — nothing may overwrite it yet.
       `settle(${SETTLE_MS})`,
+      // The decode happens BEFORE the pasteboard is touched at all.
+      'prepare(/pad/a.png)',
       // Pre-clear is what makes the verify sound: a PNG in an emptied slot is ours.
       'clear+record',
       'writeImage(/pad/a.png)+record',
@@ -47,6 +58,40 @@ describe('the pasteboard race is closed by ORDER, not by hope', () => {
       // The clipboard ends up holding what was dictated, not the screenshot.
       'writeText( the words )+record',
     ])
+  })
+
+  // The hazard: a second nativeImage.createFromPath between the clear and the
+  // write would leave the SYSTEM PASTEBOARD EMPTY for the length of a Retina
+  // decode — tens of milliseconds — and if the two decodes' PNG encodings
+  // differed by one byte the verify could never match, so every image would
+  // burn the full timeout and then paste anyway, silently and slowly. The type
+  // is what prevents it: writeImageAndRecord takes the decoded handle, never a
+  // path, so there is nothing in the window that COULD decode.
+  test('EXACTLY ONE decode per image, and it is outside the clear→write window', async () => {
+    const { trace, decodes, deps } = recorder()
+    await handOffImages(deps, ['/pad/a.png', '/pad/b.png'], 'x')
+
+    assert.deepEqual(decodes, ['/pad/a.png', '/pad/b.png'], 'one decode each, no more')
+    for (let i = 0; i < trace.length; i++) {
+      if (trace[i] === 'clear+record') {
+        assert.ok(trace[i - 1].startsWith('prepare('), 'the decode precedes the clear')
+        assert.ok(trace[i + 1].startsWith('writeImage('), 'and nothing sits between clear and write')
+      }
+    }
+  })
+
+  test('the bytes VERIFIED are the bytes WRITTEN — one decode measured both', async () => {
+    // Two decodes could disagree by a byte and make the verify unmatchable.
+    // Same handle, same measurement, by construction.
+    const seen: { wrote: string | null; verified: number | null } = { wrote: null, verified: null }
+    const { deps } = recorder({
+      prepareImage: (p) => ({ image: { from: p }, bytes: 4242 }),
+      writeImageAndRecord: (img) => { seen.wrote = img.from },
+      verifyServesPNG: async (b) => { seen.verified = b; return true },
+    })
+    await handOffImages(deps, ['/pad/a.png'], 'x')
+    assert.equal(seen.wrote, '/pad/a.png')
+    assert.equal(seen.verified, 4242)
   })
 
   test('the FIRST thing that happens is the settle — never a write', async () => {
@@ -106,7 +151,7 @@ describe('several images go in order, each one isolated from the last', () => {
     // Without the pre-clear the second verify would pass instantly against the
     // FIRST image — and the first would be pasted twice. The clear between them
     // is the whole defence, so it is asserted positionally.
-    const { trace, deps } = recorder({ pngBytes: () => 4096 })
+    const { trace, deps } = recorder({ prepareImage: (p) => ({ image: { from: p }, bytes: 4096 }) })
     await handOffImages(deps, ['/pad/a.png', '/pad/b.png'], 'x')
 
     const second = trace.indexOf('writeImage(/pad/b.png)+record')
@@ -138,8 +183,8 @@ describe('a failing image never costs the text or the others', () => {
     assert.equal(warnings.length, 1)
   })
 
-  test('a throwing pngBytes is contained too', async () => {
-    const { warnings, deps } = recorder({ pngBytes: () => { throw new Error('decode blew up') } })
+  test('a throwing prepareImage is contained too', async () => {
+    const { warnings, deps } = recorder({ prepareImage: () => { throw new Error('decode blew up') } })
     assert.equal(await handOffImages(deps, ['/pad/a.png'], 'x'), 0)
     assert.equal(warnings.length, 1)
   })

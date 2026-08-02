@@ -60,15 +60,24 @@ export interface SpeechPiece {
  *  NOT a boundary — rejoining would eat the line break. */
 const SENTENCE_END = /[.!?…]+["'”’)\]]* /g
 
-/** Every index at which the text may be cut, in order. Never 0 and never the
- *  full length: an empty piece is not a sentence. */
+/** Every index at which the text may be cut, in order.
+ *
+ *  Never 0, and never past the last non-space character: an empty piece is not
+ *  a sentence, and a piece made only of whitespace is worse than empty — it
+ *  becomes a segment whose text trims to '', i.e. a blank row in the pad that
+ *  renders nothing. `'beta.  '` (terminator, then two spaces) is the whole
+ *  repro: the boundary at 6 is inside the text but past everything that is not
+ *  whitespace. Bounding on `trimEnd().length` rather than `length` is what
+ *  makes "no piece is blank" a property of this function instead of a thing
+ *  every caller has to remember to check. */
 export function sentenceBoundaries(text: string): number[] {
   const out: number[] = []
+  const lastContent = text.trimEnd().length
   SENTENCE_END.lastIndex = 0
   let m: RegExpExecArray | null
   while ((m = SENTENCE_END.exec(text)) !== null) {
     const at = m.index + m[0].length
-    if (at > 0 && at < text.length) out.push(at)
+    if (at > 0 && at < lastContent) out.push(at)
   }
   return out
 }

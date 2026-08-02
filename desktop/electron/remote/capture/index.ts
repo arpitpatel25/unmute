@@ -26,7 +26,7 @@ import {
 import { splitSpeech } from './speechSplit'
 import { render, type RenderResult } from './insertRender'
 import { canArmScratchpad, type CaptureSettings } from './captureGate'
-import { claimContent, createClaims } from './clipboardLedger'
+import { TEXT_DEDUP_WINDOW_MS, claimContent, createClaims } from './clipboardLedger'
 
 /** Where pads live on disk. Unmute-owned, safe to delete, recreated on demand. */
 export const SCRATCHPAD_ROOT = join(homedir(), '.unmute', 'remote', 'scratchpad')
@@ -60,9 +60,13 @@ let heldPad: Pad | null = null
 const sharedClaims = createClaims()
 
 /** The screenshot watcher's path-keyed claim. Exposed so init.ts can hand it to
- *  createScreenshotWatch without owning a second dedup map. */
-export function claimShared(hash: string, atMs: number): boolean {
-  return claimContent(sharedClaims, hash, atMs)
+ *  createScreenshotWatch without owning a second dedup map.
+ *
+ *  `windowMs` lets the TEXT claim below ask the same map a tighter question —
+ *  the two races have different timescales. Defaulted, so the screenshot
+ *  watcher's call site is unchanged. */
+export function claimShared(hash: string, atMs: number, windowMs?: number): boolean {
+  return claimContent(sharedClaims, hash, atMs, windowMs)
 }
 
 // ── Injected effects ────────────────────────────────────────────────────
@@ -408,13 +412,22 @@ function withSplitSegment(p: Pad, segmentId: string, text: string, now?: number)
   const times = p.entries.filter((e) => e.type === 'insert').map((e) => e.atMs)
   const pieces = splitSpeech(text, seg.startMs, seg.endMs, times)
   if (pieces.length === 1) return setSegmentText(p, segmentId, text, now)
-  const replacement: Entry[] = pieces.map((pc, i) => ({
-    type: 'segment',
-    id: i === 0 ? seg.id : `${seg.id}#${i}`,
-    text: pc.text.trim(),
-    startMs: pc.startMs,
-    endMs: pc.endMs,
-  }))
+  const replacement: Entry[] = pieces
+    // A BLANK SEGMENT IS NEVER WRITTEN TO A PAD. sentenceBoundaries already
+    // refuses a cut past the last non-space character, so this cannot trigger
+    // today — it is here because "no piece is blank" is a promise made by
+    // another module, and a pad row that renders nothing is exactly the kind of
+    // thing that pins a panel open on "Still transcribing…" forever. Cheap
+    // enough to enforce where the entries are actually built.
+    .filter((pc) => pc.text.trim() !== '')
+    .map((pc, i) => ({
+      type: 'segment',
+      id: i === 0 ? seg.id : `${seg.id}#${i}`,
+      text: pc.text.trim(),
+      startMs: pc.startMs,
+      endMs: pc.endMs,
+    }))
+  if (!replacement.length) return setSegmentText(p, segmentId, text, now)
   const entries = p.entries.flatMap((e) =>
     (e.type === 'segment' && e.id === segmentId) ? replacement : [e])
   return { ...p, entries, updatedAt: now ?? p.updatedAt }
@@ -494,19 +507,24 @@ export function recordInsert(
     // it — a missed dedup shows the user one extra thumbnail they can remove,
     // while a wrong drop loses something they captured on purpose.
     if (sig && !claimShared(sig, i.atMs)) return false
-  } else if (!claimShared(`text:${i.content}`, i.atMs)) {
+  } else if (!claimShared(`text:${i.content}`, i.atMs, TEXT_DEDUP_WINDOW_MS)) {
     // ONE COPY IS ONE INSERT — even when the pasteboard was written three
     // times. A browser writes several flavours for a single ⌘C (plain text,
     // HTML, a public.url), and EACH write bumps changeCount, so the watcher
     // sees N transitions with identical text and the user got the same link
     // two or three times in one paste. Observed in the field.
     //
-    // Claimed on the CONTENT, through the same short window images already use:
-    // the two deliberate copies of one string that the window collapses are the
-    // same tradeoff, made for the same reason, and one extra row the user can
-    // remove has always been the lesser failure than dropping something real.
+    // Claimed on the CONTENT, not the kind: the same string can classify
+    // differently between ticks (a path that exists on one read and not the
+    // next), and one user action is one insert whatever the classifier said.
     // The `text:` prefix keeps a transcript that happens to look like an image
     // signature ("1024:d41d8…") from colliding with one.
+    //
+    // ITS OWN WINDOW, NOT THE IMAGE ONE. The multi-flavour burst is sub-100ms;
+    // the 2s image window exists for a screenshot tool's disk write racing its
+    // pasteboard write. Borrowing it swallowed a deliberate second ⌘C of the
+    // same string a second later — an ordinary thing to do. See
+    // TEXT_DEDUP_WINDOW_MS.
     return false
   }
   pad = addInsert(pad, {

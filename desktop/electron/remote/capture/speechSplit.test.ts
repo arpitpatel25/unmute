@@ -33,6 +33,15 @@ describe('sentenceBoundaries', () => {
   test('no sentence punctuation at all yields nothing to cut at', () => {
     assert.deepEqual(sentenceBoundaries('just some words with no full stop'), [])
   })
+
+  test('NO BOUNDARY PAST THE LAST NON-SPACE CHARACTER', () => {
+    // A boundary at 6 is inside 'beta.  ' but past everything that is not
+    // whitespace, so the piece after it trims to '' — a blank segment, i.e. a
+    // pad row that renders nothing.
+    assert.deepEqual(sentenceBoundaries('beta.  '), [])
+    assert.deepEqual(sentenceBoundaries('One. Two.  '), [5])
+    assert.deepEqual(sentenceBoundaries('One. Two. \n'), [5])
+  })
 })
 
 describe('splitSpeech places the seam where the copy happened', () => {
@@ -139,6 +148,20 @@ describe('splitSpeech edges', () => {
     assert.equal(pieces.length, 3)
     assert.equal(pieces[1].startMs, 5_001)
     assert.equal(pieces[2].startMs, 12_001)
+  })
+
+  test('NO PIECE IS EVER BLANK — the trailing-whitespace repro', () => {
+    // splitSpeech('beta.  ', 1000, 21224, [7248]) used to return a second piece
+    // of ' ', which withSplitSegment then wrote as a segment with text: ''.
+    const pieces = splitSpeech('beta.  ', 1000, 21224, [7248])
+    assert.equal(pieces.length, 1)
+    for (const times of [[7248], [2000, 7248], [21223]]) {
+      for (const text of ['beta.  ', 'One. Two.   ', 'One. Two. \n\n', 'a. b.  ']) {
+        for (const pc of splitSpeech(text, 1000, 21224, times)) {
+          assert.notEqual(pc.text.trim(), '', `blank piece from ${JSON.stringify(text)}`)
+        }
+      }
+    }
   })
 
   test('pieces tile the stretch — the first starts at startMs, the last ends at endMs', () => {

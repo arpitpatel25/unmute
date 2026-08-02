@@ -22,8 +22,27 @@
 
 /** One physical action can reach both detectors; 2s comfortably covers the gap
  *  between a file write and the pasteboard write, without merging two
- *  deliberate copies of the same thing. */
+ *  deliberate copies of the same thing.
+ *
+ *  THIS NUMBER IS FOR THE IMAGE CASE and is sized by it: a screenshot tool
+ *  writes a PNG to disk and then writes the pasteboard, and those two can be
+ *  most of a second apart on a slow disk with a large capture. */
 export const DEDUP_WINDOW_MS = 2000
+
+/** TEXT IS A DIFFERENT RACE AND GETS A DIFFERENT WINDOW.
+ *
+ *  What text dedup guards is one application writing several pasteboard
+ *  flavours for a single ⌘C — plain, HTML, public.url — and that is a
+ *  synchronous burst inside one event loop turn on the source side: sub-100ms,
+ *  observed at 60ms and 310ms apart through a 250ms poll. Nothing about it
+ *  needs two seconds.
+ *
+ *  Sharing the image window made the cost real in the other direction: copy a
+ *  string, paste it, copy the SAME string again a second later because you
+ *  moved the cursor — a completely ordinary thing to do — and the second copy
+ *  vanished. 500ms covers the multi-flavour burst several times over while
+ *  leaving a deliberate re-copy alone. */
+export const TEXT_DEDUP_WINDOW_MS = 500
 
 /** THE DEDUP HALF, ON ITS OWN.
  *
@@ -64,10 +83,18 @@ export function shouldObserve(l: Ledger, changeCount: number): boolean {
 }
 
 /** True if this content is new enough to become an insert. False means another
- *  detector already claimed the same user action. */
-export function claimContent(l: Claims, hash: string, atMs: number): boolean {
+ *  detector — or another flavour of the same copy — already claimed the same
+ *  user action.
+ *
+ *  `windowMs` overrides the map's default for THIS claim, because the two
+ *  things being deduped are different races with different timescales (see
+ *  DEDUP_WINDOW_MS and TEXT_DEDUP_WINDOW_MS). The map stays one map: it is
+ *  keyed on content, and the window is a property of the question being asked,
+ *  not of the storage. */
+export function claimContent(l: Claims, hash: string, atMs: number, windowMs?: number): boolean {
+  const within = windowMs ?? l.dedupWindowMs
   const prev = l.claims.get(hash)
-  if (prev !== undefined && atMs - prev <= l.dedupWindowMs) return false
+  if (prev !== undefined && atMs - prev <= within) return false
   l.claims.set(hash, atMs)
   return true
 }

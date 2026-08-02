@@ -31,16 +31,26 @@
 // copied mid-sentence pasted at the END of the dictation) IS FIXED, and not
 // here — the seam is made in the finished transcript by capture/speechSplit.ts,
 // which costs the audio path nothing and works for every copy in every
-// dictation.
+// dictation, however short.
 //
-// AND IT WAS UNREACHABLE BESIDES, which the original removal did not notice.
-// decideCut is not even called until `vadActivatedRef` is set
-// (useAudioRecorder.ts:511), and that is set by a timer at `chunkMinMs` —
-// 30_000ms by default (useAudioRecorder.ts:27, 1026-1033). The insert branch
-// only fired BELOW minChunkMs. The two conditions could never both hold, so
-// the branch was dead on top of achieving nothing. Reaching it would mean
-// activating the VAD early, i.e. moving a real STT boundary on the dictation
-// fast path — the exact cost the 2026-07-14 investigation says not to pay.
+// A NOTE ON REACHABILITY, because it is easy to get wrong in both directions.
+// decideCut is not called at all until `vadActivatedRef` is set
+// (useAudioRecorder.ts:511), and that is set once by a timer at `chunkMinMs` —
+// 30_000ms by default (:27, :1026-1033) — while the insert branch required
+// `chunkElapsedMs < minChunkMs`. That makes it unreachable DURING THE FIRST
+// CHUNK ONLY. It is reachable after that: emitChunk resets `chunkStartTimeRef`
+// on every cut (:350) whereas `vadActivatedRef` is cleared only when the
+// recording ends (:243, inside cleanupStream), so from chunk 1 onward the VAD
+// is live AND `chunkElapsed` restarts at zero — the 9s-to-30s window is wide
+// open for any recording past roughly 39s.
+//
+// So it DID fire, for long recordings. It still achieved nothing, for the
+// reason the original removal gave and which has not changed: a chunk boundary
+// is not a segment boundary. capture/ has no chunk awareness at all, the
+// transcript attaches to ONE segment in one go, and no arrangement of chunk
+// boundaries could move an insert by a single character. It was paying a real
+// STT boundary — the 2026-07-14 investigation's primary source of garbled
+// transcripts — for exactly that.
 
 export type CutDecision = 'none' | 'silence' | 'soft-cap' | 'hard-cap'
 

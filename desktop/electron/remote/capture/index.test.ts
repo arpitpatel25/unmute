@@ -14,6 +14,7 @@ import {
   writePadNow,
 } from './index'
 import { SETTLE_IDLE_MS, deserialize, padDirFor, serialize } from './scratchpadStore'
+import { TEXT_DEDUP_WINDOW_MS } from './clipboardLedger'
 import { render } from './insertRender'
 import { createClipboardWatch } from './clipboardWatch'
 import type { createScreenshotWatch } from './screenshotWatch'
@@ -2208,6 +2209,39 @@ describe('ONE COPY IS ONE INSERT — a browser writing three flavours is still o
     assert.equal(recordInsert({ kind: 'url', content: 'https://a.example', atMs: 2_000 }, 2_000), true)
     assert.equal(recordInsert({ kind: 'url', content: 'https://a.example', atMs: 9_000 }, 9_000), true)
     assert.equal(snapshot().pad!.entries.filter((e) => e.type === 'insert').length, 2)
+  })
+
+  test('TEXT GETS ITS OWN, TIGHTER WINDOW — a deliberate re-copy is not swallowed', () => {
+    // The multi-flavour burst is sub-100ms. Borrowing the 2s IMAGE window (a
+    // screenshot tool's disk write racing its pasteboard write) meant copying
+    // the same string again one second later — an ordinary thing to do after
+    // moving the cursor — silently vanished.
+    beginSegment('cursor', 1_000, true)
+    assert.equal(recordInsert({ kind: 'url', content: 'https://a.example', atMs: 2_000 }, 2_000), true)
+    assert.equal(
+      recordInsert({ kind: 'url', content: 'https://a.example', atMs: 2_000 + TEXT_DEDUP_WINDOW_MS - 1 }, 0),
+      false, 'inside the burst window it is still one copy',
+    )
+    assert.equal(
+      recordInsert({ kind: 'url', content: 'https://a.example', atMs: 3_200 }, 0),
+      true, 'a second later it is a second copy — inside the old 2s image window',
+    )
+  })
+
+  test('IMAGES keep the wide window — a disk write and a pasteboard write are slow apart', () => {
+    // The image dedup is cross-DETECTOR and must still span the gap between a
+    // screenshot tool writing the file and writing the pasteboard.
+    const dir = mkdtempSync(join(tmpdir(), 'dedup-'))
+    const shot = join(dir, 'shot.png')
+    writeFileSync(shot, 'PNGBYTES')
+
+    beginSegment('cursor', 1_000, true)
+    assert.equal(recordInsert({ kind: 'image', content: shot, atMs: 2_000 }, 2_000), true)
+    assert.equal(
+      recordInsert({ kind: 'image', content: shot, atMs: 3_200 }, 0), false,
+      '1.2s apart is still ONE screenshot — well past the text window',
+    )
+    rmSync(dir, { recursive: true, force: true })
   })
 
   test('the window dies with the capture — the next one starts fresh', () => {

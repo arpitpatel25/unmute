@@ -241,7 +241,17 @@ destroys the boundary irrecoverably. The unknown case falls to the cheap failure
 |---|---|---|
 | url / path / line | inline, raw, spacing normalised | inline, raw, spacing normalised |
 | block | fenced | fenced |
-| image | skipped (or path) | real reference |
+| image | pasted as the IMAGE, after the text — never a path | real reference (path) |
+
+**An image is always delivered; only the mechanism differs.** (Amended
+2026-08-02 — this row read *"skipped (or path)"*, and the code implemented
+"skipped". It was a regression: the pre-branch delivery staged screenshots and
+pasted them after the text. Silently dropping something the user deliberately
+captured is the worse failure of the two.) A task takes a path because whatever
+reads it can open the file. A text field cannot, so at the cursor the path stays
+out of the text and the real bytes go over the pasteboard with their own ⌘V —
+text first, then each image in order. The sequencing that keeps that from
+racing delivery's own ⌘V is `engine-overrides/electron/pasteboardHandoff.ts`.
 
 **A fence is a boundary marker, not a claim.** It asserts only *this is
 verbatim, it starts here, it ends here* — the one thing we know for certain. It
