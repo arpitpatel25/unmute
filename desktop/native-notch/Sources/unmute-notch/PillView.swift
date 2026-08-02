@@ -35,8 +35,9 @@ import SwiftUI
 /// The scratchpad is the one deliberate exception and does not use it: the pad
 /// is PAPER, an off-white card that stays light in both system appearances,
 /// because it holds the user's own words rather than being another face of the
-/// instrument. See PadPaper — it borrows nothing from here and nothing from
-/// Theme, so the two vocabularies cannot quietly bleed into each other.
+/// instrument. See PadPaper — it borrows nothing from here and none of Theme's
+/// colours (only its animation curves), so the two vocabularies cannot quietly
+/// bleed into each other.
 struct PillGlass<S: Shape>: ViewModifier {
     let shape: S
     var tint: Color? = nil

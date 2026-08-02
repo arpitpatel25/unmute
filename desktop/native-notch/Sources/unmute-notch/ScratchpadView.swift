@@ -9,9 +9,11 @@ import SwiftUI
 /// appearances, because paper does not have a dark mode. Every colour below is
 /// a literal, deliberately, so nothing here can be re-tinted by the environment.
 ///
-/// It is also the reason this file uses NONE of `Theme` and none of
-/// `pillGlass`: those are the instrument's vocabulary and mixing them is how a
-/// note turns back into a panel.
+/// It is also the reason this file takes none of `Theme`'s COLOURS and never
+/// touches `pillGlass`: those are the instrument's vocabulary and mixing them is
+/// how a note turns back into a panel. It does still use Theme's animation
+/// CURVES (`collapse`, `hover`) — the pad should move like the rest of the
+/// surface even though it does not look like it.
 enum PadPaper {
     /// Off-white card. #FEFCF7
     static let paper      = Color(red: 254.0 / 255, green: 252.0 / 255, blue: 247.0 / 255)
@@ -69,8 +71,9 @@ struct ScratchpadView: View {
     let armed: Bool
     /// A delivery is in flight. See the footer.
     let delivering: Bool
-    /// Owned by PillView, because the cluster's overlay must offset by the
-    /// width this decides — the two cannot be allowed to disagree.
+    /// Owned by PillView, not by this view: it changes how wide the pad is, and
+    /// the pad is a sibling in a centred row, so collapsing moves the pill too.
+    /// The row and the pad have to agree about it.
     @Binding var expandedPad: Bool
     let onRemove: (String) -> Void
     let onDeliver: (String) -> Void
