@@ -28,10 +28,15 @@ import SwiftUI
 
 /// Applies the cluster's material to one element.
 ///
-/// Internal rather than file-private because the pad panel (ScratchpadView) is
-/// part of the same input surface and must wear the same material. A second
+/// EVERY GLASS ELEMENT IN THE INPUT SURFACE COMES THROUGH HERE. A second
 /// hand-rolled backdrop next to this one is exactly how a "one glass system"
 /// becomes two.
+///
+/// The scratchpad is the one deliberate exception and does not use it: the pad
+/// is PAPER, an off-white card that stays light in both system appearances,
+/// because it holds the user's own words rather than being another face of the
+/// instrument. See PadPaper — it borrows nothing from here and nothing from
+/// Theme, so the two vocabularies cannot quietly bleed into each other.
 struct PillGlass<S: Shape>: ViewModifier {
     let shape: S
     var tint: Color? = nil
@@ -132,9 +137,11 @@ extension View {
 
 struct PillView: View {
     @ObservedObject var model: PillModel
-    /// The scratchpad, for the one control the cluster carries. The pad itself
-    /// is a separate panel (ScratchpadWindow) — it outlives any single capture,
-    /// so it cannot live inside a surface that disappears on stop.
+    /// The scratchpad — both the chip that arms it and the pad itself, which is
+    /// drawn beside the cluster by `pad`. The pad outlives any single
+    /// capture, so this window is now shown whenever EITHER surface wants to be
+    /// on screen (AppController.reconcileSurfaces) rather than only during a
+    /// capture.
     @ObservedObject var scratch: ScratchpadModel
     /// Whether the selector panel is open. Local to the view — main never needs
     /// to know, and a round-trip would make it feel slow.
@@ -142,11 +149,25 @@ struct PillView: View {
 
     private var s: PillState { model.state }
 
+    /// Whether the pad is expanded or put away. LIVES HERE, not in the pad,
+    /// because the cluster's overlay must offset by whichever width it implies —
+    /// two copies of that answer would let the pad's left edge drift off the
+    /// chip it is supposed to be attached to.
+    @State private var padExpanded = true
+
     /// Chips ride with the pill only while a capture is live — the same rule the
     /// original used (`pillShowing`): recording or processing, nothing else.
+    /// PAUSED counts: it IS the capture, waiting. The chips going away at the
+    /// moment the pill starts saying "Paused" would read as the session ending,
+    /// which is the exact lie this state exists to stop telling.
     private var chipsVisible: Bool {
-        s.phase == .recording || s.phase == .processing
+        s.phase == .recording || s.phase == .processing || s.phase == .paused
     }
+
+    /// The pad is on screen. It is drawn INSIDE this window, as a sibling of
+    /// the whole column (see `content` and `pad`), so the cluster has to know:
+    /// the scratchpad chip is the pad's neighbour and stays out for it.
+    private var padShowing: Bool { scratch.visible }
 
     /// The ONE condition, so the panel and its dismiss scrim cannot drift apart.
     /// A scrim armed without a panel on screen would be an invisible sheet
@@ -185,25 +206,79 @@ struct PillView: View {
     private var content: some View {
         VStack(spacing: 9) {
             Spacer(minLength: 0)
-            // ONE CHIP AT A TIME, with strict precedence: mic narration first,
-            // then noise, then quiet — "noise wins: it's the condition the user
-            // can't hear themselves." Mic narration outranks both because it is
-            // the only one describing something that just CHANGED.
-            if chipsVisible { hint }
-            if selectorShowing {
-                SelectorPanel(state: s, model: model, open: $selectorOpen)
-            }
-            cluster
-            if chipsVisible, let reason = s.offline {
-                OfflineCard(reason: reason,
-                            onFix: { model.emit(.openBillingPortal) },
-                            onDismiss: { model.emit(.dismissOffline) })
+            // THE PAD IS BESIDE THE COLUMN, NOT ABOVE THE PILL.
+            //
+            // It used to be its own panel whose bottom edge landed on the top of
+            // the cluster plus this VStack's own 9pt spacing — i.e. exactly the
+            // slot `hint` and `SelectorPanel` occupy — so the two surfaces had
+            // to be made mutually exclusive to stop the pad covering the mic
+            // narration and the model selector.
+            //
+            // As a SIBLING OF THE WHOLE COLUMN that overlap cannot be
+            // constructed. The column's width is the widest of hint, selector
+            // and cluster, and the pad starts one row-gap after it, so nothing
+            // that stacks above the pill can ever reach into the pad's column
+            // whatever it says. Anchoring the pad to the scratchpad chip alone
+            // would NOT have this property: an overlay takes no part in layout,
+            // and a long mic-narration line ("Switching to iPhone — from the
+            // next dictation", ~294pt) is wider than a plain-dictation cluster
+            // (~212pt), so it would have run underneath the pad's lower-left
+            // corner. Adjacency to the chip is preserved in the ordinary case
+            // — the cluster IS the widest row — and given up only in the case
+            // where keeping it would mean an overlap.
+            //
+            // `.bottom` puts the pad's bottom edge on the column's bottom edge,
+            // and it grows upward from there. The pad takes no part in the
+            // COLUMN's vertical layout at all, which is what keeps a 340×340
+            // note from shoving the hint three hundred points up the screen.
+            HStack(alignment: .bottom, spacing: PadPaper.gap) {
+                VStack(spacing: 9) {
+                    // ONE CHIP AT A TIME, with strict precedence: mic narration
+                    // first, then noise, then quiet — "noise wins: it's the
+                    // condition the user can't hear themselves." Mic narration
+                    // outranks both because it is the only one describing
+                    // something that just CHANGED.
+                    if chipsVisible { hint }
+                    if selectorShowing {
+                        SelectorPanel(state: s, model: model, open: $selectorOpen)
+                    }
+                    cluster
+                    if chipsVisible, let reason = s.offline {
+                        OfflineCard(reason: reason,
+                                    onFix: { model.emit(.openBillingPortal) },
+                                    onDismiss: { model.emit(.dismissOffline) })
+                    }
+                }
+                pad
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.bottom, 4)
         .animation(Theme.morph, value: s.phase)
         .onChange(of: s.phase) { p in if p != .recording && p != .processing { selectorOpen = false } }
+    }
+
+    /// The awareness card is the only thing that can sit BELOW the cluster, and
+    /// it would drag the column's bottom edge — and with it the pad's — a whole
+    /// row down. The pad is lifted by exactly that row so its bottom edge stays
+    /// on the PILL's, which is the one thing the geometry promises.
+    private var offlineShowing: Bool { chipsVisible && s.offline != nil }
+
+    @ViewBuilder private var pad: some View {
+        if padShowing, let padState = scratch.state.pad {
+            ScratchpadView(
+                pad: padState,
+                destinations: scratch.state.destinations,
+                armed: scratch.state.armed,
+                delivering: scratch.state.delivering,
+                expandedPad: $padExpanded,
+                onRemove: { scratch.emit(.scratchpadRemove(id: $0)) },
+                onDeliver: { scratch.emit(.scratchpadDeliver(dest: $0)) },
+                onDiscard: { scratch.emit(.scratchpadDiscard) }
+            )
+            .padding(.bottom, offlineShowing ? PillMetrics.height + 9 : 0)
+            .animation(Theme.collapse, value: padExpanded)
+        }
     }
 
     /// Always a single horizontal row, and EVERY element is 44pt tall.
@@ -240,18 +315,24 @@ struct PillView: View {
                     MicChip(current: s.mic, options: opts) { model.emit(.pickMic($0)) }
                         .pillGlass(Capsule())
                 }
-                // THE SCRATCHPAD CONTROL. It ARMS AND DISARMS ONLY — it never
-                // sends. Toggle-off-to-send would be a silent commit dressed as
-                // a mode switch: a toggle reads as reversible, so a user tapping
-                // it to mean "never mind" would create a task instead. Send and
-                // discard live on the pad, where they read as the deliberate
-                // acts they are.
-                if scratch.state.enabled {
-                    ScratchpadChip(armed: scratch.state.armed) {
-                        scratch.emit(.scratchpadArm(!scratch.state.armed))
-                    }
-                    .pillGlass(Capsule())
+            }
+            // THE SCRATCHPAD CONTROL. It ARMS AND DISARMS ONLY — it never
+            // sends. Toggle-off-to-send would be a silent commit dressed as
+            // a mode switch: a toggle reads as reversible, so a user tapping
+            // it to mean "never mind" would create a task instead. Send and
+            // discard live on the pad, where they read as the deliberate
+            // acts they are.
+            //
+            // OUTSIDE `chipsVisible`, unlike every other chip: it is also the
+            // pad's ANCHOR. The pad hangs off this chip's trailing edge, so a
+            // pad on screen with no capture running would otherwise be pinned
+            // to an empty cluster — and the arm toggle for the work in front of
+            // the user would be unreachable.
+            if scratch.state.enabled && (chipsVisible || padShowing) {
+                ScratchpadChip(armed: scratch.state.armed) {
+                    scratch.emit(.scratchpadArm(!scratch.state.armed))
                 }
+                .pillGlass(Capsule())
             }
         }
     }
@@ -316,6 +397,24 @@ struct PillView: View {
             }
             .padding(.leading, 15).padding(.trailing, 7)
             .frame(height: PillMetrics.height)
+
+        case .paused:
+            // NOT AN ENDING, AND THE PILL MUST NOT PRETEND OTHERWISE.
+            //
+            // An armed stop holds the work instead of delivering it, and
+            // pressing the dictation key again resumes THE SAME dictation. The
+            // pill used to disappear 1.5s later, which reads as "session over"
+            // for something that is a pause — so it stays, swaps the running
+            // clock for the word, and turns its dot amber. The pad beside it is
+            // the rest of the sentence.
+            HStack(spacing: 11) {
+                Circle().fill(Theme.cNeeds).frame(width: 8, height: 8)
+                Text("Paused")
+                    .font(.system(size: 14)).foregroundColor(Theme.textDim)
+            }
+            .padding(.horizontal, 15)
+            .frame(height: PillMetrics.height)
+            .help("Held on the scratchpad — press the dictation key to carry on")
 
         case .processing:
             HStack(spacing: 10) {
@@ -771,8 +870,14 @@ private struct ScratchpadChip: View {
     var body: some View {
         Button(action: action) {
             ChipBody {
-                Image(systemName: armed ? "note.text.badge.plus" : "note.text")
-                    .font(.system(size: 12))
+                // A PEN NIB, NOT A PAGE. The old glyph drew a sheet of paper
+                // with a badge on it, which is the pad — this control is not
+                // the pad, it is the decision to write onto one. `pencil.tip`
+                // is the system's own nib, so it carries the same weight and
+                // optical size as the mic and remote glyphs beside it, which a
+                // hand-drawn path could only approximate.
+                Image(systemName: "pencil.tip")
+                    .font(.system(size: 13))
                     .foregroundColor(armed ? Theme.cReady : Theme.textFaint)
             }
         }

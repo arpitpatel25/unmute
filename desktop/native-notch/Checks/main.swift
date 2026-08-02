@@ -70,4 +70,17 @@ check("discard event", (Event.scratchpadDiscard.json["type"] as? String) == "scr
 guard case let .pill(ps) = Command.decode(#"{"type":"pill","state":{"phase":"recording","elapsed":3}}"#) else { check("pill still decodes", false); exit(1) }
 check("pill still decodes", ps.phase == .recording && ps.elapsed == 3)
 
+// THE PAUSED PILL. Main pushes this instead of hiding when an armed stop leaves
+// work on the pad; the rawValue must match the string hideNativePill() sends, or
+// the phase silently falls back to .hidden and the pill disappears exactly as it
+// used to.
+guard case let .pill(paused) = Command.decode(#"{"type":"pill","state":{"phase":"paused","model":"Sonnet 4.5"}}"#) else { check("paused pill decodes", false); exit(1) }
+check("paused pill decodes", paused.phase == .paused)
+check("paused pill keeps the chips it was pushed with", paused.model == "Sonnet 4.5")
+
+// AN UNKNOWN PHASE MUST NOT KILL THE LINE — an older helper against a newer
+// engine falls back to hidden rather than dropping the command whole.
+guard case let .pill(future) = Command.decode(#"{"type":"pill","state":{"phase":"teleporting","elapsed":9}}"#) else { check("unknown phase still decodes", false); exit(1) }
+check("unknown phase still decodes", future.phase == .hidden && future.elapsed == 9)
+
 print("\nALL DECODE CHECKS PASSED")

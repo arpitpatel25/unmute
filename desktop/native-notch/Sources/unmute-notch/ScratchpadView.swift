@@ -1,5 +1,50 @@
 import SwiftUI
 
+/// THE PAD IS PAPER, NOT APP CHROME.
+///
+/// Everything else in the cluster is glass: a lens over the user's desktop that
+/// belongs to the instrument. The pad is the one surface that holds the USER'S
+/// OWN WORDS, and a note is what people already know how to read. So it is
+/// off-white card stock with ink on it — and it stays that way in BOTH system
+/// appearances, because paper does not have a dark mode. Every colour below is
+/// a literal, deliberately, so nothing here can be re-tinted by the environment.
+///
+/// It is also the reason this file uses NONE of `Theme` and none of
+/// `pillGlass`: those are the instrument's vocabulary and mixing them is how a
+/// note turns back into a panel.
+enum PadPaper {
+    /// Off-white card. #FEFCF7
+    static let paper      = Color(red: 254.0 / 255, green: 252.0 / 255, blue: 247.0 / 255)
+    /// #221F1B
+    static let ink        = Color(red: 34.0 / 255, green: 31.0 / 255, blue: 27.0 / 255)
+    /// #8B8377
+    static let inkSoft    = Color(red: 139.0 / 255, green: 131.0 / 255, blue: 119.0 / 255)
+    /// #E8E2D6
+    static let divider    = Color(red: 232.0 / 255, green: 226.0 / 255, blue: 214.0 / 255)
+    /// #DAD3C4
+    static let edge       = Color(red: 218.0 / 255, green: 211.0 / 255, blue: 196.0 / 255)
+    /// #F4F0E6
+    static let rowHover   = Color(red: 244.0 / 255, green: 240.0 / 255, blue: 230.0 / 255)
+    /// #FFFFFF
+    static let buttonFace = Color.white
+    /// #0E7C7B
+    static let primary    = Color(red: 14.0 / 255, green: 124.0 / 255, blue: 123.0 / 255)
+    static let primaryInk = Color.white
+
+    /// THE PAD'S WIDTH IS FIXED. A content-sized pad would move its own left
+    /// edge — and, since it is a sibling in a centred row, the pill with it —
+    /// every time a row's text changed.
+    static let width: CGFloat = 340
+    /// Collapsed it is a cluster button and nothing more, so it carries the
+    /// cluster's height and radius rather than a shape of its own.
+    static let collapsedWidth: CGFloat = 148
+    static let radius: CGFloat = 14
+    static var collapsedRadius: CGFloat { PillMetrics.height / 2 }   // 22
+    /// The cluster's own inter-element spacing. The pad is one more element in
+    /// that row, so it uses the row's gap and not a gap of its own.
+    static let gap: CGFloat = 8
+}
+
 /// The pad. Appears only when there is content.
 ///
 /// STRUCTURED ROWS, NOT PROSE. The job at review time is confirmation — are the
@@ -12,12 +57,21 @@ import SwiftUI
 /// disarms only. A toggle reads as reversible, so toggle-off-to-send would turn
 /// a user's "never mind" into a dispatched task — a silent commit dressed as a
 /// mode switch. These two buttons are the deliberate acts, and they look like it.
+///
+/// COLLAPSE IS NOT AN EXIT. Collapsed, the pad is a 44pt capsule saying
+/// "Scratchpad" — the same height and radius as every other button in the
+/// cluster, because that is what it has become for the moment. The work is
+/// untouched; only the reading of it is put away. The only things that end a
+/// pad are the three in the footer.
 struct ScratchpadView: View {
     let pad: ScratchpadPad
     let destinations: ScratchpadDestinations
     let armed: Bool
     /// A delivery is in flight. See the footer.
     let delivering: Bool
+    /// Owned by PillView, because the cluster's overlay must offset by the
+    /// width this decides — the two cannot be allowed to disagree.
+    @Binding var expandedPad: Bool
     let onRemove: (String) -> Void
     let onDeliver: (String) -> Void
     let onDiscard: () -> Void
@@ -27,9 +81,18 @@ struct ScratchpadView: View {
     private var ordered: [ScratchpadDestination] { destinations.ordered(origin: pad.origin) }
 
     var body: some View {
+        Group {
+            if expandedPad { sheet } else { tab }
+        }
+        .animation(Theme.collapse, value: expandedPad)
+    }
+
+    // MARK: - Expanded
+
+    private var sheet: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider().overlay(Theme.hairline)
+            rule
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
@@ -47,38 +110,93 @@ struct ScratchpadView: View {
                 }
                 .padding(8)
             }
-            .frame(maxHeight: 320)
+            // KEPT INSIDE THE PILL WINDOW'S CANVAS, which is why this ceiling
+            // came down from 320. The pad grows upward from the cluster's
+            // baseline inside the pill's 400pt panel, and content outside a
+            // hosting view's bounds is clipped, not merely off-screen. The
+            // budget: 4 (the row's bottom padding) + 34 (header) + 1 + THIS + 1
+            // + 43 (footer) + 53 (the lift when an awareness card is under the
+            // pill) = 376 of 400.
+            .frame(maxHeight: 240)
 
-            Divider().overlay(Theme.hairline)
+            rule
             footer
         }
-        .frame(width: 340)
-        .pillGlass(RoundedRectangle(cornerRadius: 14))
+        .frame(width: PadPaper.width)
+        .background(paper(RoundedRectangle(cornerRadius: PadPaper.radius)))
+    }
+
+    // MARK: - Collapsed
+
+    /// A cluster button, not a shrunken window. One height, one radius — the
+    /// same rule PillMetrics states for every other element in the row.
+    private var tab: some View {
+        Button(action: { expandedPad = true }) {
+            HStack(spacing: 8) {
+                nib
+                Text("Scratchpad")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundColor(PadPaper.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(PadPaper.inkSoft)
+            }
+            .padding(.horizontal, 14)
+            .frame(width: PadPaper.collapsedWidth, height: PillMetrics.height)
+            .background(paper(RoundedRectangle(cornerRadius: PadPaper.collapsedRadius)))
+            .contentShape(RoundedRectangle(cornerRadius: PadPaper.collapsedRadius))
+        }
+        .buttonStyle(.plain)
+        .help("Open the scratchpad")
+    }
+
+    // MARK: - Parts
+
+    /// A PEN NIB, no page behind it. The pad is the page; drawing a second one
+    /// on the control that opens it says the same thing twice.
+    private var nib: some View {
+        Image(systemName: "pencil.tip")
+            .font(.system(size: 12))
+            .foregroundColor(armed ? PadPaper.primary : PadPaper.inkSoft)
     }
 
     /// Says what the surface IS, because a floating list of fragments with no
     /// title is not self-explanatory the first time it appears. The arm state is
     /// here too: it is the difference between "this keeps growing" and "this is
-    /// what you have", and the icon that controls it is on a pill that may not
-    /// be on screen right now.
+    /// what you have".
+    ///
+    /// IT IS ALSO THE COLLAPSE CONTROL — one control, in both directions. A
+    /// separate close button would read as an exit, and there is no exit here.
     private var header: some View {
-        HStack(spacing: 7) {
-            Image(systemName: armed ? "note.text.badge.plus" : "note.text")
-                .font(.system(size: 11))
-                .foregroundColor(armed ? Theme.cReady : Theme.textFaint)
-            Text("Scratchpad")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(Theme.text)
-            Text(armed ? "keeping" : "held")
-                .font(.system(size: 11))
-                .foregroundColor(Theme.textFaint)
-            Spacer(minLength: 0)
+        Button(action: { expandedPad = false }) {
+            HStack(spacing: 7) {
+                nib
+                Text("Scratchpad")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundColor(PadPaper.ink)
+                Text(armed ? "keeping" : "held")
+                    .font(.system(size: 11))
+                    .foregroundColor(PadPaper.inkSoft)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(PadPaper.inkSoft)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
+        .buttonStyle(.plain)
+        .help("Put the scratchpad away — nothing is sent and nothing is lost")
+    }
+
+    private var rule: some View {
+        Rectangle().fill(PadPaper.divider).frame(height: 1)
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             // The primary is whichever destination the capture opened with; the
             // rest are alternatives. "Add to <task>" is present only when a task
             // is really focused.
@@ -87,7 +205,7 @@ struct ScratchpadView: View {
                     onDeliver(d.id)
                 }
             }
-            Spacer(minLength: 6)
+            Spacer(minLength: 4)
             // DISCARD IS NOT A CANCEL, and must never look like one.
             //
             // Once a delivery is in flight the pad has already been TAKEN for
@@ -97,8 +215,12 @@ struct ScratchpadView: View {
             // work the user tried to SEND. Offering a live Discard here would
             // read as "stop the send", which it would not do, so it goes quiet
             // for the moment the question is unanswerable.
+            //
+            // NO RED. The approved palette has none, and a note does not shout.
+            // Discard reads as the quietest control on the surface, which is
+            // what a destructive action nobody should hit by accident deserves.
             PadButton(label: delivering ? "Sending…" : "Discard",
-                      destructive: !delivering,
+                      quiet: !delivering,
                       enabled: !delivering,
                       action: onDiscard)
                 .help(delivering
@@ -106,6 +228,13 @@ struct ScratchpadView: View {
                       : "Throw the pad away")
         }
         .padding(8)
+    }
+
+    /// Card stock and its edge. NO DROP SHADOW — see PillView's note: a soft
+    /// shadow pools behind the whole cluster and reads as a bounding box around
+    /// the surface. The edge does the separating.
+    private func paper<S: Shape>(_ shape: S) -> some View {
+        shape.fill(PadPaper.paper).overlay(shape.stroke(PadPaper.edge, lineWidth: 0.75))
     }
 }
 
@@ -125,23 +254,23 @@ private struct EntryRow: View {
                       ? (isExpanded ? "chevron.down" : "chevron.right")
                       : entry.glyph)
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(Theme.textFaint)
+                    .foregroundColor(PadPaper.inkSoft)
                     .frame(width: 12)
                 Text(entry.preview)
                     .font(.system(size: 12.5))
-                    .foregroundColor(Theme.text)
+                    .foregroundColor(PadPaper.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 6)
                 if let d = entry.durationLabel {
                     Text(d)
                         .font(.system(size: 11)).monospacedDigit()
-                        .foregroundColor(Theme.textFaint)
+                        .foregroundColor(PadPaper.inkSoft)
                 }
                 Button(action: onRemove) {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(Theme.textFaint)
+                        .foregroundColor(PadPaper.inkSoft)
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                 }
@@ -150,7 +279,7 @@ private struct EntryRow: View {
             }
             .padding(.horizontal, 6).padding(.vertical, 5)
             .background(RoundedRectangle(cornerRadius: 7)
-                .fill(hovering ? Color.white.opacity(0.06) : .clear))
+                .fill(hovering ? PadPaper.rowHover : .clear))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
             .onTapGesture { if entry.isSegment { onToggle() } }
@@ -158,7 +287,7 @@ private struct EntryRow: View {
             if isExpanded {
                 Text(entry.full)
                     .font(.system(size: 12.5))
-                    .foregroundColor(Theme.textDim)
+                    .foregroundColor(PadPaper.inkSoft)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 24).padding(.trailing, 8)
@@ -169,20 +298,27 @@ private struct EntryRow: View {
     }
 }
 
-/// The footer's button. Same capsule vocabulary as the pill's CapsuleButton —
-/// this surface is part of the same instrument, not a dialog.
+/// The footer's button. Paper stationery, not the cluster's glass: a white face
+/// with a card-stock edge, and one teal primary for the destination the capture
+/// was already heading to.
 private struct PadButton: View {
     let label: String
     var prominent: Bool = false
-    var destructive: Bool = false
+    /// The de-emphasised end of the row (Discard). Same face, quieter ink.
+    var quiet: Bool = false
     var enabled: Bool = true
     let action: () -> Void
     @State private var hovering = false
 
     private var ink: Color {
-        if !enabled { return Theme.textFaint }
-        if prominent { return Theme.accentInk }
-        return destructive ? Theme.cError : Theme.text
+        if !enabled { return PadPaper.inkSoft }
+        if prominent { return PadPaper.primaryInk }
+        return quiet ? PadPaper.inkSoft : PadPaper.ink
+    }
+
+    private var face: Color {
+        if prominent && enabled { return PadPaper.primary.opacity(hovering ? 0.88 : 1) }
+        return hovering && enabled ? PadPaper.rowHover : PadPaper.buttonFace
     }
 
     var body: some View {
@@ -191,17 +327,16 @@ private struct PadButton: View {
                 .font(.system(size: 12, weight: prominent ? .semibold : .regular))
                 .foregroundColor(ink)
                 .lineLimit(1)
-                .padding(.horizontal, 11).padding(.vertical, 5)
-                .background(Capsule().fill(prominent && enabled
-                                           ? Theme.accent.opacity(hovering ? 0.86 : 1)
-                                           : Color.white.opacity(enabled && hovering ? 0.18 : 0.10)))
-                .overlay(Capsule().stroke(prominent && enabled ? Color.clear : Color.white.opacity(0.30),
-                                          lineWidth: 0.5))
+                .truncationMode(.tail)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Capsule().fill(face))
+                .overlay(Capsule().stroke(prominent && enabled ? Color.clear : PadPaper.edge,
+                                          lineWidth: 0.75))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.55)
+        .opacity(enabled ? 1 : 0.6)
         .onHover { hovering = $0 && enabled }
         .animation(Theme.hover, value: hovering)
     }

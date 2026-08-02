@@ -14,11 +14,12 @@ final class AppController: NSObject, NotchResizing {
     private let pillModel = PillModel()
     private var pillWindow: PillWindow!
     private var pillHost: NSHostingView<AnyView>!
-    // The pad — held work, waiting for a destination. A SEPARATE panel because
-    // it outlives the pill: the pill exists only while a capture does, and the
-    // whole point of the scratchpad is accumulating across several.
+    // The pad — held work, waiting for a destination. It is drawn INSIDE the
+    // pill's panel, as one more element in the cluster's row (PillView.pad), so
+    // it has a model here but no window of its own. Sharing the panel is what makes the
+    // pad's non-activating contract structural rather than a copied checklist:
+    // there is only one set of flags, and it is PillWindow's.
     private let scratchModel = ScratchpadModel()
-    private var scratchWindow: ScratchpadWindow!
     private var geometry: NotchGeometry
     /// Kept because contentView is now a container, not the hosting view.
     private var hostView: NSHostingView<NotchView>!
@@ -87,30 +88,30 @@ final class AppController: NSObject, NotchResizing {
         pillHost = host
         pillWindow.contentView = host
 
-        // The pad's panel. Non-activating for the same reason the pill's is —
-        // see ScratchpadWindow: taking focus would kill the insertion point the
-        // user is about to deliver into.
-        scratchWindow = ScratchpadWindow()
-        scratchWindow.fit(geometry: geometry)
-        let padHost = NSHostingView(rootView: ScratchpadHost(model: scratchModel))
-        padHost.sizingOptions = []
-        scratchWindow.contentView = padHost
-
         reconcileSurfaces()
     }
 
-    /// THE TWO INPUT SURFACES ARE MUTUALLY EXCLUSIVE, so they must be decided
-    /// together — either one changing can change the other's answer.
+    /// ONE PANEL, TWO SURFACES, AND THEY ARE NO LONGER EXCLUSIVE.
+    ///
+    /// The pad used to be a second window that could only be shown while the
+    /// pill was hidden. Its bottom edge sat at the top of the cluster plus the
+    /// cluster's 9pt row spacing — which is exactly the slot `PillView.content`
+    /// gives the mic hint and the model/agent selector — so a co-visible pad
+    /// covered the coaching line and the selector opened by clicking the very
+    /// cluster the scratchpad chip sits in. Mutual exclusion was the honest
+    /// answer to an overlap, not a design.
+    ///
+    /// The pad now sits BESIDE the whole column instead of above the pill (see
+    /// PillView.content), so the overlap cannot be constructed and neither can
+    /// the rule. Both surfaces are drawn in this one window, which is also why
+    /// the pad inherits every focus flag PillWindow sets rather than repeating
+    /// them — there is only one set, and it is the pill's.
+    ///
+    /// Hidden means ORDERED OUT, not zero-alpha: an invisible always-on panel
+    /// still sits in the window server and still competes for clicks.
     private func reconcileSurfaces() {
-        reconcilePillVisibility()
-        reconcilePadVisibility()
-    }
-
-    /// The pill exists only while a capture does. Hidden means ORDERED OUT, not
-    /// zero-alpha: an invisible always-on panel still sits in the window server
-    /// and still competes for clicks.
-    private func reconcilePillVisibility() {
-        if pillModel.visible {
+        let wanted = pillModel.visible || scratchModel.visible
+        if wanted {
             if !pillWindow.isVisible {
                 pillWindow.present()
                 // Shown after being ordered out — whatever it last sampled may
@@ -119,38 +120,6 @@ final class AppController: NSObject, NotchResizing {
             }
         } else if pillWindow.isVisible {
             pillWindow.orderOut(nil)
-        }
-    }
-
-    /// The pad is on screen only when it HOLDS something, and NEVER while the
-    /// pill is up. Same ordered-out rule as the pill, for the same reason: an
-    /// invisible always-on panel still sits in the window server and still
-    /// competes for clicks.
-    ///
-    /// THE PILL WINS THE SLOT. The pad's bottom edge is the top of the pill
-    /// cluster plus the cluster's own 9pt row spacing — which is exactly where
-    /// `PillView.content` puts the mic-status hint and the model/agent selector.
-    /// Both windows are `.screenSaver` and the pad orders itself front as it
-    /// appears, so a co-visible pad would cover the coaching line and the
-    /// selector panel — the selector being opened by a click on the very
-    /// cluster the scratchpad chip lives in.
-    ///
-    /// Making them exclusive rather than nudging the pad upward is the honest
-    /// fix: while a capture is running the PILL is the surface, the pad's
-    /// destinations are not actionable yet (the set is still changing, and
-    /// pasting at a cursor mid-dictation would fight the capture), and the pad
-    /// carries nothing the icon's armed state does not already say. The pad
-    /// returns the moment the capture's pill goes away, in the same place it
-    /// always sits — it never has to move to dodge anything.
-    private func reconcilePadVisibility() {
-        guard let scratchWindow else { return }
-        if scratchModel.visible && !pillModel.visible {
-            if !scratchWindow.isVisible {
-                scratchWindow.present()
-                Appearance.shared.invalidateBackdrop()
-            }
-        } else if scratchWindow.isVisible {
-            scratchWindow.orderOut(nil)
         }
     }
 
@@ -645,8 +614,7 @@ final class AppController: NSObject, NotchResizing {
         // it has to move too — plugging in a monitor, or moving the menu bar to
         // one, relocates both surfaces together. Its size preference does not
         // re-fire on a screen change, so refit explicitly from the current frame.
-        pillWindow?.fit(geometry: geometry)
-        scratchWindow?.fit(geometry: geometry)   // it rides directly above the pill
+        pillWindow?.fit(geometry: geometry)   // the pad rides inside it
         NotchLog.log("geometry recomputed (\(reason)): screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) → window=\(NotchLog.rect(f))")
     }
 }

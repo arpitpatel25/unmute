@@ -228,6 +228,12 @@ struct NotchGeometry {
     /// The pill window's frame — full usable width so the cluster can grow in
     /// both directions from centre without the window ever being resized
     /// mid-capture.
+    ///
+    /// The scratchpad is drawn inside this same canvas, as one more element in
+    /// the cluster's row (PillView.pad), so the widest thing it must hold is now
+    /// the selector column (~530) plus a gap plus a 340pt pad — ~880, which
+    /// clears the 1200 cap with room to spare. Nothing is drawn in the rest and
+    /// the empty area stays click-through (see PillWindow).
     func pillFrame() -> NSRect {
         let screen = Self.primaryScreen()
         let visible = screen.visibleFrame

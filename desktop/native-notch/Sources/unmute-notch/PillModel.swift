@@ -26,6 +26,12 @@ enum PillPhase: String, Codable {
     case hidden
     /// Speaking. dot (or the Remote glyph) + timer + stop. NO label.
     case recording
+    /// STOPPED WITH THE SCRATCHPAD ARMED — the work is on the pad and the same
+    /// key resumes the same dictation. Amber dot + "Paused". The one state the
+    /// pill stays up for with no live capture behind it, because vanishing here
+    /// tells the user their session ended when it has not. Main decides it (see
+    /// hideNativePill in init.ts), not the capture renderer.
+    case paused
     /// Audio done, text pending. The one resting state that does carry a word.
     case processing
     /// Silent success acknowledgement — a green tick, nothing else.
