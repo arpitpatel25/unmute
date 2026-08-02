@@ -225,20 +225,27 @@ struct NotchGeometry {
     /// Distance from the bottom of the screen's visible frame.
     static let pillBottomInset: CGFloat = 26
 
-    /// The pill window's frame — full usable width so the cluster can grow in
-    /// both directions from centre without the window ever being resized
+    /// The pill window's frame — the WHOLE screen width, so the cluster can grow
+    /// in both directions from centre without the window ever being resized
     /// mid-capture.
     ///
-    /// The scratchpad is drawn inside this same canvas, as one more element in
-    /// the cluster's row (PillView.pad), so the widest thing it must hold is now
-    /// the selector column (~530) plus a gap plus a 340pt pad — ~880, which
-    /// clears the 1200 cap with room to spare. Nothing is drawn in the rest and
-    /// the empty area stays click-through (see PillWindow).
+    /// It was 90% of the screen capped at 1200. The scratchpad is now drawn
+    /// inside this same canvas as one more element in the cluster's row, and the
+    /// row carries a counterweight of the pad's width on the far side so the
+    /// pill stays put (PillView.counterweight) — which means the canvas must
+    /// hold `2 × 340 + 2 × 8 + the widest column`. With the Codex selector open
+    /// that is ~1226, and the old cap clipped it. Nothing is drawn in the extra
+    /// width, and the empty area stays click-through (see PillWindow), so the
+    /// cap bought nothing and cost the pad its edge.
+    ///
+    /// A display narrower than ~1226pt still cannot show that widest case whole;
+    /// the pad's outer edge is clipped and the pill stays where it is, which is
+    /// the right way round. The ordinary dictation cluster needs only ~908.
     func pillFrame() -> NSRect {
         let screen = Self.primaryScreen()
         let visible = screen.visibleFrame
-        let width = min(screenFrame.width * 0.9, 1200)
-        let x = round(screenFrame.midX - width / 2)
+        let width = screenFrame.width
+        let x = round(screenFrame.minX)
         let y = round(visible.minY + Self.pillBottomInset)
         return NSRect(x: x, y: y, width: width, height: Self.pillCanvasHeight)
     }

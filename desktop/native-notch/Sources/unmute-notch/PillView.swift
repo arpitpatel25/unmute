@@ -232,7 +232,21 @@ struct PillView: View {
             // and it grows upward from there. The pad takes no part in the
             // COLUMN's vertical layout at all, which is what keeps a 340×340
             // note from shoving the hint three hundred points up the screen.
+            //
+            // AND THE PILL DOES NOT MOVE. A row of [column, pad] centres on the
+            // MIDDLE OF BOTH, so the pill slid 174pt left the instant a pad
+            // appeared and 96pt more when it collapsed — motion on the one
+            // element the user's eye is trained on, to announce something
+            // happening beside it. The counterweight fixes that in the layout
+            // rather than with a transform: an empty view of exactly the pad's
+            // width on the FAR side, so the row is symmetric about the column
+            // and centring the row centres the column. The pill's position is
+            // then identical whether the pad is absent, expanded or collapsed —
+            // and it stays identical if the row ever outgrows the canvas, since
+            // the overflow is symmetric too and the left half of it is the
+            // counterweight, which is nothing.
             HStack(alignment: .bottom, spacing: PadPaper.gap) {
+                counterweight
                 VStack(spacing: 9) {
                     // ONE CHIP AT A TIME, with strict precedence: mic narration
                     // first, then noise, then quiet — "noise wins: it's the
@@ -252,6 +266,15 @@ struct PillView: View {
                 }
                 pad
             }
+            // NOTHING IN THIS ROW MAY BE COMPRESSED TO MAKE IT FIT. Without
+            // this, a row wider than the canvas is resolved by squeezing
+            // whatever can squeeze — the agent and model labels — which both
+            // looks broken and MOVES THE PILL, since its position is the
+            // cluster's layout. Overflowing and clipping the pad's outer edge
+            // instead keeps the pill exactly where it was. See padWidth for
+            // when that can happen.
+            .fixedSize(horizontal: true, vertical: false)
+            .animation(Theme.collapse, value: padExpanded)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.bottom, 4)
@@ -265,6 +288,29 @@ struct PillView: View {
     /// on the PILL's, which is the one thing the geometry promises.
     private var offlineShowing: Bool { chipsVisible && s.offline != nil }
 
+    /// ONE EXPRESSION FOR THE PAD'S FOOTPRINT, read by both the pad and its
+    /// counterweight. Two copies of this number would let the row go asymmetric
+    /// — and an asymmetric row is a pill that has moved.
+    private var padWidth: CGFloat {
+        padExpanded ? PadPaper.width : PadPaper.collapsedWidth
+    }
+
+    /// The pad's width, on the other side of the column, drawing nothing.
+    ///
+    /// It is deliberately not a Spacer: a Spacer is flexible and would absorb
+    /// slack instead of reserving a fixed mirror of the pad. `allowsHitTesting`
+    /// is off so it cannot swallow a click meant for the app underneath — the
+    /// pill window's empty canvas is click-through BY DESIGN (see PillWindow),
+    /// and this is a large piece of that canvas.
+    @ViewBuilder private var counterweight: some View {
+        if padShowing, scratch.state.pad != nil {
+            Color.clear
+                .frame(width: padWidth, height: 1)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
     @ViewBuilder private var pad: some View {
         if padShowing, let padState = scratch.state.pad {
             ScratchpadView(
@@ -277,8 +323,11 @@ struct PillView: View {
                 onDeliver: { scratch.emit(.scratchpadDeliver(dest: $0)) },
                 onDiscard: { scratch.emit(.scratchpadDiscard) }
             )
+            // Pinned to the SAME expression the counterweight uses, rather than
+            // trusting ScratchpadView's own frame to agree with it. The two
+            // sides of the balance now cannot drift, including mid-animation.
+            .frame(width: padWidth, alignment: .leading)
             .padding(.bottom, offlineShowing ? PillMetrics.height + 9 : 0)
-            .animation(Theme.collapse, value: padExpanded)
         }
     }
 

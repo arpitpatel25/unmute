@@ -33,6 +33,27 @@ enum PadPaper {
     static let primary    = Color(red: 14.0 / 255, green: 124.0 / 255, blue: 123.0 / 255)
     static let primaryInk = Color.white
 
+    /// #9A3412 — the ONE addition to the approved palette, for Discard.
+    ///
+    /// It is an OXIDE, not an alert. The system's red (#FF3B30 and its
+    /// relatives) is a screen colour: cool, saturated, and instantly read as
+    /// chrome belonging to the OS rather than marking on the page. This is iron
+    /// oxide — the red of a rubber stamp or a correcting pen — and it is warm,
+    /// which is what lets it sit on a warm off-white beside tan rules instead of
+    /// floating above them.
+    ///
+    /// It also cannot fight the primary. #0E7C7B is a cyan-leaning teal and this
+    /// is very nearly its opposite on the wheel, so the two never compete for
+    /// the same register; and the teal carries a FILLED capsule while this is
+    /// ink on white, which is the heavier of the two by a wide margin. Discard
+    /// is unmissable without becoming the thing your eye lands on first.
+    ///
+    /// Contrast, computed (WCAG relative luminance): 7.3:1 on the white button
+    /// face and 7.1:1 on the paper — comfortably past AA at this size, and
+    /// deliberately below the body ink's ~16:1 so it reads as emphasis rather
+    /// than as the loudest text on the surface.
+    static let destructive = Color(red: 154.0 / 255, green: 52.0 / 255, blue: 18.0 / 255)
+
     /// THE PAD'S WIDTH IS FIXED. A content-sized pad would move its own left
     /// edge — and, since it is a sibling in a centred row, the pill with it —
     /// every time a row's text changed.
@@ -219,11 +240,12 @@ struct ScratchpadView: View {
             // read as "stop the send", which it would not do, so it goes quiet
             // for the moment the question is unanswerable.
             //
-            // NO RED. The approved palette has none, and a note does not shout.
-            // Discard reads as the quietest control on the surface, which is
-            // what a destructive action nobody should hit by accident deserves.
+            // RED — see PadPaper.destructive. It is the only thing on this
+            // surface that destroys work, and it should look like it. It goes
+            // colourless the moment it is disabled, because "Sending…" is a
+            // status, not a threat.
             PadButton(label: delivering ? "Sending…" : "Discard",
-                      quiet: !delivering,
+                      destructive: !delivering,
                       enabled: !delivering,
                       action: onDiscard)
                 .help(delivering
@@ -307,8 +329,10 @@ private struct EntryRow: View {
 private struct PadButton: View {
     let label: String
     var prominent: Bool = false
-    /// The de-emphasised end of the row (Discard). Same face, quieter ink.
-    var quiet: Bool = false
+    /// Discard. Red ink and a red edge on the same white face — the weight of
+    /// the control is unchanged, only its colour, so it cannot be mistaken for
+    /// a second primary.
+    var destructive: Bool = false
     var enabled: Bool = true
     let action: () -> Void
     @State private var hovering = false
@@ -316,12 +340,21 @@ private struct PadButton: View {
     private var ink: Color {
         if !enabled { return PadPaper.inkSoft }
         if prominent { return PadPaper.primaryInk }
-        return quiet ? PadPaper.inkSoft : PadPaper.ink
+        return destructive ? PadPaper.destructive : PadPaper.ink
     }
 
     private var face: Color {
         if prominent && enabled { return PadPaper.primary.opacity(hovering ? 0.88 : 1) }
-        return hovering && enabled ? PadPaper.rowHover : PadPaper.buttonFace
+        guard hovering && enabled else { return PadPaper.buttonFace }
+        // A wash of the button's OWN colour rather than the generic row hover —
+        // the same tone at 8%, so hovering Discard confirms what it is instead
+        // of introducing a fourth colour.
+        return destructive ? PadPaper.destructive.opacity(0.08) : PadPaper.rowHover
+    }
+
+    private var border: Color {
+        if prominent && enabled { return .clear }
+        return destructive && enabled ? PadPaper.destructive.opacity(0.45) : PadPaper.edge
     }
 
     var body: some View {
@@ -332,9 +365,8 @@ private struct PadButton: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(Capsule().fill(face))
-                .overlay(Capsule().stroke(prominent && enabled ? Color.clear : PadPaper.edge,
-                                          lineWidth: 0.75))
+                .background(Capsule().fill(PadPaper.buttonFace).overlay(Capsule().fill(face)))
+                .overlay(Capsule().stroke(border, lineWidth: 0.75))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
