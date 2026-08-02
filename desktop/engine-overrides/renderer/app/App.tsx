@@ -8,10 +8,14 @@ import { SETTINGS_SECTIONS, SegmentedControl } from './_shared'
 import type { SettingsSection } from './_shared'
 import { BalancePill } from '../paywall/BalancePill'
 // ─── Unmute Remote ───
-// Tasks NO LONGER live here. The notch is the single task/attention surface
-// (spec 2026-07-24): top-center = status output, bottom-center = voice input.
-// The main app keeps dictation history, the orchestrator's control surfaces,
-// the account, and settings.
+// The notch remains the single ATTENTION surface (spec 2026-07-24): top-center
+// = status output, bottom-center = voice input. Nothing here interrupts you,
+// and the notch is still where a running task announces itself.
+//
+// What changed: the Orchestrator tab now has a Tasks page (`TaskPanel`) as its
+// default, because a destination described as "what your agents are doing" that
+// opens on a settings pane is the wrong first frame. That is an on-demand list
+// you navigate to, not a surface that pushes at you — the notch keeps that job.
 import { OutOfCreditBanner } from '../paywall/OutOfCreditBanner'
 import { AuthProvider, useAuth } from '../paywall/AuthContext'
 import { SignInScreen } from '../paywall/SignInScreen'
@@ -95,8 +99,12 @@ export function readOnboardingVersion(): number | null {
   }
 }
 
-/** Settings → Help & about's "Replay onboarding". Clears both keys, so the user
- *  gets the full flow rather than the three-screen summary. */
+/** Clears both keys, so the user gets the full flow rather than the three-screen
+ *  summary. Exported for Settings → Help & about's "Replay onboarding" to call.
+ *  NOTHING CALLS IT YET: that button lives in `Settings.tsx`, which this pack
+ *  does not own, and still inlines `removeItem('unmute_onboarding_complete')`.
+ *  That inline version keeps working — see the note on the legacy key above —
+ *  so this is the tidier replacement, not a fix for something broken. */
 export function resetOnboarding(): void {
   try {
     localStorage.removeItem(ONBOARDING_VERSION_KEY)
@@ -140,7 +148,9 @@ function AppInner() {
   const [pendingUpdate, setPendingUpdate] = useState<string | null>(null)
   // Language sub-item badge — "Auto" or the ISO code (uppercased). Kept in sync
   // via a refresh on every navigation away from the Language section, since the
-  // Language component itself is the only writer.
+  // Language component itself is the only writer. DORMANT on this branch alone:
+  // `Language.tsx` moves inside Settings and Pack B mounts it, so until that
+  // lands nothing can change the value and the badge never moves.
   const [languageBadge, setLanguageBadge] = useState<string>('Auto')
   const [orchestratorPage, setOrchestratorPage] = useState<OrchestratorPage>('tasks')
   // Which of the seven Settings sections the sidebar has selected. Pack B's
@@ -381,6 +391,14 @@ function AppInner() {
 /**
  * The Orchestrator tab and its four sub-pages. The components themselves belong
  * to Pack C; this is only the navigation between them.
+ *
+ * KNOWN SEAM FOR PACK C. `TaskPanel` carries its own `'tasks' | 'how' | 'setup'`
+ * state and its own links into `RemoteHowItWorks` and `RemoteSetup` — it was
+ * written as a standalone panel, and until this pack it was imported by nothing
+ * at all. So there are briefly two navigations over the same three pages: enter
+ * How-it-works from inside the Tasks page and the segment above still reads
+ * "Tasks". Collapsing TaskPanel's internal pages into this control is Pack C's
+ * to do; doing it here would mean editing a file this pack does not own.
  */
 function OrchestratorTab({ page, onPageChange }: {
   page: OrchestratorPage

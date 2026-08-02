@@ -162,10 +162,24 @@ reachable, which is what VERIFY 50 is guarding.
 **`TaskPanel` is now mounted from the main window for the first time.** Its own
 header comment says it was designed to live "as a tab in the main window", and it
 was previously imported by nothing at all — the widened `'tasks'` page in the
-SPEC's union needs something to render, and this is the component for it. It has
-its own internal `how`/`setup` sub-pages that now duplicate the outer segmented
-control; Pack C owns that file and can collapse the duplication. I did not touch
-it.
+SPEC's union needs something to render, and this is the component for it.
+
+**Hand-off to Pack C: there are briefly two navigations over the same three
+pages.** `TaskPanel` carries its own `'tasks' | 'how' | 'setup'` state and its
+own links into `RemoteHowItWorks` and `RemoteSetup`. Enter How-it-works from
+inside the Tasks page and the segmented control above it still reads "Tasks" —
+an outer selection that has gone stale. Collapsing TaskPanel's internal pages
+into the outer control is the right fix and it belongs to Pack C, which owns
+that file. Doing it here would mean editing a file this pack does not own. The
+seam is commented at the `OrchestratorTab` definition so it is not discovered by
+accident.
+
+**Onboarding gained a Back control.** VERIFY 28 asks that "back/forward never
+lands on a blank screen" — but neither the old flow nor my first draft had any
+way back at all, so a user who wanted to re-read a screen had to restart the
+app. `Shell` now takes an optional `onBack`, rendered next to the step counter
+and absent on the first screen. It does not weaken the permissions gate: step 5
+still blocks *forward* until both are granted.
 
 **Sidebar sub-items carry no icons.** Seven new glyphs in a 220px rail would have
 fought decision D8's one-icon-per-concept rule far more than they would have

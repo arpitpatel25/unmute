@@ -2,9 +2,12 @@
 // Permissions tabs. Extracted from the old single-page Settings.tsx
 // during the UI restructure. Pure presentation only — no IPC, no state.
 //
-// TYPE SCALE (decision D8). Every font size in a screen a user sees is one of
-// 22 / 16 / 14 / 13 / 12.5 / 11 / 10 px and nothing between. The odd 9px and
-// 12px sizes that used to live here were folded into 10px and 12.5px.
+// TYPE SCALE (decision D8). The scale is 22 / 16 / 14 / 13 / 12.5 / 11 / 10 px
+// and nothing between. THIS FILE now conforms — the odd 9px and 12px sizes that
+// used to live here were folded into 10px and 12.5px — as do App.tsx and
+// Onboarding.tsx. The rest of the app does not yet: Settings.tsx still has 8,
+// 9, 12 and 18, and Account/Language/Permissions/Privacy still have 12. Those
+// belong to other packs.
 //
 // ICONS. One glyph per concept. `BehaviorIcon` used to be a clock, which is
 // also what the sidebar's History row draws — two concepts, one glyph. It is

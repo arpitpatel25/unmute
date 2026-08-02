@@ -577,7 +577,15 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
     </div>,
   ]
 
-  return <Shell step={step} total={steps.length}>{steps[step]}</Shell>
+  return (
+    <Shell
+      step={step}
+      total={steps.length}
+      onBack={step > 0 ? () => setStep(step - 1) : undefined}
+    >
+      {steps[step]}
+    </Shell>
+  )
 }
 
 /* ─── What's new (decision D4) ─────────────────────────────────────────
@@ -654,12 +662,27 @@ export function WhatsNew({ onComplete, onOpenAgentSetup }: OnboardingProps) {
     </div>,
   ]
 
-  return <Shell step={step} total={screens.length}>{screens[step]}</Shell>
+  return (
+    <Shell
+      step={step}
+      total={screens.length}
+      onBack={step > 0 ? () => setStep(step - 1) : undefined}
+    >
+      {screens[step]}
+    </Shell>
+  )
 }
 
 /* ─── Shared chrome ─── */
 
-function Shell({ step, total, children }: { step: number; total: number; children: React.ReactNode }) {
+function Shell({ step, total, onBack, children }: {
+  step: number
+  total: number
+  /** Absent on the first screen; otherwise steps one back. The flow had no way
+   *  back at all, so a user who wanted to re-read a screen had to restart. */
+  onBack?: () => void
+  children: React.ReactNode
+}) {
   return (
     <div className="h-screen bg-cream flex flex-col">
       {/* Titlebar drag region */}
@@ -674,11 +697,19 @@ function Shell({ step, total, children }: { step: number; total: number; childre
         ))}
       </div>
 
-      {/* Step counter */}
-      <div className="px-10 mt-4">
+      {/* Step counter + back */}
+      <div className="px-10 mt-4 flex items-center gap-3">
         <span className="text-[11px] text-ink-35 font-medium">
           {step + 1} of {total}
         </span>
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="titlebar-no-drag text-[11px] text-ink-35 font-medium hover:text-ink-60 transition-colors"
+          >
+            ← Back
+          </button>
+        )}
       </div>
 
       {/* Content */}
