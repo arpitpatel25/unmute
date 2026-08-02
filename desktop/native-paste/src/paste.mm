@@ -70,7 +70,13 @@ Napi::Value ProcessInfo(const Napi::CallbackInfo& info) {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// postCmdV() — the actual paste
+// postV() — the actual paste, with the modifier the caller needs
+//
+// ONE implementation, two exports. postCmdV() (⌘V) is the text delivery
+// fast path and its behaviour is unchanged byte for byte — the ONLY
+// difference between the two callers is the CGEventFlags value set in
+// step 4. Duplicating sixty lines to vary one flag would let the two
+// copies drift; the flag is a parameter instead.
 //
 // Returns an object with one boolean per step taken, plus `ok` overall.
 // On any failure, `error` is set to a human-readable description of the
@@ -88,8 +94,7 @@ Napi::Value ProcessInfo(const Napi::CallbackInfo& info) {
 //     stepFailed?:     string,  // present only when ok=false
 //   }
 // ────────────────────────────────────────────────────────────────────
-Napi::Value PostCmdV(const Napi::CallbackInfo& info) {
-  Napi::Env env = info.Env();
+static Napi::Value PostV(Napi::Env env, CGEventFlags modifierFlags) {
   Napi::Object result = Napi::Object::New(env);
 
   result.Set("ax_trusted", Napi::Boolean::New(env, false));
@@ -139,9 +144,9 @@ Napi::Value PostCmdV(const Napi::CallbackInfo& info) {
   }
   result.Set("events_created", Napi::Boolean::New(env, true));
 
-  // ─── Step 4: Set Cmd flag and post ─────────────────────────────
-  CGEventSetFlags(keyDown, kCGEventFlagMaskCommand);
-  CGEventSetFlags(keyUp, kCGEventFlagMaskCommand);
+  // ─── Step 4: Set the modifier flag and post ────────────────────
+  CGEventSetFlags(keyDown, modifierFlags);
+  CGEventSetFlags(keyUp, modifierFlags);
 
   // CGEventPost returns void — there is no in-band way to know if delivery
   // succeeded. The JS side verifies by checking if the focused app received
@@ -157,6 +162,45 @@ Napi::Value PostCmdV(const Napi::CallbackInfo& info) {
 
   result.Set("ok", Napi::Boolean::New(env, true));
   return result;
+}
+
+/** ⌘V — the paste every destination understands. Text delivery's fast path. */
+Napi::Value PostCmdV(const Napi::CallbackInfo& info) {
+  return PostV(info.Env(), kCGEventFlagMaskCommand);
+}
+
+/** Ctrl-V — the paste a TUI can actually see.
+ *
+ *  A terminal emulator INTERCEPTS ⌘V: it asks the pasteboard for text and
+ *  writes that to the child's stdin. An image has no text, so a screenshot
+ *  handed to Claude Code or Codex this way arrives as nothing at all.
+ *  Ctrl-V is not a terminal shortcut — it passes through as the control
+ *  character, the TUI's own key handler catches it, reads the macOS
+ *  pasteboard directly (it is a Node process) and ingests the image. */
+Napi::Value PostCtrlV(const Napi::CallbackInfo& info) {
+  return PostV(info.Env(), kCGEventFlagMaskControl);
+}
+
+// ────────────────────────────────────────────────────────────────────
+// frontmostBundleId() — who is about to receive the keystroke
+//
+// A single NSWorkspace property read: no AX tree walk, no child process,
+// no IPC. Microseconds, in-process, safe to call on the delivery path.
+// (The image delivery path is where it is called from — never the text
+// fast path.)
+//
+// Returns the bundle identifier of the frontmost application, or null
+// when there is no frontmost app or it has no bundle id (a bare binary).
+// Callers treat null as "unknown" and use ⌘V.
+// ────────────────────────────────────────────────────────────────────
+Napi::Value FrontmostBundleId(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  @autoreleasepool {
+    NSRunningApplication *front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+    NSString *bid = front ? front.bundleIdentifier : nil;
+    if (bid == nil) return env.Null();
+    return Napi::String::New(env, [bid UTF8String]);
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -185,7 +229,9 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("isAccessibilityTrusted",
               Napi::Function::New(env, IsAccessibilityTrusted));
   exports.Set("postCmdV", Napi::Function::New(env, PostCmdV));
+  exports.Set("postCtrlV", Napi::Function::New(env, PostCtrlV));
   exports.Set("processInfo", Napi::Function::New(env, ProcessInfo));
+  exports.Set("frontmostBundleId", Napi::Function::New(env, FrontmostBundleId));
   exports.Set("clipboardChangeCount",
               Napi::Function::New(env, ClipboardChangeCount));
   return exports;

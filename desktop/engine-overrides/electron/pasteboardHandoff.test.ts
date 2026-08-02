@@ -1,6 +1,13 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handOffImages, SETTLE_MS, type HandoffDeps } from './pasteboardHandoff'
+import {
+  handOffImages,
+  imagePasteModifier,
+  SETTLE_MS,
+  TERMINAL_BUNDLE_IDS,
+  type HandoffDeps,
+  type PasteModifier,
+} from './pasteboardHandoff'
 
 /** The decoded-image handle a real `prepareImage` would return. Opaque to the
  *  module; carried straight through to the write. */
@@ -11,6 +18,9 @@ function recorder(overrides: Partial<HandoffDeps<FakeImage>> = {}) {
   const trace: string[] = []
   const warnings: string[] = []
   const decodes: string[] = []
+  /** Every modifier a paste was posted with, in order. Kept OUT of `trace` so
+   *  the order assertions above stay about order and nothing else. */
+  const modifiers: PasteModifier[] = []
   const deps: HandoffDeps<FakeImage> = {
     prepareImage: (p) => {
       decodes.push(p)
@@ -21,12 +31,13 @@ function recorder(overrides: Partial<HandoffDeps<FakeImage>> = {}) {
     writeImageAndRecord: (img) => { trace.push(`writeImage(${img.from})+record`) },
     writeTextAndRecord: (t) => { trace.push(`writeText(${t})+record`) },
     verifyServesPNG: async (b) => { trace.push(`verify(${b})`); return true },
-    paste: async () => { trace.push('paste') },
+    frontmostBundleId: () => 'com.tinyspeck.slackmacgap',
+    paste: async (mod) => { trace.push('paste'); modifiers.push(mod) },
     settle: async (ms) => { trace.push(`settle(${ms})`) },
     warn: (m) => { warnings.push(m) },
     ...overrides,
   }
-  return { trace, warnings, decodes, deps }
+  return { trace, warnings, decodes, modifiers, deps }
 }
 
 describe('nothing to hand over costs nothing', () => {
@@ -158,6 +169,123 @@ describe('several images go in order, each one isolated from the last', () => {
     const first = trace.indexOf('writeImage(/pad/a.png)+record')
     assert.ok(first < second)
     assert.equal(trace[second - 1], 'clear+record', 'the slot was emptied before the second write')
+  })
+})
+
+describe('an image goes in with the key its destination can actually see', () => {
+  // A terminal emulator INTERCEPTS ⌘V: it asks the pasteboard for TEXT and
+  // writes that to the TUI's stdin. An image has no text, so a screenshot
+  // handed to Claude Code or Codex that way arrives as NOTHING. Ctrl-V passes
+  // through as the control character and the TUI reads the pasteboard itself.
+  test('a terminal: every image paste is posted with control', async () => {
+    const { modifiers, deps } = recorder({ frontmostBundleId: () => 'com.apple.Terminal' })
+    await handOffImages(deps, ['/pad/a.png', '/pad/b.png'], 'x')
+    assert.deepEqual(modifiers, ['control', 'control'])
+  })
+
+  test('every terminal we know about gets control', async () => {
+    for (const bundleId of TERMINAL_BUNDLE_IDS) {
+      const { modifiers, deps } = recorder({ frontmostBundleId: () => bundleId })
+      await handOffImages(deps, ['/pad/a.png'], 'x')
+      assert.deepEqual(modifiers, ['control'], `${bundleId} must get Ctrl-V`)
+    }
+  })
+
+  test('anything else keeps ⌘V — Slack, Notes, Mail, all unchanged', async () => {
+    for (const bundleId of ['com.tinyspeck.slackmacgap', 'com.apple.Notes', 'com.apple.mail']) {
+      const { modifiers, deps } = recorder({ frontmostBundleId: () => bundleId })
+      await handOffImages(deps, ['/pad/a.png'], 'x')
+      assert.deepEqual(modifiers, ['command'], `${bundleId} must keep ⌘V`)
+    }
+  })
+
+  test('an UNKNOWN bundle id falls back to ⌘V, not to guessing', async () => {
+    // The list is best-effort. Being wrong about an unlisted terminal costs it
+    // today's behaviour; guessing at an unlisted normal app would cost it a
+    // keystroke it never asked for.
+    const { modifiers, deps } = recorder({ frontmostBundleId: () => 'com.brand.new.app' })
+    await handOffImages(deps, ['/pad/a.png'], 'x')
+    assert.deepEqual(modifiers, ['command'])
+  })
+
+  test('a destination that cannot be read at all falls back to ⌘V', async () => {
+    const { modifiers, deps } = recorder({ frontmostBundleId: () => null })
+    await handOffImages(deps, ['/pad/a.png'], 'x')
+    assert.deepEqual(modifiers, ['command'])
+  })
+
+  test('a THROWING frontmost read falls back to ⌘V and never reaches the caller', async () => {
+    const { modifiers, warnings, deps } = recorder({
+      frontmostBundleId: () => { throw new Error('NSWorkspace refused') },
+    })
+    assert.equal(await handOffImages(deps, ['/pad/a.png'], 'x'), 1, 'the image still goes')
+    assert.deepEqual(modifiers, ['command'])
+    assert.equal(warnings.length, 1)
+  })
+
+  test('the destination is read ONCE per hand-off, not once per image', async () => {
+    let reads = 0
+    const { modifiers, deps } = recorder({ frontmostBundleId: () => { reads++; return 'com.apple.Terminal' } })
+    await handOffImages(deps, ['/pad/a.png', '/pad/b.png', '/pad/c.png'], 'x')
+    assert.equal(reads, 1)
+    assert.deepEqual(modifiers, ['control', 'control', 'control'])
+  })
+
+  test('nothing to hand over never even asks who is frontmost', async () => {
+    // The unarmed fast path must not pay one syscall for a feature it is not
+    // using. The early return sits ABOVE the destination read for this reason.
+    let reads = 0
+    const { deps } = recorder({ frontmostBundleId: () => { reads++; return 'com.apple.Terminal' } })
+    await handOffImages(deps, [], 'x')
+    assert.equal(reads, 0)
+  })
+
+  test('the modifier changes the KEY and nothing else — same order, same writes', async () => {
+    const terminal = recorder({ frontmostBundleId: () => 'com.mitchellh.ghostty' })
+    const slack = recorder({ frontmostBundleId: () => 'com.tinyspeck.slackmacgap' })
+    await handOffImages(terminal.deps, ['/pad/a.png', '/pad/b.png'], ' the words ')
+    await handOffImages(slack.deps, ['/pad/a.png', '/pad/b.png'], ' the words ')
+    assert.deepEqual(terminal.trace, slack.trace, 'settle/clear/write/verify/paste/restore is destination-blind')
+    assert.notDeepEqual(terminal.modifiers, slack.modifiers, 'and yet the key differs')
+  })
+
+  test('this module never pastes TEXT — one paste per image, terminal or not', async () => {
+    // Text delivery posts its own ⌘V before this module is entered, and the
+    // restore at the end writes the pasteboard WITHOUT a keystroke. So there is
+    // no text paste here for a terminal rule to reach.
+    const { trace, modifiers, deps } = recorder({ frontmostBundleId: () => 'com.apple.Terminal' })
+    await handOffImages(deps, ['/pad/a.png', '/pad/b.png'], ' the words ')
+    assert.equal(trace.filter((s) => s === 'paste').length, 2)
+    assert.equal(modifiers.length, 2)
+    assert.equal(trace[trace.length - 1], 'writeText( the words )+record', 'the restore posts no key')
+  })
+})
+
+describe('imagePasteModifier is the whole decision, in one place', () => {
+  test('null is unknown, and unknown is ⌘V', () => {
+    assert.equal(imagePasteModifier(null), 'command')
+  })
+
+  test('a listed terminal is control; everything else is command', () => {
+    assert.equal(imagePasteModifier('com.googlecode.iterm2'), 'control')
+    assert.equal(imagePasteModifier('dev.warp.Warp-Stable'), 'control')
+    assert.equal(imagePasteModifier('com.apple.Safari'), 'command')
+    assert.equal(imagePasteModifier(''), 'command')
+  })
+
+  test('the match is EXACT — a near-miss is not a terminal', () => {
+    // Bundle ids are case-sensitive and we compare them whole. A prefix or a
+    // differently-cased lookalike must fall to ⌘V rather than half-matching.
+    assert.equal(imagePasteModifier('com.apple.terminal'), 'command')
+    assert.equal(imagePasteModifier('com.apple.Terminal.helper'), 'command')
+    assert.equal(imagePasteModifier('com.apple'), 'command')
+  })
+
+  test('the list is bundle ids only — no names, no empties', () => {
+    for (const id of TERMINAL_BUNDLE_IDS) {
+      assert.match(id, /^[A-Za-z0-9]+(\.[A-Za-z0-9-]+)+$/, `${id} does not look like a bundle id`)
+    }
+    assert.equal(new Set(TERMINAL_BUNDLE_IDS).size, TERMINAL_BUNDLE_IDS.length, 'no duplicates')
   })
 })
 

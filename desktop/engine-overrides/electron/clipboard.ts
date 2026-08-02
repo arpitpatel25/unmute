@@ -3,7 +3,7 @@ import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import path from 'path'
 import { keyListener } from './keyListener'
-import { handOffImages, VERIFY_TIMEOUT_MS } from './pasteboardHandoff'
+import { handOffImages, VERIFY_TIMEOUT_MS, type PasteModifier } from './pasteboardHandoff'
 // Static import (a lazy require of this path can't resolve inside the bundled
 // main — proven live: 'Cannot find module' swallowed by the fail-open catch).
 // NO CYCLE, AND IT HAS TO STAY THAT WAY: remote/capture imports nothing from
@@ -67,7 +67,13 @@ interface NativePasteResult {
 interface NativePasteAddon {
   isAccessibilityTrusted(): boolean
   postCmdV(): NativePasteResult
+  /** Ctrl-V. Only the IMAGE steps use it, and only into a terminal — see
+   *  `imagePasteModifier`. Optional on the type so an OLDER .node binary that
+   *  predates it degrades to the osascript fallback instead of throwing. */
+  postCtrlV?(): NativePasteResult
   processInfo(): { pid: number; executablePath?: string; bundleIdentifier?: string; bundlePath?: string }
+  /** Bundle id of the frontmost app, or null. Optional for the same reason. */
+  frontmostBundleId?(): string | null
 }
 
 let nativePaste: NativePasteAddon | null = null
@@ -122,21 +128,50 @@ function getNativePaste(): NativePasteAddon | null {
 }
 
 /**
+ * Ask the addon which app is frontmost. In-process NSWorkspace property read
+ * (microseconds) — no child process, no AX walk, nothing that could stall the
+ * main thread. Returns null when the addon is unavailable or too old to have
+ * the export, which callers read as "unknown destination" → ⌘V.
+ *
+ * NEVER CALLED ON THE TEXT FAST PATH. Its only caller is the image hand-off,
+ * which does not run at all when nothing was captured.
+ */
+function readFrontmostBundleId(): string | null {
+  const addon = getNativePaste()
+  if (!addon || typeof addon.frontmostBundleId !== 'function') return null
+  try {
+    return addon.frontmostBundleId() ?? null
+  } catch (e) {
+    console.warn(`[native-paste] frontmostBundleId threw: ${e instanceof Error ? e.message : e}`)
+    return null
+  }
+}
+
+/**
  * Try to paste via the native CGEvent addon. Returns the time taken
  * in ms on success, or null if we should fall back to osascript.
  * Logs the per-step result object on every call so failures are
  * fully diagnostic (no silent drops).
  */
-function tryNativePaste(): number | null {
+function tryNativePaste(modifier: PasteModifier): number | null {
   const addon = getNativePaste()
   if (!addon) return null
+  // A .node binary built before postCtrlV existed has no such export. Falling
+  // back to osascript is correct there — `keystroke "v" using control down`
+  // posts the same keystroke, just slower.
+  const post = modifier === 'control' ? addon.postCtrlV : addon.postCmdV
+  const label = modifier === 'control' ? 'postCtrlV' : 'postCmdV'
+  if (typeof post !== 'function') {
+    console.warn(`[native-paste] addon has no ${label} — falling back to osascript`)
+    return null
+  }
   const t0 = Date.now()
   let result: NativePasteResult
   try {
-    result = addon.postCmdV()
+    result = post.call(addon)
   } catch (e) {
     console.warn(
-      `[native-paste] postCmdV threw — falling back to osascript: ${e instanceof Error ? e.message : e}`,
+      `[native-paste] ${label} threw — falling back to osascript: ${e instanceof Error ? e.message : e}`,
     )
     return null
   }
@@ -145,7 +180,7 @@ function tryNativePaste(): number | null {
   if (!result.ok) {
     // Log full breakdown so we know exactly which step refused.
     console.warn(
-      `[native-paste] postCmdV NOT OK in ${dt}ms:\n` +
+      `[native-paste] ${label} NOT OK in ${dt}ms:\n` +
       `  ax_trusted:     ${result.ax_trusted}\n` +
       `  source_created: ${result.source_created}\n` +
       `  events_created: ${result.events_created}\n` +
@@ -162,14 +197,14 @@ function tryNativePaste(): number | null {
   if (!nativePasteLogged) {
     nativePasteLogged = true
     console.log(
-      `[native-paste] postCmdV ok in ${dt}ms (first call — subsequent calls log compact)\n` +
+      `[native-paste] ${label} ok in ${dt}ms (first call — subsequent calls log compact)\n` +
       `  ax_trusted:     ${result.ax_trusted}\n` +
       `  source_created: ${result.source_created}\n` +
       `  events_created: ${result.events_created}\n` +
       `  posted:         ${result.posted}`,
     )
   } else {
-    console.log(`[native-paste] postCmdV ok in ${dt}ms`)
+    console.log(`[native-paste] ${label} ok in ${dt}ms`)
   }
   return dt
 }
@@ -221,20 +256,24 @@ async function simulateKeyCombo(key: string, modifier: string): Promise<void> {
   // any of: addon missing, addon load failed, AXIsProcessTrusted=false,
   // CGEventSourceCreate failed, or CGEventPost threw.
   //
-  // For Cmd+C and other modifiers, keep osascript — the addon currently only
-  // implements postCmdV (single function, single purpose). Adding more keys
-  // is a one-export-per-key extension when/if we need it.
-  if (key === 'v' && modifier === 'command') {
-    const nativeMs = tryNativePaste()
+  // Ctrl+V takes the same route, for the same reason — it is the paste an
+  // IMAGE uses when the destination is a terminal (see `imagePasteModifier`).
+  // Only the modifier flag differs inside the addon.
+  //
+  // For Cmd+C and other modifiers, keep osascript — the addon implements the
+  // two V posts and nothing else. Adding more keys is a one-export-per-key
+  // extension when/if we need it.
+  if (key === 'v' && (modifier === 'command' || modifier === 'control')) {
+    const nativeMs = tryNativePaste(modifier)
     if (nativeMs != null) {
-      console.log(`[clipboard] paste via native addon ok in ${nativeMs}ms`)
+      console.log(`[clipboard] paste (${modifier}) via native addon ok in ${nativeMs}ms`)
       return
     }
     // Fell through — paste failed at the native layer. tryNativePaste()
     // already logged the reason in detail; just note we're falling back.
     const t1 = Date.now()
     await simulateViaOsascript(key, modifier)
-    console.log(`[clipboard] paste via osascript (native fallback) ok in ${Date.now() - t1}ms`)
+    console.log(`[clipboard] paste (${modifier}) via osascript (native fallback) ok in ${Date.now() - t1}ms`)
     return
   }
 
@@ -415,9 +454,14 @@ function verifyPasteboardServesPNG(expectedBytes: number, timeoutMs: number): Pr
  *
  *  A plain text field cannot hold a file path, so an image captured during a
  *  dictation is delivered the only way a text field can accept one: through the
- *  pasteboard, with its own ⌘V. Text first, then each image in order — a Slack
- *  message reads and then shows, which is the pre-branch behaviour and the one
- *  the user is used to.
+ *  pasteboard, with its own paste keystroke. Text first, then each image in
+ *  order — a Slack message reads and then shows, which is the pre-branch
+ *  behaviour and the one the user is used to.
+ *
+ *  WHICH keystroke depends on where it is going, and `imagePasteModifier` owns
+ *  that call: ⌘V everywhere except a terminal, where it is Ctrl-V because a
+ *  terminal emulator swallows ⌘V and hands the TUI text-or-nothing. The
+ *  destination is read here, from the addon, and only when there are images.
  *
  *  The ORDER of the steps is the whole correctness argument, and it lives in
  *  pasteboardHandoff.ts where it can be tested without a pasteboard. This
@@ -445,7 +489,8 @@ async function deliverImagesAfterText(images: readonly string[], padded: string)
     writeImageAndRecord: (img: Electron.NativeImage) => { clipboard.writeImage(img); noteOurWrite() },
     writeTextAndRecord: (t: string) => { clipboard.writeText(t); noteOurWrite() },
     verifyServesPNG: (bytes: number) => verifyPasteboardServesPNG(bytes, VERIFY_TIMEOUT_MS),
-    paste: () => simulateKeyCombo('v', 'command'),
+    frontmostBundleId: readFrontmostBundleId,
+    paste: (modifier: PasteModifier) => simulateKeyCombo('v', modifier),
     settle: sleep,
     warn: (m: string, err?: unknown) => console.warn(m, err instanceof Error ? err.message : err ?? ''),
   }, images, padded)

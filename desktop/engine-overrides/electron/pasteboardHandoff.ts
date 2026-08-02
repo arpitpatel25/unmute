@@ -41,6 +41,11 @@
 // The pre-clear is also why step 2's decode must happen BEFORE it. See
 // `prepareImage`.
 //
+// WHICH KEY step 4 posts is the one thing that varies by destination, and it
+// varies for images only — see `imagePasteModifier`. Everything above holds
+// identically either way; the modifier does not change the order, the count,
+// or the pasteboard writes.
+//
 // EVERY PASTEBOARD WRITE ANNOUNCES ITSELF, SYNCHRONOUSLY. `noteOwnWrite` reads
 // the change counter AT CALL TIME; the clipboard watcher polls every 250ms, so
 // an `await` between a write and its record lets a poll observe OUR OWN write
@@ -52,6 +57,44 @@
 // Pure orchestration: no electron, no clock, no child process. clipboard.ts
 // supplies the real effects; pasteboardHandoff.test.ts supplies fakes and
 // asserts the ORDER, which is the whole contract.
+
+/** Which modifier the V keystroke is posted with. */
+export type PasteModifier = 'command' | 'control'
+
+/** TERMINAL EMULATORS, BEST EFFORT. An app that is not on this list gets ⌘V,
+ *  which is what every destination has always got — so being wrong here can
+ *  only mean "an unlisted terminal keeps today's behaviour", never "a normal
+ *  app gets a keystroke it did not expect".
+ *
+ *  Kept as bundle identifiers rather than names because a name is localised
+ *  and a bundle id is not. Add to it freely; it is not load-bearing for
+ *  anything except which modifier an IMAGE paste uses. */
+export const TERMINAL_BUNDLE_IDS: readonly string[] = [
+  'com.apple.Terminal',
+  'com.googlecode.iterm2',
+  'com.mitchellh.ghostty',
+  'com.github.wez.wezterm',
+  'dev.warp.Warp-Stable',
+  'net.kovidgoyal.kitty',
+  'io.alacritty',
+]
+
+/** THE ONE DECISION THIS FIX IS.
+ *
+ *  A coding-agent CLI (Claude Code, Codex — any TUI) does not receive images
+ *  THROUGH the terminal. ⌘V is intercepted by the terminal emulator, which
+ *  asks the pasteboard for TEXT and writes that to the TUI's stdin; an image
+ *  has no text, so nothing arrives at all. Ctrl-V is not a terminal shortcut —
+ *  it passes through as the control character, the TUI's own key handler
+ *  catches it, reads the macOS pasteboard directly (it is a Node process) and
+ *  ingests the image.
+ *
+ *  TEXT IS NOT AFFECTED, in a terminal or anywhere else: text already pastes
+ *  into a terminal with ⌘V and that path is untouched. This governs the IMAGE
+ *  steps only. An unknown or unreadable destination gets ⌘V. */
+export function imagePasteModifier(bundleId: string | null): PasteModifier {
+  return bundleId != null && TERMINAL_BUNDLE_IDS.includes(bundleId) ? 'control' : 'command'
+}
 
 export interface HandoffDeps<Prepared = unknown> {
   /** DECODE ONCE, BEFORE THE PASTEBOARD IS TOUCHED. Returns the decoded image
@@ -79,8 +122,13 @@ export interface HandoffDeps<Prepared = unknown> {
   /** Ask ANOTHER process whether the system pasteboard serves a PNG of exactly
    *  this size. Resolves false on timeout; the caller pastes regardless. */
   verifyServesPNG: (bytes: number) => Promise<boolean>
-  /** Post ⌘V. Resolves when the event is posted — NOT when it is served. */
-  paste: () => Promise<void>
+  /** Bundle identifier of the app about to receive the paste, or null when it
+   *  cannot be read. Read ONCE per hand-off, and only when there are images —
+   *  see `imagePasteModifier`. */
+  frontmostBundleId: () => string | null
+  /** Post V with this modifier held. Resolves when the event is posted — NOT
+   *  when it is served. */
+  paste: (modifier: PasteModifier) => Promise<void>
   /** Let the target app catch up. */
   settle: (ms: number) => Promise<void>
   /** Never throws out of the hand-off; a failed image must not cost the text. */
@@ -112,6 +160,19 @@ export async function handOffImages<Prepared>(
 ): Promise<number> {
   if (!images.length) return 0
 
+  // WHO IS RECEIVING THIS — read once, here, and never on a path that has no
+  // images to hand over (the early return above is above this line on purpose).
+  // The destination cannot change between images without the user switching
+  // apps mid-delivery, which would break far more than the modifier.
+  //
+  // Fail to ⌘V on ANY trouble: an unreadable destination is an unknown one.
+  let modifier: PasteModifier = 'command'
+  try {
+    modifier = imagePasteModifier(deps.frontmostBundleId())
+  } catch (err) {
+    deps.warn('[clipboard] could not read the frontmost app — pasting images with ⌘V', err)
+  }
+
   // The text's ⌘V has been POSTED, not necessarily served. Nothing may touch
   // the pasteboard until the target app has had it.
   await deps.settle(SETTLE_MS)
@@ -136,7 +197,7 @@ export async function handOffImages<Prepared>(
       deps.clearAndRecord()
       deps.writeImageAndRecord(prepared.image)
       await deps.verifyServesPNG(prepared.bytes)
-      await deps.paste()
+      await deps.paste(modifier)
       pasted++
       await deps.settle(SETTLE_MS)
     } catch (err) {
