@@ -1328,7 +1328,11 @@ async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promi
   // require of remote/init fails inside the bundled main, swallowed by a
   // fail-open catch). Importing it here would close exactly that loop.
   const send = target === 'cursor'
-    ? async (text: string): Promise<string | null> => ((await pasteAtCursor(text)) ? 'cursor' : null)
+    // The attachments ride along: at the cursor an image cannot be a path, so
+    // the pasteboard hands the real bytes over after the text (injectOutput).
+    // A task needs nothing extra — its rendering already names each file.
+    ? async (text: string, attachments: readonly string[]): Promise<string | null> =>
+      ((await pasteAtCursor(text, attachments)) ? 'cursor' : null)
     : async (text: string): Promise<string | null> => {
       const mgr = manager
       if (target === 'openTask' && orchestrateFocusId && mgr?.get(orchestrateFocusId)) {

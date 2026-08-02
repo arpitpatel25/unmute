@@ -16,13 +16,14 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { Destination, InsertKind, Pad } from './types'
+import type { Destination, Entry, InsertKind, Pad, Segment } from './types'
 import { deserialize, padDirFor, serialize, shouldSettle } from './scratchpadStore'
 import { createClipboardWatch } from './clipboardWatch'
 import { createScreenshotWatch } from './screenshotWatch'
 import {
   addInsert, addSegment, emptyPad, isEmpty, removeEntry, setSegmentEnd, setSegmentText,
 } from './captureBuffer'
+import { splitSpeech } from './speechSplit'
 import { render, type RenderResult } from './insertRender'
 import { canArmScratchpad, type CaptureSettings } from './captureGate'
 import { claimContent, createClaims } from './clipboardLedger'
@@ -76,14 +77,18 @@ export function claimShared(hash: string, atMs: number): boolean {
 // (sessionManager, which imports injectOutput today) and called back through
 // here. No new edge in the import graph.
 
-type PasteFn = (text: string) => Promise<void>
+/** `images` are absolute paths, delivered AFTER the text and in order. A plain
+ *  text field cannot hold an image, so the pasteboard hands the real bytes over
+ *  — see clipboard.ts's injectOutput for how that is sequenced without racing
+ *  the text's own ⌘V. */
+type PasteFn = (text: string, images?: readonly string[]) => Promise<void>
 let pasteFn: PasteFn | null = null
 
 export function registerPaste(fn: PasteFn): void { pasteFn = fn }
 
-export async function pasteAtCursor(text: string): Promise<boolean> {
+export async function pasteAtCursor(text: string, images?: readonly string[]): Promise<boolean> {
   if (!pasteFn) return false
-  await pasteFn(text)
+  await pasteFn(text, images)
   return true
 }
 
@@ -378,6 +383,43 @@ export function endSegment(now: number): void {
   announcePad()
 }
 
+/** FILL A SEGMENT IN — AND OPEN A SEAM IN IT WHEREVER SOMETHING WAS CAPTURED.
+ *
+ *  One capture opens one segment and the transcript arrives as one string, so
+ *  before this the buffer had no position inside the speech for an insert to
+ *  occupy: everything copied sorted after every word, and a link copied
+ *  mid-sentence came out at the end of the paste. `splitSpeech` decides where
+ *  the seams go (sentence boundaries only, never mid-word — see its header for
+ *  why the seam is made here rather than in the audio).
+ *
+ *  ONE PIECE IS THE OLD BEHAVIOUR, EXACTLY. `splitSpeech` returns a single
+ *  piece whenever it cannot do better — nothing captured inside the stretch, no
+ *  sentence boundary, no measurable duration — and this then takes the plain
+ *  `setSegmentText` path with the text UNCHANGED. The overwhelmingly common
+ *  dictation therefore produces the same pad it always did.
+ *
+ *  PIECE IDS ARE DERIVED, NOT RANDOM (`<segment>#1`, `#2`, …), so a pad written
+ *  to disk and read back holds the same ids it held in memory, and a surface
+ *  removing a row removes the same row after a restart. Piece 0 keeps the
+ *  original id: it is still the segment the capture opened. */
+function withSplitSegment(p: Pad, segmentId: string, text: string, now?: number): Pad {
+  const seg = p.entries.find((e) => e.type === 'segment' && e.id === segmentId) as Segment | undefined
+  if (!seg) return p
+  const times = p.entries.filter((e) => e.type === 'insert').map((e) => e.atMs)
+  const pieces = splitSpeech(text, seg.startMs, seg.endMs, times)
+  if (pieces.length === 1) return setSegmentText(p, segmentId, text, now)
+  const replacement: Entry[] = pieces.map((pc, i) => ({
+    type: 'segment',
+    id: i === 0 ? seg.id : `${seg.id}#${i}`,
+    text: pc.text.trim(),
+    startMs: pc.startMs,
+    endMs: pc.endMs,
+  }))
+  const entries = p.entries.flatMap((e) =>
+    (e.type === 'segment' && e.id === segmentId) ? replacement : [e])
+  return { ...p, entries, updatedAt: now ?? p.updatedAt }
+}
+
 /** Transcription lands 30-45s after the audio, so text is attached later.
  *
  *  If the segment is GONE — Escape drops the open segment, and undo then
@@ -390,7 +432,7 @@ export function attachTranscript(segmentId: string | null, text: string, now: nu
   const known = !!segmentId
     && pad.entries.some((e) => e.type === 'segment' && e.id === segmentId)
   pad = known
-    ? setSegmentText(pad, segmentId as string, text, now)
+    ? withSplitSegment(pad, segmentId as string, text, now)
     // The segment this text belonged to is gone, so its real start is gone
     // with it. `now` is the closest honest stamp there is — it puts the
     // recovered speech at the END of the pad, which for a multi-capture pad is
@@ -452,6 +494,20 @@ export function recordInsert(
     // it — a missed dedup shows the user one extra thumbnail they can remove,
     // while a wrong drop loses something they captured on purpose.
     if (sig && !claimShared(sig, i.atMs)) return false
+  } else if (!claimShared(`text:${i.content}`, i.atMs)) {
+    // ONE COPY IS ONE INSERT — even when the pasteboard was written three
+    // times. A browser writes several flavours for a single ⌘C (plain text,
+    // HTML, a public.url), and EACH write bumps changeCount, so the watcher
+    // sees N transitions with identical text and the user got the same link
+    // two or three times in one paste. Observed in the field.
+    //
+    // Claimed on the CONTENT, through the same short window images already use:
+    // the two deliberate copies of one string that the window collapses are the
+    // same tradeoff, made for the same reason, and one extra row the user can
+    // remove has always been the lesser failure than dropping something real.
+    // The `text:` prefix keeps a transcript that happens to look like an image
+    // signature ("1024:d41d8…") from colliding with one.
+    return false
   }
   pad = addInsert(pad, {
     id: randomUUID(), kind: i.kind, content: i.content,
@@ -729,7 +785,7 @@ export interface DeliveryOutcome {
  *  failsafe of its own, so a network blip inside it propagates out. */
 export async function runDelivery(
   target: DeliveryTarget,
-  send: (text: string) => Promise<string | null>,
+  send: (text: string, attachments: readonly string[]) => Promise<string | null>,
   onChanged?: () => void,
 ): Promise<DeliveryOutcome> {
   // ONE DELIVERY AT A TIME, AND THE SECOND ONE IS IGNORED.
@@ -754,7 +810,7 @@ export async function runDelivery(
   let landed: string | null = null
   let error: unknown
   try {
-    landed = await send(ready.text)
+    landed = await send(ready.text, ready.attachments)
   } catch (err) {
     error = err
   }
@@ -876,6 +932,7 @@ export function composeWithInserts(
   segmentId: string | null,
   text: string,
   dest: Destination,
+  out?: { attachments: string[] },
 ): string | null {
   if (armed || !pad) return null
   if (!pad.entries.some((e) => e.type === 'insert')) return null
@@ -885,16 +942,30 @@ export function composeWithInserts(
   const known = !!segmentId
     && pad.entries.some((e) => e.type === 'segment' && e.id === segmentId)
   const composed = known
-    ? setSegmentText(pad, segmentId as string, said)
+    // SPLIT, so a copy lands where it happened rather than after every word —
+    // see withSplitSegment. One piece (nothing captured inside the stretch, no
+    // sentence boundary to cut at) is the old single-segment shape exactly.
+    ? withSplitSegment(pad, segmentId as string, said)
     // startMs 0 is exact here, not a guess: this runs only while UNARMED, and
     // beginSegment builds a fresh pad for every unarmed capture — so the pad
     // was created at this capture's start and its clock origin IS that start.
+    // No endMs to speak of, so there is no stretch to position inside; the
+    // speech appends, which is what a recovered segment can honestly claim.
     : addSegment(pad, { id: randomUUID(), text: said, startMs: 0, endMs: 0 })
-  const out = render(composed, dest)
-  // Nothing renderable came of it (an image-only pad at the cursor, which skips
-  // images by design). Fall back rather than paste emptiness over the user's
-  // transcript.
-  return out.text.trim() ? out.text : null
+  const rendered = render(composed, dest)
+  // Nothing renderable came of it. Fall back rather than paste emptiness over
+  // the user's transcript.
+  if (!rendered.text.trim()) return null
+  // THE ATTACHMENTS COME FROM THE SAME RENDER, never from a second walk of the
+  // pad — an image the text and the attachment list disagreed about would be
+  // pasted twice or not at all. Filled ONLY on the composing path: every
+  // `return null` above means this delivery is the untouched fast path, and a
+  // caller that reads this field after a null has been handed nothing to
+  // deliver. (An out-param rather than a richer return type because the null
+  // return IS the byte-identity guarantee — see the header — and every caller
+  // spells it `composeWithInserts(...) ?? output`.)
+  if (out) out.attachments = rendered.attachments
+  return rendered.text
 }
 
 /** Drop the segment in progress without touching the rest of the pad. Escape

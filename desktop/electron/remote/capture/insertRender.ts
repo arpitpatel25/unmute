@@ -44,11 +44,21 @@ export function render(pad: Pad, dest: Destination): RenderResult {
       continue
     }
     if (e.kind === 'image') {
-      // A plain text field cannot hold an image, so the cursor skips it
-      // entirely rather than pasting a path the user did not ask for.
-      if (dest === 'cursor') continue
+      // AN IMAGE IS ALWAYS DELIVERED — the destinations differ only in HOW.
+      //
+      // A task takes a path, because whatever reads it can open the file. The
+      // cursor cannot: a text field holds no path the user asked for, and
+      // pasting one is noise. But dropping the image entirely — which is what
+      // this did — silently threw away something the user deliberately
+      // captured, and it was a REGRESSION besides: the pre-branch delivery
+      // staged screenshots and pasted them after the text.
+      //
+      // So the cursor gets the image out of the TEXT and into the attachment
+      // list, and delivery hands the real bytes over through the pasteboard
+      // (see clipboard.ts's injectOutput). Every destination sees the same
+      // list, in the same order, from this one walk of the pad.
       attachments.push(e.content)
-      pieces.push({ text: `[image: ${e.content}]`, block: false })
+      if (dest !== 'cursor') pieces.push({ text: `[image: ${e.content}]`, block: false })
       continue
     }
     if (INLINE.has(e.kind)) {

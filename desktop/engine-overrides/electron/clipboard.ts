@@ -1,8 +1,9 @@
-import { clipboard, app } from 'electron'
+import { clipboard, app, nativeImage } from 'electron'
 import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import path from 'path'
 import { keyListener } from './keyListener'
+import { handOffImages, VERIFY_TIMEOUT_MS } from './pasteboardHandoff'
 // Static import (a lazy require of this path can't resolve inside the bundled
 // main — proven live: 'Cannot find module' swallowed by the fail-open catch).
 // NO CYCLE, AND IT HAS TO STAY THAT WAY: remote/capture imports nothing from
@@ -384,12 +385,72 @@ export function getOutputMode(): 'paste' | 'clipboard' {
   return outputMode
 }
 
-export async function injectOutput(text: string): Promise<void> {
+/** Ask a SEPARATE process whether the system pasteboard serves a PNG of the
+ *  expected byte size (`clipboard info` is a tiny metadata listing — no image
+ *  data crosses). Resolves true on confirmation, false on timeout (the caller
+ *  pastes anyway — bounded, never hangs).
+ *
+ *  IT HAS TO BE ANOTHER PROCESS. An own-process `clipboard.readImage()`
+ *  reflects our own write the instant it happens and proves nothing about what
+ *  the app receiving ⌘V can see; polling it was tried and proven useless. */
+function verifyPasteboardServesPNG(expectedBytes: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  return new Promise((resolve) => {
+    const attempt = () => {
+      execFile('osascript', ['-e', 'clipboard info'], { timeout: 2000 }, (err, stdout) => {
+        if (!err && stdout) {
+          // e.g. "«class PNGf», 2189440, TIFF picture, 9640988"
+          const m = /«class PNGf», (\d+)/.exec(stdout)
+          if (m && Number(m[1]) === expectedBytes) { resolve(true); return }
+        }
+        if (Date.now() >= deadline) { resolve(false); return }
+        setTimeout(attempt, 60)
+      })
+    }
+    attempt()
+  })
+}
+
+/** IMAGES ARRIVE AT THE CURSOR AS IMAGES, and they arrive after the text.
+ *
+ *  A plain text field cannot hold a file path, so an image captured during a
+ *  dictation is delivered the only way a text field can accept one: through the
+ *  pasteboard, with its own ⌘V. Text first, then each image in order — a Slack
+ *  message reads and then shows, which is the pre-branch behaviour and the one
+ *  the user is used to.
+ *
+ *  The ORDER of the steps is the whole correctness argument, and it lives in
+ *  pasteboardHandoff.ts where it can be tested without a pasteboard. This
+ *  function only supplies the effects — and every one of the three that writes
+ *  records the write in the same statement, because `noteOurWrite` reads the
+ *  change counter at call time and anything suspended in between lets the
+ *  watcher read our own write as a user copy. */
+async function deliverImagesAfterText(images: readonly string[], padded: string): Promise<void> {
+  const t0 = Date.now()
+  const pasted = await handOffImages({
+    pngBytes: (p: string) => {
+      const img = nativeImage.createFromPath(p)
+      return img.isEmpty() ? null : img.toPNG().length
+    },
+    clearAndRecord: () => { clipboard.clear(); noteOurWrite() },
+    writeImageAndRecord: (p: string) => {
+      clipboard.writeImage(nativeImage.createFromPath(p)); noteOurWrite()
+    },
+    writeTextAndRecord: (t: string) => { clipboard.writeText(t); noteOurWrite() },
+    verifyServesPNG: (bytes: number) => verifyPasteboardServesPNG(bytes, VERIFY_TIMEOUT_MS),
+    paste: () => simulateKeyCombo('v', 'command'),
+    settle: sleep,
+    warn: (m: string, err?: unknown) => console.warn(m, err instanceof Error ? err.message : err ?? ''),
+  }, images, padded)
+  console.log(`[clipboard] pasted ${pasted}/${images.length} captured image(s) in ${Date.now() - t0}ms`)
+}
+
+export async function injectOutput(text: string, images?: readonly string[]): Promise<void> {
   const tStart = Date.now()
-  // No staged-screenshot consume here any more. Images captured during a
-  // dictation are INSERTS in the capture buffer now, positioned where they
-  // happened, and they are delivered by the capture seam — not appended blind
-  // after the text. (Task 13 removes the old ledger itself.)
+  // Images captured during a dictation are INSERTS in the capture buffer,
+  // positioned where they happened; the capture seam renders them out as
+  // `attachments` and hands them here. Nothing is swept off the clipboard
+  // blind, and nothing is appended without the user having captured it.
   const padded = padOutput(text)
   clipboard.writeText(padded)
   noteOurWrite() // ours — delivery's own write, synchronous with it
@@ -397,6 +458,12 @@ export async function injectOutput(text: string): Promise<void> {
 
   if (outputMode === 'clipboard') {
     console.log('[clipboard] outputMode=clipboard — skipping auto-paste, user will Cmd+V')
+    // No ⌘V is synthesised at all in this mode, so there is no second paste to
+    // sequence against and nowhere for an image to land. The text stays on the
+    // pasteboard for the user, exactly as it does today.
+    if (images?.length) {
+      console.log(`[clipboard] outputMode=clipboard — ${images.length} captured image(s) left in the pad`)
+    }
     return
   }
 
@@ -423,6 +490,17 @@ export async function injectOutput(text: string): Promise<void> {
   } catch (err) {
     console.error(`[clipboard] Auto-paste FAILED after ${Date.now() - tStart}ms:`, err instanceof Error ? err.message : err)
     console.log('[clipboard] Text is in clipboard, user can Cmd+V manually')
+  }
+
+  // The images the user captured during this dictation, after the text and in
+  // order. Fail-open in every direction: the text is already delivered above,
+  // and nothing in here may reach the dictation path.
+  if (images?.length) {
+    try {
+      await deliverImagesAfterText(images, padded)
+    } catch (err) {
+      console.warn('[clipboard] captured-image delivery skipped:', err instanceof Error ? err.message : err)
+    }
   }
 }
 

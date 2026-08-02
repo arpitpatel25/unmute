@@ -148,6 +148,12 @@ interface SessionState {
   // capture seam never opened one (it is fail-open — a capture failure must
   // never surface on the dictation path).
   captureSegmentId: string | null
+  // Images captured during this recording, in the order they happened. A text
+  // field cannot hold a path, so these are delivered as IMAGES through the
+  // pasteboard after the text (injectOutput). Written ONLY by composeCaptured,
+  // and only when a composition actually happened — on the fast path it stays
+  // empty and delivery is byte-for-byte what it always was.
+  captureAttachments: string[]
 }
 
 function sendToWidget(channel: string, ...args: unknown[]): void {
@@ -172,7 +178,7 @@ let remoteDispatchQueue: Promise<void> = Promise.resolve()
 // closing the cycle clipboard.ts's header exists to prevent (a lazy require of
 // remote/init from clipboard.ts fails inside the bundled main). injectOutput
 // already lives here, so hand it over rather than importing it there.
-registerPaste(async (text: string) => { await injectOutput(text) })
+registerPaste(async (text: string, images?: readonly string[]) => { await injectOutput(text, images) })
 
 // FORMATTING BELONGS TO DELIVERY, NOT TO CAPTURE. The pad holds the CLEANED
 // transcript, because a held capture has no destination yet — the user picks
@@ -855,6 +861,7 @@ class SessionManager {
         createdAt: Date.now(),
         kind, // stamped at birth; default 'dictation' (default-safe → paste)
         captureSegmentId: null,
+        captureAttachments: [],
       }
       console.log('[session] New session created:', sessionId, '| kind:', kind)
       logTelemetry('session-start', { sessionId, mode, kind, engineMode: (() => { try { return getPaywallEngineMode() } catch { return '?' } })() })
@@ -1008,7 +1015,16 @@ class SessionManager {
     dest: 'cursor' | 'task',
   ): string {
     try {
-      return composeWithInserts(session.captureSegmentId, output, dest) ?? output
+      // The attachment list comes out of the SAME render that produced the
+      // text, never from a second walk of the pad — the two disagreeing is how
+      // an image gets pasted twice or not at all. It is filled only when a
+      // composition actually happened; a null answer is the untouched fast path
+      // and leaves the list exactly as it was (empty).
+      const captured = { attachments: [] as string[] }
+      const composed = composeWithInserts(session.captureSegmentId, output, dest, captured)
+      if (composed == null) return output
+      session.captureAttachments = captured.attachments
+      return composed
     } catch (e) {
       console.warn('[session] capture compose failed — delivering speech alone:', e)
       return output
@@ -1694,7 +1710,7 @@ class SessionManager {
             const tInjectStart = Date.now()
             if (this.outputMode === 'paste') {
               console.log('[session] Injecting output via paste...')
-              await injectOutput(output)
+              await injectOutput(output, session.captureAttachments)
             } else {
               console.log('[session] Copying output to clipboard...')
               copyToClipboard(output)
@@ -1803,7 +1819,7 @@ class SessionManager {
           const tInjectStart = Date.now()
           if (this.outputMode === 'paste') {
             console.log('[session] Injecting output via paste...')
-            await injectOutput(output)
+            await injectOutput(output, session.captureAttachments)
           } else {
             console.log('[session] Copying output to clipboard...')
             copyToClipboard(output)
@@ -2261,7 +2277,7 @@ class SessionManager {
         if (output) {
           if (this.outputMode === 'paste') {
             console.log('[session] Injecting output via paste...')
-            await injectOutput(output)
+            await injectOutput(output, session.captureAttachments)
           } else {
             console.log('[session] Copying output to clipboard...')
             copyToClipboard(output)

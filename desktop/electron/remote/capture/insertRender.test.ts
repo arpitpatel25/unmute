@@ -80,13 +80,26 @@ describe('images', () => {
     assert.match(r.text, /\/tmp\/shot\.png/)
     assert.deepEqual(r.attachments, ['/tmp/shot.png'])
   })
-  test('the cursor skips images entirely — a text field cannot hold one', () => {
+  test('the cursor keeps an image OUT OF THE TEXT but still delivers it', () => {
+    // A text field cannot hold a path, so the path must not appear — but
+    // dropping the image altogether threw away something the user deliberately
+    // captured, and the pre-branch delivery did paste staged screenshots. It
+    // leaves as an ATTACHMENT, which delivery hands over as real bytes through
+    // the pasteboard.
     let p = emptyPad('p', 'cursor', 0)
     p = addSegment(p, { id: 's1', text: 'look at this', startMs: 0, endMs: 1 })
     p = addInsert(p, { id: 'i1', kind: 'image', content: '/tmp/shot.png', atMs: 2 })
     const r = render(p, 'cursor')
-    assert.equal(r.text, 'look at this')
-    assert.deepEqual(r.attachments, [])
+    assert.equal(r.text, 'look at this', 'no path in the text')
+    assert.deepEqual(r.attachments, ['/tmp/shot.png'], 'and nothing silently lost')
+  })
+
+  test('several images reach the cursor in the order they were captured', () => {
+    let p = emptyPad('p', 'cursor', 0)
+    p = addSegment(p, { id: 's1', text: 'these two', startMs: 0, endMs: 1 })
+    p = addInsert(p, { id: 'i2', kind: 'image', content: '/tmp/second.png', atMs: 9 })
+    p = addInsert(p, { id: 'i1', kind: 'image', content: '/tmp/first.png', atMs: 2 })
+    assert.deepEqual(render(p, 'cursor').attachments, ['/tmp/first.png', '/tmp/second.png'])
   })
 })
 

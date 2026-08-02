@@ -810,7 +810,7 @@ describe('delivery formats for the cursor, and ONLY for the cursor', () => {
 })
 
 describe('takeForDelivery renders for the target and clears', () => {
-  test('the cursor skips images; a task keeps them as attachments', () => {
+  test('the cursor keeps images out of the TEXT; both destinations deliver them', () => {
     armScratchpad(true)
     const id = beginSegment('cursor', 1000, true)
     attachTranscript(id, 'this one', 1500)
@@ -819,7 +819,7 @@ describe('takeForDelivery renders for the target and clears', () => {
 
     const cursor = takeForDelivery('cursor')!
     assert.equal(cursor.text, 'this one', 'no path pasted into a text field')
-    assert.deepEqual(cursor.attachments, [])
+    assert.deepEqual(cursor.attachments, ['/tmp/shot.png'], 'the image itself still goes')
 
     armScratchpad(true)
     const id2 = beginSegment('task', 1000, true)
@@ -2053,5 +2053,240 @@ describe('an empty pad leaves nothing behind on disk', () => {
     writePadNow()   // the pad is empty, but the mic is still hot
     assert.ok(existsSync(inflight), 'the rescue in progress is left alone')
     assert.equal(existsSync(join(dir, 'pad.json')), false, 'and an empty pad is still not written')
+  })
+})
+
+// ── THE THREE FIELD BUGS (2026-08-02) ───────────────────────────────────
+//
+// Found on a real dev build, in one dictation. Every test below fails against
+// the code as it shipped.
+
+describe('a copy lands WHERE IT HAPPENED, not at the end of the paste', () => {
+  // The report, verbatim. The user spoke, copied a link after "…this tracker",
+  // and kept speaking. The link came out on its own line at the very end,
+  // because one capture produced ONE segment holding the whole transcript and
+  // there was no seam inside the speech for an insert to occupy.
+  const SPOKEN = 'So I want you to go through the open source cross project, '
+    + "right? It's about agent or this tracker. It allows you to do all case "
+    + 'straight multiple agents.'
+  const LINK = 'https://github.com/Untrivial-ai/agent-orchestrator'
+
+  const delivered = (segId: string | null, text: string, dest: 'cursor' | 'task' = 'cursor') =>
+    composeWithInserts(segId, text, dest) ?? text
+
+  test('THE FIELD CASE: the link reads inside the sentence it was copied after', () => {
+    // 15s of speech; the copy at 9s, just after "…this tracker."
+    const id = beginSegment('cursor', 1_000, true)
+    recordInsert({ kind: 'url', content: LINK, atMs: 10_000 }, 10_000)
+    endSegment(16_000)
+
+    assert.equal(
+      delivered(id, SPOKEN),
+      'So I want you to go through the open source cross project, '
+      + "right? It's about agent or this tracker. "
+      + `${LINK} `
+      + 'It allows you to do all case straight multiple agents.',
+    )
+  })
+
+  test('two copies open two seams, each after the sentence it followed', () => {
+    const id = beginSegment('cursor', 1_000, true)
+    recordInsert({ kind: 'url', content: 'https://a.example', atMs: 5_500 }, 5_500)
+    recordInsert({ kind: 'url', content: 'https://b.example', atMs: 10_000 }, 10_000)
+    endSegment(16_000)
+
+    assert.equal(
+      delivered(id, SPOKEN),
+      'So I want you to go through the open source cross project, right? '
+      + 'https://a.example '
+      + "It's about agent or this tracker. "
+      + 'https://b.example '
+      + 'It allows you to do all case straight multiple agents.',
+    )
+  })
+
+  test('NEVER MID-SENTENCE: with no sentence boundary the insert still appends', () => {
+    // The 2026-07-14 accuracy work: a bad cut is worse than a late insert.
+    const id = beginSegment('cursor', 1_000, true)
+    recordInsert({ kind: 'url', content: LINK, atMs: 5_000 }, 5_000)
+    endSegment(16_000)
+
+    assert.equal(
+      delivered(id, 'go through the thread from this morning and compare them'),
+      `go through the thread from this morning and compare them ${LINK}`,
+    )
+  })
+
+  test('the ARMED pad interleaves too — the same seam, held instead of pasted', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1_000, true)
+    recordInsert({ kind: 'url', content: LINK, atMs: 10_000 }, 10_000)
+    endSegment(16_000)
+    attachTranscript(id, SPOKEN, 16_500)
+
+    const out = takeForDelivery('cursor')!
+    assert.match(out.text, /this tracker\. https:\/\/github\.com\/Untrivial-ai\/agent-orchestrator It allows/)
+  })
+
+  test('a held pad splits ONLY its own stretch — an earlier capture is untouched', () => {
+    armScratchpad(true)
+    const first = beginSegment('cursor', 1_000, true)
+    endSegment(5_000)
+    attachTranscript(first, 'One. Two. Three.', 5_100)
+
+    const second = beginSegment('cursor', 10_000, true)
+    recordInsert({ kind: 'url', content: LINK, atMs: 13_000 }, 13_000)
+    endSegment(16_000)
+    attachTranscript(second, 'Four. Five. Six.', 16_100)
+
+    const out = takeForDelivery('cursor')!
+    assert.equal(
+      out.text,
+      `One. Two. Three. Four. ${LINK} Five. Six.`,
+      'the earlier capture reads exactly as it did, and the link sits INSIDE the second',
+    )
+  })
+
+  test('the split survives a write and a read back from disk', () => {
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1_000, true)
+    recordInsert({ kind: 'url', content: LINK, atMs: 10_000 }, 10_000)
+    endSegment(16_000)
+    attachTranscript(id, SPOKEN, 16_500)
+    writePadNow()
+
+    const raw = readFileSync(join(padDirFor(root, snapshot().pad!.id), 'pad.json'), 'utf8')
+    const back = deserialize(raw)!
+    assert.equal(
+      render(back, 'cursor').text,
+      render(snapshot().pad!, 'cursor').text,
+      'the ids and offsets round-trip, so the pieces still bracket the insert',
+    )
+  })
+})
+
+describe('ONE COPY IS ONE INSERT — a browser writing three flavours is still one', () => {
+  // The field screenshot showed the same link twice; an earlier one showed it
+  // three times. A browser writes the pasteboard several times for a single ⌘C
+  // (plain text, HTML, a public.url) and each bumps changeCount, so the watcher
+  // reported N identical copies. Images were already deduped; text was not.
+  const LINK = 'https://github.com/Untrivial-ai/agent-orchestrator'
+
+  test('three pasteboard writes of the same link produce ONE insert', () => {
+    const id = beginSegment('cursor', 1_000, true)
+    assert.equal(recordInsert({ kind: 'url', content: LINK, atMs: 4_000 }, 4_000), true)
+    assert.equal(recordInsert({ kind: 'url', content: LINK, atMs: 4_060 }, 4_060), false)
+    assert.equal(recordInsert({ kind: 'url', content: LINK, atMs: 4_310 }, 4_310), false)
+    endSegment(9_000)
+
+    assert.equal(
+      composeWithInserts(id, 'take a look at this', 'cursor'),
+      `take a look at this ${LINK}`,
+      'once, not three times',
+    )
+  })
+
+  test('the classification does not matter — the CONTENT is what is claimed', () => {
+    // The same string can classify differently between ticks (a path that
+    // exists on one read and not the next). Claiming on content alone means one
+    // user action is one insert whatever the classifier said.
+    beginSegment('cursor', 1_000, true)
+    assert.equal(recordInsert({ kind: 'line', content: 'same string', atMs: 2_000 }, 2_000), true)
+    assert.equal(recordInsert({ kind: 'block', content: 'same string', atMs: 2_100 }, 2_100), false)
+    assert.equal(snapshot().pad!.entries.filter((e) => e.type === 'insert').length, 1)
+  })
+
+  test('DIFFERENT text is never merged', () => {
+    beginSegment('cursor', 1_000, true)
+    assert.equal(recordInsert({ kind: 'url', content: 'https://a.example', atMs: 2_000 }, 2_000), true)
+    assert.equal(recordInsert({ kind: 'url', content: 'https://b.example', atMs: 2_050 }, 2_050), true)
+    assert.equal(snapshot().pad!.entries.filter((e) => e.type === 'insert').length, 2)
+  })
+
+  test('past the window it IS a second copy — the user copied it again', () => {
+    beginSegment('cursor', 1_000, true)
+    assert.equal(recordInsert({ kind: 'url', content: 'https://a.example', atMs: 2_000 }, 2_000), true)
+    assert.equal(recordInsert({ kind: 'url', content: 'https://a.example', atMs: 9_000 }, 9_000), true)
+    assert.equal(snapshot().pad!.entries.filter((e) => e.type === 'insert').length, 2)
+  })
+
+  test('the window dies with the capture — the next one starts fresh', () => {
+    beginSegment('cursor', 1_000, true)
+    assert.equal(recordInsert({ kind: 'url', content: 'https://a.example', atMs: 2_000 }, 2_000), true)
+    endSegment(3_000)
+
+    beginSegment('cursor', 3_500, true)
+    assert.equal(
+      recordInsert({ kind: 'url', content: 'https://a.example', atMs: 4_000 }, 4_000), true,
+      'a new recording is a new intention',
+    )
+  })
+})
+
+describe('a screenshot taken during a dictation actually reaches the cursor', () => {
+  const SHOT = '/tmp/Screenshot 2026-08-02 at 14.22.png'
+
+  test('the path stays out of the text, and the IMAGE is handed to delivery', () => {
+    const id = beginSegment('cursor', 1_000, true)
+    recordInsert({ kind: 'image', content: SHOT, atMs: 2_000 }, 2_000)
+    endSegment(3_000)
+
+    const captured = { attachments: [] as string[] }
+    const text = composeWithInserts(id, 'fix this', 'cursor', captured)
+    assert.equal(text, 'fix this', 'a text field cannot hold a path')
+    assert.deepEqual(captured.attachments, [SHOT], 'and it is NOT silently dropped')
+  })
+
+  test('text and image together: text first, image after', () => {
+    const id = beginSegment('cursor', 1_000, true)
+    recordInsert({ kind: 'url', content: 'https://a.example', atMs: 2_000 }, 2_000)
+    recordInsert({ kind: 'image', content: SHOT, atMs: 2_500 }, 2_500)
+    endSegment(3_000)
+
+    const captured = { attachments: [] as string[] }
+    const text = composeWithInserts(id, 'look. and fix.', 'cursor', captured)
+    assert.equal(text, 'look. https://a.example and fix.', 'the URL is text, so it composes inline')
+    assert.deepEqual(captured.attachments, [SHOT], 'the image rides separately, after the text')
+  })
+
+  test('several images arrive in the order they were captured', () => {
+    const id = beginSegment('cursor', 1_000, true)
+    recordInsert({ kind: 'image', content: '/tmp/one.png', atMs: 2_000 }, 2_000)
+    recordInsert({ kind: 'image', content: '/tmp/two.png', atMs: 4_000 }, 4_000)
+    endSegment(5_000)
+
+    const captured = { attachments: [] as string[] }
+    composeWithInserts(id, 'these two', 'cursor', captured)
+    assert.deepEqual(captured.attachments, ['/tmp/one.png', '/tmp/two.png'])
+  })
+
+  test('NOTHING SPOKEN IS NOTHING DELIVERED — not even the image', () => {
+    const id = beginSegment('cursor', 1_000, true)
+    recordInsert({ kind: 'image', content: SHOT, atMs: 2_000 }, 2_000)
+    endSegment(3_000)
+
+    const captured = { attachments: [] as string[] }
+    assert.equal(composeWithInserts(id, '', 'cursor', captured), null)
+    assert.deepEqual(captured.attachments, [], 'a null answer must leave the caller with nothing')
+  })
+
+  test('the paste effect receives the images, in order, alongside the text', async () => {
+    const seen: { text: string; images?: readonly string[] }[] = []
+    registerPaste(async (text, images) => { seen.push({ text, images }) })
+
+    armScratchpad(true)
+    const id = beginSegment('cursor', 1_000, true)
+    attachTranscript(id, 'these two', 1_500)
+    recordInsert({ kind: 'image', content: '/tmp/one.png', atMs: 1_600 }, 1_600)
+    recordInsert({ kind: 'image', content: '/tmp/two.png', atMs: 1_800 }, 1_800)
+    endSegment(2_000)
+
+    const r = await runDelivery(
+      'cursor',
+      async (text, attachments) => ((await pasteAtCursor(text, attachments)) ? 'cursor' : null),
+    )
+    assert.equal(r.landed, 'cursor')
+    assert.equal(seen.length, 1)
+    assert.deepEqual(seen[0].images, ['/tmp/one.png', '/tmp/two.png'])
   })
 })

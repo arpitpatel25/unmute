@@ -27,8 +27,20 @@
 // Order already carries almost all the value of interleaving (spec §2.1), so
 // exactness was never worth paying accuracy for even when it worked.
 //
-// Do not add it back without first making chunk boundaries actually produce
-// segment boundaries.
+// Do not add it back. The field bug it was meant to fix (2026-08-02: a link
+// copied mid-sentence pasted at the END of the dictation) IS FIXED, and not
+// here — the seam is made in the finished transcript by capture/speechSplit.ts,
+// which costs the audio path nothing and works for every copy in every
+// dictation.
+//
+// AND IT WAS UNREACHABLE BESIDES, which the original removal did not notice.
+// decideCut is not even called until `vadActivatedRef` is set
+// (useAudioRecorder.ts:511), and that is set by a timer at `chunkMinMs` —
+// 30_000ms by default (useAudioRecorder.ts:27, 1026-1033). The insert branch
+// only fired BELOW minChunkMs. The two conditions could never both hold, so
+// the branch was dead on top of achieving nothing. Reaching it would mean
+// activating the VAD early, i.e. moving a real STT boundary on the dictation
+// fast path — the exact cost the 2026-07-14 investigation says not to pay.
 
 export type CutDecision = 'none' | 'silence' | 'soft-cap' | 'hard-cap'
 
