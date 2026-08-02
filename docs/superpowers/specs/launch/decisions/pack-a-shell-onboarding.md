@@ -90,27 +90,50 @@ Appearance, Permissions, Language, Privacy, Help") names no file. The literal
 labels are in `_shared.tsx`; the comment in `App.tsx` repeats them. Both files
 are owned by this pack and both are in the diff.
 
-## 4. Where the onboarding gate constants are declared
+## 4. The gate: two keys, and why the legacy one is still written
 
-The opposite choice: `ONBOARDING_VERSION`, `ONBOARDING_VERSION_KEY`,
+`ONBOARDING_VERSION`, `ONBOARDING_VERSION_KEY`,
 `LEGACY_ONBOARDING_COMPLETE_KEY`, `readOnboardingVersion()` and
-`resetOnboarding()` all live in **`App.tsx`**, because SPEC §2.4 says "export the
-key name from this file" and VERIFY 32–34 grep `App.tsx` specifically.
+`resetOnboarding()` all live in **`App.tsx`** — the opposite choice to §3 —
+because SPEC §2.4 says "export the key name from this file" and VERIFY 32–34
+grep `App.tsx` specifically.
 
 Pack B's "Replay onboarding" therefore imports from `./App`, which is a runtime
 module cycle (`App → Settings → App`). It resolves correctly under ESM because
 `resetOnboarding` is only *called* from a click handler, never read at module
 evaluation time. Flagging it so nobody is surprised by it later.
 
-**I export `resetOnboarding()` rather than just the key name.** Clearing only
-`unmute_onboarding_version` would leave `unmute_onboarding_complete` behind,
-which `readOnboardingVersion()` reads as version 1 — so "Replay onboarding" would
-replay the three-screen *summary*, not the nine-step flow. The helper clears
-both. Pack B should call `resetOnboarding()`; the key names are exported too, in
-case it wants them for a diagnostics readout.
+### The two keys split the job
 
-`markOnboardingSeen()` also removes the legacy key once the new one is written,
-so the two can never disagree.
+| Key | Meaning |
+|---|---|
+| `unmute_onboarding_complete` | `'true'` ⇔ this user has been through onboarding at all. **Unchanged meaning, unchanged name, still written on completion.** |
+| `unmute_onboarding_version` | *Which* flow they saw. Absent while complete is `'true'` ⇒ the old eight-step flow ⇒ version 1. |
+
+My first attempt made the version key the sole record and *deleted* the legacy
+key on completion. **That silently breaks "Replay onboarding" the day it ships.**
+The existing button lives in `Settings.tsx` (Pack B's file, which I may not
+edit) and does exactly this:
+
+```js
+localStorage.removeItem('unmute_onboarding_complete'); location.reload()
+```
+
+With completion recorded only in the new key, that removal would be a no-op, the
+version would survive at `2`, and the app would go straight back in. Clicking
+Replay would do nothing, and nothing would say why. Keeping the legacy key as
+the *presence* flag means the untouched button keeps working, and
+`resetOnboarding()` — which clears both — is the tidier equivalent for Pack B to
+move to. Both paths land on the full nine steps, which is the intent.
+
+Resolution table, all four states:
+
+| `complete` | `version` | Result |
+|---|---|---|
+| absent | absent | full nine-step flow (new install) |
+| `'true'` | absent | three-screen what's-new (existing user, D4) |
+| `'true'` | `2` | straight into the app |
+| absent | `2` | full nine-step flow — this is precisely what the old Replay button produces |
 
 `readOnboardingVersion()` returns `ONBOARDING_VERSION` if `localStorage` throws.
 Failing *closed* (straight into the app) is right: failing open would trap a user
@@ -270,9 +293,40 @@ Pack B will see a half-pixel shift in shared controls it did not make.
 
 ## 10. Consequences a human should look at
 
-- Until Pack B lands, **Permissions, Language and Privacy are unreachable**. The
-  sub-items exist and highlight, but `Settings.tsx` ignores the `section` prop
-  and renders its current single page. This is the expected A→B seam.
-- The nine-step flow, the three-screen summary, and the version gate have not
-  been exercised in a running app — VERIFY marks those `[eye]`, and they are in
-  the escalation list, not ticked here.
+**This branch must not ship on its own.** On `arpit/launch-shell-onboarding`
+alone, `Permissions.tsx`, `Language.tsx` and `Privacy.tsx` are imported by
+*nothing* — the top-level tabs that rendered them are gone, and `Settings.tsx`
+ignores the `section` prop, so it renders its current monolithic page whichever
+sub-item is selected. The three sub-items highlight and do nothing, and three
+settings pages are unreachable. Calling that "a broken link" understates it; it
+is a real regression that only Pack B closes. The overview makes **A → B a hard
+sequence** for exactly this reason, and the two must land together.
+
+Everything else outstanding is on the `[eye]` list — the nine-step flow, the
+three-screen summary and the version gate have not been exercised in a running
+app, and are escalated rather than ticked here.
+
+## 11. Two VERIFY assertions this pack knowingly does not satisfy
+
+Recorded so the next reader does not think they were missed.
+
+**Assertion 43** ("every path must be one of App.tsx, Onboarding.tsx,
+_shared.tsx"). The diff also contains **this file**,
+`docs/superpowers/specs/launch/decisions/pack-a-shell-onboarding.md`, because the
+dispatch instructions require it: *"Write your decisions file at
+docs/superpowers/specs/launch/decisions/pack-a-shell-onboarding.md."* VERIFY.md
+was written before that instruction existed. No code path is affected; the diff
+is three source files plus this document and nothing else.
+
+**Assertion 47** (`npm run typecheck` → exit 0). Unreachable — see §1. The
+command exits 2 on the base commit, in `electron/`, which this pack may not
+touch. The renderer stage, which is the one covering these files, never runs at
+all under that command because of the `&&`. Measured directly
+(`npx tsc -p tsconfig.renderer.json`), errors go **137 → 123** overall and
+**20 → 6** in the owned files, with exactly one new error: the deliberate
+`section`-prop seam of §2.
+
+That short-circuit is itself worth someone's attention: as the project's
+typecheck stands, **no renderer type error in any pack can fail the gate**, which
+is how a genuinely broken renderer change could ship unnoticed. Fixing it means
+touching `package.json`, which no pack owns.

@@ -10,7 +10,11 @@
 //
 // EVERY KEY LABEL IS READ LIVE. `dictationKey` comes from settings; the
 // orchestrator sits on whichever trigger dictation is not using; instruction is
-// Caps Lock. No step prints a key name it has not looked up.
+// Caps Lock (not user-selectable — only its on/off state is). No step tells the
+// user to press a key it has not looked up. The one unconditional key name is
+// the macOS Globe/🌐 tip on the "Your keys" step, which is about a System
+// Settings option rather than an unmute trigger, and which is relevant either
+// way round: unmute always has the Fn key, as dictation or as orchestrate.
 
 import { useState, useEffect, useCallback } from 'react'
 import unmuteLogo from '../assets/unmute-logo.png'

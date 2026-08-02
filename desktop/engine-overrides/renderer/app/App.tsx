@@ -47,16 +47,28 @@ type AppView = 'loading' | 'onboarding' | 'whats-new' | 'main'
 
 /* ─── The onboarding gate (decision D4) ───────────────────────────────
  *
- * The gate used to be `unmute_onboarding_complete`, an unversioned boolean.
- * Every existing user has it set, so any revamp of the flow would have reached
- * new installs only. It is now an integer version:
+ * The gate used to be `unmute_onboarding_complete` alone, an unversioned
+ * boolean. Every existing user has it set, so any revamp of the flow would have
+ * reached new installs only. Two keys now share the job:
  *
- *   absent  → the full nine-step flow (a new install)
- *   < 2     → a three-screen "what's new", then the version is written
- *   >= 2    → straight into the app
+ *   unmute_onboarding_complete  'true' ⇔ this user has been through onboarding
+ *                               at all. Unchanged meaning, unchanged name.
+ *   unmute_onboarding_version   which flow they saw. Absent but complete='true'
+ *                               ⇒ the old eight-step flow ⇒ version 1.
  *
- * The legacy boolean is read once, for migration: anyone who finished the old
- * flow counts as version 1.
+ * Resolving to:
+ *   not complete → the full nine-step flow (a new install, or a replay)
+ *   version < 2  → a three-screen "what's new", then version 2 is written
+ *   version >= 2 → straight into the app
+ *
+ * WHY THE LEGACY KEY IS STILL WRITTEN rather than migrated away. Settings →
+ * Help's "Replay onboarding" — which this pack does not own — clears exactly
+ * that key and reloads. If completion were recorded only in the new key, that
+ * button would silently stop working the day this shipped: the version would
+ * survive at 2 and the app would go straight back in. Keeping the legacy key as
+ * the presence flag means the existing button keeps working untouched, and
+ * `resetOnboarding()` below (which clears both) is the tidier equivalent for
+ * Pack B to move to.
  */
 
 /** Bump this when onboarding changes materially enough that existing users
@@ -66,28 +78,25 @@ export const ONBOARDING_VERSION_KEY = 'unmute_onboarding_version'
 export const LEGACY_ONBOARDING_COMPLETE_KEY = 'unmute_onboarding_complete'
 
 /** The version of onboarding this user has seen, or null if they have seen
- *  none. Reads the legacy boolean as version 1. */
+ *  none. A completion flag with no version is the old flow, i.e. version 1. */
 export function readOnboardingVersion(): number | null {
   try {
+    if (localStorage.getItem(LEGACY_ONBOARDING_COMPLETE_KEY) !== 'true') return null
     const raw = localStorage.getItem(ONBOARDING_VERSION_KEY)
     if (raw !== null) {
       const parsed = Number.parseInt(raw, 10)
       if (Number.isFinite(parsed)) return parsed
     }
-    // Migration path: the old unversioned boolean means "finished the old
-    // eight-step flow", which is version 1.
-    if (localStorage.getItem(LEGACY_ONBOARDING_COMPLETE_KEY) === 'true') return 1
-    return null
+    return 1
   } catch {
     // localStorage unavailable — treat as current so we never trap a user in
-    // an onboarding loop they cannot finish.
+    // an onboarding loop whose completion can never be recorded.
     return ONBOARDING_VERSION
   }
 }
 
-/** Settings → Help & about calls this for "Replay onboarding". It clears the
- *  legacy boolean too — leaving it behind would downgrade the user to version
- *  1 and replay the three-screen summary instead of the full flow. */
+/** Settings → Help & about's "Replay onboarding". Clears both keys, so the user
+ *  gets the full flow rather than the three-screen summary. */
 export function resetOnboarding(): void {
   try {
     localStorage.removeItem(ONBOARDING_VERSION_KEY)
@@ -97,8 +106,8 @@ export function resetOnboarding(): void {
 
 function markOnboardingSeen(): void {
   try {
+    localStorage.setItem(LEGACY_ONBOARDING_COMPLETE_KEY, 'true')
     localStorage.setItem(ONBOARDING_VERSION_KEY, String(ONBOARDING_VERSION))
-    localStorage.removeItem(LEGACY_ONBOARDING_COMPLETE_KEY)
   } catch { /* ignore */ }
 }
 

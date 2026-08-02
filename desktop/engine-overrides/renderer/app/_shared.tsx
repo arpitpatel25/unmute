@@ -8,8 +8,11 @@
 //
 // ICONS. One glyph per concept. `BehaviorIcon` used to be a clock, which is
 // also what the sidebar's History row draws — two concepts, one glyph. It is
-// now a set of sliders, and the sections that were borrowing it (Help,
-// Profile, Engine) have their own glyphs below.
+// now a set of sliders. Three more sections are still borrowing it: Help
+// (Settings.tsx), and Profile and Engine (Account.tsx). Glyphs for all three
+// are defined below and are NOT yet wired up — Pack A owns neither call site,
+// so Pack B rewires Help and whoever is given Account.tsx rewires the other
+// two. Until then `BehaviorIcon` still appears four times.
 
 import React from 'react'
 
