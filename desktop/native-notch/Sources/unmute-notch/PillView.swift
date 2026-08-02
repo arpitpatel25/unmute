@@ -920,20 +920,97 @@ private struct ScratchpadChip: View {
     var body: some View {
         Button(action: action) {
             ChipBody {
-                // A PEN NIB, NOT A PAGE. The old glyph drew a sheet of paper
-                // with a badge on it, which is the pad — this control is not
-                // the pad, it is the decision to write onto one. `pencil.tip`
-                // is the system's own nib, so it carries the same weight and
-                // optical size as the mic and remote glyphs beside it, which a
-                // hand-drawn path could only approximate.
-                Image(systemName: "pencil.tip")
-                    .font(.system(size: 13))
+                // NOTE + PEN — a ruled page with a pen laid across it. The pen
+                // says "write", the ruled page says "onto the pad"; either half
+                // alone says only half of it, which is why `pencil.tip` was
+                // wrong here twice over. It is also unreadable: SF's nib is a
+                // 10.6 × 13.8pt glyph that is almost all outline, and at the
+                // 13pt this row uses it collapses into a narrow caret.
+                //
+                // Drawn, not `Image(systemName:)`, because NO SF Symbol carries
+                // both halves at our floor. `long.text.page.and.pencil` is
+                // exactly this glyph but is macOS 15.4; `pencil.and.list.
+                // clipboard` is 14.0 and is a clipboard, not a page; everything
+                // available on macOS 13 has the page (`note.text`, `doc.text`)
+                // or the pen (`square.and.pencil`) but never the two together.
+                // Gating on `#available` would put a different glyph on
+                // different Macs, which is worse than drawing one.
+                NotePenGlyph()
+                    .stroke(style: StrokeStyle(lineWidth: NotePenGlyph.strokeWidth,
+                                               lineCap: .round, lineJoin: .round))
+                    .frame(width: NotePenGlyph.side, height: NotePenGlyph.side)
                     .foregroundColor(armed ? Theme.cReady : Theme.textFaint)
             }
         }
         .buttonStyle(.plain)
         .help(armed ? "Keeping on stop — tap to deliver normally again"
                     : "Keep on stop instead of delivering")
+    }
+}
+
+/// The scratchpad chip's glyph: a ruled page, open on the right, with a pen
+/// laid diagonally across it — nib at the lower left, rounded butt upper right.
+///
+/// Traced from the approved 24×24 artwork, but the stroke is NOT taken from it.
+/// The artwork's 1.6-unit stroke would come out at 1.2pt here, and measuring the
+/// bitmaps SF Symbols actually produces puts a regular-weight 13pt glyph at
+/// 1.0pt — so the width is pinned to that instead, and the chip sits in a row of
+/// system glyphs without reading heavier than them.
+private struct NotePenGlyph: Shape {
+    /// Side of the artwork's viewBox. All coordinates below are in its units.
+    static let unit: CGFloat = 24
+    /// Frame side. Yields a 15 × 15pt inked glyph — between `note.text` (13 ×
+    /// 12) and `long.text.page.and.pencil` (14 × 16) at the same 13pt, and the
+    /// same width as the `laptopcomputer` mic glyph next door (15.5).
+    static let side: CGFloat = 18
+    static let strokeWidth: CGFloat = 1
+
+    func path(in rect: CGRect) -> Path {
+        let s = min(rect.width, rect.height) / Self.unit
+        // The ink spans x 4…22, a unit right of the viewBox's centre. Shift it
+        // back, or the glyph sits off-centre in a capsule that is centred on it.
+        let ox = rect.midX - (Self.unit / 2 + 1) * s
+        let oy = rect.midY - Self.unit / 2 * s
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: ox + x * s, y: oy + y * s)
+        }
+
+        var path = Path()
+
+        // THE PAGE — left edge only, open on the right where the pen crosses.
+        // The two corners are true quarter-circles, so `addArc(tangent…)`
+        // rather than a quad curve: at this size the difference between a
+        // circular fillet and a parabolic one is a visibly slack corner.
+        path.move(to: p(14, 3))
+        path.addArc(tangent1End: p(4, 3), tangent2End: p(4, 5), radius: 2 * s)
+        path.addArc(tangent1End: p(4, 21), tangent2End: p(6, 21), radius: 2 * s)
+        path.addLine(to: p(14, 21))
+
+        // TWO RULED LINES. 4 units apart ⇒ 3pt here, less 1pt of stroke, so 2pt
+        // of white between them — 4 device pixels on the Retina panel the notch
+        // is always on. They stay two lines rather than fusing into a block.
+        path.move(to: p(8, 8))
+        path.addLine(to: p(13, 8))
+        path.move(to: p(8, 12))
+        path.addLine(to: p(12, 12))
+
+        // THE PEN. A parallelogram body closed by a triangular nib at (13.5,
+        // 19.5), and a semicircular butt across the far end — centre (21, 12),
+        // radius half the body's width. The artwork writes that butt as an SVG
+        // elliptical arc whose stated 1.8 radius is smaller than its own chord
+        // and so gets scaled up to √2 by the SVG rules; stating √2 directly is
+        // the same curve without the implicit correction.
+        path.move(to: p(20, 11))
+        path.addLine(to: p(14, 17))
+        path.addLine(to: p(13.5, 19.5))
+        path.addLine(to: p(16, 19))
+        path.addLine(to: p(22, 13))
+        path.addArc(center: p(21, 12), radius: sqrt(2) * s,
+                    startAngle: .degrees(45), endAngle: .degrees(225),
+                    clockwise: true)
+        path.closeSubpath()
+
+        return path
     }
 }
 
