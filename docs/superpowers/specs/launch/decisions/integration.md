@@ -30,6 +30,35 @@ Nothing may hang below the bar (the core rule of Pack D), and the bar has no roo
 
 **Decision: accept for launch.** A toast that arrives while collapsed is logged and dropped. Revisit only if it turns out something important is delivered exclusively by toast — the notch's attention state already covers the case that matters (a task needing an answer).
 
+## I5 — Pack A mounted a component Pack C was told to delete
+
+**Raised by:** Pack A (`arpit/launch-shell-onboarding`). **Resolved in flight.**
+
+Pack C SPEC §5 called `TaskPanel.tsx` unreachable and told C to delete it. Pack A's new Orchestrator tab **mounts it** as the default `tasks` segment — so deleting it would break the branch after merge.
+
+Instructed C to keep the export and rework its contents instead. `TaskRow.tsx` and `AmbientIndicator.tsx` remain unreferenced; the delete-or-fold instruction stands for those two.
+
+Two consequences also handed to C: mounting `TaskPanel` and routing `RemoteHowItWorks` puts *"Remote tasks"*, *"Hold the Remote key"* and *"How Remote works"* on screen for the first time, inside a tab the spec insists is called Orchestrator; and `TaskPanel` carries its own `tasks/how/setup` state while Pack A drives the same selection from `App.tsx`, so the outer control would go stale. C takes the segment as a prop.
+
+**This is the class of failure the ownership table was supposed to prevent, and it did not** — because the conflict was not two packs editing one file, it was one pack *reviving* a file another was told to remove. Ownership tables catch write collisions, not lifecycle disagreements.
+
+## I6 — Two defects in my own VERIFY documents
+
+**Raised by:** Pack A. Corrections issued to B and C; D, E and F were unaffected or already worked around it.
+
+1. **Wrong base branch.** Every VERIFY boundary section says to diff against `origin/main`. The packs are cut from `arpit/launch-readiness`, so that base wrongly attributes all six packs' spec files to whichever pack is being checked. Correct base is `arpit/launch-readiness`.
+2. **`npm run typecheck` does not pass on the base commit.** It fails in `electron/` files most packs may not touch, and `&&` short-circuits so the renderer stage never runs at all. Asserting "typecheck passes" was unachievable from inside any pack. Replacement: measure the renderer stage directly (`npx tsc -p tsconfig.renderer.json`) and prove the error count did not increase.
+
+Both were my errors, not the agents'. Pack A's two FAILs are entirely accounted for by them and are **not** real defects in its work.
+
+## I7 — `Account.tsx` and `History.tsx` were unowned
+
+**Raised by:** Pack A.
+
+The ownership table in `00-OVERVIEW.md` omitted both. `Account.tsx` matters: it still uses `BehaviorIcon` for two section headers, which is exactly the duplication D8 forbids, and Pack A prepared `ProfileIcon`/`EngineIcon`/`HelpIcon` for it.
+
+**Decision: `Account.tsx` reassigned to Pack B** (instructed at dispatch). `History.tsx` stays unowned — its findings are cosmetic (two names for one screen, a hardcoded `Fn` in the empty state, a chip for an engine that no longer exists) and it is safer to leave it for a follow-up than to hand a seventh file to a pack mid-flight.
+
 ## I4 — Corner radius is an estimate, by necessity
 
 **Raised by:** Pack D.
