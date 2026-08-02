@@ -39,6 +39,25 @@ export interface RemoteTask {
     hasTerminal: boolean
     canResume: boolean
   }
+  /** WHICH MODEL of that backend actually ran this task — the backend's own
+   *  name for it ('sonnet' for Claude Code, 'Opus 5' for Claude Desktop,
+   *  '5.6 Sol High' for Codex), resolved by the main process at DISPATCH and
+   *  sent with the task.
+   *
+   *  Sent, not re-derived, for the same reason as `provider` — and for a second,
+   *  sharper one. This is a HISTORICAL FACT, not a live reading (launch
+   *  decision D6): it says what ran, not what would run now. The renderer must
+   *  never fill it from the current model picker, because a task dispatched on
+   *  Sonnet would start claiming Opus the moment the picker moved, and that card
+   *  would look exactly as correct as a true one — a lie with no symptom. Main
+   *  writes it once, persists it in the task's meta.json, and replays that value
+   *  after a restart.
+   *
+   *  Absent when it could not be determined: a task created before this field
+   *  existed, or a backend that named no model. Render agent-only — no default,
+   *  no backfill, and no placeholder word, which is noise dressed as
+   *  information. */
+  model?: string
   /** This task is being brought back right now. Resume takes seconds (spawn,
    *  trust-accept, nudge); without this the card showed nothing until it landed,
    *  so a working Resume was indistinguishable from a dead button. */

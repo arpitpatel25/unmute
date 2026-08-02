@@ -48,6 +48,7 @@ import type { CodexDesktopDriver } from './codex/driver'
 import type { ClaudeDesktopDriver } from './claude-desktop/driver'
 import type { ClaudeDesktopAx, ClaudeSidebarRow } from './claude-desktop/ax'
 import { statusForTitle, readState as readAxState, readSidebarRows as readAxSidebar } from './claude-desktop/ax'
+import { readCatalog, labelFor, type ClaudeModel } from './claude-desktop/catalog'
 import type { ClaudeActuator } from './claude-desktop/actuate'
 import type { ClaudeConsent as ClaudeConsentLite } from './claude-desktop/ax'
 import { beat, pendingApprovals, expireStaleApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
@@ -84,6 +85,25 @@ export interface Task {
    *  writes go through the Codex app via CDP and its state is polled from the
    *  rollout files; see codex/driver.ts. */
   agent?: AgentKind
+  /** WHICH MODEL that backend ran this task on — recorded ONCE, at creation,
+   *  and never derived again (launch decision D6: the model is a historical
+   *  fact). Persisted in meta.json beside `agent`, so rehydrate() replays it
+   *  verbatim after a restart.
+   *
+   *  Deliberately NOT re-read from settings when a card is drawn. The picker
+   *  moves; a task dispatched yesterday on Sonnet would then claim Opus, and
+   *  the card would look exactly as correct as a right one. Same reasoning as
+   *  `agent` — which is tagged at birth for exactly this reason — one level
+   *  down.
+   *
+   *  Carries whatever the backend itself calls it: the `--model` value for
+   *  Claude Code ('sonnet'), the app's own label for Claude Desktop ('Opus 5')
+   *  and for Codex ('5.6 Sol High'). Absent when it could not be determined —
+   *  a task created before this field existed, a Codex thread whose app never
+   *  reported one, a Claude Desktop conversation whose store names none. An
+   *  absent field is the honest answer: no default, no placeholder string, and
+   *  no backfill, because there is no way to know what an old task ran on. */
+  model?: string
   /** For 'codex-desktop': the Codex thread this task drives (durable id, no
    *  `local:` prefix). This is the whole handle — it addresses the rollout file
    *  for reads and the sidebar row for open/send. */
@@ -514,7 +534,7 @@ export class TaskManager extends EventEmitter {
    * Dispatch a new task. Returns the taskId immediately; execution + polling
    * proceed asynchronously (PRD §4.4 — dispatch and forget).
    */
-  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null } = {}): Promise<string> {
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string } = {}): Promise<string> {
     // EXTERNAL BACKEND FORK (codex-desktop). Everything below this point — the
     // status file, the CLAUDE.md contract, the owned PTY, the trust prompt, the
     // dispatch payload — presumes Unmute spawns and owns the process. Codex
@@ -572,11 +592,17 @@ export class TaskManager extends EventEmitter {
     // resume() rebuild on the SAME backend later instead of asking the global
     // picker, and what lets the card name its provider without guessing.
     const agent: AgentKind = opts.agent ?? 'claude'
+    // ...AND THE MODEL, on the same terms and for the same reason. The caller
+    // resolved it from the value it is about to launch the executor with (the
+    // `--model` argument), so this is what actually ran — not what the picker
+    // says later. Spread conditionally: an unresolvable model must leave the
+    // field ABSENT, never present-and-empty (D6, §3).
     const task: Task = {
       id, intent, sessionId, kind, state: 'processing', createdAt: now, updatedAt: now,
       cwd: runCwd, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
       surface, mode, injectedRecipes: [], lastUserInputAt: now,
       spawnedBy: opts.spawnedBy, agent,
+      ...(opts.model ? { model: opts.model } : {}),
     }
     this.tasks.set(id, task)
     tlog.event('task-created', { intent, cwd: dir })
@@ -640,7 +666,7 @@ export class TaskManager extends EventEmitter {
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, agent, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}) }))
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, agent, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}), ...(task.model ? { model: task.model } : {}) }))
       devEvent(tlog, 'dispatch-memory', { surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
 
       // Named, not left to the picker — see the task literal above.
@@ -778,7 +804,7 @@ export class TaskManager extends EventEmitter {
 
   private async dispatchCodexDesktop(
     intent: string,
-    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; project?: string | null; agent?: AgentKind },
+    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; project?: string | null; agent?: AgentKind; model?: string },
   ): Promise<string> {
     const driver = this.opts.codexDriver
     if (!driver) throw new Error('CODEX_UNAVAILABLE: not-configured')
@@ -805,6 +831,17 @@ export class TaskManager extends EventEmitter {
       .catch((e) => log.warn('codex-hook-repair-failed', { error: (e as Error).message }))
     const reasoning = this.opts.codexReasoning?.() ?? {}
     const modelLabel = [reasoning.model, reasoning.effort].filter(Boolean).join(' ') || undefined
+    // WHAT THIS THREAD RUNS ON, as a fact about this dispatch (D6).
+    //
+    // `opts.model` is what the caller resolved from CODEX'S OWN axes — its
+    // reasoning button and its app-server model catalogue — which is the only
+    // thing that can answer when the user has made no explicit pick and the
+    // thread simply inherits whatever Codex is set to.
+    //
+    // `modelLabel` is the pick we are about to APPLY to the thread ourselves,
+    // and stands in when the manager is driven directly (no resolver wired).
+    // Both describe this thread at creation; neither is ever consulted again.
+    const model = opts.model ?? modelLabel
     const created = await driver.createTask(intent, {
       project: opts.project ?? null,
       permissionMode: this.opts.permissionMode?.() ?? 'ask',
@@ -843,6 +880,7 @@ export class TaskManager extends EventEmitter {
       codexDomThreadId: created.domThreadId,
       codexProject: opts.project ?? null,
       ...(modelLabel ? { codexModelLabel: modelLabel } : {}),
+      ...(model ? { model } : {}),
       kind,
       state: 'processing',
       createdAt: now,
@@ -867,6 +905,7 @@ export class TaskManager extends EventEmitter {
       codexDomThreadId: created.domThreadId, codexProject: opts.project ?? null,
       state: 'processing', updatedAt: now,
       ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
+      ...(model ? { model } : {}),
     })).catch(() => {})
 
     this.emit('created', task)
@@ -953,6 +992,28 @@ export class TaskManager extends EventEmitter {
       [...this.tasks.values()].map((t) => t.claudeDesktopSessionId).filter((x): x is string => !!x),
     )
 
+    // THE MODEL COMES FROM CLAUDE DESKTOP'S OWN RECORD OF THIS CONVERSATION.
+    //
+    // Its session store names a model per task, which is the per-card truth and
+    // is already historical — it is what that conversation ran on, whatever the
+    // app is set to now. Explicitly NOT the composer's current model: that
+    // belongs to whichever conversation the app happens to have OPEN, and
+    // attributing it to every adopted card is the same mistake as attributing
+    // its permission prompt (see readComposerSettings in claude-desktop/ax.ts).
+    //
+    // The bundle catalogue turns the stored id ('claude-opus-4-5-20251101')
+    // into the app's own label ('Opus 5'). When it cannot — no bundle, a
+    // restructured one, an id it does not know — the raw id is recorded rather
+    // than a prettified guess, and a store with no model at all records
+    // nothing. Read lazily and at most once per sweep: the catalogue is a 37MB
+    // archive, and a store full of model-less tasks must not pay for it.
+    let catalog: ClaudeModel[] | null = null
+    const modelOf = async (modelId: string | null): Promise<string | undefined> => {
+      if (!modelId) return undefined
+      catalog ??= await readCatalog().catch(() => [])
+      return labelFor(catalog, modelId) ?? modelId
+    }
+
     const adopted: string[] = []
     for (const meta of found) {
       if (adopted.length >= cap) break
@@ -971,6 +1032,7 @@ export class TaskManager extends EventEmitter {
       const id = randomUUID()
       const dir = join(this.opts.baseDir, this.opts.userKey ?? 'local', id)
       await fs.mkdir(dir, { recursive: true }).catch(() => {})
+      const model = await modelOf(meta.model)
 
       const task: Task = {
         id,
@@ -981,6 +1043,7 @@ export class TaskManager extends EventEmitter {
         ...(meta.title ? { name: meta.title } : {}),
         sessionId: meta.sessionId,
         agent: 'claude-code-desktop',
+        ...(model ? { model } : {}),
         claudeDesktopSessionId: meta.sessionId,
         // A conversation the user owns in another app is persistent by nature:
         // never idle-killed, never auto-purged. 'oneoff' would let the reaper
@@ -1008,6 +1071,7 @@ export class TaskManager extends EventEmitter {
         createdAt: task.createdAt, mode: 'managed',
         agent: 'claude-code-desktop', claudeDesktopSessionId: meta.sessionId,
         state: 'ready', updatedAt: now,
+        ...(model ? { model } : {}),
       })).catch(() => {})
 
       this.emit('created', task)
@@ -2067,7 +2131,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; codexThreadId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       // EXTERNAL BACKEND: a Codex thread lives in Codex, so an Unmute restart
@@ -2095,6 +2159,10 @@ export class TaskManager extends EventEmitter {
           name: meta.name,
           sessionId: meta.claudeDesktopSessionId,
           agent: 'claude-code-desktop',
+          // REPLAYED, never re-resolved. A receipt written before this field
+          // existed simply has no `model` and the card stays agent-only — the
+          // one honest outcome, since nothing on disk can say what it ran on.
+          ...(meta.model ? { model: meta.model } : {}),
           claudeDesktopSessionId: meta.claudeDesktopSessionId,
           kind: meta.kind ?? 'session',
           state: (meta.state as UiTaskState | undefined) ?? 'ready',
@@ -2124,6 +2192,7 @@ export class TaskManager extends EventEmitter {
           name: meta.name,
           sessionId: meta.codexThreadId,
           agent: 'codex-desktop',
+          ...(meta.model ? { model: meta.model } : {}),
           codexThreadId: meta.codexThreadId,
           codexDomThreadId: meta.codexDomThreadId,
           codexProject: meta.codexProject ?? null,
@@ -2176,6 +2245,7 @@ export class TaskManager extends EventEmitter {
         // Pre-sessionId receipts won't carry one; fall back to the task id so the
         // field is always present (older tasks simply aren't session-pinned).
         sessionId: meta.sessionId ?? id,
+        ...(meta.model ? { model: meta.model } : {}),
         kind: meta.kind ?? 'oneoff',
         // A non-terminal task whose session died with the app is, to the user,
         // interrupted — surface it as failed (still resumable) rather than a

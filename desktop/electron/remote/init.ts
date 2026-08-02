@@ -819,6 +819,18 @@ function serializeTask(t: Task) {
     // renderer stays dumb: it renders `provider.label` and honours
     // `provider.canResume` without knowing what any backend is.
     provider: providerOf(t.agent),
+    // ...and WHICH MODEL of that backend actually ran it. Read STRAIGHT OFF THE
+    // TASK, where it was written once at dispatch and persisted to meta.json.
+    //
+    // Not `settings.get('model')`, not `getModels()`, not the catalogue — a
+    // live lookup here would repaint every historical card with the picker's
+    // current value, so a task that ran on Sonnet yesterday would claim Opus
+    // today and look entirely correct doing it (launch decision D6).
+    //
+    // Left `undefined` rather than coerced when the task has none: an old task
+    // predating this field renders agent-only, which is honest, and a default
+    // would be indistinguishable from a real answer.
+    model: t.model,
     codexProject: t.codexProject ?? null,
     // The GUI-agent equivalent of the terminal (see Task.conversation).
     conversation: t.conversation ?? null,
@@ -855,6 +867,86 @@ function notify(title: string, body: string): void {
   }
 }
 
+/**
+ * The model Claude Code is launched with — ONE resolution, used both to build
+ * the executor (its `--model` argument) and to record what ran on the task.
+ *
+ * Extracted rather than duplicated. Two copies of
+ * `settings.get('model') || getModels().doerDefault` are two things that can
+ * drift, and this particular drift would be silent: the card would name a model
+ * the session never ran on, which is exactly the failure D6 exists to prevent.
+ */
+function doerModel(): string {
+  return settings.get('model') || getModels().doerDefault
+}
+
+/** Ceiling on the Codex model read at dispatch. The app-server answers in ~1ms;
+ *  this only bounds the pathological case so a dispatch can never hang on it. */
+const CODEX_MODEL_READ_MS = 1500
+
+/**
+ * What a NEW Codex thread will run on, in CODEX'S OWN vocabulary ("5.6 Sol High").
+ *
+ * Two sources, in order, and both belong to Codex rather than to us:
+ *
+ *   1. The pick we are about to APPLY to the thread (dispatchCodexDesktop
+ *      passes it to createTask). If the user chose a model, that is what runs.
+ *   2. Otherwise the thread inherits whatever Codex is currently set to, and
+ *      the reasoning button's own label is the only thing that reports it — the
+ *      cache is a verbatim record of that read, not a setting of ours.
+ *
+ * The label is then canonicalised against Codex's own catalogue (`model/list`
+ * over the app-server: headless, no window, no arming). NON-FATAL BY
+ * CONSTRUCTION: listCodexModels resolves `[]` on a missing app, a timeout or a
+ * protocol change, matchCurrent then matches nothing, and the raw label is
+ * recorded instead. A closed Codex costs this dispatch nothing.
+ *
+ * Returns undefined when Codex has told us nothing — dispatch then records no
+ * model at all, which is the honest answer (D6, §3).
+ */
+async function codexDesktopModel(): Promise<string | undefined> {
+  const picked = (settings.get('codexModel' as never) as string) || undefined
+  const effort = (settings.get('codexEffort' as never) as string) || undefined
+  const cached = settings.get('codexReasoningCache' as never) as { label?: string | null } | undefined
+  const label = picked ? [picked, effort].filter(Boolean).join(' ') : (cached?.label ?? '').trim()
+  if (!label) return undefined
+  const models = await listCodexModels({ timeoutMs: CODEX_MODEL_READ_MS }).catch(() => [] as CodexModel[])
+  const cur = matchCurrent(label, models)
+  return cur.model ? [cur.model, cur.effort].filter(Boolean).join(' ') : label
+}
+
+/**
+ * The model to RECORD on a task at dispatch — a historical fact (D6).
+ *
+ * Resolved ONCE, here, at the moment the work starts, from whatever the chosen
+ * backend is actually about to run on. Nothing downstream ever recomputes it:
+ * serializeTask reads `t.model` straight off the task, so a card drawn tomorrow
+ * shows what ran today no matter where the picker has moved since.
+ */
+async function modelForDispatch(agent: AgentKind | undefined): Promise<string | undefined> {
+  // Mirrors TaskManager.dispatch's OWN default exactly: an absent agent means
+  // Claude Code, not the picker's current value. Reading the picker here would
+  // resolve a Codex model for a task that lands on Claude — the plausible lie
+  // in its purest form.
+  switch (agent ?? 'claude') {
+    case 'claude':
+      return doerModel()
+    case 'codex-desktop':
+      return codexDesktopModel()
+    case 'claude-code-desktop':
+      // Claude Desktop names the model per conversation in its OWN session
+      // store, and the manager reads it there — which covers both entry points
+      // (a conversation we start and one we adopt). Resolving it here would
+      // cover only the first, and would attribute the composer's CURRENT model
+      // to conversations that never ran on it.
+      return undefined
+    default:
+      // 'codex' (the Codex CLI) is not dispatchable — isDispatchable() excludes
+      // it and it has no creation path to record anything on.
+      return undefined
+  }
+}
+
 function executorFactory(resume = false, forTask?: AgentKind) {
   const mode = settings.get('permissionMode')
   // WHOSE BACKEND IS THIS? `forTask` = the agent an EXISTING task was created on;
@@ -864,7 +956,7 @@ function executorFactory(resume = false, forTask?: AgentKind) {
   const agent: AgentKind = forTask ?? settings.get('agent')
   const sandboxRoots = settings.get('sandboxRoots') ?? []
   const sandboxed = sandboxRoots.length > 0
-  const model = settings.get('model') || getModels().doerDefault
+  const model = doerModel()
   const browser = settings.get('browserEnabled') !== false
   log.event('executor-factory', { agent, forTask: forTask ?? null, permissionMode: mode, sandboxed, sandboxRoots, model, browser, resume })
   // HARD SEPARATION (invariant). Everything below builds a PTY-backed CLI
@@ -2291,11 +2383,21 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // and agent-created alike.
   {
     const origDispatch = manager.dispatch.bind(manager)
-    manager.dispatch = (intent, opts = {}) => {
+    manager.dispatch = async (intent, opts = {}) => {
       const placeholder = `pending-${randomUUID()}`
       const env = mintMcpEnvFor(placeholder)
-      return origDispatch(intent, { ...opts, extraEnv: { ...env, ...(opts.extraEnv ?? {}) } })
-        .then((id) => { remapMcpToken(placeholder, id); return id })
+      // The model is stamped HERE, at dispatch, from what the chosen backend is
+      // about to run on — the same wrapper, for the same reason, as the per-task
+      // MCP identity above. Absent when it cannot be determined; never a
+      // default (D6).
+      const model = await modelForDispatch(opts.agent)
+      const id = await origDispatch(intent, {
+        ...opts,
+        extraEnv: { ...env, ...(opts.extraEnv ?? {}) },
+        ...(model ? { model } : {}),
+      })
+      remapMcpToken(placeholder, id)
+      return id
     }
   }
   void startMcpServer({
