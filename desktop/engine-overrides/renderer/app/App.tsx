@@ -36,8 +36,10 @@ import { TaskPanel } from '../remote/TaskPanel'
  *
  * Permissions, Language and Privacy are sections INSIDE settings now, not
  * top-level tabs. The Features tab is gone — its Dictate/Instruct content is
- * superseded by the explainer pages, and the chaining tip it uniquely carried
- * moves into the Instruct explainer (decision D2).
+ * superseded by the explainer pages. Decision D2 puts the chaining tip it
+ * uniquely carried (dictate, then immediately Caps Lock to reshape) on Pack B,
+ * to place in the Instruct explainer. That is an obligation, not something
+ * already done: on this branch no explainer page exists yet.
  */
 type Tab = 'history' | 'orchestrator' | 'account' | 'settings'
 

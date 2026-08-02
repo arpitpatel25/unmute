@@ -1,6 +1,7 @@
-// Shared UI primitives + formatters used across Settings / Account /
-// Permissions tabs. Extracted from the old single-page Settings.tsx
-// during the UI restructure. Pure presentation only — no IPC, no state.
+// Shared UI primitives + formatters. Extracted from the old single-page
+// Settings.tsx during the UI restructure; now used by the app shell and
+// onboarding as well as by Settings, Account and the Permissions section.
+// Pure presentation only — no IPC, no state.
 //
 // TYPE SCALE (decision D8). The scale is 22 / 16 / 14 / 13 / 12.5 / 11 / 10 px
 // and nothing between. THIS FILE now conforms — the odd 9px and 12px sizes that

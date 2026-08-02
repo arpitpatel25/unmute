@@ -8,13 +8,18 @@
 // for everyone who moved dictation to Right Option. None of it mentioned the
 // notch, which is where handed-off work actually lives.
 //
-// EVERY KEY LABEL IS READ LIVE. `dictationKey` comes from settings; the
-// orchestrator sits on whichever trigger dictation is not using; instruction is
-// Caps Lock (not user-selectable — only its on/off state is). No step tells the
-// user to press a key it has not looked up. The one unconditional key name is
-// the macOS Globe/🌐 tip on the "Your keys" step, which is about a System
-// Settings option rather than an unmute trigger, and which is relevant either
-// way round: unmute always has the Fn key, as dictation or as orchestrate.
+// NO STEP TELLS THE USER TO PRESS A KEY IT HAS NOT LOOKED UP. `dictationKey`
+// comes from settings, and the orchestrator label is derived from it — those two
+// are the ones that move, and both go through `KEY_LABELS`.
+//
+// Three key names ARE written literally, and all three are correct to be:
+//   * the two options of the dictation-key picker ("Fn (Globe)", "Right
+//     Option") — a selector has to name what it is selecting;
+//   * Caps Lock, which is not user-selectable anywhere in the app (only its
+//     on/off state is, via paywallGetInstructionEnabled);
+//   * the macOS Globe/🌐 tip on the "Your keys" step, which is about a System
+//     Settings option rather than an unmute trigger, and is relevant either way
+//     round: unmute always holds the Fn key, as dictation or as orchestrate.
 
 import { useState, useEffect, useCallback } from 'react'
 import unmuteLogo from '../assets/unmute-logo.png'
@@ -59,8 +64,10 @@ function api(): OnboardingAPI {
   return (window as unknown as { electronAPI?: OnboardingAPI }).electronAPI ?? {}
 }
 
-/** Human labels for the two triggers a user can choose between. The only place
- *  a key name is written down; every sentence reads from here. */
+/** Human labels for the two triggers a user can choose between. Every *sentence*
+ *  that names a trigger reads from here — the literal key names elsewhere in the
+ *  file are the picker's own option labels and Caps Lock, neither of which can
+ *  vary. See the header note. */
 const KEY_LABELS: Record<DictationKey, string> = {
   fn: 'Fn',
   'right-option': 'Right Opt',
@@ -678,8 +685,10 @@ export function WhatsNew({ onComplete, onOpenAgentSetup }: OnboardingProps) {
 function Shell({ step, total, onBack, children }: {
   step: number
   total: number
-  /** Absent on the first screen; otherwise steps one back. The flow had no way
-   *  back at all, so a user who wanted to re-read a screen had to restart. */
+  /** Absent on the first screen; otherwise steps one back. The old flow had no
+   *  way back between STEPS — its single "← Back to sign in" only undid a
+   *  step-local toggle — so a user who wanted to re-read a screen had to quit
+   *  and clear the completion flag. */
   onBack?: () => void
   children: React.ReactNode
 }) {

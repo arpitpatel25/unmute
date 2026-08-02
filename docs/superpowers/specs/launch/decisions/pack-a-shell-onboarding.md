@@ -174,6 +174,16 @@ that file. Doing it here would mean editing a file this pack does not own. The
 seam is commented at the `OrchestratorTab` definition so it is not discovered by
 accident.
 
+**Consequence for Pack C: mounting `TaskPanel` and `RemoteHowItWorks` puts the
+word "Remote" back on screen, inside a tab called Orchestrator.** SPEC §2.2 says
+the user-visible string is "Orchestrator", never "Remote" — and it is, in the
+shell. But `TaskPanel` says "Remote tasks", "Hold the Remote key", "Set up
+Remote"; `RemoteHowItWorks` is titled "How Remote works" and says it seven more
+times. Neither was reachable from the main window before this pack; the decision
+to surface them is mine, so the consequence is recorded here. Both files belong
+to Pack C, which is rewriting them. They also carry off-scale type (`text-sm`,
+`text-[12px]`) which D8's scale will need applied when Pack C touches them.
+
 **Onboarding gained a Back control.** VERIFY 28 asks that "back/forward never
 lands on a blank screen" — but neither the old flow nor my first draft had any
 way back at all, so a user who wanted to re-read a screen had to restart the
