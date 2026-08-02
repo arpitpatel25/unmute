@@ -1,72 +1,87 @@
 import SwiftUI
 
-// The surface shape: square top corners flush to the screen's top edge, only
-// the bottom corners round. (The earlier concave "shoulder" fillets were cut —
-// on wide surfaces they read as notches carved out of the top border.)
+// THE SURFACE IS ONE SHAPE, AND IT IS DRAWN STRAIGHT THROUGH THE CUTOUT.
+//
+// On a notched display the mass spans left content · the camera housing · right
+// content as a SINGLE path. There is no second view, no pair of wings butted
+// against the hardware. Two wings can never look right: the cutout is rounded
+// on BOTH of its bottom corners, so anything placed beside it leaves a
+// bitten-out curve exactly where the join has to be invisible. Drawing across
+// the hole costs nothing — those pixels are not displayed, and the surface and
+// the housing are the same black — and it removes the join entirely.
+//
+// The path therefore knows nothing about the cutout. The controller positions
+// the window so the mass's middle sits over it (NotchGeometry.barFrame) and the
+// view leaves that middle empty (NotchView.barRow). The shape just runs
+// through.
+//
+// TWO KINDS OF CORNER, and both belong to this path:
+//
+//   * BOTTOM OUTER — convex, `bottomRadius`, matching the radius macOS uses on
+//     the cutout's own bottom corners. Only the outer two: the middle, where
+//     the mass crosses the housing, is dead straight.
+//
+//   * TOP OUTER — CONCAVE, `topFillet`. Where the mass meets the menu bar the
+//     black flares OUTWARD in a quarter circle instead of stopping at a right
+//     angle. This inverted curve is what separates a surface that belongs to
+//     the screen from one pasted on top of it.
+//
+// The fillets are PART OF THE PATH, deliberately, and not an overlay view. An
+// overlay at a fixed size visibly detaches from a mass that is springing to a
+// new width — mid-motion, which is exactly when the eye is tracking it. Being
+// path geometry they are interpolated by `animatableData` along with the
+// radius, so they travel with the shape by construction rather than by anyone
+// remembering to keep them in step.
+//
+// The fillets live INSIDE the rect: the mass body is the rect inset by
+// `topFillet` on each side, and the flare fills that inset back out at the top.
+// So a caller sizes the window to `body + 2 × fillet` and pads its content by
+// `fillet` — see MassPlacement.width.
 struct NotchShape: Shape {
+    /// Convex radius on the two OUTER bottom corners.
     var bottomRadius: CGFloat
+    /// Concave radius where the top of the mass flares out into the menu bar.
+    var topFillet: CGFloat
 
-    var animatableData: CGFloat {
-        get { bottomRadius }
-        set { bottomRadius = newValue }
+    init(bottomRadius: CGFloat, topFillet: CGFloat = 0) {
+        self.bottomRadius = bottomRadius
+        self.topFillet = topFillet
+    }
+
+    /// BOTH radii animate. A fillet that held still while the radius moved
+    /// would be the overlay bug wearing a different hat.
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(bottomRadius, topFillet) }
+        set { bottomRadius = newValue.first; topFillet = newValue.second }
     }
 
     func path(in rect: CGRect) -> Path {
-        let br = min(bottomRadius, rect.width / 2, rect.height)
+        // Nothing may exceed half the width or the whole height: a mass narrower
+        // than its own corners is the collapse animation's last frame, and it
+        // must degenerate cleanly rather than fold inside out.
+        let f = max(min(topFillet, rect.width / 2, rect.height), 0)
+        let body = rect.insetBy(dx: f, dy: 0)
+        let br = max(min(bottomRadius, body.width / 2, max(body.height - f, 0)), 0)
+
         var p = Path()
+        // Top-left, out on the menu bar, then the concave flare inward+down.
         p.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
-        p.addQuadCurve(to: CGPoint(x: rect.maxX - br, y: rect.maxY),
-                       control: CGPoint(x: rect.maxX, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.minX + br, y: rect.maxY))
-        p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - br),
-                       control: CGPoint(x: rect.minX, y: rect.maxY))
-        p.closeSubpath()
-        return p
-    }
-}
-
-/// The notch-plus-tongue shape used on HARDWARE-NOTCH displays.
-///
-/// A physical notch is a hole in the screen: nothing drawn in the middle of the
-/// top edge can be seen. The old shape ignored that — it grew SIDEWAYS and
-/// centred its content, so the message landed inside the cutout and only the
-/// empty wings either side stayed visible. On a 14" MBP an attention strip
-/// showed an amber bar with a black hole in it and no readable words.
-///
-/// So the surface is two parts: a top band exactly the width of the notch —
-/// invisible, because that is where the notch is — and a TONGUE hanging below
-/// it carrying everything that has to be read. The tongue may be wider than the
-/// notch when a message needs the room; never narrower, or it reads as hanging
-/// off the hardware rather than growing out of it.
-struct NotchTongueShape: Shape {
-    /// Width of the top band — the physical notch.
-    var topWidth: CGFloat
-    /// Height of that band — the menu-bar inset.
-    var topHeight: CGFloat
-    /// Corner radius on the tongue's bottom edge.
-    var bottomRadius: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        let tw = min(topWidth, rect.width)
-        let th = min(topHeight, rect.height)
-        let br = min(bottomRadius, rect.width / 2, max(rect.height - th, 0))
-        let l = rect.midX - tw / 2, r = rect.midX + tw / 2
-
-        var p = Path()
-        p.move(to: CGPoint(x: l, y: rect.minY))
-        p.addLine(to: CGPoint(x: r, y: rect.minY))
-        p.addLine(to: CGPoint(x: r, y: rect.minY + th))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + th))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
-        p.addQuadCurve(to: CGPoint(x: rect.maxX - br, y: rect.maxY),
-                       control: CGPoint(x: rect.maxX, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.minX + br, y: rect.maxY))
-        p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - br),
-                       control: CGPoint(x: rect.minX, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + th))
-        p.addLine(to: CGPoint(x: l, y: rect.minY + th))
+        p.addQuadCurve(to: CGPoint(x: body.minX, y: rect.minY + f),
+                       control: CGPoint(x: body.minX, y: rect.minY))
+        // Down the left wall to the bottom-left convex corner.
+        p.addLine(to: CGPoint(x: body.minX, y: rect.maxY - br))
+        p.addQuadCurve(to: CGPoint(x: body.minX + br, y: rect.maxY),
+                       control: CGPoint(x: body.minX, y: rect.maxY))
+        // The bottom edge — DEAD STRAIGHT across the cutout region.
+        p.addLine(to: CGPoint(x: body.maxX - br, y: rect.maxY))
+        p.addQuadCurve(to: CGPoint(x: body.maxX, y: rect.maxY - br),
+                       control: CGPoint(x: body.maxX, y: rect.maxY))
+        // Up the right wall and out through the second flare.
+        p.addLine(to: CGPoint(x: body.maxX, y: rect.minY + f))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY),
+                       control: CGPoint(x: body.maxX, y: rect.minY))
+        // Closed along the screen's top edge, which is where the shape hangs
+        // from. The top is always square: it shares an edge with the display.
         p.closeSubpath()
         return p
     }

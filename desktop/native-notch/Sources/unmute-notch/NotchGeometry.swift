@@ -1,30 +1,48 @@
 import AppKit
 
-// Where the surface sits and how big it is in each state.
+// WHERE THE SURFACE SITS, MEASURED FROM ONE SCREEN.
 //
-// AppKit screen coordinates (origin bottom-left). The surface is ALWAYS on the
-// PRIMARY display (the one with the menu bar, frame.origin == 0,0) and pinned
-// flush to that display's top edge — never hardcoded pixels, always relative to
-// the screen frame, so plugging in an external monitor can't misplace it.
+// AppKit screen coordinates (origin bottom-left). Two rules decide everything:
+//
+//   1. UNMUTE LIVES IN THE MENUBAR ROW. Unexpanded, the mass is exactly as tall
+//      as the menu bar and shares the notch's top edge. Nothing hangs below the
+//      bar in any resting state, on any display. Only the expanded panel drops
+//      below it, which is the one exception the user asked for.
+//
+//   2. EVERYTHING IS MEASURED, NEVER HARDCODED. The cutout is a different width
+//      on a 14" and a 16" MacBook and the bar height moves with display
+//      scaling. macOS reports both — safeAreaInsets, auxiliaryTopLeftArea /
+//      auxiliaryTopRightArea, visibleFrame. A model-to-width lookup table would
+//      break silently on the next machine Apple ships.
 //
 // DISPLAY MATRIX (all resolved by the two rules above):
-//   * No hardware notch anywhere      → dummy notch on the primary display
-//   * Notched built-in is primary     → hugs the real notch; dormant is invisible
+//   * No hardware notch anywhere      → centred mass, no reserved middle
+//   * Notched built-in is primary     → mass spans THROUGH the cutout
 //   * Notched built-in, EXTERNAL is primary (menu bar moved) → renders on the
-//     external with a dummy notch. This works only because the primary display
-//     is resolved by origin == .zero rather than NSScreen.main, which follows
-//     the CURSOR and would shuffle the surface between displays as the mouse
-//     moved. Do not "simplify" primaryScreen().
-//   * Clamshell                       → external is primary; dummy notch
-//   * Hot-plug / rearrange            → didChangeScreenParametersNotification
-//     re-runs current() (see AppController.observeScreens)
-struct NotchGeometry {
+//     external, centred. This works only because the primary display is
+//     resolved by origin == .zero rather than NSScreen.main, which follows the
+//     CURSOR and would shuffle the surface between displays as the mouse moved.
+//     Do not "simplify" primaryScreen().
+//   * Clamshell                       → external is primary; centred
+//   * Hot-plug / rearrange / scaling  → didChangeScreenParametersNotification
+//     re-runs current() (see AppController.observeScreens). The layout is
+//     re-chosen from the screen the surface is on, never cached from launch.
+struct NotchGeometry: Equatable {
     let screenFrame: NSRect
     let hasNotch: Bool
-    /// Physical notch width when present; a dummy width otherwise.
-    let notchWidth: CGFloat
-    /// Menu-bar thickness (24pt plain, ~37pt notched).
-    let menuBarHeight: CGFloat
+    /// The physical cutout, in SCREEN coordinates. nil on a display without one.
+    /// Its width and position come from the OS; nothing here invents them.
+    let cutout: NSRect?
+    /// Menu-bar thickness, measured. On a notched display this is the safe-area
+    /// inset, which is also the height of the housing — which is why the mass
+    /// and the cutout share a bottom edge for free.
+    let barHeight: CGFloat
+    /// Usable width to the left / right of the cutout — the real estate the
+    /// mass may spend. Half the screen each when there is no cutout.
+    let leftUsable: CGFloat
+    let rightUsable: CGFloat
+
+    // MARK: - Measuring
 
     /// The primary display = the one whose frame origin is (0,0) (System
     /// Settings' "main display", where the menu bar lives). NSScreen.main is the
@@ -36,67 +54,190 @@ struct NotchGeometry {
             ?? NSScreen.screens[0]
     }
 
-    static func current() -> NotchGeometry {
-        let screen = primaryScreen()
-        let frame = screen.frame
+    /// The screen the SURFACE is actually on.
+    ///
+    /// The layout is a property of that screen, not of the app: a notched
+    /// built-in and an external monitor want different shapes, and which one we
+    /// are on can change under us (hot-plug, "main display" moved in System
+    /// Settings, the window dragged by the window server during a Space swipe).
+    /// Falls back to the primary display, which is where a menu-bar surface
+    /// belongs when the question has no other answer.
+    static func screen(hosting window: NSWindow?) -> NSScreen {
+        guard let window, let s = window.screen else { return primaryScreen() }
+        // Only honour it if that screen actually carries a menu bar row we can
+        // live in — i.e. it is the primary one. Anything else and the surface
+        // would sit in the middle of a monitor with no bar to be level with.
+        return s.frame.origin == .zero ? s : primaryScreen()
+    }
 
-        let topInset = screen.safeAreaInsets.top
-        // UNMUTE_FAKE_NOTCH=1 pretends this display has a hardware notch
-        // (200pt wide, 37pt menu bar). Off by default and never set in the app.
+    /// LAST-DITCH ONLY, and never used when macOS answers.
+    ///
+    /// Reachable in exactly two situations: the UNMUTE_FAKE_NOTCH test harness,
+    /// and a display that reports a top safe-area inset but refuses to report
+    /// the auxiliary areas either side of it (never observed; the API has
+    /// returned them on every notched Mac since Monterey). It is a FRACTION of
+    /// the screen rather than a pixel count so that it degrades sensibly rather
+    /// than being wrong by a fixed amount on every future machine — a 14" MBP
+    /// cutout is ~13% of its width.
+    static let estimatedCutoutFraction: CGFloat = 0.13
+
+    /// Concave fillet and outer bottom radius, as fractions of the measured bar.
+    ///
+    /// macOS exposes no API for the cutout's own corner radius, so it is derived
+    /// from the one number it does expose. At a 37pt notched bar this lands at
+    /// 11pt, which is the radius the housing reads as; at a 24pt plain bar it
+    /// scales down to 7pt with it rather than looking bolted on.
+    static let filletOfBar: CGFloat = 0.30
+    static let cornerOfBar: CGFloat = 0.30
+
+    static func current(for screen: NSScreen = primaryScreen()) -> NotchGeometry {
+        let frame = screen.frame
+        let inset = screen.safeAreaInsets.top
+
+        // UNMUTE_FAKE_NOTCH=1 pretends this display has a hardware cutout. Off
+        // by default and never set in the app.
         //
         // It exists because the notched layout is otherwise UNTESTABLE by anyone
         // without a notched Mac — which is how the old centred strip shipped
-        // with its message inside the camera housing and nobody noticed. This is
-        // the only way to look at that path on an external display or an M1 Air.
-        let fake = ProcessInfo.processInfo.environment["UNMUTE_FAKE_NOTCH"] == "1"
-        let hasNotch = fake || topInset > 0
+        // with its message inside the camera housing and nobody noticed. Note
+        // that it fakes only the CUTOUT: the bar height stays the real measured
+        // one, because a simulation that also lied about the bar would hide the
+        // very bug this pack exists to fix.
+        let simulate = ProcessInfo.processInfo.environment["UNMUTE_FAKE_NOTCH"] == "1"
+        let real = inset > 0
 
-        var notchWidth: CGFloat = fake ? 200 : Self.dummyNotchWidth
-        if hasNotch,
-           let left = screen.auxiliaryTopLeftArea,
-           let right = screen.auxiliaryTopRightArea {
-            let gap = right.minX - left.maxX
-            if gap > 0 { notchWidth = gap }
+        // MEASURED, in preference order:
+        //   1. the notched display's safe-area inset (== the housing's height)
+        //   2. frame.maxY − visibleFrame.maxY — the menu bar, exactly, at
+        //      whatever scaling the user is running
+        //   3. the status bar's own thickness, for an auto-hidden menu bar,
+        //      where (2) measures zero
+        let measured = frame.maxY - screen.visibleFrame.maxY
+        let barHeight = real ? inset
+                             : (measured > 0 ? measured : NSStatusBar.system.thickness)
+
+        var cutout: NSRect? = nil
+        var leftUsable = frame.width / 2
+        var rightUsable = frame.width / 2
+
+        if real, let l = screen.auxiliaryTopLeftArea, let r = screen.auxiliaryTopRightArea,
+           r.minX > l.maxX {
+            // THE REAL THING: the OS tells us exactly where the hole is and how
+            // much bar there is either side of it.
+            cutout = NSRect(x: l.maxX, y: frame.maxY - barHeight,
+                            width: r.minX - l.maxX, height: barHeight)
+            leftUsable = l.width
+            rightUsable = r.width
+        } else if real || simulate {
+            let w = round(frame.width * Self.estimatedCutoutFraction)
+            cutout = NSRect(x: round(frame.midX - w / 2), y: frame.maxY - barHeight,
+                            width: w, height: barHeight)
+            leftUsable = (frame.width - w) / 2
+            rightUsable = leftUsable
+            // Logged only for the case that should never happen. The test
+            // harness takes this branch on every measurement and would otherwise
+            // fill the log with a line per state change.
+            if real { NotchLog.log("cutout ESTIMATED — this display reports an inset but no auxiliary areas: w=\(Int(w))") }
         }
 
-        let menuBarHeight = fake ? 37 : (hasNotch ? topInset : Self.dummyMenuBarHeight)
-        return NotchGeometry(screenFrame: frame, hasNotch: hasNotch,
-                             notchWidth: notchWidth, menuBarHeight: menuBarHeight)
+        return NotchGeometry(screenFrame: frame,
+                             hasNotch: cutout != nil,
+                             cutout: cutout,
+                             barHeight: barHeight,
+                             leftUsable: leftUsable,
+                             rightUsable: rightUsable)
     }
 
-    // ── HARDWARE-NOTCH LAYOUT ──
-    //
-    // On a notched display nothing readable may sit BESIDE the cutout: there is
-    // no screen there. The per-state widths below (+150 active, +220 attention)
-    // grew the strip sideways and centred the text inside it — straight into the
-    // camera housing, leaving two empty wings and no readable words.
-    //
-    // So on notched hardware the surface is the notch plus a TONGUE below it,
-    // and its width follows the MESSAGE rather than the state. Notchless
-    // displays keep the strip sizes exactly as they are: with no hole to avoid
-    // they are already correct, and that is the only configuration in use today.
+    // MARK: - Derived shape numbers
 
-    /// Height of the tongue that carries a message below the notch.
-    static let tongueHeight: CGFloat = 27
+    var cutoutWidth: CGFloat { cutout?.width ?? 0 }
+    /// The x the mass's middle is anchored on: the hole, or the screen's centre
+    /// when there is none.
+    var anchorX: CGFloat { cutout?.midX ?? screenFrame.midX }
+    /// Concave fillet at bar level, derived from the measured bar.
+    var barFillet: CGFloat { max(round(barHeight * Self.filletOfBar), 4) }
+    /// Outer bottom radius at bar level — the cutout's own, as near as macOS
+    /// lets us get.
+    var barCornerRadius: CGFloat { max(round(barHeight * Self.cornerOfBar), 4) }
 
-    /// Notched-display size. `contentWidth == nil` means no tongue at all —
-    /// dormant, and idle until the pointer arrives. The tongue never goes
-    /// narrower than the notch, or it reads as hanging off the hardware rather
-    /// than growing out of it.
-    func notchedSize(contentWidth: CGFloat?) -> NSSize {
-        guard let cw = contentWidth else {
-            return NSSize(width: notchWidth, height: menuBarHeight)
+    // MARK: - The bar-level mass
+
+    /// Gap between the two halves when there is no cutout to separate them.
+    static let segmentGap: CGFloat = 18
+    /// Below this a right-hand segment cannot say anything genuinely useful, so
+    /// it is DROPPED rather than shown as an ellipsis. A status line that can be
+    /// cut off is not a status line.
+    static let minRightSegment: CGFloat = 54
+    /// Breathing room kept between the mass and the far edge of the bar, so the
+    /// mass can never collide with the clock or the leftmost app menu.
+    static let barEdgeKeepOut: CGFloat = 24
+
+    /// The mass, resolved: how wide each half is allowed to be, what sits
+    /// between them, and the shape numbers that go with it.
+    ///
+    /// OVERFLOW POLICY, in one place:
+    ///   * the RIGHT segment truncates first, and is dropped entirely below
+    ///     `minRightSegment`
+    ///   * the LEFT segment carries status only, is short by construction, and
+    ///     is never truncated — it is the thing that must stay readable
+    func mass(left: CGFloat, right: CGFloat) -> MassPlacement {
+        let fillet = barFillet
+        let roomRight = max(rightUsable - fillet - Self.barEdgeKeepOut, 0)
+        var r = min(right, roomRight)
+        if r < Self.minRightSegment { r = 0 }
+        // The left half is not cut down — but if it ever outgrows the bar beside
+        // the cutout, `barFrame` will slide the whole mass off the hole to keep
+        // it on screen and the join will open up. That is a content bug (the
+        // left half carries the wordmark, a count or a status word, all short by
+        // construction), and this is the line that makes it visible instead of
+        // mysterious.
+        if left > max(leftUsable - fillet - Self.barEdgeKeepOut, 0) {
+            NotchLog.log("LEFT SEGMENT OVERFLOWS the bar beside the cutout: want=\(Int(left)) room=\(Int(leftUsable)) — the mass will be pushed off the cutout anchor")
         }
-        let w = min(max(cw + 30, notchWidth), screenFrame.width * 0.9)
-        return NSSize(width: round(w), height: menuBarHeight + Self.tongueHeight)
+        let middle = cutoutWidth > 0 ? cutoutWidth
+                                     : (left > 0 && r > 0 ? Self.segmentGap : 0)
+        return MassPlacement(left: left, middle: middle, right: r,
+                             fillet: fillet, bottomRadius: barCornerRadius)
     }
 
-    static let dummyNotchWidth: CGFloat = 190
-    static let dummyMenuBarHeight: CGFloat = 24
+    /// The window frame for a bar-level mass.
+    ///
+    /// ANCHORED ON THE HOLE, not on the screen: the mass's middle must sit
+    /// exactly over the cutout or the whole illusion collapses. With no cutout
+    /// there is nothing to align to and the mass centres instead.
+    func barFrame(_ m: MassPlacement) -> NSRect {
+        let w = min(m.width, screenFrame.width)
+        var x: CGFloat
+        if cutout != nil {
+            x = anchorX - m.middle / 2 - m.left - m.fillet
+        } else {
+            x = screenFrame.midX - w / 2
+        }
+        x = min(max(x, screenFrame.minX), screenFrame.maxX - w)
+        return NSRect(x: round(x), y: round(screenFrame.maxY - barHeight),
+                      width: round(w), height: round(barHeight))
+    }
 
-    // ── Per-state content sizes ──
-    // Small rungs are notch-scale fixed sizes — they hug the notch, so they are
-    // sized in notch units and nothing else.
+    /// Dormant is INVISIBLE — an always-visible idle indicator stops being an
+    /// indicator.
+    ///
+    /// On a notched display the window is the cutout itself, inset by a point so
+    /// no black can spill past the hardware's rounded corners. Nothing new is
+    /// drawn — those pixels are not displayed — but the pointer can still find
+    /// the surface there, which is the gesture people already know.
+    ///
+    /// On a display with NO cutout there is nowhere to hide, so dormant reserves
+    /// nothing and draws nothing at all.
+    func dormantFrame() -> NSRect {
+        let y = round(screenFrame.maxY - barHeight)
+        guard let c = cutout, c.width > 4 else {
+            return NSRect(x: round(screenFrame.midX - 1), y: y, width: 2, height: round(barHeight))
+        }
+        return NSRect(x: round(c.minX + 1), y: y,
+                      width: round(c.width - 2), height: round(barHeight))
+    }
+
+    // MARK: - Expanded surfaces
     //
     // The EXPANDED surfaces (task, cockpit) are pure FRACTIONS of the screen, on
     // both axes, with no floor and no ceiling. A fraction that is then clamped to
@@ -106,40 +247,7 @@ struct NotchGeometry {
     // monitor — 43% of a 2560-wide external, 55% of a laptop. Share of screen is
     // the whole contract; see SurfaceFill.
 
-    /// Dormant.
-    ///
-    /// On real-notch hardware this is EXACTLY the notch: drawn behind it, so at
-    /// rest unmute costs zero pixels and the hardware never looks broken.
-    ///
-    /// On a notch-less display it is a slim capsule. It cannot be nothing —
-    /// field feedback recorded that a fully invisible dummy notch was
-    /// unfindable — but 9pt is barely over half the old 10pt tab's presence and
-    /// reads as a hairline rather than a black flag hanging into content.
-    var dormantSize: NSSize {
-        NSSize(width: hasNotch ? notchWidth : 190,
-               height: hasNotch ? menuBarHeight : 9)
-    }
-    /// Idle: matches the hardware notch; on a dummy notch a touch wider so the
-    /// "unmute" label breathes.
-    var idleSize: NSSize {
-        NSSize(width: hasNotch ? notchWidth : 230, height: max(menuBarHeight, 34))
-    }
-    /// Active: a wider strip carrying the breathing dot, the count and elapsed.
-    var activeSize: NSSize {
-        NSSize(width: hasNotch ? notchWidth + 150 : 330, height: max(menuBarHeight, 36))
-    }
-    /// Attention: wider still — it carries a headline, so it needs the measure.
-    var attentionSize: NSSize {
-        NSSize(width: hasNotch ? notchWidth + 220 : 400, height: max(menuBarHeight, 40))
-    }
-    /// Kept for callers that don't distinguish the two strip states.
-    var stripSize: NSSize { activeSize }
-
     /// How much of the screen an expanded surface fills, by what it carries.
-    ///
-    /// These are the whole sizing policy for task and cockpit, in one place and
-    /// stated as shares rather than pixels. Same share on a 13" laptop as on a
-    /// 32" external — the surface looks like the same object on both.
     enum SurfaceFill {
         /// A task on a backend with NO PTY (Codex desktop, Claude Code desktop).
         /// Its panel is a conversation and a composer: readable at a smaller
@@ -175,29 +283,21 @@ struct NotchGeometry {
     /// Cockpit: the survey surface.
     var cockpitSize: NSSize { expandedSize(fill: SurfaceFill.cockpit) }
 
-    func size(for state: NotchState) -> NSSize {
-        switch state {
-        case .dormant:   return dormantSize
-        case .idle:      return idleSize
-        case .active:    return activeSize
-        case .attention: return attentionSize
-        case .task:      return taskSize
-        case .cockpit:   return cockpitSize
-        }
-    }
-
-    /// Center horizontally; pin the shape's TOP edge flush to the screen's top
-    /// edge (frame.maxY). Square top corners then make it read as growing OUT of
-    /// the notch rather than floating below it.
+    /// Centre horizontally; pin the shape's TOP edge flush to the screen's top
+    /// edge (frame.maxY). The expanded panel is the ONE surface allowed to
+    /// occupy space below the bar.
     func topPinnedFrame(width: CGFloat, height: CGFloat) -> NSRect {
         let x = round(screenFrame.midX - width / 2)
         let y = round(screenFrame.maxY - height)
         return NSRect(x: x, y: y, width: width, height: height)
     }
 
-    func windowFrame(for state: NotchState) -> NSRect {
-        let size = size(for: state)
-        return topPinnedFrame(width: size.width, height: size.height)
+    /// The expanded panel's own shape numbers. Same path, same fillets — a
+    /// panel with square shoulders reads as a floating window pasted over the
+    /// screen instead of something the screen grew.
+    var panelPlacement: MassPlacement {
+        MassPlacement(left: 0, middle: 0, right: 0,
+                      fillet: Theme.panelFillet, bottomRadius: Theme.panelRadius)
     }
 
     // NO clampTaskHeight. It described a content-MEASURED task height clamped to
@@ -229,24 +329,35 @@ struct NotchGeometry {
     /// in both directions from centre without the window ever being resized
     /// mid-capture.
     ///
-    /// It was 90% of the screen capped at 1200. The scratchpad is now drawn
-    /// inside this same canvas as one more element in the cluster's row, and the
-    /// row carries a counterweight of the pad's width on the far side so the
-    /// pill stays put (PillView.counterweight) — which means the canvas must
-    /// hold `2 × 340 + 2 × 8 + the widest column`. With the Codex selector open
-    /// that is ~1226, and the old cap clipped it. Nothing is drawn in the extra
-    /// width, and the empty area stays click-through (see PillWindow), so the
-    /// cap bought nothing and cost the pad its edge.
-    ///
-    /// A display narrower than ~1226pt still cannot show that widest case whole;
-    /// the pad's outer edge is clipped and the pill stays where it is, which is
-    /// the right way round. The ordinary dictation cluster needs only ~908.
+    /// A display narrower than ~1226pt cannot show the widest case whole; the
+    /// pad's outer edge is clipped and the pill stays where it is, which is the
+    /// right way round. The ordinary dictation cluster needs only ~908.
     func pillFrame() -> NSRect {
-        let screen = Self.primaryScreen()
-        let visible = screen.visibleFrame
+        let visible = Self.primaryScreen().visibleFrame
         let width = screenFrame.width
         let x = round(screenFrame.minX)
         let y = round(visible.minY + Self.pillBottomInset)
         return NSRect(x: x, y: y, width: width, height: Self.pillCanvasHeight)
     }
+}
+
+/// THE MASS, RESOLVED — the numbers the window frame, the shape and the content
+/// row are all built from, so none of them can disagree with the others.
+///
+/// `middle` is the cutout on a notched display and a plain gap on one without;
+/// nothing else in the app needs to know which, because the mass is drawn
+/// straight through either way.
+struct MassPlacement: Equatable {
+    var left: CGFloat = 0
+    var middle: CGFloat = 0
+    var right: CGFloat = 0
+    /// Concave flare at each outer end. Part of the shape path (NotchShape),
+    /// which is why it is included in the window's width and in the content's
+    /// horizontal padding.
+    var fillet: CGFloat = 0
+    var bottomRadius: CGFloat = 0
+
+    var width: CGFloat { fillet + left + middle + right + fillet }
+
+    static let empty = MassPlacement()
 }

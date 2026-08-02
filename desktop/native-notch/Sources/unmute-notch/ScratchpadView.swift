@@ -12,7 +12,7 @@ import SwiftUI
 /// It is also the reason this file takes none of `Theme`'s COLOURS and never
 /// touches `pillGlass`: those are the instrument's vocabulary and mixing them is
 /// how a note turns back into a panel. It does still use Theme's animation
-/// CURVES (`collapse`, `hover`) — the pad should move like the rest of the
+/// CURVES (`morph`, `hover`) — the pad should move like the rest of the
 /// surface even though it does not look like it.
 enum PadPaper {
     /// Off-white card. #FEFCF7
@@ -108,7 +108,7 @@ struct ScratchpadView: View {
         Group {
             if expandedPad { sheet } else { tab }
         }
-        .animation(Theme.collapse, value: expandedPad)
+        .animation(Theme.morph, value: expandedPad)
     }
 
     // MARK: - Expanded

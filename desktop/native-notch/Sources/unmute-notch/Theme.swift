@@ -121,19 +121,23 @@ enum Theme {
 
     // MARK: - Geometry (concentric)
 
-    /// Panel corner radius per state. Golden Gate tightened Tahoe's oversized
-    /// window corners; these follow. Top corners are always square — the
-    /// surface hangs from the screen's top edge (see NotchShape).
-    static func radius(for state: NotchState) -> CGFloat {
-        switch state {
-        case .dormant:            return 5
-        case .idle:               return 13
-        case .active, .attention: return 15
-        case .task, .cockpit:     return panelRadius
-        }
-    }
+    // NO `radius(for:)` ANY MORE.
+    //
+    // The bar-level mass impersonates the hardware cutout, so its bottom radius
+    // is a property of the SCREEN, not of the state — it is derived from the
+    // measured menu-bar height in NotchGeometry.barCornerRadius. A per-state
+    // table here was a second, contradictory source for the same number and it
+    // could never match a display it had not been written for.
+    //
+    // Only the expanded panel still chooses its own radius, and it has exactly
+    // one: panelRadius.
 
     static let panelRadius: CGFloat = 18
+    /// The concave fillet at the expanded panel's TOP corners, where it meets
+    /// the menu bar. Bar-level fillets are derived from the bar (see
+    /// NotchGeometry.barFillet); the panel is not bar-sized, so it names its
+    /// own — one number, still part of the same shape path.
+    static let panelFillet: CGFloat = 14
     /// Inset from the glass shell to the content plane.
     static let panelPadding: CGFloat = 6
     /// CONCENTRIC: the plane's radius is the panel's minus the padding.
@@ -145,14 +149,51 @@ enum Theme {
     static let gutter: CGFloat = 16
 
     // MARK: - Motion
+    //
+    // ONE SPRING FOR EVERY SIZE CHANGE THE SURFACE EVER MAKES.
+    //
+    // The two numbers below are declared exactly once and are read by both
+    // sides of every resize: the SwiftUI animation (`morph`) that carries the
+    // shape and its content, and the hand-rolled solver (`springSolver`) that
+    // carries the NSWindow frame. A window frame cannot be animated by SwiftUI
+    // and NSAnimationContext has no spring, so the frame used to travel on a
+    // bezier of its own — two curves on one object, which is precisely how a
+    // surface stops reading as one physical thing. Same response, same damping,
+    // same start time, both sides.
+    //
+    // Under-damped enough to settle rather than stop dead; nowhere near bouncy.
 
-    /// Expansion leads with the shape.
-    static let morph: Animation    = .spring(response: 0.48, dampingFraction: 0.82)
-    /// Collapse is snappier than expansion.
-    static let collapse: Animation = .spring(response: 0.32, dampingFraction: 0.88)
+    static let springResponse: Double = 0.34
+    static let springDamping:  Double = 0.82
+
+    /// THE curve. Every size change, in every state, on both surfaces.
+    static let morph: Animation = .spring(response: springResponse, dampingFraction: springDamping)
+    /// The same spring, sampled by hand for the window frame. See SpringSolver.
+    static let springSolver = SpringSolver(response: springResponse, damping: springDamping)
+
+    /// Reduce Motion's stand-in: a short cross-fade, no spring, no overshoot.
+    static let reducedFade: Animation = .easeInOut(duration: 0.16)
+
+    // ── Content, offset from the container ──
+    //
+    // Cross-fading in lockstep with the resize looks like two views swapping.
+    // The old content leaves BEFORE the shape has finished and the new content
+    // arrives after it has committed, so one thing appears to become another.
+    static let contentOutDuration: Double = 0.09
+    static let contentInDuration:  Double = 0.14
+    static let contentInDelay:     Double = 0.08
+    static let contentOut: Animation = .easeIn(duration: contentOutDuration)
+    static let contentIn:  Animation = .easeOut(duration: contentInDuration).delay(contentInDelay)
+
+    /// EXPAND UNFURLS, COLLAPSE FOLDS. Width leads on the way out and height
+    /// follows this far behind; collapsing runs strictly in reverse. Asymmetry
+    /// here makes the surface feel unreliable even when nobody can say why.
+    static let axisLag: Double = 0.06
+
     /// Glass light/dark flip.
     static let flip: Animation     = .easeInOut(duration: 0.24)
-    /// Hover / press feedback.
+    /// Hover / press feedback. NOT a size change — this is opacity and fill on
+    /// controls, and it is deliberately faster than the spring.
     static let hover: Animation    = .easeOut(duration: 0.15)
 
     // MARK: - Type scale
@@ -172,6 +213,69 @@ enum Theme {
     static let fMicro   = Font.system(size: 10, weight: .semibold)
     static let fNum     = Font.system(size: 10.5, design: .monospaced)
     static let fTerm    = Font.system(size: 11.5, design: .monospaced)
+}
+
+// MARK: - The spring, sampled by hand
+
+/// SwiftUI's `.spring(response:dampingFraction:)`, solved in closed form.
+///
+/// It exists for ONE reason: an NSWindow's frame cannot be animated by SwiftUI,
+/// and NSAnimationContext offers only bezier timing. Driving the frame on a
+/// bezier while the shape inside it travelled on a spring is two curves on one
+/// object. This samples the SAME spring the view uses, from the same two
+/// numbers, so the window and its contents are never on different journeys.
+///
+/// Unit step response of a damped harmonic oscillator: ω = 2π/response,
+/// ζ = dampingFraction. Under-damped is the only case we ship, but the
+/// critically/over-damped branch is here so a future retune cannot produce NaN.
+struct SpringSolver {
+    let response: Double
+    let damping: Double
+
+    var omega: Double { 2 * .pi / max(response, 0.0001) }
+
+    /// When the envelope has decayed to a thousandth — visually finished.
+    var settle: Double {
+        let decay = damping * omega
+        guard decay > 0 else { return response }
+        return min(-log(0.001) / decay, 4)
+    }
+
+    /// Progress 0 → 1 at time `t` seconds. Negative time (an axis that has not
+    /// started yet) is 0, which is what makes the axis stagger free.
+    func value(at t: Double) -> Double {
+        guard t > 0 else { return 0 }
+        guard t < settle else { return 1 }
+        let z = damping, w = omega
+        if z < 1 {
+            let wd = w * (1 - z * z).squareRoot()
+            return 1 - exp(-z * w * t) * (cos(wd * t) + (z * w / wd) * sin(wd * t))
+        }
+        return 1 - exp(-w * t) * (1 + w * t)
+    }
+}
+
+// MARK: - Reduce Motion
+
+/// The one gate for "the user asked for less movement".
+///
+/// Read live rather than cached: macOS posts a workspace notification when it
+/// changes, and an animation that started before it flipped is half a second
+/// long — there is nothing to invalidate.
+enum Motion {
+    /// System Settings → Accessibility → Display → Reduce motion.
+    static var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// The curve for any size change: the one spring, or a short cross-fade
+    /// when Reduce Motion is on. Nothing else may choose.
+    ///
+    /// Content in / out is decided in the view instead, from
+    /// `@Environment(\.accessibilityReduceMotion)` — SwiftUI already tracks the
+    /// preference there and re-renders when it flips, and a second copy of the
+    /// same decision here is how two answers to one question start to diverge.
+    static var resize: Animation { reduceMotion ? Theme.reducedFade : Theme.morph }
 }
 
 // MARK: - Appearance preference
