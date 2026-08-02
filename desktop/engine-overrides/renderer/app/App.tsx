@@ -123,7 +123,9 @@ function markOnboardingSeen(): void {
 
 /** The renderer types in this project do not declare `window.electronAPI`, so
  *  reaching for it directly is a type error on every line. Same runtime access,
- *  none of the noise — the idiom the rest of the override files use. */
+ *  none of the noise — the idiom the `renderer/remote/` override files use.
+ *  (Several `renderer/app/` files still reach for it directly and pay the
+ *  error; migrating them is not this pack's to do.) */
 type AppAPI = {
   getDictationKey?: () => Promise<string>
   paywallGetLanguageAutoDetect?: () => Promise<boolean>
@@ -148,11 +150,12 @@ function AppInner() {
   const [activeTab, setActiveTab] = useState<Tab>('history')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [pendingUpdate, setPendingUpdate] = useState<string | null>(null)
-  // Language sub-item badge — "Auto" or the ISO code (uppercased). Kept in sync
-  // via a refresh on every navigation away from the Language section, since the
+  // Language sub-item badge — "Auto" or the ISO code (uppercased). Re-read
+  // whenever the sidebar is not sitting on the Language section, since the
   // Language component itself is the only writer. DORMANT on this branch alone:
   // `Language.tsx` moves inside Settings and Pack B mounts it, so until that
-  // lands nothing can change the value and the badge never moves.
+  // lands nothing can change the setting and the badge never moves after its
+  // first read.
   const [languageBadge, setLanguageBadge] = useState<string>('Auto')
   const [orchestratorPage, setOrchestratorPage] = useState<OrchestratorPage>('tasks')
   // Which of the seven Settings sections the sidebar has selected. Pack B's
@@ -188,8 +191,9 @@ function AppInner() {
     refreshLanguageBadge()
   }, [])
 
-  // Re-read whenever we navigate away from the Language section — cheap (one
-  // IPC call) and avoids needing a pub/sub channel just for this.
+  // Re-read on any navigation that does not land on the Language section. One
+  // or two IPC calls (the second only when auto-detect is off), which is cheap
+  // enough to beat introducing a pub/sub channel just for this badge.
   useEffect(() => {
     const onLanguage = activeTab === 'settings' && settingsSection === 'language'
     if (!onLanguage) refreshLanguageBadge()
@@ -323,8 +327,10 @@ function AppInner() {
               Appearance & notch · Permissions · Language · Privacy · Help &
               about. The list itself is SETTINGS_SECTIONS in _shared.tsx, so
               Settings.tsx can import the section type without an import cycle
-              back through this file. Only Settings gets sub-items; the other
-              three destinations are single pages. */}
+              back through this file. Settings is the only destination with
+              sub-items IN THE SIDEBAR — Orchestrator also has four sub-pages,
+              but they are a segmented control inside the content area, so the
+              rail stays four rows deep. */}
           {activeTab === 'settings' && (
             <div className="flex flex-col gap-0.5 mt-0.5 mb-1 pl-[26px] border-l border-border ml-[15px]">
               {SETTINGS_SECTIONS.map((section) => (

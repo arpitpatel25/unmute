@@ -349,8 +349,9 @@ export function HelpIcon() {
   )
 }
 
-/** Profile — a person. Distinct from the sidebar Account row, which is the
- *  destination; this is the section header inside it. */
+/** Profile — an ID card. Deliberately NOT a person figure: that glyph is the
+ *  sidebar's Account row, which is the destination; this is a section header
+ *  inside it, and one glyph per concept (D8) means they cannot share. */
 export function ProfileIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">

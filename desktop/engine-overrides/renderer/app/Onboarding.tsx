@@ -40,7 +40,9 @@ type Plan = 'dictation' | 'unmute'
 
 /** The renderer types in this project do not declare `window.electronAPI`.
  *  Reaching for it through a cast window is the same runtime access with none
- *  of the type noise — the idiom the other override files use. */
+ *  of the type noise — the idiom the `renderer/remote/` override files use.
+ *  (Several `renderer/app/` files still reach for it directly and pay the
+ *  error; migrating them is not this pack's to do.) */
 type OnboardingAPI = {
   getMicPermissionStatus?: () => Promise<string>
   requestMicPermission?: () => Promise<boolean>
@@ -65,9 +67,9 @@ function api(): OnboardingAPI {
 }
 
 /** Human labels for the two triggers a user can choose between. Every *sentence*
- *  that names a trigger reads from here — the literal key names elsewhere in the
- *  file are the picker's own option labels and Caps Lock, neither of which can
- *  vary. See the header note. */
+ *  that names a trigger reads from here. The three literal key names elsewhere
+ *  in the file — the picker's own option labels, Caps Lock, and the macOS Globe
+ *  tip — all name things that cannot vary. See the header note. */
 const KEY_LABELS: Record<DictationKey, string> = {
   fn: 'Fn',
   'right-option': 'Right Opt',
@@ -687,8 +689,8 @@ function Shell({ step, total, onBack, children }: {
   total: number
   /** Absent on the first screen; otherwise steps one back. The old flow had no
    *  way back between STEPS — its single "← Back to sign in" only undid a
-   *  step-local toggle — so a user who wanted to re-read a screen had to quit
-   *  and clear the completion flag. */
+   *  step-local toggle — so a user who wanted to re-read an earlier screen had
+   *  to quit and start the whole flow again. */
   onBack?: () => void
   children: React.ReactNode
 }) {
