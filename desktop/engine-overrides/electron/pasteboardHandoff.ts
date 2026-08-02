@@ -75,8 +75,12 @@ export const TERMINAL_BUNDLE_IDS: readonly string[] = [
   'com.mitchellh.ghostty',
   'com.github.wez.wezterm',
   'dev.warp.Warp-Stable',
+  'dev.warp.Warp-Preview',
   'net.kovidgoyal.kitty',
+  // Alacritty ships under BOTH ids depending on how it was built/installed;
+  // listing only one silently leaves half its users on the ⌘V that does nothing.
   'io.alacritty',
+  'org.alacritty',
 ]
 
 /** THE ONE DECISION THIS FIX IS.
