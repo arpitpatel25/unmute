@@ -101,6 +101,49 @@ let currentSession: PaywallSession = {
 let refreshTimer: NodeJS.Timeout | null = null
 let refreshInFlight: Promise<boolean> | null = null
 
+// ─── Proactive-refresh tuning ────────────────────────────────────
+// Refresh this far ahead of expiry. Deliberately much larger than supabase-js's
+// own EXPIRY_MARGIN_MS (90s, = AUTO_REFRESH_TICK_THRESHOLD * TICK_DURATION in
+// @supabase/auth-js): main renews while the renderer's copy of the session still
+// looks fresh, so the renderer never even reaches for the token endpoint.
+const REFRESH_MARGIN_SEC = 300
+// Floor between two proactive refreshes, whatever the server says about expiry.
+// Insurance against a hot loop if a token ever comes back already inside the
+// margin (refreshAccessToken re-arms the timer on every success).
+const MIN_REFRESH_INTERVAL_MS = 30_000
+// First re-arm delay after a failed refresh (offline, 5xx, or a rejection that
+// wasn't decisive yet — see refreshAccessToken).
+const REFRESH_RETRY_MS = 60_000
+// ...doubling on each consecutive failure, capped here. Without the cap, a
+// Supabase incident lasting hours would have every installed client hitting
+// /auth/v1/token once a minute for its whole duration — new outbound traffic
+// this pack would otherwise have introduced, since before it nothing re-armed
+// after a failure at all. Recovery is not delayed by the backoff in the case
+// that matters: ensureFreshToken() refreshes on demand at the top of every
+// dictation, and powerMonitor's 'resume' does the same on wake.
+const REFRESH_RETRY_MAX_MS = 15 * 60_000
+// setTimeout's delay is a signed 32-bit int; larger values wrap and fire on the
+// next tick instead of later. Everything armed here is clamped to it.
+const MAX_TIMER_DELAY_MS = 2_147_483_647
+// Ceiling on a single token request. Generous for a healthy round trip, short
+// enough that a hung socket cannot hold up the dictation path — see the call.
+const REFRESH_REQUEST_TIMEOUT_MS = 15_000
+// Consecutive failed refreshes, for that backoff. Reset by any success.
+let consecutiveRefreshFailures = 0
+// Consecutive rejections we declined to act on because we could not tell
+// whether the access token was still good (no expiry recorded). Bounded, so
+// that path still converges on a sign-out instead of retrying forever.
+let undecidedRejections = 0
+const MAX_UNDECIDED_REJECTIONS = 3
+let lastProactiveRefreshMs = 0
+// Bumped whenever the current credential is torn down (clearSessionState) or
+// replaced by a different one (paywall:set-session with a new refresh token).
+// A refresh that started before that must not write its result into the session
+// that replaced it — otherwise signing out while a refresh is in flight
+// resurrects the user with a fresh token and re-arms the refresh timer.
+// (auth-js guards its own refresh the same way; see _sessionRemovalEpoch.)
+let sessionGeneration = 0
+
 // ─── Public getters for sessionManager to consult before routing ───
 export function getPaywallAccessToken(): string | null {
   return currentSession.accessToken
@@ -169,6 +212,22 @@ export async function refreshRemoteTriggerEntitlement(): Promise<void> {
 declare const __SUPABASE_URL__: string
 declare const __SUPABASE_ANON_KEY__: string
 
+/** True when a non-2xx body is recognisably GoTrue's own error shape, i.e. the
+ *  auth server really did answer. GoTrue replies to a rejected refresh token
+ *  with JSON carrying some of `error_code` / `code` / `error` / `msg` /
+ *  `error_description`; a captive portal or a proxy replies with HTML. Only a
+ *  real Supabase verdict is allowed to end a session — see the call site. */
+function looksLikeSupabaseAuthError(raw: string): boolean {
+  try {
+    const j = JSON.parse(raw) as Record<string, unknown>
+    if (!j || typeof j !== 'object') return false
+    return ['error_code', 'code', 'error', 'msg', 'error_description']
+      .some((k) => typeof j[k] === 'string' || typeof j[k] === 'number')
+  } catch {
+    return false
+  }
+}
+
 /**
  * Force a token refresh by calling Supabase REST directly using the stored
  * refresh_token. Dedupes concurrent calls so a burst of 401s only refreshes
@@ -179,6 +238,7 @@ export async function refreshAccessToken(): Promise<boolean> {
   if (refreshInFlight) return refreshInFlight
   refreshInFlight = (async () => {
     const t0 = Date.now()
+    const generationAtStart = sessionGeneration
     try {
       const res = await fetch(`${__SUPABASE_URL__}/auth/v1/token?grant_type=refresh_token`, {
         method: 'POST',
@@ -187,9 +247,109 @@ export async function refreshAccessToken(): Promise<boolean> {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ refresh_token: currentSession.refreshToken }),
+        // Bound it. `refreshInFlight` dedupes every caller onto this one
+        // promise, and two of those callers are `await ensureFreshToken()` on
+        // the managed-STT path (paywall-route) — so a hung socket here doesn't
+        // just delay a refresh, it stalls a dictation for as long as the
+        // request takes to give up (undici's default body timeout is 300s).
+        // A timeout rejects into the catch below, which keeps the session and
+        // lets the retry timer try again.
+        signal: AbortSignal.timeout(REFRESH_REQUEST_TIMEOUT_MS),
       })
       if (!res.ok) {
-        console.warn(`[paywall-glue] token refresh failed: ${res.status}`)
+        // Commit guard FIRST, before anything reads or writes session state.
+        // If the session was torn down or replaced while this request was in
+        // flight, this response is a verdict on a credential we no longer
+        // hold. Acting on it would judge the REPLACEMENT by the old
+        // credential's rejection and delete a credential nobody rejected.
+        // Destructive paths need this guard at least as much as the
+        // constructive one below.
+        if (sessionGeneration !== generationAtStart) {
+          console.warn('[paywall-glue] refresh outcome is for a session that has since been replaced — ignoring')
+          return false
+        }
+        // The ONLY thing that means "signed out" is the server rejecting this
+        // refresh token — revoked, already-rotated, or the account is gone. A
+        // 5xx (including Cloudflare 520-530) or a 429 is the network having a
+        // bad day; the credential is still good, so keep the session and let
+        // the retry timer try again. This is the same split @supabase/auth-js
+        // makes in lib/fetch.ts (NETWORK_ERROR_CODES → retryable → session
+        // preserved; anything else → session removed).
+        const transient = res.status >= 500 || res.status === 429
+        if (transient) {
+          console.warn(`[paywall-glue] token refresh failed transiently (${res.status}) — session kept`)
+          undecidedRejections = 0
+          return false
+        }
+        // Is this a verdict from Supabase, or from something standing in the
+        // way of it? A hotel or conference captive portal, a corporate MITM
+        // proxy and a misconfigured gateway all answer POSTs with a 4xx and an
+        // HTML body — and the case where that matters most is the one where
+        // this branch is most likely to be decisive: the laptop has been
+        // asleep, so the access token is already expired, so none of the
+        // protections below apply. GoTrue itself always answers a rejected
+        // refresh with its own JSON error shape, so requiring that shape costs
+        // nothing against the real server and keeps a portal from signing
+        // anyone out. (auth-js draws the same line, via isAuthApiError on a
+        // parsed body.) Note this is deliberately GoTrue's shape and not
+        // Supabase's gateway's: a bare `{"message":"…"}` from Kong is treated
+        // as transient, which is the right call — the auth server never saw it.
+        const errorBody = await res.text().catch(() => '')
+        if (!looksLikeSupabaseAuthError(errorBody)) {
+          console.warn(
+            `[paywall-glue] refresh failed with ${res.status} but the body is not a Supabase error ` +
+            `(captive portal or proxy in the way?) — session kept`,
+          )
+          undecidedRejections = 0
+          return false
+        }
+        // A rejection is only decisive once the ACCESS token is also gone.
+        //
+        // This timer fires REFRESH_MARGIN_SEC *before* expiry, so a rejection
+        // here usually arrives while the user's access token still works
+        // perfectly. Tearing the session down at that moment would sign out a
+        // user whose credential is fine — and a non-2xx does not always mean
+        // "revoked": a WAF rule, a captive portal, a corporate MITM proxy or a
+        // misrouted 4xx all land here. Keep the session, let armRefreshTimer
+        // retry, and only conclude "signed out" once the access token has
+        // actually expired and the refresh token is the sole credential left —
+        // at which point a rejection really does mean there is nothing to
+        // recover. @supabase/auth-js draws the line in exactly the same place
+        // and for the same reason (GoTrueClient._callRefreshToken: "destroying
+        // it now would log out a user whose access token works").
+        const nowSec = Math.floor(Date.now() / 1000)
+        const expiresAt = currentSession.expiresAt
+        if (currentSession.accessToken && expiresAt != null && expiresAt > nowSec) {
+          console.warn(
+            `[paywall-glue] refresh rejected (${res.status}) but the access token is still valid ` +
+            `for ${expiresAt - nowSec}s — keeping the session and retrying`,
+          )
+          return false
+        }
+        // Expiry unknown: we hold an access token but nothing said when it
+        // dies. That is reachable — readStoredSession() tolerates a session
+        // with no numeric `expires_at`, and a refresh response can carry
+        // neither `expires_at` nor `expires_in`. Treating unknown as expired
+        // would put the whole "don't sign out a user whose token works"
+        // protection back on the floor for exactly those sessions; treating it
+        // as valid forever would make revocation undetectable. So: hold, but
+        // only for a bounded number of rejections, then accept the verdict.
+        if (currentSession.accessToken && expiresAt == null &&
+            ++undecidedRejections < MAX_UNDECIDED_REJECTIONS) {
+          console.warn(
+            `[paywall-glue] refresh rejected (${res.status}) and this session has no recorded expiry — ` +
+            `holding (${undecidedRejections}/${MAX_UNDECIDED_REJECTIONS}) before treating it as a sign-out`,
+          )
+          return false
+        }
+        undecidedRejections = 0
+        console.warn(`[paywall-glue] refresh token REJECTED (${res.status}) — this is a real sign-out`)
+        clearSessionState()
+        // Tell the renderer on the channel it already listens to. A null token
+        // pair is the "your credential was rejected" signal — see AuthContext.
+        for (const w of BrowserWindow.getAllWindows()) {
+          w.webContents.send('paywall:token-refreshed', { accessToken: null, refreshToken: null })
+        }
         return false
       }
       const body = await res.json() as {
@@ -199,6 +359,24 @@ export async function refreshAccessToken(): Promise<boolean> {
         expires_in?: number
       }
       if (!body.access_token) return false
+      // The session was torn down while this request was in flight (sign-out,
+      // or another refresh being rejected). Drop the result on the floor: this
+      // token belongs to a session that no longer exists.
+      if (sessionGeneration !== generationAtStart) {
+        console.warn('[paywall-glue] session ended mid-refresh — discarding the new token')
+        return false
+      }
+      // A working credential clears the whole failure history: the retry
+      // backoff goes back to its floor and any held-but-undecided rejections
+      // are forgotten.
+      consecutiveRefreshFailures = 0
+      undecidedRejections = 0
+      // Count REACTIVE refreshes (ensureFreshToken, the 401 path) against the
+      // minimum-interval floor too, not just the timer's own. Without this a
+      // reactive refresh that returns a token already inside the 300s margin
+      // computes floorMs = 0 and re-arms at once, and a server issuing
+      // short-lived tokens would sustain two rotations a minute indefinitely.
+      lastProactiveRefreshMs = Date.now()
       currentSession.accessToken = body.access_token
       currentSession.refreshToken = body.refresh_token ?? currentSession.refreshToken
       currentSession.expiresAt = body.expires_at ??
@@ -207,13 +385,25 @@ export async function refreshAccessToken(): Promise<boolean> {
         currentSession.expiresAt ? currentSession.expiresAt - Math.floor(Date.now() / 1000) : '?'
       }s)`)
       scheduleAutoRefresh()
-      // Push the new token back to the renderer so its supabase-js client stays in sync
+      // Push the new pair to the renderer so its supabase-js client stays in
+      // sync without ever refreshing itself. Send currentSession.refreshToken,
+      // not body.refresh_token: if the server ever omits a rotated token the
+      // former still holds the working one, and a null in this field is the
+      // agreed "credential rejected" signal — it must never be sent by accident.
       for (const w of BrowserWindow.getAllWindows()) {
-        w.webContents.send('paywall:token-refreshed', { accessToken: body.access_token, refreshToken: body.refresh_token })
+        w.webContents.send('paywall:token-refreshed', {
+          accessToken: currentSession.accessToken,
+          refreshToken: currentSession.refreshToken,
+        })
       }
       return true
     } catch (e) {
+      // The request never completed (offline, DNS, TLS). That is not the
+      // server rejecting anything, so it breaks a run of rejections in exactly
+      // the way a transient status does — keep `undecidedRejections` meaning
+      // *consecutive* rejections rather than "rejections seen at some point".
       console.warn('[paywall-glue] token refresh threw:', (e as Error).message)
+      undecidedRejections = 0
       return false
     } finally {
       refreshInFlight = null
@@ -249,30 +439,145 @@ export async function ensureFreshToken(withinSec = 120): Promise<void> {
 }
 
 /**
- * Proactive auto-refresh is intentionally a no-op.
+ * MAIN is the sole proactive refresher. Read this before changing it.
  *
- * Historically main+renderer both ran timers that fired ~5min before
- * access-token expiry. Both would call /auth/v1/token?grant_type=refresh_token
- * with the same refresh token. With Supabase's refresh-token rotation,
- * whichever request arrived second saw its refresh token already-rotated
- * and was rejected — which supabase-js interprets as "session compromised"
- * and fires SIGNED_OUT, kicking the user out of the app.
+ * ── The outage this arrangement exists to prevent ──
+ * Main and the renderer both used to run a timer firing ~5min before expiry,
+ * and both called /auth/v1/token?grant_type=refresh_token with the same
+ * refresh token. Supabase rotates refresh tokens, so whichever request
+ * arrived second presented an already-rotated token and was rejected.
+ * supabase-js reads a rejected refresh as "session compromised", fires
+ * SIGNED_OUT, and the user is kicked out of the app. That was real and it
+ * shipped. Two refreshers is the failure mode; never reintroduce it.
  *
- * Fix: supabase-js (renderer) is the sole proactive refresher. It already
- * fires onAuthStateChange with the new tokens, which AuthContext pushes
- * into main via paywallSetSession. Main stays in sync without competing.
+ * ── Why the renderer lost, and main won ──
+ * The first fix kept the renderer as the sole refresher. It was right about
+ * the race and wrong about which side to keep, because in unmute the renderer
+ * is the part of the app that is not running. Users live in the notch; the
+ * main window is hidden most of the time, and:
+ *   - Electron throttles a hidden window's timers, and
+ *   - supabase-js calls _stopAutoRefresh() on document.visibilityState
+ *     'hidden' all by itself (GoTrueClient._onVisibilityChanged).
+ * So the sole refresher stopped refreshing whenever the window was hidden,
+ * the access token expired, and the next dictation fell back to the local
+ * model and announced "you're signed out". Main has no window and no
+ * visibility state, so nothing switches it off.
  *
- * The reactive refreshAccessToken() below still exists for the rare case
- * where main hits a 401 on a managed STT call (paywall-route). It broadcasts
- * paywall:token-refreshed so the renderer's supabase-js can adopt the new
- * tokens via setSession, keeping both sides aligned.
+ * Main's timer is not immune to *everything*, and it doesn't need to be.
+ * macOS App Nap can stretch a backgrounded app's timers (see warmNow's
+ * comment above — the 25s keep-alive already loses to it) and sleep stops
+ * them outright. The difference is that main can always refresh ON DEMAND:
+ * ensureFreshToken() runs at recording start (sessionManager) and again
+ * before every managed call (paywall-route), and powerMonitor's 'resume'
+ * handler calls it on wake (main-extensions). So a late timer costs one
+ * on-demand refresh at the top of a dictation. A renderer that has stopped
+ * refreshing has no such recovery — by the time supabase-js notices, the
+ * routing decision has already been made and the call is on the local model.
+ * "Main is awake" is not the load-bearing claim; "main can still act when it
+ * wakes up" is.
+ *
+ * ── Why the race cannot come back ──
+ * Turning the renderer's `autoRefreshToken` off is NOT sufficient on its own:
+ * with it off, @supabase/auth-js still calls the token endpoint from
+ * getSession(), getUser() and client construction whenever the stored session
+ * is inside its 90s expiry margin (verified against the installed 2.108.2 —
+ * see docs/superpowers/specs/launch/decisions/pack-e-auth.md). The renderer is
+ * therefore additionally denied the endpoint at the transport layer: its
+ * supabase client is built with a fetch that refuses
+ * /auth/v1/token?grant_type=refresh_token outright (supabase-client.ts).
+ * One process can reach the token endpoint. The other cannot reach it at all.
+ *
+ * Main pushes every new token pair to the renderer over
+ * `paywall:token-refreshed`; AuthContext adopts it with setSession, so
+ * supabase-js's own session stays fresh without it ever refreshing.
+ *
+ * ── The timer ──
+ * Fires REFRESH_MARGIN_SEC (5min) BEFORE expiry, not on it. That margin is
+ * deliberately far larger than supabase-js's 90s margin, so in normal
+ * operation the renderer's session never even looks stale to it.
+ * A due-in-the-past deadline (cold start with a stale token, wake from sleep)
+ * fires as soon as the event loop allows, floored by MIN_REFRESH_INTERVAL_MS.
  */
 function scheduleAutoRefresh(): void {
-  // intentionally no-op — see comment above
   if (refreshTimer) {
     clearTimeout(refreshTimer)
     refreshTimer = null
   }
+  // No credential to renew. Sign-out and cold start both land here.
+  if (!currentSession.refreshToken) return
+  // Token of unknown lifetime — renew periodically rather than never, but
+  // SLOWLY. This is the one branch where a *success* re-arms itself: with no
+  // expiry there is no deadline to compute, so every refresh lands back here
+  // and the interval becomes the rotation rate. At the retry delay that is one
+  // rotation a minute, forever. At the cap it is four an hour, which keeps an
+  // exotic session alive without turning into a self-inflicted storm.
+  if (currentSession.expiresAt == null) {
+    armRefreshTimer(REFRESH_RETRY_MAX_MS)
+    return
+  }
+  const dueMs = (currentSession.expiresAt - REFRESH_MARGIN_SEC) * 1000 - Date.now()
+  const floorMs = Math.max(0, MIN_REFRESH_INTERVAL_MS - (Date.now() - lastProactiveRefreshMs))
+  armRefreshTimer(Math.max(dueMs, floorMs))
+}
+
+/** Arm the single refresh timer. Success re-arms via refreshAccessToken →
+ *  scheduleAutoRefresh; a failure re-arms here with an exponential backoff, so
+ *  an offline stretch doesn't leave the session with nothing to renew it and a
+ *  multi-hour outage doesn't turn into once-a-minute polling from every client.
+ *  A decisively rejected refresh token clears the session, so the guard below
+ *  stops the loop rather than polling a credential that no longer exists. */
+function armRefreshTimer(delayMs: number): void {
+  if (refreshTimer) clearTimeout(refreshTimer)
+  // setTimeout takes a signed 32-bit delay: anything larger silently fires on
+  // the NEXT TICK instead of later, which here would mean a hot loop against
+  // the token endpoint. `dueMs` is derived from a server-supplied expiry, so
+  // clamp rather than trust it — and fall back to the retry delay for a NaN,
+  // which Math.min/max would otherwise propagate straight into the timer.
+  const safeDelayMs = Number.isFinite(delayMs)
+    ? Math.min(Math.max(delayMs, 0), MAX_TIMER_DELAY_MS)
+    : REFRESH_RETRY_MS
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null
+    void (async () => {
+      const generationAtTick = sessionGeneration
+      lastProactiveRefreshMs = Date.now()
+      const ok = await refreshAccessToken()
+      // A different credential arrived while that was in flight (a sign-in, an
+      // account switch, a sign-out). It has already armed its own timer via
+      // paywall:set-session → scheduleAutoRefresh, and this failure belongs to
+      // the credential it replaced. Re-arming here would clobber the new
+      // session's correct ~55-minute deadline with a retry meant for a dead
+      // one, and would re-dirty the failure counters that set-session just
+      // reset.
+      if (sessionGeneration !== generationAtTick) return
+      if (!ok && currentSession.refreshToken) {
+        consecutiveRefreshFailures++
+        armRefreshTimer(Math.min(
+          REFRESH_RETRY_MS * 2 ** (consecutiveRefreshFailures - 1),
+          REFRESH_RETRY_MAX_MS,
+        ))
+      }
+    })()
+  }, safeDelayMs)
+}
+
+/** Drop every trace of the current session. Shared by the explicit sign-out
+ *  IPC and by refreshAccessToken when the server rejects the refresh token,
+ *  so a revocation leaves main in exactly the state an explicit sign-out does. */
+function clearSessionState(): void {
+  sessionGeneration++
+  currentSession = { accessToken: null, refreshToken: null, expiresAt: null, user: null }
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null }
+  // The failure history belonged to the credential that just died. A sign-in
+  // that follows must not inherit its backoff or its rejection tally.
+  consecutiveRefreshFailures = 0
+  undecidedRejections = 0
+  // Signed out = no plan: lock Remote and forget this session's choice so the
+  // next account starts from its own default.
+  settings.set('remoteTriggerEntitled', false)
+  setRemoteTriggerEntitled(false)
+  resetRemoteTriggerUserPref()
+  broadcastRemoteTriggerState()
 }
 
 /** Renderer pushes session state to main when supabase-js fires auth-state-change. */
@@ -284,6 +589,37 @@ function registerSessionBridge() {
     user: { id: string; email: string | null } | null
   }) => {
     const hadToken = !!currentSession.accessToken
+    // Refuse a push that is OLDER than what we already hold for the same user.
+    // A renderer reads the credential from the keychain at startup, so a second
+    // window — or a cold-start hand-off that crossed a refresh main had already
+    // done — can arrive carrying the pre-rotation pair. Adopting it would swap a
+    // good token for a rotated-away one, whose next refresh gets a 400 and
+    // signs the user out for real. Sign-out pushes (no expiry) and account
+    // switches (different user) are not affected.
+    const sameUser = data.user?.id == null || data.user.id === currentSession.user?.id
+    if (
+      currentSession.refreshToken &&
+      currentSession.expiresAt != null &&
+      data.expiresAt != null &&
+      data.expiresAt < currentSession.expiresAt &&
+      sameUser
+    ) {
+      console.warn('[paywall-glue] ignoring a stale session push (older than the one held)')
+      return true
+    }
+    // A different refresh token means this is a different credential (sign-in,
+    // account switch, a token main didn't mint). Any refresh already in flight
+    // was based on the credential being replaced, so its result is stale —
+    // bump the generation so it is discarded rather than written back over
+    // this one. An identical refresh token is the ordinary echo of main's own
+    // broadcast coming back through setSession, and must NOT bump.
+    if (currentSession.refreshToken !== (data.refreshToken ?? null)) {
+      sessionGeneration++
+      // Same reasoning as clearSessionState: a different credential starts
+      // with a clean failure history.
+      consecutiveRefreshFailures = 0
+      undecidedRejections = 0
+    }
     currentSession = {
       accessToken: data.accessToken,
       refreshToken: data.refreshToken ?? null,
@@ -305,14 +641,7 @@ function registerSessionBridge() {
   })
   ipcMain.handle('paywall:get-user', () => currentSession.user)
   ipcMain.handle('paywall:sign-out', () => {
-    currentSession = { accessToken: null, refreshToken: null, expiresAt: null, user: null }
-    if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null }
-    // Signed out = no plan: lock Remote and forget this session's choice so the
-    // next account starts from its own default.
-    settings.set('remoteTriggerEntitled', false)
-    setRemoteTriggerEntitled(false)
-    resetRemoteTriggerUserPref()
-    broadcastRemoteTriggerState()
+    clearSessionState()
     return true
   })
   // NOTE: paywall:request-sign-in is registered by main-extensions.ts (it has
