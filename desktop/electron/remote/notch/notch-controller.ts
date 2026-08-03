@@ -36,8 +36,12 @@ export interface TaskLite {
   deliveryError?: string
   /** A message is in flight to the agent. */
   sending?: boolean
-  /** Codex's label for this thread's model/effort, e.g. "5.6 Terra High". */
+  /** Codex's label for this thread's model/effort, e.g. "5.6 Terra High".
+   *  NOT persisted: set at creation and gone after a restart. Prefer `model`. */
   codexModelLabel?: string
+  /** The model that actually ran this task — recorded at dispatch and written
+   *  to meta.json (Pack F, decision D6), so it survives a restart. */
+  model?: string
   threadContext?: string | null
   shelved?: boolean
   note?: string | null
@@ -720,9 +724,21 @@ export class NotchController {
       : null
   }
 
-  /** Present-tense fade (the wall's visibleOnWall): sessions never fade; done
-   *  one-offs fade after 15m; errored/stuck after 60m; shelved → Shelf only. */
-  private visibleOnWall(t: TaskLite, now: number): boolean {
+  /** THE NOTCH'S OWN FADE RULE — deliberately NOT the wall's.
+   *
+   *  This used to be called visibleOnWall and claimed to mirror the renderer.
+   *  It no longer does: Pack C replaced the renderer's rule with a 24-hour
+   *  window, and this one kept the old behaviour — sessions never fade, done
+   *  one-offs fade after 15m, errored/stuck after 60m, shelved → Shelf only.
+   *
+   *  Keeping them separate is CORRECT. The notch answers "what is going on
+   *  right now" and must not drop a live session because a filter in another
+   *  window says so. The wall answers "what should I be looking at", and there
+   *  a 46-day-old card is noise. Two questions, two rules.
+   *
+   *  What was wrong was the shared NAME, which invited someone editing one to
+   *  assume they had edited both. Renamed so the next person has to choose. */
+  private notchVisible(t: TaskLite, now: number): boolean {
     if (t.shelved) return false
     if (t.kind === 'session') return true
     if ((t.updatedAt ?? 0) <= this.clearedAt && (t.state === 'done' || t.state === 'failed' || t.state === 'ready')) return false
@@ -810,9 +826,15 @@ export class NotchController {
       // and unlike `error` it must never be read as "the work failed".
       deliveryError: t.deliveryError ?? undefined,
       sending: t.sending ?? undefined,
-      // What this thread runs on, in Codex's own words. Shown in the composer
-      // because "which model is this" is part of writing the next message.
-      modelLabel: t.codexModelLabel ?? undefined,
+      // What this thread runs on. Shown in the composer because "which model is
+      // this" is part of writing the next message.
+      //
+      // codexModelLabel first — it is Codex's own phrasing ("5.6 Terra High"),
+      // which is what a Codex user recognises. But it is set at creation and
+      // never persisted, so it is gone after a restart and the composer used to
+      // go blank. `model` is the persisted fact (Pack F, D6) and carries it
+      // through. Neither is ever invented: absent stays absent.
+      modelLabel: t.codexModelLabel || t.model || undefined,
       activity: t.question?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined,
       question: t.question ?? undefined,
       result: t.result ?? undefined,
@@ -871,7 +893,7 @@ export class NotchController {
   private allGroupNames(): string[] {
     const now = Date.now()
     return [...new Set(this.deps.listTasks()
-      .filter((t) => this.visibleOnWall(t, now))
+      .filter((t) => this.notchVisible(t, now))
       .map((t) => (t.group ?? '').trim()))]
   }
 
@@ -887,7 +909,7 @@ export class NotchController {
     // arbitrary: a task touched five minutes ago but created three weeks ago
     // promoted its whole group to the top and then sat at the BOTTOM of it, so
     // the group said "something here is fresh" and the cards never showed which.
-    const wall = tasks.filter((t) => this.visibleOnWall(t, now))
+    const wall = tasks.filter((t) => this.notchVisible(t, now))
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     const byGroup = new Map<string, TaskLite[]>()
     for (const t of wall) {
@@ -905,7 +927,7 @@ export class NotchController {
     /**
      * Collapse the stale tail of a group behind "show all".
      *
-     * Sessions never faded from the wall at all (visibleOnWall returns true for
+     * Sessions never fade from the NOTCH at all (notchVisible returns true for
      * them unconditionally), so a wall accumulates every session ever created —
      * DONE cards from three weeks ago sitting beside this morning's work.
      *

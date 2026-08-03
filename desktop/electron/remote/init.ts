@@ -1939,9 +1939,18 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // other list already went through snapshotOf; this one had drifted.
       const finished = manager.recentlyFinished().map((t) => snapshotOf(t, nowMs, false))
       const { targetable, coldSessions } = partitionRoutable(nowMs)
-      // THE WALL for curation: everything the user can currently SEE (mirrors
-      // the renderer's visibleOnWall: non-shelved sessions always; active
-      // states; recent finishes). Curation references resolve against what's
+      // THE WALL for curation: everything the user can currently SEE.
+      //
+      // This USED to say it mirrored the renderer's visibleOnWall. It no
+      // longer does — Pack C gave the renderer a 24-hour window, and this rule
+      // (non-shelved sessions always; active states; recent finishes) stayed as
+      // it was. That is deliberate: curation must be able to name a session the
+      // user has parked for a week, and a filter in one window should not make
+      // it unaddressable by voice. Three rules now exist on purpose — this one,
+      // the notch's notchVisible(), and the renderer's. Do not "unify" them
+      // without deciding which question each is answering.
+      //
+      // Curation references resolve against what's
       // on screen — a wall the router can't see caused the first field bug
       // (a curation command misrouted into a junk task, 2026-07-16).
       const DONE_FADE_MS = 15 * 60_000
@@ -2233,6 +2242,14 @@ export function setDictationKey(key: TriggerKey): void {
 // Librarian PARKED (skill-curator spec §12): no librarian sessions spawn — the
 // curator supersedes it. Code + recipes stay on disk; flip to false to revive.
 const LIBRARIAN_PARKED = true
+
+// Curator PARKED for launch (decision D7). The librarian above had a park
+// switch from the start; the curator never did, so it kept running while the
+// UI claimed otherwise. Same shape, same promise: code and recipes stay on
+// disk, flip to false to revive. Reviving it also means restoring the
+// Suggestions rail Pack C removed — a curator with no review surface proposes
+// into a void. See the guard at the curator.start() call site.
+const CURATOR_PARKED = true
 
 export function initRemote(deps: RemoteInitDeps): TaskManager {
   if (manager) return manager
@@ -2841,7 +2858,22 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     isBusy: () => (manager?.hasProcessingTask() ?? false) || captureBusy,
     runSweep: makeRunSweep({ executorFactory: librarianExecutorFactory, paths: curatorPathsV, curatedIndex: buildCuratedIndex }),
   })
-  curator.start()
+  // PARKED for launch (decision D7), exactly as the librarian is at :2235.
+  //
+  // This guard is the whole reason Settings can honestly say the curator is
+  // switched off. Before it, `curator.start()` ran unconditionally while the
+  // Settings screen told the user "Both are being switched off for this
+  // release" and rendered a disabled toggle in the OFF position — a
+  // kill-switch asserting a state that was not true. Found by Pack B's
+  // independent verifier; the librarian had been parked properly and the
+  // curator never had been.
+  //
+  // A constant, not a setting, and deliberately so: D7 retires the curator for
+  // this release. A live toggle would promise it can be switched back on,
+  // which is a bigger promise than we want to make — and re-enabling it also
+  // means restoring the Suggestions surface Pack C removed, since that was the
+  // only way a user could ever see what it proposed.
+  if (!CURATOR_PARKED) curator.start()
   // One live review conversation per proposal (Task 10). Held HERE so a second
   // start for the same id stops the first — ProposalConversation does not
   // self-guard; that carry-forward enforcement is this map's responsibility.
