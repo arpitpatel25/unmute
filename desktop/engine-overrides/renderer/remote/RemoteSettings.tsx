@@ -1,12 +1,29 @@
-// Unmute Remote — settings panel (PRD §2.4.5, §10.1, §10.6, §11).
+// Unmute Orchestrator — settings panel.
 //
-// Lives in the Remote tab. Exposes the user-facing knobs whose IPC already
-// exists in remote/init.ts: permission mode (auto-approve), executor agent
-// (claude/codex), and the path sandbox roots. Credentials are NEVER here
-// (PRD §12.1) — MCP setup is done in the user's own Claude Code.
+// Lives in the Orchestrator tab. Exposes the user-facing knobs whose IPC already
+// exists in remote/init.ts: the agent that runs the work, that agent's own
+// models, permission mode, and the path sandbox. Credentials are NEVER here
+// (PRD §12.1) — MCP setup is done in the user's own agent.
+//
+// REBUILT (launch spec pack-c §6). This screen was raw HTML checkbox inputs, a
+// native dropdown element and ad-hoc 12px text in an app that has a design
+// system — the largest visual-quality gap in the product. It now uses the same
+// primitives as every other settings surface (`SectionHeader`, `SettingRow`,
+// `Toggle`, `SegmentedControl`), and three things were removed outright:
+//
+//   * the orchestrator trigger-key toggle — it also lives in Settings → Your
+//     triggers, which is the one that stays (spec §6). Two switches for one gate
+//     is two places to disagree.
+//   * the memory-footprint readout and its cleanup button — decision D1: the
+//     curator and librarian that filled that store are being switched off, so a
+//     footprint readout for a store nothing writes to is furniture.
+//   * `FALLBACK_CATALOG` — hardcoded Haiku/Sonnet/Opus, rendered even with
+//     Codex desktop selected. Model chips follow the selected agent now, or
+//     there are no chips. See `<Models>` below.
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ComputerUseSettings } from './ComputerUseSettings'
+import { SectionHeader, SettingRow, Toggle } from '../app/_shared'
 
 interface Settings {
   permissionMode: 'prompt' | 'auto-approve'
@@ -30,316 +47,610 @@ interface Settings {
   agentTasksEnabled?: boolean
   logFile: string | null
 }
+
 interface ModelChoice { id: string; label: string; description?: string }
-// Fallback if the catalog IPC is unavailable (older main) — the classic tiers.
-const FALLBACK_CATALOG: ModelChoice[] = [
-  { id: 'haiku', label: 'Haiku', description: 'Fastest — best for simple, quick tasks.' },
-  { id: 'sonnet', label: 'Sonnet', description: 'Balanced speed and capability. Great default.' },
-  { id: 'opus', label: 'Opus', description: 'Most capable — best for hard, multi-step tasks.' },
-]
+interface AgentOption { id: string; label: string; available: boolean; installed?: boolean; reason?: string }
+interface AgentPicker { current: string; options: AgentOption[] }
+type CodexAxis = 'Model' | 'Effort' | 'Speed'
+interface CodexReasoning {
+  label: string | null
+  current: Partial<Record<CodexAxis, string>>
+  options: Partial<Record<CodexAxis, string[]>>
+}
+interface SetupStep { key: string; title: string; detail: string; command?: string; status: 'done' | 'todo' }
+
 type API = {
   remoteGetSettings?: () => Promise<Settings>
   remoteSetPermissionMode?: (m: 'prompt' | 'auto-approve') => Promise<boolean>
-  remoteSetAgent?: (a: 'claude' | 'codex-desktop') => Promise<boolean>
+  remoteSetAgent?: (a: string) => Promise<boolean>
+  remoteAgentOptions?: () => Promise<AgentPicker>
   remoteSetSandboxRoots?: (r: string[]) => Promise<boolean>
   remoteSetBrowserEnabled?: (enabled: boolean) => Promise<boolean>
   remoteSetModel?: (m: string) => Promise<string>
-  remoteGetModelCatalog?: () => Promise<ModelChoice[]>
+  /** Models for ONE backend, in that backend's own vocabulary. */
+  remoteModelOptions?: (agent: string) => Promise<{ agent: string; models: ModelChoice[] }>
   remoteOnModelChanged?: (cb: (model: string) => void) => () => void
-  remoteSetOverlayAutoPresent?: (on: boolean) => Promise<boolean>
-  remoteSetOverlayDocked?: (on: boolean) => Promise<boolean>
+  remoteCodexReasoning?: () => Promise<CodexReasoning>
+  remoteCodexReasoningSet?: (axis: CodexAxis, value: string) => Promise<boolean>
   remoteSetOsNotifications?: (on: boolean) => Promise<boolean>
   remoteSetForceRaw?: (on: boolean) => Promise<boolean>
-  remoteGetMemoryUsage?: () => Promise<MemoryUsage>
-  remoteCleanupMemory?: () => Promise<CleanupResult | null>
-  // Remote trigger gate (paywall layer): `locked` = the plan doesn't include
-  // Remote; `enabled` = the key is live right now. Per app session, not saved.
-  paywallGetRemoteTrigger?: () => Promise<RemoteTriggerState>
-  paywallSetRemoteTriggerEnabled?: (enabled: boolean) => Promise<RemoteTriggerState>
-  paywallOnRemoteTriggerChanged?: (cb: (s: RemoteTriggerState) => void) => () => void
+  remoteSetAgentTasks?: (v: boolean) => Promise<boolean>
+  remoteListProjects?: () => Promise<Array<{ name: string; path: string }>>
+  remoteGetSetupStatus?: () => Promise<{ steps: SetupStep[]; complete: boolean }>
 }
-interface RemoteTriggerState { enabled: boolean; locked: boolean }
-interface MemoryUsage { bytes: number; recipeCount: number; skillCount: number }
-interface CleanupResult { pruned: string[]; evicted: string[]; demoted: string[]; deduped: string[] }
-
-// Soft, informational thresholds — NOT a limit. Past either, the UI gently
-// suggests a cleanup; the user is always free to ignore it.
-const SOFT_BYTES = 2 * 1024 * 1024
-const SOFT_COUNT = 150
-const fmtBytes = (b: number) => (b < 1024 ? `${b} B` : b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`)
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
 }
 
-export function RemoteSettings() {
-  const [s, setS] = useState<Settings | null>(null)
-  const [newRoot, setNewRoot] = useState('')
-  const [usage, setUsage] = useState<MemoryUsage | null>(null)
-  const [cleaning, setCleaning] = useState(false)
-  const [cleanupNote, setCleanupNote] = useState<string | null>(null)
-  const [catalog, setCatalog] = useState<ModelChoice[]>(FALLBACK_CATALOG)
-  // Locked until main says otherwise — never flash an unlocked switch at a
-  // user whose plan doesn't include Remote.
-  const [trigger, setTrigger] = useState<RemoteTriggerState>({ enabled: false, locked: true })
+/** What each backend is actually good at — the sentence a bare dropdown never
+ *  said. Keyed by the registry's provider id; an unknown backend simply gets no
+ *  sentence rather than a guessed one. */
+const AGENT_PITCH: Record<string, string> = {
+  claude: 'Runs on your machine in a real terminal. Live output, and you can resume a session later.',
+  'codex-desktop': 'Runs in the Codex app you already have open. No terminal here — the thread lives in Codex.',
+  'claude-code-desktop': 'Runs in the Claude desktop app. The conversation lives there; Unmute conducts it.',
+}
 
-  const refreshUsage = () => void api().remoteGetMemoryUsage?.().then((u) => u && setUsage(u))
+/* ─── Small primitives this screen needs and `_shared` does not have ─── */
+
+/** A row of choice chips. The one control vocabulary the app uses for "pick one
+ *  of a list that changes at runtime" — `SegmentedControl` assumes a short,
+ *  fixed set, and a model catalogue is neither. */
+function Chips({ options, value, onPick }: {
+  options: Array<{ id: string; label: string; title?: string }>
+  value: string | undefined
+  onPick: (id: string) => void
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          title={o.title}
+          onClick={() => onPick(o.id)}
+          className={`px-2.5 py-1.5 rounded-lg text-[12.5px] font-medium border transition-colors ${
+            value === o.id
+              ? 'bg-ink text-white border-ink'
+              : 'bg-white text-ink-60 border-border hover:bg-cream-mid'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      className="text-[11px] px-2 py-0.5 rounded border border-border hover:bg-cream-mid shrink-0"
+      onClick={() => { void navigator.clipboard?.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1200) }}
+    >
+      {copied ? 'copied' : 'copy'}
+    </button>
+  )
+}
+
+function Panel({ children }: { children: React.ReactNode }) {
+  return <div className="bg-white border border-border rounded-[12px] overflow-hidden">{children}</div>
+}
+
+/* ─── Icons — one per concept (decision D8) ─── */
+
+function AgentIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2.5" y="4.5" width="11" height="8" rx="2" /><path d="M8 2v2.5M5.5 8h.01M10.5 8h.01M6 10.5h4" />
+    </svg>
+  )
+}
+function ModelIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 1.5l5.5 3v7L8 14.5l-5.5-3v-7z" /><path d="M8 8l5.5-3M8 8v6.5M8 8L2.5 5" />
+    </svg>
+  )
+}
+function ReachIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 2h4.5A1.5 1.5 0 0 1 14 7.5v4A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5z" />
+    </svg>
+  )
+}
+function LaneIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="6" /><path d="M2 8h12M8 2c1.8 2 1.8 10 0 12M8 2C6.2 4 6.2 12 8 14" />
+    </svg>
+  )
+}
+
+/* ─── Model chips — THE BUG THIS SECTION EXISTS TO FIX ───────────────────────
+ *
+ * The old panel rendered `FALLBACK_CATALOG` (Haiku / Sonnet / Opus) whenever the
+ * catalog IPC returned nothing — including when the selected agent was Codex
+ * desktop, which has none of those models. Picking one wrote a Claude alias into
+ * unmute's own setting; Codex ignored it, and the screen went on claiming the
+ * task would run on Opus.
+ *
+ * Now: the chips are ASKED OF THE SELECTED BACKEND, in that backend's own
+ * vocabulary, and an empty answer is a real answer — it means "we cannot know
+ * what this app offers", so nothing selectable is drawn. One backend's models
+ * are never shown under another's name.
+ *
+ * WHY THIS IS A TABLE AND NOT AN `=== 'codex-desktop'`. `remote:model-options`
+ * looks like the per-backend answer, and it is — for 'claude-code-desktop'. For
+ * every OTHER id it falls through to `getModelCatalog()` (init.ts:3703), which
+ * is Claude Code's catalogue. So the dangerous default is not "ask Codex the
+ * wrong way", it is "ask the catalogue about a backend it knows nothing about
+ * and render Claude's tiers under that backend's name" — and a single
+ * `agentId === 'codex-desktop'` guard fixes that for exactly one id while
+ * leaving the next backend to reintroduce the bug on the day it lands.
+ *
+ * So the question asked here is "how does THIS backend report its models", and
+ * an absent answer means we do not know — which draws nothing, rather than
+ * something plausible and wrong.
+ */
+
+/** How each backend reports what it can run.
+ *
+ *  'catalog' — `remote:model-options` genuinely answers for this backend.
+ *  'own-app' — the app itself is the only source (Codex reports Model / Effort /
+ *              Speed through `remote:codex-reasoning`, read from the running
+ *              app; it is the same source the pill's chip uses).
+ *
+ *  ABSENT is the important entry. A backend not listed here has no known model
+ *  source, so this screen offers none — see the note above for why the
+ *  alternative is another vendor's models under this one's name. Adding a
+ *  backend to the registry should mean adding one line here; forgetting is
+ *  visibly inert instead of quietly wrong. */
+const MODEL_SOURCE: Record<string, 'catalog' | 'own-app'> = {
+  claude: 'catalog',
+  'claude-code-desktop': 'catalog',
+  'codex-desktop': 'own-app',
+}
+
+function Models({ agentId, model, onPickClaudeModel }: {
+  agentId: string
+  model: string
+  onPickClaudeModel: (id: string) => void
+}) {
+  const source = MODEL_SOURCE[agentId]
+  const [catalog, setCatalog] = useState<ModelChoice[] | null>(null)
+  const [codex, setCodex] = useState<CodexReasoning | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setCatalog(null)
+    setCodex(null)
+    if (source === 'own-app') {
+      void api().remoteCodexReasoning?.().then((r) => { if (!cancelled) setCodex(r ?? null) }).catch(() => { if (!cancelled) setCodex(null) })
+      return () => { cancelled = true }
+    }
+    if (source === 'catalog') {
+      void api().remoteModelOptions?.(agentId)
+        .then((r) => { if (!cancelled) setCatalog(r?.models ?? []) })
+        .catch(() => { if (!cancelled) setCatalog([]) })
+    }
+    return () => { cancelled = true }
+  }, [agentId, source])
+
+  if (!source) {
+    return (
+      <p className="text-[11px] text-ink-35 leading-relaxed">
+        Unmute can&rsquo;t read this agent&rsquo;s model list, so it won&rsquo;t offer one.
+        Tasks run on whatever the agent is already set to.
+      </p>
+    )
+  }
+
+  if (source === 'own-app') {
+    const axes = (['Model', 'Effort', 'Speed'] as const)
+      .map((axis) => ({ axis, values: codex?.options[axis] ?? [], current: codex?.current[axis] }))
+      .filter((a) => a.values.length)
+    if (!axes.length) {
+      return (
+        <p className="text-[11px] text-ink-35 leading-relaxed">
+          Codex&rsquo;s models are read from the Codex app itself. Open Codex and connect it
+          from <b>Agents &amp; setup</b> above, and its own choices appear here.
+        </p>
+      )
+    }
+    return (
+      <div className="space-y-3">
+        {axes.map((a) => (
+          <div key={a.axis}>
+            <p className="text-[11px] text-ink-35 mb-1.5">{a.axis}</p>
+            <Chips
+              options={a.values.map((v) => ({ id: v, label: v }))}
+              value={a.current}
+              onPick={(v) => {
+                setCodex((prev) => (prev ? { ...prev, current: { ...prev.current, [a.axis]: v } } : prev))
+                void api().remoteCodexReasoningSet?.(a.axis, v)
+              }}
+            />
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  if (catalog === null) return <p className="text-[11px] text-ink-35">Reading this agent&rsquo;s models…</p>
+  if (catalog.length === 0) {
+    return (
+      <p className="text-[11px] text-ink-35 leading-relaxed">
+        Unmute can&rsquo;t read this agent&rsquo;s model list, so it won&rsquo;t offer one.
+        Tasks run on whatever the agent is already set to.
+      </p>
+    )
+  }
+  return (
+    <div>
+      <Chips
+        options={catalog.map((m) => ({ id: m.id, label: m.label, title: m.description }))}
+        value={model}
+        onPick={onPickClaudeModel}
+      />
+      <p className="mt-2 text-[11px] text-ink-35">
+        {catalog.find((m) => m.id === model)?.description ?? model}
+      </p>
+    </div>
+  )
+}
+
+/* ─── Sandbox ───────────────────────────────────────────────────────────────
+ *
+ * A LIMITATION, STATED. The spec asks for a directory picker. A real one needs
+ * `dialog.showOpenDialog` in the main process, and no such IPC exists: neither
+ * this repo's `remote-preload.ts` nor the OSS engine's `preload.ts` exposes a
+ * folder chooser, and Pack C owns no main-process file that could add one.
+ * The renderer-only substitute (`<input webkitdirectory>` plus `File.path`) does
+ * not work either — the engine ships Electron 40, which removed `File.path` in
+ * v32, so the button would open a chooser and then silently add nothing.
+ *
+ * What this does instead is offer real directories to CLICK: the projects
+ * Unmute already knows about on disk (`remote:list-projects`), one tap each.
+ * Typing a path is the fallback, not the primary control, and its field says
+ * what it wants rather than showing a fictional example path.
+ */
+function Sandbox({ roots, onChange }: { roots: string[]; onChange: (roots: string[]) => void }) {
+  const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
+  const [typed, setTyped] = useState('')
+  useEffect(() => {
+    void api().remoteListProjects?.().then((p) => setProjects(p ?? [])).catch(() => {})
+  }, [])
+  const add = (p: string) => {
+    const v = p.trim()
+    if (!v || roots.includes(v)) return
+    onChange([...roots, v])
+  }
+  const suggestions = projects.filter((p) => !roots.includes(p.path))
+  return (
+    <div className="px-5 py-4 space-y-3">
+      <div>
+        <p className="text-[13px] font-medium text-ink">Folders tasks may reach</p>
+        <p className="text-[11px] text-ink-35 mt-0.5">
+          {roots.length === 0
+            ? 'No fence right now — tasks can reach anywhere you can.'
+            : `Tasks are fenced to ${roots.length} folder${roots.length === 1 ? '' : 's'}.`}
+        </p>
+      </div>
+
+      {roots.length > 0 && (
+        <div className="space-y-1">
+          {roots.map((r) => (
+            <div key={r} className="flex items-center gap-2">
+              <code className="flex-1 px-2 py-1 bg-cream-mid border border-border rounded-md text-[11px] truncate" title={r}>{r}</code>
+              <button
+                className="text-[11px] px-2 py-1 rounded border border-border text-ink-60 hover:bg-cream-mid"
+                onClick={() => onChange(roots.filter((x) => x !== r))}
+              >Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {suggestions.length > 0 && (
+        <div>
+          <p className="text-[11px] text-ink-35 mb-1.5">Your projects — one tap to fence to one</p>
+          <div className="flex flex-wrap gap-1.5">
+            {suggestions.map((p) => (
+              <button
+                key={p.path}
+                title={p.path}
+                onClick={() => add(p.path)}
+                className="px-2.5 py-1.5 rounded-lg text-[12.5px] font-medium border border-border bg-white text-ink-60 hover:bg-cream-mid"
+              >+ {p.name}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <form
+        className="flex gap-1.5"
+        onSubmit={(e) => { e.preventDefault(); add(typed); setTyped('') }}
+      >
+        <input
+          className="flex-1 text-[12.5px] px-2.5 py-1.5 rounded-md border border-border bg-white"
+          placeholder="Or type the full path to a folder"
+          aria-label="Full path to a folder"
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+        />
+        <button className="text-[11px] px-3 py-1.5 rounded-md border border-border hover:bg-cream-mid" type="submit">Add</button>
+      </form>
+    </div>
+  )
+}
+
+/* ─── No agent installed (spec §3.7) ─────────────────────────────────────────
+ *
+ * The most likely first-run state after launch, and the one the old panel
+ * handled worst: it drew a model picker, a permission switch and a sandbox for a
+ * thing that could not run at all. Nothing here is a control — it is what the
+ * Orchestrator is, how to get each agent, and the reassurance that the app the
+ * user actually bought (dictation) works without any of this.
+ */
+function NoAgents({ steps, onHowItWorks, onRecheck }: {
+  steps: SetupStep[]
+  /** Absent ⇒ no link is drawn. See `RemoteSettings`' prop doc. */
+  onHowItWorks?: () => void
+  onRecheck: () => void
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border border-border rounded-[12px] px-5 py-4">
+        <p className="text-[14px] font-semibold text-ink">The Orchestrator needs an agent</p>
+        <p className="text-[12.5px] text-ink-60 leading-relaxed mt-1.5">
+          The Orchestrator is where you hand work to a coding agent by voice and watch
+          it run — several at once, each on its own card. Unmute doesn&rsquo;t do the
+          thinking; it hands your words to an agent on this machine and brings the
+          answer back. So it needs one installed first.
+        </p>
+        <p className="text-[12.5px] text-ink-60 leading-relaxed mt-2">
+          <b>Dictation works without any of this.</b> Everything you already use —
+          hold-to-talk, Instruct, the pill — is unaffected by what&rsquo;s on this page.
+        </p>
+        {onHowItWorks && (
+          <button
+            className="mt-3 text-[11px] font-semibold px-3 py-1.5 rounded-full border border-border text-ink-60 hover:bg-cream-mid"
+            onClick={onHowItWorks}
+          >
+            How it works
+          </button>
+        )}
+      </div>
+
+      {steps.length > 0 && (
+        <Panel>
+          {steps.map((s, i) => (
+            <div key={s.key} className={`px-5 py-4 ${i ? 'border-t border-border' : ''}`}>
+              <p className="text-[13px] font-medium text-ink">{s.title}</p>
+              <p className="text-[11px] text-ink-35 mt-0.5 leading-relaxed">{s.detail}</p>
+              {s.command && (
+                <div className="flex items-center gap-1.5 mt-2">
+                  <code className="flex-1 px-2 py-1 bg-cream-mid border border-border rounded-md text-[11px] truncate">{s.command}</code>
+                  <CopyButton text={s.command} />
+                </div>
+              )}
+            </div>
+          ))}
+        </Panel>
+      )}
+
+      <button
+        className="text-[11px] px-3 py-1.5 rounded-md border border-border hover:bg-cream-mid"
+        onClick={onRecheck}
+      >
+        Re-check
+      </button>
+    </div>
+  )
+}
+
+/* ─── The panel ─── */
+
+export function RemoteSettings({ onOpenHowItWorks }: {
+  /** Navigate the Orchestrator tab to its "How it works" page.
+   *
+   *  THIS PANEL KEEPS NO PAGE STATE. The tab above owns which sub-page is
+   *  selected. An earlier cut of this file fell back to swapping ITSELF for the
+   *  trust page when this prop was absent — and since the Orchestrator tab
+   *  mounts `<RemoteSettings />` with no props, that fallback is what would
+   *  actually run: the panel would show the trust page while the segmented
+   *  control above it still read "Settings". That is precisely the two-navigations
+   *  -over-one-selection bug this pack removed from `TaskPanel`, and shipping it
+   *  one screen over on the promise of a wiring line elsewhere is not a fix.
+   *
+   *  So: given the callback, the link drives the real selection. Absent it, the
+   *  link is NOT DRAWN — a caller with no sub-nav loses nothing that works, and
+   *  the tab's own "How it works" segment is the route in the shipped app.
+   *  A control that navigates somewhere the user cannot see they have gone is a
+   *  dead control by another name. */
+  onOpenHowItWorks?: () => void
+} = {}) {
+  const [s, setS] = useState<Settings | null>(null)
+  const [picker, setPicker] = useState<AgentPicker | null>(null)
+  const [setupSteps, setSetupSteps] = useState<SetupStep[] | null>(null)
+
+  const loadBackends = useCallback(() => {
+    void api().remoteAgentOptions?.().then((p) => p && setPicker(p)).catch(() => {})
+    void api().remoteGetSetupStatus?.()
+      .then((v) => setSetupSteps((v?.steps ?? []).filter((step) => step.key.startsWith('backend-'))))
+      .catch(() => setSetupSteps([]))
+  }, [])
 
   useEffect(() => {
     void api().remoteGetSettings?.().then((v) => v && setS(v))
-    // Config-driven model catalog (falls back to the classic tiers if absent).
-    void api().remoteGetModelCatalog?.().then((c) => { if (c && c.length) setCatalog(c) })
-    refreshUsage()
-    void api().paywallGetRemoteTrigger?.().then((t) => t && setTrigger(t)).catch(() => {})
+    loadBackends()
     // Stay in sync when the model is changed from the capture-widget badge.
     const off = api().remoteOnModelChanged?.((model) => setS((prev) => (prev ? { ...prev, model } : prev)))
-    // …and when the trigger is toggled elsewhere (Settings tab) or the plan changes.
-    const offTrigger = api().paywallOnRemoteTriggerChanged?.((t) => setTrigger(t))
-    return () => { off?.(); offTrigger?.() }
-  }, [])
+    return () => { off?.() }
+  }, [loadBackends])
+
   if (!s) return null
 
   const update = (patch: Partial<Settings>) => setS((prev) => (prev ? { ...prev, ...patch } : prev))
 
-  const runCleanup = async () => {
-    setCleaning(true); setCleanupNote(null)
-    try {
-      const r = await api().remoteCleanupMemory?.()
-      const removed = (r?.evicted.length ?? 0) + (r?.pruned.length ?? 0) + (r?.deduped.length ?? 0)
-      const demoted = r?.demoted.length ?? 0
-      setCleanupNote(removed === 0 && demoted === 0 ? 'Nothing to clean — your memory is tidy.' : `Removed ${removed}, retired ${demoted}.`)
-      refreshUsage()
-    } finally { setCleaning(false) }
+  // Offered = usable right now, or installed and one step from usable. An
+  // installed-but-unarmed backend must stay visible: hiding it leaves the user
+  // with no way to connect it.
+  const offered = (picker?.options ?? []).filter((o) => o.available || o.installed)
+  // NOTHING INSTALLED (spec §3.7). Only once the probe has actually answered —
+  // an empty `picker` before the first reply is "not known yet", not "none".
+  if (picker && offered.length === 0) {
+    return <NoAgents steps={setupSteps ?? []} onHowItWorks={onOpenHowItWorks} onRecheck={loadBackends} />
+  }
+
+  // 'codex' is the unwired CLI adapter; startup migrates a stored one back to
+  // claude, so it is never the selected value here.
+  const agentId = picker?.current ?? (s.agent === 'codex' ? 'claude' : s.agent)
+  const selected = offered.find((o) => o.id === agentId)
+
+  const pickAgent = (id: string) => {
+    update({ agent: id as Settings['agent'] })
+    setPicker((prev) => (prev ? { ...prev, current: id } : prev))
+    void api().remoteSetAgent?.(id)
   }
 
   return (
-    <div className="rounded-lg border border-black/10 p-3 mb-3 bg-cream-mid/40 text-[12px]">
-      <div className="font-semibold text-ink mb-2">Remote settings</div>
-
-      {/* The trigger itself — the master switch for Remote activation. Mirrors
-          Settings → Your triggers; both read the same main-process gate. Locked
-          (off, inert) without the Unmute plan; for Pro it's on at every launch
-          and any off you set here lasts until you quit Unmute. */}
-      <label className="flex items-center justify-between py-1.5 mb-1">
-        <span>
-          Remote trigger{' '}
-          <span className="text-ink/40">
-            ({s.remoteKey === 'fn' ? 'Function key' : 'Right-option'} — the key not used for
-            dictation
-            {trigger.locked
-              ? '; part of the Unmute plan)'
-              : trigger.enabled
-                ? ')'
-                : '; back on when you reopen Unmute)'}
-          </span>
-        </span>
-        <input
-          type="checkbox"
-          checked={trigger.enabled}
-          disabled={trigger.locked}
-          title={trigger.locked ? 'Unmute Remote is part of the Unmute plan' : undefined}
-          onChange={(e) => {
-            const on = e.target.checked
-            setTrigger((prev) => ({ ...prev, enabled: on })) // optimistic
-            void api().paywallSetRemoteTriggerEnabled?.(on)
-              .then((next) => next && setTrigger(next)) // main owns the plan gate
-              .catch(() => {})
-          }}
-        />
-      </label>
-
-      {/* Doer model — Remote tasks run on this. Applies to the next task. */}
-      <div className="py-1.5 border-t border-black/5">
-        <div className="mb-1.5">Model <span className="text-ink/40">(Remote tasks — applies to the next one)</span></div>
-        <div className="flex flex-wrap gap-1.5">
-          {catalog.map((m) => (
-            <button
-              key={m.id}
-              onClick={() => { update({ model: m.id }); void api().remoteSetModel?.(m.id) }}
-              className={`px-2.5 py-1.5 rounded-lg text-[12px] font-semibold border transition-colors ${
-                s.model === m.id
-                  ? 'bg-[#D97757] text-white border-[#D97757]'
-                  : 'bg-white text-ink/70 border-border hover:bg-cream-mid'
-              }`}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
-        <div className="mt-1 text-[10.5px] text-ink/40">
-          {catalog.find((m) => m.id === s.model)?.description ?? s.model}
-        </div>
+    <div>
+      <div className="flex items-center justify-between">
+        <SectionHeader icon={<AgentIcon />} title="Agent" />
+        {/* Drawn only when the tab above can actually be navigated. Unwired, the
+            tab's own "How it works" segment is the route — this would only be a
+            link that moves the content and leaves the selection behind. */}
+        {onOpenHowItWorks && (
+          <button
+            className="text-[11px] font-medium text-ink-35 hover:text-ink mt-5 mb-2.5"
+            onClick={onOpenHowItWorks}
+          >
+            How it works →
+          </button>
+        )}
       </div>
-
-      {/* Permission mode (§10.1) */}
-      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
-        <span>Auto-approve actions <span className="text-ink/40">(frictionless; no per-action prompts)</span></span>
-        <input
-          type="checkbox"
-          checked={s.permissionMode === 'auto-approve'}
-          onChange={(e) => {
-            const mode = e.target.checked ? 'auto-approve' : 'prompt'
-            update({ permissionMode: mode })
-            void api().remoteSetPermissionMode?.(mode)
-          }}
-        />
-      </label>
-
-      {/* The two overlay toggles that used to sit here (auto-present, dock) are
-          gone on purpose: the floating overlay was retired when the notch became
-          the attention surface (ede9966). Leaving switches that drive a window
-          which is never created would be worse than not offering them — the IPC
-          still exists for older builds, we simply no longer surface it. */}
-
-      {/* macOS notifications — off by default (the overlay is the surface) */}
-      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
-        <span>macOS notifications <span className="text-ink/40">(off — overlay replaces them; often dropped anyway)</span></span>
-        <input
-          type="checkbox"
-          checked={s.osNotifications}
-          onChange={(e) => {
-            const on = e.target.checked
-            update({ osNotifications: on })
-            void api().remoteSetOsNotifications?.(on)
-          }}
-        />
-      </label>
-
-      {/* Agent-created tasks — the Unmute MCP master switch. Sessions may ADD
-          tasks to the wall (with provenance + depth/rate guardrails), never
-          touch existing work. Off = the intercom rejects all creations. */}
-      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
-        <span>Agent-created tasks <span className="text-ink/40">(let a running task spawn new tasks onto the wall — always labeled, rate-limited, never able to touch existing work)</span></span>
-        <input
-          type="checkbox"
-          checked={s.agentTasksEnabled ?? true}
-          onChange={(e) => {
-            const on = e.target.checked
-            update({ agentTasksEnabled: on })
-            void (api() as { remoteSetAgentTasks?: (v: boolean) => Promise<boolean> }).remoteSetAgentTasks?.(on)
-          }}
-        />
-      </label>
-
-      {/* Raw mode — run Claude Code clean, with NO Unmute memory injection. The
-          pill widget can flip this per-session; this is the saved default. */}
-      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
-        <span>Raw mode <span className="text-ink/40">(no Unmute memory injection — a clean Claude Code session; toggle per-session from the pill)</span></span>
-        <input
-          type="checkbox"
-          checked={s.forceRawMode}
-          onChange={(e) => {
-            const on = e.target.checked
-            update({ forceRawMode: on })
-            void api().remoteSetForceRaw?.(on)
-          }}
-        />
-      </label>
-
-      {/* Browser lane — drives your real Chrome via the extension (DECIDED) */}
-      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
-        <span>Browser tasks <span className="text-ink/40">(drives your real Chrome via the extension)</span></span>
-        <input
-          type="checkbox"
-          checked={s.browserEnabled}
-          onChange={(e) => {
-            const browserEnabled = e.target.checked
-            update({ browserEnabled })
-            void api().remoteSetBrowserEnabled?.(browserEnabled)
-          }}
-        />
-      </label>
-
-      {/* Computer Use — background macOS app control via the Accessibility API.
-          Self-contained (owns its own IPC). Sits alongside the Browser lane:
-          browser drives Chrome, this drives every other desktop app. */}
-      <ComputerUseSettings />
-
-      {/* Executor agent (§11) */}
-      <label className="flex items-center justify-between py-1.5 border-t border-black/5">
-        <span>Executor</span>
-        <select
-          className="text-[12px] border border-black/15 rounded px-1 py-0.5 bg-white"
-          // 'codex' is the UNWIRED CLI adapter; startup migrates a stored one
-          // back to claude, so it is never offered. 'codex-desktop' is real and
-          // has shipped since v1.4.8 — this control still said "coming soon" and
-          // refused the selection, which is where users concluded Codex did not
-          // exist. It also rendered blank for anyone already on codex-desktop,
-          // and wrote 'claude' over their choice if they touched it.
-          value={s.agent === 'codex' ? 'claude' : s.agent}
-          onChange={(e) => {
-            const agent = e.target.value as 'claude' | 'codex-desktop'
-            update({ agent })
-            void api().remoteSetAgent?.(agent)
-          }}
-        >
-          <option value="claude">Claude Code</option>
-          <option value="codex-desktop">Codex desktop</option>
-        </select>
-      </label>
-
-      {/* Sandbox roots (§10.6) */}
-      <div className="py-1.5 border-t border-black/5">
-        <div className="mb-1">
-          Sandbox <span className="text-ink/40">(empty = no fence; add folders to limit reach)</span>
-        </div>
-        {s.sandboxRoots.length === 0 && <div className="text-ink/40 italic mb-1">No sandbox — tasks can reach anywhere.</div>}
-        {s.sandboxRoots.map((r) => (
-          <div key={r} className="flex items-center gap-2 mb-1">
-            <code className="flex-1 px-1 py-0.5 bg-black/5 rounded text-[11px] truncate">{r}</code>
-            <button
-              className="text-[11px] text-red-700"
-              onClick={() => {
-                const roots = s.sandboxRoots.filter((x) => x !== r)
-                update({ sandboxRoots: roots })
-                void api().remoteSetSandboxRoots?.(roots)
-              }}
-            >remove</button>
+      <Panel>
+        <div className="px-5 py-4">
+          <p className="text-[13px] font-medium text-ink mb-2.5">Where your tasks run</p>
+          {/* NOT a native dropdown. Each backend states what it is good at,
+              because "Claude Code CLI vs Codex desktop" is a real difference in
+              what the ticket can then do — one has a live terminal and a Resume,
+              the other has a thread in another app. */}
+          <div className="space-y-1.5">
+            {offered.map((o) => {
+              const on = o.id === agentId
+              return (
+                <button
+                  key={o.id}
+                  onClick={() => pickAgent(o.id)}
+                  className={`w-full text-left px-3.5 py-3 rounded-[10px] border transition-colors ${
+                    on ? 'border-ink bg-cream-mid' : 'border-border bg-white hover:bg-cream-mid'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className={`w-[7px] h-[7px] rounded-full shrink-0 ${o.available ? 'bg-success' : 'bg-ink-35'}`} />
+                    <span className="text-[13px] font-medium text-ink">{o.label}</span>
+                    {!o.available && (
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-ink-35">not connected</span>
+                    )}
+                  </span>
+                  {AGENT_PITCH[o.id] && (
+                    <span className="block text-[11px] text-ink-35 mt-1 leading-relaxed">{AGENT_PITCH[o.id]}</span>
+                  )}
+                </button>
+              )
+            })}
           </div>
-        ))}
-        <form
-          className="flex gap-1 mt-1"
-          onSubmit={(e) => {
-            e.preventDefault()
-            const r = newRoot.trim()
-            if (!r) return
-            const roots = [...s.sandboxRoots, r]
-            update({ sandboxRoots: roots })
-            void api().remoteSetSandboxRoots?.(roots)
-            setNewRoot('')
-          }}
-        >
-          <input
-            className="flex-1 text-[12px] px-2 py-1 rounded border border-black/15"
-            placeholder="/Users/you/Downloads"
-            value={newRoot}
-            onChange={(e) => setNewRoot(e.target.value)}
-          />
-          <button className="text-[11px] px-2 py-1 rounded border border-black/15 hover:bg-black/5" type="submit">Add</button>
-        </form>
-      </div>
-
-      {/* Memory footprint + on-demand cleanup. Informational, never a hard limit —
-          storage is tiny; this is a courtesy so the user stays in control. */}
-      {usage && (
-        <div className="py-1.5 border-t border-black/5">
-          <div className="flex items-center justify-between">
-            <span>
-              Unmute memory <span className="text-ink/40">({usage.recipeCount} recipes · {usage.skillCount} skills · {fmtBytes(usage.bytes)})</span>
-            </span>
-            <button
-              className="text-[11px] px-2 py-1 rounded border border-black/15 hover:bg-black/5 disabled:opacity-50"
-              disabled={cleaning}
-              onClick={() => void runCleanup()}
-            >{cleaning ? 'Cleaning…' : 'Clean up'}</button>
-          </div>
-          {(usage.bytes > SOFT_BYTES || usage.recipeCount + usage.skillCount > SOFT_COUNT) && (
-            <div className="mt-1 text-[10.5px] text-ink/50">
-              Unmute is holding a fair bit of learned memory. Nothing's wrong — clear unused leads anytime to keep it lean.
-            </div>
+          {selected && !selected.available && (
+            <p className="text-[11px] text-ink-35 mt-2.5 leading-relaxed">
+              {selected.label} is installed but not connected. Open <b>Agents &amp; setup</b> above
+              to connect it — until then, tasks fall back to whichever agent is ready.
+            </p>
           )}
-          {cleanupNote && <div className="mt-1 text-[10.5px] text-ink/50">{cleanupNote}</div>}
         </div>
-      )}
+      </Panel>
+
+      <SectionHeader icon={<ModelIcon />} title="Model" />
+      <Panel>
+        <div className="px-5 py-4">
+          <p className="text-[13px] font-medium text-ink">Applies to the next task</p>
+          <p className="text-[11px] text-ink-35 mt-0.5 mb-2.5">
+            Tasks already running keep the model they started on — a card always says what it ran.
+          </p>
+          <Models
+            agentId={agentId}
+            model={s.model}
+            onPickClaudeModel={(id) => { update({ model: id }); void api().remoteSetModel?.(id) }}
+          />
+        </div>
+      </Panel>
+
+      <SectionHeader icon={<ReachIcon />} title="Reach" />
+      <Panel>
+        <SettingRow
+          label="Auto-approve actions"
+          description="No per-action prompts. Off means the agent asks before it acts."
+        >
+          <Toggle
+            checked={s.permissionMode === 'auto-approve'}
+            onChange={(on) => {
+              const mode = on ? 'auto-approve' : 'prompt'
+              update({ permissionMode: mode })
+              void api().remoteSetPermissionMode?.(mode)
+            }}
+          />
+        </SettingRow>
+        <Sandbox
+          roots={s.sandboxRoots}
+          onChange={(roots) => { update({ sandboxRoots: roots }); void api().remoteSetSandboxRoots?.(roots) }}
+        />
+      </Panel>
+
+      <SectionHeader icon={<LaneIcon />} title="What tasks can drive" />
+      <Panel>
+        <SettingRow
+          label="Browser tasks"
+          description="Drives your real, already-signed-in Chrome through the extension."
+        >
+          <Toggle
+            checked={s.browserEnabled}
+            onChange={(browserEnabled) => { update({ browserEnabled }); void api().remoteSetBrowserEnabled?.(browserEnabled) }}
+          />
+        </SettingRow>
+        {/* Computer Use owns its own IPC and renders its own row. Browser drives
+            Chrome; this drives every other desktop app. */}
+        <ComputerUseSettings />
+        <SettingRow
+          label="Agent-created tasks"
+          description="Lets a running task put new tasks on the wall — always labelled, rate-limited, never able to touch existing work."
+        >
+          <Toggle
+            checked={s.agentTasksEnabled ?? true}
+            onChange={(on) => { update({ agentTasksEnabled: on }); void api().remoteSetAgentTasks?.(on) }}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Raw mode"
+          description="Start each session clean, with no Unmute context injected. The pill can flip this for one session."
+        >
+          <Toggle
+            checked={s.forceRawMode}
+            onChange={(on) => { update({ forceRawMode: on }); void api().remoteSetForceRaw?.(on) }}
+          />
+        </SettingRow>
+        <SettingRow
+          label="macOS notifications"
+          description="Off by default — the notch already tells you when a task needs you."
+        >
+          <Toggle
+            checked={s.osNotifications}
+            onChange={(on) => { update({ osNotifications: on }); void api().remoteSetOsNotifications?.(on) }}
+          />
+        </SettingRow>
+      </Panel>
     </div>
   )
 }
