@@ -1,4 +1,12 @@
-// Language tab — single-language picker for STT.
+// Language — a Settings SECTION (it used to be a top-level tab).
+//
+// Moved as-is, per SPEC §2.5, with three changes and no behaviour touched:
+//   * the page's own <h2> and width cap are gone — Settings owns both now;
+//   * the bespoke toggle button is `Toggle` from _shared.tsx, because D8 fixes
+//     ONE control vocabulary and a second toggle drawn to a different size and
+//     colour is exactly what that rules out;
+//   * the two 12-pixel sizes moved to 12.5, the nearest step on D8's scale.
+// Every IPC call and both settings keys are unchanged.
 //
 // The Whisper API is binary: send one ISO-639-1 code, or omit the field
 // entirely so the model auto-detects across all 99 supported languages.
@@ -17,6 +25,19 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { LANGUAGES, languageByCode } from './languages'
+import { Toggle } from './_shared'
+
+/** Typed accessor for the preload bridge — see the note in Permissions.tsx.
+ *  `window.electronAPI` is undeclared in the renderer's types, so going through
+ *  a cast window is the same runtime access with the type errors removed. */
+interface LanguageApi {
+  paywallGetLanguageAutoDetect?: () => Promise<boolean>
+  paywallGetLanguage?: () => Promise<string>
+  paywallSetLanguageAutoDetect?: (v: boolean) => Promise<unknown>
+  paywallSetLanguage?: (code: string) => Promise<unknown>
+}
+const api = (): LanguageApi =>
+  (window as unknown as { electronAPI?: LanguageApi }).electronAPI ?? {}
 
 export default function Language() {
   const [autoDetect, setAutoDetect] = useState<boolean>(true)
@@ -28,8 +49,8 @@ export default function Language() {
   useEffect(() => {
     let cancelled = false
     Promise.all([
-      window.electronAPI.paywallGetLanguageAutoDetect?.() ?? Promise.resolve(true),
-      window.electronAPI.paywallGetLanguage?.() ?? Promise.resolve('en'),
+      api().paywallGetLanguageAutoDetect?.() ?? Promise.resolve(true),
+      api().paywallGetLanguage?.() ?? Promise.resolve('en'),
     ]).then(([ad, code]) => {
       if (cancelled) return
       if (typeof ad === 'boolean') setAutoDetect(ad)
@@ -42,12 +63,12 @@ export default function Language() {
   // ─── Persist on every change ───
   useEffect(() => {
     if (!loaded) return
-    window.electronAPI.paywallSetLanguageAutoDetect?.(autoDetect).catch(() => {})
+    api().paywallSetLanguageAutoDetect?.(autoDetect)?.catch(() => {})
   }, [autoDetect, loaded])
 
   useEffect(() => {
     if (!loaded) return
-    window.electronAPI.paywallSetLanguage?.(selected).catch(() => {})
+    api().paywallSetLanguage?.(selected)?.catch(() => {})
   }, [selected, loaded])
 
   // ─── Filter ───
@@ -65,26 +86,16 @@ export default function Language() {
   const selectedLang = languageByCode(selected)
 
   return (
-    <div className="max-w-3xl">
-      <h2 className="font-display text-[22px] font-bold text-ink tracking-tight mb-6">Language</h2>
-
+    <div>
       {/* Auto-detect row */}
       <div className="bg-surface-2 border border-border rounded-2xl px-5 py-4 mb-5 shadow-sm flex items-center justify-between">
         <div className="min-w-0 mr-4">
           <p className="text-[14px] font-semibold text-ink">Auto-detect</p>
-          <p className="text-[12px] text-ink-60 mt-0.5 leading-relaxed">
+          <p className="text-[12.5px] text-ink-60 mt-0.5 leading-relaxed">
             When on, we let the model detect the language for every dictation. When off, we lock to the language you pick below — faster and more accurate, but only for that one language.
           </p>
         </div>
-        <button
-          onClick={() => setAutoDetect((v) => !v)}
-          className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${autoDetect ? 'bg-accent' : 'bg-ink-07 border border-border-md'}`}
-          aria-pressed={autoDetect}
-        >
-          <span
-            className={`absolute top-[2px] left-[2px] w-5 h-5 rounded-full bg-white shadow-md transition-transform ${autoDetect ? 'translate-x-5' : 'translate-x-0'}`}
-          />
-        </button>
+        <Toggle checked={autoDetect} onChange={setAutoDetect} />
       </div>
 
       {/* Section header — phrasing changes based on auto-detect state */}
@@ -128,7 +139,7 @@ export default function Language() {
       </div>
 
       {filtered.length === 0 && (
-        <p className="text-[12px] text-ink-35 text-center py-6">
+        <p className="text-[12.5px] text-ink-35 text-center py-6">
           No languages match “{query}”.
         </p>
       )}
