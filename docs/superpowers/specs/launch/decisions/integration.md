@@ -59,6 +59,36 @@ The ownership table in `00-OVERVIEW.md` omitted both. `Account.tsx` matters: it 
 
 **Decision: `Account.tsx` reassigned to Pack B** (instructed at dispatch). `History.tsx` stays unowned — its findings are cosmetic (two names for one screen, a hardcoded `Fn` in the empty state, a chip for an engine that no longer exists) and it is safer to leave it for a follow-up than to hand a seventh file to a pack mid-flight.
 
+## I8 — THE CURATOR IS STILL RUNNING. Blocking.
+
+**Raised by:** Pack B's independent verifier. **Confirmed by me directly.**
+
+`desktop/electron/remote/init.ts:2742` is a bare `curator.start()` — no gate, no setting, no handler. There is no `curatorEnabled` anywhere in main. Compare the librarian, which is properly parked: `LIBRARIAN_PARKED = true` at `:2143`, honoured at `:2270` and `:2664`.
+
+Meanwhile Settings now tells the user, in shipping copy: *"Both are being switched off for this release."* **Half of that is false**, and the disabled toggle renders in the off position while the subsystem runs — asserting a state that is not true, which is exactly what a kill-switch must never do.
+
+This is one of the user's explicit launch requirements, so it is not optional.
+
+**Fix at integration** (`init.ts` sits in Pack F's lineage and cannot be touched cleanly from Pack B's branch): mirror the librarian's pattern — a `CURATOR_PARKED = true` constant guarding `curator.start()` — and only then is the Settings copy true. Prefer the constant over a live setting: D7 retires the curator for launch, and a real toggle implies it can be switched back on, which is a bigger promise than we want to make now.
+
+## I9 — One unverified claim shipped in the explainers
+
+**Raised by:** Pack B's verifier, and disclosed by Pack B itself in the file header.
+
+`help/BrowserUse.tsx:76-77` states that Codex desktop brings its own browser control. Nothing in this repository sources it. It came from my design conversation, not from the code.
+
+**Decision: needs machine confirmation before launch.** It is a claim about a third-party app's capabilities and it drives a recommendation ("Codex is one step, Claude Code is three"). If it turns out false, the sentence and the recommendation both change. On the escalation list.
+
+## I10 — I1 was wrong: the notch toggle already works
+
+**Superseded:** I1 above.
+
+I recorded that Pack B's notch auto-present toggle was cosmetic until two lines landed in `init.ts`. Pack B's verifier disproved it. `maybePresent()` at `init.ts:784` opens with `if (settings.get('overlayAutoPresent') === false) return`, and it is the **only** path to `presentOrExpand` — every auto-present call site routes through it. The toggle works end to end today.
+
+Pack D's additive `autoPresent` IPC command is a *refinement* — it lets the notch know its own policy — not the mechanism. Wiring it remains worth doing, but it is no longer blocking and the OFF position is not dead.
+
+I corrected the over-cautious comment Pack B had written on my instruction (commit `5e3840d`), because it would have sent whoever picked up integration hunting for a hop that already exists.
+
 ## I4 — Corner radius is an estimate, by necessity
 
 **Raised by:** Pack D.
