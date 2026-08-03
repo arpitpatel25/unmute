@@ -275,7 +275,13 @@ test('openDashboard builds the full cockpit payload', async () => {
   // rails
   assert.equal(cp.skills.length, 1)
   assert.equal(cp.unmuteSkills.length, 1)
-  assert.equal(cp.projects[0].name, 'unmute-cloud')
+  // projects + suggestions are GONE from the payload. Projects listed
+  // directories with no action attached; Suggestions was the curator's review
+  // inbox and the curator is parked, so it can never fill again. Asserted as
+  // absent rather than deleted, so re-adding either is a test failure and not
+  // a quiet regression.
+  assert.equal((cp as Record<string, unknown>).projects, undefined)
+  assert.equal((cp as Record<string, unknown>).suggestions, undefined)
   assert.equal(cp.doorbell, true)
   assert.equal(cp.tmuxAvailable, true)
   // queue: only your-move, unshelved
