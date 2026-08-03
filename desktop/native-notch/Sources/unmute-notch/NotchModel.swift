@@ -6,18 +6,34 @@ import Combine
 final class NotchModel: ObservableObject {
     // Ladder + counts (pushed by main).
     @Published var state: NotchState = .dormant
-    /// The rung MAIN last asked for. `state` is what is rendered and flips
-    /// instantly; the window frame animates behind it, so during a morph the two
-    /// disagree. Anything whose appearance must not survive into the next state
-    /// — the attention colour wash above all — gates on BOTH.
-    @Published var commandedState: NotchState = .dormant
+    // NO `commandedState` HERE ANY MORE.
+    //
+    // It mirrored the rung MAIN last asked for, so a view could refuse to carry
+    // an appearance into a state it had already left — the attention colour wash
+    // surviving into a task-sized frame mid-morph. That wash is gone (the
+    // bar-level mass is opaque black in every state, D5) and the separation is
+    // now structural: the mass is only drawn at bar level and the expanded panel
+    // draws glass, so nothing needs to ask what was commanded. AppController
+    // keeps its own copy for the hover ladder, which is the only thing that
+    // still cares.
+
     /// Is the pointer over the surface right now?
     ///
-    /// Only idle reads it, and only on notched hardware: at rest unmute is
-    /// invisible there, so hovering is the one way to ask whether it is running.
-    /// Published because the WIDTH of the window follows what the tongue says,
-    /// and on notched hardware idle says nothing until you hover.
+    /// HOVER REVEALS, NEVER OPENS. It adds one level of detail to whatever the
+    /// mass is already saying and grows it a little to fit; it does not change
+    /// the state and it does not expand the panel. Published because the WIDTH
+    /// of the window follows what the mass says.
     @Published var hovering: Bool = false
+
+    /// WHERE THE MASS IS AND WHAT SHAPE IT IS, resolved by AppController from
+    /// the screen the surface is on right now.
+    ///
+    /// The window frame, the shape path and the content row are all built from
+    /// this one value, inside one animation transaction, so they cannot
+    /// disagree about how wide the surface is mid-morph.
+    @Published var bar: MassPlacement = .empty
+    /// What the two halves say. Same story: measured once, rendered once.
+    @Published var content: BarContent = BarContent()
     @Published var attention: Int = 0
     @Published var working: Int = 0
 

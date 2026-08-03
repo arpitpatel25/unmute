@@ -1,43 +1,67 @@
 import SwiftUI
 
-// The one morphing surface. A single NotchShape fills the window (sized per
-// state, top-pinned by AppController); content swaps by state — never a second
-// window, never a crossfade of sibling surfaces.
+// THE ONE MORPHING SURFACE. A single NotchShape fills the window (sized and
+// positioned per state by AppController); content swaps by state — never a
+// second window, never a crossfade of sibling surfaces.
 //
-// The layer split (see Theme):
-//   * SMALL states (dormant/idle/active/attention) are pure chrome — nothing
-//     behind them but wallpaper — so they are WHOLLY GLASS and their content
-//     sits directly on the material.
-//   * LARGE states (task/cockpit) are a glass SHELL around an OPAQUE PLANE.
-//     Every card, terminal and transcript lives on the plane, never on glass.
+// THE MATERIAL SPLIT (decision D5):
+//
+//   * BAR LEVEL (dormant/idle/active/attention) is OPAQUE BLACK, ALWAYS. The
+//     mass impersonates the physical cutout, and the physical cutout is opaque.
+//     Any translucency breaks the illusion at exactly the join the single-path
+//     shape exists to remove — a glass mass would show the wallpaper where the
+//     housing shows nothing, and the seam would appear precisely at the middle.
+//     The Fixed / Live glass / Follow system setting does not reach this
+//     surface. It also sidesteps the macOS 26.2 glass-caching bug for the one
+//     surface that could not tolerate it.
+//
+//   * EXPANDED (task/cockpit) is the glass shell around an opaque content
+//     plane, and it is where the appearance setting still applies in full.
+//
+// There is NO rim on the bar-level mass. A stroke around it would outline the
+// black against the housing and put back the join by another route.
 struct NotchView: View {
     @ObservedObject var model: NotchModel
-    /// Content inset that clears the physical notch / menu bar (display safety:
-    /// no control ever renders under the camera housing).
+    /// Content inset that clears the physical cutout / menu bar on the EXPANDED
+    /// surfaces (display safety: no control ever renders under the housing).
     let topInset: CGFloat
 
+    /// System Settings → Accessibility → Display → Reduce motion. When it is on
+    /// the surface still changes; it simply stops springing.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
-        let sh = NotchShape(bottomRadius: Theme.radius(for: model.state))
         ZStack {
-            GlassSurface(
-                shape: sh,
-                state: model.state,
-                rimHighlight: rimHighlight,
-                rimWidth: model.state == .attention ? 1.5 : 1,
-                tint: materialTint
-            )
+            surface
             content
-            if model.proposal != nil || model.proposalLoadingId != nil {
-                SkillPopupView(model: model)
+            // BOTH OF THESE NEED ROOM, AND THE BAR HAS NONE.
+            //
+            // The unexpanded surface is exactly menu-bar height now, so a review
+            // popup or a toast drawn there would be clipped to a sliver — it was
+            // already being clipped by the old 34pt strip, silently. They are
+            // drawn only where they fit, and AppController logs the ones that
+            // arrive with nowhere to go (see showToast) rather than leaving a
+            // message that simply never appeared.
+            if expanded {
+                if model.proposal != nil || model.proposalLoadingId != nil {
+                    SkillPopupView(model: model)
+                }
+                if let toast = model.toast { toastView(toast) }
             }
-            if let toast = model.toast { toastView(toast) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.all)
-        .contentShape(sh)
+        .contentShape(shape)
+        // CLICK OPENS. Hover never does — see .onHover below.
         .onTapGesture { if !expanded { model.emit(.tap) } }
-        // Hover: wake dormant → idle (AppController owns the ladder) and show a
-        // pointing hand on the small states so the surface reads as clickable.
+        // HOVER REVEALS, AND THAT IS ALL IT DOES.
+        //
+        // It grows the mass a little and adds one more level of detail
+        // (AppController.handleHover → BarContent.make). It does not open the
+        // panel and must never be made to: the menu bar is somewhere the
+        // pointer passes through constantly, and a panel that opens on approach
+        // becomes something the user fights. This is the main usability failure
+        // of NotchNook and its imitators.
         .onHover { hovering in
             model.onHover(hovering)
             if hovering && !expanded { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
@@ -45,145 +69,173 @@ struct NotchView: View {
         // NO `.animation(_:value: model.state)` HERE.
         //
         // An explicit .animation modifier OVERRIDES the ambient transaction for
-        // its whole subtree, so this silently beat the withAnimation in
-        // AppController.applyState — the frame moved on a 0.42s curve while the
-        // content was still governed by a spring settling nearer 0.8s. That is
-        // the "1 running" strip sitting in a full-size task panel, and task
-        // chrome squeezed into the notch on the way back. Matching the
-        // durations at the mutation site did nothing while this line existed.
-        //
-        // The comment on materialTint below describes this exact failure for
-        // the tint, and was patched by gating on commandedState — a symptom
-        // fix that left the cause in place. AppController is now the single
+        // its whole subtree, so it silently beat the withAnimation in
+        // AppController.applyState — the frame moved on one curve while the
+        // content was still governed by another. AppController is the single
         // timing authority: every mutation of model.state carries its own
-        // animation, matched to the window's.
+        // animation, matched to the window's by construction (Theme.morph and
+        // Theme.springSolver are the same two numbers).
     }
 
     private var expanded: Bool { model.state == .task || model.state == .cockpit }
 
-    /// The sanctioned use of tint: a state that genuinely needs the user washes
-    /// the WHOLE material, so it reads as one object rather than a black bar
-    /// with a coloured pip on it.
-    ///
-    /// Gated on BOTH the rendered state and the commanded one. The rendered
-    /// state flips instantly but the window frame animates, so for a few frames
-    /// after tapping an attention strip the surface is already task-sized while
-    /// still carrying attention's wash — which is what turned a 400×40 amber
-    /// strip into a 792×468 orange rectangle. If either says we have left
-    /// attention, the wash is gone.
-    private var materialTint: Color? {
-        guard model.state == .attention, model.commandedState == .attention else { return nil }
-        return Theme.status(model.task?.status ?? .needsUser)
+    /// The shape, from the placement the controller resolved. Both radii are
+    /// animatable, so the fillets travel with the mass instead of being pinned
+    /// on top of it.
+    private var shape: NotchShape {
+        NotchShape(bottomRadius: model.bar.bottomRadius, topFillet: model.bar.fillet)
     }
 
-    /// Tint for the specular rim. The rim's SHAPE (bright top, dead sides,
-    /// bright lip) is fixed in Glass.rim — this only chooses its hue.
-    private var rimHighlight: Color {
-        if model.state == .attention { return Theme.cNeeds }
-        // A real hardware notch needs no outline; on a dummy notch the resting
-        // sliver must be FINDABLE (field feedback: pure black on a dark
-        // wallpaper was invisible).
-        if model.state == .dormant && model.hasNotch { return .clear }
-        return .white
-    }
+    // MARK: - Material
 
-    @ViewBuilder private var content: some View {
-        // NOTCHED HARDWARE TAKES A DIFFERENT PATH ENTIRELY.
-        //
-        // Everything below centres its row in the window — which on a notched
-        // display is exactly where the camera housing is. Here the row hangs in
-        // a tongue BELOW the cutout instead, so it is on screen and readable.
-        // The small states only; task and cockpit already own the whole surface.
-        if model.hasNotch, model.state == .idle || model.state == .active || model.state == .attention {
-            VStack(spacing: 0) {
-                // The band the notch occupies. Nothing may live here.
-                Color.clear.frame(height: topInset > 0 ? min(topInset, 60) : 0)
-                    .frame(maxWidth: .infinity)
-                if let text = tongueText {
-                    HStack(spacing: 8) {
-                        if model.state == .active {
-                            Dot(status: .processing, size: 7, breathing: true)
-                        } else if model.state == .attention {
-                            Dot(status: model.task?.status ?? .needsUser, size: 7)
-                        }
-                        Text(text)
-                            .font(model.state == .idle ? .system(size: 9.5, weight: .light) : Theme.fCap)
-                            .tracking(model.state == .idle ? 2.1 : 0)
-                            .foregroundColor(model.state == .idle ? Color.white.opacity(0.62) : Theme.text)
-                            .lineLimit(1)
-                        if model.state == .attention, model.attention > 1 {
-                            Badge(text: "\(model.attention)",
-                                  color: Theme.status(model.task?.status ?? .needsUser))
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: NotchGeometry.tongueHeight)
-                }
-            }
+    @ViewBuilder private var surface: some View {
+        if expanded {
+            GlassSurface(
+                shape: shape,
+                state: model.state,
+                rimHighlight: .white,
+                rimWidth: 1
+            )
+        } else if model.state == .dormant {
+            // DORMANT DRAWS NOTHING VISIBLE.
+            //
+            // On a notched display the window is the cutout, so filling it black
+            // adds no pixel the user can see — those pixels are behind the
+            // housing — while keeping a target the pointer can find, which is
+            // the gesture people already know. On a display with no cutout there
+            // is nothing to hide behind, so nothing is drawn at all.
+            if model.hasNotch { shape.fill(Color.black) }
         } else {
+            // D5: opaque, always. Pure black, because the hardware it continues
+            // is pure black and any other value shows up as a seam at the join.
+            shape.fill(Color.black)
+                .overlay(alarmGlow)
+        }
+    }
+
+    /// THE ONLY GLOW IN THE APP.
+    ///
+    /// Attention is the one state that gets it: if everything glows, nothing
+    /// does. It is an INNER glow, drawn along the inside of the path, because a
+    /// drop shadow would have to hang below the menu bar — and nothing hangs
+    /// below the bar unless the surface is expanded. The mass itself stays
+    /// black (D5); the amber arrives as the dot, the words and this rim.
+    ///
+    /// GATED ON THE RENDERED STATE ONLY. It used to be gated on the commanded
+    /// one as well, to stop attention's colour surviving into a task frame
+    /// mid-morph. That guard is now structural — this whole branch is only
+    /// reached when the surface is at bar level, and an expanded surface draws
+    /// glass instead — and keeping it did real harm: with auto-present off,
+    /// `commandedState` holds the expanded rung the engine asked for while the
+    /// surface is deliberately held at attention, so the one state that must
+    /// glow was the one state that did not.
+    @ViewBuilder private var alarmGlow: some View {
+        if model.state == .attention, let status = model.content.alarm {
+            ZStack {
+                shape.stroke(Theme.status(status), lineWidth: 2.5)
+                    .blur(radius: 3.5)
+                    .opacity(0.9)
+                shape.stroke(Theme.status(status).opacity(0.55), lineWidth: 1)
+            }
+            .clipShape(shape)
+            .allowsHitTesting(false)
+        }
+    }
+
+    // MARK: - Content
+
+    // CONTAINER MORPHS, CONTENT CROSS-FADES, AND THEY ARE OFFSET.
+    //
+    // Keyed on the state so leaving and arriving are separate events: the old
+    // content goes fast and EARLY, before the shape has finished, and the new
+    // content arrives after it has committed to its size. Cross-fading in
+    // lockstep with the resize looks like two views swapping. Offsetting them
+    // looks like one thing becoming another.
+    //
+    // Under Reduce Motion both halves collapse to the same short fade with no
+    // offset — an offset is itself motion.
+    @ViewBuilder private var content: some View {
+        Group {
+            if expanded { expandedContent } else { barRow }
+        }
+        .id(model.state)
+        .transition(.asymmetric(
+            insertion: .opacity.animation(reduceMotion ? Theme.reducedFade : Theme.contentIn),
+            removal:   .opacity.animation(reduceMotion ? Theme.reducedFade : Theme.contentOut)))
+    }
+
+    /// The bar row: left half · the cutout (or a gap) · right half.
+    ///
+    /// The middle is EMPTY by construction. Nothing readable may sit there —
+    /// on a notched display there is no screen behind it — and the mass is
+    /// drawn straight through it by the shape, not by anything here.
+    private var barRow: some View {
+        HStack(spacing: 0) {
+            leftHalf
+                .frame(width: model.bar.left, alignment: .leading)
+                .clipped()
+            Color.clear.frame(width: model.bar.middle)
+            rightHalf
+                .frame(width: model.bar.right, alignment: .trailing)
+                .clipped()
+        }
+        // The fillets are part of the path and they eat into the rect, so the
+        // content is inset by exactly as much as they take.
+        .padding(.horizontal, model.bar.fillet)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder private var leftHalf: some View {
+        let c = model.content
+        if c.dot != nil || c.left != nil {
+            HStack(spacing: BarContent.gap) {
+                if let d = c.dot {
+                    Dot(status: d, size: BarContent.dotSize, breathing: d == .processing)
+                }
+                if let t = c.left {
+                    Text(t)
+                        .font(.system(size: c.emphasis == .wordmark
+                                        ? BarContent.wordmarkSize : BarContent.statusSize,
+                                      weight: c.emphasis == .wordmark ? .light : .medium))
+                        .tracking(c.emphasis == .wordmark ? BarContent.wordmarkTracking : 0)
+                        .foregroundColor(leftInk)
+                        // NEVER TRUNCATES. The left half carries status, is short
+                        // by construction, and is the last thing that may be cut.
+                        .fixedSize()
+                }
+                if let b = c.badge, b > 1 {
+                    Badge(text: "\(b)", color: Theme.status(c.alarm ?? .needsUser))
+                }
+            }
+            .padding(.leading, BarContent.inset)
+        }
+    }
+
+    @ViewBuilder private var rightHalf: some View {
+        if let t = model.content.right, !t.isEmpty, model.bar.right > 0 {
+            Text(t)
+                .font(.system(size: BarContent.detailSize))
+                .foregroundColor(model.state == .attention ? Theme.text : Theme.textDim)
+                // Truncates first, and only ever here. Below the width at which
+                // it could say something useful it is not drawn at all — the
+                // controller has already set `bar.right` to zero.
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.trailing, BarContent.inset)
+        }
+    }
+
+    private var leftInk: Color {
+        let c = model.content
+        if c.emphasis == .wordmark { return Color.white.opacity(model.working > 0 ? 0.62 : 0.52) }
+        if let alarm = c.alarm { return Theme.status(alarm) }
+        return Theme.text
+    }
+
+    @ViewBuilder private var expandedContent: some View {
         switch model.state {
-        case .dormant:
-            EmptyView()
-
-        case .idle:
-            // The invitation: hovering woke it, so say who it is. (Suppressed on
-            // hardware notches — text would sit under the camera housing.)
-            if !model.hasNotch {
-                // A WORDMARK, NOT A MESSAGE. It was 11pt semibold at near-full
-                // white — the heaviest thing on a surface whose entire job is to
-                // be quiet, and lowercase in a slot where lowercase reads as a
-                // label. Tracked-out light caps at half opacity reads as an
-                // identity and stops competing with the status dot; it is the
-                // same treatment the rail's section labels already use.
-                //
-                // When something IS running, the count is the information and
-                // the mark recedes further behind it.
-                HStack(spacing: 9) {
-                    Text("UNMUTE")
-                        .font(.system(size: 9.5, weight: .light))
-                        .tracking(2.1)
-                        .foregroundColor(Color.white.opacity(model.working > 0 ? 0.38 : 0.52))
-                    if model.working > 0 {
-                        Text(model.working == 1 ? "1 running" : "\(model.working) running")
-                            .font(.system(size: 11.5)).foregroundColor(Theme.textDim)
-                    }
-                }
-            }
-
-        case .active:
-            // NO SPINNER. A ProgressView is motion that pulls the eye at exactly
-            // the moment the philosophy says to leave the user alone. The dot
-            // breathes instead — informative, never a pull.
-            HStack(spacing: 9) {
-                Spacer(minLength: 12)
-                Dot(status: .processing, size: 7, breathing: true)
-                Text(model.working == 1 ? "1 running" : "\(model.working) running")
-                    .font(Theme.fCap).foregroundColor(Theme.text)
-                if let e = model.task?.elapsed { NumText(text: e) }
-                Spacer(minLength: 12)
-            }
-
-        case .attention:
-            // CENTRED. This was left-aligned with a Spacer pushing the count to
-            // the right edge — which looks deliberate only when there IS a
-            // count. With a single waiting task the badge is absent and the row
-            // sat against the left edge with ~150pt of dead space beside it.
-            // The group centres; the badge travels with the text.
-            HStack(spacing: 9) {
-                Spacer(minLength: 12)
-                Dot(status: model.task?.status ?? .needsUser, size: 7)
-                Text(attentionLabel)
-                    .font(Theme.fSub).foregroundColor(Theme.text).lineLimit(1)
-                if model.attention > 1 {
-                    Badge(text: "\(model.attention)",
-                          color: Theme.status(model.task?.status ?? .needsUser))
-                }
-                Spacer(minLength: 12)
-            }
-
         case .task:
             plane { TaskSurfaceView(model: model, topInset: topInset) }
-
         case .cockpit:
             plane {
                 if model.focusedId != nil {
@@ -192,7 +244,8 @@ struct NotchView: View {
                     WallView(model: model, topInset: topInset)
                 }
             }
-        }
+        default:
+            EmptyView()
         }
     }
 
@@ -200,13 +253,16 @@ struct NotchView: View {
     ///
     /// CONCENTRIC by construction: the plane's radius is the panel's minus the
     /// padding (18 − 6 = 12), so the two curves share a centre and nest without
-    /// the optical pinch you get from two independently-chosen radii.
+    /// the optical pinch you get from two independently-chosen radii. The
+    /// horizontal padding also clears the concave fillets, which take their
+    /// width out of the same rect.
     @ViewBuilder private func plane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {
         body()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(RoundedRectangle(cornerRadius: Theme.planeRadius).fill(Theme.plane))
             .clipShape(RoundedRectangle(cornerRadius: Theme.planeRadius))
-            .padding(Theme.panelPadding)
+            .padding(.vertical, Theme.panelPadding)
+            .padding(.horizontal, Theme.panelPadding + model.bar.fillet)
     }
 
     private func toastView(_ toast: String) -> some View {
@@ -220,48 +276,6 @@ struct NotchView: View {
                     .stroke(Theme.hairline, lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
                 .padding(.bottom, 18)
-        }
-    }
-
-    /// What the tongue says on a notched display, or nil for no tongue at all.
-    ///
-    /// One place, because the WIDTH of the surface is measured from this same
-    /// string in AppController — if the two ever disagree the message is clipped
-    /// or the surface is padded with dead space.
-    var tongueText: String? { Self.tongueText(for: model) }
-
-    static func tongueText(for m: NotchModel) -> String? {
-        switch m.state {
-        case .dormant:   return nil
-        // Idle says nothing until the pointer arrives. At rest the app is
-        // invisible on notched hardware, so hovering is the only way to ask
-        // "is this running?" — and this is the answer.
-        case .idle:      return m.hovering ? "unmute" : nil
-        case .active:    return m.working == 1 ? "1 running" : "\(m.working) running"
-        case .attention: return Self.attentionLabel(for: m)
-        default:         return nil
-        }
-    }
-
-    static func attentionLabel(for m: NotchModel) -> String {
-        guard let t = m.task else { return "Something needs you" }
-        switch t.status {
-        case .needsUser: return t.question?.text ?? t.title
-        case .stuck:     return "Stuck — \(t.title)"
-        case .failed:    return "Errored — \(t.title)"
-        case .ready:     return "Ready — \(t.title)"
-        default:         return t.title
-        }
-    }
-
-    private var attentionLabel: String {
-        guard let t = model.task else { return "Something needs you" }
-        switch t.status {
-        case .needsUser: return t.question?.text ?? t.title
-        case .stuck:     return "Stuck — \(t.title)"
-        case .failed:    return "Errored — \(t.title)"
-        case .ready:     return "Ready — \(t.title)"
-        default:         return t.title
         }
     }
 }

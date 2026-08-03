@@ -62,19 +62,14 @@ struct VisualEffectBackdrop: NSViewRepresentable {
 // MARK: - Tokens
 
 enum Glass {
-    /// Depth of the translucent band, in points from the bottom edge. Tuned
-    /// against the panel's corner radius so glass and curve resolve together.
-    /// Only meaningful in Tier B — Tier A's shell is uniformly glass because it
-    /// never contains content directly.
-    static func lip(for state: NotchState) -> CGFloat {
-        switch state {
-        case .dormant:            return 0      // hides against the hardware notch
-        case .idle:               return 10
-        case .active, .attention: return 12
-        case .task:               return 18
-        case .cockpit:            return 22
-        }
-    }
+    // NO `lip(for:)`, AND NO SHADOW TOKENS.
+    //
+    // Both described the four small states as glass surfaces of their own. They
+    // are not any more: the bar-level mass is opaque black in every state
+    // (decision D5) and this file no longer draws it at all — GlassSurface is
+    // reached only by the expanded panel and the pill. The tokens went with the
+    // states they described rather than being left lying around to be reused by
+    // something they no longer fit.
 
     /// True when this state is wholly glass (pure chrome, no content of its own).
     /// The large states are a shell around an opaque plane instead.
@@ -137,17 +132,6 @@ enum Glass {
         )
     }
 
-    /// Drop shadow. Larger states simulate a THICKER material: deeper shadow,
-    /// more pronounced separation — Apple's stated behaviour for large glass.
-    static func shadowRadius(for state: NotchState) -> CGFloat {
-        isChromeOnly(state) ? 14 : 34
-    }
-    static func shadowY(for state: NotchState) -> CGFloat {
-        isChromeOnly(state) ? 4 : 14
-    }
-    static func shadowOpacity(for state: NotchState) -> Double {
-        isChromeOnly(state) ? 0.32 : 0.46
-    }
 }
 
 // MARK: - The composed surface

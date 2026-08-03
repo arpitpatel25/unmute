@@ -23,19 +23,17 @@ final class AppController: NSObject, NotchResizing {
     private var geometry: NotchGeometry
     /// Kept because contentView is now a container, not the hosting view.
     private var hostView: NSHostingView<NotchView>!
-    /// The last state MAIN commanded (hover-wake is local and never fights it).
-    /// Mirrored onto the model so the view can gate anything that must not
-    /// survive a morph — see NotchModel.commandedState.
-    private var commandedState: NotchState = .dormant {
-        didSet { model.commandedState = commandedState }
-    }
+    /// The last state MAIN commanded. The hover ladder is LOCAL — dormant ⇄ idle
+    /// happens here and never fights main — so it needs to know what main
+    /// actually asked for before it puts the surface back to sleep.
+    private var commandedState: NotchState = .dormant
     private var hoverTimer: Timer?
     private var toastTimer: Timer?
 
     override init() {
         geometry = NotchGeometry.current()
         super.init()
-        NotchLog.log("geometry: screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) menuBarH=\(Int(geometry.menuBarHeight)) notchW=\(Int(geometry.notchWidth))")
+        NotchLog.log("geometry: screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) barH=\(Int(geometry.barHeight)) cutoutW=\(Int(geometry.cutoutWidth))")
         window = NotchWindow(geometry: geometry)
         // A plain container holds the SwiftUI view and the resize border as
         // SIBLINGS. The border cannot live inside the hosting view — SwiftUI
@@ -58,7 +56,10 @@ final class AppController: NSObject, NotchResizing {
         }
         model.onHover = { [weak self] entering in self?.handleHover(entering) }
         installPill()
-        window.applyFrame(frame(for: .dormant), animated: false)
+        let start = resolve(.dormant)
+        model.bar = start.placement
+        model.content = start.content
+        window.applyFrame(start.frame, animated: false)
         window.present()
         installTracking()
         installKeyMonitors()
@@ -66,9 +67,10 @@ final class AppController: NSObject, NotchResizing {
         NotchLog.log("presented at dormant: window=\(NotchLog.rect(window.frame)) visible=\(window.isVisible)")
     }
 
-    /// Content inset that clears the physical notch (notched ≈ menu bar height
-    /// + breathing room) or just the surface's own chrome on plain displays.
-    private var topInset: CGFloat { geometry.hasNotch ? geometry.menuBarHeight + 10 : 14 }
+    /// Content inset that clears the physical cutout on the EXPANDED surfaces
+    /// (bar height + breathing room), or just the surface's own chrome on a
+    /// display with no cutout.
+    private var topInset: CGFloat { geometry.hasNotch ? geometry.barHeight + 10 : 14 }
 
     // MARK: - The input surface
 
@@ -144,6 +146,9 @@ final class AppController: NSObject, NotchResizing {
             let fillChanged = model.task?.hasTerminal != task.hasTerminal
             model.task = task
             if model.state == .task && fillChanged { refit(animated: true) }
+            // At bar level the fronted task IS the message — the right half
+            // carries its activity, and the mass is as wide as what it says.
+            else if !isExpanded(model.state) && model.state != .dormant { refreshBar() }
 
         case let .stageDetail(task):
             NotchLog.log("CMD stageDetail id=\(task.id) status=\(task.status.rawValue)")
@@ -171,6 +176,19 @@ final class AppController: NSObject, NotchResizing {
         case let .proposal(detail):
             NotchLog.log("CMD proposal id=\(detail.id) kind=\(detail.kind)")
             model.proposalLoadingId = nil
+            // A PROPOSAL THAT CANNOT BE DRAWN MUST NOT BE HELD.
+            //
+            // The review popup is only drawn on the expanded surface (the bar
+            // has no room for it), and the request is always made from the
+            // cockpit — but the reply is asynchronous, so the user can collapse
+            // while it is in flight. Holding it then would leave an invisible
+            // popup in the model, and `stepDown` consumes a live proposal before
+            // it steps the surface down: the next Escape would silently dismiss
+            // something the user cannot see instead of collapsing the surface.
+            guard isExpanded(model.state) else {
+                NotchLog.log("proposal arrived while collapsed — NOT SHOWN, dropped: id=\(detail.id)")
+                return
+            }
             model.proposal = detail
 
         case let .convData(_, text):
@@ -189,7 +207,14 @@ final class AppController: NSObject, NotchResizing {
 
         case let .appearance(pref):
             NotchLog.log("CMD appearance \(pref.rawValue)")
+            // Reaches the expanded panel and the pill ONLY. The bar-level mass
+            // is opaque black whatever this says (decision D5) — it impersonates
+            // the physical cutout, and the cutout is not translucent.
             Appearance.shared.preference = pref
+
+        case let .autoPresent(on):
+            NotchLog.log("CMD autoPresent \(on)")
+            autoPresent = on
 
         case let .pill(state):
             // Logged at phase granularity only — the level field changes every
@@ -222,13 +247,10 @@ final class AppController: NSObject, NotchResizing {
 
     // MARK: - State / frames
 
-    /// ONE pair of numbers for the frame AND the content, so they cannot drift.
-    /// Expansion is slower than collapse — the surface should feel like it is
-    /// arriving, and like it is getting out of the way.
-    private static let growS: Double = 0.42
-    private static let shrinkS: Double = 0.30
-
-    private func applyState(_ state: NotchState) {
+    private func applyState(_ commanded: NotchState) {
+        // AUTO-PRESENT decides whether an expanded rung is honoured at all.
+        let state = presentableState(commanded)
+        syncGeometry("state")
         // Each visit starts at the hard-coded size. A size dragged out for one
         // look at a task is not a preference — carrying it across would make the
         // surface's size a hidden setting the user never chose to persist.
@@ -238,15 +260,30 @@ final class AppController: NSObject, NotchResizing {
         // Terminal is OPEN BY DEFAULT on the task surface ("hide terminal" is
         // the choice); reset when leaving so re-entry starts open again.
         model.taskTerminalOpen = (state == .task)
-        // MATCHED TO THE WINDOW, and it must be a DURATION curve to be matched
-        // at all. This used to animate the content with Theme.morph — a spring
-        // whose `response: 0.48` is not a duration: it settles nearer 0.8s,
-        // while the frame finished in 0.42. For the difference you saw the OLD
-        // content inside the NEW frame — the "1 running" strip floating in a
-        // full-size task panel on the way up, and task chrome squeezed into the
-        // notch on the way down. Same numbers on both sides, so the surface and
-        // what it contains arrive together.
-        withAnimation(.easeOut(duration: up ? Self.growS : Self.shrinkS)) { model.state = state }
+        // THE REVIEW POPUP CANNOT SURVIVE A COLLAPSE. It is drawn only on the
+        // expanded surface, and a popup nobody can see still eats the next
+        // Escape in stepDown. Leaving the expanded state ends it, exactly as
+        // pressing Escape on it would.
+        if !isExpanded(state), model.proposal != nil || model.proposalLoadingId != nil {
+            if let p = model.proposal { model.emit(.converseStop(id: p.id)) }
+            NotchLog.log("proposal cleared — the surface left the expanded state")
+            model.proposal = nil; model.proposalLoadingId = nil; model.convLog = ""
+        }
+        // ONE SPRING, BOTH SIDES.
+        //
+        // The state, the shape numbers and the two halves' widths all move
+        // inside a single transaction on Motion.resize; the window frame that
+        // holds them is sampled from the same spring by FrameSpring. There is no
+        // second curve for the frame to arrive on, which is what used to leave
+        // the OLD content sitting inside the NEW frame — the "1 running" strip
+        // floating in a full-size task panel on the way up, and task chrome
+        // squeezed into the bar on the way down.
+        let r = resolve(state)
+        withAnimation(Motion.resize) {
+            model.state = state
+            model.bar = r.placement
+            model.content = r.content
+        }
         let engaged = (state == .task || state == .cockpit)
         window.allowsKey = engaged
         // ESC MUST NOT LEAK TO THE APP UNDERNEATH.
@@ -268,61 +305,116 @@ final class AppController: NSObject, NotchResizing {
         if engaged {
             if !window.isKeyWindow { window.makeKey() }
         }
-        let f = frame(for: state)
-        // Same duration as the content's own animation, so the frame and what is
-        // drawn inside it arrive together.
-        window.applyFrame(f, animated: true, duration: up ? Self.growS : Self.shrinkS)
-        NotchLog.log("state -> \(state.rawValue) window=\(NotchLog.rect(f))")
+        // EXPAND UNFURLS, COLLAPSE FOLDS — the axis order is the only thing
+        // `up` decides. See NotchWindow.applyFrame.
+        window.applyFrame(r.frame, animated: true, expanding: up)
+        NotchLog.log("state -> \(state.rawValue)\(state == commanded ? "" : " (commanded \(commanded.rawValue))") window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] fillet=\(Int(r.placement.fillet))")
     }
 
-    /// The Stage/wall keep the cockpit frame; the task surface is content-sized.
-    private func frame(for state: NotchState) -> NSRect {
-        var size: NSSize
-        if state == .task {
+    /// EVERYTHING ABOUT A STATE, RESOLVED IN ONE PASS: what the mass says, how
+    /// wide each half is, the shape numbers, and the window frame that holds
+    /// them. One function, because these four have to agree — sizing the window
+    /// from one measurement and rendering from another is what put the old
+    /// message inside the camera housing.
+    private func resolve(_ state: NotchState)
+        -> (frame: NSRect, placement: MassPlacement, content: BarContent) {
+        switch state {
+        case .dormant:
+            // Nothing is drawn; the placement exists so the shape traces the
+            // hardware's own corners if the surface is on notched glass.
+            return (geometry.dormantFrame(),
+                    MassPlacement(fillet: 0, bottomRadius: geometry.barCornerRadius),
+                    BarContent())
+
+        case .idle, .active, .attention:
+            // BAR LEVEL. Height is the measured menu bar and nothing else; the
+            // width follows what the mass has to say, bounded by the room
+            // beside the cutout.
+            var c = BarContent.make(for: model, state: state, hovering: model.hovering)
+            // HOVER GROWS IT SLIGHTLY. A few points on each half that is
+            // actually there — enough to register as a response, nowhere near
+            // enough to read as opening.
+            let grow: CGFloat = model.hovering ? 6 : 0
+            let l = c.leftWidth > 0 ? c.leftWidth + grow : 0
+            let r = c.wantsRightWidth > 0 ? c.wantsRightWidth + grow : 0
+            let m = geometry.mass(left: l, right: r)
+            // Dropped rather than ellipsised: if the right half did not survive
+            // the fit, the view must not render it either.
+            if m.right == 0 { c.right = nil }
+            return (geometry.barFrame(m), m, c)
+
+        case .task, .cockpit:
             // SIZED BY WHAT THE PANEL CARRIES, not by the state alone. A live
             // terminal gets 80% of the screen; a desktop-app backend's
             // conversation gets 60% (NotchGeometry.SurfaceFill).
-            size = geometry.taskSize(terminal: taskHasTerminal)
-        } else if geometry.hasNotch,
-                  state == .idle || state == .active || state == .attention {
-            // NOTCHED HARDWARE: the surface is the notch plus a tongue, and its
-            // width is MEASURED from the message the tongue will show. Sizing by
-            // state instead is what put the text inside the camera housing.
-            //
-            // Measured with the same font the view renders, so the frame and the
-            // string agree — a mismatch either clips the message or pads the
-            // surface with dead space.
-            let text = NotchView.tongueText(for: model)
-            size = geometry.notchedSize(contentWidth: text.map { t in
-                let font = state == .idle
-                    ? NSFont.systemFont(ofSize: 9.5, weight: .light)
-                    : NSFont.systemFont(ofSize: 11.5)
-                var w = (t as NSString).size(withAttributes: [.font: font]).width
-                if state == .idle { w += CGFloat(t.count) * 2.1 }      // tracking
-                if state != .idle { w += 15 }                          // status dot + gap
-                if state == .attention, model.attention > 1 { w += 26 } // count badge
-                return w
-            })
-        } else {
-            size = geometry.size(for: state)
-        }
-
-        // USER SCALE — one factor on BOTH axes, so any drag from any edge makes
-        // the whole surface bigger rather than stretching it one way. Only the
-        // expanded surfaces are resizable; the resting states are fixed.
-        if userScale != 1, state == .task || state == .cockpit {
-            var w = size.width * userScale
-            var h = size.height * userScale
-            // The cockpit NEVER goes below its own default. Carrying a smaller
-            // task-view scale into it would shrink the wall, and the wall's
-            // default is deliberately the larger of the two.
-            if state == .cockpit {
-                w = max(w, geometry.cockpitSize.width)
-                h = max(h, geometry.cockpitSize.height)
+            var size = state == .task ? geometry.taskSize(terminal: taskHasTerminal)
+                                      : geometry.cockpitSize
+            // USER SCALE — one factor on BOTH axes, so any drag from any edge
+            // makes the whole surface bigger rather than stretching it one way.
+            // Only the expanded surfaces are resizable; the resting states are
+            // fixed.
+            if userScale != 1 {
+                var w = size.width * userScale
+                var h = size.height * userScale
+                // The cockpit NEVER goes below its own default. Carrying a
+                // smaller task-view scale into it would shrink the wall, and the
+                // wall's default is deliberately the larger of the two.
+                if state == .cockpit {
+                    w = max(w, geometry.cockpitSize.width)
+                    h = max(h, geometry.cockpitSize.height)
+                }
+                size = NSSize(width: round(w), height: round(h))
             }
-            size = NSSize(width: round(w), height: round(h))
+            return (geometry.topPinnedFrame(width: size.width, height: size.height),
+                    geometry.panelPlacement,
+                    BarContent())
         }
-        return geometry.topPinnedFrame(width: size.width, height: size.height)
+    }
+
+    private func isExpanded(_ s: NotchState) -> Bool { s == .task || s == .cockpit }
+
+    /// Re-resolve the CURRENT state in place.
+    ///
+    /// Used whenever something the mass says changes without the rung changing:
+    /// a task detail arriving, the pointer entering or leaving, a display being
+    /// plugged in. The width follows the message, so this is a size change like
+    /// any other and it travels on the same spring.
+    private func refreshBar(animated: Bool = true) {
+        let r = resolve(model.state)
+        let grew = r.frame.width >= window.frame.width
+        withAnimation(animated && !Motion.reduceMotion ? Motion.resize : nil) {
+            model.bar = r.placement
+            model.content = r.content
+        }
+        window.applyFrame(r.frame, animated: animated, expanding: grew)
+        NotchLog.log("bar \(model.state.rawValue) window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] left=\(r.content.left ?? "—") right=\(r.content.right ?? "—")")
+    }
+
+    // MARK: - Auto-present (default ON)
+
+    /// Whether the surface may present ITSELF. Pushed by main; absent ⇒ ON,
+    /// which is also the engine's own default for the same setting.
+    private var autoPresent = true
+    /// When the user last acted ON THIS SURFACE. See presentableState.
+    private var lastGestureAt: Date? = nil
+    private static let gestureWindow: TimeInterval = 6
+
+    /// The rung the surface will actually show.
+    ///
+    /// With auto-present ON this is the identity. With it OFF the surface never
+    /// expands ITSELF: every expansion the engine commands today is the direct
+    /// consequence of a gesture on this surface — NotchController engages
+    /// `task`/`cockpit` only from onTap, onFocusTask and openDashboard, all of
+    /// which are events this process emitted — so an expanded rung arriving with
+    /// no recent gesture is by definition an automatic present. It is answered
+    /// at bar level instead, and the content still updates in place: the user
+    /// asked not to be interrupted, not to be left uninformed.
+    private func presentableState(_ s: NotchState) -> NotchState {
+        guard !autoPresent, isExpanded(s) else { return s }
+        if let g = lastGestureAt, Date().timeIntervalSince(g) < Self.gestureWindow { return s }
+        let held: NotchState = model.attention > 0 ? .attention : (model.working > 0 ? .active : .idle)
+        NotchLog.log("auto-present OFF: \(s.rawValue) held at \(held.rawValue)")
+        return held
     }
 
     /// Does the task surface's task have a live terminal? Nil task ⇒ true: a PTY
@@ -356,7 +448,7 @@ final class AppController: NSObject, NotchResizing {
         guard start > 8 else { return }
         let raw = anchor.scale * (current / start)
         userScale = min(max(raw, 0.6), maxScale())
-        window.applyFrame(frame(for: model.state), animated: false)
+        window.applyFrame(resolve(model.state).frame, animated: false)
     }
 
     func endResize() { dragAnchor = nil }
@@ -371,18 +463,17 @@ final class AppController: NSObject, NotchResizing {
         let base = model.state == .cockpit ? geometry.cockpitSize
                                            : geometry.taskSize(terminal: taskHasTerminal)
         let sw = geometry.screenFrame.width * 0.98 / max(base.width, 1)
-        let sh = (geometry.screenFrame.height - geometry.menuBarHeight) * 0.98 / max(base.height, 1)
+        let sh = (geometry.screenFrame.height - geometry.barHeight) * 0.98 / max(base.height, 1)
         return max(1, min(sw, sh))
     }
     /// Re-apply the current state's frame after something the frame depends on
-    /// changed (the fronted task's backend, a stage detail arriving).
+    /// changed (the fronted task's backend, a stage detail arriving, a message
+    /// the bar now has to carry).
     private func refit(animated: Bool = false) {
-        let f = frame(for: model.state)
-        let up = f.width >= window.frame.width
-        window.applyFrame(f, animated: animated, duration: up ? Self.growS : Self.shrinkS)
+        refreshBar(animated: animated)
         // Logged like a state change, because to the user it IS one: the surface
         // visibly resizes without the rung changing.
-        NotchLog.log("refit \(model.state.rawValue) window=\(NotchLog.rect(f))")
+        NotchLog.log("refit \(model.state.rawValue) window=\(NotchLog.rect(window.frame))")
     }
 
     private func rung(_ s: NotchState) -> Int {
@@ -393,6 +484,11 @@ final class AppController: NSObject, NotchResizing {
     }
 
     private func showToast(_ text: String) {
+        // A toast has nowhere to be drawn at bar level — the surface is menu-bar
+        // height and nothing may hang below it. Logged rather than lost without
+        // trace; the engine sends these from user actions ("finish the recording
+        // first"), so a toast landing here is worth knowing about.
+        if !isExpanded(model.state) { NotchLog.log("toast while collapsed — NOT SHOWN: \(text)") }
         model.toast = text
         toastTimer?.invalidate()
         toastTimer = Timer.scheduledTimer(withTimeInterval: 1.8, repeats: false) { [weak self] _ in
@@ -402,6 +498,14 @@ final class AppController: NSObject, NotchResizing {
 
     /// Local reactions to our own emits (snappy UI; main remains authoritative).
     private func afterEmit(_ ev: Event) {
+        // THE USER JUST ASKED FOR SOMETHING ON THIS SURFACE. Recorded so that an
+        // expansion arriving from main a moment later can be told apart from one
+        // the app decided on by itself — see presentableState.
+        switch ev {
+        case .tap, .openDashboard, .next, .prev, .focusTask:
+            lastGestureAt = Date()
+        default: break
+        }
         switch ev {
         case .focusTask(let id):
             model.focusedId = id
@@ -416,7 +520,18 @@ final class AppController: NSObject, NotchResizing {
         }
     }
 
-    // MARK: - Hover wake (dormant ⇄ idle, local-only)
+    // MARK: - Hover — REVEALS, NEVER OPENS
+    //
+    // Hovering the collapsed mass grows it a little and adds one more level of
+    // detail: idle gains the task count, a running task gains its name. It does
+    // NOT open the panel, and it must never be made to. The menu bar is
+    // somewhere the pointer passes through constantly, and a panel that opens on
+    // approach becomes something the user fights — the main usability failure of
+    // NotchNook and its imitators. The only thing that opens the panel is a
+    // click (NotchView.onTapGesture → .tap).
+    //
+    // Dormant → idle IS a reveal, not an open: it is one rung, at bar level,
+    // and it goes back on its own when the pointer leaves.
 
     private func installTracking() {
         guard let cv = window.contentView else { return }
@@ -425,26 +540,21 @@ final class AppController: NSObject, NotchResizing {
                                   owner: self, userInfo: nil)
         cv.addTrackingArea(area)
     }
-    /// Shared, idempotent hover-wake (fed by BOTH the SwiftUI .onHover relay and
-    /// the AppKit tracking area — SwiftUI's own tracking can miss a never-key
-    /// panel, which is exactly the dormant window; two paths, one behavior).
+    /// Shared, idempotent (fed by BOTH the SwiftUI .onHover relay and the AppKit
+    /// tracking area — SwiftUI's own tracking can miss a never-key panel, which
+    /// is exactly the dormant window; two paths, one behavior).
     func handleHover(_ entering: Bool) {
-        // The flag is READ by the view (idle's tongue) and by frame(for:), so a
-        // change of hover on notched hardware changes the window size too.
+        // The flag is READ by BarContent.make, and the mass is as wide as what
+        // it says — so a change of hover is a size change like any other.
         if model.hovering != entering {
             model.hovering = entering
-            if geometry.hasNotch, model.state == .idle {
-                withAnimation(.easeOut(duration: entering ? Self.growS : Self.shrinkS)) { }
-                window.applyFrame(frame(for: .idle), animated: true,
-                                  duration: entering ? Self.growS : Self.shrinkS)
-            }
+            if !isExpanded(model.state), model.state != .dormant { refreshBar() }
         }
         if entering {
             hoverTimer?.invalidate()
             if model.state == .dormant && commandedState == .dormant {
-                NotchLog.log("hover-wake: dormant → idle")
-                withAnimation(.easeOut(duration: Self.growS)) { model.state = .idle }
-                window.applyFrame(frame(for: .idle), animated: true, duration: Self.growS)
+                NotchLog.log("hover-reveal: dormant → idle")
+                applyState(.idle)
             }
         } else {
             guard model.state == .idle, commandedState == .dormant else { return }
@@ -452,8 +562,7 @@ final class AppController: NSObject, NotchResizing {
             hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
                 guard let self, self.model.state == .idle, self.commandedState == .dormant else { return }
                 NotchLog.log("hover-sleep: idle → dormant")
-                withAnimation(.easeOut(duration: Self.shrinkS)) { self.model.state = .dormant }
-                self.window.applyFrame(self.frame(for: .dormant), animated: true, duration: Self.shrinkS)
+                self.applyState(.dormant)
             }
         }
     }
@@ -558,7 +667,11 @@ final class AppController: NSObject, NotchResizing {
     /// Esc: one rung down. Stage full→split→wall; task/cockpit → collapsed
     /// (main then reconciles to attention/active/dormant).
     private func stepDown() {
-        if model.proposal != nil || model.proposalLoadingId != nil {
+        // Only a VISIBLE popup gets to swallow the Escape. It is drawn on the
+        // expanded surface only, so a stale one at bar level must not consume a
+        // keystroke the user aimed at the surface itself. (Belt and braces: it
+        // is also cleared on the way down — see applyState.)
+        if isExpanded(model.state), model.proposal != nil || model.proposalLoadingId != nil {
             if let p = model.proposal { model.emit(.converseStop(id: p.id)) }
             model.proposal = nil; model.proposalLoadingId = nil; model.convLog = ""
             return
@@ -581,10 +694,30 @@ final class AppController: NSObject, NotchResizing {
     // MARK: - Displays
 
     private func observeScreens() {
+        // PER DISPLAY, NOT PER APP. Connected, disconnected, rearranged, main
+        // display moved, resolution or scaling changed — all of them arrive
+        // here, and all of them re-run the measurement. Nothing about the
+        // layout survives from launch.
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
         ) { [weak self] _ in self?.recomputeGeometry("screen-params-changed") }
+
+        // …and when the SURFACE ITSELF changes screen, which a display change
+        // does not always announce (the window server can move a panel during a
+        // Space transition, and "main display" can move under a window that
+        // never resized).
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeScreenNotification,
+            object: window, queue: .main
+        ) { [weak self] _ in self?.recomputeGeometry("window-changed-screen") }
+
+        // Backing-store changes (a display switched to a different scale factor
+        // without the screen list changing) move the menu bar's point height.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeBackingPropertiesNotification,
+            object: window, queue: .main
+        ) { [weak self] _ in self?.recomputeGeometry("backing-properties-changed") }
 
         // NO SPACE-CHANGE HANDLER. Every invalidation strong enough to force a
         // re-sample — ordering the window out and back, or displacing it — is
@@ -603,18 +736,35 @@ final class AppController: NSObject, NotchResizing {
         // it is ordered out between captures, so rebuilding as it appears costs
         // nothing visually and is the moment that actually matters.
     }
-    private func recomputeGeometry(_ reason: String) {
-        geometry = NotchGeometry.current()
-        model.hasNotch = geometry.hasNotch
+    /// Re-measure the screen the surface is on, cheaply, before anything that
+    /// depends on it. Returns without touching the view tree when nothing moved,
+    /// which is the common case — this runs on every state change.
+    @discardableResult
+    private func syncGeometry(_ reason: String) -> Bool {
+        let next = NotchGeometry.current(for: NotchGeometry.screen(hosting: window))
+        guard next != geometry else { return false }
+        geometry = next
+        model.hasNotch = next.hasNotch
         // topInset feeds the view tree — rebuild the root so it picks it up.
         hostView?.rootView = NotchView(model: model, topInset: topInset)
-        let f = frame(for: model.state)
-        window.applyFrame(f, animated: false)
+        NotchLog.log("geometry changed (\(reason)): screen=\(NotchLog.rect(next.screenFrame)) hasNotch=\(next.hasNotch) barH=\(Int(next.barHeight)) cutoutW=\(Int(next.cutoutWidth))")
+        return true
+    }
+
+    /// A display was connected, disconnected, rearranged or rescaled, or the
+    /// surface moved between screens. Re-measure and re-lay-out in place — no
+    /// restart, no animation (nothing "moved"; the world did).
+    private func recomputeGeometry(_ reason: String) {
+        syncGeometry(reason)
+        let r = resolve(model.state)
+        model.bar = r.placement
+        model.content = r.content
+        window.applyFrame(r.frame, animated: false)
         // The pill is bottom-anchored to the PRIMARY display's visible frame, so
         // it has to move too — plugging in a monitor, or moving the menu bar to
         // one, relocates both surfaces together. Its size preference does not
         // re-fire on a screen change, so refit explicitly from the current frame.
         pillWindow?.fit(geometry: geometry)   // the pad rides inside it
-        NotchLog.log("geometry recomputed (\(reason)): screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) → window=\(NotchLog.rect(f))")
+        NotchLog.log("geometry recomputed (\(reason)): screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) → window=\(NotchLog.rect(r.frame))")
     }
 }

@@ -209,6 +209,15 @@ enum Command {
     /// honours System Settings → Accessibility → Reduce Transparency; "glass"
     /// and "solid" are explicit user overrides. See SurfaceAppearance.
     case appearance(SurfaceAppearance)
+    /// May the surface present ITSELF when a task needs attention or finishes?
+    /// From unmute Settings → Appearance & notch. DEFAULT ON, and absent means
+    /// on — see AppController.presentableState.
+    ///
+    /// ADDITIVE. The line is `{"type":"autoPresent","on":false}`; an engine that
+    /// never sends it leaves the surface at its default, and an engine that
+    /// sends it to an older helper is ignored (`default: return .unknown`). No
+    /// existing field changed shape.
+    case autoPresent(Bool)
     /// Full state of the bottom-centre input surface. Pushed on every change,
     /// including the per-frame level during a capture — one float, which is the
     /// only new traffic the capture path gains.
@@ -265,6 +274,12 @@ enum Command {
             // ignoring the user's accessibility setting.
             let raw = obj["value"] as? String ?? "system"
             return .appearance(SurfaceAppearance(rawValue: raw) ?? .system)
+        case "autoPresent":
+            // A MISSING OR MALFORMED `on` MEANS ON. The setting's default is on
+            // (engine: overlayAutoPresent), and a surface that silently stopped
+            // presenting itself because one line was mistyped is a far worse
+            // failure than one that presents when the user asked it not to.
+            return .autoPresent(obj["on"] as? Bool ?? true)
         case "proposal":
             guard let p = sub("data", ProposalDetail.self) else { return .unknown }
             return .proposal(p)

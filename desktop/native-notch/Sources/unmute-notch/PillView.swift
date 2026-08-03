@@ -274,7 +274,7 @@ struct PillView: View {
             // instead keeps the pill exactly where it was. See padWidth for
             // when that can happen.
             .fixedSize(horizontal: true, vertical: false)
-            .animation(Theme.collapse, value: padExpanded)
+            .animation(Theme.morph, value: padExpanded)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.bottom, 4)
