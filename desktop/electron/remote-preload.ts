@@ -211,6 +211,9 @@ export const remotePreloadExtensions = {
   remoteSetOverlayAutoPresent: (on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-overlay-auto-present', on),
 
+  /** Speak short confirmations through the macOS voice. Default off. */
+  remoteSetVoiceFeedback: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-voice-feedback', on),
   /** Open the task surface when something starts needing you, instead of only
    *  tinting the bar and waiting for a tap. */
   remoteSetNotchAutoExpand: (on: boolean): Promise<boolean> =>

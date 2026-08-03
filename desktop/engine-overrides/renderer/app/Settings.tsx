@@ -99,12 +99,14 @@ interface SettingsApi {
   remoteGetSettings?: () => Promise<{
     overlayAutoPresent?: boolean
     notchAutoExpand?: boolean
+    voiceFeedback?: boolean
     surfaceFill?: number
     librarianWriteEnabled?: boolean
     curatorEnabled?: boolean
   }>
   remoteSetOverlayAutoPresent?: (on: boolean) => Promise<boolean>
   remoteSetNotchAutoExpand?: (on: boolean) => Promise<boolean>
+  remoteSetVoiceFeedback?: (on: boolean) => Promise<boolean>
   remoteSetSurfaceFill?: (fill: number) => Promise<number>
   /** Handled in main (remote/init.ts:3444) but NOT exposed by the preload —
    *  an orphaned handler. Optional-chained, so calling it is a no-op until
@@ -232,6 +234,9 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // to look. The controller guards it on `engaged === 'none'`, so this never
   // yanks you out of a task you are already reading.
   const [notchAutoExpand, setNotchAutoExpand] = useState<boolean>(true)
+  // DEFAULT OFF. It speaks through the macOS system voice, and the thing it was
+  // really answering — "did that land?" — is now shown in the notch instead.
+  const [voiceFeedback, setVoiceFeedback] = useState<boolean>(false)
   // 0.8 matches the compiled-in default on the Swift side, so the control shows
   // the truth on the first frame rather than flicking once the snapshot lands.
   const [surfaceFill, setSurfaceFill] = useState<number>(0.8)
@@ -302,6 +307,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
       if (!s) return
       setNotchAutoPresent(s.overlayAutoPresent !== false)
       setNotchAutoExpand(s.notchAutoExpand !== false)
+      setVoiceFeedback(s.voiceFeedback === true)
       setSurfaceFill(typeof s.surfaceFill === 'number' ? s.surfaceFill : 0.8)
       setLibrarianEnabled(s.librarianWriteEnabled === true)
       setCuratorEnabled(s.curatorEnabled === true)
@@ -360,6 +366,10 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
     void api().setSurfaceAppearance?.(v)
   }
 
+  function handleVoiceFeedbackChange(next: boolean): void {
+    setVoiceFeedback(next)
+    void api().remoteSetVoiceFeedback?.(next)
+  }
   function handleNotchAutoExpandChange(next: boolean): void {
     setNotchAutoExpand(next)
     void api().remoteSetNotchAutoExpand?.(next)
@@ -583,6 +593,12 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
             </SettingRow>
             <SettingRow label="Sound feedback" description="Play sounds on start / stop">
               <Toggle checked={soundFeedback} onChange={handleSoundFeedbackChange} />
+            </SettingRow>
+            <SettingRow
+              label="Speak confirmations"
+              description="Say short replies out loud when a task is created — “On it.” Off by default: the notch already shows what happened, and this uses your Mac's system voice."
+            >
+              <Toggle checked={voiceFeedback} onChange={handleVoiceFeedbackChange} />
             </SettingRow>
             {/* The label used to say "Screenshot capture", from when images were
                 all this touched. It now governs TEXT too — anything you copy

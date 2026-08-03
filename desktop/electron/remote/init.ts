@@ -137,6 +137,9 @@ interface RemoteSettings {
   /** Open the task surface when something starts needing you, rather than only
    *  tinting the bar amber and waiting for a tap. Default true. */
   notchAutoExpand: boolean
+  /** Speak short confirmations ("On it.") through the macOS `say` voice.
+   *  DEFAULT OFF — see speakLine for why. */
+  voiceFeedback: boolean
   /** Share of the screen an expanded surface fills: 0.7 | 0.8 | 0.9. */
   surfaceFill: number
   // DECIDED: docked mode — a compact bottom-right pill (running/stuck counts)
@@ -202,6 +205,7 @@ const settings = new Store<RemoteSettings>({
     osNotifications: false,
     overlayAutoPresent: true,
     notchAutoExpand: true,
+    voiceFeedback: false,
     surfaceFill: 0.8,
     overlayDocked: true,
     librarianWriteEnabled: false,
@@ -1691,6 +1695,19 @@ function speakHeadline(t: Task, state: 'needs-user' | 'stuck' | 'failed'): void 
 /** Speak one line aloud (serialized; silent while the user is mid-capture).
  *  Shared by the doorbell and the 'speak' router verb. */
 function speakLine(text: string): void {
+  // OFF BY DEFAULT.
+  //
+  // This shells out to macOS `say` with no voice specified, so it speaks in
+  // whatever the system default is — on a stock Mac, the compact voice, which
+  // sounds like a decade ago. More to the point, the gap it was covering is
+  // gone: the notch now says "creating task" during exactly the moment between
+  // the recording pill vanishing and the task appearing, which is the only
+  // moment the spoken beat was really answering.
+  //
+  // Kept rather than deleted because spoken confirmation is a genuine
+  // accessibility affordance in a voice-first product — but nobody hears it
+  // unless they ask for it in Settings.
+  if (settings.get('voiceFeedback') !== true) return
   const line = text.trim().slice(0, 500)
   if (!line) return
   sayChain = sayChain.then(() => new Promise<void>((resolve) => {
@@ -3527,6 +3544,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('overlay-auto-present-set', { on: !!on })
     return true
   })
+  ipcMain.handle('remote:set-voice-feedback', async (_e, on: boolean) => {
+    settings.set('voiceFeedback', !!on)
+    log.event('voice-feedback-set', { on: !!on })
+    return true
+  })
   ipcMain.handle('remote:set-notch-auto-expand', async (_e, on: boolean) => {
     settings.set('notchAutoExpand', !!on)
     notchController?.setAutoExpand(!!on)
@@ -3657,6 +3679,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     browserEnabled: settings.get('browserEnabled') !== false,
     overlayAutoPresent: settings.get('overlayAutoPresent') !== false,
     notchAutoExpand: settings.get('notchAutoExpand') !== false,
+    voiceFeedback: settings.get('voiceFeedback') === true,
     surfaceFill: settings.get('surfaceFill') ?? 0.8,
     overlayDocked: settings.get('overlayDocked') !== false,
     osNotifications: settings.get('osNotifications') === true,
