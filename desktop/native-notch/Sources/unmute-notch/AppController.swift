@@ -198,8 +198,31 @@ final class AppController: NSObject, NotchResizing {
             if model.convLog.count > 20_000 { model.convLog = String(model.convLog.suffix(16_000)) }
 
         case let .capturePhase(phase, target):
+            let was = model.capturePhase
             model.capturePhase = phase.isEmpty || phase == "idle" ? nil : phase
             model.captureTarget = target
+            // ROUTING IS THE ONE PHASE THE BAR ITSELF HAS TO SHOW.
+            //
+            // Setting the model is not enough on two counts. The bar is built
+            // from a resolved BarContent, so it needs a refresh to pick the new
+            // words up — and a DORMANT surface draws nothing at all, which is
+            // precisely the state a machine is in when the user has just
+            // finished speaking to it.
+            //
+            // So routing borrows the same reveal the pointer uses: dormant is
+            // lifted to idle for the duration, then handed straight back to
+            // whatever main last commanded. Nothing about the state machine
+            // changes; this is a display lift, not a rung.
+            if model.capturePhase == "routing", model.state == .dormant {
+                NotchLog.log("routing-reveal: dormant → idle")
+                applyState(.idle)
+            } else if was == "routing", model.capturePhase == nil,
+                      commandedState == .dormant, model.state == .idle {
+                NotchLog.log("routing-reveal ended: idle → dormant")
+                applyState(.dormant)
+            } else if !isExpanded(model.state) {
+                refreshBar()
+            }
 
         case let .toast(text):
             showToast(text)
@@ -575,9 +598,22 @@ final class AppController: NSObject, NotchResizing {
     func handleHover(_ entering: Bool) {
         // The flag is READ by BarContent.make, and the mass is as wide as what
         // it says — so a change of hover is a size change like any other.
+        // ONE COLLAPSE, NOT TWO.
+        //
+        // Leaving used to refresh the bar at once — dropping the right half —
+        // and only then let the 0.4s sleep timer take the rest away. The eye
+        // read that as the count shrinking first and the wordmark following,
+        // because that is exactly what happened.
+        //
+        // When the pointer is leaving a surface that is ABOUT to sleep, the
+        // content is left alone and the timer collapses the whole mass in a
+        // single motion. The delay still exists — it is what stops a pointer
+        // crossing the bar from making it flicker — it just no longer spends
+        // that time showing a half-dismantled bar.
+        let willSleep = !entering && model.state == .idle && commandedState == .dormant && geometry.hasNotch
         if model.hovering != entering {
             model.hovering = entering
-            if !isExpanded(model.state), model.state != .dormant { refreshBar() }
+            if !isExpanded(model.state), model.state != .dormant, !willSleep { refreshBar() }
         }
         if entering {
             hoverTimer?.invalidate()

@@ -20,6 +20,9 @@ import SwiftUI
 //   * RIGHT is detail — the current activity, the question being asked. It
 //     truncates first and is dropped entirely when it cannot say anything
 //     useful (NotchGeometry.mass).
+/// Bar-level only: the expanded surfaces draw their own chrome.
+private func isExpandedState(_ s: NotchState) -> Bool { s == .task || s == .cockpit }
+
 struct BarContent: Equatable {
     /// How the left half is set: an identity, or a state.
     enum Emphasis { case wordmark, status }
@@ -109,6 +112,21 @@ struct BarContent: Equatable {
     /// resolves the content for the state it is about to move TO, and the model
     /// still holds the one it is leaving.
     static func make(for m: NotchModel, state: NotchState, hovering: Bool) -> BarContent {
+        // ROUTING OUTRANKS EVERY RESTING STATE.
+        //
+        // Between the recording pill vanishing and the task appearing, the
+        // router is deciding where the words go — an LLM call, so it is not
+        // instant. The pill is gone by then and the task does not exist yet, so
+        // the surface said nothing at all and the user was left wondering
+        // whether their words had landed.
+        //
+        // The phase is already broadcast (`broadcastCapturePhase('routing')` in
+        // remote/init.ts, inside a try/finally so it always clears). It was only
+        // ever rendered inside the expanded wall, where nobody is looking at
+        // that moment. This is that same signal, at bar level.
+        if m.capturePhase == "routing", !isExpandedState(state) {
+            return BarContent(dot: .processing, left: "creating task", emphasis: .status)
+        }
         switch state {
         case .dormant:
             // Nothing. Not a hairline, not a sliver — an always-visible idle

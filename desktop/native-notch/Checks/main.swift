@@ -231,6 +231,18 @@ check("...but still reserves a width, or there is nothing to click",
 check("hovering the nub brings the wordmark back",
       BarContent.make(for: vm, state: .idle, hovering: true).left == "unmute")
 vm.hasNotch = true
+
+// ROUTING: the gap between the pill vanishing and the task existing. It has to
+// say something, on either display kind, and it outranks the resting states.
+vm.capturePhase = "routing"
+let routing = BarContent.make(for: vm, state: .idle, hovering: false)
+check("routing speaks even when idle would rest", routing.left == "creating task")
+check("routing shows a working dot", routing.dot == .processing)
+check("routing outranks dormant too",
+      BarContent.make(for: vm, state: .dormant, hovering: false).left == "creating task")
+check("routing never glows", routing.alarm == nil)
+vm.capturePhase = nil
+check("and clears cleanly", BarContent.make(for: vm, state: .dormant, hovering: false).isEmpty)
 let act = BarContent.make(for: vm, state: .active, hovering: false)
 check("active carries the count on the left", act.left == "2 running" && act.dot == .processing)
 check("active never glows", act.alarm == nil)

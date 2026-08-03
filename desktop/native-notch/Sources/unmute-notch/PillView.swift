@@ -637,6 +637,7 @@ private struct StopButton: View {
                 .frame(width: 9, height: 9)
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(Color.white.opacity(hovering ? 0.14 : 0.08)))
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -662,6 +663,8 @@ private struct CapsuleButton: View {
                                            : Color.white.opacity(hovering ? 0.18 : 0.10)))
                 .overlay(Capsule().stroke(prominent ? Color.clear : Color.white.opacity(0.30),
                                           lineWidth: 0.5))
+                // The padded capsule IS the button, not just the glyph inside.
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -688,6 +691,13 @@ private struct ChipBody<Content: View>: View {
         HStack(spacing: 6) { content() }
             .padding(.horizontal, 14)
             .frame(height: PillMetrics.height)
+            // THE WHOLE CHIP IS THE BUTTON, not the glyph inside it.
+            //
+            // Without this, SwiftUI hit-tests the RENDERED content — so a chip
+            // that is 30pt of capsule around an 11pt icon only responded on the
+            // icon, and the padding that exists to make it easy to hit did the
+            // opposite. Stated explicitly so the target matches what is drawn.
+            .contentShape(Capsule())
     }
 }
 
@@ -1063,6 +1073,10 @@ private struct OfflineCard: View {
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold)).foregroundColor(Theme.textFaint)
+                    // A 9pt glyph is a 9pt target without this — the smallest
+                    // control in the app and the hardest to hit.
+                    .frame(width: 22, height: 22)
+                    .contentShape(Circle())
             }.buttonStyle(.plain)
         }
         .padding(.leading, 13).padding(.trailing, 11)
