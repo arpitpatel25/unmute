@@ -1,4 +1,4 @@
-// Unmute Remote — tiny dependency-free markdown renderer for task `result.detail`.
+// Unmute Orchestrator — tiny dependency-free markdown renderer for task `result.detail`.
 //
 // The executor writes info answers as markdown; we render it properly (headings,
 // bold, lists, links, inline code, paragraphs) instead of showing raw syntax.

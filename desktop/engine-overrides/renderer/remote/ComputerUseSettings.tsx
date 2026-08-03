@@ -6,6 +6,7 @@
 // kill switch remains the user's control; the menu-bar activity indicator
 // remains the live affordance.
 import { useEffect, useState, useCallback } from 'react'
+import { SettingRow, Toggle } from '../app/_shared'
 
 interface AxPolicy { enabled: boolean }
 
@@ -35,27 +36,22 @@ export function ComputerUseSettings() {
   if (!p) return null
 
   return (
-    <div className="border-t border-black/5 pt-2 mt-1">
-      <label className="flex items-center justify-between py-1.5">
-        <span>
-          Computer Use{' '}
-          <span className="text-ink/40">
-            (let Claude Code operate your Mac apps in the background — no stolen focus, your screen never moves)
-          </span>
-        </span>
-        <input
-          type="checkbox"
-          checked={p.enabled}
-          onChange={(e) => save({ enabled: e.target.checked })}
-        />
-      </label>
+    <>
+      <SettingRow
+        label="Computer Use"
+        description="Lets a task operate your Mac apps in the background — no stolen focus, your screen never moves."
+      >
+        <Toggle checked={p.enabled} onChange={(enabled) => save({ enabled })} />
+      </SettingRow>
 
       {p.enabled && trusted === false && (
-        <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 my-1">
-          Accessibility permission is needed. Grant it to Unmute in System Settings → Privacy &amp; Security →
-          Accessibility. Unmute picks the grant up automatically within about half a minute — no restart needed.
+        <div className="px-5 pb-4 -mt-1">
+          <div className="text-[11px] text-ink-60 leading-relaxed bg-cream-mid border border-border rounded-[10px] px-3 py-2">
+            Accessibility permission is needed. Grant it to Unmute in System Settings → Privacy &amp; Security →
+            Accessibility. Unmute picks the grant up automatically within about half a minute — no restart needed.
+          </div>
         </div>
       )}
-    </div>
+    </>
   )
 }

@@ -1,8 +1,12 @@
-// Unmute Orchestrate — the cockpit wall (NEW surface, handoff §3 #3).
+// Unmute Orchestrator — the wall (NEW surface, handoff §3 #3).
 //
-// A voice-conducted cockpit for many concurrent Claude Code sessions. The human
+// A voice-conducted Orchestrator for many concurrent agent sessions. The human
 // stays the conductor; this surface owns the ATTENTION layer — always pointing the
 // user at the session that most needs them, at near-zero switch cost.
+//
+// NAMING (launch spec pack-c §2): the surface is the ORCHESTRATOR. The word
+// "cockpit" is deleted from the product — header, title, comments, log lines.
+// `#/orchestrate` survives only as a route hash, which no user reads.
 //
 // Visual direction: Ops Console (§7). Two hard rules, enforced here:
 //   R1 — color encodes EXACTLY ONE variable: status. Cards are structurally
@@ -23,7 +27,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
 import { groupSections } from './groupSections'
 import { LiveTerminal } from './LiveTerminal'
-import SkillReviewPopup from './SkillReviewPopup'
+import {
+  agentAndModel, canKill, canResume, dirLabel, hasTerminal, openInLabel,
+  providerLabel, vendorMark,
+} from './taskFacts'
 
 // ─── Ops Console palette — neutral everywhere; hue lives ONLY in `status`. ───
 const C = {
@@ -39,15 +46,10 @@ const C = {
   mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
 }
 
-// SUGGESTIONS chip label per proposal kind (Task 12) — short, glanceable verbs
-// distinguishing the five typed proposals the curator can surface.
-const PROPOSAL_KIND_LABEL: Record<'create' | 'narrow' | 'split' | 'merge' | 'retire', string> = {
-  create: 'new',
-  narrow: 'narrow',
-  split: 'split',
-  merge: 'merge',
-  retire: 'retire',
-}
+// Vendor marks, capability questions and the ticket's facts live in
+// `taskFacts.ts`: the wall and the main window's Tasks page must answer "which
+// agent, which model, which directory" and "may this be resumed" identically,
+// and two copies of that is exactly what the provider registry replaced.
 
 // The ONLY colored variable in the whole surface (R1).
 const STATUS = {
@@ -66,20 +68,44 @@ const needsYou = (s: WallState) => s === 'needs-user' || s === 'stuck' || s === 
 const yourMove = (s: WallState) => needsYou(s) || s === 'ready'
 
 // ─── Present-tense visibility (the calm-wall rule): pixels are for NOW. ───
-// A finished one-off earns wall space only briefly — done fades after 15m,
-// errored/stuck after 60m (they were actionable; after an hour the user has
-// moved on). Sessions and anything running/needing-you never fade. Nothing is
-// ever LOST — every task lives on in the overlay panel + History; the wall just
-// stops showing the past. `clearedAt` is the "clear finished" sweep cutoff.
-const DONE_FADE_MS = 15 * 60_000
-const ATTN_FADE_MS = 60 * 60_000
-function visibleOnWall(t: RemoteTask, now: number, clearedAt: number): boolean {
+//
+// THE 24-HOUR WINDOW (spec §3.2). This function used to return `true` for every
+// `kind === 'session'`, forever — which is why a session last touched 46 days
+// ago still held a card that said "ready", and why twelve identical "Ready"
+// cards could fill the wall with nothing ranked. The rule is now one sentence
+// for every kind: **live now, or updated within 24 hours.**
+//
+// It also replaced two invisible timers (done faded at 15m, errored/stuck at
+// 60m). Those were a second, unlabelled time filter with no control attached —
+// exactly the silent truncation §3.2 forbids. One window, one control, one
+// honest count of what it hides.
+//
+// Nothing is ever LOST: every task lives on in the overlay panel and History,
+// `All` in the header restores it here, and `clearedAt` is still the "clear
+// finished" sweep cutoff.
+const WALL_WINDOW_MS = 24 * 60 * 60_000
+
+/** Grid density (spec §3.3): cards a group shows before `+N more`. One full row
+ *  at the widest layout the window reaches. Not a time bound — see the header's
+ *  `Last 24h` for that; these are two different controls with two different words. */
+const GRID_ROW = 8
+
+/** Live NOW: actually running, or actually holding a question open. `ready`
+ *  deliberately does NOT count — a parked "ready" card is a finished thing
+ *  waiting to be read, and treating it as live is what kept the 46-day-old one
+ *  on screen. `alive` covers a long-running session that is genuinely still up
+ *  even though nobody has touched it today. */
+function liveNow(t: RemoteTask): boolean {
+  return t.state === 'processing' || t.state === 'needs-user' || t.alive === true
+}
+
+/** @param allTime — the header's `Last 24h ▾ / All` filter, off by default. */
+function visibleOnWall(t: RemoteTask, now: number, clearedAt: number, allTime: boolean): boolean {
   if (t.shelved) return false // shelved = kept, deliberately out of sight (rail Shelf)
-  if (t.kind === 'session') return true
-  if (t.state === 'processing' || t.state === 'needs-user' || t.state === 'ready') return true
+  if (liveNow(t)) return true
   if (t.updatedAt <= clearedAt) return false // user swept finished ones away
-  const age = now - t.updatedAt
-  return t.state === 'done' ? age < DONE_FADE_MS : age < ATTN_FADE_MS
+  if (allTime) return true
+  return now - t.updatedAt < WALL_WINDOW_MS
 }
 
 function elapsed(fromMs: number, now: number): string {
@@ -103,15 +129,6 @@ function nameOf(t: RemoteTask): string {
   if (t.name) return t.name
   const s = (t.intent || t.id.slice(0, 8)).trim()
   return s.length > 44 ? `${s.slice(0, 44).trimEnd()}…` : s
-}
-
-// The session's REAL working directory, compacted (home → ~) — shown only when it
-// MEANS something: a project-bound session's repo. A one-off's isolated scratch
-// dir (~/.unmute/…/uuid) is machinery, not information — hidden.
-function dirLabel(t: RemoteTask): string {
-  const cwd = t.cwd || ''
-  if (!cwd || cwd.includes('/.unmute/')) return ''
-  return cwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
 }
 
 // FLIP morph: wrap a state change so Chromium captures before/after and tweens
@@ -138,31 +155,8 @@ function setMainFocus(id: string | null) {
   void api?.remoteSetOrchestrateFocus?.(id)
 }
 
-/** Does this task live in a chat app we drive (Codex) rather than in a PTY we
- *  own? Such a thread is never "dead": there is no session to end and none to
- *  resume, so every liveness affordance must branch on this FIRST. */
-function isChat(t: RemoteTask): boolean {
-  // Reads the provider registry (resolved by main, sent with the task) rather
-  // than naming Codex, so the next desktop backend is classified correctly the
-  // day it lands instead of being mistaken for a PTY session. The literal stays
-  // only as a fallback for a payload rendered before `provider` existed.
-  return t.provider ? t.provider.transport === 'driver' : t.agent === 'codex-desktop'
-}
-
-/** WHICH backend this task runs on — shown quietly in the card footer.
- *
- *  EVERY card names its provider now, not only the non-default ones. The wall
- *  mixes backends freely and they no longer behave alike (one has a live
- *  terminal and a Resume button, one has neither), so "which is this?" is
- *  information the card owes the user rather than noise. */
-function providerLabel(t: RemoteTask): string {
-  const base = t.provider?.label ?? (t.agent === 'codex-desktop' ? 'Codex desktop' : 'Claude Code CLI')
-  // A Codex thread lives in a project; it disambiguates two threads on one wall.
-  return t.codexProject ? `${base} · ${t.codexProject}` : base
-}
-
-/** Hand the user the real Codex chat (main routes open-in-terminal by backend). */
-function openInCodex(id: string) {
+/** Hand the user the real chat thread (main routes open-in-terminal by backend). */
+function openInApp(id: string) {
   const api = (window as unknown as { electronAPI?: { remoteOpenInTerminal?: (id: string) => Promise<boolean> } }).electronAPI
   void api?.remoteOpenInTerminal?.(id)
 }
@@ -178,13 +172,17 @@ function Dot({ state }: { state: WallState }) {
 }
 
 // ─── full session card (resting grid) — structurally identical for every state ───
-function Card({ t, now, queuePos, promoted = false, onClick }: { t: RemoteTask; now: number; queuePos: number | null; promoted?: boolean; onClick: () => void }) {
+function Card({ t, now, queuePos, promoted = false, attention = false, onClick }: { t: RemoteTask; now: number; queuePos: number | null; promoted?: boolean; attention?: boolean; onClick: () => void }) {
   const st = statusOf(t.state)
   return (
     <button onClick={onClick} className="ow-card"
       style={{
-        textAlign: 'left', cursor: 'pointer', fontFamily: C.mono, background: C.surface,
-        border: `1px solid ${C.border}`, borderRadius: 8, padding: '11px 13px',
+        textAlign: 'left', cursor: 'pointer', fontFamily: C.mono, background: attention ? C.surfaceHi : C.surface,
+        // Needs-you band (spec §3.1): amber edge + glow, so the band reads as
+        // one loud object rather than as ordinary cards under a heading.
+        border: `1px solid ${attention ? STATUS['needs-user'].color : C.border}`,
+        boxShadow: attention ? `0 0 0 1px rgba(210,153,34,0.18), 0 0 18px rgba(210,153,34,0.13)` : 'none',
+        borderRadius: 8, padding: '11px 13px',
         display: 'flex', flexDirection: 'column', gap: 7, minWidth: 0,
         viewTransitionName: `card-${t.id}`,
       } as React.CSSProperties}>
@@ -206,14 +204,21 @@ function Card({ t, now, queuePos, promoted = false, onClick }: { t: RemoteTask; 
       {t.note && (
         <div style={{ fontSize: 10.5, color: C.dimText, fontStyle: 'italic', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>✎ {t.note}</div>
       )}
-      <div style={{ display: 'flex', gap: 10, fontSize: 10.5, color: C.dimText }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {dirLabel(t) || (t.kind === 'session' ? 'session' : 'one-off')}
+      {/* FOOTER (spec §4.1): agent · model, the working directory, the age —
+          dim ink throughout, never competing with the title. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10.5, color: C.dimText }}>
+        {/* vendor mark — scannable without reading */}
+        <span aria-hidden style={{ width: 6, height: 6, borderRadius: 2, flex: 'none', background: vendorMark(t) }} />
+        {/* The backend, present for every card. `model` is a HISTORICAL FACT
+            sent by main (D6): when it is absent the agent stands alone — no
+            default, no settings read, no placeholder word. */}
+        <span style={{ flex: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }}
+          title={t.model ? `Ran on ${providerLabel(t)} · ${t.model}` : `Ran on ${providerLabel(t)}`}>
+          {providerLabel(t)}{t.model ? ` · ${t.model}` : ''}
         </span>
-        {/* The backend, in the same dim ink as the path: present for every card,
-            never loud enough to compete with the intent. */}
-        <span style={{ flex: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`Runs on ${providerLabel(t)}`}>
-          {providerLabel(t)}
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl', textAlign: 'left' }}
+          title={t.cwd || undefined}>
+          {dirLabel(t) || (t.kind === 'session' ? 'session' : 'one-off')}
         </span>
         <span style={{ marginLeft: 'auto', flex: 'none' }}>{elapsed(t.createdAt, now)}</span>
       </div>
@@ -252,6 +257,48 @@ async function attachImageBlob(taskId: string, blob: Blob): Promise<string | nul
   if (!api?.remoteAttachImage) return null
   const ext = (blob.type.split('/')[1] || 'png').split('+')[0]
   return api.remoteAttachImage(taskId, await blob.arrayBuffer(), ext)
+}
+
+/**
+ * The four facts every ticket owes the user (spec §4.2):
+ * Agent · Model · Working directory · Permissions.
+ *
+ * Three of them are properties of THIS task, sent by main and never re-derived
+ * here. `model` is a historical fact (D6) and is simply absent when main could
+ * not determine one — the row then says so rather than borrowing the picker's
+ * current value, which would look exactly as correct as a true one.
+ *
+ * Permissions is the honest exception, and is labelled as one. It is not
+ * recorded per task anywhere: `permissionMode` is a single live setting read by
+ * the executor factory at spawn time (init.ts:951), so the only truthful thing
+ * this surface can show is the setting as it stands now. It says "current
+ * setting" out loud rather than implying the task ran under it.
+ */
+function TicketFacts({ t }: { t: RemoteTask }) {
+  const [permission, setPermission] = useState<string | null>(null)
+  useEffect(() => {
+    const api = (window as unknown as { electronAPI?: { remoteGetSettings?: () => Promise<{ permissionMode?: string }> } }).electronAPI
+    void api?.remoteGetSettings?.().then((s) => {
+      if (s?.permissionMode) setPermission(s.permissionMode === 'auto-approve' ? 'auto-approve' : 'ask before acting')
+    }).catch(() => {})
+  }, [])
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 26px', padding: '9px 14px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
+      <Fact label="agent" value={<><span aria-hidden style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 2, background: vendorMark(t), marginRight: 6 }} />{providerLabel(t)}</>} />
+      <Fact label="model" value={t.model || <span style={{ color: C.faintText }}>not recorded</span>} />
+      <Fact label="working directory" value={dirLabel(t) || <span style={{ color: C.faintText }}>none</span>} title={t.cwd || undefined} />
+      <Fact label="permissions" value={permission ? `${permission}` : '…'} title="The current Orchestrator setting — permission mode is not recorded per task." />
+    </div>
+  )
+}
+
+function Fact({ label, value, title }: { label: string; value: React.ReactNode; title?: string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }} title={title}>
+      <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase' }}>{label}</span>
+      <span style={{ fontSize: 12, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
+    </div>
+  )
 }
 
 // ─── focused stage: hoisted pending line + the REAL terminal ───
@@ -348,16 +395,17 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
           const api = (window as unknown as { electronAPI?: { remoteSetKind?: (id: string, kind: 'oneoff' | 'session') => Promise<boolean> } }).electronAPI
           void api?.remoteSetKind?.(t.id, t.kind === 'session' ? 'oneoff' : 'session')
         }} />
-        {/* lifecycle controls — BACKEND FIRST, then liveness (the notch's rule).
-            A Codex thread has no PTY, so `alive` is always false for one — and
-            this branch used to read that as "dead" and offer to RESUME a chat
-            that had never stopped. There is nothing to kill and nothing to
-            revive: the only honest move is a door into the thread. */}
-        {isChat(t) ? (
-          <Key label="open in codex" onClick={() => openInCodex(t.id)} />
-        ) : t.alive ? (
+        {/* Lifecycle controls ASK THE REGISTRY (spec §4.3), never the id.
+            A driver-backed thread has no PTY, so `alive` is always false for
+            one — this branch used to read that as "dead" and offer to RESUME a
+            chat that had never stopped. Resume renders only where
+            `provider.canResume`; a backend that cannot resume gets the door into
+            its own app instead, not a greyed-out button. */}
+        {!hasTerminal(t) && <Key label={openInLabel(t)} onClick={() => openInApp(t.id)} />}
+        {canKill(t) && t.alive && (
           <Key label="kill" danger onClick={() => { if (window.confirm('Stop this session?')) onKill(t.id) }} />
-        ) : (
+        )}
+        {canResume(t) && !t.alive && (
           <Key label="resume" onClick={() => onResume(t.id)} />
         )}
         {/* shelve (parked states only): keep it, stop seeing it. Unshelve is
@@ -374,6 +422,10 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
         <Key label={full ? 'split' : 'full'} onClick={onToggleFull} />
         <Key label="esc" onClick={onClose} />
       </div>
+
+      {/* THE FOUR FIELDS (spec §4.2). Always rendered, always in this order, so
+          "what is this and where did it run" never needs hunting for. */}
+      <TicketFacts t={t} />
 
       {/* warm-up: "where you left off" — the session's own rolling context,
           shown on re-entry so the human never cold-starts. Framed as re-entry
@@ -432,18 +484,18 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
           garbled the stage). DEAD → never an empty black void: the result/error
           panel with resume / re-run as the obvious next move. */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        {isChat(t) ? (
+        {!hasTerminal(t) ? (
           <div style={{ height: '100%', overflow: 'auto', padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase' }}>
-              codex thread{t.codexProject ? ` · ${t.codexProject}` : ''} · {st.label}
+              {providerLabel(t)} thread · {st.label}
             </div>
             {t.threadContext && <div style={{ fontSize: 13, color: C.midText, lineHeight: 1.55 }}>{t.threadContext}</div>}
             {t.result?.summary && <div style={{ fontSize: 14, color: C.nameText, lineHeight: 1.55 }}>{t.result.summary}</div>}
             {t.result?.detail && <div style={{ fontSize: 12.5, color: C.midText, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{t.result.detail}</div>}
             <div style={{ display: 'flex', gap: 9, marginTop: 4 }}>
-              <button onClick={() => openInCodex(t.id)}
-                style={{ fontFamily: C.mono, fontSize: 12, fontWeight: 700, color: C.bg, background: '#3fb950', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer' }}>
-                open in codex — the thread is still there
+              <button onClick={() => openInApp(t.id)}
+                style={{ fontFamily: C.mono, fontSize: 12, fontWeight: 700, color: C.bg, background: vendorMark(t), border: 'none', borderRadius: 6, padding: '7px 16px', cursor: 'pointer' }}>
+                {openInLabel(t)} — the thread is still there
               </button>
             </div>
           </div>
@@ -470,11 +522,12 @@ function Stage({ t, now, full, onAnswer, onClose, onNext, onToggleFull, onKill, 
             <div style={{ display: 'flex', gap: 9, marginTop: 4 }}>
               {/* Resume is seconds long (spawn → trust-accept → nudge). The label
                   and the disabled state ARE the progress indicator: previously
-                  nothing on this card moved until the terminal appeared. */}
-              <button onClick={() => onResume(t.id)} disabled={t.resuming}
+                  nothing on this card moved until the terminal appeared.
+                  Rendered only where the registry says the backend can resume. */}
+              {canResume(t) && <button onClick={() => onResume(t.id)} disabled={t.resuming}
                 style={{ fontFamily: C.mono, fontSize: 12, fontWeight: 700, color: C.bg, background: t.resuming ? '#2b6a33' : '#3fb950', border: 'none', borderRadius: 6, padding: '7px 16px', cursor: t.resuming ? 'default' : 'pointer', opacity: t.resuming ? 0.75 : 1 }}>
                 {t.resuming ? 'resuming — bringing the session back…' : 'resume — continue with full context'}
-              </button>
+              </button>}
               <button onClick={() => onRerun(t.intent)}
                 style={{ fontFamily: C.mono, fontSize: 12, color: C.nameText, background: C.surface, border: `1px solid ${C.borderHi}`, borderRadius: 6, padding: '7px 16px', cursor: 'pointer' }}>
                 re-run fresh
@@ -500,6 +553,52 @@ function Key({ label, onClick, danger = false }: { label: string; onClick: () =>
       style={{ flex: 'none', background: 'none', border: `1px solid ${danger ? '#5b2a2e' : C.border}`, color: danger ? '#c56069' : C.midText, borderRadius: 5, fontSize: 11, padding: '3px 9px', cursor: 'pointer', fontFamily: C.mono }}>
       {label}
     </button>
+  )
+}
+
+/**
+ * The empty wall (spec §3.6): an agent is connected and nothing is running.
+ *
+ * A workspace between jobs, not an error. One microphone affordance, one example
+ * phrase in the user's own vocabulary, and the last thing that finished if there
+ * is one. No illustration, no "get started" ceremony.
+ *
+ * The key is READ, not asserted: the spec's phrase says ⌥, which is right for a
+ * right-option setup and wrong for an fn one — and a first-run screen that names
+ * the wrong key is the worst possible first instruction.
+ */
+function EmptyWall({ lastFinished, hidden, onShowAll }: { lastFinished: RemoteTask | null; hidden: number; onShowAll: () => void }) {
+  const [key, setKey] = useState<'fn' | 'right-option'>('right-option')
+  useEffect(() => {
+    const api = (window as unknown as { electronAPI?: { remoteGetSettings?: () => Promise<{ remoteKey?: 'fn' | 'right-option' }> } }).electronAPI
+    void api?.remoteGetSettings?.().then((s) => { if (s?.remoteKey) setKey(s.remoteKey) }).catch(() => {})
+  }, [])
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 13, padding: '46px 8px', maxWidth: 460 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span aria-hidden style={{ fontSize: 17 }}>🎙</span>
+        <span style={{ fontSize: 14, color: C.nameText }}>
+          Press {key === 'fn' ? 'fn' : '⌥'} and say what you want done.
+        </span>
+      </div>
+      <div style={{ fontSize: 12, color: C.dimText, lineHeight: 1.55 }}>
+        Nothing is running. Every task you start appears here while it works, and
+        stays until you have read it.
+      </div>
+      {lastFinished && (
+        <div style={{ fontSize: 11.5, color: C.dimText, borderTop: `1px solid ${C.border}`, paddingTop: 11 }}>
+          <span style={{ color: C.faintText }}>last finished · </span>
+          {nameOf(lastFinished)}
+          {lastFinished.result?.summary ? <span style={{ color: C.faintText }}> — {lastFinished.result.summary}</span> : null}
+        </div>
+      )}
+      {hidden > 0 && (
+        <button onClick={onShowAll}
+          style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, fontFamily: C.mono, fontSize: 11, color: '#d29922', cursor: 'pointer' }}>
+          {hidden} older {hidden === 1 ? 'task is' : 'tasks are'} hidden by the 24-hour filter — show all
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -564,37 +663,31 @@ export default function OrchestrateWall() {
     void api?.remoteAcceptRouteOffer?.(o.newTaskId).then((ok) => { if (ok) focusRef.current?.(o.altTaskId) })
   }, [offer])
 
-  // Glance vocabulary (rails): skills + projects from disk, so the words you can
-  // SAY are always in front of you. Loaded on mount, refreshed every 5 min.
+  // Glance vocabulary (rail): the skills archive, so the words you can SAY are
+  // always in front of you. Loaded on mount, refreshed every 5 min.
+  //
+  // SKILLS IS A READ-ONLY ARCHIVE (decision D7). The curator that used to
+  // propose new ones is off; nothing will be added to this list again. It stays
+  // because what was already learned is still usable — you can say a skill's
+  // name, pin one to the top, or drop it into an open terminal. No copy here
+  // may imply the app is still learning, and none does.
   const [skills, setSkills] = useState<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean; origin?: 'unmute' }>>([])
   // Signal over noise: the rail shows only the trusted top (pinned + most-used);
   // the long tail hides behind one expander so 30 skills never bury the 5 that matter.
   const [skillsExpanded, setSkillsExpanded] = useState(false)
-  // Curator inbox (spec §11): pending skill proposals the sweep surfaced. Loaded
-  // beside skills; `openProposalId` is held here for Task 14's review popup to mount.
-  const [proposals, setProposals] = useState<Array<{ id: string; kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'; draft: { name: string; description: string } }>>([])
-  const [openProposalId, setOpenProposalId] = useState<string | null>(null)
   // Anchor coords captured at hover time — the card renders at WINDOW level
   // (position: fixed) because the rail is overflow:auto and clips anything
   // placed outside it (the bug: tooltips positioned left of the rail never showed).
   const [hoveredSkill, setHoveredSkill] = useState<{ name: string; top: number; rightPx: number } | null>(null)
-  const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   useEffect(() => {
-    const api = (window as unknown as { electronAPI?: { remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean; origin?: 'unmute' }>>; remoteListProjects?: () => Promise<Array<{ name: string; path: string }>>; curatorListProposals?: () => Promise<Array<{ id: string; kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'; draft: { name: string; description: string } }>> } }).electronAPI
+    const api = (window as unknown as { electronAPI?: { remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean; origin?: 'unmute' }>> } }).electronAPI
     const load = () => {
       void api?.remoteListSkills?.().then((s) => setSkills(s ?? [])).catch(() => {})
-      void api?.remoteListProjects?.().then((p) => setProjects(p ?? [])).catch(() => {})
-      void api?.curatorListProposals?.().then((p) => setProposals(p ?? [])).catch(() => {})
     }
     load()
     const i = setInterval(load, 5 * 60_000)
     return () => clearInterval(i)
   }, [])
-  // DEV-ONLY: SUGGESTIONS surfaced — log the pending-proposal list + count each
-  // time it changes, so the log shows exactly what the user was offered and when.
-  useEffect(() => {
-    curatorDevLog({ kind: 'suggestions-surfaced', count: proposals.length, proposals: proposals.map((p) => ({ id: p.id, kind: p.kind, name: p.draft.name })) })
-  }, [proposals])
   const togglePinSkill = useCallback((name: string, on: boolean) => {
     const api = (window as unknown as { electronAPI?: { remotePinSkill?: (n: string, on: boolean) => Promise<boolean>; remoteListSkills?: () => Promise<Array<{ name: string; lastUsed: string; description: string; runs?: number; pinned?: boolean }>> } }).electronAPI
     void api?.remotePinSkill?.(name, on).then(() => api?.remoteListSkills?.().then((s) => setSkills(s ?? [])))
@@ -607,16 +700,8 @@ export default function OrchestrateWall() {
     const api = (window as unknown as { electronAPI?: { curatorTapSkill?: (taskId: string, name: string) => Promise<boolean> } }).electronAPI
     void api?.curatorTapSkill?.(taskId, name)
   }, [])
-  const spawnInProject = useCallback((p: { name: string; path: string }) => {
-    // A click must never silently spawn a whole session (learned the hard way —
-    // one grazed row created a task the user never asked for). Confirm first.
-    if (!window.confirm(`Start a working session in ${p.name}?\n${p.path}`)) return
-    const api = (window as unknown as { electronAPI?: { remoteDispatch?: (intent: string) => Promise<string | null> } }).electronAPI
-    void api?.remoteDispatch?.(`Start a working session in the ${p.name} project (${p.path}).`)
-  }, [])
-
   // Voice-as-doorbell toggle (§6.4): spoken headlines for needs-you states —
-  // one toggle away, and the cockpit is fully usable dead silent.
+  // one toggle away, and the Orchestrator is fully usable dead silent.
   const [doorbell, setDoorbell] = useState(true)
   useEffect(() => {
     const api = (window as unknown as { electronAPI?: { remoteGetVoiceHeadlines?: () => Promise<boolean> } }).electronAPI
@@ -638,9 +723,31 @@ export default function OrchestrateWall() {
     return () => clearInterval(i)
   }, [])
 
+  // The window title is part of the product's name (spec §2). The Orchestrator
+  // window is frameless, so this is the only place the title can be set at all.
+  useEffect(() => { document.title = 'Orchestrator' }, [])
+
   // "Clear finished" sweep cutoff — hides terminal one-offs immediately.
   const [clearedAt, setClearedAt] = useState(0)
-  const visible = useMemo(() => tasks.filter((t) => visibleOnWall(t, now, clearedAt)), [tasks, now, clearedAt])
+
+  // THE TIME FILTER (spec §3.2). Default: the last 24 hours. `All` restores the
+  // pre-filter behaviour exactly, and the control below states how many the
+  // filter is currently hiding — a filter that truncates silently is forbidden.
+  const [allTime, setAllTime] = useState(false)
+  const visible = useMemo(() => tasks.filter((t) => visibleOnWall(t, now, clearedAt, allTime)), [tasks, now, clearedAt, allTime])
+  // How many the TIME FILTER alone is hiding — everything `All` would restore,
+  // not counting what is shelved or was swept by "clear finished". Computed as
+  // the honest difference between the two answers of the same function.
+  const hiddenByFilter = useMemo(
+    () => (allTime ? 0 : tasks.filter((t) => visibleOnWall(t, now, clearedAt, true) && !visibleOnWall(t, now, clearedAt, false)).length),
+    [tasks, now, clearedAt, allTime],
+  )
+
+  // GRID DENSITY (spec §3.3) — a different thing from the time filter, with a
+  // different word. A group renders at most one full row of cards; the rest sit
+  // behind `+N more`. Nothing here has anything to do with age.
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(() => new Set())
+  const [expandAll, setExpandAll] = useState(false)
 
   // While-you-were-away digest (§4 re-entry): after a real absence, one quiet
   // line instead of a wall of stale cards. Dismisses on click or first focus.
@@ -701,17 +808,32 @@ export default function OrchestrateWall() {
   // live on the stage (a focused, alive task). Otherwise unmute-skill rows are inert.
   const openTerminalTaskId = focused?.alive ? focused.id : null
 
+  // NEEDS YOU (spec §3.1): a task waiting on an answer outranks eleven that
+  // finished, so it is lifted OUT of its router-assigned group into a band above
+  // every group. Lifted, not copied — one card, one place, no double render.
+  // Drawn from everything visible (not just the grid), so a waiting one-off is
+  // promoted out of the rail too: the whole point is that nothing waiting on you
+  // can be somewhere you are not looking.
+  const needsYouBand = useMemo(() => visible.filter((t) => t.state === 'needs-user'), [visible])
+  const banded = useMemo(() => new Set(needsYouBand.map((t) => t.id)), [needsYouBand])
+
   // Species split (§5): the grid is the space of WORKING SESSIONS; one-off
   // errands live (and resolve) in the rail. Until the user has any sessions,
   // the grid shows everything — an empty wall over a busy rail helps no one.
   // All present-tense (visibleOnWall): the past lives in History, not here.
-  const sessions = useMemo(() => visible.filter((t) => t.kind === 'session'), [visible])
-  const oneoffs = useMemo(() => visible.filter((t) => t.kind !== 'session'), [visible])
-  const gridTasks = sessions.length ? sessions : visible
+  const rest = useMemo(() => visible.filter((t) => !banded.has(t.id)), [visible, banded])
+  const sessions = useMemo(() => rest.filter((t) => t.kind === 'session'), [rest])
+  const oneoffs = useMemo(() => rest.filter((t) => t.kind !== 'session'), [rest])
+  const gridTasks = sessions.length ? sessions : rest
   const railOneoffs = sessions.length ? oneoffs : []
   // The Shelf: shelved tasks come from the FULL list (visibleOnWall hides them).
   const shelf = useMemo(() => tasks.filter((t) => t.shelved), [tasks])
-  const hiddenFinished = tasks.length - visible.length
+  // The empty wall's one backward glance (§3.6) — from the WHOLE store, not the
+  // visible slice, so "the last thing that finished" survives the time filter.
+  const lastFinished = useMemo(
+    () => tasks.filter((t) => t.state === 'done').sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null,
+    [tasks],
+  )
 
   const focus = useCallback((id: string | null) => {
     setMainFocus(id) // tell main where the voice lands BEFORE any utterance (§6.2)
@@ -720,13 +842,13 @@ export default function OrchestrateWall() {
   focusRef.current = focus
 
   // Clear the focus address when the wall unmounts/closes, so a stale focus can't
-  // keep capturing the voice after the user leaves the cockpit.
+  // keep capturing the voice after the user leaves the Orchestrator.
   useEffect(() => () => setMainFocus(null), [])
 
   // Focus hygiene (the "Happy Rates!" lesson): the focused stage is the voice
-  // address ONLY while the cockpit window itself has the user's attention. The
+  // address ONLY while the Orchestrator window itself has the user's attention. The
   // moment they switch to another app, the address is released (utterances route
-  // normally); returning to the cockpit re-asserts it. The visual stage never
+  // normally); returning to the Orchestrator re-asserts it. The visual stage never
   // moves — only where the voice lands. Predictable: what you see is the address.
   const [winFocused, setWinFocused] = useState(() => document.hasFocus())
   useEffect(() => {
@@ -796,13 +918,13 @@ export default function OrchestrateWall() {
   // no more "SESSIONS · 21" listing every dead errand of the day).
   const others = focused ? visible.filter((t) => t.id !== focused.id) : []
 
-  // Origin split (spec §11): curator-authored skills get their own badged section
-  // (with tap-to-invoke); everything else stays in the existing Skills list.
-  const unmuteSkills = skills.filter((s) => s.origin === 'unmute')
-  const otherSkills = skills.filter((s) => s.origin !== 'unmute')
-  // One row renderer for BOTH sections so the hover card + pin logic stay identical.
-  // `unmute` rows carry the origin badge and, when a terminal is open, tap-to-invoke.
-  const renderSkillRow = (s: (typeof skills)[number], unmute: boolean) => {
+  // ONE Skills section, not two (spec §3.5 — the rail is exactly four sections:
+  // Queue · One-offs · Skills · Shelf). Curator-authored entries used to get a
+  // second header of their own; with the curator off, "where did this come
+  // from" is archive trivia and does not deserve a section. It survives as a
+  // badge on the row, which still explains the origin without splitting the list.
+  const renderSkillRow = (s: (typeof skills)[number]) => {
+    const unmute = s.origin === 'unmute'
     const canTap = unmute && !!openTerminalTaskId
     return (
       <div
@@ -827,7 +949,7 @@ export default function OrchestrateWall() {
         >{s.pinned ? '★' : '☆'}</button>
         <span style={{ fontSize: 11.5, color: hoveredSkill?.name === s.name ? C.nameText : C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{s.name}</span>
         {unmute && (
-          <span title="Curated by the Unmute skill curator" style={{ fontSize: 8.5, letterSpacing: 0.4, textTransform: 'uppercase', color: '#39c5cf', border: '1px solid rgba(57,197,207,0.35)', borderRadius: 4, padding: '0 4px', flex: 'none', alignSelf: 'center' }}>unmute</span>
+          <span title="Written by Unmute's skill curator, which is switched off — this archive is fixed." style={{ fontSize: 8.5, letterSpacing: 0.4, textTransform: 'uppercase', color: '#39c5cf', border: '1px solid rgba(57,197,207,0.35)', borderRadius: 4, padding: '0 4px', flex: 'none', alignSelf: 'center' }}>unmute</span>
         )}
         <span style={{ fontSize: 10, color: C.faintText, flex: 'none' }}>{(s.runs ?? 0) > 0 ? `${s.runs}×` : s.lastUsed ? s.lastUsed.slice(5, 10) : ''}</span>
       </div>
@@ -838,6 +960,55 @@ export default function OrchestrateWall() {
     <div
       style={{ position: 'absolute', inset: 0, background: C.bg, color: C.midText, fontFamily: C.mono, display: 'flex', flexDirection: 'column', padding: '14px 16px 16px' }}
     >
+      {/* ─── HEADER (spec §2, §3.2, §3.4) ───
+          The surface names itself, and carries the two controls that govern what
+          the wall is showing: the TIME filter and grid density's Expand all. */}
+      {!full && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '2px 2px 11px', flex: 'none' }}>
+          <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 0.6, color: C.nameText }}>Orchestrator</span>
+          {!focused && (
+            <span style={{ fontSize: 10.5, color: C.faintText }}>
+              {visible.length} {visible.length === 1 ? 'task' : 'tasks'}
+            </span>
+          )}
+
+          {/* The two controls govern the GRID, so they stand down while a stage
+              is open — the wall they act on is not on screen. The title stays. */}
+          <div style={{ marginLeft: 'auto', display: focused ? 'none' : 'flex', alignItems: 'center', gap: 8 }}>
+            {/* TIME FILTER. Reversible, and it says what it is hiding — a wall
+                that quietly drops your work is worse than one that is busy. */}
+            <button onClick={() => setAllTime((v) => !v)} className="ow-key"
+              title={allTime
+                ? 'Showing every task the store still holds. Click for the last 24 hours.'
+                : 'Showing tasks that are live now or were touched in the last 24 hours. Click to show everything.'}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: `1px solid ${C.border}`, color: C.midText, borderRadius: 5, fontSize: 11, padding: '3px 9px', cursor: 'pointer', fontFamily: C.mono }}>
+              <span>{allTime ? 'All' : 'Last 24h'}</span>
+              {!allTime && hiddenByFilter > 0 && (
+                <span style={{ color: '#d29922' }}>· {hiddenByFilter} older hidden</span>
+              )}
+              <span style={{ color: C.faintText }}>▾</span>
+            </button>
+
+            {/* GRID DENSITY. Idempotent by construction: it only ever SETS
+                expanded. Pressing it twice cannot collapse anything; the
+                separate Collapse control is the only way back. */}
+            <button
+              onClick={() => { setExpandAll(true); setExpandedGroups(new Set()) }}
+              className="ow-key"
+              title="Show every card in every group. Does not change the time filter."
+              style={{ background: 'none', border: `1px solid ${C.border}`, color: expandAll ? C.faintText : C.midText, borderRadius: 5, fontSize: 11, padding: '3px 9px', cursor: 'pointer', fontFamily: C.mono }}>
+              Expand all
+            </button>
+            {(expandAll || expandedGroups.size > 0) && (
+              <button onClick={() => { setExpandAll(false); setExpandedGroups(new Set()) }} className="ow-key"
+                style={{ background: 'none', border: `1px solid ${C.border}`, color: C.midText, borderRadius: 5, fontSize: 11, padding: '3px 9px', cursor: 'pointer', fontFamily: C.mono }}>
+                Collapse
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* tap banner — highest-priority queued item, always at the top (§8) */}
       {top && needsYou(top.state) && !full && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', borderBottom: `1px solid ${C.border}`, background: C.surface, flex: 'none' }}>
@@ -873,23 +1044,65 @@ export default function OrchestrateWall() {
                   {digest} <span style={{ color: C.faintText }}>· dismiss</span>
                 </button>
               )}
+              {/* ─── NEEDS YOU (spec §3.1) ───
+                  Above every group, because one task waiting on an answer
+                  outranks eleven that finished. Empty → nothing renders at all:
+                  no header, no rule, no gap. */}
+              {needsYouBand.length > 0 && (
+                <div style={{ marginBottom: 26 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 9999, background: STATUS['needs-user'].color, boxShadow: `0 0 7px ${STATUS['needs-user'].color}` }} />
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: STATUS['needs-user'].color, textTransform: 'uppercase' }}>
+                      needs you · {needsYouBand.length}
+                    </span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))', gap: 11, alignContent: 'start' }}>
+                    {needsYouBand.map((t) => (
+                      <Card key={t.id} t={t} now={now} attention queuePos={queuePos.get(t.id) ?? null}
+                        promoted={(promotedAt.get(t.id) ?? 0) > now - 8000} onClick={() => focus(t.id)} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Group sections (spec 2026-07-16): position encodes what the
                   work is ABOUT. Zero named groups → exactly the old flat grid.
                   Store order is newest-first, so newest renders left. */}
-              {gridTasks.length === 0 && <div style={{ color: C.dimText, fontSize: 12, padding: 8 }}>no sessions — speak to spawn one</div>}
-              {groupSections(gridTasks).map((sec, i) => (
-                <div key={sec.name ?? '·ungrouped'} style={{ marginTop: i === 0 ? 0 : 28 }}>
-                  {sec.name != null && (
-                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase', marginBottom: 6 }}>{sec.name}</div>
-                  )}
-                  {sec.name == null && i > 0 && (
-                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.faintText, textTransform: 'uppercase', marginBottom: 6 }}>ungrouped</div>
-                  )}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))', gap: 11, alignContent: 'start' }}>
-                    {sec.tasks.map((t) => <Card key={t.id} t={t} now={now} queuePos={queuePos.get(t.id) ?? null} promoted={(promotedAt.get(t.id) ?? 0) > now - 8000} onClick={() => focus(t.id)} />)}
+              {gridTasks.length === 0 && needsYouBand.length === 0 && <EmptyWall lastFinished={lastFinished} hidden={hiddenByFilter} onShowAll={() => setAllTime(true)} />}
+              {groupSections(gridTasks).map((sec, i) => {
+                const key = sec.name ?? '·ungrouped'
+                const open = expandAll || expandedGroups.has(key)
+                const shown = open ? sec.tasks : sec.tasks.slice(0, GRID_ROW)
+                const more = sec.tasks.length - shown.length
+                return (
+                  <div key={key} style={{ marginTop: i === 0 ? 0 : 28 }}>
+                    {sec.name != null && (
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.dimText, textTransform: 'uppercase', marginBottom: 6 }}>{sec.name}</div>
+                    )}
+                    {sec.name == null && i > 0 && (
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.faintText, textTransform: 'uppercase', marginBottom: 6 }}>ungrouped</div>
+                    )}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))', gap: 11, alignContent: 'start' }}>
+                      {shown.map((t) => <Card key={t.id} t={t} now={now} queuePos={queuePos.get(t.id) ?? null} promoted={(promotedAt.get(t.id) ?? 0) > now - 8000} onClick={() => focus(t.id)} />)}
+                    </div>
+                    {/* GRID DENSITY, not time (spec §3.3). A different verb and a
+                        different shape from `Last 24h`, so it cannot be misread
+                        as a second time filter. */}
+                    {more > 0 && (
+                      <button onClick={() => setExpandedGroups((s) => new Set(s).add(key))}
+                        style={{ marginTop: 8, background: 'none', border: 'none', padding: 0, fontFamily: C.mono, fontSize: 11, color: C.dimText, cursor: 'pointer' }}>
+                        +{more} more
+                      </button>
+                    )}
+                    {open && sec.tasks.length > GRID_ROW && !expandAll && (
+                      <button onClick={() => setExpandedGroups((s) => { const n = new Set(s); n.delete(key); return n })}
+                        style={{ marginTop: 8, background: 'none', border: 'none', padding: 0, fontFamily: C.mono, fontSize: 11, color: C.faintText, cursor: 'pointer' }}>
+                        show less
+                      </button>
+                    )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </>
           )}
         </div>
@@ -923,7 +1136,7 @@ export default function OrchestrateWall() {
                   )}
                   {railOneoffs.length === 0 && (
                     <div style={{ fontSize: 11, color: C.faintText }}>
-                      {hiddenFinished > 0 ? `${hiddenFinished} finished earlier — see History` : 'short-lived tasks resolve here'}
+                      {hiddenByFilter > 0 ? `${hiddenByFilter} older — switch to All, or see History` : 'short-lived tasks resolve here'}
                     </div>
                   )}
                   {railOneoffs.map((t) => (
@@ -935,62 +1148,28 @@ export default function OrchestrateWall() {
                     </button>
                   ))}
                 </RailSection>
-                {projects.length > 0 && (
-                  <RailSection title="Projects">
-                    {projects.map((p) => (
-                      <button key={p.path} onClick={() => spawnInProject(p)} title={`Start a session in ${p.path}`} className="ow-row"
-                        style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', fontFamily: C.mono }}>
-                        <span style={{ fontSize: 11, color: C.faintText }}>▸</span>
-                        <span style={{ fontSize: 11.5, color: C.midText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
-                      </button>
-                    ))}
-                  </RailSection>
-                )}
-                {/* SUGGESTIONS (spec §11): the curator's review inbox — pending
-                    skill proposals from the last sweep. Amber (needs-you hue): it
-                    wants a decision. A row opens the proposal in Task 14's popup.
-                    Empty → the whole section renders nothing. */}
-                {proposals.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1.4, color: '#d29922', textTransform: 'uppercase' }}>
-                      suggestions <span style={{ color: 'rgba(210,153,34,0.5)' }}>({proposals.length})</span>
-                    </div>
-                    {proposals.map((p) => (
-                      <button key={p.id} onClick={() => { curatorDevLog({ kind: 'suggestion-tap', proposalId: p.id, proposalKind: p.kind, name: p.draft.name }); setOpenProposalId(p.id) }} className="ow-row"
-                        style={{ display: 'flex', alignItems: 'baseline', gap: 7, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', fontFamily: C.mono }}>
-                        <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.4, color: 'rgba(210,153,34,0.7)', flex: 'none' }}>{PROPOSAL_KIND_LABEL[p.kind] ?? p.kind}</span>
-                        <span style={{ fontSize: 11.5, color: C.nameText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{p.draft.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {/* UNMUTE SKILLS (spec §11): skills the curator authored, badged by
-                    origin. Same row as any skill (hover card + pin preserved); when a
-                    task terminal is open, a tap drops `/name ` (unsubmitted). Empty →
-                    header hidden. */}
-                {unmuteSkills.length > 0 && (
-                  <RailSection title="Unmute Skills">
-                    {unmuteSkills.map((s) => renderSkillRow(s, true))}
-                  </RailSection>
-                )}
-                {otherSkills.length > 0 && (
-                  <RailSection title="Skills">
-                    {/* glance vocabulary — say a skill's name to use it. Hover →
-                        a card with the FULL name + the skill's own description,
-                        so 'should I invoke this?' is answerable at a glance.
-                        Ranked pinned → proven use → recency (main side); collapsed
-                        to the trusted top 6 with the tail behind "N more". */}
-                    {(skillsExpanded ? otherSkills : otherSkills.slice(0, 6)).map((s) => renderSkillRow(s, false))}
-                    {otherSkills.length > 6 && (
-                      <button onClick={() => setSkillsExpanded((v) => !v)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', textAlign: 'left', fontFamily: C.mono, fontSize: 10.5, color: C.faintText }}>
-                        {skillsExpanded ? '· show less' : `· ${otherSkills.length - 6} more…`}
-                      </button>
-                    )}
-                  </RailSection>
-                )}
-                {shelf.length > 0 && (
-                  <RailSection title={`Shelf · ${shelf.length}`}>
+                {/* SKILLS — a READ-ONLY ARCHIVE (decision D7). What was already
+                    learned, still usable: say a name, pin one, or drop it into an
+                    open terminal. Nothing is added to it any more, and no copy
+                    here suggests otherwise. Always rendered: it is one of the
+                    rail's four fixed sections, so it must not vanish when empty. */}
+                <RailSection title={`Skills · ${skills.length}`}>
+                  {skills.length === 0 && <div style={{ fontSize: 11, color: C.faintText }}>no skills on this machine</div>}
+                  {/* glance vocabulary — say a skill's name to use it. Hover →
+                      a card with the FULL name + the skill's own description,
+                      so 'should I invoke this?' is answerable at a glance.
+                      Ranked pinned → proven use → recency (main side); collapsed
+                      to the trusted top 6 with the tail behind "N more". */}
+                  {(skillsExpanded ? skills : skills.slice(0, 6)).map((s) => renderSkillRow(s))}
+                  {skills.length > 6 && (
+                    <button onClick={() => setSkillsExpanded((v) => !v)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', margin: '0 -6px', textAlign: 'left', fontFamily: C.mono, fontSize: 10.5, color: C.faintText }}>
+                      {skillsExpanded ? '· show less' : `· ${skills.length - 6} more…`}
+                    </button>
+                  )}
+                </RailSection>
+                <RailSection title={`Shelf · ${shelf.length}`}>
+                    {shelf.length === 0 && <div style={{ fontSize: 11, color: C.faintText }}>kept-but-out-of-the-way tasks land here</div>}
                     {/* kept-but-out-of-the-way — findable, never on the wall.
                         Click a row to open it on the stage; ⌃ puts it back. */}
                     {shelf.map((t) => (
@@ -1009,8 +1188,7 @@ export default function OrchestrateWall() {
                         >⌃</button>
                       </div>
                     ))}
-                  </RailSection>
-                )}
+                </RailSection>
               </>
             )}
           </div>
@@ -1118,20 +1296,10 @@ export default function OrchestrateWall() {
         )}
       </div>
 
-      {/* Skill Curator review popup (Task 14): opened from a SUGGESTIONS row.
-          Overlays everything (position:fixed scrim). Cancel keeps the proposal
-          pending; Accept/Reject resolve it — either way we refresh the inbox so
-          a resolved row disappears. */}
-      {openProposalId && (
-        <SkillReviewPopup
-          proposalId={openProposalId}
-          onClose={() => {
-            setOpenProposalId(null)
-            const api = (window as unknown as { electronAPI?: { curatorListProposals?: () => Promise<Array<{ id: string; kind: 'create' | 'narrow' | 'split' | 'merge' | 'retire'; draft: { name: string; description: string } }>> } }).electronAPI
-            void api?.curatorListProposals?.().then((p) => setProposals(p ?? []))
-          }}
-        />
-      )}
+      {/* The Skill Curator review popup used to mount here, opened from the
+          curator's review-inbox rail section. That section is gone (decision D7
+          — with the curator off it can never receive another proposal), and the
+          popup went with it rather than sitting in the tree unreachable. */}
     </div>
   )
 }

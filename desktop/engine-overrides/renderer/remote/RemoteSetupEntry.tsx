@@ -1,9 +1,10 @@
-// Unmute Remote — the permanent way into agent setup.
+// Unmute Orchestrator — the permanent way into agent setup.
 //
-// WHY THIS EXISTS. The setup page had no entry point at all: it hung off
-// TaskPanel, which nothing imports, so the entire checklist — agents, the Chrome
-// extension, MCPs — was unreachable in the shipped app. The Remote tab rendered
-// only RemoteSettings.
+// WHY THIS EXISTS. The setup page had no entry point at all: it hung off a task
+// panel that nothing imported, so the entire checklist — agents, the Chrome
+// extension, MCPs — was unreachable in the shipped app. The tab rendered only
+// the settings panel. This component is now the ONLY route to `RemoteSetup`;
+// deleting it strands the checklist again.
 //
 // WHY IT IS ALWAYS VISIBLE. Setup is not a one-time gate. A user may run Codex
 // first and add Claude Code months later, and a connected Codex REGRESSES on its
@@ -42,7 +43,7 @@ export function RemoteSetupEntry({ onOpen }: { onOpen: () => void }) {
         className="w-full text-left rounded-lg border border-black/10 bg-cream-mid/40 p-3 hover:bg-black/5 flex items-center gap-3"
         onClick={onOpen}
       >
-        <span className="text-base leading-none">⚙</span>
+        <span className="text-[16px] leading-none">⚙</span>
         <span className="flex-1">
           <span className="block text-[13px] font-semibold text-ink flex items-center gap-1.5">
             Agents &amp; setup

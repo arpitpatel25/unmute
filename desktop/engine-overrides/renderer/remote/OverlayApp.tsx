@@ -1,13 +1,13 @@
-// Unmute Remote — the floating overlay's renderer (loaded at #/overlay).
+// Unmute Orchestrator — the floating overlay's renderer (loaded at #/overlay).
 //
 // A compact, translucent-DARK task surface shown on top of whatever the user is
 // doing. Auto-presents (from the main process) on a terminal/attention state and
 // expands the task that just changed; the user reads the result/answer in place,
-// answers needs-user by voice (Remote key) or by typing into the task terminal,
+// answers needs-user by voice (the Orchestrator key) or by typing into the task terminal,
 // and dismisses with Esc or the ✕ — it NEVER closes on its own.
 //
 // Aesthetic: minimal, black-translucent, no white cards/borders. Its own dark
-// rendering (NOT the light in-app TaskRow), with a soft expand/collapse animation.
+// rendering (NOT a light in-app list row), with a soft expand/collapse animation.
 
 import { useEffect, useRef, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
@@ -217,7 +217,7 @@ function Expanded({
               <button className="text-[11px] px-2.5 py-1 rounded-lg bg-amber-400/20 text-amber-100" type="submit">send</button>
             </form>
           )}
-          <div className="text-[10px] text-white/30 mt-1.5">🎙 or hold the Remote key and speak your answer</div>
+          <div className="text-[10px] text-white/30 mt-1.5">🎙 or hold the Orchestrator key and speak your answer</div>
         </div>
       )}
 
@@ -229,9 +229,11 @@ function Expanded({
         {!active && (
           <button className="text-white/35 hover:text-white/80" onClick={() => onRerun(task.intent)}>re-run</button>
         )}
-        {/* PTY-only: a Codex thread has no session of ours to revive. Asked of
-            the provider registry, not spelled "not Codex". */}
-        {!active && (task.provider ? task.provider.canResume : task.agent !== 'codex-desktop') && (
+        {/* PTY-only: a driver-backed thread has no session of ours to revive.
+            Asked of the provider registry, never of an agent id — a payload
+            with no provider predates the registry and was always a resumable
+            Claude Code PTY session, so the default is a literal capability. */}
+        {!active && (task.provider?.canResume ?? true) && (
           <button
             className="text-white/35 hover:text-white/80 disabled:opacity-40 disabled:cursor-default"
             title={task.resuming ? 'Bringing the session back…' : 'Continue this exact session with full prior context'}
@@ -244,7 +246,7 @@ function Expanded({
           <span className="text-red-400/70" title={task.resumeError}>couldn’t resume</span>
         )}
         {wallOwned ? (
-          <span className="text-white/30" title="This session's terminal is open in the Orchestrate cockpit">in cockpit ↗</span>
+          <span className="text-white/30" title="This session's terminal is open in the Orchestrator">in Orchestrator ↗</span>
         ) : (
           <button className="text-white/35 hover:text-white/80" onClick={() => setShowTerminal((v) => !v)}>
             {showTerminal ? 'hide terminal' : 'terminal'}
@@ -503,7 +505,7 @@ export function OverlayApp() {
         </div>
 
         <div className="px-4 py-2 text-[9.5px] tracking-wide text-white/25">
-          hold the Remote key to answer · {dockedEnabled ? 'esc to collapse' : 'esc to dismiss'}
+          hold the Orchestrator key to answer · {dockedEnabled ? 'esc to collapse' : 'esc to dismiss'}
         </div>
       </div>
     </div>

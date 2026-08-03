@@ -1,16 +1,21 @@
-// Unmute Remote — "Set up Remote" page.
+// Unmute Orchestrator — "Agents & setup" page.
 //
-// Full-page setup reached from the Remote tab. DECIDED posture: Remote needs
-// exactly ONE thing — the Claude for Chrome extension. Everything else is
-// optional and granted as-needed, so the required part stays a 30-second job and
-// the optional integrations are clearly framed as "add as you go".
+// Full-page setup reached from the Orchestrator tab.
 //
-// Drives off the live setup-status IPC (same as the old Onboarding widget):
-// chrome-extension is the one required step; tmux + MCPs are optional. Unmute is
-// never in the credential path — the user authorizes each integration in their
-// own Claude Code.
+// WHAT IS ACTUALLY REQUIRED, said once. This page used to claim two different
+// things at the same time: a header comment and a badge saying the Chrome
+// extension was "exactly ONE thing" the product needs, and body copy saying you
+// need an agent and that everything else is optional. Both cannot be true, and
+// the second one is: without an agent there is no product at all, while the
+// extension buys you exactly one lane — browser tasks. So the badge on the
+// extension now says what it is required FOR, and the agents section is the only
+// thing marked required.
+//
+// Drives off the live setup-status IPC. Unmute is never in the credential path —
+// the user authorizes each integration in their own agent.
 
 import { useEffect, useState } from 'react'
+import { Toggle } from '../app/_shared'
 import installExtImg from '../assets/setup-install-extension.png'
 import extActiveImg from '../assets/setup-extension-active.png'
 
@@ -82,14 +87,15 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
         className="text-[11px] text-ink/50 hover:text-ink mb-3 flex items-center gap-1"
         onClick={onBack}
       >
-        ← Back to Remote
+        ← Back
       </button>
 
-      <div className="text-lg font-semibold text-ink mb-1">Agents &amp; setup</div>
-      <div className="text-[12px] text-ink/50 mb-5">
-        Remote runs your work on an agent — set up at least one below. The Claude
-        for Chrome extension is needed for browser tasks; everything else is
-        optional, add it whenever you like.
+      <div className="text-[16px] font-semibold text-ink mb-1">Agents &amp; setup</div>
+      <div className="text-[12.5px] text-ink/50 mb-5">
+        The Orchestrator runs your work on an agent, so <b>you need at least one</b> —
+        that is the only requirement on this page. The Claude for Chrome extension
+        unlocks browser tasks; everything below it is optional and can be added
+        whenever you like.
       </div>
 
       {/* ─── The agents that run the work ───
@@ -98,9 +104,15 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
           when something must be installed, a button when Unmute can do it. */}
       {backends.length > 0 && (
         <div className="rounded-lg border border-black/10 p-4 mb-4">
-          <div className="text-[13px] font-semibold text-ink mb-1">Agents</div>
-          <div className="text-[12px] text-ink/50 mb-3">
-            Where your tasks actually run. You need at least one.
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[13px] font-semibold text-ink">Agents</span>
+            <span className="ml-auto text-[10px] uppercase tracking-wider text-accent font-semibold">
+              required
+            </span>
+          </div>
+          <div className="text-[12.5px] text-ink/50 mb-3">
+            Where your tasks actually run. You need at least one; nothing else on this
+            page matters without it.
           </div>
           {backends.map((step) => (
             <div key={step.key} className="py-2 border-t border-black/5 first:border-t-0">
@@ -109,7 +121,7 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
                   {step.status === 'done' ? '✓' : '○'}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <div className={`text-[12px] font-medium ${step.status === 'done' ? 'text-ink/50' : 'text-ink'}`}>
+                  <div className={`text-[12.5px] font-medium ${step.status === 'done' ? 'text-ink/50' : 'text-ink'}`}>
                     {step.title}
                   </div>
                   {step.status !== 'done' && (
@@ -126,9 +138,12 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
                       className="mt-2 text-[11px] px-2.5 py-1 rounded border border-black/15 hover:bg-black/5 disabled:opacity-50"
                       disabled={busy}
                       onClick={async () => {
+                        // Arming QUITS AND RELAUNCHES the user's Codex app. The
+                        // detail text above says so, and this says it again at
+                        // the moment of the click — closing someone's app is not
+                        // something to do on a single unconfirmed tap.
+                        if (!window.confirm('Connect Codex?\n\nUnmute will quit the Codex app and reopen it in the background so it can drive it. Your threads are kept.')) return
                         setBusy(true)
-                        // Arming quits and relaunches Codex in the background; the
-                        // detail text warns about that before this point.
                         try { await api().remoteCodexConnect?.() } catch { /* re-check tells the truth */ }
                         await refresh()
                         setBusy(false)
@@ -144,7 +159,9 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
         </div>
       )}
 
-      {/* ─── Required: the Chrome extension ─── */}
+      {/* ─── The Chrome extension: needed for browser tasks, and only those ───
+          NOT marked required. It buys exactly one lane; the agents section above
+          is the only thing on this page without which there is no product. */}
       <div className="rounded-lg border border-black/10 p-4 mb-4 bg-cream-mid/40">
         <div className="flex items-center gap-2 mb-2">
           <span className={ext?.status === 'done' ? 'text-green-700' : 'text-ink/30'}>
@@ -153,12 +170,12 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
           <span className="text-[13px] font-semibold text-ink">
             Install the Claude for Chrome extension
           </span>
-          <span className="ml-auto text-[10px] uppercase tracking-wider text-accent font-semibold">
-            required
+          <span className="ml-auto text-[10px] uppercase tracking-wider text-ink/40 font-semibold">
+            for browser tasks
           </span>
         </div>
 
-        <div className="text-[12px] leading-relaxed text-ink/70 mb-2">
+        <div className="text-[12.5px] leading-relaxed text-ink/70 mb-2">
           Add the Claude for Chrome extension to your normal Chrome from the Chrome
           Web Store and enable it. Browser tasks drive your real, already-signed-in
           Chrome — no separate profile or login needed. If you already have it, just
@@ -170,9 +187,9 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
           className="w-full rounded-md border border-black/10 mb-3"
         />
 
-        <div className="text-[12px] leading-relaxed text-ink/70 mb-2">
+        <div className="text-[12.5px] leading-relaxed text-ink/70 mb-2">
           Then keep <b>one Chrome window open</b> with the extension active while you
-          use Remote — that&rsquo;s the window your browser tasks run in.
+          work — that&rsquo;s the window your browser tasks run in.
         </div>
         <img
           src={extActiveImg}
@@ -180,15 +197,14 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
           className="w-full rounded-md border border-black/10 mb-3"
         />
 
-        <label className="flex items-center gap-2 text-[12px] text-ink/70">
-          <input
-            type="checkbox"
+        <div className="flex items-center gap-2.5 text-[12.5px] text-ink/70">
+          <Toggle
             checked={ext?.status === 'done'}
             disabled={busy || !ext}
-            onChange={(e) => void setConfirm('chrome-extension', e.target.checked)}
+            onChange={(on) => void setConfirm('chrome-extension', on)}
           />
-          I&rsquo;ve installed the extension and have a Chrome window open
-        </label>
+          <span>I&rsquo;ve installed the extension and have a Chrome window open</span>
+        </div>
       </div>
 
       {/* ─── Optional: add as you go ─── */}
@@ -196,12 +212,12 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
         <div className="text-[13px] font-semibold text-ink mb-1">
           Add more as you go <span className="text-ink/40 font-normal">(optional)</span>
         </div>
-        <div className="text-[12px] leading-relaxed text-ink/60 mb-3">
-          Remote already works. These just unlock more — connect them whenever you
-          want, and Remote will ask for what it needs, when it needs it. Sign into
-          your accounts (Gmail and the rest) in that same Chrome window so browser
-          tasks can act for you. Unmute never sees your credentials — you authorize
-          each one in your own Claude Code.
+        <div className="text-[12.5px] leading-relaxed text-ink/60 mb-3">
+          With an agent set up you are already working. These just unlock more —
+          connect them whenever you want, and a task will ask for what it needs, when
+          it needs it. Sign into your accounts (Gmail and the rest) in that same Chrome
+          window so browser tasks can act for you. Unmute never sees your credentials —
+          you authorize each one in your own agent.
         </div>
 
         {optional.map((step) => (
@@ -211,7 +227,7 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
                 {step.status === 'done' ? '✓' : '○'}
               </span>
               <div className="flex-1">
-                <div className={`text-[12px] font-medium ${step.status === 'done' ? 'text-ink/50 line-through' : 'text-ink'}`}>
+                <div className={`text-[12.5px] font-medium ${step.status === 'done' ? 'text-ink/50 line-through' : 'text-ink'}`}>
                   {step.title}
                 </div>
                 <div className="text-[11px] text-ink/50 mt-0.5">{step.detail}</div>
@@ -236,15 +252,14 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
                   </div>
                 )}
                 {!step.auto && (
-                  <label className="flex items-center gap-1.5 mt-1 text-[11px] text-ink/60">
-                    <input
-                      type="checkbox"
+                  <div className="flex items-center gap-2 mt-1.5 text-[11px] text-ink/60">
+                    <Toggle
                       checked={step.status === 'done'}
                       disabled={busy}
-                      onChange={(e) => void setConfirm(step.key, e.target.checked)}
+                      onChange={(on) => void setConfirm(step.key, on)}
                     />
-                    I&rsquo;ve done this
-                  </label>
+                    <span>I&rsquo;ve done this</span>
+                  </div>
                 )}
               </div>
             </div>
