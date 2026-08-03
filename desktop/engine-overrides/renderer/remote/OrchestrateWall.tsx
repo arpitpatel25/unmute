@@ -285,7 +285,7 @@ function TicketFacts({ t }: { t: RemoteTask }) {
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 26px', padding: '9px 14px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
       <Fact label="agent" value={<><span aria-hidden style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 2, background: vendorMark(t), marginRight: 6 }} />{providerLabel(t)}</>} />
-      <Fact label="model" value={t.model ?? <span style={{ color: C.faintText }}>not recorded</span>} />
+      <Fact label="model" value={t.model || <span style={{ color: C.faintText }}>not recorded</span>} />
       <Fact label="working directory" value={dirLabel(t) || <span style={{ color: C.faintText }}>none</span>} title={t.cwd || undefined} />
       <Fact label="permissions" value={permission ? `${permission}` : '…'} title="The current Orchestrator setting — permission mode is not recorded per task." />
     </div>

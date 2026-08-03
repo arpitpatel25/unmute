@@ -1,4 +1,4 @@
-// Unmute Remote — the live terminal. A REAL terminal, done the way iTerm and
+// Unmute Orchestrator — the live terminal. A REAL terminal, done the way iTerm and
 // VS Code do it, not a reconstruction.
 //
 // THE MODEL (why this finally behaves like a terminal). We OWN the PTY: the
