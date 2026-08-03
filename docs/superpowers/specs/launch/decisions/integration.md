@@ -89,6 +89,32 @@ Pack D's additive `autoPresent` IPC command is a *refinement* — it lets the no
 
 I corrected the over-cautious comment Pack B had written on my instruction (commit `5e3840d`), because it would have sent whoever picked up integration hunting for a hop that already exists.
 
+## I11 — Two `visibleOnWall` rules now exist and disagree
+
+**Raised by:** Pack C's verifier. Pack C could not fix it — `electron/` is out of its scope.
+
+The renderer's `visibleOnWall` now enforces the 24-hour window. The main process keeps **its own copy** at `electron/remote/notch/notch-controller.ts:725`, untouched, whose comments still describe the old rule — `:723` *"sessions never fade"* — and `init.ts:1943` still says *"the renderer's visibleOnWall: non-shelved sessions always"*. All three statements are now false.
+
+This is why the notch's count did not move when the wall's filter changed, which is the **correct** behaviour (the notch shows what is running; the wall shows what is visible — different sets). So the divergence is intentional in effect and accidental in origin.
+
+**Fix at integration:** leave the two implementations separate, but rename the main-process copy so it cannot be mistaken for the renderer's rule, and correct all three stale comments. A same-named function with two definitions is a trap for whoever next edits either.
+
+## I12 — Eight curator IPC handlers now have no consumer
+
+**Raised by:** Pack C's verifier.
+
+Removing Suggestions orphaned `curator:list-proposals`, `curator:get-proposal`, `curator:accept`, `curator:reject`, `curator:converse-start/write/stop` and `curator:conv-data` — eight handlers with zero renderer callers. Nothing crashes: all are pull-based `invoke` handlers, and the one push channel only fires after a call that no longer happens.
+
+**Fix at integration, together with I8.** Parking the curator and deleting its unreachable IPC surface are the same job; doing one without the other leaves a switched-off subsystem still exposing an API.
+
+## I13 — The sandbox directory picker is not built
+
+**Raised by:** Pack C's verifier. **Spec item openly unmet, with a sound reason.**
+
+SPEC §6 required replacing the free-text sandbox path field with a directory picker. Pack C shipped one-tap project chips instead and documented why: no `dialog.showOpenDialog` IPC exists, and `File.path` was removed in Electron 32 while the engine ships 40 — so a renderer-only picker is impossible.
+
+**Decision: accept the chips for launch.** They cover the common case (adding a project you already use) without a main-process change. A real picker needs a new IPC handler in `init.ts` and belongs in a follow-up, not in a launch pack.
+
 ## I4 — Corner radius is an estimate, by necessity
 
 **Raised by:** Pack D.
