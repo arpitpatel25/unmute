@@ -249,8 +249,24 @@ final class AppController: NSObject, NotchResizing {
 
     private func applyState(_ commanded: NotchState) {
         // AUTO-PRESENT decides whether an expanded rung is honoured at all.
-        let state = presentableState(commanded)
+        var state = presentableState(commanded)
         syncGeometry("state")
+        // DORMANT IS ONLY AVAILABLE WHERE THE HARDWARE IS THE LANDMARK.
+        //
+        // Hiding at rest is right on a notched display: the cutout is always
+        // visible, so "put the pointer in the notch" is a gesture people already
+        // have, and dormantFrame() reserves exactly those pixels for it.
+        //
+        // On a display with no cutout there is nothing to aim at. Dormant there
+        // reserved a 2pt strip at dead centre — findable only by accident, which
+        // is what testing on a 1920x1080 external screen found: the surface
+        // appeared "only in the middle", after hunting for it.
+        //
+        // The notch is a CONTROL as well as an indicator — it is the way into the
+        // orchestrator. An indicator may hide when there is nothing to say; a
+        // control may not. So off-notch, dormant collapses into idle: quiet,
+        // small, never glowing, but always there and always a target.
+        if state == .dormant && !geometry.hasNotch { state = .idle }
         // Each visit starts at the hard-coded size. A size dragged out for one
         // look at a task is not a preference — carrying it across would make the
         // surface's size a hidden setting the user never chose to persist.
@@ -558,6 +574,10 @@ final class AppController: NSObject, NotchResizing {
             }
         } else {
             guard model.state == .idle, commandedState == .dormant else { return }
+            // Off-notch there is no dormant to fall back to (applyState maps it
+            // to idle), so arming this timer would log a transition that never
+            // happens and then do nothing. Idle IS the resting state here.
+            guard geometry.hasNotch else { return }
             hoverTimer?.invalidate()
             hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
                 guard let self, self.model.state == .idle, self.commandedState == .dormant else { return }

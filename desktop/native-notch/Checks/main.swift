@@ -146,9 +146,21 @@ let f3 = plain.barFrame(m3)
 check("with no cutout the mass centres on the screen", near(f3.midX, screen.midX, 1))
 check("and still sits in the menu bar row", f3.height == 24 && f3.maxY == screen.maxY)
 
-// Dormant reserves nothing on a display with no cutout, and exactly the cutout
-// (inset, so no black can spill past its rounded corners) on one with.
-check("dormant reserves nothing without a cutout", plain.dormantFrame().width == 2)
+// DORMANT IS A NOTCHED-DISPLAY LUXURY.
+//
+// On a display WITH a cutout, dormant reserves exactly the cutout (inset, so no
+// black spills past its rounded corners) and draws nothing: the hardware is the
+// landmark, and "put the pointer in the notch" is a gesture people already have.
+//
+// On a display WITHOUT one there is nothing to aim at, so AppController never
+// enters dormant there — it maps to idle (see applyState). dormantFrame()'s
+// no-cutout branch is therefore unreachable in the app. It stays as a 2pt strip
+// only so this pure function is total; the check below pins that it is NOT what
+// the user ever sees, which is the mistake this replaced: a 2pt hit target at
+// dead centre, findable only by accident.
+check("dormant off-notch is a degenerate frame, never a real surface", plain.dormantFrame().width == 2)
+check("the real off-notch resting frame is idle-sized, and a findable target",
+      plain.barFrame(plain.mass(left: 60, right: 0)).width >= 60)
 let dz = notched.dormantFrame()
 check("dormant hides inside the cutout", dz.width == cut.width - 2 && dz.minX == cut.minX + 1)
 check("dormant is still bar height", dz.height == barH && dz.maxY == screen.maxY)
