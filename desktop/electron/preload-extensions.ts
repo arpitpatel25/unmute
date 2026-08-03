@@ -11,6 +11,17 @@ export const paywallPreloadExtensions = {
   paywallAppVersion: (): Promise<string> =>
     ipcRenderer.invoke('paywall:app-version'),
 
+  /** Ask NOW whether an update exists. Reuses the same electron-updater the
+   *  background checker uses, so a found update downloads itself and surfaces
+   *  through the existing "ready to install" banner — the button starts the
+   *  identical path, it does not run a second one. */
+  paywallCheckForUpdates: (): Promise<
+    | { status: 'available'; version: string }
+    | { status: 'current'; version?: string }
+    | { status: 'unsupported'; message: string }
+    | { status: 'error'; message: string }
+  > => ipcRenderer.invoke('paywall:check-for-updates'),
+
   // Keychain bridge (used by supabase-js storage adapter)
   paywallKeychainGet: (key: string): Promise<string | null> =>
     ipcRenderer.invoke('paywall:keychain-get', key),

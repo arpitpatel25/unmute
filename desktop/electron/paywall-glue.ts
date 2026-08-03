@@ -208,6 +208,14 @@ export async function refreshRemoteTriggerEntitlement(): Promise<void> {
 }
 
 
+/** What an on-demand update check found. `available` means it is downloading
+ *  now and the existing "ready to install" banner will appear when it lands. */
+export type UpdateCheckResult =
+  | { status: 'available'; version: string }
+  | { status: 'current'; version?: string }
+  | { status: 'unsupported'; message: string }
+  | { status: 'error'; message: string }
+
 // Substituted by build script
 declare const __SUPABASE_URL__: string
 declare const __SUPABASE_ANON_KEY__: string
@@ -881,6 +889,38 @@ function registerSessionBridge() {
   // ─── Launch at login (macOS) ─────────────────────────────────
   // Backed by Electron's app.setLoginItemSettings(). macOS persists this
   // in launchd; we don't need our own electron-store entry.
+  // ON-DEMAND UPDATE CHECK.
+  //
+  // The engine already runs electron-updater: it checks 10s after launch and
+  // every 6h, downloads automatically, and broadcasts `updater:downloaded` so
+  // App.tsx can offer Restart. What it had no way to do was answer "check NOW",
+  // so Settings' button merely opened the releases page in a browser — which
+  // tells the user nothing about the copy they are running.
+  //
+  // This reuses the SAME autoUpdater singleton the engine configured, so the
+  // behaviour is identical to the automatic path: a found update downloads by
+  // itself (`autoDownload = true`) and surfaces through the existing banner.
+  // We deliberately do NOT install here — the user chooses when to restart,
+  // exactly as they do for a background update.
+  ipcMain.handle('paywall:check-for-updates', async (): Promise<UpdateCheckResult> => {
+    // electron-updater needs the packaged app-update.yml; in dev it throws.
+    if (!app.isPackaged) return { status: 'unsupported', message: 'Updates only run in an installed build.' }
+    try {
+      const { autoUpdater } = await import('electron-updater')
+      const res = await autoUpdater.checkForUpdates()
+      const latest = res?.updateInfo?.version
+      if (!latest) return { status: 'current' }
+      // checkForUpdates resolves for both outcomes; compare to decide which.
+      const current = app.getVersion()
+      if (latest === current) return { status: 'current', version: current }
+      return { status: 'available', version: latest }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      console.warn('[paywall-glue] update check failed:', message)
+      return { status: 'error', message }
+    }
+  })
+
   ipcMain.handle('paywall:get-launch-at-login', () => {
     try {
       return app.getLoginItemSettings().openAtLogin

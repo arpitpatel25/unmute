@@ -110,14 +110,15 @@ interface SettingsApi {
    *  Named here so the row is one line from working. See KILL_SWITCHES_WIRED. */
   remoteSetCuratorEnabled?: (on: boolean) => Promise<boolean>
   paywallOpenExternal?: (url: string) => Promise<boolean>
+  paywallCheckForUpdates?: () => Promise<
+    | { status: 'available'; version: string }
+    | { status: 'current'; version?: string }
+    | { status: 'unsupported'; message: string }
+    | { status: 'error'; message: string }
+  >
 }
 const api = (): SettingsApi =>
   (window as unknown as { electronAPI?: SettingsApi }).electronAPI ?? {}
-
-/** Releases live on our own repo, not the OSS engine's — the same target
- *  electron-builder publishes to (build/wire-into-engine.sh:270-275), so what
- *  this opens is what the in-app updater installs from. */
-const RELEASES_URL = 'https://github.com/arpitpatel25/unmute/releases/latest'
 
 /* ─── The two kill-switches, and why they are inert ───
  *
@@ -176,6 +177,30 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   const [lowercaseOutput, setLowercaseOutput] = useState<boolean>(false)
   const [dictationCleanup, setDictationCleanup] = useState<boolean>(true)
   const [appVersion, setAppVersion] = useState<string | null>(null)
+  // ON-DEMAND UPDATE. The button used to open the releases page in a browser,
+  // which answers a different question than the one being asked: the user wants
+  // to know about the copy they are RUNNING, not what exists on GitHub.
+  //
+  // This runs the same electron-updater the background checker runs. A found
+  // update downloads itself and arrives through the existing "ready to install"
+  // banner, so on-demand and automatic are one path, not two. We never install
+  // from here — restarting stays the user's decision either way.
+  const [updateBusy, setUpdateBusy] = useState(false)
+  const [updateNote, setUpdateNote] = useState<string | null>(null)
+  async function runUpdateCheck(): Promise<void> {
+    setUpdateBusy(true)
+    setUpdateNote(null)
+    try {
+      const r = await api().paywallCheckForUpdates?.()
+      if (!r) { setUpdateNote('Could not check right now. Try again in a moment.'); return }
+      if (r.status === 'available') setUpdateNote(`Version ${r.version} is downloading. You will be offered a restart when it is ready.`)
+      else if (r.status === 'current') setUpdateNote('You are up to date.')
+      else if (r.status === 'unsupported') setUpdateNote(r.message)
+      else setUpdateNote('Could not reach the update server. Check your connection and try again.')
+    } finally {
+      setUpdateBusy(false)
+    }
+  }
   // 'system' is the default and the only value that respects an accessibility
   // preference — macOS already owns this setting (Accessibility → Reduce
   // Transparency, and the Liquid Glass opacity slider on 26+). The explicit
@@ -659,13 +684,14 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
           <Card>
             <SettingRow
               label={`unmute ${appVersion ? `v${appVersion}` : ''}`.trim()}
-              description="unmute updates itself in the background. This opens the latest release."
+              description={updateNote ?? 'unmute updates itself in the background. Check now if you would rather not wait.'}
             >
               <button
-                onClick={() => { void api().paywallOpenExternal?.(RELEASES_URL) }}
-                className="px-4 py-2 rounded-full border border-border text-[12.5px] font-semibold text-ink-60 hover:bg-cream-mid hover:border-border-md transition-all duration-200"
+                disabled={updateBusy}
+                onClick={() => { void runUpdateCheck() }}
+                className="px-4 py-2 rounded-full border border-border text-[12.5px] font-semibold text-ink-60 hover:bg-cream-mid hover:border-border-md transition-all duration-200 disabled:opacity-50"
               >
-                Check for updates
+                {updateBusy ? 'Checking…' : 'Check for updates'}
               </button>
             </SettingRow>
             <SettingRow label="Replay onboarding" description="Walk through the welcome and setup steps again">
