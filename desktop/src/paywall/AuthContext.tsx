@@ -31,7 +31,7 @@
 
 import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { getSupabase } from './supabase-client'
+import { getSupabase, readStoredSession, clearStoredSession } from './supabase-client'
 import { writeCachedSubscription } from './subscription-cache'
 
 export type AuthState = 'idle' | 'opening' | 'waiting' | 'exchanging' | 'error'
@@ -72,6 +72,12 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 // Timeout for "waiting" state — if no callback in 5 min, revert to idle so the
 // user isn't stuck looking at a spinner. Tunable.
 const OAUTH_WAIT_TIMEOUT_MS = 5 * 60 * 1000
+
+// How long sign-out waits for supabase-js to revoke the token server-side
+// before tearing the session down regardless. Generous enough for a real
+// /auth/v1/logout round trip, short enough that "Sign out" always feels
+// immediate. The revoke request is not cancelled when this elapses.
+const SIGN_OUT_REVOKE_BUDGET_MS = 1500
 
 // Last-known signed-in user, cached SYNCHRONOUSLY in localStorage so the very
 // first render already shows the signed-in UI. Without this, `user` starts null
@@ -114,6 +120,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [sessionEpoch, setSessionEpoch] = useState(0)
 
   const waitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Set when a sign-out is accounted for: either the user asked for one, or the
+  // main process told us the refresh token was rejected. See honourSignOut.
+  const signOutExpectedRef = useRef(false)
+
+  /**
+   * End the session everywhere, unconditionally. The one teardown both
+   * sign-out routes use — the user pressing Sign out, and main reporting that
+   * the server rejected the refresh token.
+   *
+   * It does not delegate to supabase-js, because supabase-js cannot be relied
+   * on to finish the job here. `GoTrueClient._signOut()` reads the session
+   * first and returns early — clearing nothing, emitting no SIGNED_OUT — if
+   * that read errors, and the read errors whenever the access token has
+   * expired, because the refresh it wants is main's to make and ours to
+   * refuse. Worse, it *resolves* with an `{ error }` rather than throwing, so
+   * neither a `try/catch` nor a `.catch()` notices. Both sign-out routes run
+   * precisely when the token is most likely to be stale, so both must tear the
+   * session down themselves.
+   *
+   * supabase-js is still asked — when it can, it revokes the token server-side,
+   * which nothing else here does — but it is never waited on for long. With a
+   * stale access token its signOut() sits in the same ~25s refresh-retry loop
+   * as getSession() and then clears nothing, so awaiting it would leave the
+   * user looking at a signed-in UI long after pressing Sign out. It is given a
+   * short budget; the request keeps running in the background either way, so a
+   * slow-but-successful revoke is not lost, it just stops holding up the UI.
+   */
+  const tearDownSession = useCallback(async (scope: 'global' | 'local' = 'global') => {
+    // Mark it BEFORE asking, so any SIGNED_OUT this produces is recognised as
+    // one we asked for and skips the second opinion honourSignOut applies to
+    // unsolicited ones.
+    signOutExpectedRef.current = true
+    const revoke = getSupabase().auth.signOut({ scope }).catch(() => { /* best-effort */ })
+    await Promise.race([
+      revoke,
+      new Promise((resolve) => setTimeout(resolve, SIGN_OUT_REVOKE_BUDGET_MS)),
+    ])
+    await clearStoredSession()
+    try {
+      await window.electronAPI.paywallSignOut?.()
+    } catch {
+      /* best-effort */
+    }
+    setUser(null)
+    // Never leave this latched: a stuck `true` would let the next unsolicited
+    // SIGNED_OUT through without corroboration.
+    signOutExpectedRef.current = false
+  }, [setUser])
 
   // ─── Bootstrap: read existing session, subscribe to auth-state changes ───
   useEffect(() => {
@@ -146,38 +200,161 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .catch(() => { /* best-effort */ })
     }
 
-    supa.auth.getSession().then(({ data }) => {
+    /**
+     * Clear the user — but only for a reason that actually means "signed out".
+     *
+     * A stale access token is not a signed-out user. Main owns proactive
+     * refresh now (paywall-glue.scheduleAutoRefresh) and the renderer's
+     * supabase client is denied the token endpoint outright, so between an
+     * access token expiring and main's next push supabase-js has no way to
+     * produce a session and will hand us `null`. Treating that as a sign-out
+     * is the bug this pack exists to fix — it flips the UI to signed-out *and*
+     * pushes a null token into main, which is what makes the next dictation
+     * fall back to the local model and announce a downgrade.
+     *
+     * Only two things are real sign-outs:
+     *   1. the user asked, or
+     *   2. the server rejected the refresh token.
+     * Main is the only process that calls the token endpoint, so main is the
+     * only one that can observe (2) — it reports it as a null token pair on
+     * `paywall:token-refreshed`. Both routes set signOutExpectedRef.
+     *
+     * An unsolicited SIGNED_OUT is something else: supabase-js also emits one
+     * for a stored session it could not parse. We ask main for a second
+     * opinion before acting on it. If main still holds a session, ignoring the
+     * event is not just safe but self-healing — main's next broadcast feeds a
+     * good token back through setSession and repopulates the keychain.
+     */
+    async function honourSignOut() {
+      if (!signOutExpectedRef.current) {
+        try {
+          // Cast: window.electronAPI's ambient type comes from the OSS engine
+          // at build time and isn't available in this repo. paywallGetUser is
+          // real (electron/preload-extensions.ts) — the cast just avoids
+          // depending on a declaration we cannot see from here.
+          const api = window.electronAPI as unknown as {
+            paywallGetUser?: () => Promise<AuthUser | null>
+          }
+          const mainUser = await api.paywallGetUser?.()
+          if (mainUser) {
+            console.warn('[auth] ignoring an unsolicited SIGNED_OUT — main still holds a live session')
+            return
+          }
+        } catch {
+          /* couldn't ask — fall through and honour the event */
+        }
+      }
+      signOutExpectedRef.current = false
+      setUser(null)
+      // paywallSignOut, NOT pushSessionToMain(null). Both null out main's
+      // session, but only `paywall:sign-out` runs clearSessionState() — which
+      // also cancels the refresh timer and drops the Remote entitlement
+      // (`remoteTriggerEntitled`, the trigger state, the per-account pref).
+      // Pushing a null session instead leaves the Remote key live for a user
+      // main considers signed out, and leaves the next account inheriting this
+      // one's trigger choice. A sign-out honoured here is as real as one the
+      // user pressed, so it gets the same teardown.
+      window.electronAPI.paywallSignOut?.().catch(() => { /* best-effort */ })
+    }
+
+    // ── Hand main the credential FIRST, before asking supabase-js anything ──
+    //
+    // Main starts empty and is the only process that can use a refresh token,
+    // so the sooner it has one the sooner cloud dictation works. This is a
+    // plain keychain read: measured at ~0ms.
+    //
+    // It must not wait for getSession(). When the stored access token has
+    // expired, getSession() spends **~25 seconds** inside supabase-js's bounded
+    // refresh-retry loop (auth-js retries a refresh with exponential backoff
+    // until AUTO_REFRESH_TICK_DURATION_MS elapses; ours is refused instantly,
+    // so the whole budget is spent sleeping) before returning `session: null`.
+    // Blocking the hand-off on that would leave main with no token for 25s
+    // after every launch that follows a night's downtime — dictation on the
+    // local model, announcing a downgrade. That is the very symptom this pack
+    // exists to remove, and it is exactly when a user reaches for it.
+    //
+    // Main's scheduleAutoRefresh then sees a past-due expiry, refreshes at
+    // once, and broadcasts — which repairs supabase-js's own session via
+    // setSession in the handler below.
+    void (async () => {
+      const stored = await readStoredSession()
+      if (cancelled || !stored) return
+      if (stored.user) setUser(stored.user)
+      window.electronAPI.paywallSetSession?.({
+        accessToken: stored.accessToken,
+        refreshToken: stored.refreshToken,
+        expiresAt: stored.expiresAt,
+        user: stored.user,
+      }).catch(() => { /* best-effort */ })
+    })()
+
+    supa.auth.getSession().then(({ data, error }) => {
       if (cancelled) return
       const u = data.session?.user
-      setUser(u ? { id: u.id, email: u.email ?? null } : null)
-      // Important: on cold start we still need to tell main about a restored
-      // session (the keychain bridge persists tokens but main starts empty).
-      pushSessionToMain(data.session)
+      if (u) {
+        setUser({ id: u.id, email: u.email ?? null })
+        // Fresh session — this is the same credential the read above pushed,
+        // now with a confirmed-live access token. Same refresh token, so main
+        // treats it as an echo rather than a replacement.
+        pushSessionToMain(data.session)
+        return
+      }
+      if (error) {
+        // Not "no credential" — "couldn't produce a usable session right now".
+        // getSession() returns null whenever the stored access token has
+        // expired, because renewing it is main's job. Keep the cached user, and
+        // above all do NOT push a null token into main. The credential hand-off
+        // above already happened, and main is refreshing.
+        console.warn('[auth] getSession failed — keeping the last known session:', error.message)
+        return
+      }
+      // A clean null with no error: there is genuinely nothing stored.
+      setUser(null)
+      pushSessionToMain(null)
     })
 
-    const { data: sub } = supa.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = supa.auth.onAuthStateChange((event, session) => {
       const u = session?.user
-      setUser(u ? { id: u.id, email: u.email ?? null } : null)
-      pushSessionToMain(session)
       if (u) {
+        setUser({ id: u.id, email: u.email ?? null })
+        pushSessionToMain(session)
         // Successful sign-in — clear the modal + reset flow state
         clearWaitTimeout()
         setAuthState('idle')
         setErrorMessage(null)
         setShowSignIn(false)
+        return
       }
+      // A null session on INITIAL_SESSION / TOKEN_REFRESHED / USER_UPDATED
+      // means a refresh could not be completed. None of those is a sign-out.
+      if (event !== 'SIGNED_OUT') return
+      void honourSignOut()
     })
 
-    // Main-process forced refresh sync. When paywall-route hits a 401 on a
-    // managed call, it refreshes via /auth/v1/token directly and broadcasts
-    // the new tokens here. We adopt them into supabase-js so the renderer's
-    // next auto-refresh doesn't re-use the now-rotated old refresh token
-    // (which Supabase would reject as a replay attempt and sign the user
-    // out of the app).
-    window.electronAPI.paywallOnTokenRefreshed?.(({ accessToken, refreshToken }) => {
-      if (!accessToken || !refreshToken) return
-      supa.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
-        .catch((e) => console.warn('[auth] setSession after main refresh failed:', e))
+    // Main-process refresh sync. Main is the sole proactive refresher and also
+    // refreshes reactively when paywall-route hits a 401; either way it
+    // broadcasts the new pair here and we adopt it into supabase-js, which is
+    // how the renderer's session stays fresh without ever refreshing itself.
+    window.electronAPI.paywallOnTokenRefreshed?.((tokens) => {
+      const accessToken = tokens?.accessToken ?? null
+      const refreshToken = tokens?.refreshToken ?? null
+      if (accessToken && refreshToken) {
+        supa.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
+          .catch((e) => console.warn('[auth] setSession after main refresh failed:', e))
+        return
+      }
+      // BOTH null is main reporting that the server REJECTED the refresh
+      // token. That is the one remote event that is a genuine sign-out, and
+      // main has already cleared its own copy. Tear the local session down
+      // too; scope 'local' because there is no credential left to revoke.
+      // A half-filled pair is malformed, not a sign-out — ignore it.
+      if (accessToken || refreshToken) return
+      console.warn('[auth] main reports the refresh token was rejected — signing out')
+      // Scope 'local': the credential has already been rejected, so there is
+      // nothing left to revoke server-side. Full teardown, because this fires
+      // exactly when the access token is stale — the case where supabase-js's
+      // own signOut() quietly does nothing.
+      void tearDownSession('local')
     })
 
     return () => {
@@ -351,13 +528,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true
   }, [processCallbackUrl])
 
+  /** Sign out at the user's request. 'global' so the refresh token is revoked
+   *  server-side too, when supabase-js can still reach the endpoint. */
   const signOut = useCallback(async () => {
-    try {
-      await getSupabase().auth.signOut()
-    } catch {
-      /* swallow — onAuthStateChange will still clear state */
-    }
-  }, [])
+    await tearDownSession('global')
+  }, [tearDownSession])
 
   const value: AuthContextValue = {
     user,
