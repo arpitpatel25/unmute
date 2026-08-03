@@ -117,10 +117,25 @@ export default function History() {
 
   return (
     <div>
+      {/* RETENTION IS A PRIVACY CLAIM, so it says what the code does.
+       *
+       * Both halves of the old line were wrong. "Only today's sessions" — the
+       * cutoff is a ROLLING 24 hours (db.ts:239), not a calendar day, which is
+       * why a 3am screen still shows yesterday evening. And "the last 5
+       * recordings" — audio is pruned by SESSION (audio.ts:5,
+       * MAX_AUDIO_SESSIONS = 5, grouping files by session id), and one dictation
+       * can write several chunks, so the count was not what it said either.
+       *
+       * The heading said "Today" for the same reason and was equally wrong.
+       *
+       * Not mentioned here on purpose: sessions are ALSO capped at 100 rows
+       * (db.ts:242), oldest dropped first. It bites only on a very heavy day,
+       * and a retention line that lists two rules is one nobody finishes
+       * reading. Settings → Privacy is where the full posture belongs. */}
       <div className="mb-4">
-        <h2 className="font-display text-[22px] font-bold text-ink tracking-tight">Today</h2>
+        <h2 className="font-display text-[22px] font-bold text-ink tracking-tight">History</h2>
         <p className="text-[11px] text-ink-35 mt-1">
-          Only today's sessions are shown. Audio is kept for the last 5 recordings.
+          Sessions from the last 24 hours. Audio is kept for the 5 most recent dictations.
         </p>
       </div>
 
