@@ -20,8 +20,21 @@ const store = new Store<{ paywall: Record<string, string> }>({
 })
 
 // ─── Keychain bridge ────────────────────────────────────────────
+//
+// EXPORTED as of the Pack E auth work. These are the token store's only
+// accessors, and main now needs them directly: it mints rotated refresh
+// tokens itself, and previously those reached disk ONLY by being broadcast
+// to a live renderer, which then wrote them back through supabase-js's
+// storage adapter. A destroyed main window — which is what the red button
+// does on macOS while the app keeps running in the notch — meant main
+// rotated hourly and nothing persisted any of it, leaving an already-dead
+// refresh token in the keychain and signing the user out on the next cold
+// start. See paywall-glue.ts's persistRotatedSession().
+//
+// No behaviour change here, no new storage, no safeStorage change — these
+// were already the accessors, just module-private.
 
-function keychainGet(key: string): string | null {
+export function keychainGet(key: string): string | null {
   const raw = store.get(`paywall.${key}`) as string | undefined
   if (!raw) return null
   if (safeStorage.isEncryptionAvailable()) {
@@ -35,7 +48,7 @@ function keychainGet(key: string): string | null {
   return raw
 }
 
-function keychainSet(key: string, value: string): void {
+export function keychainSet(key: string, value: string): void {
   if (safeStorage.isEncryptionAvailable()) {
     const enc = safeStorage.encryptString(value)
     store.set(`paywall.${key}`, enc.toString('base64'))

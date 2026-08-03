@@ -5,7 +5,7 @@
 
 import { app, ipcMain, BrowserWindow } from 'electron'
 import path from 'path'
-import { registerAuthIPC, setPendingDeepLink } from './auth-ipc'
+import { registerAuthIPC, setPendingDeepLink, keychainGet, keychainSet } from './auth-ipc'
 import { startBalancePolling } from './balance-ipc'
 import Store from 'electron-store'
 import { paywallFetch, verifyKeepAlive, startPoolStatsSampling } from './paywall-net'
@@ -212,6 +212,61 @@ export async function refreshRemoteTriggerEntitlement(): Promise<void> {
 declare const __SUPABASE_URL__: string
 declare const __SUPABASE_ANON_KEY__: string
 
+/** supabase-js's own storage key, derived exactly as the renderer derives it
+ *  (`supabase-client.ts:177`): `sb-<first hostname label>-auth-token`. Main and
+ *  the renderer MUST agree on this string — they are reading and writing the
+ *  same keychain entry. */
+function authStorageKey(): string {
+  try {
+    return `sb-${new URL(__SUPABASE_URL__ || 'http://localhost:54321').hostname.split('.')[0]}-auth-token`
+  } catch {
+    return 'sb-localhost-auth-token'
+  }
+}
+
+/**
+ * Persist a rotation main performed itself.
+ *
+ * WHY THIS EXISTS. Main holds `currentSession` in memory only. Before this,
+ * every rotation reached disk exclusively by being broadcast to a live
+ * renderer, which wrote it back through supabase-js's storage adapter. That
+ * chain has a hole: `BrowserWindow.getAllWindows()` reaches live webContents
+ * only, and on macOS the red button DESTROYS the main window while the app
+ * carries on in the notch — which is how this app is normally used. Main would
+ * then rotate hourly with nobody listening, leaving an already-rotated, dead
+ * refresh token in the keychain. The next cold start hands main that dead
+ * token, the refresh is correctly rejected, and the user is signed out
+ * permanently having done nothing wrong. That is a regression against the old
+ * arrangement, where one process both refreshed and persisted.
+ *
+ * READ-MODIFY-WRITE, NEVER A FRESH OBJECT. supabase-js validates whatever it
+ * loads (`_isValidSession`) and calls `_removeSession()` on anything it judges
+ * malformed. Writing a partial session here would not "mostly work" — it would
+ * delete the credential outright. So we parse what is stored, patch only the
+ * four token fields, and write the rest back untouched.
+ *
+ * Best-effort by design: a failure here must never break a refresh that
+ * otherwise succeeded. The broadcast still happens either way.
+ */
+function persistRotatedSession(): void {
+  try {
+    const key = authStorageKey()
+    const raw = keychainGet(key)
+    if (!raw) return // nothing stored yet — the renderer owns first write
+    const stored = JSON.parse(raw) as Record<string, unknown>
+    if (!stored || typeof stored !== 'object') return
+    stored.access_token = currentSession.accessToken
+    stored.refresh_token = currentSession.refreshToken
+    if (currentSession.expiresAt != null) {
+      stored.expires_at = currentSession.expiresAt
+      stored.expires_in = Math.max(0, currentSession.expiresAt - Math.floor(Date.now() / 1000))
+    }
+    keychainSet(key, JSON.stringify(stored))
+  } catch (e) {
+    console.warn('[paywall-glue] could not persist rotated session:', (e as Error).message)
+  }
+}
+
 /** True when a non-2xx body is recognisably GoTrue's own error shape, i.e. the
  *  auth server really did answer. GoTrue replies to a rejected refresh token
  *  with JSON carrying some of `error_code` / `code` / `error` / `msg` /
@@ -385,6 +440,10 @@ export async function refreshAccessToken(): Promise<boolean> {
         currentSession.expiresAt ? currentSession.expiresAt - Math.floor(Date.now() / 1000) : '?'
       }s)`)
       scheduleAutoRefresh()
+      // DURABILITY BEFORE SYNC. Persist what we just minted ourselves, rather
+      // than relying on a renderer to write it back for us. See
+      // persistRotatedSession() for why this is not optional.
+      persistRotatedSession()
       // Push the new pair to the renderer so its supabase-js client stays in
       // sync without ever refreshing itself. Send currentSession.refreshToken,
       // not body.refresh_token: if the server ever omits a rotated token the
