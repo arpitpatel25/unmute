@@ -89,6 +89,14 @@ function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
     scratchpadDiscard: rec('scratchpadDiscard'),
   }
   const controller = new NotchController(client, events, deps)
+  // AUTO-EXPAND OFF BY DEFAULT IN TESTS.
+  //
+  // It ships ON, but almost every case below is about the ATTENTION rung — what
+  // the bar does when something starts needing you — and auto-expand jumps
+  // straight past that to the task surface. Leaving it on here would have every
+  // one of those assertions really testing auto-expand instead of the thing it
+  // names. The behaviour itself is covered explicitly further down.
+  controller.setAutoExpand(false)
   // reconcile is debounced 80ms — tests force it synchronously by re-firing.
   const flush = () => { (controller as unknown as { reconcile(): void }).reconcile() }
   return { events, client, controller, tasks, calls, flush }
@@ -951,3 +959,29 @@ test('notifyScratchpad pushes the payload verbatim', () => {
   assert.equal(sent.data.destinations.openTask, null)
 })
 
+
+// ── AUTO-EXPAND (ships ON; setup() turns it off — see the harness) ───────────
+
+test('auto-expand opens the task surface instead of only tinting the bar', () => {
+  const h = setup()
+  h.controller.setAutoExpand(true)
+  put(h, makeTask({ id: 't1', state: 'needs-user', name: 'RCA' }))
+  assert.equal(h.client.last('setState')!.state, 'task')
+})
+
+test('auto-expand NEVER interrupts something already open', () => {
+  const h = setup()
+  h.controller.setAutoExpand(true)
+  // The user is in the Orchestrator. A second task starting to need them must
+  // not yank the surface away — that is worse than never expanding at all.
+  ;(h.controller as unknown as { engaged: string }).engaged = 'cockpit'
+  put(h, makeTask({ id: 't2', state: 'needs-user', name: 'second' }))
+  assert.equal(h.client.last('setState')!.state, 'cockpit')
+})
+
+test('with auto-expand off the bar still only reaches attention', () => {
+  const h = setup()
+  h.controller.setAutoExpand(false)
+  put(h, makeTask({ id: 't3', state: 'needs-user', name: 'quiet' }))
+  assert.equal(h.client.last('setState')!.state, 'attention')
+})

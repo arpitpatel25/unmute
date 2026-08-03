@@ -210,6 +210,14 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-browser-enabled', enabled),
   remoteSetOverlayAutoPresent: (on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-overlay-auto-present', on),
+
+  /** Open the task surface when something starts needing you, instead of only
+   *  tinting the bar and waiting for a tap. */
+  remoteSetNotchAutoExpand: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-notch-auto-expand', on),
+  /** Share of the screen an expanded surface fills: 0.7 | 0.8 | 0.9. */
+  remoteSetSurfaceFill: (fill: number): Promise<number> =>
+    ipcRenderer.invoke('remote:set-surface-fill', fill),
   /** Toggle docked mode (compact bottom-right pill that expands on demand). */
   remoteSetOverlayDocked: (on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-overlay-docked', on),

@@ -218,6 +218,7 @@ export type NotchCommand =
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
+  | { type: 'surfaceFill'; fill: number }
   | { type: 'collapse' }
   | { type: 'quit' }
 

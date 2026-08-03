@@ -216,6 +216,17 @@ final class AppController: NSObject, NotchResizing {
             NotchLog.log("CMD autoPresent \(on)")
             autoPresent = on
 
+        case let .surfaceFill(fill):
+            // Clamped again here, not only in main: this process outlives a
+            // single engine run and a bad value would resize every surface
+            // with no UI path back.
+            let v = min(max(fill, 0.5), 0.95)
+            NotchLog.log("CMD surfaceFill \(v)")
+            NotchGeometry.SurfaceFill.user = v
+            // Re-fit only if something expanded is on screen; at bar level the
+            // mass is sized by its content, not by this.
+            if isExpanded(model.state) { refit(animated: true) }
+
         case let .pill(state):
             // Logged at phase granularity only — the level field changes every
             // frame during a capture and would drown the log.

@@ -98,10 +98,14 @@ interface SettingsApi {
    *  fields are read here: `overlayAutoPresent` and `librarianWriteEnabled`. */
   remoteGetSettings?: () => Promise<{
     overlayAutoPresent?: boolean
+    notchAutoExpand?: boolean
+    surfaceFill?: number
     librarianWriteEnabled?: boolean
     curatorEnabled?: boolean
   }>
   remoteSetOverlayAutoPresent?: (on: boolean) => Promise<boolean>
+  remoteSetNotchAutoExpand?: (on: boolean) => Promise<boolean>
+  remoteSetSurfaceFill?: (fill: number) => Promise<number>
   /** Handled in main (remote/init.ts:3444) but NOT exposed by the preload —
    *  an orphaned handler. Optional-chained, so calling it is a no-op until
    *  `electron/remote-preload.ts` carries it. See KILL_SWITCHES_WIRED. */
@@ -223,6 +227,14 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // own IPC so the surface can know its own policy; that is a refinement, and the
   // engine-side gate above is what actually does the work.
   const [notchAutoPresent, setNotchAutoPresent] = useState<boolean>(true)
+  // DEFAULT ON. A surface that goes quiet-amber and waits to be noticed is easy
+  // to walk past, and the notch exists precisely so you do not have to remember
+  // to look. The controller guards it on `engaged === 'none'`, so this never
+  // yanks you out of a task you are already reading.
+  const [notchAutoExpand, setNotchAutoExpand] = useState<boolean>(true)
+  // 0.8 matches the compiled-in default on the Swift side, so the control shows
+  // the truth on the first frame rather than flicking once the snapshot lands.
+  const [surfaceFill, setSurfaceFill] = useState<number>(0.8)
   // The two kill-switches. DEFAULT OFF, both — D7 retires the curator and the
   // librarian for launch, and `librarianWriteEnabled` defaults to false in main
   // too (remote/init.ts:200). Neither can be WRITTEN from here; see
@@ -289,6 +301,8 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
     api().remoteGetSettings?.().then((s) => {
       if (!s) return
       setNotchAutoPresent(s.overlayAutoPresent !== false)
+      setNotchAutoExpand(s.notchAutoExpand !== false)
+      setSurfaceFill(typeof s.surfaceFill === 'number' ? s.surfaceFill : 0.8)
       setLibrarianEnabled(s.librarianWriteEnabled === true)
       setCuratorEnabled(s.curatorEnabled === true)
     }).catch(() => {})
@@ -346,6 +360,17 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
     void api().setSurfaceAppearance?.(v)
   }
 
+  function handleNotchAutoExpandChange(next: boolean): void {
+    setNotchAutoExpand(next)
+    void api().remoteSetNotchAutoExpand?.(next)
+  }
+  function handleSurfaceFillChange(value: string): void {
+    const v = Number(value)
+    setSurfaceFill(v)
+    // Main clamps to the three offered values and returns what it stored, so a
+    // rejected value corrects the control rather than leaving it lying.
+    void api().remoteSetSurfaceFill?.(v)?.then((stored) => { if (stored) setSurfaceFill(stored) })
+  }
   function handleNotchAutoPresentChange(on: boolean) {
     setNotchAutoPresent(on)
     void api().remoteSetOverlayAutoPresent?.(on)
@@ -612,6 +637,26 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
               description="Bring it forward when a task finishes or needs an answer"
             >
               <Toggle checked={notchAutoPresent} onChange={handleNotchAutoPresentChange} />
+            </SettingRow>
+            <SettingRow
+              label="Open the task when it needs you"
+              description="Expand straight to the task instead of just turning amber and waiting to be tapped. It never interrupts you mid-task — if you already have something open, the new one waits."
+            >
+              <Toggle checked={notchAutoExpand} onChange={handleNotchAutoExpandChange} />
+            </SettingRow>
+            <SettingRow
+              label="Expanded size"
+              description="How much of the screen the task view and the Orchestrator fill when they open."
+            >
+              <SegmentedControl
+                options={[
+                  { value: '0.7', label: '70%' },
+                  { value: '0.8', label: '80%' },
+                  { value: '0.9', label: '90%' },
+                ]}
+                value={String(surfaceFill)}
+                onChange={handleSurfaceFillChange}
+              />
             </SettingRow>
             {/* D5: this governs the expanded panel and the recording pill ONLY.
                 The bar-level mass is always opaque black, because it is

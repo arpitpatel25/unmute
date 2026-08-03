@@ -134,6 +134,11 @@ interface RemoteSettings {
   // DECIDED: the floating overlay auto-presents on terminal/attention states.
   // User can turn the auto-popup off (then they open the app manually).
   overlayAutoPresent: boolean
+  /** Open the task surface when something starts needing you, rather than only
+   *  tinting the bar amber and waiting for a tap. Default true. */
+  notchAutoExpand: boolean
+  /** Share of the screen an expanded surface fills: 0.7 | 0.8 | 0.9. */
+  surfaceFill: number
   // DECIDED: docked mode — a compact bottom-right pill (running/stuck counts)
   // that expands into the full panel on a notify-state event or click, and
   // collapses back on Esc. ON by default; OFF reverts to the legacy pop-the-
@@ -196,6 +201,8 @@ const settings = new Store<RemoteSettings>({
     setupConfirmations: {},
     osNotifications: false,
     overlayAutoPresent: true,
+    notchAutoExpand: true,
+    surfaceFill: 0.8,
     overlayDocked: true,
     librarianWriteEnabled: false,
     forceRawMode: false,
@@ -2492,6 +2499,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         binPath: notchBin,
         onExit: (code) => log.warn('notch helper exited', { code }),
       })
+      // Auto-expand is controller state, not a helper command — the decision to
+      // open the task surface is made here, before anything is sent.
+      const applyAutoExpand = () => notchController?.setAutoExpand(settings.get('notchAutoExpand') !== false)
       notchController = new NotchController(notchClient, mgr, {
         // task runtime — same calls as remote:list/answer/kill/remove/resume/…
         listTasks: () => mgr.list().map(serializeTask),
@@ -2593,6 +2603,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         scratchpadDiscard: () => discardScratchpad(),
         // (pill deps are wired separately, below — see PillController)
       })
+      applyAutoExpand()
       // Seed the pad panel. Without this a pad adopted from a previous run is
       // invisible until something else happens to change it.
       //
@@ -2759,6 +2770,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // so without this a user who chose Solid would see one glassy frame on
       // every launch.
       notchClient.send({ type: 'appearance', value: settings.get('surfaceAppearance') || 'solid' } as never)
+      // Same reason: the helper compiles its own defaults (0.8 fill, auto-present
+      // on), so a user who chose otherwise would get one wrong frame per launch.
+      notchClient.send({ type: 'surfaceFill', fill: settings.get('surfaceFill') ?? 0.8 })
+      notchClient.send({ type: 'autoPresent', on: settings.get('overlayAutoPresent') !== false } as never)
 
       log.info('notch shell started', { bin: notchBin })
     } catch (e) {
@@ -3512,6 +3527,23 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('overlay-auto-present-set', { on: !!on })
     return true
   })
+  ipcMain.handle('remote:set-notch-auto-expand', async (_e, on: boolean) => {
+    settings.set('notchAutoExpand', !!on)
+    notchController?.setAutoExpand(!!on)
+    log.event('notch-auto-expand-set', { on: !!on })
+    return true
+  })
+  // Share of the screen the expanded surfaces fill. Clamped to the three
+  // offered choices rather than trusted: a stray value here would resize every
+  // surface on the machine, and there is no UI path back from a bad one.
+  ipcMain.handle('remote:set-surface-fill', async (_e, fill: number) => {
+    const allowed = [0.7, 0.8, 0.9]
+    const v = allowed.includes(fill) ? fill : 0.8
+    settings.set('surfaceFill', v)
+    notchClient?.send({ type: 'surfaceFill', fill: v })
+    log.event('surface-fill-set', { fill: v })
+    return v
+  })
   // Doer model selector (Remote only). Validated to the three supported tiers;
   // applies to the NEXT dispatched task (each task reads the setting at spawn).
   // Broadcast so both surfaces — Remote settings + the capture-widget badge —
@@ -3624,6 +3656,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     model: settings.get('model') || getModels().doerDefault,
     browserEnabled: settings.get('browserEnabled') !== false,
     overlayAutoPresent: settings.get('overlayAutoPresent') !== false,
+    notchAutoExpand: settings.get('notchAutoExpand') !== false,
+    surfaceFill: settings.get('surfaceFill') ?? 0.8,
     overlayDocked: settings.get('overlayDocked') !== false,
     osNotifications: settings.get('osNotifications') === true,
     librarianWriteEnabled: settings.get('librarianWriteEnabled') === true,

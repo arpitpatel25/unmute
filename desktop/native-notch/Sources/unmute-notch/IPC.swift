@@ -218,6 +218,10 @@ enum Command {
     /// sends it to an older helper is ignored (`default: return .unknown`). No
     /// existing field changed shape.
     case autoPresent(Bool)
+    /// ADDITIVE. `{"type":"surfaceFill","fill":0.8}` — the share of the screen
+    /// an expanded surface fills. An engine too old to send it leaves the
+    /// built-in 0.8, so this is safe to ignore.
+    case surfaceFill(CGFloat)
     /// Full state of the bottom-centre input surface. Pushed on every change,
     /// including the per-frame level during a capture — one float, which is the
     /// only new traffic the capture path gains.
@@ -274,6 +278,11 @@ enum Command {
             // ignoring the user's accessibility setting.
             let raw = obj["value"] as? String ?? "system"
             return .appearance(SurfaceAppearance(rawValue: raw) ?? .system)
+        case "surfaceFill":
+            // A missing or malformed value means the default, not a dropped
+            // command — same rule as `appearance` above. AppController clamps
+            // it again before anything is resized.
+            return .surfaceFill(CGFloat(obj["fill"] as? Double ?? 0.8))
         case "autoPresent":
             // A MISSING OR MALFORMED `on` MEANS ON. The setting's default is on
             // (engine: overlayAutoPresent), and a surface that silently stopped

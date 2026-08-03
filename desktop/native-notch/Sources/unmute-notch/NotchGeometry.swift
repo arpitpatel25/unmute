@@ -253,15 +253,21 @@ struct NotchGeometry: Equatable {
         /// Its panel is a conversation and a composer: readable at a smaller
         /// measure, and a full-size frame around it renders as a large void with
         /// two buttons floating in it (field feedback 2026-07-25).
-        static let desktopTask: CGFloat = 0.60
+        /// The user's choice, from Settings → Appearance & notch: 0.7 | 0.8 | 0.9.
+        /// Everything below is expressed RELATIVE to it, so picking 90% grows the
+        /// whole family and does not silently flatten the deliberate gap between
+        /// a conversation panel and a terminal one.
+        static var user: CGFloat = 0.80
+
+        static var desktopTask: CGFloat { max(0.40, user - 0.20) }
         /// A terminal-backed task — Claude's PTY, the Codex CLI, anything with
         /// live scrollback. The terminal IS the content here, and it was being
         /// given a half-screen panel: 80 columns of output in a 792pt window is
         /// the size complaint this whole change answers.
-        static let terminalTask: CGFloat = 0.80
+        static var terminalTask: CGFloat { user }
         /// The cockpit, always. Whatever is on the wall, expanding it is a
         /// deliberate "show me everything" and it gets the room to be that.
-        static let cockpit: CGFloat = 0.80
+        static var cockpit: CGFloat { user }
     }
 
     /// An expanded surface at `fill` of the screen, on BOTH axes.

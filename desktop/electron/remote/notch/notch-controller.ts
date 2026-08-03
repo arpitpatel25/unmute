@@ -214,6 +214,12 @@ type Engaged = 'none' | 'task' | 'cockpit'
 export class NotchController {
   private queue: string[] = []
   private engaged: Engaged = 'none'
+  /** AUTO-EXPAND: open the task surface when something starts needing you,
+   *  instead of only tinting the bar amber and waiting to be tapped.
+   *  Default ON — a surface that goes quiet-amber and waits is easy to walk
+   *  past, and the whole point of the notch is that you should not have to
+   *  remember to look. Off restores tap-to-open. */
+  private autoExpand = true
   private focusedId: string | null = null
   /** One-off "clear finished" sweep cutoff. */
   private clearedAt = 0
@@ -398,7 +404,22 @@ export class NotchController {
     if (mutedIn !== undefined && mutedIn !== t.state) this.muted.delete(t.id)
     const eligible = this.crankEligible(t)
     const queued = this.queue.includes(t.id)
-    if (eligible && !queued) this.queue.push(t.id)
+    if (eligible && !queued) {
+      this.queue.push(t.id)
+      // AUTO-EXPAND, guarded on `engaged === 'none'`.
+      //
+      // The guard is the whole design. Without it a task arriving while you are
+      // reading ANOTHER task, or working in the cockpit, would yank the surface
+      // out from under you — which is worse than never expanding at all.
+      //
+      // It also gives the user's ✕ the behaviour they expect: closing sets
+      // engaged back to 'none', so the surface stays shut for the task they
+      // dismissed, and the NEXT thing that needs them opens it again.
+      if (this.autoExpand && this.engaged === 'none') {
+        this.engaged = 'task'
+        this.setFocus(t.id)
+      }
+    }
     else if (!eligible && queued) this.queue = this.queue.filter((id) => id !== t.id)
     this.scheduleReconcile()
   }
@@ -535,6 +556,12 @@ export class NotchController {
     this.setFocus(id)
     this.deps.opened?.(id) // opening the stage IS the intent to work in it
     this.reconcile()
+  }
+
+  /** Live-settable from Settings → Appearance & notch. */
+  setAutoExpand(on: boolean): void {
+    this.autoExpand = on
+    log.info('auto-expand', { on })
   }
 
   private setFocus(id: string | null): void {
