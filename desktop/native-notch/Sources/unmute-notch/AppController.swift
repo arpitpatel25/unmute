@@ -160,7 +160,7 @@ final class AppController: NSObject, NotchResizing {
             }
 
         case let .setCockpit(data):
-            NotchLog.log("CMD setCockpit groups=\(data.groups.count) queue=\(data.queue.count) skills=\(data.skills.count) suggestions=\(data.suggestions.count)")
+            NotchLog.log("CMD setCockpit groups=\(data.groups.count) queue=\(data.queue.count) skills=\(data.skills.count)")
             model.cockpit = data
             // Focused task vanished (removed/purged) → back to the wall.
             if let f = model.focusedId, !data.groups.flatMap(\.cards).contains(where: { $0.id == f }) {

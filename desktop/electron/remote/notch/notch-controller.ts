@@ -773,6 +773,8 @@ export class NotchController {
       // it as a PTY task and gave it a terminal's frame with nothing in it.
       backend: providerOf(t.agent).transport === 'driver' ? t.agent : undefined,
       project: t.agent === 'codex-desktop' ? (t.codexProject ?? undefined) : undefined,
+      // Absent stays absent (D6) — the card renders the agent alone.
+      model: t.model || undefined,
       note: t.note ?? undefined,
       // A CODEX THREAD IS NEVER DEAD. `alive` means "has a live PTY", and every
       // consumer reads it as "can you still talk to this?" — for which the
@@ -975,12 +977,6 @@ export class NotchController {
       showingAll: groups.length > 0 && groups.every((x) => x.expanded),
       queue,
       oneoffs,
-      projects: this.projects,
-      suggestions: this.proposals.map((p) => ({
-        id: p.id,
-        kind: p.kind === 'create' ? 'new' : p.kind,
-        name: p.draft?.name ?? p.id,
-      })),
       unmuteSkills: this.skills.filter((s) => s.origin === 'unmute'),
       skills: this.skills.filter((s) => s.origin !== 'unmute'),
       shelf,

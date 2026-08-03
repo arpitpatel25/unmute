@@ -135,6 +135,8 @@ struct CardP: Codable {
     /// Which backend runs this card. Absent ⇒ Claude (PTY-backed).
     let backend: String?
     let project: String?
+    /// The model that RAN this task (D6). Absent ⇒ show the agent alone.
+    let model: String?
 }
 
 struct GroupP: Codable {
@@ -169,8 +171,6 @@ struct CockpitData: Codable {
     let showingAll: Bool?
     let queue: [QueueItemP]
     let oneoffs: [OneoffP]
-    let projects: [ProjectP]
-    let suggestions: [SuggestionP]
     let unmuteSkills: [SkillP]
     let skills: [SkillP]
     let shelf: [ShelfItemP]

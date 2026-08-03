@@ -1,7 +1,7 @@
 import SwiftUI
 
-// The cockpit wall — group sections of cards plus the sidebar (queue / one-offs
-// / projects / suggestions / skills / shelf), the away digest, doorbell and the
+// The Orchestrator wall — group sections of cards plus the sidebar (queue /
+// one-offs / skills / shelf), the away digest, doorbell and the
 // route offer. Clicking a card emits focusTask (the voice address) and the
 // Stage takes over (StageView).
 //
@@ -15,8 +15,8 @@ struct WallView: View {
 
     private var data: CockpitData {
         model.cockpit ?? CockpitData(groups: [], hiddenTotal: 0, showingAll: false,
-                                     queue: [], oneoffs: [], projects: [],
-                                     suggestions: [], unmuteSkills: [], skills: [], shelf: [],
+                                     queue: [], oneoffs: [],
+                                     unmuteSkills: [], skills: [], shelf: [],
                                      digest: nil, doorbell: true,
                                      routeOffer: nil, tmuxAvailable: false)
     }
@@ -72,7 +72,7 @@ struct WallView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            SectionLabel(text: "Cockpit")
+            SectionLabel(text: "Orchestrator")
             Spacer(minLength: 0)
             // The wall-level way back. Deliberately not dependent on any group
             // rendering its own header — that dependency is what made folded
@@ -172,6 +172,12 @@ struct WallView: View {
                 // halfway up while its neighbour's sits at the base.
                 Spacer(minLength: 0)
                 HStack(spacing: 6) {
+                    // WHO RAN IT, then WHERE. Every card names its backend —
+                    // the wall mixes them freely and they do not behave alike.
+                    // Model is appended only when it was actually recorded (D6):
+                    // an absent model renders the agent alone rather than
+                    // inheriting whatever the picker says today.
+                    NumText(text: agentLabel(c))
                     NumText(text: c.kind == "session" ? (c.dir ?? "session") : "one-off")
                     Spacer(minLength: 0)
                     if c.backend == "codex-desktop" {
@@ -248,34 +254,16 @@ struct WallView: View {
                         }
                     }
                 }
-                // Projects.
-                if !data.projects.isEmpty {
-                    railSection("Projects") {
-                        ForEach(data.projects, id: \.path) { p in
-                            RailRow(action: { model.emit(.openProject(path: p.path, name: p.name)) }) {
-                                Image(systemName: "folder")
-                                    .font(.system(size: 11)).foregroundColor(Theme.textFaint)
-                                Text(p.name).font(Theme.fBody).foregroundColor(Theme.textDim).lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                        }
-                    }
-                }
-                // Curator suggestions → review popup.
-                if !data.suggestions.isEmpty {
-                    railSection("Suggestions · \(data.suggestions.count)") {
-                        ForEach(data.suggestions, id: \.id) { s in
-                            RailRow(action: {
-                                model.proposalLoadingId = s.id
-                                model.emit(.suggestionOpen(id: s.id))
-                            }) {
-                                Badge(text: s.kind, color: suggestionColor(s.kind))
-                                Text(s.name).font(Theme.fBody).foregroundColor(Theme.text).lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                        }
-                    }
-                }
+                // PROJECTS and SUGGESTIONS were here and are gone.
+                //
+                // Projects listed directories with no action attached — you
+                // could not do anything with one from the rail. Suggestions was
+                // the curator's review inbox, and the curator is parked
+                // (CURATOR_PARKED, remote/init.ts), so it can never receive
+                // anything again. An inbox that cannot fill reads as broken.
+                //
+                // The rail is now four sections that can each be acted on:
+                // Queue, One-offs, Skills, Shelf.
                 // Skills: curator-authored first, then the vocabulary.
                 if !data.unmuteSkills.isEmpty {
                     railSection("Unmute skills") {
@@ -323,6 +311,30 @@ struct WallView: View {
         .frame(width: 250)
         .background(Theme.railBg)
         .overlay(Rectangle().fill(Theme.hairlineSoft).frame(width: 1), alignment: .leading)
+    }
+
+    /// WHO ran this card, and on what.
+    ///
+    /// Mirrors providers.ts's labels — the Swift side cannot import the
+    /// registry, so this is the one place a backend id becomes a human name.
+    /// Absent backend means the PTY default, which is Claude Code CLI: cards
+    /// have always been persisted with no agent key, so absent is a contract
+    /// rather than a gap.
+    ///
+    /// The model is appended ONLY when one was recorded (D6). An absent model
+    /// renders the agent alone — never "unknown", never the current picker
+    /// value, because a task that ran under Sonnet must not claim Opus just
+    /// because the picker moved since it finished.
+    private func agentLabel(_ c: CardP) -> String {
+        let agent: String
+        switch c.backend {
+        case "codex-desktop":       agent = "Codex desktop"
+        case "claude-code-desktop": agent = "Claude desktop"
+        case "codex":               agent = "Codex CLI"
+        default:                    agent = "Claude Code CLI"
+        }
+        guard let m = c.model, !m.isEmpty else { return agent }
+        return "\(agent) · \(m)"
     }
 
     private func suggestionColor(_ kind: String) -> Color {

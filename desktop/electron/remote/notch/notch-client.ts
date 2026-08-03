@@ -89,6 +89,11 @@ export interface CardP {
   backend?: ProviderId
   /** Codex project name, when backend is 'codex-desktop'. */
   project?: string
+  /** The model that actually RAN this task, recorded at dispatch and persisted
+   *  (decision D6). Absent means absent — never a default, never the current
+   *  picker value, because a task run under Sonnet must not claim Opus because
+   *  the picker moved since. */
+  model?: string
   note?: string
   alive: boolean
 }
@@ -125,8 +130,10 @@ export interface CockpitPayload {
   showingAll?: boolean
   queue: QueueItemP[]
   oneoffs: OneoffP[]
-  projects: ProjectP[]
-  suggestions: SuggestionP[]
+  // projects / suggestions REMOVED. Projects was a directory list with no
+  // action attached; Suggestions was the curator's review inbox, and the
+  // curator is parked (CURATOR_PARKED in remote/init.ts), so it can never
+  // receive anything again. An inbox that cannot fill is worse than no inbox.
   unmuteSkills: SkillItemP[]
   skills: SkillItemP[]
   shelf: ShelfItemP[]
