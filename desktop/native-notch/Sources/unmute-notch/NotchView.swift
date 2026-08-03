@@ -96,6 +96,8 @@ struct NotchView: View {
                 rimHighlight: .white,
                 rimWidth: 1
             )
+        } else if model.content.resting {
+            restingNub
         } else if model.state == .dormant {
             // DORMANT DRAWS NOTHING VISIBLE.
             //
@@ -112,6 +114,31 @@ struct NotchView: View {
                 .overlay(alarmGlow)
         }
     }
+
+    /// THE RESTING NUB — off-notch idle, pointer elsewhere.
+    ///
+    /// DRAWN SMALL, HIT BIG. The window stays a full menu-bar tall, so the
+    /// pointer target is unchanged and hovering still wakes it; only the ink
+    /// shrinks. Shrinking the window instead would have made the one thing this
+    /// state exists for — being findable — harder.
+    ///
+    /// Not pure black either. D5 makes the mass opaque because it is
+    /// impersonating the hardware notch, and at rest on a screen with no cutout
+    /// there is no hardware to match: a full-strength black tab reads as a badge
+    /// stuck to the desktop. Softened, it reads as part of the bezel.
+    @ViewBuilder private var restingNub: some View {
+        VStack(spacing: 0) {
+            NotchShape(bottomRadius: Self.restRadius, topFillet: Self.restFillet)
+                .fill(Color.black.opacity(0.55))
+                .frame(height: Self.restHeight)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Tall enough to see on a light desktop, short enough to ignore.
+    static let restHeight: CGFloat = 7
+    static let restRadius: CGFloat = 4
+    static let restFillet: CGFloat = 3
 
     /// THE ONLY GLOW IN THE APP.
     ///

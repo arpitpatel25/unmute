@@ -209,10 +209,28 @@ check("content leaves before the shape and arrives after it",
 let vm = NotchModel()
 vm.working = 2
 check("dormant says nothing at all", BarContent.make(for: vm, state: .dormant, hovering: false).isEmpty)
+// IDLE SAYS DIFFERENT THINGS ON THE TWO DISPLAY KINDS, on purpose.
+//
+// With a cutout the mass is continuous with the hardware, so the wordmark reads
+// as the notch saying something. Without one it would be a black tab with a
+// name in it sitting on the desktop — announcing the app on the screens that
+// least need it. Off-notch at rest it is a nub instead: no text, short, and
+// still a target.
+vm.hasNotch = true
 let idle = BarContent.make(for: vm, state: .idle, hovering: false)
-check("idle is ONE segment — the wordmark", idle.left == "unmute" && idle.right == nil && idle.dot == nil)
+check("idle ON a notch is ONE segment — the wordmark", idle.left == "unmute" && idle.right == nil && idle.dot == nil)
 check("hover REVEALS the count", BarContent.make(for: vm, state: .idle, hovering: true).right == "2 running")
 check("idle never glows", idle.alarm == nil)
+
+vm.hasNotch = false
+let resting = BarContent.make(for: vm, state: .idle, hovering: false)
+check("idle OFF-notch says nothing", resting.left == nil && resting.right == nil && resting.dot == nil)
+check("...and is marked resting", resting.resting)
+check("...but still reserves a width, or there is nothing to click",
+      resting.leftWidth == BarContent.restingWidth)
+check("hovering the nub brings the wordmark back",
+      BarContent.make(for: vm, state: .idle, hovering: true).left == "unmute")
+vm.hasNotch = true
 let act = BarContent.make(for: vm, state: .active, hovering: false)
 check("active carries the count on the left", act.left == "2 running" && act.dot == .processing)
 check("active never glows", act.alarm == nil)

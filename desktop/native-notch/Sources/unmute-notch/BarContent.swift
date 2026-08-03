@@ -33,6 +33,10 @@ struct BarContent: Equatable {
     var badge: Int? = nil
     /// Attention is the ONE state that glows, and this is what says so.
     var alarm: TaskStatus? = nil
+    /// RESTING: idle, off-notch, pointer elsewhere. Nothing to say, so nothing
+    /// is said — the surface shrinks to a small nub instead of a full-height
+    /// bar wearing a wordmark. See NotchView.restingNub.
+    var resting: Bool = false
 
     // ── Metrics. The view reads these too; nothing here is duplicated there. ──
 
@@ -56,8 +60,15 @@ struct BarContent: Equatable {
         (s as NSString).size(withAttributes: [.font: font]).width + tracking * CGFloat(s.count)
     }
 
+    /// A resting nub carries no text, so it has no natural width — and a mass
+    /// measured from empty content would collapse to the fillets and take the
+    /// hit target with it. This is the whole point of the state, so the width
+    /// is stated rather than derived.
+    static let restingWidth: CGFloat = 56
+
     /// Width the left half needs to be shown WHOLE. It is never cut down to fit.
     var leftWidth: CGFloat {
+        if resting { return Self.restingWidth }
         guard dot != nil || (left?.isEmpty == false) else { return 0 }
         var w = Self.inset
         if dot != nil { w += Self.dotSize + Self.gap }
@@ -105,6 +116,18 @@ struct BarContent: Equatable {
             return BarContent()
 
         case .idle:
+            // OFF-NOTCH AND UNTOUCHED: a nub, not a nameplate.
+            //
+            // Idle here exists because a display with no cutout has no landmark,
+            // so the surface must stay findable. That is a much smaller job than
+            // it was being given: a full-height black bar with "unmute" written
+            // in it announces the app on every screen it is not needed on. What
+            // is required is somewhere to aim, not a signature.
+            //
+            // On a notched display idle keeps the wordmark — there the mass is
+            // continuous with the hardware, so it reads as the notch saying
+            // something rather than as a badge sitting on the desktop.
+            if !m.hasNotch && !hovering { return BarContent(resting: true) }
             // One segment: there is no second thing to say. Hovering adds the
             // count, which is the answer to the only question idle raises.
             var c = BarContent(left: "unmute", emphasis: .wordmark)
