@@ -265,6 +265,28 @@ struct QuietButton: View {
 /// Escape was once the ONLY way out of the cockpit and the task surface — fine
 /// when you know it, invisible until then, and unavailable to anyone driving by
 /// mouse. Every expanded surface carries this in the same corner.
+/// Walks back out of whatever you drilled into — a stage, a review popup —
+/// without closing the surface. Rendered only when `canGoBack`, because an
+/// arrow that behaves like ✕ teaches people not to trust it.
+struct BackButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(hovering ? Theme.text : Theme.textFaint)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(hovering ? 0.10 : 0.05)))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Back")
+        .animation(Theme.hover, value: hovering)
+    }
+}
+
 struct CloseButton: View {
     let action: () -> Void
     @State private var hovering = false
@@ -279,7 +301,7 @@ struct CloseButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Close (esc)")
+        .help("Close (esc, or click outside)")
         .animation(Theme.hover, value: hovering)
     }
 }

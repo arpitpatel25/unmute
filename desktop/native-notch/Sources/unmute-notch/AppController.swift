@@ -55,6 +55,7 @@ final class AppController: NSObject, NotchResizing {
             self?.afterEmit(ev)
         }
         model.onHover = { [weak self] entering in self?.handleHover(entering) }
+        model.onBack = { [weak self] in self?.stepDown() }
         installPill()
         let start = resolve(.dormant)
         model.bar = start.placement
@@ -63,6 +64,7 @@ final class AppController: NSObject, NotchResizing {
         window.present()
         installTracking()
         installKeyMonitors()
+        installOutsideClickMonitor()
         observeScreens()
         NotchLog.log("presented at dormant: window=\(NotchLog.rect(window.frame)) visible=\(window.isVisible)")
     }
@@ -602,6 +604,28 @@ final class AppController: NSObject, NotchResizing {
 
     // MARK: - Keyboard (Esc ladder · Tab crank · F full · 1-9 answers)
 
+    /// CLICK ANYWHERE ELSE AND IT CLOSES.
+    ///
+    /// A global monitor sees clicks destined for OTHER apps and cannot consume
+    /// them — which is exactly right here: the click should still land wherever
+    /// the user aimed it, and the surface should get out of the way. Only
+    /// expanded states listen; at bar level there is nothing to dismiss, and a
+    /// resting notch that vanished on every click elsewhere would be unusable.
+    ///
+    /// The pill and the pad are deliberately EXCLUDED — they live in their own
+    /// window and are mid-dictation surfaces. Closing the wall because someone
+    /// clicked the scratchpad would be a bug, not a dismissal.
+    private func installOutsideClickMonitor() {
+        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
+            guard let self, self.isExpanded(self.model.state) else { return }
+            let p = NSEvent.mouseLocation
+            if self.window.frame.contains(p) { return }
+            if let pw = self.pillWindow, pw.isVisible, pw.frame.contains(p) { return }
+            NotchLog.log("close-all: click outside at \(Int(p.x)),\(Int(p.y))")
+            self.closeAll()
+        }
+    }
+
     private func installKeyMonitors() {
         // Global Esc: collapse even when we're not key (never required to
         // dismiss the resting state — only steps ENGAGED states down).
@@ -613,7 +637,7 @@ final class AppController: NSObject, NotchResizing {
             if self.model.state == .task || self.model.state == .cockpit {
                 NotchLog.log("esc: GLOBAL monitor while expanded — LEAKED to the app below (key=\(self.window.isKeyWindow))")
             }
-            self.stepDown()
+            self.closeAll()
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self else { return e }
@@ -625,7 +649,7 @@ final class AppController: NSObject, NotchResizing {
                 // line is absent when Escape leaks, the local monitor never
                 // fired and the panel was not key (see NotchWindow).
                 NotchLog.log("esc: LOCAL monitor (swallowed) state=\(self.model.state.rawValue) key=\(self.window.isKeyWindow)")
-                self.stepDown(); return nil
+                self.closeAll(); return nil
             }
 
             // ⌘V AND FRIENDS, BECAUSE NOTHING ELSE WILL DELIVER THEM.
@@ -697,6 +721,25 @@ final class AppController: NSObject, NotchResizing {
 
     /// Esc: one rung down. Stage full→split→wall; task/cockpit → collapsed
     /// (main then reconciles to attention/active/dormant).
+    /// ESCAPE AND OUTSIDE-CLICK MEAN "CLOSE", NOT "GO BACK ONE".
+    ///
+    /// Escape used to call stepDown(), so from a stage inside the Orchestrator
+    /// it took three presses to actually leave. Everywhere else on the platform
+    /// those two gestures dismiss the whole thing, and the graded walk now
+    /// belongs to the back arrow, which is visible and says what it does.
+    ///
+    /// Any drilled-in state is torn down on the way out so re-opening starts at
+    /// the wall rather than wherever the surface happened to be when it closed.
+    private func closeAll() {
+        if model.state == .dormant { return }
+        if let p = model.proposal { model.emit(.converseStop(id: p.id)) }
+        model.proposal = nil; model.proposalLoadingId = nil; model.convLog = ""
+        if model.focusedId != nil { model.emit(.closeStage) }
+        model.focusedId = nil; model.stageTask = nil; model.stageFull = false
+        NotchLog.log("close-all from \(model.state.rawValue)")
+        model.emit(.collapsed)
+    }
+
     private func stepDown() {
         // Only a VISIBLE popup gets to swallow the Escape. It is drawn on the
         // expanded surface only, so a stale one at bar level must not consume a

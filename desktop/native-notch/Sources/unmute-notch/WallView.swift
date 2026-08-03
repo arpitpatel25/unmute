@@ -86,6 +86,7 @@ struct WallView: View {
                     model.emit(.showAll(group: nil, on: true))
                 }
             }
+            if model.canGoBack { BackButton { model.onBack() } }
             CloseButton { model.emit(.collapsed) }
         }
     }

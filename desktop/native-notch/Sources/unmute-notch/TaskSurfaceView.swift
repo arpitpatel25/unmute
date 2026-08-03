@@ -118,6 +118,7 @@ struct TaskSurfaceView: View {
             // LAST in the row, so it lands in the corner. It once sat between two
             // Spacers with the counter to its right, which floated it into the
             // middle of the header — nowhere near where a close control belongs.
+            if model.canGoBack { BackButton { model.onBack() } }
             CloseButton { model.emit(.collapsed) }
         }
     }

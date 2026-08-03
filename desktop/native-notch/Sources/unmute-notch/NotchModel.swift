@@ -79,6 +79,20 @@ final class NotchModel: ObservableObject {
     var emit: (Event) -> Void = IPC.emit
     /// Hover relay → AppController (dormant ⇄ idle wake lives there).
     var onHover: (Bool) -> Void = { _ in }
+    /// BACK, not close. Wired to AppController.stepDown — the graded walk back
+    /// out of whatever you drilled into. Escape and an outside click no longer
+    /// do this; they close outright, which is what those two gestures mean
+    /// everywhere else on the platform.
+    var onBack: () -> Void = {}
+
+    /// Is there somewhere to go back TO? False on the bare wall, where the only
+    /// move left is closing — and a back arrow that just closes is a lie about
+    /// where you are.
+    var canGoBack: Bool {
+        if proposal != nil || proposalLoadingId != nil { return true }
+        if state == .cockpit && focusedId != nil { return true }
+        return stageFull
+    }
 
     // Terminal byte fan-out: TerminalHost subscribes; AppController publishes.
     let termBytes = PassthroughSubject<(id: String, bytes: [UInt8]), Never>()
