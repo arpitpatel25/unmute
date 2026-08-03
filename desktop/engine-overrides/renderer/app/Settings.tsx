@@ -186,14 +186,17 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // `overlayAutoPresent: true`). A surface that never comes forward by itself is
   // a surface you have to remember to look at.
   //
-  // THIS TOGGLE PERSISTS BUT DOES NOT YET REACH THE NOTCH. The full path is
-  // real on this side: `remote:set-overlay-auto-present` (init.ts:3376) writes
-  // `overlayAutoPresent`, and `remote:get-settings` reads it back, so the state
-  // survives a restart. What is missing is the last hop — Pack D added an
-  // additive `autoPresent` command to the notch's IPC, and two lines in
-  // `electron/remote/init.ts` (Pack F's file) must send it. Tracked by the
-  // coordinator as integration item I1; until it lands the notch keeps its own
-  // default, which is on, so the OFF position is the one that does nothing yet.
+  // THIS TOGGLE WORKS END TO END TODAY. `remote:set-overlay-auto-present`
+  // (init.ts:3376) writes `overlayAutoPresent`, and `maybePresent()`
+  // (init.ts:784) opens with `if (settings.get('overlayAutoPresent') === false)
+  // return`. That is the ONLY path to `presentOrExpand` — every auto-present
+  // call site routes through it — so OFF genuinely stops the notch coming
+  // forward.
+  //
+  // An earlier revision of this comment claimed the last hop was missing. It was
+  // not. Pack D separately added an additive `autoPresent` command to the notch's
+  // own IPC so the surface can know its own policy; that is a refinement, and the
+  // engine-side gate above is what actually does the work.
   const [notchAutoPresent, setNotchAutoPresent] = useState<boolean>(true)
   // The two kill-switches. DEFAULT OFF, both — D7 retires the curator and the
   // librarian for launch, and `librarianWriteEnabled` defaults to false in main

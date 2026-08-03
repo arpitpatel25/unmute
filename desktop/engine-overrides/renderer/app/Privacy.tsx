@@ -72,10 +72,19 @@ export default function Privacy() {
           flow="leaves"
           body={
             <>
+              {/* SOURCE: backend/cloudflare/shared/groq.ts:8 (GROQ_STT_URL);
+                  pipeline/src/index.ts:231,239 posts the audio blob there.
+                  The audio reaches a THIRD PARTY. We can only speak for our own
+                  infrastructure, so this names the processor and claims nothing
+                  about theirs. Do NOT restore "our transcription service" — it
+                  reads as first-party, and it is not. */}
               <p>
-                Your audio goes to our transcription service over an encrypted
-                connection and the text comes back. The audio is discarded as
-                soon as the response is sent.
+                Your audio is sent over an encrypted connection to{' '}
+                <span className="font-semibold text-ink">Groq</span>, the
+                speech-to-text provider we use, and the text comes back. Groq
+                handles it under their own privacy policy. On our side the audio
+                is never written down — it is held only for the length of the
+                request.
               </p>
               <p>
                 We record what we need to bill you and nothing else: a
