@@ -1,8 +1,51 @@
-// Shared UI primitives + formatters used across Settings / Account /
-// Permissions tabs. Extracted from the old single-page Settings.tsx
-// during the UI restructure. Pure presentation only — no IPC, no state.
+// Shared UI primitives + formatters. Extracted from the old single-page
+// Settings.tsx during the UI restructure; now used by the app shell and
+// onboarding as well as by Settings, Account and the Permissions section.
+// Pure presentation only — no IPC, no state.
+//
+// TYPE SCALE (decision D8). The scale is 22 / 16 / 14 / 13 / 12.5 / 11 / 10 px
+// and nothing between. THIS FILE now conforms — the odd 9px and 12px sizes that
+// used to live here were folded into 10px and 12.5px — as do App.tsx and
+// Onboarding.tsx. The rest of the app does not yet: Settings.tsx still has 8,
+// 9, 12 and 18, and Account/Language/Permissions/Privacy still have 12. Those
+// belong to other packs.
+//
+// ICONS. One glyph per concept. `BehaviorIcon` used to be a clock, which is
+// also what the sidebar's History row draws — two concepts, one glyph. It is
+// now a set of sliders. Three more sections are still borrowing it: Help
+// (Settings.tsx), and Profile and Engine (Account.tsx). Glyphs for all three
+// are defined below and are NOT yet wired up — Pack A owns neither call site,
+// so Pack B rewires Help and whoever is given Account.tsx rewires the other
+// two. Until then `BehaviorIcon` still appears four times.
 
 import React from 'react'
+
+/* ─── Settings sections ───
+ *
+ * The seven sections of Settings. Pack A's sidebar renders these as sub-items
+ * and hands the active one to `Settings` as a prop; Pack B renders one section
+ * at a time. Declared here rather than in App.tsx so Settings.tsx can import
+ * the type without an import cycle back through App.
+ */
+
+export type SettingsSection =
+  | 'triggers'
+  | 'audio'
+  | 'appearance'
+  | 'permissions'
+  | 'language'
+  | 'privacy'
+  | 'help'
+
+export const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
+  { id: 'triggers', label: 'Triggers' },
+  { id: 'audio', label: 'Audio & behaviour' },
+  { id: 'appearance', label: 'Appearance & notch' },
+  { id: 'permissions', label: 'Permissions' },
+  { id: 'language', label: 'Language' },
+  { id: 'privacy', label: 'Privacy' },
+  { id: 'help', label: 'Help & about' },
+]
 
 /* ─── Section header ─── */
 
@@ -10,7 +53,7 @@ export function SectionHeader({ icon, title }: { icon: React.ReactNode; title: s
   return (
     <div className="flex items-center gap-1.5 mb-2.5 mt-5">
       <span className="text-ink-35">{icon}</span>
-      <h3 className="text-[9px] font-bold text-ink-35 uppercase tracking-[0.11em]">{title}</h3>
+      <h3 className="text-[10px] font-bold text-ink-35 uppercase tracking-[0.11em]">{title}</h3>
     </div>
   )
 }
@@ -58,7 +101,7 @@ export function SegmentedControl({ options, value, onChange }: {
         <button
           key={opt.value}
           onClick={() => onChange(opt.value)}
-          className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-all duration-120 ${
+          className={`px-3 py-1.5 rounded-md text-[12.5px] font-medium transition-all duration-120 ${
             value === opt.value
               ? 'bg-ink text-white shadow-sm'
               : 'text-ink-60 hover:text-ink'
@@ -102,13 +145,13 @@ export function SegmentedControlDark({ options, value, onChange }: {
 export function HeroKey({ children, variant }: { children: React.ReactNode; variant?: 'red' }) {
   if (variant === 'red') {
     return (
-      <span className="inline-flex items-center justify-center text-[12px] font-extrabold text-white rounded-[9px] px-3 py-1.5 min-h-[36px] min-w-[44px] select-none whitespace-nowrap bg-gradient-to-b from-[#F04040] to-[#C02020] border border-black/40 shadow-[0_4px_0_#7a1010,0_6px_14px_rgba(200,30,30,0.35),inset_0_1px_0_rgba(255,255,255,0.22)]">
+      <span className="inline-flex items-center justify-center text-[12.5px] font-extrabold text-white rounded-[9px] px-3 py-1.5 min-h-[36px] min-w-[44px] select-none whitespace-nowrap bg-gradient-to-b from-[#F04040] to-[#C02020] border border-black/40 shadow-[0_4px_0_#7a1010,0_6px_14px_rgba(200,30,30,0.35),inset_0_1px_0_rgba(255,255,255,0.22)]">
         {children}
       </span>
     )
   }
   return (
-    <span className="inline-flex items-center justify-center text-[12px] font-extrabold text-white/90 rounded-[9px] px-3 py-1.5 min-h-[36px] min-w-[44px] select-none whitespace-nowrap bg-gradient-to-b from-white/[0.14] to-white/[0.06] border border-white/16 shadow-[0_4px_0_rgba(0,0,0,0.45),0_6px_14px_rgba(0,0,0,0.30),inset_0_1px_0_rgba(255,255,255,0.18)]">
+    <span className="inline-flex items-center justify-center text-[12.5px] font-extrabold text-white/90 rounded-[9px] px-3 py-1.5 min-h-[36px] min-w-[44px] select-none whitespace-nowrap bg-gradient-to-b from-white/[0.14] to-white/[0.06] border border-white/16 shadow-[0_4px_0_rgba(0,0,0,0.45),0_6px_14px_rgba(0,0,0,0.30),inset_0_1px_0_rgba(255,255,255,0.18)]">
       {children}
     </span>
   )
@@ -199,7 +242,7 @@ export function PermissionRow({
           <p className="text-[13px] font-semibold text-ink">{title}</p>
           <span className={`text-[10px] font-bold uppercase tracking-wider ${granted ? 'text-success' : 'text-ink-35'}`}>{statusText}</span>
         </div>
-        <p className="text-[12px] text-ink-60 leading-relaxed mt-1.5">{description}</p>
+        <p className="text-[12.5px] text-ink-60 leading-relaxed mt-1.5">{description}</p>
         {(primary || secondary) && (
           <div className="flex items-center gap-2 mt-3">
             {primary && (
@@ -283,11 +326,48 @@ export function UsageIcon() {
   )
 }
 
+/** Behaviour — sliders. Was a clock, which is the History glyph; one concept
+ *  per icon (D8), so the clock stays with history and behaviour gets knobs. */
 export function BehaviorIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12z" />
-      <path d="M8 5v4l2 2" />
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 4.5h8M13 4.5h1M2 11.5h1M6 11.5h8" />
+      <circle cx="11.5" cy="4.5" r="1.75" />
+      <circle cx="4.5" cy="11.5" r="1.75" />
+    </svg>
+  )
+}
+
+/** Help & about — the question mark. */
+export function HelpIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M6.2 6.1a1.9 1.9 0 0 1 3.7.6c0 1.3-1.9 1.6-1.9 2.8" />
+      <path d="M8 11.9h.01" />
+    </svg>
+  )
+}
+
+/** Profile — an ID card. Deliberately NOT a person figure: that glyph is the
+ *  sidebar's Account row, which is the destination; this is a section header
+ *  inside it, and one glyph per concept (D8) means they cannot share. */
+export function ProfileIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+      <circle cx="6" cy="7" r="1.75" />
+      <path d="M3.25 11.6a3 3 0 0 1 5.5 0M10.5 6.5h2.25M10.5 9h2.25" />
+    </svg>
+  )
+}
+
+/** Engine — the transcription backend. A chip, not a gear (gear is Settings). */
+export function EngineIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4.75" y="4.75" width="6.5" height="6.5" rx="1.25" />
+      <path d="M6.5 2v2.75M9.5 2v2.75M6.5 11.25V14M9.5 11.25V14M2 6.5h2.75M2 9.5h2.75M11.25 6.5H14M11.25 9.5H14" />
     </svg>
   )
 }

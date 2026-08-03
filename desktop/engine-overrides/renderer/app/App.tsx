@@ -1,18 +1,21 @@
 import { useState, useEffect } from 'react'
 import unmuteLogo from '../assets/unmute-logo.png'
 import History from './History'
-import Voice from './Voice'
 import Settings from './Settings'
 import Account from './Account'
-import Permissions from './Permissions'
-import Privacy from './Privacy'
-import Language from './Language'
-import Onboarding from './Onboarding'
+import Onboarding, { WhatsNew } from './Onboarding'
+import { SETTINGS_SECTIONS, SegmentedControl } from './_shared'
+import type { SettingsSection } from './_shared'
 import { BalancePill } from '../paywall/BalancePill'
 // ─── Unmute Remote ───
-// Tasks NO LONGER live here. The notch is the single task/attention surface
-// (spec 2026-07-24): top-center = status output, bottom-center = voice input.
-// The main app keeps dictation + settings + dictation history only.
+// The notch remains the single ATTENTION surface (spec 2026-07-24): top-center
+// = status output, bottom-center = voice input. Nothing here interrupts you,
+// and the notch is still where a running task announces itself.
+//
+// What changed: the Orchestrator tab now has a Tasks page (`TaskPanel`) as its
+// default, because a destination described as "what your agents are doing" that
+// opens on a settings pane is the wrong first frame. That is an on-demand list
+// you navigate to, not a surface that pushes at you — the notch keeps that job.
 import { OutOfCreditBanner } from '../paywall/OutOfCreditBanner'
 import { AuthProvider, useAuth } from '../paywall/AuthContext'
 import { SignInScreen } from '../paywall/SignInScreen'
@@ -21,10 +24,118 @@ import { SignInScreen } from '../paywall/SignInScreen'
 import { RemoteSettings } from '../remote/RemoteSettings'
 import { RemoteSetup } from '../remote/RemoteSetup'
 import { RemoteSetupEntry } from '../remote/RemoteSetupEntry'
+import { RemoteHowItWorks } from '../remote/RemoteHowItWorks'
+import { TaskPanel } from '../remote/TaskPanel'
 
-type Tab = 'history' | 'voice' | 'remote' | 'account' | 'permissions' | 'language' | 'settings' | 'privacy'
+/**
+ * Four destinations, and only four:
+ *   history       what you said
+ *   orchestrator  what your agents are doing
+ *   account       who you are and what you pay
+ *   settings      everything else
+ *
+ * Permissions, Language and Privacy are sections INSIDE settings now, not
+ * top-level tabs. The Features tab is gone — its Dictate/Instruct content is
+ * superseded by the explainer pages. Decision D2 puts the chaining tip it
+ * uniquely carried (dictate, then immediately Caps Lock to reshape) on Pack B,
+ * to place in the Instruct explainer. That is an obligation, not something
+ * already done: on this branch no explainer page exists yet.
+ */
+type Tab = 'history' | 'orchestrator' | 'account' | 'settings'
 
-type AppView = 'loading' | 'onboarding' | 'main'
+/** Sub-pages of the Orchestrator tab. Setup is NOT one-time — a user may add a
+ *  second agent months later, and Codex loses its connection whenever its app
+ *  is reopened normally — so the way in is permanent, never gated on
+ *  "complete". */
+type OrchestratorPage = 'tasks' | 'how' | 'setup' | 'settings'
+
+type AppView = 'loading' | 'onboarding' | 'whats-new' | 'main'
+
+/* ─── The onboarding gate (decision D4) ───────────────────────────────
+ *
+ * The gate used to be `unmute_onboarding_complete` alone, an unversioned
+ * boolean. Every existing user has it set, so any revamp of the flow would have
+ * reached new installs only. Two keys now share the job:
+ *
+ *   unmute_onboarding_complete  'true' ⇔ this user has been through onboarding
+ *                               at all. Unchanged meaning, unchanged name.
+ *   unmute_onboarding_version   which flow they saw. Absent but complete='true'
+ *                               ⇒ the old eight-step flow ⇒ version 1.
+ *
+ * Resolving to:
+ *   not complete → the full nine-step flow (a new install, or a replay)
+ *   version < 2  → a three-screen "what's new", then version 2 is written
+ *   version >= 2 → straight into the app
+ *
+ * WHY THE LEGACY KEY IS STILL WRITTEN rather than migrated away. Settings →
+ * Help's "Replay onboarding" — which this pack does not own — clears exactly
+ * that key and reloads. If completion were recorded only in the new key, that
+ * button would silently stop working the day this shipped: the version would
+ * survive at 2 and the app would go straight back in. Keeping the legacy key as
+ * the presence flag means the existing button keeps working untouched, and
+ * `resetOnboarding()` below (which clears both) is the tidier equivalent for
+ * Pack B to move to.
+ */
+
+/** Bump this when onboarding changes materially enough that existing users
+ *  need to be told. Every bump needs a matching "what's new" for the step. */
+export const ONBOARDING_VERSION = 2
+export const ONBOARDING_VERSION_KEY = 'unmute_onboarding_version'
+export const LEGACY_ONBOARDING_COMPLETE_KEY = 'unmute_onboarding_complete'
+
+/** The version of onboarding this user has seen, or null if they have seen
+ *  none. A completion flag with no version is the old flow, i.e. version 1. */
+export function readOnboardingVersion(): number | null {
+  try {
+    if (localStorage.getItem(LEGACY_ONBOARDING_COMPLETE_KEY) !== 'true') return null
+    const raw = localStorage.getItem(ONBOARDING_VERSION_KEY)
+    if (raw !== null) {
+      const parsed = Number.parseInt(raw, 10)
+      if (Number.isFinite(parsed)) return parsed
+    }
+    return 1
+  } catch {
+    // localStorage unavailable — treat as current so we never trap a user in
+    // an onboarding loop whose completion can never be recorded.
+    return ONBOARDING_VERSION
+  }
+}
+
+/** Clears both keys, so the user gets the full flow rather than the three-screen
+ *  summary. Exported for Settings → Help & about's "Replay onboarding" to call.
+ *  NOTHING CALLS IT YET: that button lives in `Settings.tsx`, which this pack
+ *  does not own, and still inlines `removeItem('unmute_onboarding_complete')`.
+ *  That inline version keeps working — see the note on the legacy key above —
+ *  so this is the tidier replacement, not a fix for something broken. */
+export function resetOnboarding(): void {
+  try {
+    localStorage.removeItem(ONBOARDING_VERSION_KEY)
+    localStorage.removeItem(LEGACY_ONBOARDING_COMPLETE_KEY)
+  } catch { /* ignore — nothing we can do, and nothing breaks */ }
+}
+
+function markOnboardingSeen(): void {
+  try {
+    localStorage.setItem(LEGACY_ONBOARDING_COMPLETE_KEY, 'true')
+    localStorage.setItem(ONBOARDING_VERSION_KEY, String(ONBOARDING_VERSION))
+  } catch { /* ignore */ }
+}
+
+/** The renderer types in this project do not declare `window.electronAPI`, so
+ *  reaching for it directly is a type error on every line. Same runtime access,
+ *  none of the noise — the idiom the `renderer/remote/` override files use.
+ *  (Several `renderer/app/` files still reach for it directly and pay the
+ *  error; migrating them is not this pack's to do.) */
+type AppAPI = {
+  getDictationKey?: () => Promise<string>
+  paywallGetLanguageAutoDetect?: () => Promise<boolean>
+  paywallGetLanguage?: () => Promise<string>
+  onUpdateDownloaded?: (cb: (version: string) => void) => void
+  restartToUpdate?: () => void
+}
+function api(): AppAPI {
+  return (window as unknown as { electronAPI?: AppAPI }).electronAPI ?? {}
+}
 
 export default function App() {
   return (
@@ -35,52 +146,71 @@ export default function App() {
 }
 
 function AppInner() {
-  const [view, setView] = useState<AppView | 'loading'>('loading')
+  const [view, setView] = useState<AppView>('loading')
   const [activeTab, setActiveTab] = useState<Tab>('history')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [pendingUpdate, setPendingUpdate] = useState<string | null>(null)
-  // Sidebar Language row badge — "Auto" or the ISO code (uppercased). Kept in
-  // sync via a polling re-read on tab focus + a refresh on every Language-tab
-  // visit, since the Language component itself is the only writer.
+  // Language sub-item badge — "Auto" or the ISO code (uppercased). Re-read
+  // whenever the sidebar is not sitting on the Language section, since the
+  // Language component itself is the only writer. DORMANT on this branch alone:
+  // `Language.tsx` moves inside Settings and Pack B mounts it, so until that
+  // lands nothing can change the setting and the badge never moves after its
+  // first read.
   const [languageBadge, setLanguageBadge] = useState<string>('Auto')
-  // Sub-page of the Remote tab. Setup is NOT one-time — a user may add a second
-  // agent months later, and Codex loses its connection whenever its app is
-  // reopened normally — so the way in is permanent, never gated on "complete".
-  const [remotePage, setRemotePage] = useState<'settings' | 'setup'>('settings')
+  const [orchestratorPage, setOrchestratorPage] = useState<OrchestratorPage>('tasks')
+  // Which of the seven Settings sections the sidebar has selected. Pack B's
+  // Settings renders one section at a time from this.
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('triggers')
 
   async function refreshLanguageBadge() {
     try {
-      const auto = await window.electronAPI?.paywallGetLanguageAutoDetect?.()
+      const auto = await api().paywallGetLanguageAutoDetect?.()
       if (auto) { setLanguageBadge('Auto'); return }
-      const code = await window.electronAPI?.paywallGetLanguage?.()
+      const code = await api().paywallGetLanguage?.()
       if (typeof code === 'string' && code) setLanguageBadge(code.toUpperCase())
     } catch { /* ignore — keep previous badge */ }
   }
 
   useEffect(() => {
     // Load dictation key setting (for the pro-tip hint)
-    window.electronAPI?.getDictationKey().then((key: string) => {
+    api().getDictationKey?.().then((key: string) => {
       if (key === 'fn' || key === 'right-option') setDictationKey(key)
     }).catch(() => {})
 
     // Onboarding gate — no sign-in in local BYO-key mode
-    const onboardingDone = localStorage.getItem('unmute_onboarding_complete')
-    setView(onboardingDone ? 'main' : 'onboarding')
+    const seen = readOnboardingVersion()
+    setView(
+      seen === null ? 'onboarding'
+        : seen < ONBOARDING_VERSION ? 'whats-new'
+          : 'main',
+    )
 
     // Listen for downloaded updates and surface a "Restart" banner.
-    window.electronAPI?.onUpdateDownloaded((version) => setPendingUpdate(version))
+    api().onUpdateDownloaded?.((version) => setPendingUpdate(version))
 
     refreshLanguageBadge()
   }, [])
 
-  // Re-read on every navigation back to History/Account/etc from Language —
-  // cheap (one IPC call) and avoids needing a pub/sub channel just for this.
+  // Re-read on any navigation that does not land on the Language section. One
+  // or two IPC calls (the second only when auto-detect is off), which is cheap
+  // enough to beat introducing a pub/sub channel just for this badge.
   useEffect(() => {
-    if (activeTab !== 'language') refreshLanguageBadge()
-  }, [activeTab])
+    const onLanguage = activeTab === 'settings' && settingsSection === 'language'
+    if (!onLanguage) refreshLanguageBadge()
+  }, [activeTab, settingsSection])
 
   function handleOnboardingComplete() {
-    localStorage.setItem('unmute_onboarding_complete', 'true')
+    markOnboardingSeen()
+    setView('main')
+  }
+
+  /** "Connect an agent" in onboarding, and the same from the what's-new
+   *  summary: finish the flow and land on the setup page rather than dumping
+   *  the user on History to find it themselves. */
+  function handleOpenAgentSetup() {
+    markOnboardingSeen()
+    setActiveTab('orchestrator')
+    setOrchestratorPage('setup')
     setView('main')
   }
 
@@ -100,7 +230,16 @@ function AppInner() {
   if (view === 'onboarding') {
     return (
       <>
-        <Onboarding onComplete={handleOnboardingComplete} />
+        <Onboarding onComplete={handleOnboardingComplete} onOpenAgentSetup={handleOpenAgentSetup} />
+        <SignInOverlay />
+      </>
+    )
+  }
+
+  if (view === 'whats-new') {
+    return (
+      <>
+        <WhatsNew onComplete={handleOnboardingComplete} onOpenAgentSetup={handleOpenAgentSetup} />
         <SignInOverlay />
       </>
     )
@@ -123,12 +262,12 @@ function AppInner() {
       {pendingUpdate && (
         <div className="absolute top-8 left-0 right-0 z-20 flex justify-center pointer-events-none">
           <div className="pointer-events-auto mt-2 flex items-center gap-3 px-4 py-2.5 rounded-full bg-ink text-white shadow-lg border border-black/30 animate-fade-up-in">
-            <span className="text-[12px] font-medium">
+            <span className="text-[12.5px] font-medium">
               <span className="font-bold">unmute {pendingUpdate}</span> ready to install.
             </span>
             <button
-              onClick={() => window.electronAPI.restartToUpdate()}
-              className="text-[12px] font-semibold px-3 py-1 rounded-full bg-white text-ink hover:opacity-90 transition-opacity"
+              onClick={() => api().restartToUpdate?.()}
+              className="text-[12.5px] font-semibold px-3 py-1 rounded-full bg-white text-ink hover:opacity-90 transition-opacity"
             >
               Restart now
             </button>
@@ -144,11 +283,11 @@ function AppInner() {
       )}
 
       {/* Sidebar */}
-      <nav className="w-[220px] min-w-[220px] border-r border-border pt-12 px-2 flex flex-col bg-cream-mid">
+      <nav className="w-[220px] min-w-[220px] border-r border-border pt-12 px-2 flex flex-col bg-cream-mid overflow-y-auto">
         {/* Brand — the wordmark PNG itself carries the distinguisher
             from OSS unmute (baked into the asset, not a CSS overlay), so
             this is back to a single image + tagline. */}
-        <div className="px-3 mb-5 pb-5 border-b border-border flex flex-col items-center">
+        <div className="px-3 mb-5 pb-5 border-b border-border flex flex-col items-center shrink-0">
           <div className="relative">
             <img src={unmuteLogo} alt="unmute" className="h-[54px] w-auto" />
           </div>
@@ -157,7 +296,7 @@ function AppInner() {
           </p>
         </div>
 
-        {/* Nav items */}
+        {/* Nav items — four destinations, one glyph each. */}
         <div className="flex flex-col gap-0.5 px-1">
           <SidebarButton
             icon={<HistoryIcon />}
@@ -166,16 +305,10 @@ function AppInner() {
             onClick={() => setActiveTab('history')}
           />
           <SidebarButton
-            icon={<VoiceIcon />}
-            label="Features"
-            active={activeTab === 'voice'}
-            onClick={() => setActiveTab('voice')}
-          />
-          <SidebarButton
-            icon={<VoiceIcon />}
-            label="Remote"
-            active={activeTab === 'remote'}
-            onClick={() => setActiveTab('remote')}
+            icon={<OrchestratorIcon />}
+            label="Orchestrator"
+            active={activeTab === 'orchestrator'}
+            onClick={() => setActiveTab('orchestrator')}
           />
           <SidebarButton
             icon={<AccountIcon />}
@@ -184,51 +317,56 @@ function AppInner() {
             onClick={() => setActiveTab('account')}
           />
           <SidebarButton
-            icon={<PermissionsIcon />}
-            label="Permissions"
-            active={activeTab === 'permissions'}
-            onClick={() => setActiveTab('permissions')}
-          />
-          <SidebarButton
-            icon={<LanguageIcon />}
-            label="Language"
-            active={activeTab === 'language'}
-            onClick={() => setActiveTab('language')}
-            trailing={
-              <span
-                className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${activeTab === 'language' ? 'bg-accent/10 text-accent' : 'bg-ink-07 text-ink-35'}`}
-              >
-                {languageBadge}
-              </span>
-            }
-          />
-          <SidebarButton
             icon={<SettingsIcon />}
             label="Settings"
             active={activeTab === 'settings'}
             onClick={() => setActiveTab('settings')}
           />
-          <SidebarButton
-            icon={<PrivacyIcon />}
-            label="Privacy"
-            active={activeTab === 'privacy'}
-            onClick={() => setActiveTab('privacy')}
-          />
+
+          {/* Settings sub-navigation — Triggers · Audio & behaviour ·
+              Appearance & notch · Permissions · Language · Privacy · Help &
+              about. The list itself is SETTINGS_SECTIONS in _shared.tsx, so
+              Settings.tsx can import the section type without an import cycle
+              back through this file. Settings is the only destination with
+              sub-items IN THE SIDEBAR — Orchestrator also has four sub-pages,
+              but they are a segmented control inside the content area, so the
+              rail stays four rows deep. */}
+          {activeTab === 'settings' && (
+            <div className="flex flex-col gap-0.5 mt-0.5 mb-1 pl-[26px] border-l border-border ml-[15px]">
+              {SETTINGS_SECTIONS.map((section) => (
+                <SidebarSubButton
+                  key={section.id}
+                  label={section.label}
+                  active={settingsSection === section.id}
+                  onClick={() => setSettingsSection(section.id)}
+                  trailing={section.id === 'language' ? (
+                    <span
+                      className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${settingsSection === 'language' ? 'bg-accent/10 text-accent' : 'bg-ink-07 text-ink-35'}`}
+                    >
+                      {languageBadge}
+                    </span>
+                  ) : undefined}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="mt-auto pb-4 px-1">
+        <div className="mt-auto pb-4 px-1 shrink-0">
           {/* Pro tip */}
           <div className="px-1 mt-3">
             <div className="p-3 rounded-xl bg-surface-2 border border-border shadow-sm">
               <p className="text-[11px] font-bold text-ink mb-1.5 flex items-center gap-1.5">
-                <span className="text-[8px] text-gold">✦</span> Pro tip
+                <span className="text-[10px] text-gold">✦</span> Pro tip
               </p>
               <p className="text-[11px] text-ink-60 leading-relaxed">
                 Press{' '}
-                <kbd className="inline-flex px-1.5 py-0.5 rounded-md bg-gradient-to-b from-white to-cream-dark text-[9px] font-bold text-ink border border-border-md shadow-[0_2px_0_rgba(26,23,20,0.22),0_1px_3px_rgba(0,0,0,0.10)]">{dictationKey === 'fn' ? 'Fn' : 'Right Opt'}</kbd>
+                <kbd className="inline-flex px-1.5 py-0.5 rounded-md bg-gradient-to-b from-white to-cream-dark text-[10px] font-bold text-ink border border-border-md shadow-[0_2px_0_rgba(26,23,20,0.22),0_1px_3px_rgba(0,0,0,0.10)]">{dictationKey === 'fn' ? 'Fn' : 'Right Opt'}</kbd>
                 {' '}to dictate,{' '}
-                <kbd className="inline-flex px-1.5 py-0.5 rounded-md bg-gradient-to-b from-[#2E2A25] to-ink text-[9px] font-bold text-white/90 border border-black/50 shadow-[0_2px_0_rgba(0,0,0,0.55),0_1px_3px_rgba(0,0,0,0.25)]">Caps Lock</kbd>
-                {' '}for instructions.
+                <kbd className="inline-flex px-1.5 py-0.5 rounded-md bg-gradient-to-b from-[#2E2A25] to-ink text-[10px] font-bold text-white/90 border border-black/50 shadow-[0_2px_0_rgba(0,0,0,0.55),0_1px_3px_rgba(0,0,0,0.25)]">Caps Lock</kbd>
+                {' '}for instructions, and{' '}
+                <kbd className="inline-flex px-1.5 py-0.5 rounded-md bg-gradient-to-b from-white to-cream-dark text-[10px] font-bold text-ink border border-border-md shadow-[0_2px_0_rgba(26,23,20,0.22),0_1px_3px_rgba(0,0,0,0.10)]">{dictationKey === 'fn' ? 'Right Opt' : 'Fn'}</kbd>
+                {' '}to hand a job to your agent.
               </p>
             </div>
           </div>
@@ -239,23 +377,72 @@ function AppInner() {
       <main className="flex-1 pt-10 px-10 overflow-y-auto">
         <div className="max-w-2xl mx-auto pb-8">
           {activeTab === 'history' && <History />}
-          {activeTab === 'voice' && <Voice dictationKey={dictationKey} />}
-          {activeTab === 'remote' && (remotePage === 'setup' ? (
-            <RemoteSetup onBack={() => setRemotePage('settings')} />
-          ) : (
-            <>
-              <RemoteSetupEntry onOpen={() => setRemotePage('setup')} />
-              <RemoteSettings />
-            </>
-          ))}
+          {activeTab === 'orchestrator' && (
+            <OrchestratorTab page={orchestratorPage} onPageChange={setOrchestratorPage} />
+          )}
           {activeTab === 'account' && <Account />}
-          {activeTab === 'permissions' && <Permissions />}
-          {activeTab === 'language' && <Language />}
-          {activeTab === 'settings' && <Settings onDictationKeyChange={setDictationKey} />}
-          {activeTab === 'privacy' && <Privacy />}
+          {activeTab === 'settings' && (
+            // `section` is Pack A's half of the contract in the overview's
+            // ownership table: this pack owns the navigation state, Pack B owns
+            // what each section renders. Until Pack B widens SettingsProps this
+            // prop is unknown to Settings.tsx — an expected, deliberate broken
+            // link between the two packs, NOT something to fix by editing a file
+            // this pack does not own.
+            <Settings onDictationKeyChange={setDictationKey} section={settingsSection} />
+          )}
         </div>
       </main>
     </div>
+  )
+}
+
+/**
+ * The Orchestrator tab and its four sub-pages. The components themselves belong
+ * to Pack C; this is only the navigation between them.
+ *
+ * KNOWN SEAM FOR PACK C. `TaskPanel` carries its own `'tasks' | 'how' | 'setup'`
+ * state and its own links into `RemoteHowItWorks` and `RemoteSetup` — it was
+ * written as a standalone panel, and until this pack it was imported by nothing
+ * at all. So there are briefly two navigations over the same three pages: enter
+ * How-it-works from inside the Tasks page and the segment above still reads
+ * "Tasks". Collapsing TaskPanel's internal pages into this control is Pack C's
+ * to do; doing it here would mean editing a file this pack does not own.
+ */
+function OrchestratorTab({ page, onPageChange }: {
+  page: OrchestratorPage
+  onPageChange: (page: OrchestratorPage) => void
+}) {
+  return (
+    <>
+      <div className="flex items-center justify-between gap-4 mb-5 flex-wrap">
+        <h2 className="font-display text-[22px] font-bold text-ink tracking-tight">Orchestrator</h2>
+        <SegmentedControl
+          options={[
+            { value: 'tasks', label: 'Tasks' },
+            { value: 'how', label: 'How it works' },
+            { value: 'setup', label: 'Agents' },
+            { value: 'settings', label: 'Settings' },
+          ]}
+          value={page}
+          onChange={(value) => onPageChange(value as OrchestratorPage)}
+        />
+      </div>
+
+      {page === 'tasks' && <TaskPanel />}
+      {page === 'how' && (
+        <RemoteHowItWorks
+          onBack={() => onPageChange('tasks')}
+          onOpenSetup={() => onPageChange('setup')}
+        />
+      )}
+      {page === 'setup' && <RemoteSetup onBack={() => onPageChange('tasks')} />}
+      {page === 'settings' && (
+        <>
+          <RemoteSetupEntry onOpen={() => onPageChange('setup')} />
+          <RemoteSettings />
+        </>
+      )}
+    </>
   )
 }
 
@@ -310,13 +497,13 @@ function ProfileButton() {
           {auth.user?.email && (
             <div className="px-2 py-1.5">
               <p className="text-[10px] text-ink-35 font-bold uppercase tracking-wider mb-0.5">Signed in</p>
-              <p className="text-[12px] font-semibold text-ink truncate">{auth.user.email}</p>
+              <p className="text-[12.5px] font-semibold text-ink truncate">{auth.user.email}</p>
             </div>
           )}
           <div className="h-px bg-border my-1.5" />
           <button
             onClick={() => { setMenuOpen(false); auth.signOut() }}
-            className="w-full text-left px-2 py-1.5 rounded-lg text-[12px] text-ink hover:bg-cream-mid transition-colors"
+            className="w-full text-left px-2 py-1.5 rounded-lg text-[12.5px] text-ink hover:bg-cream-mid transition-colors"
           >
             Sign out
           </button>
@@ -357,6 +544,35 @@ function SidebarButton({
   )
 }
 
+/** A section inside Settings. Deliberately unglyphed: seven more icons in a
+ *  220px rail would collide with the one-icon-per-concept rule (D8) long before
+ *  they helped anyone scan the list. */
+function SidebarSubButton({
+  label,
+  active,
+  onClick,
+  trailing,
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+  trailing?: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`titlebar-no-drag w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-lg text-[12.5px] transition-all duration-150 select-none ${
+        active
+          ? 'bg-ink-07 text-ink font-semibold'
+          : 'text-ink-60 font-medium hover:bg-ink-07 hover:text-ink'
+      }`}
+    >
+      <span className="flex-1 truncate">{label}</span>
+      {trailing}
+    </button>
+  )
+}
+
 function HistoryIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -365,30 +581,26 @@ function HistoryIcon() {
     </svg>
   )
 }
-function VoiceIcon() {
+
+/** Orchestrator — the cockpit: many panes, many agents, one surface. */
+function OrchestratorIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="5.5" y="1.5" width="5" height="8" rx="2.5" />
-      <path d="M3.5 7.5a4.5 4.5 0 0 0 9 0" />
-      <line x1="8" y1="12" x2="8" y2="14.5" />
+      <rect x="1.75" y="2.25" width="5.25" height="5" rx="1.25" />
+      <rect x="9" y="2.25" width="5.25" height="5" rx="1.25" />
+      <rect x="1.75" y="8.75" width="5.25" height="5" rx="1.25" />
+      <rect x="9" y="8.75" width="5.25" height="5" rx="1.25" />
     </svg>
   )
 }
 
+/** Settings — an actual gear. The old icon was a circle with eight straight
+ *  spokes, which reads as a sun or a loading spinner, not a setting. */
 function SettingsIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="8" r="2.5" />
-      <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.22 3.22l1.41 1.41M11.37 11.37l1.41 1.41M3.22 12.78l1.41-1.41M11.37 4.63l1.41-1.41" />
-    </svg>
-  )
-}
-
-function PrivacyIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8 14.5s5.5-2.5 5.5-7V3.5L8 1.5 2.5 3.5V7.5c0 4.5 5.5 7 5.5 7z" />
-      <polyline points="5.5 8 7 9.5 10.5 6" />
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   )
 }
@@ -398,25 +610,6 @@ function AccountIcon() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="8" cy="5.5" r="2.5" />
       <path d="M2.5 14a5.5 5.5 0 0 1 11 0" />
-    </svg>
-  )
-}
-
-function PermissionsIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
-      <path d="M5.5 7V4.5a2.5 2.5 0 0 1 5 0V7" />
-    </svg>
-  )
-}
-
-function LanguageIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="8" r="6" />
-      <path d="M2 8h12" />
-      <path d="M8 2c1.8 2 2.8 4 2.8 6S9.8 12 8 14c-1.8-2-2.8-4-2.8-6S6.2 4 8 2z" />
     </svg>
   )
 }
