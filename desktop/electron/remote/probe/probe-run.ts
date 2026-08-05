@@ -71,7 +71,7 @@ async function main() {
 
   // A trivial, harmless, fully-local task.
   const intent = 'Create a file named hello.txt in the current directory containing the text "hi from unmute remote". Then mark the task done in your status file.'
-  ex.writeStdin(buildDispatch({ intent, statusPath }))
+  ex.writeStdin(buildDispatch({ intent }))
   console.log('[probe] dispatched task; polling status file (max 120s)…\n')
 
   const deadline = Date.now() + 120_000

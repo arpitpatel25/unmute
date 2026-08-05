@@ -37,7 +37,11 @@ test('mcp: initialize handshake + tools/list expose exactly the two-tool surface
     const list = await rpc(port, 'tools/list')
     const names = list.result.tools.map((t: { name: string }) => t.name).sort()
     // THE SURFACE: sessions may ADD work, never TOUCH it. Two tools, no more.
-    assert.deepEqual(names, ['unmute_create_task', 'unmute_task_status'])
+    // unmute_status is the OPTIONAL precision channel (observer.ts derives
+    // state on its own). Deliberately third and deliberately described as
+    // optional — the moment it reads as mandatory we have rebuilt the
+    // reporting contract this design deleted, one tool call at a time.
+    assert.deepEqual(names, ['unmute_create_task', 'unmute_status', 'unmute_task_status'])
   })
 })
 
@@ -48,7 +52,7 @@ test('mcp: tool calls without a valid task identity are rejected with an instruc
     assert.match(res.result.content[0].text, /no valid task identity/)
     // ...but the handshake itself needs no identity (server must be listable).
     const list = await rpc(port, 'tools/list')
-    assert.equal(list.result.tools.length, 2)
+    assert.equal(list.result.tools.length, 3)
   })
 })
 

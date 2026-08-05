@@ -35,17 +35,24 @@ test('upsert is idempotent — replaces the block, no duplication', () => {
   assert.match(twice, /notes/) // user content survives
 })
 
-test('installContract writes a CLAUDE.md containing the real contract', async () => {
+test('the markers still upsert, so an OLD 244-line contract gets replaced not appended', async () => {
+  // Task dispatch no longer calls this at all. It survives for the parked
+  // librarian, and because a user upgrading from a previous build has stale
+  // CLAUDE.md files in their task directories — this is what removes them.
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'remote-cwd-'))
-  const target = await installContract(cwd)
+  const target = path.join(cwd, 'CLAUDE.md')
+  await fs.writeFile(target, `${CONTRACT_BEGIN}\n# Unmute Remote — operating contract\n## 4a. Classify the task\n${CONTRACT_END}`)
+  await installContract(cwd)
   const body = await fs.readFile(target, 'utf8')
-  assert.match(target, /CLAUDE\.md$/)
-  assert.match(body, /Unmute Remote — operating contract/) // from the real contract.md
-  assert.match(body, /status file/i)
+  assert.doesNotMatch(body, /Classify the task/, 'the old contract survived the upsert')
+  assert.match(body, /Unmute task/)
 })
 
-test('readContractText returns the bundled contract', async () => {
+test('the bundled text is now the four-line preamble, not a protocol', async () => {
   const t = await readContractText()
   assert.match(t, /UNMUTE-REMOTE-CONTRACT:BEGIN/)
-  assert.match(t, /atomically/i)
+  assert.ok(t.length < 800, `contract text grew back to ${t.length} chars`)
+  for (const banned of ['status.json', 'atomically', 'schema_version', 'recipe']) {
+    assert.ok(!t.toLowerCase().includes(banned), `contract text mentions "${banned}" again`)
+  }
 })

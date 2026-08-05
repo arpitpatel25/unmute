@@ -1,48 +1,26 @@
-import { test } from 'node:test'
+import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildDispatch } from './dispatch-prompt.ts'
+import { buildDispatch, buildResumeNudge } from './dispatch-prompt.ts'
 
-test('typed payload carries the per-task path + intent, not the full contract (PRD #3)', () => {
-  const out = buildDispatch({
-    intent: 'extract ~/Downloads/report.zip',
-    statusPath: '/home/u/.unmute/remote/local/t1/status.json',
-  })
-  assert.match(out, /\/home\/u\/\.unmute\/remote\/local\/t1\/status\.json/) // dynamic path present
-  assert.match(out, /extract ~\/Downloads\/report\.zip/) // intent present
-  assert.ok(out.length < 600, `payload should stay terse, was ${out.length} bytes`)
+test('the dispatch payload is the intent, and nothing else', () => {
+  // It used to be a header, a status path, a recipe path, hedged memory leads,
+  // stale-skill notes, an "Act now" imperative and — on project-bound spawns —
+  // the entire 244-line operating contract, inline, as a user turn.
+  assert.equal(buildDispatch({ intent: 'summarize the pricing thread' }), 'summarize the pricing thread')
 })
 
-test('recipe scratch path is included only when provided', () => {
-  const without = buildDispatch({ intent: 'x', statusPath: '/s.json' })
-  assert.doesNotMatch(without, /recipe\.json/i)
-  const withScratch = buildDispatch({ intent: 'x', statusPath: '/s.json', recipeScratchPath: '/r/recipe.json' })
-  assert.match(withScratch, /\/r\/recipe\.json/)
+test('nothing Unmute-shaped leaks into the payload', () => {
+  const out = buildDispatch({ intent: 'open my inbox' })
+  for (const leak of ['status.json', 'Unmute', 'contract', 'recipe', 'Act now']) {
+    assert.ok(!out.includes(leak), `payload leaked "${leak}"`)
+  }
 })
 
-test('buildDispatch renders a hedged nursery block with confidence stance', () => {
-  const out = buildDispatch({
-    intent: 'scan my inboxes',
-    statusPath: '/t/status.json',
-    nurseryRecipes: [{ name: 'gmail-inbox-sweep', confidence: 'low', body: '## Invariants\n- check all profiles' }],
-  })
-  assert.match(out, /unverified lead/i)         // low-confidence stance
-  assert.match(out, /derive independently/i)
-  assert.match(out, /check all profiles/)        // body included
-})
-
-test('buildDispatch with no nursery recipes is unchanged (terse)', () => {
-  const out = buildDispatch({ intent: 'do x', statusPath: '/t/status.json' })
-  assert.match(out, /\[Unmute Remote task\]/)
-  assert.doesNotMatch(out, /unverified lead/i)
-})
-
-test('buildDispatch inlines the contract for project-bound spawns (and only then)', () => {
-  const base = { intent: 'fix the bug', statusPath: '/tmp/s.json' }
-  const without = buildDispatch(base)
-  assert.ok(without.includes('already loaded'), 'scratch spawn: points at the auto-loaded contract')
-  assert.ok(!without.includes('end contract'))
-  const withContract = buildDispatch({ ...base, contractText: 'WRITE status.json atomically.' })
-  assert.ok(withContract.includes('Unmute operating contract'), 'contract block present')
-  assert.ok(withContract.includes('WRITE status.json atomically.'), 'contract text carried verbatim')
-  assert.ok(withContract.includes('contract above'), 'closing line points at the inline contract')
+test('the resume nudge still says continue, not restart', () => {
+  // This one survives because it is genuinely task content: a resumed REPL comes
+  // back idle and would otherwise sit there, or start over.
+  const out = buildResumeNudge('fix the flaky test')
+  assert.match(out, /do NOT restart/)
+  assert.match(out, /fix the flaky test/)
+  assert.ok(!out.includes('status'), 'the nudge must not re-anchor a status protocol')
 })

@@ -120,7 +120,8 @@ unmute-cloud/
     │       ├── notch/         controller + IPC client for the Swift surface
     │       ├── capture/       universal capture + the scratchpad
     │       ├── cua/ + ax/     computer-use lanes (CDP, AppleScript, cua driver)
-    │       ├── contract/      the status-file contract handed to every task
+    │       ├── observer.ts    derives task state from what a session emits
+    │       ├── session-policy.ts  the ONLY things Unmute adds to a session
     │       └── curator-*      the skills observatory (PARKED — see §6)
     ├── native-notch/         the Swift notch shell (SwiftUI + SwiftTerm)
     ├── native-*/             in-process macOS addons (paste, key listener, AX)
@@ -191,6 +192,12 @@ each patched file into place.
   executor interface.
 - **Files are the control channel** in the orchestrator (router → `decision.json`,
   tasks → `status.json`). The terminal stream is display-only.
+- **Unmute OBSERVES a Claude Code session; it never modifies one.** Diff a session
+  Unmute started against one the user started themselves: the only difference
+  should be the task text. Task state is derived from lifecycle hooks and the
+  session's own transcript (`observer.ts`), never demanded from the model. Before
+  adding anything to a launch or a prompt, read `session-policy.ts` — the allowed
+  flags are a list, and a test enforces it.
 - **There is more than one renderer.** The wall exists in both React
   (`engine-overrides/renderer/remote/`) and Swift (`native-notch/`). A UI change
   in one is not a UI change in the other — confirm which surface is meant before

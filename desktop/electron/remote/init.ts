@@ -50,6 +50,10 @@ import { CodexRouterEngine } from './codex-router-engine'
 import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
+import { SESSION_PREAMBLE } from './session-policy'
+import { installHookSettings } from './hooks'
+import { parseHookEvent } from './observer'
+import type { ExecutorFactoryOpts } from './executor'
 import { startCuaServer, type CuaServer } from './cua/server'
 import { NotchClient } from './notch/notch-client'
 import { NotchController } from './notch/notch-controller'
@@ -628,6 +632,21 @@ function partitionRoutable(now: number): { targetable: RoutableTask[]; coldSessi
 let tmuxBin: string | null = null
 const tmuxConfPath = join(homedir(), '.unmute', 'remote', 'tmux.conf')
 
+/** Unmute's own directory. Everything Unmute writes lives here — never in the
+ *  user's working directory. That is the rule session-policy.ts exists to keep. */
+const REMOTE_BASE_DIR = join(homedir(), '.unmute', 'remote')
+
+/** Path of the shared hook-settings file, once written. Null until then (and on
+ *  failure), in which case sessions launch with no `--settings` and fall back to
+ *  status-file polling alone. */
+let hookSettingsFile: string | null = null
+
+/** Shared secret the lifecycle hooks present when they POST an event. The hook
+ *  lane is on loopback, but a bearer check means another local process cannot
+ *  forge task state. Per-process: hooks are re-installed at every init, so a
+ *  restart simply rotates it. */
+const HOOK_TOKEN = randomUUID()
+
 /** Compact "22h" / "3m" / "0:42" age from a timestamp, for cockpit cards. */
 function relativeAge(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000))
@@ -882,13 +901,21 @@ function notify(title: string, body: string): void {
  * The model Claude Code is launched with — ONE resolution, used both to build
  * the executor (its `--model` argument) and to record what ran on the task.
  *
- * Extracted rather than duplicated. Two copies of
- * `settings.get('model') || getModels().doerDefault` are two things that can
- * drift, and this particular drift would be silent: the card would name a model
- * the session never ran on, which is exactly the failure D6 exists to prevent.
+ * EMPTY MEANS THE USER'S OWN DEFAULT, and we pass no `--model` at all.
+ *
+ * This used to fall back to `getModels().doerDefault` ('sonnet'), which pinned
+ * EVERY Unmute task to our default and silently overrode the user's own Claude
+ * Code configuration. For anyone whose personal default is stronger than ours,
+ * every task ran on a weaker model than the sessions they were comparing it to,
+ * with nothing anywhere saying so — the most likely single cause of "Claude Code
+ * works worse inside Unmute". A picker choice is still honoured, because that is
+ * the user's decision; the absence of one is not our invitation to decide.
+ *
+ * Downstream (D6) an absent model means the card renders the agent alone rather
+ * than inventing a value — which was already the documented rule.
  */
 function doerModel(): string {
-  return settings.get('model') || getModels().doerDefault
+  return settings.get('model') || ''
 }
 
 /** Ceiling on the Codex model read at dispatch. The app-server answers in ~1ms;
@@ -958,7 +985,7 @@ async function modelForDispatch(agent: AgentKind | undefined): Promise<string | 
   }
 }
 
-function executorFactory(resume = false, forTask?: AgentKind) {
+function executorFactory(resume = false, forTask?: AgentKind, factoryOpts?: ExecutorFactoryOpts) {
   const mode = settings.get('permissionMode')
   // WHOSE BACKEND IS THIS? `forTask` = the agent an EXISTING task was created on;
   // it always wins. The global picker answers only "what should NEW work run on",
@@ -968,8 +995,13 @@ function executorFactory(resume = false, forTask?: AgentKind) {
   const sandboxRoots = settings.get('sandboxRoots') ?? []
   const sandboxed = sandboxRoots.length > 0
   const model = doerModel()
-  const browser = settings.get('browserEnabled') !== false
-  log.event('executor-factory', { agent, forTask: forTask ?? null, permissionMode: mode, sandboxed, sandboxRoots, model, browser, resume })
+  // TWO gates now, not one. The setting is the user's master switch; the caller
+  // says whether THIS task actually touches a browser. Unconditional --chrome
+  // put a browser tool surface into every coding session, and the old contract
+  // then told it the browser was its "default tool for anything web" — wrong
+  // guidance and extra tool surface for work that never opens a page.
+  const browser = settings.get('browserEnabled') !== false && factoryOpts?.browser !== false
+  log.event('executor-factory', { agent, forTask: forTask ?? null, permissionMode: mode, sandboxed, sandboxRoots, model: model || '(user default)', browser, resume })
   // HARD SEPARATION (invariant). Everything below builds a PTY-backed CLI
   // session — i.e. Claude Code. An external backend must never reach here: if
   // it did, the fall-through would hand the user a Claude session for a task
@@ -1010,8 +1042,14 @@ function executorFactory(resume = false, forTask?: AgentKind) {
   return new ClaudeCodeExecutor({
     extraArgs,
     addDirs: sandboxRoots,
-    model, // DECIDED: Opus for executor sessions
-    chrome: browser, // DECIDED: Claude-in-Chrome on by default (browser lane)
+    // Empty ⇒ NO --model flag ⇒ the user's own Claude Code default. See doerModel().
+    ...(model ? { model } : {}),
+    chrome: browser,
+    // Lifecycle hooks + the four-line framing. Both point at files/strings we
+    // own, so a session is fully instrumented with NOTHING written into the
+    // user's working directory (session-policy.ts).
+    ...(hookSettingsFile ? { settingsPath: hookSettingsFile } : {}),
+    appendSystemPrompt: SESSION_PREAMBLE,
     tmux,
   })
 }
@@ -2441,6 +2479,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       return id
     }
   }
+  // The hook settings file every Claude session is launched with. Written once,
+  // shared by all of them — identity comes from each event's own session_id, so
+  // nothing in it is per-task. Best-effort: a session with no hooks still runs
+  // and still has its status file polled.
+  void installHookSettings(REMOTE_BASE_DIR, getKnobs().mcpPort, HOOK_TOKEN)
+    .then((p) => { hookSettingsFile = p })
+    .catch(() => { /* installHookSettings never rejects; belt and braces */ })
+
   void startMcpServer({
     resolveCaller: (token) => {
       if (!token) return null
@@ -2449,6 +2495,29 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     },
     createTask: mcpCreateTask,
     taskStatus: mcpTaskStatus,
+    // THE OBSERVER'S INTAKE. Claude Code lifecycle hooks curl their event JSON
+    // here; everything the old operating contract demanded in prose is derived
+    // from these five events plus the session's own transcript.
+    hookEvent: (token, payload) => {
+      if (token !== HOOK_TOKEN) { log.warn('hook event with a bad token — ignored', {}); return }
+      const event = parseHookEvent(payload)
+      if (!event) return // unknown/unparseable event: ignorable, never fatal
+      manager?.onHookEvent(event)
+    },
+    // The OPTIONAL precision channel (unmute_status). A session that wants to be
+    // exact overwrites what the observer inferred; nothing requires it to.
+    setStatus: async (callerTaskId, input) => {
+      if (!manager) throw new Error('not ready')
+      await manager.setReportedStatus(callerTaskId, {
+        schema_version: 1,
+        state: input.state,
+        updated_at: new Date().toISOString(),
+        ...(input.summary || input.detail || input.artifacts
+          ? { result: { summary: input.summary ?? '', ...(input.detail ? { detail: input.detail } : {}), ...(input.artifacts ? { artifacts: input.artifacts } : {}) } }
+          : {}),
+        ...(input.question ? { question: { text: input.question, kind: 'free_text' as const } } : {}),
+      })
+    },
   }, getKnobs().mcpPort).catch((e) => log.warn('mcp server not started', { error: (e as Error).message }))
   // Register the server in the user's Claude Code config (idempotent). The
   // header uses env expansion so each session presents ITS OWN token.

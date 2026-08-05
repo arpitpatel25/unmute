@@ -42,7 +42,7 @@ async function tmpBase(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'remote-tm-'))
 }
 
-test('dispatch → scaffolds, installs contract, types payload, starts processing', async () => {
+test('dispatch → scaffolds status, types ONLY the intent, writes nothing into the cwd', async () => {
   const baseDir = await tmpBase()
   let spawned: SpawnOpts | null = null
   const tm = new TaskManager({
@@ -54,9 +54,13 @@ test('dispatch → scaffolds, installs contract, types payload, starts processin
   assert.equal(task.state, 'processing')
   // scaffolded status file exists
   assert.ok((await fs.stat(task.statusPath)).isFile())
-  // CLAUDE.md installed in the session cwd
-  assert.ok((await fs.readFile(path.join(task.cwd, 'CLAUDE.md'), 'utf8')).includes('Unmute Remote'))
-  // dispatch payload typed, carrying the status path
+  // NOTHING Unmute-authored lands in the session's working directory. This is
+  // the principle (session-policy.ts) as an assertion: no CLAUDE.md, no
+  // .claude/settings.json, no hook script, no marker files, no PROFILE.md.
+  const inCwd = await fs.readdir(task.cwd)
+  for (const forbidden of ['CLAUDE.md', '.claude', '.unmute-hook.sh', '.unmute-activity', 'PROFILE.md']) {
+    assert.ok(!inCwd.includes(forbidden), `dispatch wrote ${forbidden} into the session cwd`)
+  }
   assert.ok(spawned, 'executor spawned')
   // sessionId minted, set on the task, passed to the spawn (→ --session-id), and persisted.
   assert.ok(task.sessionId, 'task carries a minted sessionId')
@@ -242,20 +246,20 @@ test('staleness backstop flags a silent task as stuck (PRD §6.3)', { timeout: 5
   tm.kill(id)
 })
 
-test('deterministic hook heartbeat keeps a silent task alive; it goes stuck once activity stops', { timeout: 5000 }, async () => {
+test('a pushed hook heartbeat keeps a silent task alive; it goes stuck once the events stop', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({
     executorFactory: () => makeFakeExecutor(),
     baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 30, staleMs: 200,
   })
   const id = await tm.dispatch('a long task that works without writing status')
-  const cwd = tm.get(id)!.cwd
-  const activity = path.join(cwd, '.unmute-activity')
-  // Simulate PostToolUse firing every 60ms (real progress, NO status writes).
-  const beat = setInterval(() => { void fs.writeFile(activity, '') }, 60)
+  const sessionId = tm.get(id)!.sessionId!
+  // PostToolUse arriving every 60ms — real progress, NO status writes. These
+  // are PUSHED now (session-policy.ts) rather than inferred from a marker file.
+  const beat = setInterval(() => tm.onHookEvent({ kind: 'tool-used', sessionId }), 60)
   await new Promise((r) => setTimeout(r, 500)) // > 2x staleMs with no status write
   assert.notEqual(tm.get(id)!.state, 'stuck', 'hook heartbeat kept the silent task alive')
-  // Activity stops → no heartbeat, no status → the backstop must still fire.
+  // Events stop → no heartbeat, no status → the backstop must still fire.
   clearInterval(beat)
   const [stuckTask] = await once(tm, 'stuck')
   assert.equal(stuckTask.state, 'stuck', 'still goes stuck once genuinely silent')
@@ -418,10 +422,12 @@ test('followUp resumes a warm session — pipes text into stdin, back to process
   // for the fake executor; flush the microtask so the deferred write lands.
   await new Promise((r) => setTimeout(r, 0))
   assert.equal(fake.writes.length, before + 1)
-  // A follow-up re-sends the FULL dispatch payload (not raw text) so the model is
-  // re-anchored to the contract — the intent plus the status-file path.
-  assert.ok(fake.writes.at(-1)!.includes('reply to the second one')) // the new intent
-  assert.ok(fake.writes.at(-1)!.includes(task.statusPath))            // status-file path re-sent
+  // A FOLLOW-UP IS JUST WHAT THE USER SAID. The re-anchoring scaffolding —
+  // status path, recipe path, "Act now, follow the contract" — used to wrap
+  // every sentence for the life of the session. The Stop hook replaced the
+  // mechanism it existed to support, so it is gone.
+  assert.equal(fake.writes.at(-1)!, 'reply to the second one')
+  assert.ok(!fake.writes.at(-1)!.includes(task.statusPath), 'follow-up re-sent the status path')
   assert.equal(tm.get(id)!.state, 'processing')
   tm.kill(id)
 })
@@ -494,7 +500,15 @@ test('killAll terminates every session and marks running tasks stopped (PRD §10
   assert.equal(tm.activeCount(), 0)
 })
 
-// ── Memory layer: surface + mode, nursery injection, recipe-bearing handoff ──
+// ── Memory injection: REMOVED (2026-08-06) ───────────────────────────────────
+//
+// Dispatch used to copy graduated skills into the cwd, write a PROFILE.md, and
+// type hedged "memory leads" from the nursery into the payload. All three came
+// from the librarian, which has been parked since 2026-08-03 — so they were
+// unvetted hints from a system with no maintainer, and the project overview
+// already called them "noise that pollutes instruction packets".
+//
+// These tests pin the removal, so it cannot quietly come back.
 
 async function seedGmailNursery(baseDir: string) {
   await writeRecipe({
@@ -508,80 +522,71 @@ async function seedGmailNursery(baseDir: string) {
   }, baseDir)
 }
 
-test('managed dispatch injects + records the gmail nursery lead for the detected surface', async () => {
+test('a nursery recipe on disk is NOT injected, in managed mode or any other', async () => {
   const baseDir = await tmpBase()
   await seedGmailNursery(baseDir)
   const fake = makeFakeExecutor()
   const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25 })
   const id = await tm.dispatch('scan my inboxes') // detectSurface -> gmail, default managed
-  // hedged nursery lead is typed into the payload
-  assert.match(fake.writes.join(''), /unverified lead/i)
-  // and recorded on the task (tier nursery, surface gmail)
-  const injected = tm.get(id)!.injectedRecipes ?? []
-  assert.ok(injected.some((r) => r.name === 'gmail-inbox-sweep' && r.tier === 'nursery' && r.surface === 'gmail'),
-    'gmail nursery recipe recorded')
+  assert.equal(fake.writes.join(''), 'scan my inboxes', 'the payload is the intent and nothing else')
+  assert.doesNotMatch(fake.writes.join(''), /unverified lead/i)
+  assert.equal((tm.get(id)!.injectedRecipes ?? []).length, 0)
+  // surface + mode are still recorded — they route the work, they do not inject.
   assert.equal(tm.get(id)!.mode, 'managed')
   assert.equal(tm.get(id)!.surface, 'gmail')
   tm.kill(id)
 })
 
-test('raw dispatch skips injection, records no recipes, and never hands off on done', { timeout: 5000 }, async () => {
+test('no skills copy and no PROFILE.md land in the session directory', async () => {
   const baseDir = await tmpBase()
   await seedGmailNursery(baseDir)
-  const submits: any[] = []
-  const librarian = { submit: async (s: any) => { submits.push(s) } } as any
-  const fake = makeFakeExecutor()
-  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
-  const id = await tm.dispatch('open me a coding session', { mode: 'raw' })
-  assert.doesNotMatch(fake.writes.join(''), /unverified lead/i)
-  assert.equal((tm.get(id)!.injectedRecipes ?? []).length, 0)
-  const donePromise = once(tm, 'done')
-  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'ok' } })
-  await donePromise
-  await new Promise((r) => setTimeout(r, 50))
-  assert.equal(submits.length, 0) // raw mode never hands off
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('scan my inboxes')
+  const written = await fs.readdir(tm.get(id)!.cwd)
+  assert.ok(!written.includes('.claude'), 'skills were copied into the session cwd')
+  assert.ok(!written.includes('PROFILE.md'), 'a PROFILE.md was written into the session cwd')
+  tm.killAll()
 })
 
-test('managed done with an injected recipe hands off to the librarian once with outcome done', { timeout: 5000 }, async () => {
+test('managed done still hands off to the librarian; raw still never does', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
-  await seedGmailNursery(baseDir)
+  const submits: any[] = []
+  const librarian = { submit: async (s: any) => { submits.push(s) } } as any
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
+
+  const managed = await tm.dispatch('scan my inboxes')
+  const doneA = once(tm, 'done')
+  await claudeWrites(tm.get(managed)!.statusPath, { state: 'done', result: { summary: 'swept' } })
+  await doneA
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(submits.length, 1)
+  assert.equal(submits[0].outcome, 'done')
+  assert.deepEqual(submits[0].injectedRecipes, [], 'nothing was injected to grade against')
+
+  const raw = await tm.dispatch('open me a coding session', { mode: 'raw' })
+  const doneB = once(tm, 'done')
+  await claudeWrites(tm.get(raw)!.statusPath, { state: 'done', result: { summary: 'ok' } })
+  await doneB
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(submits.length, 1, 'raw mode never hands off')
+  tm.killAll()
+})
+
+test('a failed task no longer hands off — that gate required injected memory', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
   const submits: any[] = []
   const librarian = { submit: async (s: any) => { submits.push(s) } } as any
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
   const id = await tm.dispatch('scan my inboxes')
-  const donePromise = once(tm, 'done')
-  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'swept' } })
-  await donePromise
+  const failed = once(tm, 'failed')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'failed', error: { reason: 'boom' } })
+  await failed
   await new Promise((r) => setTimeout(r, 50))
-  assert.equal(submits.length, 1)
-  assert.equal(submits[0].outcome, 'done')
-  assert.ok(submits[0].injectedRecipes.some((r: any) => r.name === 'gmail-inbox-sweep'))
-})
-
-test('managed failed hands off ONLY when an injected recipe is present', { timeout: 5000 }, async () => {
-  const baseDir = await tmpBase()
-  await seedGmailNursery(baseDir)
-  const submits: any[] = []
-  const librarian = { submit: async (s: any) => { submits.push(s) } } as any
-  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
-
-  // (a) gmail surface has a recipe → failed hands off with outcome 'failed'
-  const withRecipe = await tm.dispatch('scan my inboxes')
-  const failedA = once(tm, 'failed')
-  await claudeWrites(tm.get(withRecipe)!.statusPath, { state: 'failed', error: { reason: 'boom' } })
-  await failedA
-  await new Promise((r) => setTimeout(r, 50))
-  assert.equal(submits.length, 1)
-  assert.equal(submits[0].outcome, 'failed')
-
-  // (b) general surface, no recipes → injectedRecipes empty → failed does NOT hand off
-  const noRecipe = await tm.dispatch('refactor the thing') // -> general, empty
-  assert.equal((tm.get(noRecipe)!.injectedRecipes ?? []).length, 0)
-  const failedB = once(tm, 'failed')
-  await claudeWrites(tm.get(noRecipe)!.statusPath, { state: 'failed', error: { reason: 'boom2' } })
-  await failedB
-  await new Promise((r) => setTimeout(r, 50))
-  assert.equal(submits.length, 1) // unchanged — recipe-less failure is not handed off
+  // The rule was "a wrong injected recipe is a contradiction signal". With
+  // nothing injected there is no signal, so a failure is just noise — exactly
+  // what the gate always said.
+  assert.equal(submits.length, 0)
+  tm.killAll()
 })
 
 // ─── Durable session model (Orchestrate): kind 'oneoff' | 'session' ───────────
@@ -683,7 +688,7 @@ test('setName persists the generated name into meta.json (survives restart)', as
 
 // ─── Project-bound spawn (Orchestrate): the agent runs IN the user's dir ──────
 
-test('project-bound dispatch: spawns in the project dir, pollutes NOTHING there, contract rides inline', async () => {
+test('project-bound dispatch: spawns in the project dir and pollutes NOTHING there', async () => {
   const baseDir = await tmpBase()
   const project = await fs.mkdtemp(path.join(os.tmpdir(), 'user-project-'))
   let spawned: SpawnOpts | null = null
@@ -702,9 +707,12 @@ test('project-bound dispatch: spawns in the project dir, pollutes NOTHING there,
   const written = await fs.readdir(project)
   assert.deepEqual(written, [], 'nothing written into the user project dir')
 
-  // The contract can't auto-load from a CLAUDE.md we never wrote → inline payload.
-  assert.ok(fake.writes[0].includes('Unmute operating contract'), 'contract inline in the payload')
-  assert.ok(fake.writes[0].includes(task.statusPath), 'status path in the payload')
+  // NO inline contract. It used to ride in the payload here — as a USER TURN —
+  // precisely because we would not write a CLAUDE.md into the user's repo. It
+  // now lives in the system prompt (--append-system-prompt) instead, so the
+  // conversation contains only what the user actually said.
+  assert.equal(fake.writes[0], 'work on the gating feature')
+  assert.ok(!fake.writes[0].includes(task.statusPath), 'status path leaked into the payload')
 
   // Receipt carries the project cwd so resume() respawns there after a restart.
   const meta = JSON.parse(await fs.readFile(path.join(task.home, 'meta.json'), 'utf8'))
@@ -726,8 +734,10 @@ test('project-bound dispatch falls back to scratch when the dir is unusable', as
   const task = tm.get(id)!
   assert.equal(task.cwd, task.home, 'fell back to the scratch spawn')
   assert.equal(spawned!.cwd, task.home)
-  // Scratch spawn = full machinery: CLAUDE.md installed as usual.
-  assert.ok((await fs.readFile(path.join(task.home, 'CLAUDE.md'), 'utf8')).includes('Unmute'))
+  // A scratch spawn is now exactly as clean as a project-bound one: no
+  // CLAUDE.md, and the payload is the intent.
+  const inHome = await fs.readdir(task.home)
+  assert.ok(!inHome.includes('CLAUDE.md'), 'scratch spawn still writes a CLAUDE.md')
   tm.killAll()
 })
 
@@ -1181,9 +1191,9 @@ test('stuck heals to processing when hook activity resumes (the API-retry recove
   // Silence past staleMs → stuck fires (the retry loop is hook-silent).
   const [stuckTask] = await once(tm, 'stuck')
   assert.equal(stuckTask.state, 'stuck')
-  // The retries work out — real tool execution resumes (PostToolUse marker).
-  const activity = path.join(tm.get(id)!.cwd, '.unmute-activity')
-  await fs.writeFile(activity, '')
+  // The retries work out — real tool execution resumes, and the PostToolUse
+  // hook tells us directly rather than us noticing a marker file's mtime.
+  tm.onHookEvent({ kind: 'tool-used', sessionId: tm.get(id)!.sessionId! })
   // The label must heal itself: stuck → processing, no human intervention.
   const t0 = Date.now()
   while (tm.get(id)!.state === 'stuck') {

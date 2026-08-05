@@ -20,6 +20,7 @@
 
 import http from 'node:http'
 import { createLogger } from './log'
+import { HOOK_PATH } from './session-policy'
 
 const log = createLogger('mcp')
 
@@ -49,6 +50,23 @@ export interface McpHandlers {
   createTask(callerTaskId: string, input: McpCreateTaskInput): Promise<McpToolResultTask>
   /** Status of one of callerTaskId's own children. Throw to reject. */
   taskStatus(callerTaskId: string, taskId: string): Promise<Record<string, unknown>>
+  /** OPTIONAL precision channel: the session states its own status instead of
+   *  letting the observer infer it (unmute_status). Throw to reject. */
+  setStatus?(callerTaskId: string, input: McpStatusInput): Promise<void>
+  /** A lifecycle hook fired. `token` is the app-wide hook token, NOT a task
+   *  token — hooks are wired by us, per session, and identity comes from the
+   *  payload's own session_id. Must never throw; must return immediately. */
+  hookEvent?(token: string | null, payload: unknown): void
+}
+
+/** The optional self-report. Every field is optional except `state`: the point
+ *  is that a session says only what the observer could not have known. */
+export interface McpStatusInput {
+  state: 'processing' | 'needs-user' | 'ready' | 'done' | 'failed'
+  summary?: string
+  detail?: string
+  question?: string
+  artifacts?: Array<{ type: 'path' | 'url'; value: string }>
 }
 
 const TOOLS = [
@@ -78,6 +96,38 @@ const TOOLS = [
       type: 'object',
       properties: { task_id: { type: 'string', description: 'The task_id returned by unmute_create_task.' } },
       required: ['task_id'],
+    },
+  },
+  {
+    // THE ESCAPE HATCH, NOT THE PROTOCOL. Unmute derives your state from your
+    // final reply on its own, so this exists only for the handful of things
+    // watching from outside cannot know exactly — the precise URL you landed
+    // the user on, or the fact that you are blocked when your reply doesn't
+    // read like a question. Deliberately worded to be OPTIONAL: making it feel
+    // mandatory would rebuild, one tool call at a time, the reporting contract
+    // this whole design deleted.
+    name: 'unmute_status',
+    description:
+      'OPTIONAL. Unmute already reads your final reply and reports your progress for you — you do not need to call this, and most tasks never should. ' +
+      'Use it only to state something Unmute could not infer: an exact URL you placed the user on, or that you are blocked when your reply does not read like a question.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        state: { type: 'string', enum: ['processing', 'needs-user', 'ready', 'done', 'failed'], description: 'Where the task stands.' },
+        summary: { type: 'string', description: 'One line. Omit to keep what Unmute derived from your reply.' },
+        detail: { type: 'string', description: 'Full text. Omit to keep your reply itself, which is usually better.' },
+        question: { type: 'string', description: 'What you need from the user (with state needs-user).' },
+        artifacts: {
+          type: 'array',
+          description: 'Exact URLs or paths the result points at.',
+          items: {
+            type: 'object',
+            properties: { type: { type: 'string', enum: ['path', 'url'] }, value: { type: 'string' } },
+            required: ['type', 'value'],
+          },
+        },
+      },
+      required: ['state'],
     },
   },
 ] as const
@@ -120,18 +170,43 @@ export function startMcpServer(handlers: McpHandlers, port = MCP_PORT): Promise<
   })
 }
 
-async function handleRequest(handlers: McpHandlers, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  if (!req.url || !req.url.startsWith(MCP_PATH)) { res.writeHead(404).end(); return }
-  if (req.method === 'GET') { res.writeHead(405, { Allow: 'POST' }).end(); return } // no SSE stream — plain JSON responses
-  if (req.method === 'DELETE') { res.writeHead(200).end(); return } // session teardown: stateless, nothing to do
-  if (req.method !== 'POST') { res.writeHead(405).end(); return }
-
-  const body = await new Promise<string>((resolve, rejectP) => {
+/** Read a request body with the same 1 MB cap the MCP path uses. */
+function readBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise<string>((resolve, rejectP) => {
     let data = ''
     req.on('data', (c) => { data += c; if (data.length > 1_000_000) rejectP(new Error('body too large')) })
     req.on('end', () => resolve(data))
     req.on('error', rejectP)
   })
+}
+
+async function handleRequest(handlers: McpHandlers, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  // ── Hook lane (session-policy.ts). Claude Code lifecycle hooks curl their
+  //    stdin JSON here. ANSWER FIRST, THINK AFTER: the hook is `async` so it
+  //    never blocks a turn, but we still respond before doing any work so a
+  //    slow Unmute can never become latency inside the user's session. A
+  //    malformed body is a 200 too — a hook is telemetry, and arguing with it
+  //    would only surface errors in the user's terminal.
+  if (req.url && req.url.startsWith(HOOK_PATH)) {
+    if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }).end(); return }
+    const raw = await readBody(req).catch(() => '')
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end('{}')
+    if (!raw) return
+    const auth = req.headers.authorization
+    const token = auth?.startsWith('Bearer ') ? auth.slice(7) : null
+    let payload: unknown
+    try { payload = JSON.parse(raw) } catch { return }
+    try { handlers.hookEvent?.(token, payload) } catch (e) {
+      log.warn('hook handler threw', { error: (e as Error).message })
+    }
+    return
+  }
+  if (!req.url || !req.url.startsWith(MCP_PATH)) { res.writeHead(404).end(); return }
+  if (req.method === 'GET') { res.writeHead(405, { Allow: 'POST' }).end(); return } // no SSE stream — plain JSON responses
+  if (req.method === 'DELETE') { res.writeHead(200).end(); return } // session teardown: stateless, nothing to do
+  if (req.method !== 'POST') { res.writeHead(405).end(); return }
+
+  const body = await readBody(req)
 
   let msg: JsonRpcReq
   try { msg = JSON.parse(body) } catch {
@@ -187,6 +262,22 @@ async function handleRequest(handlers: McpHandlers, req: http.IncomingMessage, r
           if (!tid || typeof tid !== 'string') throw new Error('task_id (string) is required')
           const out = await handlers.taskStatus(caller, tid)
           respond(rpcResult(msg.id, toolText(JSON.stringify(out))))
+          return
+        }
+        if (toolName === 'unmute_status') {
+          if (!handlers.setStatus) throw new Error('status reporting is not available')
+          const state = args.state
+          if (typeof state !== 'string' || !['processing', 'needs-user', 'ready', 'done', 'failed'].includes(state)) {
+            throw new Error('state must be one of: processing, needs-user, ready, done, failed')
+          }
+          await handlers.setStatus(caller, {
+            state: state as McpStatusInput['state'],
+            ...(typeof args.summary === 'string' ? { summary: args.summary } : {}),
+            ...(typeof args.detail === 'string' ? { detail: args.detail } : {}),
+            ...(typeof args.question === 'string' ? { question: args.question } : {}),
+            ...(Array.isArray(args.artifacts) ? { artifacts: args.artifacts as McpStatusInput['artifacts'] } : {}),
+          })
+          respond(rpcResult(msg.id, toolText('recorded')))
           return
         }
         respond(rpcError(msg.id, -32602, `unknown tool: ${toolName}`))

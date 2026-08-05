@@ -25,6 +25,7 @@ import { EventEmitter } from 'node:events'
 import { createLogger } from './log'
 import {
   scaffoldStatusFile,
+  writeStatusFile,
   readStatus,
   statusMtimeMs,
   isStale,
@@ -32,11 +33,10 @@ import {
   type TaskState,
 } from './status-file'
 import { buildDispatch, buildResumeNudge } from './dispatch-prompt'
-import { installContract, readContractText } from './contract/installer'
-import { installHooks, hookActivityMs } from './hooks'
-import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
 import { detectSurface } from './surface'
-import { readNurseryRecipes, listRecipes, isStaleHigh, selectNurseryWithinBudget, type Confidence } from './recipe-store'
+import { deriveStatus, type HookEvent } from './observer'
+import { readTranscript, hadSideEffects } from './transcript'
+import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import { resolveTranscriptById } from './trace-reducer'
 import { projectSlug } from './projects'
@@ -219,6 +219,10 @@ export interface Task {
    *  status write OR a deterministic hook event (hooks.ts). Decoupled from
    *  lastMtimeMs so hook heartbeats keep a task alive WITHOUT hiding status reads. */
   lastHeartbeatMs: number
+  /** When the session last told us a prompt actually SUBMITTED (UserPromptSubmit
+   *  hook). The signal verifyDispatch waits for — a real event now, not a marker
+   *  file's mtime, so it works in project-bound sessions too. */
+  promptSubmittedAt?: number
   /** Executor self-classification (drives presentation + lifecycle). */
   category?: StatusPayload['category']
   /** Latest short progress label the executor wrote ("Editing X · 12/18 tests").
@@ -615,62 +619,36 @@ export class TaskManager extends EventEmitter {
       // Seed the heartbeat clock from the scaffold's real mtime so staleness is
       // measured from "task start", not the logical createdAt.
       task.lastMtimeMs = task.lastHeartbeatMs = (await statusMtimeMs(statusPath)) ?? now
-      // Contract + hooks are CWD-COUPLED (CLAUDE.md auto-load; .claude/settings.json
-      // hooks) — installed only for the scratch spawn, where the cwd is ours. For a
-      // project-bound session, writing either into the user's repo would pollute it
-      // (and .claude/settings.json could CLOBBER the project's own); the contract
-      // travels inline in the payload instead, and lifecycle falls back to the
-      // status-file path (the documented pre-hooks behaviour — fail-open).
-      if (!external) {
-        await installContract(dir) // CLAUDE.md auto-load (#3)
-        // Deterministic lifecycle hooks: heartbeat on real progress + enforce a
-        // status write before the turn ends. Best-effort — a failure here must not
-        // block dispatch (without hooks the task runs on the status-file path, i.e.
-        // today's behaviour). See hooks.ts.
-        await installHooks(dir).catch((e) => tlog.warn('installHooks failed — running without hooks', { error: (e as Error).message }))
-      }
 
-      // ── Memory injection (managed mode only). Raw mode SKIPS all three Unmute
-      //    memory injections (skills copy, profile, nursery leads) — protocol +
-      //    orchestration (scaffold/meta/contract/hooks above) still run. (§4.2) ──
-      let nurseryForDispatch: Array<{ name: string; confidence: Confidence; body: string }> = []
-      let staleNotes: string[] = []
-      if (mode === 'managed') {
-        await installSkillsIntoCwd(dir, { surface, baseDir: this.opts.baseDir }) // graduated skills auto-discovery, surface-scoped (PRD §8.3)
-        await installProfileIntoCwd(dir, this.opts.baseDir) // user facts/prefs the doer Reads on demand
-        const nurseryAll = await readNurseryRecipes(surface, this.opts.baseDir).catch((e) => {
-          tlog.warn('nursery read failed — no leads injected', { error: (e as Error).message }); return []
-        })
-        // Flood-backstop: in healthy operation this keeps everything (executor
-        // judges relevance); it only trims when a surface is bloated — and a trim
-        // is a CLEANUP signal (logged), never a silent drop of a relevant recipe.
-        const { kept: nursery, trimmed } = selectNurseryWithinBudget(nurseryAll)
-        if (trimmed > 0) {
-          tlog.warn('nursery injection trimmed to budget — surface may be bloated, consider cleanup', {
-            surface, total: nurseryAll.length, kept: nursery.length, trimmed,
-          })
-        }
-        nurseryForDispatch = nursery.map((r) => ({ name: r.frontmatter.name, confidence: r.frontmatter.confidence, body: r.body }))
-        const graduated = await listRecipes({ tier: 'skill', surface, baseDir: this.opts.baseDir }).catch((e) => {
-          tlog.warn('graduated read failed', { error: (e as Error).message }); return []
-        })
-        staleNotes = graduated
-          .filter((r) => isStaleHigh(r, this.clock()))
-          .map((r) => `${r.frontmatter.name} is high-confidence but unverified for a while — confirm before relying.`)
-        task.injectedRecipes = [
-          ...nursery.map((r) => ({ name: r.frontmatter.name, tier: 'nursery' as const, surface })),
-          ...graduated.map((r) => ({ name: r.frontmatter.name, tier: 'skill' as const, surface })),
-        ]
-      }
+      // NOTHING IS WRITTEN INTO THE SESSION'S WORKING DIRECTORY. This is the
+      // load-bearing change of 2026-08-06 (session-policy.ts). We used to drop a
+      // CLAUDE.md, a .claude/settings.json, a hook script, marker files, copied
+      // skills and a PROFILE.md into the cwd — and because doing that to a
+      // user's own repo was unacceptable, project-bound sessions silently got
+      // NO hooks at all, which is exactly backwards: the longest-lived sessions
+      // were the least instrumented.
+      //
+      // Hooks now ride on `--settings <our file>` and framing on
+      // `--append-system-prompt`, so every session — scratch or project-bound —
+      // is instrumented identically and the user's directory is untouched.
+      //
+      // The memory injections (nursery leads, stale-skill caveats, the skills
+      // copy, PROFILE.md) are gone with them. The librarian that authored and
+      // validated them has been parked since 2026-08-03, so they were unvetted
+      // hints from a system with no maintainer; the overview already called
+      // them "noise that pollutes instruction packets". `injectedRecipes` stays
+      // on the Task as an empty list so persisted meta.json keeps its shape.
       // Persist a tiny receipt so the task survives an app crash/restart. The
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
       await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, agent, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}), ...(task.model ? { model: task.model } : {}) }))
-      devEvent(tlog, 'dispatch-memory', { surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
+      devEvent(tlog, 'dispatch-memory', { surface, mode, injectedRecipes: task.injectedRecipes })
 
-      // Named, not left to the picker — see the task literal above.
-      const ex = this.opts.executorFactory(undefined, agent)
+      // Named, not left to the picker — see the task literal above. `browser`
+      // is decided per task now: a session working in the user's repo does not
+      // get browser control it will never use (session-policy.ts).
+      const ex = this.opts.executorFactory(undefined, agent, { browser: browserFor({ surface, projectBound: external }) })
       this.executors.set(id, ex)
       // Buffer raw PTY output (capped) for render-on-demand (§4.3/§13.4#8) and
       // emit it live so a watching terminal view updates in real time.
@@ -714,15 +692,12 @@ export class TaskManager extends EventEmitter {
       }
       tlog.event('folder-trust-accepted', {})
 
-      // Project-bound spawn: the contract can't auto-load from a CLAUDE.md we
-      // never wrote, so it rides inline in the payload (same obligations).
-      const contractText = external ? await readContractText() : undefined
-      const payload = mode === 'managed'
-        ? buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes: nurseryForDispatch, staleNotes, contractText })
-        : buildDispatch({ intent, statusPath, recipeScratchPath, contractText })
+      // The payload is the user's words. Nothing else — no status path, no
+      // recipe path, no contract, no "act now". See dispatch-prompt.ts.
+      const payload = buildDispatch({ intent })
       const dispatchedAt = Date.now()
       ex.writeStdin(payload)
-      tlog.event('task-dispatched', {})
+      tlog.event('task-dispatched', { bytes: payload.length })
 
       // Reliability fix: the multi-line payload occasionally lands one Enter
       // short of submitting in Claude's input box (proven on-device — a manual
@@ -736,20 +711,17 @@ export class TaskManager extends EventEmitter {
       }
 
       this.startPolling(id)
-      // Verify the prompt ACTUALLY submitted, and self-heal if not. The
-      // multi-line payload can get swallowed if it lands while the REPL is still
-      // painting — Claude's TUI mis-reads the embedded newlines and tips into
-      // reverse-search ("(search up)"), so the task sits at 0s forever with an
-      // empty prompt. We detect this via the UserPromptSubmit hook (it touches
-      // .unmute-activity ONLY on a real submit); if no such activity appears, we
-      // clear the input line with Ctrl-U (NEVER Esc — Esc = "No, exit" on a
-      // dialog and QUITS Claude) and re-inject. Background, fire-and-forget —
-      // adds ZERO latency to the happy path.
-      // SKIPPED for project-bound spawns: no hooks there means no submit signal —
-      // the verifier would read "never submitted" forever and re-inject a payload
-      // that DID land, double-dispatching the session. Fail-open instead.
-      if (!external) void this.verifyDispatch(id, ex, payload, dir, dispatchedAt)
-      else tlog.event('dispatch-verify-skipped', { reason: 'external-cwd-no-hooks', cwd: runCwd })
+      // Verify the prompt ACTUALLY submitted, and self-heal if not. A payload
+      // can be swallowed if it lands while the REPL is still painting — Claude's
+      // TUI mis-reads embedded newlines and tips into reverse-search, so the
+      // task sits at 0s forever with an empty prompt.
+      //
+      // The signal is the UserPromptSubmit hook, which now REACHES US DIRECTLY
+      // (session-policy.ts) instead of touching a marker file we then stat. That
+      // is why this no longer skips project-bound spawns: they get the same
+      // hooks as any other session, so the verifier finally protects the
+      // long-lived sessions it used to be disabled for.
+      void this.verifyDispatch(id, ex, payload, dispatchedAt)
     } catch (e) {
       tlog.error('dispatch failed before polling', { error: (e as Error).message })
       this.transition(id, 'failed', { error: { reason: 'Could not start the task', detail: (e as Error).message } })
@@ -758,18 +730,17 @@ export class TaskManager extends EventEmitter {
   }
 
   /** Verify the dispatched prompt actually SUBMITTED; self-heal if it didn't.
-   *  Signal: the UserPromptSubmit hook touches .unmute-activity ONLY on a real
-   *  submit, so hookActivityMs() returning null/old after dispatch means the
-   *  payload was swallowed (e.g. the REPL tipped into reverse-search while still
-   *  painting — the task then sits at 0s forever). We clear the input line with
-   *  Ctrl-U (NEVER Esc — Esc = "No, exit" on a dialog and QUITS Claude), then
-   *  re-inject. Bounded retries; only ever fires on a genuinely-unsubmitted
-   *  prompt, so it can't double-dispatch a live one. */
+   *  Signal: the UserPromptSubmit hook, pushed straight to us (session-policy.ts)
+   *  and recorded as `promptSubmittedAt`. Nothing to stat, no marker file, and —
+   *  unlike the old marker-mtime version — it works in EVERY session, including
+   *  project-bound ones where this used to be switched off entirely.
+   *  We clear the input line with Ctrl-U (NEVER Esc — Esc = "No, exit" on a
+   *  dialog and QUITS Claude), then re-inject. Bounded retries; only ever fires
+   *  on a genuinely-unsubmitted prompt, so it can't double-dispatch a live one. */
   private async verifyDispatch(
     id: string,
     ex: AgentExecutor,
     payload: string,
-    dir: string,
     dispatchedAt: number,
   ): Promise<void> {
     const tlog = log.child({ taskId: id })
@@ -778,10 +749,9 @@ export class TaskManager extends EventEmitter {
       const task = this.tasks.get(id)
       // Stop if the task is gone, the PTY died, or it already finished.
       if (!task || !ex.alive || task.state === 'done' || task.state === 'failed') return
-      const activity = await hookActivityMs(dir)
       // A UserPromptSubmit at/after our dispatch = the prompt submitted → done.
-      // (1s slack absorbs clock/mtime granularity.)
-      if (activity !== null && activity >= dispatchedAt - 1000) return
+      // (1s slack absorbs clock granularity between processes.)
+      if ((task.promptSubmittedAt ?? 0) >= dispatchedAt - 1000) return
       // Never submitted → clear any stuck partial input, re-inject.
       tlog.warn('dispatch not confirmed (no submit) — clearing input and re-injecting', { attempt })
       ex.write('\x15') // Ctrl-U — clear the input line; safe (NEVER Esc, which quits Claude)
@@ -792,6 +762,96 @@ export class TaskManager extends EventEmitter {
       if (ex.alive) ex.write('\r')
       tlog.event('dispatch-reinjected', { attempt })
     }
+  }
+
+  // ─── The observer: what a session emits becomes what Unmute knows ─────────
+  //
+  // Everything the operating contract used to demand in prose now arrives here
+  // as a lifecycle hook and is turned into a status by observer.ts. The session
+  // is never asked for any of it.
+
+  /** Find the task a hook event belongs to. `session_id` is authoritative —
+   *  we pin it with `--session-id`, so we own the mapping. `cwd` is the fallback
+   *  for forked sessions, whose id Claude mints itself. */
+  private taskForSession(sessionId: string, cwd?: string): Task | undefined {
+    for (const t of this.tasks.values()) if (t.sessionId === sessionId) return t
+    if (!cwd) return undefined
+    // Newest match wins: several tasks can share a project cwd.
+    let best: Task | undefined
+    for (const t of this.tasks.values()) {
+      if (t.cwd !== cwd || TERMINAL.includes(t.state)) continue
+      if (!best || t.createdAt > best.createdAt) best = t
+    }
+    return best
+  }
+
+  /**
+   * Apply one lifecycle hook event. Never throws — a hook is telemetry, and a
+   * bad one must not disturb the task it describes.
+   */
+  onHookEvent(event: HookEvent): void {
+    const task = this.taskForSession(event.sessionId, event.cwd)
+    if (!task) return
+    const tlog = log.child({ taskId: task.id })
+    const at = this.clock()
+
+    // Liveness first, for EVERY event. A hook firing is proof the session is
+    // alive, which also HEALS a false `stuck`: stuck is a verdict about silence,
+    // and this is the silence ending. Advances lastHeartbeatMs only — never
+    // lastMtimeMs, which is the status read cursor (see poll()).
+    task.lastHeartbeatMs = at
+    if (task.state === 'stuck') {
+      tlog.event('stuck-recovered', { via: 'hook' })
+      this.transition(task.id, 'processing')
+    }
+    if (event.kind === 'prompt-submitted') task.promptSubmittedAt = at
+    if (event.kind === 'tool-used') return // liveness only
+
+    void this.applyObservation(task, event).catch((e) =>
+      tlog.warn('observation failed', { error: (e as Error).message }))
+  }
+
+  /** Derive a status from an event and record it — in memory AND on disk, so
+   *  every existing reader (wall, notch, rehydrate, history) is unchanged. */
+  private async applyObservation(task: Task, event: HookEvent): Promise<void> {
+    const tlog = log.child({ taskId: task.id })
+    // `act` vs `info` is the one derivation needing more than the last message:
+    // did this session actually change anything? Read from its own transcript,
+    // and only when a turn ended (the sole event where category is decided).
+    let sideEffects = false
+    if (event.kind === 'turn-ended') {
+      const transcript = await readTranscript(
+        task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null)
+      sideEffects = hadSideEffects(transcript)
+    }
+    const payload = deriveStatus(event, {
+      kind: (task.kind ?? 'oneoff') as 'oneoff' | 'session',
+      surface: task.surface,
+      sideEffects,
+      prior: task.state as TaskState,
+      now: new Date().toISOString(),
+    })
+    if (!payload) return
+    tlog.event('observed', { event: event.kind, state: payload.state, category: payload.category ?? null })
+    // Write the file first so anything reading from disk agrees with the card,
+    // then advance the read cursor so poll() doesn't re-apply what we just did.
+    if (await writeStatusFile(task.statusPath, payload)) {
+      task.lastMtimeMs = (await statusMtimeMs(task.statusPath)) ?? task.lastMtimeMs
+    }
+    this.transition(task.id, payload.state, payload)
+  }
+
+  /** The OPTIONAL self-report (`unmute_status`). Same path as an observation —
+   *  a session that chooses to be precise simply overwrites what we inferred. */
+  async setReportedStatus(taskId: string, payload: StatusPayload): Promise<void> {
+    const task = this.tasks.get(taskId)
+    if (!task) throw new Error('unknown task')
+    task.lastHeartbeatMs = this.clock()
+    if (await writeStatusFile(task.statusPath, payload)) {
+      task.lastMtimeMs = (await statusMtimeMs(task.statusPath)) ?? task.lastMtimeMs
+    }
+    log.child({ taskId }).event('self-reported', { state: payload.state })
+    this.transition(taskId, payload.state, payload)
   }
 
   /** Poll the status file + run the staleness backstop until terminal. */
@@ -1813,30 +1873,13 @@ export class TaskManager extends EventEmitter {
       return
     }
 
-    // DETERMINISTIC hook heartbeat (hooks.ts): real progress (PostToolUse) and
-    // turn boundaries advance LIVENESS even when the model didn't write `step`.
-    // CRITICAL: this advances lastHeartbeatMs ONLY — never lastMtimeMs. The Stop
-    // hook fires AFTER the model writes its final 'done' status, so the hook mtime
-    // is LATER than that status write; if we let it touch lastMtimeMs (the read
-    // cursor) the 'done' write would be < cursor and never read → the task would
-    // sit and then false-stuck (observed). It keys off real tool execution, not
-    // TUI redraw noise, so a genuinely hung task (no hook events) still goes stale.
-    // If hooks never fired, hookMs is null ⇒ staleness falls back to status mtime.
-    const hookMs = await hookActivityMs(task.cwd)
-    if (hookMs !== null && hookMs > task.lastHeartbeatMs) {
-      task.lastHeartbeatMs = hookMs
-      // SELF-HEALING STUCK (the API-retry lesson): stuck is a verdict about
-      // SILENCE, and this hook event is proof the silence ended — real tool
-      // execution resumed (e.g. the API retries worked out). The label must
-      // heal itself; a card that says STUCK over a visibly-working terminal
-      // is a lie the user has to clean up by hand. Status writes already
-      // healed via transition(); this closes the other half.
-      if (task.state === 'stuck') {
-        tlog.event('stuck-recovered', { via: 'hook-activity' })
-        this.transition(id, 'processing')
-      }
-      return
-    }
+    // The hook heartbeat no longer needs polling for: PostToolUse is PUSHED to
+    // onHookEvent(), which advances lastHeartbeatMs the moment it happens and
+    // heals a false `stuck` on the spot. We used to stat a marker file here on
+    // every poll of every task — that is now zero syscalls and strictly fresher.
+    //
+    // The subtle rule it enforced still holds and lives in onHookEvent(): a hook
+    // advances lastHeartbeatMs ONLY, never lastMtimeMs (the status read cursor).
 
     // No fresh heartbeat this poll — staleness backstop (PRD §6.3). Keyed on
     // lastHeartbeatMs (status writes OR hook activity), NOT the status read cursor.
@@ -2770,12 +2813,19 @@ export class TaskManager extends EventEmitter {
     }
     this.emit('updated', task)
 
-    // A follow-up is a FRESH dispatch into the SAME session — the only thing
-    // shared is the terminal (for context). Send the full dispatch payload, not
-    // raw text, so the model is re-anchored to the contract (status-file path +
-    // "act now, update status"). Without this it answers conversationally and
-    // never writes status → Unmute never learns it finished → marks it stuck.
-    const payload = buildDispatch({ intent: text, statusPath: task.statusPath, recipeScratchPath: task.recipeScratchPath })
+    // A FOLLOW-UP IS JUST WHAT THE USER SAID.
+    //
+    // This used to re-send the whole dispatch payload — status path, recipe
+    // path, "Act now, follow the contract" — wrapped around every single
+    // sentence the user spoke, for the entire life of the session. The reason
+    // given was real at the time: without the re-anchor the model would answer
+    // conversationally, never write status, and Unmute would mark it stuck.
+    //
+    // That reason is gone. The Stop hook now tells us the turn ended and hands
+    // us the reply, so there is nothing left to re-anchor the model TO. The
+    // plumbing was the load-bearing part of a mechanism that no longer exists,
+    // and it was the bloat users saw growing on every turn.
+    const payload = buildDispatch({ intent: text })
 
     void (async () => {
       // CRITICAL: wait until the REPL is genuinely idle at the prompt before
@@ -2902,7 +2952,7 @@ export class TaskManager extends EventEmitter {
       // never nudge it to "continue" (there is nothing to continue without them).
       const unfinished = status?.state !== 'done' && status?.state !== 'ready'
       if (unfinished) {
-        const nudge = buildResumeNudge(task.intent, task.statusPath)
+        const nudge = buildResumeNudge(task.intent)
         ex.writeStdin(nudge)
         // Same submit-reliability fix as dispatch: a follow Enter guarantees the
         // multi-line prompt submits; a spare Enter on an empty prompt is a no-op.

@@ -97,6 +97,33 @@ export async function scaffoldStatusFile(filePath: string): Promise<void> {
   log.event('status-file-scaffolded', { filePath, state: 'processing' })
 }
 
+/**
+ * Write a status payload ATOMICALLY (temp file, then rename).
+ *
+ * This is the observer's write path (observer.ts) — and it is the same atomic
+ * dance the operating contract used to spend six lines instructing the model to
+ * perform by hand. Doing it in our own code is not merely tidier: a model can
+ * forget the rename, emit malformed JSON, or be interrupted mid-write, and all
+ * three produced the "caught mid-write, retry next poll" class of bug that
+ * readStatus() below exists to tolerate. Here it simply cannot happen.
+ *
+ * Returns false rather than throwing — a failed status write must never take
+ * down the task it was describing.
+ */
+export async function writeStatusFile(filePath: string, payload: StatusPayload): Promise<boolean> {
+  const tmp = `${filePath}.tmp`
+  try {
+    await fs.mkdir(dirname(filePath), { recursive: true })
+    await fs.writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8')
+    await fs.rename(tmp, filePath)
+    return true
+  } catch (e) {
+    log.warn('status write failed', { filePath, error: (e as Error).message })
+    try { await fs.rm(tmp, { force: true }) } catch { /* best effort */ }
+    return false
+  }
+}
+
 // ─── Tolerant read (PRD #2) ─────────────────────────────────────────
 
 function isValidState(s: unknown): s is TaskState {
