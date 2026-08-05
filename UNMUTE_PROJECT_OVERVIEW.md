@@ -1,9 +1,13 @@
 # Unmute — Project Overview
 
-> **Read this first.** This is the high-level map of the whole project — the
-> *why*, the *shape*, and *where we stand*. It is deliberately not a manual.
-> For depth on any subsystem, follow the pointers in
-> [§7 Where to go for depth](#7-where-to-go-for-depth).
+> **Read this first.** The high-level map of the whole project — the *why*, the
+> *shape*, and *where we stand*. Deliberately not a manual. For depth on any
+> subsystem, follow the pointers in [§7](#7-where-to-go-for-depth).
+>
+> **Getting it running on your machine:** [`docs/ONBOARDING.md`](./docs/ONBOARDING.md).
+>
+> *Last substantive revision: 2026-08-05. If you are reading this months later,
+> run `git log -1 -- UNMUTE_PROJECT_OVERVIEW.md` before trusting §6.*
 
 ---
 
@@ -37,11 +41,6 @@ the form**. The engine wins; the terminal doesn't. That gap is the opening.
   information.
 - **Attention is pulled, never grabbed.** Nothing modal, nothing that steals
   focus, one calm spoken headline when — and only when — a task becomes yours.
-- **Skills are the unit of durable value.** If the agent is the primary surface
-  for work, then *skills* (reusable procedures) are the software people
-  accumulate and must maintain. Nobody maintains them. So we observe the work and
-  turn the recurring, valuable parts into skills — **with a human accept/reject
-  gate, never full automation. Not Jarvis.**
 - **We sit above the executor (neutrality).** Claude Code today, anything
   tomorrow. Everything is built against a thin executor seam.
 - **Hard invariants.** (1) *Billing isolation* — agent work always runs on the
@@ -49,6 +48,8 @@ the form**. The engine wins; the terminal doesn't. That gap is the opening.
   (2) *Consent* — a persistent session is never hijacked by an ambiguous
   utterance. (3) *The user's files are sovereign* — only an explicit, consented
   action ever writes into `~/.claude/skills`.
+- **Skills are the unit of durable value** — the long-term bet, *currently
+  parked*. See §6.
 
 ## 3. How we got here (the layers, in order built)
 
@@ -56,22 +57,28 @@ Each layer is the same bet stated louder. They stack; none replaced the one belo
 
 1. **Dictation** — the foundation and still the daily driver. Voice → text,
    pasted anywhere. Local (Parakeet) + cloud STT, heavy accuracy work.
-2. **Unmute Remote** — fire off a Claude Code session by voice. No terminal, no
+2. **Unmute Remote** — fire off a coding session by voice. No terminal, no
    typing `claude`. Born from: people on large plans leave tokens on the table
    and shouldn't have to manage terminals for one-off agent tasks.
-3. **The Cockpit / Orchestrator** — voice as the primary interface for *long-lived*
-   work across *many* agent sessions. The "whose move is it" wall, the crank, the
-   doorbell, ready/done/failed, the shelf. This is where voice stops being a
-   convenience and becomes the control plane.
-4. **Computer Use (`unmute-computer`)** — our own hands for the agent, because the
-   built-in options weren't good enough. Drives native apps and browsers **in the
-   background** (no focus steal) so non-coding work (Notion, Slack, editors) is in
-   reach. A four-lane router: CDP (browsers/Electron), Apple Events, cua
-   accessibility, cua pixel.
-5. **The Skills Observatory (Skill Curator)** — the long-term bet. Watches the
-   user's sessions, notices recurring valuable work, and proposes skills to
-   create / refine / retire. A human gates everything. Skills grow, age, and get
-   pruned — so the curator is a *gardener*, not just an author.
+3. **The Cockpit / Orchestrator** — voice as the primary interface for
+   *long-lived* work across *many* sessions. The "whose move is it" wall, the
+   crank, the doorbell, ready/done/failed, the shelf.
+4. **Computer Use (`unmute-computer`)** — our own hands for the agent. Drives
+   native apps and browsers **in the background** (no focus steal) so non-coding
+   work is in reach. A four-lane router: CDP (browsers/Electron), Apple Events,
+   cua accessibility, cua pixel.
+5. **The notch** — a native Swift surface living in the menubar row and through
+   the display cutout. It is now **the** attention surface: the pill, the wall,
+   the rail, the task stage and the scratchpad all render there, driven over IPC
+   from the Electron main process. The older right-side overlay is retired
+   behind `UNMUTE_NOTCH_ENABLED=0`.
+6. **Universal capture / the scratchpad** — what you copy *while dictating* is
+   held and composed into the delivery, instead of being lost to the clipboard.
+   The pad is armed deliberately; an armed pad holds a capture rather than
+   delivering it.
+7. **The shell** — a four-destination app (History · Orchestrator · Account ·
+   Settings), a nine-step onboarding, and seven settings sections each with a
+   written explainer.
 
 ## 4. Monetization
 
@@ -82,68 +89,98 @@ The model has evolved: prepaid pay-per-use credits → **flat subscription**
 (current: `dictation` and `unmute` plans) gated by a Supabase entitlement →
 a hidden, notify-only **fair-use** cap. Auth is Supabase JWT; payments are Dodo;
 the hot path is a Cloudflare Worker in front of the STT/LLM providers.
+Migrations run `005 → 014`; read them in order.
 
 ## 5. Repository shape (folder map)
 
 ```
 unmute-cloud/
 ├── UNMUTE_PROJECT_OVERVIEW.md   ← you are here
-├── PLAN.md                  original implementation plan (STALE — see §6)
-├── README.md                original paywall README (STALE — see §6)
+├── README.md                what this repo is, in a page
+├── docs/
+│   ├── ONBOARDING.md         get it running on your Mac — start here
+│   ├── DEPLOYMENT.md         backend deploy steps
+│   ├── ORCHESTRATE-VISION.md the cockpit vision, in the founder's words
+│   └── superpowers/          design specs and plans, dated
 ├── backend/
 │   ├── cloudflare/          the managed hot path
 │   │   ├── pipeline/         Worker: auth + entitlement gate + STT/LLM proxy
 │   │   ├── payments/         Worker: Dodo checkout + webhook
-│   │   └── shared/           auth, balance/entitlement, provider config, remote config
-│   └── supabase/migrations/  the billing evolution, in order (005 → 013)
-├── desktop/                 the shipped Electron app
-│   ├── engine-overrides/     files copied over the pulled OSS engine at build time
-│   │   └── electron/          dictation upgrades: Parakeet, STT arbiter, accuracy gates
-│   ├── electron/             closed-source main-process glue
-│   │   ├── (paywall-*, provider-router, managed-client, ...)  the managed tier
-│   │   └── remote/           THE ORCHESTRATOR + computer-use + skill curator
-│   │       ├── router / task-manager / pty-session / tmux / status-file / hooks
-│   │       │                  voice → routed action → tracked agent sessions
-│   │       ├── cua/ + ax/     computer-use lanes (CDP, AppleScript, cua driver)
-│   │       └── curator-*      the skills observatory
-│   ├── native-*/             in-process macOS addons (paste, key listener, AX)
-│   ├── vendor/cua-driver/    pinned trycua binary (fetched, not committed)
-│   └── build/wire-into-engine.sh   clones OSS engine, overlays, signs, ships DMG
-└── docs/                    design docs & vision (the real depth — see §7)
+│   │   └── shared/           auth, entitlement, provider config, remote config
+│   └── supabase/migrations/  the billing evolution, in order (005 → 014)
+└── desktop/                 the shipped Electron app
+    ├── engine-overrides/     files copied over the pulled OSS engine at build
+    │   ├── electron/          dictation: Parakeet, STT arbiter, accuracy gates,
+    │   │                      key listener, session manager
+    │   └── renderer/          the shell (app/), the pill (widget/), the wall
+    ├── electron/             closed-source main-process glue
+    │   ├── (paywall-*, provider-router, managed-client, …)  the managed tier
+    │   └── remote/           THE ORCHESTRATOR
+    │       ├── router / task-manager / pty-session / tmux / status-file / hooks
+    │       ├── notch/         controller + IPC client for the Swift surface
+    │       ├── capture/       universal capture + the scratchpad
+    │       ├── cua/ + ax/     computer-use lanes (CDP, AppleScript, cua driver)
+    │       ├── contract/      the status-file contract handed to every task
+    │       └── curator-*      the skills observatory (PARKED — see §6)
+    ├── native-notch/         the Swift notch shell (SwiftUI + SwiftTerm)
+    ├── native-*/             in-process macOS addons (paste, key listener, AX)
+    ├── vendor/cua-driver/    pinned trycua binary (fetched, NOT committed)
+    └── build/wire-into-engine.sh   clones OSS engine, overlays, signs, ships DMG
 ```
 
 **The build model:** the OSS `unmute-dictation` engine is **never forked**. The
 build script clones a pinned tag, recursively copies `engine-overrides/` on top,
-vendors the native addons, and produces one signed DMG. Overrides mirror the OSS
-path structure so the copy just drops each patched file into place.
+vendors the native addons and the Swift notch shell, and produces one signed,
+notarized DMG. Overrides mirror the OSS path structure so the copy just drops
+each patched file into place.
 
 ## 6. Where we stand (honest state)
 
-- **`README.md` and `PLAN.md` are stale.** They describe the original
-  dictation-paywall with prepaid credits and call the subscription model and the
-  curator "out of scope / future work." The code has moved well past both. Trust
-  the code and `docs/`, not those two files, until they're rewritten.
-- **The routine/librarian memory system is PARKED** in favor of the Skill Curator
-  (the curator supersedes it; some of its plumbing was reused). The
-  `docs/memory-system/` design describes that superseded system.
+- **`PLAN.md` is gone.** It described the original prepaid-credits paywall and
+  called the subscription model "future work". Two months stale and actively
+  misleading. `git log` still has it.
+- **`README.md` has been rewritten** and is current as of this revision.
+- **The Skill Curator is PARKED for this release** (`CURATOR_PARKED`, 2026-08-03).
+  This overview previously called it "the most actively iterated subsystem" —
+  that is no longer true. Settings shows the switch off and disabled, and the
+  Suggestions rail that was its only user-visible surface has been removed. The
+  librarian is parked alongside it. `desktop/docs/skill-curator/` remains as the
+  design record for when it comes back.
+- **The routine/memory system stays parked** — superseded by the curator, whose
+  plumbing reused parts of it. `desktop/docs/memory-system/` is history.
+- **The notch is the attention surface.** Sizing, dormancy, escape/back/click-out
+  and the "nub vs nameplate" resting states all shipped in the launch work.
+  Note it has **three distinct surfaces** — the wall (fades finished one-offs
+  after 15m), the rail (persists until cleared) and the task stage. They are not
+  interchangeable, and confusing them is a repeat source of bugs.
 - **Computer-use lanes are code-complete and wired**; the live signed-build smoke
   is the pending manual step, and off-Space scroll / arming focus-flash are the
   acknowledged frontier.
-- **The Skill Curator is the most actively iterated subsystem** — it has run live
-  and been re-aimed based on real runs (the "user-side reframe").
+- **In flight, not on main:** `arpit/unmute-addressable` — the **Unmute agent**,
+  a second key (Fn+Space) that addresses Unmute itself rather than a session, so
+  it can keep things for you and manage sessions on your behalf. Built and
+  field-tested; see
+  `desktop/docs/superpowers/specs/2026-08-05-unmute-agent-SPEC.md` on that branch.
 - Work happens across **many branches on one `main`**; the orchestrator and the
-  pure modules (STT arbiter, correction gates, lanes, curator) carry heavy test
-  coverage.
+  pure modules (STT arbiter, correction gates, lanes, capture, grouping) carry
+  heavy test coverage. `npm test` in `desktop/` is ~1400 tests, ~2 minutes.
+- **Known non-blocking noise:** the parked librarian still injects stale,
+  low-confidence "memory leads" into task prompts. Cosmetic, but it pollutes
+  instruction packets.
 
 ## 7. Where to go for depth
 
 | Topic | Read |
 |---|---|
+| Getting a build running on your Mac | `docs/ONBOARDING.md` |
 | The cockpit vision, in the founder's words | `docs/ORCHESTRATE-VISION.md` |
-| The skills thesis + "everything is a coding agent" | `desktop/docs/skill-curator/` (esp. `11-…hypothesis.md`, `README.md`) |
-| Skill curator — the shipped design | `desktop/docs/superpowers/specs/2026-07-20-skill-curator-architecture.md` (note its §0 reframe) |
+| The Unmute agent (Fn+Space, in flight) | `desktop/docs/superpowers/specs/2026-08-05-unmute-agent-SPEC.md` *(on `arpit/unmute-addressable`)* |
+| The skills thesis + "everything is a coding agent" | `desktop/docs/skill-curator/` (esp. `11-…hypothesis.md`) |
+| Skill curator — the shipped design (parked) | `desktop/docs/superpowers/specs/2026-07-20-skill-curator-architecture.md` (note its §0 reframe) |
 | Computer-use lanes & router | `desktop/docs/superpowers/specs/2026-07-22-computer-use-router-design.md` |
-| The (parked) routine/memory system | `desktop/docs/memory-system/`, `desktop/docs/superpowers/plans/2026-06-27-unmute-memory-system.md` |
+| The notch redesign | `desktop/docs/superpowers/specs/2026-07-24-notch-ui-redesign-design.md` |
+| What every task is told | `desktop/electron/remote/contract/contract.md` |
+| The (parked) routine/memory system | `desktop/docs/memory-system/` |
 | Managed backend & deployment | `docs/DEPLOYMENT.md`, `backend/supabase/migrations/` (in order) |
 
 ## 8. Orientation for an agent working here
@@ -154,9 +191,16 @@ path structure so the copy just drops each patched file into place.
   executor interface.
 - **Files are the control channel** in the orchestrator (router → `decision.json`,
   tasks → `status.json`). The terminal stream is display-only.
+- **There is more than one renderer.** The wall exists in both React
+  (`engine-overrides/renderer/remote/`) and Swift (`native-notch/`). A UI change
+  in one is not a UI change in the other — confirm which surface is meant before
+  calling it done.
 - **Never break the hard invariants** in §2 (billing isolation, consent, file
   sovereignty). They each exist because a real bug or a real principle demanded
   them.
 - **Precision over recall for anything the user sees suggested.** A wrong
   suggestion is a broken promise of the exact thing we sell; a missed one is just
   a future cold start.
+- **Never install an unsigned build.** macOS keys Keychain and Accessibility by
+  code signature, so `--no-sign` produces an app that is signed out with dead
+  auto-paste — and nothing reports why.

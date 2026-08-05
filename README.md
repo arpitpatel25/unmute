@@ -1,27 +1,64 @@
 # unmute-cloud
 
-Closed-source build distribution + managed-cloud paywall layered on top of the open-source [unmute-dictation](https://github.com/arpitpatel25/unmute-dictation) engine.
+Private repo. The closed-source layer on top of the open-source
+[unmute-dictation](https://github.com/arpitpatel25/unmute-dictation) engine — it
+adds the managed-cloud tier and the orchestrator, and produces the signed,
+notarized DMG distributed from the website.
 
-This repo is **private**. The OSS engine stays MIT-licensed and fully functional on its own; this repo adds the optional managed-cloud tier (auth + balance ledger + prepaid credits) and produces the unified DMG that's distributed from the public website.
+The OSS engine stays MIT-licensed and fully functional on its own. **It is never
+forked.** The build clones a pinned tag and copies `desktop/engine-overrides/`
+over it.
+
+---
+
+## Start here
+
+| If you want to… | Read |
+|---|---|
+| **Get it running on your Mac** | [`docs/ONBOARDING.md`](./docs/ONBOARDING.md) |
+| **Understand what this is and why** | [`UNMUTE_PROJECT_OVERVIEW.md`](./UNMUTE_PROJECT_OVERVIEW.md) |
+| Deploy the backend | [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) |
+| The cockpit vision, in the founder's words | [`docs/ORCHESTRATE-VISION.md`](./docs/ORCHESTRATE-VISION.md) |
 
 ## What's where
 
 | Path | Purpose |
 |---|---|
-| `PLAN.md` | High-level implementation plan |
-| `backend/supabase/migrations/` | Additive SQL on top of BoloAI's existing migrations |
-| `backend/cloudflare/pipeline/` | Groq proxy worker — only managed users hit this |
-| `backend/cloudflare/payments/` | Dodo webhook handler (stub for now) |
-| `backend/cloudflare/shared/` | Auth, balance KV, types, Groq config |
-| `desktop/src/paywall/` | React paywall components (sign-in, balance pill, top-up, engine selector) |
-| `desktop/electron/` | Main-process glue (auth IPC, balance polling, provider router, managed client) |
-| `desktop/build/wire-into-engine.sh` | Build script — pulls OSS engine, wires paywall, builds DMG |
-| `docs/DEPLOYMENT.md` | End-to-end deploy steps |
+| `backend/supabase/migrations/` | Billing evolution, in order (`005 → 014`) |
+| `backend/cloudflare/pipeline/` | Worker: auth + entitlement gate + STT/LLM proxy. Only managed users hit this. |
+| `backend/cloudflare/payments/` | Worker: Dodo checkout + webhook |
+| `desktop/engine-overrides/` | Files copied over the pulled OSS engine at build time |
+| `desktop/electron/remote/` | The orchestrator — router, tasks, notch, capture, computer-use lanes |
+| `desktop/native-notch/` | The Swift notch surface (SwiftUI + SwiftTerm) |
+| `desktop/native-*/` | In-process macOS addons — paste, key listener, accessibility |
+| `desktop/build/wire-into-engine.sh` | The whole build: clone engine → overlay → sign → notarize → DMG |
 
-## Architecture in one paragraph
+## Three modes, in one paragraph
 
-The OSS engine ships **BYOK** (your Groq key) and **Local** (whisper.cpp) modes. This repo adds **Managed** mode: user signs in via Supabase Auth, tops up credits via Dodo, and transcription routes through a Cloudflare Worker that verifies their JWT, decrements balance from a KV cache (atomic edge-fast), forwards to Groq, and reconciles to Supabase async. Backend overhead is targeted under 50ms. The provider router picks managed / BYOK / local per user state with auto-fallback. **Crucial: BYOK and Local users never touch our infrastructure — only Managed users do.** Free users cost us nothing.
+The OSS engine ships **BYOK** (your own key) and **Local** (on-device model).
+This repo adds **Managed**: sign in with Supabase, subscribe through Dodo, and
+transcription routes through a Cloudflare Worker that verifies the JWT, checks
+entitlement at the edge, and forwards to the provider. The provider router picks
+managed / BYOK / local per user state with auto-fallback. **BYOK and Local users
+never touch our infrastructure**, so free users cost us nothing.
 
-## Quick start
+## Two things that will bite you
 
-See [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
+**Never install an unsigned build.** macOS keys Keychain and Accessibility grants
+by *code signature*, so `build:fast` / `--no-sign` produces an app that is signed
+out with dead auto-paste — and nothing tells you why. Use it as a compile gate
+only.
+
+**Two files don't travel to git worktrees.** `desktop/.env.dev` and
+`desktop/vendor/cua-driver/cua-driver` are both gitignored, so building from a
+fresh worktree fails until you copy/fetch them. The build says so when it
+happens; [`docs/ONBOARDING.md`](./docs/ONBOARDING.md) says so beforehand.
+
+## Quick commands
+
+```bash
+cd desktop
+npm install
+npm test          # ~1400 tests, ~2 min
+npm run typecheck # 3 known pre-existing errors — see ONBOARDING
+```
