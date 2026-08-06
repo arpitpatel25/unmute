@@ -51,7 +51,7 @@ import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
 import { SESSION_PREAMBLE } from './session-policy'
-import { installHookSettingsSync } from './hooks'
+import { installHookSettingsSync, hookToken } from './hooks'
 import { parseHookEvent } from './observer'
 import type { ExecutorFactoryOpts } from './executor'
 import { startCuaServer, type CuaServer } from './cua/server'
@@ -641,11 +641,11 @@ const REMOTE_BASE_DIR = join(homedir(), '.unmute', 'remote')
  *  status-file polling alone. */
 let hookSettingsFile: string | null = null
 
-/** Shared secret the lifecycle hooks present when they POST an event. The hook
- *  lane is on loopback, but a bearer check means another local process cannot
- *  forge task state. Per-process: hooks are re-installed at every init, so a
- *  restart simply rotates it. */
-const HOOK_TOKEN = randomUUID()
+/** Shared secret the lifecycle hooks present when they POST an event. Read from
+ *  disk and STABLE ACROSS LAUNCHES — a task's tmux session outlives the app, so a
+ *  per-process token meant every hook from a surviving session was rejected by
+ *  our own auth check. See hooks.hookToken(). */
+const HOOK_TOKEN = hookToken(REMOTE_BASE_DIR)
 
 /** Compact "22h" / "3m" / "0:42" age from a timestamp, for cockpit cards. */
 function relativeAge(ts: number): string {

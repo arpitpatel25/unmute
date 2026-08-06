@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { installHookSettings, installHookSettingsSync, hookSettingsPath } from './hooks.ts'
+import { installHookSettings, installHookSettingsSync, hookSettingsPath, hookToken } from './hooks.ts'
 
 test('hook settings are written to OUR directory, never a session cwd', async () => {
   // The whole point of the 2026-08-06 change. The previous version wrote
@@ -53,4 +53,21 @@ test('the sync install writes the same file, before anything can dispatch', asyn
   const doc = JSON.parse(await fs.readFile(p!, 'utf8'))
   assert.equal(Object.keys(doc.hooks).length, 5)
   assert.equal(installHookSettingsSync('/definitely/not/writable', 1, 'x'), null)
+})
+
+test('the hook token SURVIVES a restart — a tmux session outlives the app', async () => {
+  // The bug this pins: the token was a per-process randomUUID(), so every
+  // relaunch rotated it. But a task's tmux session keeps running across an app
+  // restart, still holding the settings it was launched with — so its hooks
+  // arrived with the previous run's token and our own auth check threw them
+  // away. Field evidence: 10 "hook event with a bad token" rejections in one
+  // log, and an observer that never heard a thing.
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'hooks-token-'))
+  const first = hookToken(base)          // launch 1
+  const second = hookToken(base)         // launch 2 — same install
+  assert.equal(first, second, 'the token rotated across launches')
+  assert.match(first, /^[0-9a-f-]{36}$/)
+  // And the settings a surviving session was launched with still carry it.
+  const p = await installHookSettings(base, 42117, first)
+  assert.match(await fs.readFile(p!, 'utf8'), new RegExp(`Bearer ${first}`))
 })

@@ -22,12 +22,52 @@
 // `async` and reports OUT: they tell Unmute what happened and never speak to
 // the model. Nothing Unmute does can delay or redirect a turn.
 
-import { promises as fs, mkdirSync, writeFileSync } from 'node:fs'
+import { promises as fs, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { createLogger } from './log'
 import { buildHookSettings } from './session-policy'
 
 const log = createLogger('hooks')
+
+/** Where the hook bearer token is kept, so it SURVIVES a restart. */
+function hookTokenPath(baseDir: string): string {
+  return join(baseDir, 'hook-token')
+}
+
+/**
+ * The shared secret hooks present when they POST an event — read from disk,
+ * minted once if absent.
+ *
+ * IT MUST BE STABLE ACROSS APP LAUNCHES, and that is not a nicety. The token was
+ * a per-process `randomUUID()`, on the reasoning that "hooks are re-installed at
+ * every init, so a restart simply rotates it". That reasoning missed the thing
+ * this codebase is built around: **a task's tmux session outlives the app.**
+ * Quit and relaunch Unmute and those sessions are still there, still running,
+ * still holding the settings they were launched with — so every hook they fire
+ * arrives stamped with the PREVIOUS run's token and gets rejected by our own
+ * auth check. Field evidence: 10 `hook event with a bad token` rejections in one
+ * log, and an observer that consequently never heard a thing.
+ *
+ * Persisting it costs one small file and removes the whole failure mode: the
+ * token a session was launched with is still the token we accept.
+ */
+export function hookToken(baseDir: string): string {
+  const p = hookTokenPath(baseDir)
+  try {
+    const existing = readFileSync(p, 'utf8').trim()
+    if (existing) return existing
+  } catch { /* first run */ }
+  const minted = randomUUID()
+  try {
+    mkdirSync(baseDir, { recursive: true })
+    writeFileSync(p, minted, { encoding: 'utf8', mode: 0o600 })
+    log.event('hook-token-minted', {})
+  } catch (e) {
+    log.warn('hook token could not be persisted — it will rotate on restart', { error: (e as Error).message })
+  }
+  return minted
+}
 
 /** Path of the shared hook-settings file (one per install, not per task —
  *  identity comes from the payload's own session_id, so nothing in it is
