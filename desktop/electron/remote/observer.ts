@@ -98,6 +98,11 @@ export function parseHookEvent(payload: unknown): HookEvent | null {
     }
     case 'PermissionRequest': {
       const tool = typeof p.tool_name === 'string' ? p.tool_name : 'a tool'
+      // ASKING PERMISSION TO ASK A QUESTION IS NOISE. Claude Code fires a
+      // PermissionRequest for AskUserQuestion itself, so a single question
+      // produced "Allow AskUserQuestion?" and then buried the real question
+      // underneath it. The question IS the ask; there is nothing to approve.
+      if (tool === 'AskUserQuestion') return null
       // The command itself is the question. `Bash` is the case that matters —
       // "may I run this?" is unanswerable without seeing what "this" is.
       const input = (p.tool_input ?? {}) as Record<string, unknown>
@@ -165,6 +170,22 @@ export interface ObserverContext {
   prior?: TaskState
   /** ISO timestamp to stamp (injected — this module owns no clock). */
   now: string
+  /**
+   * Is a question already pending on this task?
+   *
+   * THE ASK CHANNEL IS NOT LAST-WRITER-WINS. One question from the model fires
+   * up to three events, and they arrive WORST LAST:
+   *
+   *   PreToolUse/AskUserQuestion → the real text AND its options   (richest)
+   *   PermissionRequest          → a tool and its input
+   *   Notification               → "Claude needs your permission"  (poorest)
+   *
+   * Observed live: the real question was captured and then overwritten twice,
+   * leaving a bare "Claude needs your permission" with no question and no
+   * choices — while the terminal underneath showed the actual picker. So the
+   * poorer two may only speak when nothing better is already pending.
+   */
+  pendingQuestion?: boolean
 }
 
 /** Surfaces whose whole point is media that plays. The category taxonomy exists
@@ -215,6 +236,9 @@ export function deriveStatus(event: HookEvent, ctx: ObserverContext): StatusPayl
       // answers. Other notifications (idle, auth) are not state — ignore them
       // rather than parking a working task in the user's queue.
       if (event.notificationType && event.notificationType !== 'permission_prompt') return null
+      // The poorest event in the ask channel. It carries no question and no
+      // choices, so it must never speak over one that does.
+      if (ctx.pendingQuestion) return null
       const text = event.message.trim() || 'The session is waiting for your input.'
       return {
         schema_version: 1,
@@ -245,6 +269,9 @@ export function deriveStatus(event: HookEvent, ctx: ObserverContext): StatusPayl
     }
 
     case 'permission-asked': {
+      // Richer than a Notification, poorer than a real question — so it yields
+      // to one already pending (see ObserverContext.pendingQuestion).
+      if (ctx.pendingQuestion) return null
       // "May I run this?" The command IS the question — `Bash` unqualified is
       // unanswerable, so the input is put in the text rather than a label.
       const text = event.summary

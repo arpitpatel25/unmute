@@ -177,3 +177,47 @@ test('when it cannot tell, it says so instead of inventing a result', () => {
   assert.match(s.result!.summary, /without a written reply/)
   assert.equal(s.result?.detail, undefined)
 })
+
+// ─── The ask channel is not last-writer-wins ────────────────────────────────
+
+test('a Notification never speaks over a question that already has choices', () => {
+  // Observed live: ONE question fired three events, worst last —
+  // question-asked (text + options) → permission-asked → waiting. Each
+  // overwrote the previous, so the card ended up showing "Claude needs your
+  // permission" with no question and no choices, while the terminal underneath
+  // showed the real picker.
+  const poorer = deriveStatus(
+    { kind: 'waiting', sessionId: 's', message: 'Claude needs your permission', notificationType: 'permission_prompt' },
+    ctx({ pendingQuestion: true }),
+  )
+  assert.equal(poorer, null, 'must not clobber the richer ask')
+})
+
+test('a PermissionRequest also yields to a pending question', () => {
+  assert.equal(
+    deriveStatus({ kind: 'permission-asked', sessionId: 's', tool: 'Bash', summary: 'ls' }, ctx({ pendingQuestion: true })),
+    null,
+  )
+})
+
+test('but with nothing pending, both still speak', () => {
+  assert.equal(deriveStatus({ kind: 'waiting', sessionId: 's', message: 'x', notificationType: 'permission_prompt' }, ctx())?.state, 'needs-user')
+  assert.equal(deriveStatus({ kind: 'permission-asked', sessionId: 's', tool: 'Bash', summary: 'ls' }, ctx())?.state, 'needs-user')
+})
+
+test('a real question always wins, even over one already pending', () => {
+  const s = deriveStatus(
+    { kind: 'question-asked', sessionId: 's', text: 'Which?', choices: ['A', 'B'], multiSelect: false },
+    ctx({ pendingQuestion: true }),
+  )!
+  assert.deepEqual(s.question?.choices, ['A', 'B'])
+})
+
+test('we never ask permission to ask a question', () => {
+  // Claude Code fires PermissionRequest for AskUserQuestion itself, which
+  // produced "Allow AskUserQuestion?" on the card before the real question.
+  assert.equal(parseHookEvent({
+    session_id: 's', hook_event_name: 'PermissionRequest',
+    tool_name: 'AskUserQuestion', tool_input: { questions: [] },
+  }), null)
+})

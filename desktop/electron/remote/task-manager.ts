@@ -885,6 +885,9 @@ export class TaskManager extends EventEmitter {
       surface: task.surface,
       sideEffects,
       prior: task.state as TaskState,
+      // A better-informed ask must not be clobbered by a poorer one arriving
+      // later — see ObserverContext.pendingQuestion.
+      pendingQuestion: task.state === 'needs-user' && !!task.question,
       now: new Date().toISOString(),
     })
     if (!payload) return
