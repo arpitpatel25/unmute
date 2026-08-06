@@ -41,7 +41,13 @@ struct StageView: View {
                 // with. It was also drawn with plain Text, so its markdown came
                 // out as literal asterisks next to a correctly-rendered copy of
                 // itself two lines below.
-                if t.backend != "codex-desktop", let warm = t.warmup, !warm.isEmpty {
+                // "Where you left off" is for a card with NOTHING to show —
+                // a session you are re-entering cold. Once the strip below
+                // carries the actual reply, this is the same text a third time
+                // (summary → strip → dead panel), which is what made a finished
+                // card read as an echo chamber.
+                if t.backend != "codex-desktop", let warm = t.warmup, !warm.isEmpty,
+                   !(t.conversation ?? []).contains(where: { $0.role == "assistant" && !$0.text.isEmpty }) {
                     warmupStrip(warm)
                 }
                 noteRow(t).padding(.top, 8)
@@ -358,15 +364,17 @@ struct DeadPanel: View {
         VStack(alignment: .leading, spacing: 9) {
             SectionLabel(text: "Session ended · \(Theme.statusLabel(t.status))")
 
+            // THE MESSAGE IS NOT OURS TO PRINT ANY MORE.
+            //
+            // This panel predates the chat strip, when it was the ONLY place a
+            // finished result could appear — so it printed `summary` and then
+            // `detail`, which is the same reply twice (the summary IS the
+            // detail's first line). With the strip above now showing the reply,
+            // a finished card showed it three times counting "where you left
+            // off". The strip owns the message; this panel keeps only what is
+            // genuinely its own — where the result POINTS, and what you can do
+            // next.
             if let r = t.result {
-                Text(r.summary).font(.system(size: 13.5)).foregroundColor(Theme.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let d = r.detail, !d.isEmpty {
-                    ScrollView {
-                        MarkdownText(text: d).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 180)
-                }
                 if let arts = r.artifacts, !arts.isEmpty {
                     HStack(spacing: 6) {
                         ForEach(Array(arts.enumerated()), id: \.offset) { _, a in
