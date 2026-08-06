@@ -234,3 +234,26 @@ test('a Notification is never state — it is liveness', () => {
   assert.equal(deriveStatus({ kind: 'waiting', sessionId: 's', message: 'Claude needs your permission', notificationType: 'permission_prompt' }, ctx()), null)
   assert.equal(deriveStatus({ kind: 'waiting', sessionId: 's', message: 'x', notificationType: 'idle_prompt' }, ctx()), null)
 })
+
+test('a plan awaiting approval is an ask, carrying the plan itself', () => {
+  // Verified live: ExitPlanMode's tool_input has `plan` (full markdown) and
+  // `planFilePath`. Before this, our matcher named only AskUserQuestion, so a
+  // plan approval reached us as NOTHING — the card sat at processing while the
+  // terminal held a picker nobody could see.
+  const e = parseHookEvent({
+    session_id: 's', hook_event_name: 'PreToolUse', tool_name: 'ExitPlanMode',
+    tool_use_id: 'toolu_p', tool_input: { plan: '# Add a --version flag\n\n## Context\n…', planFilePath: '/p.md' },
+  }) as { kind: string; askId: string; questions: AskQuestion[] }
+  assert.equal(e.kind, 'ask-opened')
+  assert.equal(e.askId, 'toolu_p')
+  assert.match(e.questions[0].question, /--version flag/)
+  assert.equal(isAnswerable(e.questions), false, 'we have not proven we can drive its picker')
+})
+
+test('a plan ask closes on its own PostToolUse', () => {
+  const e = parseHookEvent({
+    session_id: 's', hook_event_name: 'PostToolUse', tool_name: 'ExitPlanMode',
+    tool_use_id: 'toolu_p', tool_response: {},
+  })
+  assert.equal(e?.kind, 'ask-closed')
+})

@@ -123,7 +123,7 @@ export function parseHookEvent(payload: unknown): HookEvent | null {
       // shadow a live one and nothing could tell us what the user actually
       // chose. `tool_response.answers` is the record of what registered — the
       // docs promised `tool_output`, which is null.
-      if (p.tool_name === 'AskUserQuestion') {
+      if (p.tool_name === 'AskUserQuestion' || p.tool_name === 'ExitPlanMode') {
         const resp = (p.tool_response ?? {}) as { answers?: unknown }
         const answers: Record<string, string> = {}
         if (resp.answers && typeof resp.answers === 'object') {
@@ -156,6 +156,19 @@ export function parseHookEvent(payload: unknown): HookEvent | null {
     case 'PreToolUse': {
       // Only AskUserQuestion is matched, but check anyway: a matcher is
       // configuration, and configuration drifts.
+      // A PLAN AWAITING APPROVAL IS AN ASK. Same interval, same id, different
+      // content: `plan` is the full markdown the user is being asked to approve.
+      // Deliberately NOT answerable by us — its picker's options are unverified,
+      // and the rule is that we refuse what we have not proven we can drive.
+      if (p.tool_name === 'ExitPlanMode') {
+        const input = (p.tool_input ?? {}) as { plan?: unknown }
+        const plan = typeof input.plan === 'string' ? input.plan.trim() : ''
+        if (!plan) return null
+        return {
+          kind: 'ask-opened', sessionId, cwd, askId: askIdOf(p),
+          questions: [{ question: plan, header: 'Plan', multiSelect: false, options: [] }],
+        }
+      }
       if (p.tool_name !== 'AskUserQuestion') return null
       const questions = parseAskQuestions(p.tool_input)
       if (!questions.length) return null

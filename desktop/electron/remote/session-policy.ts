@@ -185,7 +185,17 @@ export function buildHookSettings(port: number, token: string): Record<string, u
       // ARGUMENTS are a question for the human, so it is the only one worth the
       // extra event. A `*` matcher here would fire on every tool call in the
       // session for no gain.
-      PreToolUse: [{ matcher: 'AskUserQuestion', hooks: [hook] }],
+      // Two asks, two matchers. `ExitPlanMode` is a plan waiting for approval —
+      // verified live: its tool_input carries the full `plan` markdown and a
+      // `planFilePath`, and it opens and closes exactly like a question does.
+      // Without it a plan approval was INVISIBLE: our matcher named only
+      // AskUserQuestion, so the card sat at `processing` while the terminal held
+      // a picker nobody could see. Silence, not degradation — the same failure
+      // shape as the bug this whole ask channel exists to fix.
+      PreToolUse: [
+        { matcher: 'AskUserQuestion', hooks: [hook] },
+        { matcher: 'ExitPlanMode', hooks: [hook] },
+      ],
       // "May I run this?" — the tool and its exact input. The old contract asked
       // the model to self-declare irreversible actions; this is the real thing,
       // named by Claude Code itself, with the command in hand.

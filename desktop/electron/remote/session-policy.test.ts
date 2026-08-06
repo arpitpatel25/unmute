@@ -92,6 +92,8 @@ test('every hook is async, so Unmute can never delay a turn', () => {
   // picker with labelled options) reached us as nothing at all, and the only
   // thing that could mark a task blocked was a heuristic reading prose.
   assert.deepEqual(events.sort(), ['Notification', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionEnd', 'Stop', 'UserPromptSubmit'].sort())
+  // PreToolUse carries TWO matchers now — a question and a plan — so the check
+  // walks groups rather than assuming one per event.
   for (const ev of events) {
     for (const group of s.hooks[ev]) {
       for (const h of group.hooks) {
