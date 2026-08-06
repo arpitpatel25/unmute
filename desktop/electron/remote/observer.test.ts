@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   parseHookEvent,
+  isAnswerable,
+  type AskQuestion,
   summarize,
   plainLine,
   endsWithQuestion,
@@ -113,22 +115,7 @@ test('a trailing question is an OFFER — ready, not blocked, and not a question
   assert.match(s.result!.detail!, /Two options exist/, 'the reasoning is still there in full')
 })
 
-test('a REAL question carries the options the CLI would show', () => {
-  const s = deriveStatus({
-    kind: 'question-asked', sessionId: 's',
-    text: 'Which do you prefer: tabs or spaces?',
-    choices: ['Tabs', 'Spaces'], multiSelect: false,
-  }, ctx())!
-  assert.equal(s.state, 'needs-user')
-  assert.equal(s.question?.kind, 'choice')
-  assert.deepEqual(s.question?.choices, ['Tabs', 'Spaces'])
-})
 
-test('a question with no options degrades to free text rather than empty chips', () => {
-  const s = deriveStatus({ kind: 'question-asked', sessionId: 's', text: 'What next?', choices: [], multiSelect: false }, ctx())!
-  assert.equal(s.question?.kind, 'free_text')
-  assert.equal(s.question?.choices, undefined)
-})
 
 test('a permission request names the command, because "Allow Bash?" is unanswerable', () => {
   const s = deriveStatus({ kind: 'permission-asked', sessionId: 's', tool: 'Bash', summary: 'rm -rf /tmp/x' }, ctx())!
@@ -137,31 +124,11 @@ test('a permission request names the command, because "Allow Bash?" is unanswera
   assert.deepEqual(s.question?.choices, ['Allow', 'Deny'])
 })
 
-test('parseHookEvent lifts the real question out of AskUserQuestion input', () => {
-  // Shape verified against a live session, not the docs.
-  const e = parseHookEvent({
-    session_id: 's', hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion',
-    tool_input: { questions: [{ question: 'Pick a colour.', header: 'Colour', multiSelect: false,
-      options: [{ label: 'Red', description: 'warm' }, { label: 'Blue', description: 'cool' }] }] },
-  })
-  assert.equal(e?.kind, 'question-asked')
-  assert.deepEqual((e as { choices: string[] }).choices, ['Red', 'Blue'])
-})
 
 test('PreToolUse for any OTHER tool is not an ask', () => {
   assert.equal(parseHookEvent({ session_id: 's', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' } }), null)
 })
 
-test('a permission prompt blocks; other notifications are not state', () => {
-  const blocked = deriveStatus(
-    { kind: 'waiting', sessionId: 's', message: 'Claude needs permission to run git push', notificationType: 'permission_prompt' },
-    ctx(),
-  )!
-  assert.equal(blocked.state, 'needs-user')
-  assert.match(blocked.question!.text, /permission/)
-  // An idle nudge must never park a working task in the user's queue.
-  assert.equal(deriveStatus({ kind: 'waiting', sessionId: 's', message: 'still there?', notificationType: 'idle_prompt' }, ctx()), null)
-})
 
 test('a session that dies mid-work fails; one that dies after finishing does not', () => {
   assert.equal(deriveStatus({ kind: 'session-ended', sessionId: 's' }, ctx({ prior: 'processing' }))?.state, 'failed')
@@ -180,38 +147,9 @@ test('when it cannot tell, it says so instead of inventing a result', () => {
 
 // ─── The ask channel is not last-writer-wins ────────────────────────────────
 
-test('a Notification never speaks over a question that already has choices', () => {
-  // Observed live: ONE question fired three events, worst last —
-  // question-asked (text + options) → permission-asked → waiting. Each
-  // overwrote the previous, so the card ended up showing "Claude needs your
-  // permission" with no question and no choices, while the terminal underneath
-  // showed the real picker.
-  const poorer = deriveStatus(
-    { kind: 'waiting', sessionId: 's', message: 'Claude needs your permission', notificationType: 'permission_prompt' },
-    ctx({ pendingQuestion: true }),
-  )
-  assert.equal(poorer, null, 'must not clobber the richer ask')
-})
 
-test('a PermissionRequest also yields to a pending question', () => {
-  assert.equal(
-    deriveStatus({ kind: 'permission-asked', sessionId: 's', tool: 'Bash', summary: 'ls' }, ctx({ pendingQuestion: true })),
-    null,
-  )
-})
 
-test('but with nothing pending, both still speak', () => {
-  assert.equal(deriveStatus({ kind: 'waiting', sessionId: 's', message: 'x', notificationType: 'permission_prompt' }, ctx())?.state, 'needs-user')
-  assert.equal(deriveStatus({ kind: 'permission-asked', sessionId: 's', tool: 'Bash', summary: 'ls' }, ctx())?.state, 'needs-user')
-})
 
-test('a real question always wins, even over one already pending', () => {
-  const s = deriveStatus(
-    { kind: 'question-asked', sessionId: 's', text: 'Which?', choices: ['A', 'B'], multiSelect: false },
-    ctx({ pendingQuestion: true }),
-  )!
-  assert.deepEqual(s.question?.choices, ['A', 'B'])
-})
 
 test('we never ask permission to ask a question', () => {
   // Claude Code fires PermissionRequest for AskUserQuestion itself, which
@@ -220,4 +158,79 @@ test('we never ask permission to ask a question', () => {
     session_id: 's', hook_event_name: 'PermissionRequest',
     tool_name: 'AskUserQuestion', tool_input: { questions: [] },
   }), null)
+})
+
+// ─── An ask is an INTERVAL, keyed by tool_use_id ────────────────────────────
+
+const askPayload = (questions: unknown[], id = 'toolu_1') => ({
+  session_id: 's', prompt_id: 'p1', hook_event_name: 'PreToolUse',
+  tool_name: 'AskUserQuestion', tool_use_id: id, tool_input: { questions },
+})
+
+test('an ask opens with EVERY question it declared, not just the first', () => {
+  // Verified live: one call carried two questions, and reading questions[0]
+  // silently dropped half the ask.
+  const e = parseHookEvent(askPayload([
+    { question: 'Colour?', header: 'Colour', multiSelect: false, options: [{ label: 'Blue', description: 'cool' }, { label: 'Red' }] },
+    { question: 'Languages?', header: 'Languages', multiSelect: true, options: [{ label: 'Go' }, { label: 'Rust' }] },
+  ])) as { kind: string; askId: string; questions: AskQuestion[] }
+  assert.equal(e.kind, 'ask-opened')
+  assert.equal(e.askId, 'toolu_1')
+  assert.equal(e.questions.length, 2)
+  assert.equal(e.questions[1].multiSelect, true)
+  assert.equal(e.questions[0].options[0].description, 'cool')
+})
+
+test('the same tool_use_id closes it, carrying what actually registered', () => {
+  // tool_response.answers — NOT tool_output, which the docs named and which is
+  // null in practice.
+  const e = parseHookEvent({
+    session_id: 's', hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion',
+    tool_use_id: 'toolu_1', tool_output: null,
+    tool_response: { answers: { 'Colour?': 'Blue', 'Languages?': 'Go, Rust' } },
+  }) as { kind: string; askId: string; answers: Record<string, string> }
+  assert.equal(e.kind, 'ask-closed')
+  assert.equal(e.askId, 'toolu_1')
+  assert.equal(e.answers['Languages?'], 'Go, Rust')
+})
+
+test('askId falls back to prompt_id, because PermissionRequest has none', () => {
+  // Verified live: PermissionRequest arrived with tool_use_id NULL.
+  const e = parseHookEvent(askPayload([{ question: 'Q?', multiSelect: false, options: [{ label: 'A' }] }], null as unknown as string))
+  assert.equal((e as { askId: string }).askId, 'p1')
+})
+
+test('only a single single-select ask is answerable by us', () => {
+  const one = [{ question: 'Q?', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }]
+  assert.equal(isAnswerable(one), true)
+  assert.equal(isAnswerable([...one, { question: 'Q2?', multiSelect: false, options: [{ label: 'C' }] }]), false, 'tab bar')
+  assert.equal(isAnswerable([{ question: 'Q?', multiSelect: true, options: [{ label: 'A' }] }]), false, 'checkboxes')
+  assert.equal(isAnswerable([{ question: 'Q?', multiSelect: false, options: [] }]), false, 'nothing to pick')
+})
+
+test('an answerable ask renders chips; a complex one says use the terminal', () => {
+  const simple = deriveStatus({ kind: 'ask-opened', sessionId: 's', askId: 'a', questions: [
+    { question: 'Tabs or spaces?', multiSelect: false, options: [{ label: 'Tabs' }, { label: 'Spaces' }] }] }, ctx())!
+  assert.equal(simple.state, 'needs-user')
+  assert.deepEqual(simple.question?.choices, ['Tabs', 'Spaces'])
+
+  const complex = deriveStatus({ kind: 'ask-opened', sessionId: 's', askId: 'a', questions: [
+    { question: 'Colour?', multiSelect: false, options: [{ label: 'Blue' }] },
+    { question: 'Languages?', multiSelect: true, options: [{ label: 'Go' }] }] }, ctx())!
+  assert.equal(complex.question?.kind, 'free_text', 'no chips we cannot honour')
+  assert.equal(complex.question?.choices, undefined)
+  assert.match(complex.question!.text, /2 questions/)
+  assert.match(complex.question!.text, /terminal/)
+})
+
+test('closing an ask returns the task to work, however it was answered', () => {
+  const s = deriveStatus({ kind: 'ask-closed', sessionId: 's', askId: 'a', answers: {} }, ctx())!
+  assert.equal(s.state, 'processing')
+})
+
+test('a Notification is never state — it is liveness', () => {
+  // Unkeyed, content-free, and async with no ordering guarantee. It buried a
+  // real question and its options under "Claude needs your permission".
+  assert.equal(deriveStatus({ kind: 'waiting', sessionId: 's', message: 'Claude needs your permission', notificationType: 'permission_prompt' }, ctx()), null)
+  assert.equal(deriveStatus({ kind: 'waiting', sessionId: 's', message: 'x', notificationType: 'idle_prompt' }, ctx()), null)
 })

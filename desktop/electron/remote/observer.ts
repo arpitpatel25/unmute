@@ -26,6 +26,33 @@
 import type { StatusPayload, TaskState, TaskCategory } from './status-file'
 import { urlsIn } from './transcript'
 
+/** One question inside an ask, exactly as AskUserQuestion declares it. */
+export interface AskQuestion {
+  question: string
+  header?: string
+  multiSelect: boolean
+  options: Array<{ label: string; description?: string }>
+}
+
+/**
+ * Can Unmute answer this ask on the user's behalf?
+ *
+ * ONLY the simplest shape, and this is a deliberate refusal rather than a gap.
+ * Verified against a live picker: a single single-select question is one
+ * keystroke — the index — and lands exactly. Anything richer is a TAB BAR:
+ * pick in tab 1, it auto-advances, toggle checkboxes in tab 2, Tab to a Submit
+ * entry that has no number, Enter. We can watch that sequence; we have not
+ * proven we can DRIVE it through a PTY, and a half-driven picker leaves the ask
+ * hanging with the model waiting.
+ *
+ * So a complex ask is shown, not answered — the terminal underneath is live and
+ * already knows how. Refusing loudly beats answering wrongly in silence, which
+ * is the one failure mode of this whole design that corrupts instead of degrades.
+ */
+export function isAnswerable(questions: readonly AskQuestion[]): boolean {
+  return questions.length === 1 && !questions[0].multiSelect && questions[0].options.length > 0
+}
+
 // ─── Hook events (what a session emits) ─────────────────────────────────────
 
 export type HookEvent =
@@ -37,12 +64,43 @@ export type HookEvent =
   | { kind: 'turn-ended'; sessionId: string; cwd?: string; lastMessage: string }
   /** Notification — the session is waiting on the human. */
   | { kind: 'waiting'; sessionId: string; cwd?: string; message: string; notificationType?: string }
-  /** AskUserQuestion — a REAL question, with the options the CLI would show. */
-  | { kind: 'question-asked'; sessionId: string; cwd?: string; text: string; choices: string[]; multiSelect: boolean }
+  /** AskUserQuestion OPENS an ask — every question it declared, plus the id
+   *  that will close it. */
+  | { kind: 'ask-opened'; sessionId: string; cwd?: string; askId: string; questions: AskQuestion[] }
+  /** …and PostToolUse CLOSES that same ask, carrying what actually registered.
+   *  `answers` is keyed by question text (verified live). */
+  | { kind: 'ask-closed'; sessionId: string; cwd?: string; askId: string; answers: Record<string, string> }
   /** PermissionRequest — "may I run this?", with the exact command in hand. */
   | { kind: 'permission-asked'; sessionId: string; cwd?: string; tool: string; summary: string }
   /** SessionEnd — it is gone, and why. */
   | { kind: 'session-ended'; sessionId: string; cwd?: string; reason?: string }
+
+/** The id that opens and closes one ask. `tool_use_id` correlates PreToolUse
+ *  with PostToolUse exactly; `prompt_id` is the fallback, because a
+ *  PermissionRequest arrives with tool_use_id NULL (verified live). */
+function askIdOf(p: Record<string, unknown>): string {
+  return (typeof p.tool_use_id === 'string' && p.tool_use_id)
+    || (typeof p.prompt_id === 'string' && p.prompt_id)
+    || 'ask'
+}
+
+/** Every question an AskUserQuestion call declared. PLURAL — verified live: one
+ *  call carried two, and reading only the first silently dropped half the ask. */
+export function parseAskQuestions(toolInput: unknown): AskQuestion[] {
+  const input = (toolInput ?? {}) as { questions?: unknown }
+  const raw = Array.isArray(input.questions) ? input.questions : []
+  const out: AskQuestion[] = []
+  for (const q of raw) {
+    const o = q as { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }
+    if (typeof o?.question !== 'string' || !o.question) continue
+    const options = (Array.isArray(o.options) ? o.options : [])
+      .map((x) => x as { label?: unknown; description?: unknown })
+      .filter((x) => typeof x?.label === 'string' && x.label)
+      .map((x) => ({ label: x.label as string, ...(typeof x.description === 'string' ? { description: x.description } : {}) }))
+    out.push({ question: o.question, ...(typeof o.header === 'string' ? { header: o.header } : {}), multiSelect: o.multiSelect === true, options })
+  }
+  return out
+}
 
 /**
  * Normalize a raw hook payload into a typed event. Unknown events return null
@@ -60,6 +118,21 @@ export function parseHookEvent(payload: unknown): HookEvent | null {
       return { kind: 'prompt-submitted', sessionId, cwd }
     case 'PostToolUse':
     case 'PostToolUseFailure':
+      // AN ASK CLOSES WHEN ITS TOOL RETURNS. This is the event that was missing:
+      // without it a question stayed "pending" forever, so a stale ask could
+      // shadow a live one and nothing could tell us what the user actually
+      // chose. `tool_response.answers` is the record of what registered — the
+      // docs promised `tool_output`, which is null.
+      if (p.tool_name === 'AskUserQuestion') {
+        const resp = (p.tool_response ?? {}) as { answers?: unknown }
+        const answers: Record<string, string> = {}
+        if (resp.answers && typeof resp.answers === 'object') {
+          for (const [k, v] of Object.entries(resp.answers as Record<string, unknown>)) {
+            if (typeof v === 'string') answers[k] = v
+          }
+        }
+        return { kind: 'ask-closed', sessionId, cwd, askId: askIdOf(p), answers }
+      }
       return { kind: 'tool-used', sessionId, cwd, tool: typeof p.tool_name === 'string' ? p.tool_name : undefined }
     case 'Stop':
       return {
@@ -84,17 +157,13 @@ export function parseHookEvent(payload: unknown): HookEvent | null {
       // Only AskUserQuestion is matched, but check anyway: a matcher is
       // configuration, and configuration drifts.
       if (p.tool_name !== 'AskUserQuestion') return null
-      const input = p.tool_input as { questions?: unknown } | undefined
-      const qs = Array.isArray(input?.questions) ? input!.questions : []
-      const first = qs[0] as { question?: unknown; options?: unknown; multiSelect?: unknown } | undefined
-      const text = typeof first?.question === 'string' ? first.question : ''
-      if (!text) return null
-      // Verified against a live session: options are {label, description}. The
-      // label is what the picker shows and what the answer must select.
-      const choices = (Array.isArray(first?.options) ? first!.options : [])
-        .map((o) => (o as { label?: unknown })?.label)
-        .filter((l): l is string => typeof l === 'string' && l.length > 0)
-      return { kind: 'question-asked', sessionId, cwd, text, choices, multiSelect: first?.multiSelect === true }
+      const questions = parseAskQuestions(p.tool_input)
+      if (!questions.length) return null
+      // `tool_use_id` is what closes this ask. It correlates PreToolUse with
+      // PostToolUse exactly (verified live); prompt_id is the fallback, because
+      // PermissionRequest arrives with tool_use_id NULL.
+      const askId = askIdOf(p)
+      return { kind: 'ask-opened', sessionId, cwd, askId, questions }
     }
     case 'PermissionRequest': {
       const tool = typeof p.tool_name === 'string' ? p.tool_name : 'a tool'
@@ -232,39 +301,54 @@ export function deriveStatus(event: HookEvent, ctx: ObserverContext): StatusPayl
       return { schema_version: 1, state: 'processing', updated_at: ctx.now, step: 'working' }
 
     case 'waiting': {
-      // A permission prompt is unambiguous: the session is stopped until a human
-      // answers. Other notifications (idle, auth) are not state — ignore them
-      // rather than parking a working task in the user's queue.
-      if (event.notificationType && event.notificationType !== 'permission_prompt') return null
-      // The poorest event in the ask channel. It carries no question and no
-      // choices, so it must never speak over one that does.
-      if (ctx.pendingQuestion) return null
-      const text = event.message.trim() || 'The session is waiting for your input.'
-      return {
-        schema_version: 1,
-        state: 'needs-user',
-        updated_at: ctx.now,
-        step: 'waiting for you',
-        question: { text, kind: 'free_text' },
-        thread_context: deriveThreadContext(summarize(text), 'needs-user', ctx.kind),
-      }
+      // DEMOTED OUT OF THE STATE PATH ENTIRELY (2026-08-07).
+      //
+      // It is unkeyed, content-free ("Claude needs your permission"), and the
+      // docs classify it as ASYNC with no ordering guarantee — so it can arrive
+      // after the keyed events that actually describe the same moment. It did:
+      // it buried a real question and its options under a bare sentence.
+      //
+      // Everything it could tell us, a keyed event tells us better. It survives
+      // only as liveness, handled by the caller.
+      return null
     }
 
-    case 'question-asked': {
-      // A REAL question — the CLI is showing a picker right now. This is the
-      // only path that produces `choices`, because it is the only one where the
-      // options actually exist: the model declared them as tool arguments.
+    case 'ask-opened': {
+      // The CLI is showing a picker right now. An ask is an INTERVAL, keyed by
+      // askId — it opens here and closes on PostToolUse. Nothing else may write
+      // over it, which is what makes the precedence problem disappear: two asks
+      // are two ids, not a fight over one field.
+      const answerable = isAnswerable(event.questions)
+      const first = event.questions[0]
+      const text = event.questions.length > 1
+        // Honest about what we cannot drive. Naming the parts beats showing the
+        // first question as though it were the whole ask.
+        ? `${event.questions.length} questions — answer them in the terminal:\n` +
+          event.questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n')
+        : first.question
       return {
         schema_version: 1,
         state: 'needs-user',
         updated_at: ctx.now,
         step: 'waiting for you',
         question: {
-          text: event.text,
-          kind: event.choices.length ? 'choice' : 'free_text',
-          ...(event.choices.length ? { choices: event.choices } : {}),
+          text,
+          kind: answerable ? 'choice' : 'free_text',
+          ...(answerable ? { choices: first.options.map((o) => o.label) } : {}),
         },
-        thread_context: deriveThreadContext(summarize(event.text), 'needs-user', ctx.kind),
+        thread_context: deriveThreadContext(summarize(first.question), 'needs-user', ctx.kind),
+      }
+    }
+
+    case 'ask-closed': {
+      // The tool returned, so the question is over however it was answered —
+      // by us, or by the user typing into the terminal underneath. Either way
+      // the card stops asking. Back to processing; Stop decides the end state.
+      return {
+        schema_version: 1,
+        state: 'processing',
+        updated_at: ctx.now,
+        step: 'working',
       }
     }
 

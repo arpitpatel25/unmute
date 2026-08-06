@@ -34,7 +34,7 @@ import {
 } from './status-file'
 import { buildDispatch, buildResumeNudge } from './dispatch-prompt'
 import { detectSurface } from './surface'
-import { deriveStatus, type HookEvent } from './observer'
+import { deriveStatus, isAnswerable, type HookEvent, type AskQuestion } from './observer'
 import { readTranscript, hadSideEffects, readLatestExchange } from './transcript'
 import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
@@ -228,6 +228,10 @@ export interface Task {
    *  status write OR a deterministic hook event (hooks.ts). Decoupled from
    *  lastMtimeMs so hook heartbeats keep a task alive WITHOUT hiding status reads. */
   lastHeartbeatMs: number
+  /** The ask currently open on this task, keyed by the id that will close it.
+   *  Held because answering needs the SHAPE — which option is at which index —
+   *  and verification needs the labels to compare against what registered. */
+  openAsk?: { id: string; questions: AskQuestion[]; answeredWith?: string }
   /** When the session last told us a prompt actually SUBMITTED (UserPromptSubmit
    *  hook). The signal verifyDispatch waits for — a real event now, not a marker
    *  file's mtime, so it works in project-bound sessions too. */
@@ -835,6 +839,39 @@ export class TaskManager extends EventEmitter {
     }
     if (event.kind === 'prompt-submitted') task.promptSubmittedAt = at
     if (event.kind === 'tool-used') return // liveness only
+    // A Notification says nothing a keyed event has not already said better —
+    // it is liveness and nothing more (observer.ts explains why).
+    if (event.kind === 'waiting') return
+
+    // THE ASK INTERVAL. Opening records the shape; closing verifies what
+    // actually registered and clears it. Because both are keyed by askId, a
+    // second ask cannot overwrite the first and a stale one cannot linger.
+    if (event.kind === 'ask-opened') {
+      task.openAsk = { id: event.askId, questions: event.questions }
+      tlog.event('ask-opened', {
+        askId: event.askId, questions: event.questions.length,
+        answerable: isAnswerable(event.questions),
+      })
+    }
+    if (event.kind === 'ask-closed') {
+      const open = task.openAsk
+      // NEVER LET AN UNVERIFIED ANSWER LOOK SUCCESSFUL. `tool_response.answers`
+      // is what the picker actually recorded; if we sent a keystroke and it
+      // registered something else, that is the one failure mode of this design
+      // that corrupts rather than degrades — so it is logged loudly rather than
+      // hidden. (The class it guards: typing "Spaces" recorded "Tabs".)
+      if (open?.answeredWith) {
+        const got = event.answers[open.questions[0]?.question ?? ''] ?? ''
+        if (got && got !== open.answeredWith) {
+          tlog.error('ANSWER MISMATCH — the picker registered something else', {
+            sent: open.answeredWith, registered: got, askId: event.askId,
+          })
+        } else {
+          tlog.event('answer-verified', { answer: got || open.answeredWith })
+        }
+      }
+      if (task.openAsk?.id === event.askId || !task.openAsk) task.openAsk = undefined
+    }
 
     void this.applyObservation(task, event).catch((e) =>
       tlog.warn('observation failed', { error: (e as Error).message }))
@@ -2147,11 +2184,17 @@ export class TaskManager extends EventEmitter {
     // So when the pending question came with choices, map the label back to its
     // 1-based position and send that single keystroke — the picker selects
     // immediately, with no Enter (also verified: "3" selected "Blue").
-    const pending = answered?.question
-    const idx = pending?.kind === 'choice' && pending.choices
-      ? pending.choices.findIndex((c) => c.trim().toLowerCase() === userAnswer.trim().toLowerCase())
+    // We drive the picker ONLY for the shape we proved on a live session: one
+    // question, single-select. Anything else is a tab bar (pick, auto-advance,
+    // toggle, Tab to an unnumbered Submit, Enter) — a sequence we have watched
+    // but never driven through a PTY, and half-driving it leaves the model
+    // waiting on a picker nobody is holding. Those go to the terminal.
+    const ask = answered?.openAsk
+    const idx = ask && isAnswerable(ask.questions)
+      ? ask.questions[0].options.findIndex((o) => o.label.trim().toLowerCase() === userAnswer.trim().toLowerCase())
       : -1
     if (idx >= 0 && idx < 9) {
+      if (answered?.openAsk) answered.openAsk.answeredWith = ask!.questions[0].options[idx].label
       ex.write(String(idx + 1))
       tlog.event('answered-by-index', { index: idx + 1, label: userAnswer })
       const t = this.tasks.get(id)

@@ -222,12 +222,15 @@ test('needs-user surfaces the question; answer() pipes it into stdin (PRD §7)',
   const [q] = await needsUser
   assert.equal(q.question.text, 'Which Rishi?')
 
-  // A CHOICE IS ANSWERED BY INDEX. This used to assert the label was typed —
-  // which is the bug: AskUserQuestion is a numbered picker, so typing 'A' left
-  // the highlight where it was and Enter took option 1 regardless.
-  const before = fake.raw.length
+  // TYPED, and correctly so. This question arrived through a STATUS WRITE, not
+  // through the AskUserQuestion hook — so there is no picker shape on record and
+  // no basis for sending an index. We drive the picker only when a hook told us
+  // its exact options (see the index test below); otherwise typing is the honest
+  // fallback, and the terminal can take it.
+  const before = fake.writes.length
   tm.answer(id, 'A')
-  assert.equal(fake.raw.slice(before).join(''), '1', 'first choice ⇒ keystroke 1')
+  assert.equal(fake.writes.length, before + 1)
+  assert.equal(fake.writes.at(-1), 'A')
   assert.equal(tm.get(id)!.state, 'processing') // optimistic resume
   tm.kill(id)
 })
@@ -1374,7 +1377,7 @@ test('a choice is answered by INDEX — typing the label picks the wrong option'
   const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   const id = await tm.dispatch('pick something')
   const sessionId = tm.get(id)!.sessionId!
-  tm.onHookEvent({ kind: 'question-asked', sessionId, text: 'Tabs or spaces?', choices: ['Tabs', 'Spaces'], multiSelect: false })
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_1', questions: [{ question: 'Tabs or spaces?', multiSelect: false, options: [{ label: 'Tabs' }, { label: 'Spaces' }] }] })
   await new Promise((r) => setTimeout(r, 30))
   assert.equal(tm.get(id)!.state, 'needs-user')
 
@@ -1391,7 +1394,7 @@ test('a free-text answer is still typed as text', { timeout: 8000 }, async () =>
   const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   const id = await tm.dispatch('ask me something')
   const sessionId = tm.get(id)!.sessionId!
-  tm.onHookEvent({ kind: 'question-asked', sessionId, text: 'What next?', choices: [], multiSelect: false })
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_2', questions: [{ question: 'What next?', multiSelect: false, options: [] }] })
   await new Promise((r) => setTimeout(r, 30))
   const before = fake.writes.length
   tm.answer(id, 'do the thing')
@@ -1419,4 +1422,58 @@ test('the conversation survives a restart', { timeout: 8000 }, async () => {
   assert.deepEqual(convo.map((t) => t.role), ['user', 'assistant'], 'both turns must come back')
   assert.match(convo[1].text, /Here is the summary/)
   tm2.killAll()
+})
+
+test('a complex ask is NOT answered by us — it goes to the terminal', { timeout: 8000 }, async () => {
+  // A tab bar: pick, auto-advance, toggle, Tab to an unnumbered Submit, Enter.
+  // We have watched that sequence and never driven it, and half-driving it
+  // leaves the model waiting on a picker nobody is holding.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('ask me two things')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_x', questions: [
+    { question: 'Colour?', multiSelect: false, options: [{ label: 'Blue' }] },
+    { question: 'Languages?', multiSelect: true, options: [{ label: 'Go' }] },
+  ] })
+  await new Promise((r) => setTimeout(r, 30))
+  const beforeRaw = fake.raw.length
+  tm.answer(id, 'Blue')
+  assert.equal(fake.raw.slice(beforeRaw).join(''), '', 'must not send an index for a shape we cannot drive')
+  assert.equal(fake.writes.at(-1), 'Blue', 'falls back to typing, which the terminal can take')
+  tm.killAll()
+})
+
+test('closing an ask clears it, so a stale question cannot shadow a live one', { timeout: 8000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('ask me')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_a', questions: [{ question: 'Q?', multiSelect: false, options: [{ label: 'A' }] }] })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(tm.get(id)!.state, 'needs-user')
+  tm.onHookEvent({ kind: 'ask-closed', sessionId, askId: 'toolu_a', answers: { 'Q?': 'A' } })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(tm.get(id)!.state, 'processing')
+  assert.equal(tm.get(id)!.openAsk, undefined)
+  tm.killAll()
+})
+
+test('a Notification cannot bury a live ask', { timeout: 8000 }, async () => {
+  // The football bug: question-asked → permission-asked → waiting, each
+  // overwriting, leaving "Claude needs your permission" with no options.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('football')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_f', questions: [
+    { question: 'Which sport?', multiSelect: false, options: [{ label: 'Soccer' }, { label: 'American football' }] }] })
+  await new Promise((r) => setTimeout(r, 30))
+  tm.onHookEvent({ kind: 'waiting', sessionId, message: 'Claude needs your permission', notificationType: 'permission_prompt' })
+  tm.onHookEvent({ kind: 'permission-asked', sessionId, tool: 'AskUserQuestion', summary: '' })
+  await new Promise((r) => setTimeout(r, 40))
+  assert.match(tm.get(id)!.question!.text, /Which sport/)
+  assert.deepEqual(tm.get(id)!.question!.choices, ['Soccer', 'American football'])
+  tm.killAll()
 })
