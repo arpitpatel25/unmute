@@ -1074,6 +1074,16 @@ export function registerIntentCleanupLLM(fn: CompleteFn): void {
 // routes to it DETERMINISTICALLY (see the short-circuit below) — the offer-never-move
 // spine: the user can SEE where their voice lands before they speak.
 let orchestrateFocusId: string | null = null
+/**
+ * The pocket's `+ New task` slot — the one thing focus cannot say.
+ *
+ * A null focus means "let the router choose", and the router may well continue
+ * an existing task, which is usually right. But a user who stepped the carousel
+ * onto `+ New task` has said something stronger: start something new, continue
+ * nothing. Without this the deliberate choice and the absence of one are the
+ * same value, and the choice quietly becomes a guess.
+ */
+let forceNewTask = false
 
 /** The voice lifecycle, observed (never driven) for the wall's listening surface:
  *  listening (key held) → transcribing (key up, STT running) → routing (deciding
@@ -1092,6 +1102,11 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
     if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
   }
   notchController?.notifyCapturePhase(phase, taskId ?? null)
+  // THE POCKET SHOWS ITSELF WHILE YOU SPEAK, and only while you speak. Remote is
+  // tap-toggle (keyboard.ts:197 makes key-up a no-op), so `listening` spans the
+  // whole utterance — there is no hold to fumble the carousel arrows inside of.
+  // This REVEALS the address; it never sets it (see applyVoiceTarget).
+  notchController?.notifyCapturing(phase === 'listening')
 }
 
 /** The one pending "or send it there?" route offer (only the LATEST matters —
@@ -1946,6 +1961,18 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
   const raw = (rawTranscript || '').trim()
   if (!raw) { log.warn('empty transcript — not dispatching', {}); return null }
 
+  // 0a. "+ NEW TASK", CHOSEN ON PURPOSE. The pocket carousel was stepped onto
+  //     its new-task slot, so the user has already answered the only question
+  //     the router would be asked. Running it anyway could continue an existing
+  //     task instead — overruling an explicit, visible choice with a guess.
+  if (forceNewTask) {
+    const text = completeFn ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
+    const id = await manager.dispatch(text)
+    log.event('routed-to-new', { taskId: id, via: 'pocket-slot' })
+    pendingBeat = ''
+    return id
+  }
+
   // 0. ORCHESTRATE FOCUS short-circuit (§6.2). If the wall is focused on a session,
   //    the utterance goes THERE — deterministically, bypassing the router. This is
   //    PURELY ADDITIVE: with nothing focused (orchestrateFocusId === null) the block
@@ -2605,6 +2632,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         setShelved: (id, on) => mgr.setShelved(id, on),
         setNote: (id, note) => mgr.setNote(id, note),
         focus: (id) => { orchestrateFocusId = id },
+        forceNewTask: (on) => { forceNewTask = on },
         opened: (id) => mgr.opened(id),
         // terminal — same as remote:get-output/terminal-input/terminal-resize
         getOutput: (id) => mgr.getOutput(id),

@@ -127,6 +127,30 @@ struct BarContent: Equatable {
         if m.capturePhase == "routing", !isExpandedState(state) {
             return BarContent(dot: .processing, left: "creating task", emphasis: .status)
         }
+        // THE POCKET AT REST IS THE NOTCH ITSELF.
+        //
+        // This is why the pocket costs nothing: no new window, no floating
+        // widget — just the surface that was already on screen, tinted and
+        // counting. Any card big enough to READ is a card big enough to be in
+        // the way, and what you need it for lasts a few seconds, so it earns
+        // its pixels only while you are speaking or once you tap it open.
+        //
+        // Ranked below `routing` (that is happening now, and briefly) and above
+        // the resting states, because something waiting on you outranks a
+        // wordmark.
+        if m.pocket.taskCount > 0, !isExpandedState(state), !m.pocket.isOpen {
+            let n = m.pocket.taskCount
+            var c = BarContent(dot: .needsUser,
+                               left: n == 1 ? "1 in your pocket" : "\(n) in your pocket",
+                               emphasis: .status,
+                               alarm: .needsUser)
+            // Hovering names the one your voice would reach — the only question
+            // a bare count raises.
+            if hovering, let first = m.pocket.slots.first(where: { $0.kind == "task" }) {
+                c.right = first.title
+            }
+            return c
+        }
         switch state {
         case .dormant:
             // Nothing. Not a hairline, not a sliver — an always-visible idle

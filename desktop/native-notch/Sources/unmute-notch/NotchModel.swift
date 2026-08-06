@@ -61,6 +61,11 @@ final class NotchModel: ObservableObject {
     @Published var proposalLoadingId: String? = nil
     @Published var convLog: String = ""            // streamed review-conversation output
 
+    /// THE POCKET. What you set aside: still alive, still in the crank, still
+    /// reachable by voice — and costing you nothing but the notch until you
+    /// either speak or tap it open.
+    @Published var pocket: PocketP = .empty
+
     // Terminal visibility (task surface toggle; Stage shows it by default when alive).
     @Published var taskTerminalOpen: Bool = false
     /// The orchestrator stage's own terminal toggle. Separate from

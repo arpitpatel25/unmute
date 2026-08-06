@@ -53,7 +53,17 @@ struct NotchView: View {
         .ignoresSafeArea(.all)
         .contentShape(shape)
         // CLICK OPENS. Hover never does — see .onHover below.
-        .onTapGesture { if !expanded { model.emit(.tap) } }
+        // CLICK OPENS — and what it opens is whatever is being held.
+        //
+        // Tapping a notch that says "3 in your pocket" and getting the task
+        // surface would be answering a different question than the one the
+        // surface just asked. A tap on the pocket opens the pocket; a tap on
+        // the open pocket is handled by its own controls, not here.
+        .onTapGesture {
+            guard !expanded else { return }
+            if model.pocket.isOpen { return }
+            model.emit(model.pocket.taskCount > 0 ? .pocketOpen : .tap)
+        }
         // HOVER REVEALS, AND THAT IS ALL IT DOES.
         //
         // It grows the mass a little and adds one more level of detail
@@ -183,9 +193,20 @@ struct NotchView: View {
     // offset — an offset is itself motion.
     @ViewBuilder private var content: some View {
         Group {
-            if expanded { expandedContent } else { barRow }
+            if expanded { expandedContent }
+            // THE POCKET, OPEN. Not a rung of its own — it lives between the bar
+            // and the panel, so it borrows the bar's states and changes only
+            // what is drawn. An expanded task outranks it: you are already
+            // looking at one address, and a card naming a second would be two
+            // answers to the same question.
+            else if model.pocket.isOpen {
+                plane { PocketCard(model: model, listening: model.capturePhase == "listening") }
+            }
+            else { barRow }
         }
-        .id(model.state)
+        // The pocket opening is a content swap the state alone cannot express,
+        // so it has to take part in the identity or the transition never runs.
+        .id("\(model.state.rawValue)-\(model.pocket.isOpen)")
         .transition(.asymmetric(
             insertion: .opacity.animation(reduceMotion ? Theme.reducedFade : Theme.contentIn),
             removal:   .opacity.animation(reduceMotion ? Theme.reducedFade : Theme.contentOut)))

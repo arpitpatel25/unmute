@@ -66,6 +66,7 @@ final class AppController: NSObject, NotchResizing {
         installKeyMonitors()
         installOutsideClickMonitor()
         observeScreens()
+        observeAppSwitches()
         NotchLog.log("presented at dormant: window=\(NotchLog.rect(window.frame)) visible=\(window.isVisible)")
     }
 
@@ -226,6 +227,18 @@ final class AppController: NSObject, NotchResizing {
                 applyState(.dormant)
             } else if !isExpanded(model.state) {
                 refreshBar()
+            }
+
+        case let .pocket(p):
+            // A pocket that opens or closes changes the surface's SIZE, so it
+            // needs a refit — but only when it is the thing being shown. An
+            // expanded task outranks it: you are already looking at one address,
+            // and a card announcing a second would be two answers to one question.
+            let wasOpen = model.pocket.isOpen
+            model.pocket = p
+            NotchLog.log("CMD pocket mode=\(p.mode) at=\(p.at) slots=\(p.slots.count)")
+            if !isExpanded(model.state) || model.state == .attention {
+                if wasOpen != p.isOpen { refit(animated: true) } else { refreshBar() }
             }
 
         case let .toast(text):
@@ -396,6 +409,18 @@ final class AppController: NSObject, NotchResizing {
                     BarContent())
 
         case .idle, .active, .attention:
+            // THE POCKET, OPEN — a card between the bar and the panel.
+            //
+            // Deliberately small and deliberately temporary: it is up only
+            // while you are speaking or because you tapped it, and its job is
+            // to say WHICH thing you are addressing, not to let you read the
+            // whole ask. Anything bigger and we are back to a surface that is
+            // in the way, which is the problem the pocket exists to solve.
+            if model.pocket.isOpen {
+                return (geometry.topPinnedFrame(width: 360, height: 158),
+                        geometry.panelPlacement,
+                        BarContent())
+            }
             // BAR LEVEL. Height is the measured menu bar and nothing else; the
             // width follows what the mass has to say, bounded by the room
             // beside the cutout.
@@ -834,6 +859,38 @@ final class AppController: NSObject, NotchResizing {
     }
 
     // MARK: - Displays
+
+    /// CHANGING WINDOW IS THE SIGNAL.
+    ///
+    /// An expanded panel covering 70% of the display is right while you are
+    /// reading it and wrong the instant you go elsewhere — and you went
+    /// elsewhere FOR A REASON, usually to look at the thing you need in order
+    /// to answer. Before this, the only way to get your screen back was to
+    /// close the task, which says "done with this" and dropped you into the
+    /// dashboard to find it again. So leaving now pockets it instead.
+    ///
+    /// `NSWorkspace.didActivateApplicationNotification`, not app-resign: this
+    /// helper is an accessory that never takes key focus, so it is never the
+    /// app that resigns. What we can see is who came FORWARD.
+    private func observeAppSwitches() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let mine = app?.bundleIdentifier == Bundle.main.bundleIdentifier
+                || app?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            if mine {
+                // Straight back = you did not mean to leave. Main owns the grace
+                // window; we only report the return.
+                self.model.emit(.userReturned)
+            } else if self.isExpanded(self.model.state) {
+                NotchLog.log("user left for \(app?.bundleIdentifier ?? "?") — pocketing")
+                self.model.emit(.userLeft(reason: "blur"))
+            }
+        }
+    }
 
     private func observeScreens() {
         // PER DISPLAY, NOT PER APP. Connected, disconnected, rearranged, main

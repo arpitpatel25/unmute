@@ -12,7 +12,7 @@ import type { EventEmitter } from 'node:events'
 import type {
   NotchCommand, NotchEvent, NotchStateName, TaskStatusName,
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
-  ScratchpadPayloadP,
+  ScratchpadPayloadP, PocketP, PocketSlotP, PocketMode,
 } from './notch-client'
 import { providerOf, type ProviderId } from '../providers'
 import { createLogger } from '../log'
@@ -91,6 +91,11 @@ export interface NotchControllerDeps {
   setShelved(id: string, on: boolean): void
   setNote(id: string, note: string): void
   focus(id: string | null): void
+  /** The one thing focus cannot express. A null focus means "let the router
+   *  choose", which is NOT the same as "I want a new task" — and the pocket's
+   *  `+ New task` slot means exactly the second. Optional so a host that does
+   *  not wire it simply never gets the forced-new slot's behaviour. */
+  forceNewTask?(on: boolean): void
   /** The user opened this card (tap / cockpit stage). Revives a persistent
    *  session whose PTY the quit switch closed — see TaskManager.opened. Optional
    *  so a host that doesn't wire it simply keeps the manual Resume button. */
@@ -196,6 +201,9 @@ export function relativeAge(ts: number | undefined, now = Date.now()): string {
   return `${Math.floor(s / 86400)}d`
 }
 
+/** Leave and come straight back and you did not mean to leave — a ⌘-Tab to
+ *  check the link the task just gave you should not cost you the panel. */
+const RETURN_GRACE_MS = 4000
 const FADE_DONE_MS = 15 * 60 * 1000       // done fades from the wall after 15m
 const FADE_ERR_MS = 60 * 60 * 1000        // errored/stuck after 60m
 const AWAY_MS = 30 * 60 * 1000            // digest threshold
@@ -278,6 +286,18 @@ export class NotchController {
   private expandedGroups = new Set<string>()
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
 
+  // ── The pocket ────────────────────────────────────────────────────────────
+  /** Task ids you set aside, most recent first. NOT a queue and NOT a mute:
+   *  a pocketed task keeps its place in the crank and keeps demanding. */
+  private pocket: string[] = []
+  private pocketMode: PocketMode = 'closed'
+  /** Index into `pocketSlots()`. Whatever sits here is the voice's address. */
+  private pocketAt = 0
+  /** Set when leaving collapsed an expanded task; a return inside this window
+   *  re-opens it, because you did not mean to leave. */
+  private returnGraceUntil = 0
+  private lastPocketJson = ''
+
   constructor(
     private client: NotchClientLike,
     events: EventEmitter,
@@ -310,6 +330,11 @@ export class NotchController {
     on('prev', () => this.onPrev())
     on('focusTask', (e) => this.onFocusTask((e as { id: string }).id))
     on('closeStage', () => { this.seenThenClose() })
+    on('userLeft', (e) => this.onUserLeft((e as { reason: 'blur' | 'screenshot' }).reason))
+    on('userReturned', () => this.onUserReturned())
+    on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
+    on('pocketOpen', () => { this.setPocketMode('sticky'); this.reconcile() })
+    on('pocketRelease', () => { this.setPocketMode('closed'); this.reconcile() })
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
     on('mute', (e) => this.onMute((e as { id: string }).id))
     on('answerText', (e) => {
@@ -486,6 +511,10 @@ export class NotchController {
     // leaving cockpit, so our record of having sent it must go at the same time.
     if (this.engaged !== 'cockpit') this.lastDetailJson.delete('stageDetail')
     this.rebuildQueue()
+    // The pocket rides along on every pass: tasks in it can finish or be killed
+    // by anything, and a carousel offering a dead address would aim the voice
+    // at nothing. sendPocket is a no-op when the payload has not changed.
+    this.sendPocket()
     const front = this.front()
     const attention = this.queue.length
     const working = this.deps.listTasks().filter((t) => t.state === 'processing').length
@@ -549,8 +578,193 @@ export class NotchController {
     return working.length === 1 ? working[0] : undefined
   }
 
+  // ── The pocket ────────────────────────────────────────────────────────────
+
+  /**
+   * The carousel: everything your next words could land on.
+   *
+   *   [ + new task ] [ …pocketed tasks… ] [ auto ]
+   *
+   * THE ORDER IS THE FEATURE. There are exactly two places the carousel ever
+   * STARTS — the first task (you tapped it open, so you meant to address
+   * something) and `auto` (you are just speaking) — and `+ new task` sits one
+   * press from both: left from the first task, right-with-wrap from `auto`.
+   * That is the whole answer to "how do I start something new when I have five
+   * things pocketed", and it holds however many are in there.
+   *
+   * `auto` is not a cop-out. When the pocket is closed the router has not heard
+   * the utterance yet, so there is no honest target to display — "Unmute will
+   * choose" is the truth, and stepping off it turns that unknown into a
+   * decision the user made on purpose.
+   */
+  private pocketSlots(): PocketSlotP[] {
+    const live = this.pocket
+      .map((id) => this.deps.getTask(id))
+      .filter((t): t is TaskLite => !!t && t.alive !== false)
+    return [
+      { id: null, kind: 'new', title: '+ New task' },
+      ...live.map((t) => ({
+        id: t.id,
+        kind: 'task' as const,
+        title: t.name ?? truncate(t.intent),
+        ask: t.question?.text ?? t.step ?? undefined,
+        status: t.state,
+      })),
+      { id: null, kind: 'auto', title: 'Unmute will choose' },
+    ]
+  }
+
+  /** Where the carousel sits when nobody has aimed it: `auto`, the last stop. */
+  private autoIdx(): number { return this.pocketSlots().length - 1 }
+
+  /** Drop ids that died, and keep `pocketAt` pointing at something real. */
+  private prunePocket(): void {
+    const before = this.pocket.length
+    this.pocket = this.pocket.filter((id) => {
+      const t = this.deps.getTask(id)
+      return !!t && t.alive !== false
+    })
+    // A shrinking ring must never leave the pointer past its end, or the voice
+    // would be aimed at a slot that no longer exists.
+    if (this.pocket.length !== before) this.pocketAt = Math.min(this.pocketAt, this.autoIdx())
+  }
+
+  /**
+   * YOU ROUTE TO WHAT YOU CAN SEE.
+   *
+   * One rule, no timers, no hidden state — which is exactly why an earlier
+   * "the task stays yours for N minutes" idea was dropped: it made the address
+   * depend on elapsed time the user cannot see and will not remember.
+   *
+   *   expanded task            → that task
+   *   pocket open (sticky)     → whatever is at the forefront
+   *   pocket closed / speaking → the router decides, and the card says so
+   *
+   * `focus` is already the voice's address (init.ts short-circuits on it), so
+   * this is expressed by moving focus rather than by inventing a second
+   * channel. `forceNewTask` is the one thing focus cannot say: null focus means
+   * "let the router choose", which is not the same as "I want a new task".
+   */
+  private applyVoiceTarget(): void {
+    if (this.engaged === 'task' && this.focusedId) { this.deps.forceNewTask?.(false); return }
+    if (this.pocketMode !== 'sticky') {
+      // Closed, or merely showing while you speak. Speaking must never become
+      // an act of aiming — that is the whole point of the transient/sticky split.
+      if (this.focusedId) this.setFocus(null)
+      this.deps.forceNewTask?.(false)
+      return
+    }
+    const slot = this.pocketSlots()[this.pocketAt]
+    this.deps.forceNewTask?.(slot?.kind === 'new')
+    this.setFocus(slot?.kind === 'task' ? slot.id : null)
+  }
+
+  private sendPocket(): void {
+    this.prunePocket()
+    const data: PocketP = { mode: this.pocketMode, at: this.pocketAt, slots: this.pocketSlots() }
+    const json = JSON.stringify(data)
+    if (json === this.lastPocketJson) return
+    this.lastPocketJson = json
+    this.client.send({ type: 'pocket', data })
+  }
+
+  /** Put a task in the pocket. Never mutes it, never takes it out of the crank
+   *  — it is still your move, it is just not covering your screen. */
+  private pocketTask(id: string, why: string): void {
+    this.pocket = [id, ...this.pocket.filter((x) => x !== id)]
+    log.event('pocketed', { taskId: id, why, size: this.pocket.length })
+  }
+
+  private setPocketMode(mode: PocketMode): void {
+    if (this.pocketMode === mode) return
+    this.pocketMode = mode
+    if (mode === 'sticky') {
+      // Opening lands on the first real task, because opening it IS the act of
+      // choosing to address something. `+ New task` is then one press left.
+      if (this.pocketSlots().length > 2) this.pocketAt = 1
+    } else {
+      // Closed or merely speaking: back to `auto`. A carousel that remembered
+      // where it was left would make the address depend on invisible history —
+      // the same failure as the freshness timer this design already rejected.
+      this.pocketAt = this.autoIdx()
+    }
+    this.applyVoiceTarget()
+    this.sendPocket()
+  }
+
+  /**
+   * The user left — switched app, or started a screen capture.
+   *
+   * An expanded panel covering 70% of the display is right while you are
+   * reading it and wrong the instant you go to look at something else, and
+   * changing window IS the signal that you have. Closing was the only escape
+   * before, and closing says "done with this", which is rarely what was meant.
+   */
+  private onUserLeft(reason: 'blur' | 'screenshot'): void {
+    // FOCUS, NOT THE SURFACE. The task panel and the cockpit's stage are two
+    // ways of looking at exactly one task, and leaving means the same thing in
+    // both. Keying on `engaged === 'task'` silently exempted the stage — you
+    // could be staring at a task, switch to Chrome, and come back to find it
+    // still covering the screen. The wall has no single task, so a focusless
+    // cockpit has nothing to pocket and is left alone.
+    if (!this.focusedId) return
+    const id = this.focusedId
+    this.pocketTask(id, reason)
+    this.returnGraceUntil = Date.now() + RETURN_GRACE_MS
+    this.engaged = 'none'
+    this.setFocus(null)
+    this.setPocketMode('closed')
+    this.sendPocket()
+    this.reconcile()
+  }
+
+  /** Came straight back → you did not mean to leave. Re-open what collapsed. */
+  private onUserReturned(): void {
+    if (Date.now() > this.returnGraceUntil) return
+    const id = this.pocket[0]
+    const t = id ? this.deps.getTask(id) : undefined
+    if (!t) return
+    this.returnGraceUntil = 0
+    this.engaged = 'task'
+    this.setFocus(id)
+    this.setPocketMode('closed')
+    log.event('pocket-reopened-on-return', { taskId: id })
+    this.reconcile()
+  }
+
+  private onPocketMove(e: { delta?: number; to?: number }): void {
+    const n = this.pocketSlots().length
+    if (n <= 1) return
+    this.pocketAt = typeof e.to === 'number'
+      ? Math.max(0, Math.min(n - 1, e.to))
+      : (this.pocketAt + (e.delta ?? 1) + n * 2) % n
+    // Moving the carousel is an explicit aim even while merely speaking: you
+    // stepped off `auto` on purpose, so honour it.
+    const slot = this.pocketSlots()[this.pocketAt]
+    this.deps.forceNewTask?.(slot.kind === 'new')
+    this.setFocus(slot.kind === 'task' ? slot.id : null)
+    this.sendPocket()
+  }
+
+  /** Right-⌥ started/stopped listening. Remote is TAP-TOGGLE (keyboard.ts:197
+   *  makes key-up a no-op), so the card is up for the whole utterance — there
+   *  is no hold to fumble arrows inside of. */
+  notifyCapturing(on: boolean): void {
+    if (this.pocketMode === 'sticky') return           // an explicit aim outranks it
+    this.setPocketMode(on && this.pocket.length > 0 ? 'transient' : 'closed')
+  }
+
   private openCockpit(): void {
     this.engaged = 'cockpit'
+    // "OPEN DASHBOARD" MEANS THE DASHBOARD, NOT THE TASK YOU CAME FROM.
+    //
+    // The cockpit renders the focused task's STAGE whenever `focusedId` is set
+    // (reconcile sends stageDetail; NotchView draws the stage instead of the
+    // wall). Coming here from an auto-expanded task left that focus in place,
+    // so the one button whose label promises "all your tasks" delivered the
+    // single task you had just chosen to leave — and getting to the actual wall
+    // meant closing the stage first. Arriving at the dashboard clears focus.
+    this.setFocus(null)
     this.expandedGroups.clear()   // each visit starts on the live view
     this.computeDigest()
     this.deps.setLastSeen(Date.now())
@@ -620,9 +834,15 @@ export class NotchController {
       this.muted.set(t.id, t.state)
       this.queue = this.queue.filter((x) => x !== t.id)
       log.event('seen-on-close', { taskId: t.id, state: t.state })
+    } else if (t) {
+      // A BLOCKED TASK IS POCKETED, NOT DISMISSED. It is still your move — the
+      // only thing you asked for by closing was your screen back. It keeps its
+      // place in the crank, stays unmuted, and keeps the voice reachable.
+      this.pocketTask(t.id, 'closed')
     }
     if (opts.collapse) this.engaged = 'none'
     this.setFocus(null)
+    this.setPocketMode('closed')
     this.reconcile()
   }
 

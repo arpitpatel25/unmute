@@ -18,6 +18,48 @@ const log = createLogger('notch-client')
 export type NotchStateName = 'dormant' | 'idle' | 'active' | 'attention' | 'task' | 'cockpit'
 export type TaskStatusName = 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
 
+/**
+ * THE POCKET — the state between expanded and gone.
+ *
+ * Leaving a task used to mean closing it, and closing carries a meaning ("I am
+ * done with this") the user rarely intends: they changed window BECAUSE they
+ * had to go look at something in order to answer. So the expanded panel now
+ * collapses into the notch instead — the task stays alive, queued and unmuted,
+ * and the voice stays pointed at it.
+ *
+ *   closed    — it lives in the notch as a count. The footprint IS the notch,
+ *               so it covers nothing. Voice falls back to the router.
+ *   transient — the card is up because you are SPEAKING. It shows where the
+ *               words will land; it does not decide it.
+ *   sticky    — the card is up because you TAPPED it open. Now the forefront
+ *               IS the address.
+ *
+ * The last two must stay distinct. If merely speaking counted as opening the
+ * pocket, every utterance would silently aim at a pocketed task — precisely
+ * what a closed pocket exists to prevent.
+ */
+export type PocketMode = 'closed' | 'transient' | 'sticky'
+
+/** One stop in the carousel: something your next words could land on. */
+export interface PocketSlotP {
+  /** Task id; null for the two synthetic stops. */
+  id: string | null
+  /** `auto` = let the router decide (it has not heard you yet, so nothing
+   *  truthful can be shown); `new` = force a new task. */
+  kind: 'auto' | 'task' | 'new'
+  title: string
+  /** The pending ask. The surface clamps it to two lines. */
+  ask?: string
+  status?: TaskStatusName
+}
+
+export interface PocketP {
+  mode: PocketMode
+  /** Index into `slots`. Whatever sits here is the address. */
+  at: number
+  slots: PocketSlotP[]
+}
+
 export interface ArtifactP { type: 'url' | 'path'; value: string }
 export interface QuestionP { text: string; kind?: string; choices?: string[]; irreversible?: boolean }
 export interface ResultP { summary: string; detail?: string; artifacts?: ArtifactP[] }
@@ -215,6 +257,7 @@ export type NotchCommand =
   | { type: 'proposal'; data: ProposalDetailP }
   | { type: 'convData'; id: string; text: string }
   | { type: 'capturePhase'; phase: string; target?: string }
+  | { type: 'pocket'; data: PocketP }
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
@@ -233,6 +276,16 @@ export type NotchEvent =
   | { type: 'prev' }
   | { type: 'focusTask'; id: string }
   | { type: 'closeStage' }
+  /** The user left Unmute (app deactivated, or a screen capture began). An
+   *  expanded task goes to the pocket rather than being dismissed. */
+  | { type: 'userLeft'; reason: 'blur' | 'screenshot' }
+  /** …and came back. Within the grace window this re-opens what it collapsed. */
+  | { type: 'userReturned' }
+  /** Move the carousel. `to` is an absolute slot index; `delta` steps. */
+  | { type: 'pocketMove'; delta?: number; to?: number }
+  /** Tap the pocket open (sticky), or let it go back to the notch. */
+  | { type: 'pocketOpen' }
+  | { type: 'pocketRelease' }
   | { type: 'chooseOption'; id: string; index: number }
   | { type: 'answerText'; id: string; text: string }
   | { type: 'mute'; id: string }
