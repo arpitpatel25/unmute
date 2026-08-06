@@ -35,7 +35,7 @@ import {
 import { buildDispatch, buildResumeNudge } from './dispatch-prompt'
 import { detectSurface } from './surface'
 import { deriveStatus, type HookEvent } from './observer'
-import { readTranscript, hadSideEffects } from './transcript'
+import { readTranscript, hadSideEffects, readLatestExchange } from './transcript'
 import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import { resolveTranscriptById } from './trace-reducer'
@@ -166,8 +166,17 @@ export interface Task {
    *  so the conversation itself has to be what the panel carries. Kept to the
    *  last few turns deliberately — enough to re-enter, never a re-implementation
    *  of the other app's chat (ORCHESTRATE-VISION §3, the delete-the-wall test). */
-  /** A driven backend's conversation — this is what a desktop task has INSTEAD
-   *  of a terminal.
+  /** The task's conversation, for EVERY backend.
+   *
+   *  It began as "what a driven backend has instead of a terminal", because a
+   *  Codex thread has no PTY to show. That framing made the stage an either/or:
+   *  a Claude task showed a terminal and no messages at all, so the one thing a
+   *  returning user actually wants — what did I ask, what came back — was
+   *  reachable only by reading a scrollback.
+   *
+   *  A Claude session's turns now come from Claude's OWN record
+   *  (transcript.ts), not from scraping the screen, so all three backends fill
+   *  the same field and the stage can show the message AND the terminal.
    *
    *  Widened from `{role: 'user'|'assistant'}` to the shape the drivers actually
    *  emit. That narrow type predated the Codex backend and never matched it:
@@ -698,6 +707,11 @@ export class TaskManager extends EventEmitter {
       const dispatchedAt = Date.now()
       ex.writeStdin(payload)
       tlog.event('task-dispatched', { bytes: payload.length })
+      // Show what was asked IMMEDIATELY, before any reply exists. The transcript
+      // is the source of truth and replaces this the moment the turn ends — but
+      // a card that is blank for the first thirty seconds of every task reads as
+      // broken, and the user already knows what they said.
+      task.conversation = [{ role: 'user', text: intent }]
 
       // Reliability fix: the multi-line payload occasionally lands one Enter
       // short of submitting in Claude's input box (proven on-device — a manual
@@ -820,9 +834,16 @@ export class TaskManager extends EventEmitter {
     // and only when a turn ended (the sole event where category is decided).
     let sideEffects = false
     if (event.kind === 'turn-ended') {
-      const transcript = await readTranscript(
-        task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null)
-      sideEffects = hadSideEffects(transcript)
+      const path = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
+      sideEffects = hadSideEffects(await readTranscript(path))
+      // The end of a turn is exactly when the exchange is complete, so this is
+      // where the card's conversation is refreshed — from Claude's own record,
+      // replacing the optimistic user turn we showed while it worked.
+      const exchange = await readLatestExchange(path)
+      if (exchange.length) {
+        task.conversation = exchange.map((t) => ({ role: t.role, text: t.text }))
+        tlog.event('conversation-refreshed', { turns: exchange.length })
+      }
     }
     const payload = deriveStatus(event, {
       kind: (task.kind ?? 'oneoff') as 'oneoff' | 'session',
@@ -2826,6 +2847,10 @@ export class TaskManager extends EventEmitter {
     // plumbing was the load-bearing part of a mechanism that no longer exists,
     // and it was the bloat users saw growing on every turn.
     const payload = buildDispatch({ intent: text })
+    // The user's new message appears on the card the instant they send it —
+    // whether they spoke it or typed it into the stage composer — rather than
+    // only after the turn ends. Replaced by the real transcript on turn-ended.
+    task.conversation = [{ role: 'user', text }]
 
     void (async () => {
       // CRITICAL: wait until the REPL is genuinely idle at the prompt before

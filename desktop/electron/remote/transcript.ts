@@ -27,6 +27,18 @@ export interface AssistantMessage {
   tools: string[]
 }
 
+/** One side of the conversation, as a human would recognise it. The shape
+ *  matches TurnP (notch-client.ts) so a Claude session projects into the same
+ *  panel a Codex thread does — one Turn type, three producers. */
+export interface Turn {
+  role: 'user' | 'assistant'
+  text: string
+  /** ISO timestamp from the entry itself. */
+  at?: string
+  /** Stable id for keying a UI row. */
+  uuid?: string
+}
+
 /** Tools whose use means the world changed: the task ACTED, it did not just
  *  answer. Read-only tools are deliberately absent — a task that only read and
  *  searched produced knowledge, which is `info`. */
@@ -104,6 +116,99 @@ export async function readTranscript(path: string | null): Promise<AssistantMess
   if (!path) return []
   try {
     return parseTranscript(await fs.readFile(path, 'utf8'))
+  } catch {
+    return []
+  }
+}
+
+// ─── The conversation, both sides ───────────────────────────────────────────
+//
+// THE USER SIDE IS EVEN CLEANER THAN THE ASSISTANT SIDE, and the rule is one
+// line. Measured on a real session: 211 lines have `type: "user"`, but only 17
+// of them are a human talking. The other 194 are TOOL RESULTS, which Claude Code
+// records as user turns because that is how the API frames them.
+//
+// They are told apart by the shape of `message.content`:
+//   * a STRING  → a person typed (or spoke) this
+//   * an ARRAY  → tool_result blocks being fed back
+//
+// No heuristics, no keyword matching, no guessing. `toolUseResult` on the entry
+// is a second, independent tell for the same thing.
+
+/** Parse one JSONL line into a conversation turn, or null if it is not one a
+ *  human would recognise as part of the conversation. */
+export function parseTurnLine(line: string): Turn | null {
+  let o: unknown
+  try { o = JSON.parse(line) } catch { return null }
+  if (typeof o !== 'object' || o === null) return null
+  const rec = o as {
+    type?: unknown; message?: { content?: unknown }; isSidechain?: unknown
+    timestamp?: unknown; uuid?: unknown; toolUseResult?: unknown
+  }
+  // A SUBAGENT'S conversation is not the user's. Without this, one Task call
+  // floods the panel with an exchange the user never had and never saw.
+  if (rec.isSidechain === true) return null
+  const at = typeof rec.timestamp === 'string' ? rec.timestamp : undefined
+  const uuid = typeof rec.uuid === 'string' ? rec.uuid : undefined
+
+  if (rec.type === 'user') {
+    const content = rec.message?.content
+    // The whole filter. An array here is always tool_result.
+    if (typeof content !== 'string') return null
+    if (rec.toolUseResult !== undefined) return null // belt and braces
+    const text = content.trim()
+    return text ? { role: 'user', text, at, uuid } : null
+  }
+  if (rec.type === 'assistant') {
+    const m = parseAssistantLine(line)
+    return m && m.text ? { role: 'assistant', text: m.text, at, uuid } : null
+  }
+  return null // system, attachment, ai-title, mode, last-prompt, …
+}
+
+/** The conversation as a person would read it, oldest first. */
+export function parseTurns(raw: string): Turn[] {
+  const out: Turn[] = []
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue
+    const t = parseTurnLine(line)
+    if (t) out.push(t)
+  }
+  return out
+}
+
+/**
+ * The LATEST EXCHANGE: the most recent assistant message, and the user message
+ * that prompted it — in that order, oldest first.
+ *
+ * This is what the stage shows. Not a scrollback: the question a returning user
+ * has is "what did I ask, and what came back", and everything else is history
+ * they can reach through the terminal.
+ *
+ * Degrades honestly: a task mid-first-turn yields just the user's message; a
+ * session with nothing yet yields [].
+ */
+export function latestExchange(turns: readonly Turn[]): Turn[] {
+  let lastAssistant = -1
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (turns[i].role === 'assistant') { lastAssistant = i; break }
+  }
+  // No reply yet — show what was asked, so the card is never blank while it works.
+  if (lastAssistant === -1) {
+    const lastUser = [...turns].reverse().find((t) => t.role === 'user')
+    return lastUser ? [lastUser] : []
+  }
+  for (let i = lastAssistant - 1; i >= 0; i--) {
+    if (turns[i].role === 'user') return [turns[i], turns[lastAssistant]]
+  }
+  return [turns[lastAssistant]]
+}
+
+/** Read a transcript and return the latest exchange. Never throws. */
+export async function readLatestExchange(path: string | null): Promise<Turn[]> {
+  if (!path) return []
+  try {
+    return latestExchange(parseTurns(await fs.readFile(path, 'utf8')))
   } catch {
     return []
   }

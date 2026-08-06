@@ -6,6 +6,9 @@ import {
   lastAssistantText,
   hadSideEffects,
   urlsIn,
+  parseTurnLine,
+  parseTurns,
+  latestExchange,
 } from './transcript.ts'
 
 const line = (o: unknown) => JSON.stringify(o)
@@ -63,4 +66,73 @@ test('urlsIn: de-duplicated, in order, without the sentence punctuation', () => 
     ['https://example.com/a', 'https://x.dev/b?q=1'],
   )
   assert.deepEqual(urlsIn('nothing here'), [])
+})
+
+// ─── The conversation, both sides ───────────────────────────────────────────
+
+const userStr = (text: string, extra: Record<string, unknown> = {}) =>
+  line({ type: 'user', message: { content: text }, timestamp: '2026-08-06T00:00:00Z', uuid: 'u1', ...extra })
+
+test('a user turn is real when message.content is a STRING', () => {
+  // Measured on a live session: 17 of 211 user-typed lines were a human. The
+  // other 194 were tool_result being fed back. This is the whole filter.
+  const t = parseTurnLine(userStr('summarize the pricing thread'))
+  assert.equal(t?.role, 'user')
+  assert.equal(t?.text, 'summarize the pricing thread')
+  assert.equal(t?.at, '2026-08-06T00:00:00Z')
+  assert.equal(t?.uuid, 'u1')
+})
+
+test('a user turn whose content is an ARRAY is tool output, never shown', () => {
+  const toolResult = line({
+    type: 'user',
+    message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: 'file contents…' }] },
+    toolUseResult: { stdout: '…' },
+  })
+  assert.equal(parseTurnLine(toolResult), null)
+})
+
+test('subagent turns are excluded — they are not the user\'s conversation', () => {
+  // Without this one Task call floods the panel with an exchange the user
+  // never had and never saw.
+  assert.equal(parseTurnLine(userStr('inner agent prompt', { isSidechain: true })), null)
+  assert.equal(parseTurnLine(line({
+    type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'inner reply' }] },
+  })), null)
+})
+
+test('metadata lines are not conversation', () => {
+  for (const type of ['system', 'attachment', 'file-history-snapshot', 'ai-title', 'mode', 'last-prompt']) {
+    assert.equal(parseTurnLine(line({ type, message: { content: 'x' } })), null, `${type} leaked in`)
+  }
+})
+
+test('an assistant turn with only tools contributes nothing', () => {
+  assert.equal(parseTurnLine(assistant([{ type: 'tool_use', name: 'Read', input: {} }])), null)
+  assert.equal(parseTurnLine(assistant([{ type: 'thinking', thinking: 'hmm' }])), null)
+})
+
+test('latestExchange returns the ask and the reply, in order', () => {
+  const turns = parseTurns([
+    userStr('first question'),
+    assistant([{ type: 'text', text: 'first answer' }]),
+    userStr('second question'),
+    assistant([{ type: 'tool_use', name: 'Read', input: {} }]),
+    assistant([{ type: 'text', text: 'second answer' }]),
+  ].join('\n'))
+  assert.deepEqual(latestExchange(turns).map((t) => [t.role, t.text]), [
+    ['user', 'second question'],
+    ['assistant', 'second answer'],
+  ])
+})
+
+test('mid-first-turn shows the ask alone rather than nothing', () => {
+  // A card that is blank while the model works reads as broken.
+  const turns = parseTurns(userStr('do the thing'))
+  assert.deepEqual(latestExchange(turns).map((t) => t.text), ['do the thing'])
+})
+
+test('an empty session yields an empty exchange, not a crash', () => {
+  assert.deepEqual(latestExchange([]), [])
+  assert.deepEqual(latestExchange(parseTurns('{"broken')), [])
 })

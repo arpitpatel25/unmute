@@ -63,10 +63,31 @@ struct StageView: View {
                                   modelLabel: t.modelLabel, sending: t.sending ?? false)
                         .padding(.top, 9)
                 } else if t.alive {
+                    // MESSAGE, THEN TERMINAL — not one or the other.
+                    //
+                    // The exchange answers "what did I ask, what came back" at a
+                    // glance; the terminal underneath is still the real thing,
+                    // shown raw, for everything the headline leaves out. The
+                    // strip renders nothing at all when there are no turns yet,
+                    // so a fresh task looks exactly as it did before.
+                    ExchangeStrip(turns: t.conversation ?? [])
+                        .padding(.top, 10)
                     TerminalPanel(model: model, taskId: t.id,
                                   tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
                         .padding(.top, 10)
+                    // Say the next thing without opening the terminal. Voice is
+                    // still the primary way in — the placeholder says so — but
+                    // when the stage is already open and focused, making the
+                    // user reach into a PTY to type one line is the friction
+                    // this surface exists to remove.
+                    StageComposer(placeholder: "Reply — or hold right ⌥ and speak",
+                                  model: model, taskId: t.id,
+                                  deliveryError: t.deliveryError,
+                                  modelLabel: t.modelLabel, sending: t.sending ?? false)
+                        .padding(.top, 9)
                 } else {
+                    ExchangeStrip(turns: t.conversation ?? [])
+                        .padding(.top, 10)
                     DeadPanel(model: model, t: t).padding(.top, 10)
                     Spacer(minLength: 0)
                 }

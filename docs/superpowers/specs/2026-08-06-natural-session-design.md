@@ -173,3 +173,85 @@ exactly what the user said.**
 - **Watch the observer's accuracy** across real sessions, especially
   question-detection. The `unmute_status` tool is the escape hatch if a case
   proves undecidable from outside.
+
+---
+
+# Part 2 — the latest exchange on the stage
+
+Added the same day, on top of the above.
+
+## 11. Why
+
+The stage was an **either/or**. `StageView.swift` branched: a driven backend
+(Codex, Claude desktop) rendered a `ConversationPanel` *because it has no PTY*,
+and a Claude CLI task rendered a raw terminal and **nothing else**. So the one
+question a returning user actually has — *what did I ask, and what came back* —
+was answerable only by reading scrollback in a terminal, which is exactly the
+work the wall exists to save them.
+
+## 12. Both sides, from Claude's own record
+
+`Task.conversation` stops meaning "what a driven backend has instead of a
+terminal" and starts meaning "this task's conversation", for all three backends.
+A Claude session's turns come from its transcript, not from scraping the screen.
+
+The user side turned out cleaner than the assistant side. Claude Code records
+user turns in two shapes, and they are trivially distinguishable:
+
+| `message.content` | Count in a real session | What it is |
+|---|---|---|
+| a **string** | 17 | a human talking |
+| an **array** | 194 | `tool_result` blocks being fed back |
+
+So the filter is `typeof content === 'string'` — no heuristics, no keyword
+matching. `toolUseResult` on the entry is an independent second tell.
+
+Also excluded: `isSidechain === true` (subagent turns — without this one Task
+call floods the panel with an exchange the user never had), and the metadata
+line types (`system`, `attachment`, `file-history-snapshot`, `ai-title`, `mode`,
+`last-prompt`).
+
+## 13. A headline, not a transcript
+
+`ExchangeStrip` is deliberately **not** `ConversationPanel`:
+
+| | `ConversationPanel` | `ExchangeStrip` |
+|---|---|---|
+| for | a backend with no terminal | a backend that has one |
+| shows | the whole thread, scrolling | the latest exchange only |
+| owns | the full pane | a bounded height above the terminal |
+
+Keeping it to one exchange is what stops it becoming a re-rendered conversation —
+the bright line in `ORCHESTRATE-VISION.md` §3. Everything before this exchange is
+history, and history is what the terminal below is for.
+
+It renders **nothing at all** when a task has no turns, so a fresh task looks
+exactly as it did before.
+
+## 14. Optimistic, then true
+
+`dispatch()` and `followUp()` set the conversation to the user's message
+immediately; `turn-ended` replaces it from the transcript. A card that is blank
+for the first thirty seconds of every task reads as broken — and the user already
+knows what they said.
+
+## 15. The composer
+
+`CodexComposer` became `StageComposer` with a `placeholder`, and `CodexComposer`
+is now a thin wrapper keeping Codex's own wording. Claude tasks get one too.
+
+**This touches a stated bright line** — *"no text input on the stage"* — so it is
+a deliberate decision, not drift. The line was already crossed once for driven
+backends, where a composer was the only way in. The argument for extending it:
+when the stage is already open in front of you, being sent into a PTY to type one
+line is the friction this surface exists to remove. Voice stays primary, and the
+placeholder says so before it names the field: *"Reply — or hold right ⌥ and
+speak"*.
+
+## 16. Still to verify
+
+- **Images.** There were zero `image` blocks in the transcript I measured. The
+  block type exists in the content schema (`source.type: "base64"`), but the
+  render path should be checked against a real pasted screenshot before being
+  built on.
+- **Live smoke.** Same as Part 1: no real session has driven this UI yet.

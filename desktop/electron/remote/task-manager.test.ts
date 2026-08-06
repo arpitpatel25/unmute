@@ -1290,3 +1290,21 @@ test('typeUnsubmitted writes raw text with no CR to the task executor', async ()
   assert.equal(tm.typeUnsubmitted('nope', 'x'), false)    // unknown task
   tm.kill(id)
 })
+
+// ─── The conversation, for a PTY task too ────────────────────────────────────
+
+test('dispatch shows the ask immediately, and a follow-up replaces it', async () => {
+  // A card that is blank for the first thirty seconds of every task reads as
+  // broken — and the user already knows what they said. The transcript is still
+  // the source of truth; this is what fills the gap until a turn ends.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('summarize the pricing thread')
+  assert.deepEqual(tm.get(id)!.conversation, [{ role: 'user', text: 'summarize the pricing thread' }])
+
+  tm.followUp(id, 'now compare it with last quarter')
+  await new Promise((r) => setTimeout(r, 0))
+  assert.deepEqual(tm.get(id)!.conversation, [{ role: 'user', text: 'now compare it with last quarter' }])
+  tm.killAll()
+})

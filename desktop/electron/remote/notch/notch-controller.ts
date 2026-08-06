@@ -830,16 +830,21 @@ export class NotchController {
       // what picks the expanded surface's share of the screen (80% for a
       // terminal, 60% for a conversation). One registry, one answer.
       terminal: providerOf(t.agent).hasTerminal,
-      // An external backend has no PTY, so the panel renders the CONVERSATION
-      // where a Claude task renders its terminal. Both are "the real thing,
-      // shown raw" — neither is a re-implementation of the other app's UI.
+      // THE CONVERSATION IS SENT FOR EVERY BACKEND NOW.
+      //
+      // It used to be gated on `external`, because it was conceived as "what a
+      // driven backend has INSTEAD of a terminal". That made the stage an
+      // either/or, and a Claude task lost: it showed a raw PTY and no messages,
+      // so the one thing a returning user wants — what did I ask, what came
+      // back — was only reachable by reading scrollback.
+      //
+      // A Claude session's turns come from Claude's own transcript
+      // (transcript.ts), so all three backends now speak the same shape and the
+      // stage can show the message AND the terminal. `terminal` above still
+      // says whether there is a PTY to draw underneath it.
+      conversation: t.conversation ?? [],
       ...(external ? {
         backend: t.agent,
-        // The whole thread. The old windows here (6, then 40) were both
-        // downstream of a 6-item cut at the parse layer, so neither ever had
-        // anything to trim — widening this alone did nothing, which is exactly
-        // the mistake that let the truncation survive a round of "fixes".
-        conversation: t.conversation ?? [],
         ...(t.codexProject ? { project: t.codexProject } : {}),
       } : {}),
       status: t.state,

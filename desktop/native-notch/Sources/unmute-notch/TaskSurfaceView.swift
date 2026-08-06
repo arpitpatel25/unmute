@@ -64,15 +64,24 @@ struct TaskSurfaceView: View {
                     CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
                                   modelLabel: t.modelLabel, sending: t.sending ?? false)
                         .padding(.top, 9)
-                } else if model.taskTerminalOpen && t.alive {
+                } else if t.alive {
+                    // The same message-then-terminal shape as the stage. The
+                    // strip is bounded and renders nothing when there are no
+                    // turns yet, so the terminal keeps the space it always had.
+                    ExchangeStrip(turns: t.conversation ?? [], maxAnswerHeight: 150)
+                        .padding(.top, 10)
+                    if model.taskTerminalOpen {
                     // The terminal owns EVERYTHING left down to the action row
                     // (field feedback: never a fixed band with dead space below).
                     // .id ties the PTY stream to THIS task across Next/Prev.
-                    TerminalPanel(model: model, taskId: t.id,
-                                  tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
-                        .id(t.id)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 10)
+                        TerminalPanel(model: model, taskId: t.id,
+                                      tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
+                            .id(t.id)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.top, 10)
+                    } else {
+                        Spacer(minLength: 0)
+                    }
                 } else {
                     Spacer(minLength: 0)
                 }

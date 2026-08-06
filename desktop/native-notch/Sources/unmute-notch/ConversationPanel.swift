@@ -383,7 +383,18 @@ struct RichText: View {
 /// a turn finishes. So unlike a Claude question box this is NOT gated on
 /// `needs-user`: there is always something to say. It sends through the same
 /// path right-Option dictation uses, so speaking and typing land identically.
-struct CodexComposer: View {
+/// The composer, for any backend you can say something to.
+///
+/// It began as Codex's — a driven backend has no terminal, so a text field was
+/// the ONLY way in. A Claude task has a terminal, which is why it never had one:
+/// you could always type into the PTY. But when the stage is already open in
+/// front of you, being sent into a terminal to type one line is exactly the
+/// friction this surface exists to remove, so the composer is now shared.
+///
+/// The placeholder keeps voice primary in both cases — it names the key before
+/// it names the field.
+struct StageComposer: View {
+    var placeholder: String = "Reply — or hold right ⌥ and speak"
     @ObservedObject var model: NotchModel
     let taskId: String
     /// Last message that did not get through — shown here, where the retry is.
@@ -411,7 +422,7 @@ struct CodexComposer: View {
             // beneath the text, not a one-line field with a button beside it.
             // The shape is most of what makes it read as a place to write.
             VStack(alignment: .leading, spacing: 10) {
-                TextField("Reply to Codex — or hold right ⌥ and speak", text: $text, onCommit: send)
+                TextField(placeholder, text: $text, onCommit: send)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13.5))
                     .foregroundColor(Theme.text)
@@ -455,5 +466,21 @@ struct CodexComposer: View {
         guard !v.isEmpty else { return }
         model.emit(.answerText(id: taskId, text: v))
         text = ""
+    }
+}
+
+
+/// Codex's composer: the shared one, with Codex's own wording.
+struct CodexComposer: View {
+    @ObservedObject var model: NotchModel
+    let taskId: String
+    var deliveryError: String? = nil
+    var modelLabel: String? = nil
+    var sending: Bool = false
+
+    var body: some View {
+        StageComposer(placeholder: "Reply to Codex — or hold right ⌥ and speak",
+                      model: model, taskId: taskId, deliveryError: deliveryError,
+                      modelLabel: modelLabel, sending: sending)
     }
 }

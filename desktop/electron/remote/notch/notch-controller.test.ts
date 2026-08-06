@@ -884,7 +884,7 @@ test('a driven backend is never reported dead — its chat lives in the other ap
   assert.equal(h.client.last('stageDetail')!.task.alive, true)
 })
 
-test('a PTY task is unaffected by the generalisation', () => {
+test('a PTY task names no backend, keeps its real liveness, and now carries a conversation too', () => {
   const h = setup()
   put(h, makeTask({ id: 'p1', state: 'ready', agent: 'claude', alive: false }))
   h.client.fire({ type: 'focusTask', id: 'p1' })
@@ -892,7 +892,30 @@ test('a PTY task is unaffected by the generalisation', () => {
   const d = h.client.last('stageDetail')!.task
   assert.equal(d.backend, undefined, 'a PTY backend names no backend')
   assert.equal(d.alive, false)
-  assert.equal(d.conversation, undefined, 'and renders a terminal, not a conversation')
+  // CHANGED 2026-08-06. `conversation` used to be gated on `external`, which
+  // made the stage an either/or: a Claude task showed a terminal and no
+  // messages at all. It now ships for every backend — empty here because this
+  // task has no turns yet — so the stage can render the latest exchange ABOVE
+  // the terminal. `terminal` below still says whether there is a PTY to draw.
+  assert.deepEqual(d.conversation, [], 'a PTY task carries a (here empty) conversation')
+  assert.equal(d.terminal, true, 'and still has a terminal to draw under it')
+})
+
+test('a PTY task with turns sends them, so the stage can show the exchange', () => {
+  const h = setup()
+  put(h, makeTask({
+    id: 'p2', state: 'ready', agent: 'claude', alive: true,
+    conversation: [
+      { role: 'user', text: 'summarize the pricing thread' },
+      { role: 'assistant', text: 'Three tiers, and the middle one is new.' },
+    ],
+  }))
+  h.client.fire({ type: 'focusTask', id: 'p2' })
+  h.flush()
+  const d = h.client.last('stageDetail')!.task
+  assert.equal(d.conversation?.length, 2)
+  assert.equal(d.conversation?.[1].text, 'Three tiers, and the middle one is new.')
+  assert.equal(d.terminal, true)
 })
 
 // ── the scratchpad ──────────────────────────────────────────────────────────
