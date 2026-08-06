@@ -22,7 +22,7 @@
 // `async` and reports OUT: they tell Unmute what happened and never speak to
 // the model. Nothing Unmute does can delay or redirect a turn.
 
-import { promises as fs } from 'node:fs'
+import { promises as fs, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createLogger } from './log'
 import { buildHookSettings } from './session-policy'
@@ -47,6 +47,31 @@ export async function installHookSettings(baseDir: string, port: number, token: 
     await fs.mkdir(baseDir, { recursive: true })
     await fs.writeFile(target, JSON.stringify(buildHookSettings(port, token), null, 2), 'utf8')
     log.event('hook-settings-installed', { target, port })
+    return target
+  } catch (e) {
+    log.warn('hook settings install failed — sessions will run without hooks', { error: (e as Error).message })
+    return null
+  }
+}
+
+/**
+ * The same install, SYNCHRONOUSLY — used at startup.
+ *
+ * This must not be async, and the reason is a real cold-start race rather than
+ * fussiness: a task dispatched before the promise resolves launches with no
+ * `--settings`, so it gets no hooks, so the observer never hears from it and the
+ * card sits at "processing" forever. The window is small and the trigger is
+ * ordinary — launch the app, press the key, speak — which is exactly the case a
+ * field test hits first.
+ *
+ * It writes ~600 bytes once per launch. Blocking on that is cheaper than the bug.
+ */
+export function installHookSettingsSync(baseDir: string, port: number, token: string): string | null {
+  const target = hookSettingsPath(baseDir)
+  try {
+    mkdirSync(baseDir, { recursive: true })
+    writeFileSync(target, JSON.stringify(buildHookSettings(port, token), null, 2), 'utf8')
+    log.event('hook-settings-installed', { target, port, sync: true })
     return target
   } catch (e) {
     log.warn('hook settings install failed — sessions will run without hooks', { error: (e as Error).message })

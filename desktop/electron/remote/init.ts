@@ -51,7 +51,7 @@ import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
 import { SESSION_PREAMBLE } from './session-policy'
-import { installHookSettings } from './hooks'
+import { installHookSettingsSync } from './hooks'
 import { parseHookEvent } from './observer'
 import type { ExecutorFactoryOpts } from './executor'
 import { startCuaServer, type CuaServer } from './cua/server'
@@ -2483,9 +2483,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // shared by all of them — identity comes from each event's own session_id, so
   // nothing in it is per-task. Best-effort: a session with no hooks still runs
   // and still has its status file polled.
-  void installHookSettings(REMOTE_BASE_DIR, getKnobs().mcpPort, HOOK_TOKEN)
-    .then((p) => { hookSettingsFile = p })
-    .catch(() => { /* installHookSettings never rejects; belt and braces */ })
+  // SYNCHRONOUS ON PURPOSE. Written before anything can dispatch: a task that
+  // launches before this lands gets no --settings, therefore no hooks, therefore
+  // no observer — and its card sits at "processing" forever. Launch the app,
+  // press the key, speak is the ordinary path into that window.
+  hookSettingsFile = installHookSettingsSync(REMOTE_BASE_DIR, getKnobs().mcpPort, HOOK_TOKEN)
 
   void startMcpServer({
     resolveCaller: (token) => {
