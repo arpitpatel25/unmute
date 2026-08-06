@@ -2137,8 +2137,14 @@ export class TaskManager extends EventEmitter {
    * Answer a needs-user question by piping the answer into the session's stdin
    * (PRD §7.2). NEVER auto-answered — this is only ever called with a real user
    * answer (PRD §7.3, §1.4).
+   *
+   * Returns FALSE only when the answer was REFUSED and the task is still blocked
+   * on the very same question — an open picker Unmute will not drive. The caller
+   * must not advance the crank on false, or the user is carried away from the
+   * question they still have to go answer. A dead session is not this case: the
+   * answer went nowhere, but the task is over, so the crank may move on.
    */
-  answer(id: string, userAnswer: string): void {
+  answer(id: string, userAnswer: string): boolean {
     const tlog = log.child({ taskId: id })
     // Codex desktop: answering IS the next turn — there is no separate blocked
     // channel to write into, and no PTY liveness to check (the thread always
@@ -2152,21 +2158,21 @@ export class TaskManager extends EventEmitter {
     if (target && target.agent === 'claude-code-desktop') {
       tlog.ui('task-row.answer-submitted', { answer: userAnswer })
       void this.answerOrSendClaudeDesktop(id, userAnswer)
-      return
+      return true
     }
     if (target && isExternalAgent(target.agent)) {
       tlog.ui('task-row.answer-submitted', { answer: userAnswer })
       // An outstanding APPROVAL is answered through the hook, not the composer:
       // typing "Approve" into the chat would leave the permission dialog still
       // waiting and add a stray message to the user's thread.
-      if (this.answerCodexApproval(target, userAnswer)) return
+      if (this.answerCodexApproval(target, userAnswer)) return true
       this.followUpCodexDesktop(id, userAnswer)
-      return
+      return true
     }
     const ex = this.executors.get(id)
     if (!ex || !ex.alive) {
       tlog.warn('answer dropped — no live session', {})
-      return
+      return true
     }
     const answered = this.tasks.get(id)
     if (answered) answered.lastUserInputAt = this.clock() // consent clock
@@ -2203,8 +2209,48 @@ export class TaskManager extends EventEmitter {
         t.updatedAt = this.clock()
         this.emit('updated', t)
       }
-      return
+      return true
     }
+
+    // AN OPEN PICKER IS NOT A PROMPT — SO WE SEND NOTHING.
+    //
+    // If an ask is open and the branch above did not drive it, the session is
+    // rendering a picker right now. `writeStdin` below assumes a text input: it
+    // types the answer and follows with Enter. At a picker that is not an
+    // answer, it is prose landing on a widget that ignores most of it and an
+    // Enter that commits WHATEVER IS HIGHLIGHTED — option 1. That is the exact
+    // corruption the index branch above exists to prevent, arriving through the
+    // fallback path instead.
+    //
+    // So: refuse, say why, and hand the ask to the terminal. Two ways in here —
+    // a shape we never drive (a tab bar, checkboxes, a plan), or an answerable
+    // one where what the user said matches no option. Both mean the same thing
+    // to the picker, so both get the same treatment.
+    //
+    // CLAUDE CODE CLI ONLY, by construction: `openAsk` is written from hook
+    // events, and only a CLI session has hooks. Codex, Codex desktop and Claude
+    // desktop returned far above; a CLI task with no open picker still falls
+    // through to `writeStdin` exactly as before.
+    if (ask) {
+      const shaped = isAnswerable(ask.questions)
+      tlog.event('answer-refused-picker-open', {
+        askId: ask.id, questions: ask.questions.length, answerable: shaped, said: userAnswer,
+      })
+      if (answered) {
+        answered.deliveryError = shaped
+          ? `"${userAnswer}" isn't one of the options — pick one in the terminal.`
+          : 'This one has to be answered in the terminal.'
+        // Promote the card to the refusal shape. An answerable ask that just
+        // failed to match is, from here on, exactly as undrivable as the rest —
+        // and the surface opens the terminal off this kind, so saying it here is
+        // what actually gets the user to the picker.
+        if (answered.question) answered.question = { ...answered.question, kind: 'terminal_only' }
+        answered.updatedAt = this.clock()
+        this.emit('updated', answered)
+      }
+      return false
+    }
+
     ex.writeStdin(userAnswer)
     // Same submit-confirm as dispatch/followUp — the input occasionally lands one
     // Enter short of submitting, which would leave the blocked task waiting forever.
@@ -2219,6 +2265,7 @@ export class TaskManager extends EventEmitter {
       task.updatedAt = this.clock()
       this.emit('updated', task)
     }
+    return true
   }
 
   /** Merge the observed state + its timestamp into the task's meta.json. */

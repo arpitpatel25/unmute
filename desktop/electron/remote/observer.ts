@@ -53,6 +53,33 @@ export function isAnswerable(questions: readonly AskQuestion[]): boolean {
   return questions.length === 1 && !questions[0].multiSelect && questions[0].options.length > 0
 }
 
+/**
+ * The whole ask, written out for a card that cannot be clicked.
+ *
+ * Refusing to drive a picker does not excuse us from showing what it asks. The
+ * user still has to DECIDE, and deciding needs what the terminal shows: every
+ * question, every option, and the description that makes one option different
+ * from another. Listing the questions and hiding the options — which is what
+ * shipped — left the user a set of things they could not evaluate and a
+ * terminal they had to go read anyway, which is strictly worse than the
+ * terminal alone.
+ *
+ * A plan is the one shape with no options: its "question" IS the document, so
+ * it goes through whole, without numbering or bullets bolted around markdown.
+ */
+export function renderAsk(questions: readonly AskQuestion[]): string {
+  if (questions.length === 1 && questions[0].options.length === 0) return questions[0].question
+  const numbered = questions.length > 1
+  return questions
+    .map((q, i) => {
+      const head = numbered ? `${i + 1}. ${q.question}` : q.question
+      const rule = q.multiSelect ? 'pick any' : 'pick one'
+      const opts = q.options.map((o) => `   • ${o.label}${o.description ? ` — ${o.description}` : ''}`)
+      return [q.options.length ? `${head}  (${rule})` : head, ...opts].join('\n')
+    })
+    .join('\n\n')
+}
+
 // ─── Hook events (what a session emits) ─────────────────────────────────────
 
 export type HookEvent =
@@ -333,20 +360,23 @@ export function deriveStatus(event: HookEvent, ctx: ObserverContext): StatusPayl
       // are two ids, not a fight over one field.
       const answerable = isAnswerable(event.questions)
       const first = event.questions[0]
-      const text = event.questions.length > 1
-        // Honest about what we cannot drive. Naming the parts beats showing the
-        // first question as though it were the whole ask.
-        ? `${event.questions.length} questions — answer them in the terminal:\n` +
-          event.questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n')
-        : first.question
+      // A SHAPE WE CANNOT DRIVE IS NOT A FREE-TEXT QUESTION.
+      //
+      // It used to be marked `free_text`, which put a text box and "speak your
+      // answer" under an ask whose session is showing a PICKER. Whatever the
+      // user then said went to `answer()`, which typed it at the picker —
+      // keystrokes landing somewhere unpredictable, with the model still
+      // waiting. The card invited a reply the rest of the system could not
+      // keep. `terminal_only` says the true thing instead, and the card offers
+      // no input at all.
       return {
         schema_version: 1,
         state: 'needs-user',
         updated_at: ctx.now,
-        step: 'waiting for you',
+        step: answerable ? 'waiting for you' : 'waiting for you in the terminal',
         question: {
-          text,
-          kind: answerable ? 'choice' : 'free_text',
+          text: answerable ? first.question : renderAsk(event.questions),
+          kind: answerable ? 'choice' : 'terminal_only',
           ...(answerable ? { choices: first.options.map((o) => o.label) } : {}),
         },
         thread_context: deriveThreadContext(summarize(first.question), 'needs-user', ctx.kind),

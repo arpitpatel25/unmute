@@ -78,7 +78,9 @@ export interface NotchControllerDeps {
   // task runtime
   listTasks(): TaskLite[]
   getTask(id: string): TaskLite | undefined
-  answer(id: string, text: string): void
+  /** False when the answer was REFUSED — an open picker Unmute will not drive.
+   *  The task is still blocked, so the crank must not move off it. */
+  answer(id: string, text: string): boolean
   kill(id: string): void
   remove(id: string): Promise<void> | void
   killAll(): void
@@ -298,8 +300,12 @@ export class NotchController {
       // (it is "your move"), so keying on it advanced away from a Codex chat the
       // user was mid-conversation with. Only `needs-user` is a question.
       const wasBlocking = this.deps.getTask(id)?.state === 'needs-user'
-      this.deps.answer(id, text)
-      if (wasBlocking) this.advanceAfterAnswer(id)
+      // A REFUSED ANSWER IS NOT AN ANSWER. When a picker we cannot drive is
+      // open, `answer` sends nothing and the task stays blocked — cranking to
+      // the next task there would carry the user away from the very question
+      // they still have to go answer, and away from the card explaining why.
+      const landed = this.deps.answer(id, text)
+      if (wasBlocking && landed) this.advanceAfterAnswer(id)
       else this.scheduleReconcile()
     })
     on('kill', (e) => this.deps.kill((e as { id: string }).id))
@@ -615,7 +621,7 @@ export class NotchController {
     const t = this.deps.getTask(id)
     const label = t?.question?.choices?.[index]
     if (label == null) return
-    this.deps.answer(id, label)
+    if (!this.deps.answer(id, label)) { this.scheduleReconcile(); return }
     this.advanceAfterAnswer(id)
   }
 

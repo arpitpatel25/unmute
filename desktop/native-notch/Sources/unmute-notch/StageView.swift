@@ -86,7 +86,8 @@ struct StageView: View {
                                   maxAnswerHeight: model.stageTerminalOpen ? 190 : .infinity)
                         .padding(.top, 10)
                 if t.status == .needsUser, let q = t.question {
-                    QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 10)
+                    QuestionBlock(model: model, taskId: t.id, question: q,
+                                  terminalOpen: $model.stageTerminalOpen).padding(.top, 10)
                 }
                     if model.stageTerminalOpen {
                         TerminalPanel(model: model, taskId: t.id,
@@ -259,7 +260,13 @@ struct QuestionBlock: View {
     @ObservedObject var model: NotchModel
     let taskId: String
     let question: QuestionP
+    /// The surface's own terminal toggle — the stage and the task surface each
+    /// own one, and a terminal-only ask has to be able to open whichever it is
+    /// sitting in. Without it the card can name the terminal but not reach it.
+    @Binding var terminalOpen: Bool
     @State private var answerText = ""
+
+    private var terminalOnly: Bool { question.kind == "terminal_only" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -270,10 +277,24 @@ struct QuestionBlock: View {
                 }
                 .foregroundColor(Theme.cError)
             }
-            Text(question.text)
-                .font(.system(size: 13.5)).foregroundColor(Theme.text)
-                .fixedSize(horizontal: false, vertical: true)
-            if let choices = question.choices, !choices.isEmpty {
+            // A TERMINAL-ONLY ASK IS THE WHOLE ASK, so it can be long — every
+            // question with every option, or a full plan in markdown. It scrolls
+            // inside the card rather than pushing the terminal off the surface,
+            // because the point of showing it is to decide here and act below.
+            if terminalOnly {
+                ScrollView {
+                    RichText(text: question.text, size: 13, color: Theme.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 240)
+            } else {
+                Text(question.text)
+                    .font(.system(size: 13.5)).foregroundColor(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if terminalOnly {
+                terminalHandoff
+            } else if let choices = question.choices, !choices.isEmpty {
                 FlowChips(choices: choices) { idx in
                     model.emit(.chooseOption(id: taskId, index: idx))
                 }
@@ -303,6 +324,25 @@ struct QuestionBlock: View {
             .fill(Theme.cNeeds.opacity(0.08)))
         .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
             .stroke(Theme.cNeeds.opacity(0.26), lineWidth: 0.5))
+    }
+
+    /// SAY WHY, AND OFFER THE WAY. A refusal with no route is just a dead end,
+    /// which is how this surface felt before: a card that said "answer in the
+    /// terminal" beside a terminal that was closed.
+    private var terminalHandoff: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                .font(.system(size: 9.5))
+            Text(terminalOpen
+                 ? "Choose in the terminal below — Unmute can't drive this picker."
+                 : "This one has to be answered in the terminal.")
+                .font(.system(size: 11))
+                .fixedSize(horizontal: false, vertical: true)
+            if !terminalOpen {
+                ActButton(label: "Open terminal", go: true) { terminalOpen = true }
+            }
+        }
+        .foregroundColor(Theme.textFaint)
     }
 
     private func send() {

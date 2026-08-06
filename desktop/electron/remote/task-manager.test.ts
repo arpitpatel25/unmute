@@ -1388,13 +1388,14 @@ test('a choice is answered by INDEX — typing the label picks the wrong option'
   tm.killAll()
 })
 
-test('a free-text answer is still typed as text', { timeout: 8000 }, async () => {
+test('with no picker open, an answer is still typed as text', { timeout: 8000 }, async () => {
+  // The ordinary case: the session is at its prompt, not inside a widget. This
+  // is the path the refusal below must NOT swallow — a CLI task with no open
+  // ask keeps writing to stdin exactly as it always did.
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
   const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   const id = await tm.dispatch('ask me something')
-  const sessionId = tm.get(id)!.sessionId!
-  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_2', questions: [{ question: 'What next?', multiSelect: false, options: [] }] })
   await new Promise((r) => setTimeout(r, 30))
   const before = fake.writes.length
   tm.answer(id, 'do the thing')
@@ -1439,9 +1440,40 @@ test('a complex ask is NOT answered by us — it goes to the terminal', { timeou
   ] })
   await new Promise((r) => setTimeout(r, 30))
   const beforeRaw = fake.raw.length
+  const beforeWrites = fake.writes.length
   tm.answer(id, 'Blue')
   assert.equal(fake.raw.slice(beforeRaw).join(''), '', 'must not send an index for a shape we cannot drive')
-  assert.equal(fake.writes.at(-1), 'Blue', 'falls back to typing, which the terminal can take')
+  // AND MUST NOT FALL BACK TO TYPING. This used to write "Blue" + Enter into a
+  // session rendering a picker: the prose lands nowhere and the Enter commits
+  // whatever is HIGHLIGHTED — the same wrong-option corruption the index branch
+  // exists to prevent, arriving through the fallback instead.
+  assert.equal(fake.writes.length, beforeWrites, 'must not type prose at an open picker')
+  assert.equal(tm.get(id)!.state, 'needs-user', 'still blocked — we did not answer it')
+  assert.match(tm.get(id)!.deliveryError ?? '', /terminal/, 'and it says why')
+  tm.killAll()
+})
+
+test('an answer that matches no option is refused too, not typed', { timeout: 8000 }, async () => {
+  // The ask IS drivable, but "purple" is not one of its options, so there is no
+  // index to send. The picker is still open, so typing the word is exactly as
+  // wrong here as it is for a shape we never drive.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('pick a colour')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_y', questions: [
+    { question: 'Colour?', multiSelect: false, options: [{ label: 'Blue' }, { label: 'Green' }] }] })
+  await new Promise((r) => setTimeout(r, 30))
+  const beforeRaw = fake.raw.length
+  const beforeWrites = fake.writes.length
+  tm.answer(id, 'purple')
+  assert.equal(fake.raw.slice(beforeRaw).join(''), '', 'nothing to index')
+  assert.equal(fake.writes.length, beforeWrites, 'and nothing typed at the picker')
+  assert.equal(tm.get(id)!.state, 'needs-user')
+  assert.match(tm.get(id)!.deliveryError ?? '', /purple/, 'names what did not match')
+  // The card is promoted to the refusal shape, which is what opens the terminal.
+  assert.equal(tm.get(id)!.question?.kind, 'terminal_only')
   tm.killAll()
 })
 

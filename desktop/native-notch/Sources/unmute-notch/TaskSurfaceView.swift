@@ -77,7 +77,8 @@ struct TaskSurfaceView: View {
                         .padding(.top, 10)
                     // …and the ask lands here, under the reasoning it came from.
                     if t.status == .needsUser, let q = t.question {
-                        QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 12)
+                        QuestionBlock(model: model, taskId: t.id, question: q,
+                                      terminalOpen: $model.taskTerminalOpen).padding(.top, 12)
                     }
                     if model.taskTerminalOpen {
                     // The terminal owns EVERYTHING left down to the action row

@@ -51,7 +51,14 @@ export interface TaskError {
 
 export interface TaskQuestion {
   text: string
-  kind?: 'free_text' | 'choice' | 'confirm'
+  /**
+   * `terminal_only` is a REFUSAL, and the only kind that offers the user no way
+   * to reply from the card. It means a picker is open in the session that we
+   * have not proven we can drive, so the card shows the whole ask and the
+   * terminal underneath takes the answer. Every other kind invites a reply that
+   * Unmute promises to deliver; this one promises the opposite, out loud.
+   */
+  kind?: 'free_text' | 'choice' | 'confirm' | 'terminal_only'
   choices?: string[]
   irreversible?: boolean // PRD §10.7 destructive-action confirm
 }

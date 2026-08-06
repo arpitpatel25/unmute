@@ -35,7 +35,10 @@ struct ArtifactP: Codable { let type: String; let value: String } // "url" | "pa
 
 struct QuestionP: Codable {
     let text: String
-    let kind: String?          // "free_text" | "choice" | "confirm"
+    /// "free_text" | "choice" | "confirm" | "terminal_only".
+    /// `terminal_only` is a REFUSAL: a picker we have not proven we can drive is
+    /// open in the session, so the card shows the whole ask and offers no reply.
+    let kind: String?
     let choices: [String]?
     let irreversible: Bool?
 }

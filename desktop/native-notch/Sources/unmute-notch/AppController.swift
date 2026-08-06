@@ -147,6 +147,9 @@ final class AppController: NSObject, NotchResizing {
             // task's proportions until the next state change.
             let fillChanged = model.task?.hasTerminal != task.hasTerminal
             model.task = task
+            // The terminal stops being a drill-down when it is the only way to
+            // answer. Open it as the ask arrives — see needsTerminalToAnswer.
+            if needsTerminalToAnswer(task) { model.taskTerminalOpen = true }
             if model.state == .task && fillChanged { refit(animated: true) }
             // At bar level the fronted task IS the message — the right half
             // carries its activity, and the mass is as wide as what it says.
@@ -158,6 +161,7 @@ final class AppController: NSObject, NotchResizing {
             if model.focusedId == nil || model.focusedId == task.id {
                 model.focusedId = task.id
                 model.stageTask = task
+                if needsTerminalToAnswer(task) { model.stageTerminalOpen = true }
                 refit()
             }
 
@@ -318,7 +322,13 @@ final class AppController: NSObject, NotchResizing {
         // drill-down, not the greeting. Reset on leaving so every arrival is
         // calm again. (The orchestrator's stage keeps its own default: you went
         // there deliberately, so the terminal is what you asked for.)
-        model.taskTerminalOpen = false
+        //
+        // …UNLESS the terminal is the only way to answer. A `terminal_only` ask
+        // is a picker Unmute refuses to drive, so the card carries the whole
+        // question and no way to reply to it. Greeting that with a closed
+        // terminal is the dead end this rule was blamed for: an instruction to
+        // "answer in the terminal" beside a terminal that is not there.
+        model.taskTerminalOpen = model.task.map(needsTerminalToAnswer) ?? false
         // THE REVIEW POPUP CANNOT SURVIVE A COLLAPSE. It is drawn only on the
         // expanded surface, and a popup nobody can see still eats the next
         // Escape in stepDown. Leaving the expanded state ends it, exactly as
@@ -525,6 +535,21 @@ final class AppController: NSObject, NotchResizing {
         let sh = (geometry.screenFrame.height - geometry.barHeight) * 0.98 / max(base.height, 1)
         return max(1, min(sw, sh))
     }
+    /// Is the terminal the ONLY way to answer this task right now?
+    ///
+    /// True for a `terminal_only` ask — a picker open in the session that Unmute
+    /// has not proven it can drive, so the card shows the whole question and
+    /// deliberately offers no reply. In that one case the terminal stops being
+    /// the drill-down and becomes the control, so it opens with the ask instead
+    /// of waiting to be found.
+    ///
+    /// Claude Code CLI only, by construction: `terminal_only` is written from
+    /// hook events, and only a CLI session emits hooks. `alive` keeps a dead
+    /// session's last question from re-opening a terminal with nothing behind it.
+    private func needsTerminalToAnswer(_ t: TaskDetail) -> Bool {
+        t.alive && t.status == .needsUser && t.question?.kind == "terminal_only"
+    }
+
     /// Re-apply the current state's frame after something the frame depends on
     /// changed (the fronted task's backend, a stage detail arriving, a message
     /// the bar now has to carry).

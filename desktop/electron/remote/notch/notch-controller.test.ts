@@ -25,6 +25,8 @@ interface Harness {
   controller: NotchController
   tasks: Map<string, TaskLite>
   calls: Record<string, unknown[][]>
+  /** Make `answer` report a REFUSAL — an open picker Unmute will not drive. */
+  refuseAnswers(): void
   flush(): void
 }
 
@@ -43,10 +45,13 @@ function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
   const rec = (name: string) => (...args: unknown[]) => { (calls[name] ??= []).push(args) }
   let doorbell = true
   let lastSeen = Date.now()
+  let answersLand = true
   const deps: NotchControllerDeps = {
     listTasks: () => [...tasks.values()],
     getTask: (id) => tasks.get(id),
-    answer: rec('answer'),
+    // True = the answer landed. False is a REFUSAL: the task is still blocked on
+    // the same question, so the crank must stay on it.
+    answer: (id, text) => { rec('answer')(id, text); return answersLand },
     kill: rec('kill'),
     remove: rec('remove'),
     killAll: rec('killAll'),
@@ -99,7 +104,7 @@ function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
   controller.setAutoExpand(false)
   // reconcile is debounced 80ms — tests force it synchronously by re-firing.
   const flush = () => { (controller as unknown as { reconcile(): void }).reconcile() }
-  return { events, client, controller, tasks, calls, flush }
+  return { events, client, controller, tasks, calls, flush, refuseAnswers: () => { answersLand = false } }
 }
 
 function put(h: Harness, t: TaskLite): void {
@@ -549,6 +554,33 @@ test('answering the BLOCKING question still advances the crank', () => {
   h.client.fire({ type: 'answerText', id: 'b1', text: 'yes' })
   h.flush()
   assert.equal(h.client.last('showTask')!.task.id, 'b2', 'moved on to the next blocked task')
+})
+
+test('a REFUSED answer does not advance the crank — the task is still blocked', () => {
+  // When a picker we cannot drive is open, `answer` sends nothing. Cranking on
+  // would carry the user away from the question they still have to answer and
+  // away from the card that explains where to answer it.
+  const h = setup()
+  h.refuseAnswers()
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q', kind: 'terminal_only' } }))
+  put(h, makeTask({ id: 'b2', state: 'needs-user', alive: true, question: { text: 'q2' } }))
+  h.client.fire({ type: 'tap' })
+  h.client.fire({ type: 'answerText', id: 'b1', text: 'blue' })
+  h.flush()
+  assert.deepEqual(h.calls.answer?.[0], ['b1', 'blue'], 'it still tried')
+  assert.equal(h.client.last('showTask')!.task.id, 'b1', 'and stayed on the blocked task')
+})
+
+test('a REFUSED chip click keeps the surface on the question too', () => {
+  const h = setup()
+  h.refuseAnswers()
+  put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q', choices: ['Yes', 'No'] } }))
+  put(h, makeTask({ id: 'b2', state: 'needs-user', alive: true, question: { text: 'q2' } }))
+  h.client.fire({ type: 'tap' })
+  h.client.fire({ type: 'chooseOption', id: 'b1', index: 1 })
+  h.flush()
+  assert.deepEqual(h.calls.answer?.[0], ['b1', 'No'])
+  assert.equal(h.client.last('showTask')!.task.id, 'b1')
 })
 
 test('an errored task eventually stops occupying the notch', () => {

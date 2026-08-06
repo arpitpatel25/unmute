@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   parseHookEvent,
   isAnswerable,
+  renderAsk,
   type AskQuestion,
   summarize,
   plainLine,
@@ -208,19 +209,44 @@ test('only a single single-select ask is answerable by us', () => {
   assert.equal(isAnswerable([{ question: 'Q?', multiSelect: false, options: [] }]), false, 'nothing to pick')
 })
 
-test('an answerable ask renders chips; a complex one says use the terminal', () => {
+test('an answerable ask renders chips; a complex one hands over to the terminal', () => {
   const simple = deriveStatus({ kind: 'ask-opened', sessionId: 's', askId: 'a', questions: [
     { question: 'Tabs or spaces?', multiSelect: false, options: [{ label: 'Tabs' }, { label: 'Spaces' }] }] }, ctx())!
   assert.equal(simple.state, 'needs-user')
+  assert.equal(simple.question?.kind, 'choice')
   assert.deepEqual(simple.question?.choices, ['Tabs', 'Spaces'])
 
   const complex = deriveStatus({ kind: 'ask-opened', sessionId: 's', askId: 'a', questions: [
     { question: 'Colour?', multiSelect: false, options: [{ label: 'Blue' }] },
     { question: 'Languages?', multiSelect: true, options: [{ label: 'Go' }] }] }, ctx())!
-  assert.equal(complex.question?.kind, 'free_text', 'no chips we cannot honour')
+  // NOT free_text. That kind put a text box and "speak your answer" under an
+  // ask whose session is showing a picker, and whatever the user then said was
+  // typed AT that picker. The card must offer no reply it cannot deliver.
+  assert.equal(complex.question?.kind, 'terminal_only', 'no input we cannot honour')
   assert.equal(complex.question?.choices, undefined)
-  assert.match(complex.question!.text, /2 questions/)
-  assert.match(complex.question!.text, /terminal/)
+  assert.match(complex.step!, /terminal/)
+})
+
+test('a terminal-only card carries the WHOLE ask — every option, every description', () => {
+  // Refusing to drive the picker does not excuse hiding what it asks. Naming
+  // the questions and dropping the options left the user unable to decide
+  // without going to read the terminal anyway.
+  const s = deriveStatus({ kind: 'ask-opened', sessionId: 's', askId: 'a', questions: [
+    { question: 'Colour?', multiSelect: false, options: [{ label: 'Blue', description: 'Cool and calm.' }] },
+    { question: 'Languages?', multiSelect: true, options: [{ label: 'Go', description: 'Compiled.' }, { label: 'Rust' }] }] }, ctx())!
+  const t = s.question!.text
+  for (const must of ['Colour?', 'Languages?', 'Blue', 'Cool and calm.', 'Go', 'Compiled.', 'Rust']) {
+    assert.ok(t.includes(must), `terminal-only card dropped "${must}"`)
+  }
+  assert.match(t, /pick one/)   // multiSelect false
+  assert.match(t, /pick any/)   // multiSelect true
+})
+
+test('renderAsk lets a plan through whole, with no furniture around it', () => {
+  // A plan is the one ask with no options: its "question" IS the markdown, so
+  // numbering it and bulleting nothing under it would only add noise.
+  const plan = '# Add a --version flag\n\n## Context\n\nSome prose.'
+  assert.equal(renderAsk([{ question: plan, header: 'Plan', multiSelect: false, options: [] }]), plan)
 })
 
 test('closing an ask returns the task to work, however it was answered', () => {
