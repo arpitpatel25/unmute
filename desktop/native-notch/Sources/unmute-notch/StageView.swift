@@ -45,9 +45,6 @@ struct StageView: View {
                     warmupStrip(warm)
                 }
                 noteRow(t).padding(.top, 8)
-                if t.status == .needsUser, let q = t.question {
-                    QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 10)
-                }
                 if t.backend == "codex-desktop" {
                     // Wherever a Claude task shows its terminal, a Codex task
                     // shows its messages — and can be replied to. Neither the
@@ -74,9 +71,17 @@ struct StageView: View {
                     // here deliberately, so it is what you asked for — but it
                     // was the only surface with no way to put it away. The
                     // message expands into the space when you do.
+// THE ASK COMES AFTER THE REASONING. QuestionBlock used to render
+                    // above the conversation — a layout from before the chat strip
+                    // existed. When the question is the last thing the model said,
+                    // showing it on top inverts the reading order: you meet the ask
+                    // before the argument that makes it answerable.
                     ExchangeStrip(turns: t.conversation ?? [], status: t.status,
                                   maxAnswerHeight: model.stageTerminalOpen ? 190 : .infinity)
                         .padding(.top, 10)
+                if t.status == .needsUser, let q = t.question {
+                    QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 10)
+                }
                     if model.stageTerminalOpen {
                         TerminalPanel(model: model, taskId: t.id,
                                       tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)

@@ -222,10 +222,12 @@ test('needs-user surfaces the question; answer() pipes it into stdin (PRD §7)',
   const [q] = await needsUser
   assert.equal(q.question.text, 'Which Rishi?')
 
-  const before = fake.writes.length
+  // A CHOICE IS ANSWERED BY INDEX. This used to assert the label was typed —
+  // which is the bug: AskUserQuestion is a numbered picker, so typing 'A' left
+  // the highlight where it was and Enter took option 1 regardless.
+  const before = fake.raw.length
   tm.answer(id, 'A')
-  assert.equal(fake.writes.length, before + 1)
-  assert.equal(fake.writes.at(-1), 'A') // answer piped to the session
+  assert.equal(fake.raw.slice(before).join(''), '1', 'first choice ⇒ keystroke 1')
   assert.equal(tm.get(id)!.state, 'processing') // optimistic resume
   tm.kill(id)
 })
@@ -1360,4 +1362,61 @@ test('a hook event can NEVER land on a driven backend, by session id or by cwd',
     'the driven task must not have gained a conversation')
   assert.match(tm.get(cli)!.result?.detail ?? '', /done here/, 'the CLI task is the one that got it')
   tm.killAll()
+})
+
+test('a choice is answered by INDEX — typing the label picks the wrong option', async () => {
+  // Verified on a live session: AskUserQuestion is a numbered picker, so typing
+  // "Spaces" and pressing Enter recorded "Tabs" (the highlighted default). The
+  // user picks one thing, the agent receives another, and nothing reports an
+  // error — the worst class of bug this surface can have.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('pick something')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'question-asked', sessionId, text: 'Tabs or spaces?', choices: ['Tabs', 'Spaces'], multiSelect: false })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(tm.get(id)!.state, 'needs-user')
+
+  const before = fake.raw.length
+  tm.answer(id, 'Spaces')                       // the SECOND option
+  assert.equal(fake.raw.slice(before).join(''), '2', 'must send the index, not the label')
+  assert.equal(tm.get(id)!.state, 'processing')
+  tm.killAll()
+})
+
+test('a free-text answer is still typed as text', { timeout: 8000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('ask me something')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'question-asked', sessionId, text: 'What next?', choices: [], multiSelect: false })
+  await new Promise((r) => setTimeout(r, 30))
+  const before = fake.writes.length
+  tm.answer(id, 'do the thing')
+  assert.equal(fake.writes.at(-1), 'do the thing')
+  assert.ok(fake.writes.length > before)
+  tm.killAll()
+})
+
+test('the conversation survives a restart', { timeout: 8000 }, async () => {
+  // It lived only in memory, so every relaunch emptied the chat strip for every
+  // existing task and left the short status line where the exchange should be.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('summarize the thread')
+  const sessionId = tm.get(id)!.sessionId!
+  const done = once(tm, 'done')
+  tm.onHookEvent({ kind: 'turn-ended', sessionId, lastMessage: 'Here is the summary.' })
+  await done
+  await new Promise((r) => setTimeout(r, 60))
+  tm.killAll()
+
+  const tm2 = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm2.rehydrate()
+  const convo = tm2.get(id)?.conversation ?? []
+  assert.deepEqual(convo.map((t) => t.role), ['user', 'assistant'], 'both turns must come back')
+  assert.match(convo[1].text, /Here is the summary/)
+  tm2.killAll()
 })

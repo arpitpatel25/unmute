@@ -19,9 +19,13 @@ struct TaskSurfaceView: View {
             if let t {
                 header(t)
 
-                if t.status == .needsUser, let q = t.question {
-                    QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 12)
-                } else if t.backend == "codex-desktop" {
+                // THE ASK MOVED BELOW THE REASONING (see the strip further
+                // down). It was the FIRST thing on this surface, so a question
+                // like "Want me to spec that first?" met you stripped of the
+                // 2,800 characters that made it answerable — one line, a text
+                // box, and no argument. The headline chain keeps its other
+                // branches; only the question left the top.
+                if t.backend == "codex-desktop" {
                     // NO HEADLINE for a backend that shows its whole
                     // conversation. `activity` is derived from the last agent
                     // message, which IS the last line of the transcript below —
@@ -71,6 +75,10 @@ struct TaskSurfaceView: View {
                     ExchangeStrip(turns: t.conversation ?? [], status: t.status,
                                   maxAnswerHeight: model.taskTerminalOpen ? 150 : .infinity)
                         .padding(.top, 10)
+                    // …and the ask lands here, under the reasoning it came from.
+                    if t.status == .needsUser, let q = t.question {
+                        QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 12)
+                    }
                     if model.taskTerminalOpen {
                     // The terminal owns EVERYTHING left down to the action row
                     // (field feedback: never a fixed band with dead space below).

@@ -877,6 +877,7 @@ export class TaskManager extends EventEmitter {
       if (turns.length) {
         task.conversation = turns
         tlog.event('conversation-refreshed', { turns: turns.length, replyBytes: reply.length, askFrom: fromFile.length ? 'transcript' : 'dispatch' })
+        void this.persistState(task)
       }
     }
     const payload = deriveStatus(event, {
@@ -2130,6 +2131,34 @@ export class TaskManager extends EventEmitter {
     const answered = this.tasks.get(id)
     if (answered) answered.lastUserInputAt = this.clock() // consent clock
     tlog.ui('task-row.answer-submitted', { answer: userAnswer }) // user spoke/typed an answer
+
+    // A CHOICE IS ANSWERED BY INDEX, NOT BY ITS LABEL.
+    //
+    // `AskUserQuestion` renders a NUMBERED PICKER in the TUI, not a text field.
+    // Typing the option's text does nothing to the selection, and the Enter that
+    // follows takes whatever is HIGHLIGHTED — which is option 1. Verified on a
+    // live session: answering "Spaces" recorded "Tabs".
+    //
+    // That is the worst class of bug this surface can have: the user picks one
+    // thing, the agent receives another, and nothing anywhere reports an error.
+    // So when the pending question came with choices, map the label back to its
+    // 1-based position and send that single keystroke — the picker selects
+    // immediately, with no Enter (also verified: "3" selected "Blue").
+    const pending = answered?.question
+    const idx = pending?.kind === 'choice' && pending.choices
+      ? pending.choices.findIndex((c) => c.trim().toLowerCase() === userAnswer.trim().toLowerCase())
+      : -1
+    if (idx >= 0 && idx < 9) {
+      ex.write(String(idx + 1))
+      tlog.event('answered-by-index', { index: idx + 1, label: userAnswer })
+      const t = this.tasks.get(id)
+      if (t && t.state === 'needs-user') {
+        t.state = 'processing'
+        t.updatedAt = this.clock()
+        this.emit('updated', t)
+      }
+      return
+    }
     ex.writeStdin(userAnswer)
     // Same submit-confirm as dispatch/followUp — the input occasionally lands one
     // Enter short of submitting, which would leave the blocked task waiting forever.
@@ -2152,8 +2181,18 @@ export class TaskManager extends EventEmitter {
     try {
       const raw = await fs.readFile(path, 'utf8')
       const meta = JSON.parse(raw) as Record<string, unknown>
-      if (meta.state === task.state && meta.updatedAt === task.updatedAt) return
-      await fs.writeFile(path, JSON.stringify({ ...meta, state: task.state, updatedAt: task.updatedAt }))
+      const convo = task.conversation ?? []
+      const sameConvo = JSON.stringify(meta.conversation ?? []) === JSON.stringify(convo)
+      if (meta.state === task.state && meta.updatedAt === task.updatedAt && sameConvo) return
+      // THE CONVERSATION HAS TO SURVIVE A RESTART. It lived only in memory, so
+      // every relaunch emptied the chat strip for every existing task and left
+      // the short status line standing where the exchange should be — which is
+      // exactly what a surface meant to replace reading the terminal cannot do.
+      // status.json already persists; this is the other half.
+      await fs.writeFile(path, JSON.stringify({
+        ...meta, state: task.state, updatedAt: task.updatedAt,
+        ...(convo.length ? { conversation: convo } : {}),
+      }))
     } catch { /* absent or unreadable — nothing to keep in sync */ }
   }
 
@@ -2229,7 +2268,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation'] }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       // EXTERNAL BACKEND: a Codex thread lives in Codex, so an Unmute restart
@@ -2366,6 +2405,10 @@ export class TaskManager extends EventEmitter {
         surface: meta.surface,
         mode: meta.mode ?? 'managed',
         injectedRecipes: meta.injectedRecipes ?? [],
+        // Restored so the chat strip is not empty after a relaunch — see
+        // persistState(). Without it the card falls back to the short status
+        // line where the exchange should be.
+        ...(Array.isArray(meta.conversation) ? { conversation: meta.conversation as Task['conversation'] } : {}),
         shelved: meta.shelved || undefined,
         note: meta.note || undefined,
         spawnedBy: meta.spawnedBy || undefined,
