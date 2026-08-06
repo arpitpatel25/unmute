@@ -836,13 +836,32 @@ export class TaskManager extends EventEmitter {
     if (event.kind === 'turn-ended') {
       const path = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
       sideEffects = hadSideEffects(await readTranscript(path))
-      // The end of a turn is exactly when the exchange is complete, so this is
-      // where the card's conversation is refreshed — from Claude's own record,
-      // replacing the optimistic user turn we showed while it worked.
-      const exchange = await readLatestExchange(path)
-      if (exchange.length) {
-        task.conversation = exchange.map((t) => ({ role: t.role, text: t.text }))
-        tlog.event('conversation-refreshed', { turns: exchange.length })
+
+      // THE REPLY COMES FROM THE EVENT, NOT THE TRANSCRIPT.
+      //
+      // This read the exchange back out of the JSONL, and it was wrong in a way
+      // that only showed up in the field: `Stop` fires AS the turn ends, before
+      // Claude Code has flushed the final assistant message to that file. So the
+      // read came back with no reply, a length guard skipped the update, and the
+      // card kept only the optimistic user turn — a finished task showing your
+      // question and nothing else. Meanwhile the status was complete, because it
+      // used the payload. Two fields, one event, one of them going to a file that
+      // had not been written yet.
+      //
+      // `event.lastMessage` IS the finished reply, in hand, already stripped of
+      // thinking and tool traffic by Claude Code itself. The transcript is still
+      // worth reading for the USER turn (it is the real record of what was sent),
+      // but it can never be required for the assistant turn.
+      const fromFile = await readLatestExchange(path)
+      const ask = fromFile.find((t) => t.role === 'user')
+        ?? (task.conversation ?? []).find((t) => t.role === 'user')
+      const reply = event.lastMessage.trim()
+      const turns: NonNullable<Task['conversation']> = []
+      if (ask?.text) turns.push({ role: 'user', text: ask.text })
+      if (reply) turns.push({ role: 'assistant', text: reply })
+      if (turns.length) {
+        task.conversation = turns
+        tlog.event('conversation-refreshed', { turns: turns.length, replyBytes: reply.length, askFrom: fromFile.length ? 'transcript' : 'dispatch' })
       }
     }
     const payload = deriveStatus(event, {

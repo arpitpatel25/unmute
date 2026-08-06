@@ -70,7 +70,7 @@ struct StageView: View {
                     // shown raw, for everything the headline leaves out. The
                     // strip renders nothing at all when there are no turns yet,
                     // so a fresh task looks exactly as it did before.
-                    ExchangeStrip(turns: t.conversation ?? [])
+                    ExchangeStrip(turns: t.conversation ?? [], status: t.status)
                         .padding(.top, 10)
                     TerminalPanel(model: model, taskId: t.id,
                                   tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
@@ -86,7 +86,7 @@ struct StageView: View {
                                   modelLabel: t.modelLabel, sending: t.sending ?? false)
                         .padding(.top, 9)
                 } else {
-                    ExchangeStrip(turns: t.conversation ?? [])
+                    ExchangeStrip(turns: t.conversation ?? [], status: t.status)
                         .padding(.top, 10)
                     DeadPanel(model: model, t: t).padding(.top, 10)
                     Spacer(minLength: 0)

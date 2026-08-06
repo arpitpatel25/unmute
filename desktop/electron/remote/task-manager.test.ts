@@ -1308,3 +1308,28 @@ test('dispatch shows the ask immediately, and a follow-up replaces it', async ()
   assert.deepEqual(tm.get(id)!.conversation, [{ role: 'user', text: 'now compare it with last quarter' }])
   tm.killAll()
 })
+
+test('a finished turn puts the model reply into the conversation, from the EVENT not the file', async () => {
+  // The field bug: the reply was read back from the transcript JSONL, which
+  // Claude Code has not flushed when Stop fires. The read came back empty, a
+  // length guard skipped the update, and a DONE task showed the user's question
+  // and nothing else — while the status file held the full 2.5k reply, because
+  // that path used the payload. One event, two fields, one of them going to a
+  // file that did not exist yet.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('summarize my bookmarks')
+  const sessionId = tm.get(id)!.sessionId!
+
+  const done = once(tm, 'done')
+  tm.onHookEvent({ kind: 'turn-ended', sessionId, lastMessage: 'Here are your 5 most recent bookmarks:\n\n1. prateek — kanban in Codex' })
+  await done
+
+  const convo = tm.get(id)!.conversation ?? []
+  assert.deepEqual(convo.map((t) => t.role), ['user', 'assistant'], 'both sides must be present')
+  assert.equal(convo[0].text, 'summarize my bookmarks')
+  assert.match(convo[1].text, /5 most recent bookmarks/)
+  // And the same text is what the status carries — one reply, two fields.
+  assert.match(tm.get(id)!.result!.detail!, /5 most recent bookmarks/)
+  tm.killAll()
+})

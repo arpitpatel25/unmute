@@ -21,6 +21,11 @@ import SwiftUI
 /// this exchange is history, and history is what the terminal below is for.
 struct ExchangeStrip: View {
     let turns: [TurnP]
+    /// The task's state. "working…" is a claim about the PRESENT, so it may only
+    /// be made while the task is actually processing — this said "working…" on a
+    /// finished task whose reply had not arrived, turning a display gap into a
+    /// lie about what the agent was doing.
+    var status: TaskStatus? = nil
     /// Bound so a long answer cannot push the terminal off the stage.
     var maxAnswerHeight: CGFloat = 190
 
@@ -43,9 +48,11 @@ struct ExchangeStrip: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxHeight: maxAnswerHeight)
-                } else if ask != nil {
-                    // Mid-turn: the ask is on screen and the reply has not
-                    // landed. Saying so beats a blank space that reads as a bug.
+                } else if ask != nil, status == .processing {
+                    // Mid-turn ONLY: the ask is on screen and the reply has not
+                    // landed yet. Saying so beats a blank space that reads as a
+                    // bug — but claiming it about a finished task is worse than
+                    // saying nothing, so anything not processing shows nothing.
                     Text("working…")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.textFaint)

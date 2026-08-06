@@ -68,7 +68,7 @@ struct TaskSurfaceView: View {
                     // The same message-then-terminal shape as the stage. The
                     // strip is bounded and renders nothing when there are no
                     // turns yet, so the terminal keeps the space it always had.
-                    ExchangeStrip(turns: t.conversation ?? [], maxAnswerHeight: 150)
+                    ExchangeStrip(turns: t.conversation ?? [], status: t.status, maxAnswerHeight: 150)
                         .padding(.top, 10)
                     if model.taskTerminalOpen {
                     // The terminal owns EVERYTHING left down to the action row
