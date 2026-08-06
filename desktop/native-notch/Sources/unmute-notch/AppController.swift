@@ -309,9 +309,16 @@ final class AppController: NSObject, NotchResizing {
         if state != .task && state != .cockpit { userScale = 1 }
         let up = rung(state) >= rung(model.state)
         if state != .cockpit { model.focusedId = nil; model.stageTask = nil }
-        // Terminal is OPEN BY DEFAULT on the task surface ("hide terminal" is
-        // the choice); reset when leaving so re-entry starts open again.
-        model.taskTerminalOpen = (state == .task)
+        // TERMINAL CLOSED BY DEFAULT when a task is pulled to attention.
+        //
+        // It was open, which inverted the point of the surface: a task arrives
+        // BECAUSE it needs you, and the first thing you should see is what it
+        // said — not a wall of scrollback with the message squeezed above it.
+        // The terminal is one tap away and stays that way; it is the
+        // drill-down, not the greeting. Reset on leaving so every arrival is
+        // calm again. (The orchestrator's stage keeps its own default: you went
+        // there deliberately, so the terminal is what you asked for.)
+        model.taskTerminalOpen = false
         // THE REVIEW POPUP CANNOT SURVIVE A COLLAPSE. It is drawn only on the
         // expanded surface, and a popup nobody can see still eats the next
         // Escape in stepDown. Leaving the expanded state ends it, exactly as

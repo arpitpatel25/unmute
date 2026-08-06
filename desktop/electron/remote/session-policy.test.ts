@@ -87,10 +87,11 @@ test('hookCommand forwards the hook payload verbatim to loopback, with auth', ()
 test('every hook is async, so Unmute can never delay a turn', () => {
   const s = buildHookSettings(42117, 't') as { hooks: Record<string, Array<{ hooks: Array<Record<string, unknown>> }>> }
   const events = Object.keys(s.hooks)
-  assert.deepEqual(
-    events.sort(),
-    ['Notification', 'PostToolUse', 'SessionEnd', 'Stop', 'UserPromptSubmit'].sort(),
-  )
+  // Five report OUT what happened; PreToolUse and PermissionRequest are the ASK
+  // channel — without them a real AskUserQuestion (which the CLI renders as a
+  // picker with labelled options) reached us as nothing at all, and the only
+  // thing that could mark a task blocked was a heuristic reading prose.
+  assert.deepEqual(events.sort(), ['Notification', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionEnd', 'Stop', 'UserPromptSubmit'].sort())
   for (const ev of events) {
     for (const group of s.hooks[ev]) {
       for (const h of group.hooks) {

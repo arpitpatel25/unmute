@@ -63,6 +63,12 @@ final class NotchModel: ObservableObject {
 
     // Terminal visibility (task surface toggle; Stage shows it by default when alive).
     @Published var taskTerminalOpen: Bool = false
+    /// The orchestrator stage's own terminal toggle. Separate from
+    /// `taskTerminalOpen` on purpose: the two surfaces answer different
+    /// questions. A task pulled to ATTENTION should greet you with what it
+    /// said (closed); a stage you opened deliberately should show the work
+    /// (open). One flag for both would force one answer on both.
+    @Published var stageTerminalOpen: Bool = true
 
     // Capture / voice chip: "listening → X", "routing…", "landed → X".
     @Published var capturePhase: String? = nil

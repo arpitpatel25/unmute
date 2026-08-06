@@ -99,13 +99,57 @@ test("the reply IS the result — verbatim, with a headline and its links", () =
   assert.ok(s.thread_context && s.thread_context.length > 0)
 })
 
-test('a trailing question outranks the kind and becomes the question', () => {
+test('a trailing question is an OFFER — ready, not blocked, and not a question box', () => {
+  // It used to set needs-user, and it was the only thing that ever could. So a
+  // finished answer ending "Want me to spec that first?" became a task
+  // demanding a reply, shown as one line with a text box and none of the
+  // reasoning that made it answerable. The turn ENDED — nothing is blocked.
   const s = deriveStatus(
     { kind: 'turn-ended', sessionId: 's', lastMessage: 'Two options exist.\n\nWhich do you want?' },
     ctx({ kind: 'oneoff' }),
   )!
+  assert.equal(s.state, 'ready')
+  assert.equal(s.question, undefined, 'no fake question box')
+  assert.match(s.result!.detail!, /Two options exist/, 'the reasoning is still there in full')
+})
+
+test('a REAL question carries the options the CLI would show', () => {
+  const s = deriveStatus({
+    kind: 'question-asked', sessionId: 's',
+    text: 'Which do you prefer: tabs or spaces?',
+    choices: ['Tabs', 'Spaces'], multiSelect: false,
+  }, ctx())!
   assert.equal(s.state, 'needs-user')
-  assert.equal(s.question?.text, 'Which do you want?')
+  assert.equal(s.question?.kind, 'choice')
+  assert.deepEqual(s.question?.choices, ['Tabs', 'Spaces'])
+})
+
+test('a question with no options degrades to free text rather than empty chips', () => {
+  const s = deriveStatus({ kind: 'question-asked', sessionId: 's', text: 'What next?', choices: [], multiSelect: false }, ctx())!
+  assert.equal(s.question?.kind, 'free_text')
+  assert.equal(s.question?.choices, undefined)
+})
+
+test('a permission request names the command, because "Allow Bash?" is unanswerable', () => {
+  const s = deriveStatus({ kind: 'permission-asked', sessionId: 's', tool: 'Bash', summary: 'rm -rf /tmp/x' }, ctx())!
+  assert.equal(s.state, 'needs-user')
+  assert.match(s.question!.text, /rm -rf \/tmp\/x/)
+  assert.deepEqual(s.question?.choices, ['Allow', 'Deny'])
+})
+
+test('parseHookEvent lifts the real question out of AskUserQuestion input', () => {
+  // Shape verified against a live session, not the docs.
+  const e = parseHookEvent({
+    session_id: 's', hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion',
+    tool_input: { questions: [{ question: 'Pick a colour.', header: 'Colour', multiSelect: false,
+      options: [{ label: 'Red', description: 'warm' }, { label: 'Blue', description: 'cool' }] }] },
+  })
+  assert.equal(e?.kind, 'question-asked')
+  assert.deepEqual((e as { choices: string[] }).choices, ['Red', 'Blue'])
+})
+
+test('PreToolUse for any OTHER tool is not an ask', () => {
+  assert.equal(parseHookEvent({ session_id: 's', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' } }), null)
 })
 
 test('a permission prompt blocks; other notifications are not state', () => {

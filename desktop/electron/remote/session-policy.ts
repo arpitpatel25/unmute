@@ -168,6 +168,31 @@ export function buildHookSettings(port: number, token: string): Record<string, u
       Stop: [{ hooks: [hook] }],
       Notification: [{ hooks: [hook] }],
       SessionEnd: [{ hooks: [hook] }],
+
+      // THE ASK CHANNEL. Everything above reports what HAPPENED; these two are
+      // how the agent asks for something, and without them Unmute was strictly
+      // WORSE than the terminal it replaces.
+      //
+      // In the CLI, a question from `AskUserQuestion` renders as a numbered
+      // picker with a label and a description per option. We saw none of it —
+      // `PreToolUse` was never registered — so the only thing that could ever
+      // mark a task `needs-user` was a heuristic reading the last line of the
+      // reply. That surfaced rhetorical sign-offs ("Want me to spec that
+      // first?") as blocking questions with a bare text box, and surfaced real
+      // questions not at all. Strictly less than the terminal offers.
+      //
+      // Matched narrowly on purpose: `AskUserQuestion` is the only tool whose
+      // ARGUMENTS are a question for the human, so it is the only one worth the
+      // extra event. A `*` matcher here would fire on every tool call in the
+      // session for no gain.
+      PreToolUse: [{ matcher: 'AskUserQuestion', hooks: [hook] }],
+      // "May I run this?" — the tool and its exact input. The old contract asked
+      // the model to self-declare irreversible actions; this is the real thing,
+      // named by Claude Code itself, with the command in hand.
+      PermissionRequest: [{ hooks: [hook] }],
+      // A failed tool is a better "this task is in trouble" signal than waiting
+      // for the staleness backstop to notice silence.
+      PostToolUseFailure: [{ matcher: '*', hooks: [hook] }],
     },
   }
 }

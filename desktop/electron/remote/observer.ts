@@ -37,6 +37,10 @@ export type HookEvent =
   | { kind: 'turn-ended'; sessionId: string; cwd?: string; lastMessage: string }
   /** Notification — the session is waiting on the human. */
   | { kind: 'waiting'; sessionId: string; cwd?: string; message: string; notificationType?: string }
+  /** AskUserQuestion — a REAL question, with the options the CLI would show. */
+  | { kind: 'question-asked'; sessionId: string; cwd?: string; text: string; choices: string[]; multiSelect: boolean }
+  /** PermissionRequest — "may I run this?", with the exact command in hand. */
+  | { kind: 'permission-asked'; sessionId: string; cwd?: string; tool: string; summary: string }
   /** SessionEnd — it is gone, and why. */
   | { kind: 'session-ended'; sessionId: string; cwd?: string; reason?: string }
 
@@ -74,6 +78,34 @@ export function parseHookEvent(payload: unknown): HookEvent | null {
       }
     case 'SessionEnd':
       return { kind: 'session-ended', sessionId, cwd, reason: typeof p.reason === 'string' ? p.reason : undefined }
+
+    // THE ASK CHANNEL — see session-policy.ts for why these two exist.
+    case 'PreToolUse': {
+      // Only AskUserQuestion is matched, but check anyway: a matcher is
+      // configuration, and configuration drifts.
+      if (p.tool_name !== 'AskUserQuestion') return null
+      const input = p.tool_input as { questions?: unknown } | undefined
+      const qs = Array.isArray(input?.questions) ? input!.questions : []
+      const first = qs[0] as { question?: unknown; options?: unknown; multiSelect?: unknown } | undefined
+      const text = typeof first?.question === 'string' ? first.question : ''
+      if (!text) return null
+      // Verified against a live session: options are {label, description}. The
+      // label is what the picker shows and what the answer must select.
+      const choices = (Array.isArray(first?.options) ? first!.options : [])
+        .map((o) => (o as { label?: unknown })?.label)
+        .filter((l): l is string => typeof l === 'string' && l.length > 0)
+      return { kind: 'question-asked', sessionId, cwd, text, choices, multiSelect: first?.multiSelect === true }
+    }
+    case 'PermissionRequest': {
+      const tool = typeof p.tool_name === 'string' ? p.tool_name : 'a tool'
+      // The command itself is the question. `Bash` is the case that matters —
+      // "may I run this?" is unanswerable without seeing what "this" is.
+      const input = (p.tool_input ?? {}) as Record<string, unknown>
+      const detail = typeof input.command === 'string' ? input.command
+        : typeof input.file_path === 'string' ? input.file_path
+          : ''
+      return { kind: 'permission-asked', sessionId, cwd, tool, summary: detail }
+    }
     default:
       return null
   }
@@ -194,6 +226,40 @@ export function deriveStatus(event: HookEvent, ctx: ObserverContext): StatusPayl
       }
     }
 
+    case 'question-asked': {
+      // A REAL question — the CLI is showing a picker right now. This is the
+      // only path that produces `choices`, because it is the only one where the
+      // options actually exist: the model declared them as tool arguments.
+      return {
+        schema_version: 1,
+        state: 'needs-user',
+        updated_at: ctx.now,
+        step: 'waiting for you',
+        question: {
+          text: event.text,
+          kind: event.choices.length ? 'choice' : 'free_text',
+          ...(event.choices.length ? { choices: event.choices } : {}),
+        },
+        thread_context: deriveThreadContext(summarize(event.text), 'needs-user', ctx.kind),
+      }
+    }
+
+    case 'permission-asked': {
+      // "May I run this?" The command IS the question — `Bash` unqualified is
+      // unanswerable, so the input is put in the text rather than a label.
+      const text = event.summary
+        ? `Allow ${event.tool}?\n${event.summary}`
+        : `Allow ${event.tool}?`
+      return {
+        schema_version: 1,
+        state: 'needs-user',
+        updated_at: ctx.now,
+        step: 'waiting for permission',
+        question: { text, kind: 'choice', choices: ['Allow', 'Deny'] },
+        thread_context: deriveThreadContext(`Asking permission to run ${event.tool}.`, 'needs-user', ctx.kind),
+      }
+    }
+
     case 'session-ended': {
       // Only meaningful if the task never reached a terminal state — a session
       // that ends after finishing is just cleanup.
@@ -221,8 +287,25 @@ export function deriveStatus(event: HookEvent, ctx: ObserverContext): StatusPayl
           thread_context: 'The task finished its turn but wrote no reply, so there is nothing to report back. Open it to see what it did.',
         }
       }
-      const blocked = endsWithQuestion(message)
-      const state: TaskState = blocked ? 'needs-user' : ctx.kind === 'session' ? 'ready' : 'done'
+      // A TRAILING QUESTION IS AN OFFER, NOT A BLOCK.
+      //
+      // This used to set `needs-user`, and it was the only thing that ever
+      // could — so every "Want me to spec that first?" at the end of a finished
+      // answer became a task demanding a reply, presented as a one-line
+      // question with a text box and none of the reasoning that made it
+      // answerable.
+      //
+      // But the turn ENDED. Nothing is blocked; the agent did the work and
+      // offered a next step. That is precisely `ready` in ORCHESTRATE-VISION's
+      // own words — "the step is over but the ball is with you". It still
+      // reaches the user through the queue; it just stops claiming to be stuck,
+      // and the composer is already there to answer it.
+      //
+      // `needs-user` is now reserved for a REAL block — AskUserQuestion or a
+      // PermissionRequest — where there is something concrete to answer and an
+      // affordance to answer it with.
+      const offering = endsWithQuestion(message)
+      const state: TaskState = offering || ctx.kind === 'session' ? 'ready' : 'done'
       const urls = urlsIn(message)
       const summary = summarize(message)
       const payload: StatusPayload = {
@@ -236,10 +319,6 @@ export function deriveStatus(event: HookEvent, ctx: ObserverContext): StatusPayl
           ...(urls.length ? { artifacts: urls.map((value) => ({ type: 'url' as const, value })) } : {}),
         },
         thread_context: deriveThreadContext(summary, state, ctx.kind),
-      }
-      if (blocked) {
-        const lines = message.split('\n').map((l) => plainLine(l)).filter(Boolean)
-        payload.question = { text: lines[lines.length - 1], kind: 'free_text' }
       }
       return payload
     }

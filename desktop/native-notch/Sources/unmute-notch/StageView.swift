@@ -70,11 +70,18 @@ struct StageView: View {
                     // shown raw, for everything the headline leaves out. The
                     // strip renders nothing at all when there are no turns yet,
                     // so a fresh task looks exactly as it did before.
-                    ExchangeStrip(turns: t.conversation ?? [], status: t.status)
+                    // The stage keeps the terminal OPEN by default — you came
+                    // here deliberately, so it is what you asked for — but it
+                    // was the only surface with no way to put it away. The
+                    // message expands into the space when you do.
+                    ExchangeStrip(turns: t.conversation ?? [], status: t.status,
+                                  maxAnswerHeight: model.stageTerminalOpen ? 190 : .infinity)
                         .padding(.top, 10)
-                    TerminalPanel(model: model, taskId: t.id,
-                                  tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
-                        .padding(.top, 10)
+                    if model.stageTerminalOpen {
+                        TerminalPanel(model: model, taskId: t.id,
+                                      tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
+                            .padding(.top, 10)
+                    }
                     // Say the next thing without opening the terminal. Voice is
                     // still the primary way in — the placeholder says so — but
                     // when the stage is already open and focused, making the

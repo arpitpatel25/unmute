@@ -26,7 +26,12 @@ struct ExchangeStrip: View {
     /// finished task whose reply had not arrived, turning a display gap into a
     /// lie about what the agent was doing.
     var status: TaskStatus? = nil
-    /// Bound so a long answer cannot push the terminal off the stage.
+    /// Bound so a long answer cannot push the terminal off the stage — but the
+    /// bound belongs to the TERMINAL, not to the message. Callers pass
+    /// `.infinity` when the terminal is hidden: the freed area is the message's.
+    /// A fixed cap there left a scroller inside a small box with the vacated
+    /// space blank underneath it — nothing should scroll while the room to show
+    /// it sits empty.
     var maxAnswerHeight: CGFloat = 190
 
     private var ask: TurnP? { turns.last(where: { $0.role == "user" }) }

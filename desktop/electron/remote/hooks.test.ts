@@ -16,14 +16,11 @@ test('hook settings are written to OUR directory, never a session cwd', async ()
   assert.ok((await fs.stat(p!)).isFile())
 })
 
-test('the written settings wire the five report-OUT events', async () => {
+test('the written settings wire the report-OUT events AND the ask channel', async () => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'hooks-base-'))
   const p = await installHookSettings(base, 42117, 'tok-abc')
   const doc = JSON.parse(await fs.readFile(p!, 'utf8'))
-  assert.deepEqual(
-    Object.keys(doc.hooks).sort(),
-    ['Notification', 'PostToolUse', 'SessionEnd', 'Stop', 'UserPromptSubmit'].sort(),
-  )
+  assert.deepEqual(Object.keys(doc.hooks).sort(), ['Notification', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionEnd', 'Stop', 'UserPromptSubmit'].sort())
   assert.match(JSON.stringify(doc), /127\.0\.0\.1:42117/)
   assert.match(JSON.stringify(doc), /Bearer tok-abc/)
 })
@@ -51,7 +48,7 @@ test('the sync install writes the same file, before anything can dispatch', asyn
   const p = installHookSettingsSync(base, 42117, 'tok')
   assert.equal(p, hookSettingsPath(base))
   const doc = JSON.parse(await fs.readFile(p!, 'utf8'))
-  assert.equal(Object.keys(doc.hooks).length, 5)
+  assert.equal(Object.keys(doc.hooks).length, 8, "five report OUT, three are the ask channel")
   assert.equal(installHookSettingsSync('/definitely/not/writable', 1, 'x'), null)
 })
 
