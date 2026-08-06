@@ -1333,3 +1333,31 @@ test('a finished turn puts the model reply into the conversation, from the EVENT
   assert.match(tm.get(id)!.result!.detail!, /5 most recent bookmarks/)
   tm.killAll()
 })
+
+test('a hook event can NEVER land on a driven backend, by session id or by cwd', async () => {
+  // The isolation is asymmetric: dispatch() forks to the drivers before any hook
+  // code runs, so the OUTBOUND side is guarded by construction. The inbound side
+  // matched on identity alone — and both fallbacks are reachable. A Codex task
+  // stores the Codex THREAD id in `sessionId`; a Claude-desktop task carries a
+  // real project `cwd`. So a CLI session firing hooks from the same repo could
+  // have selected the desktop card, and we would have written a derived status
+  // onto a task whose agent we never spoke to.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const cli = await tm.dispatch('a real claude task')
+  const claudeTask = tm.get(cli)!
+
+  // A driven task that shares BOTH keys with the hook payload.
+  const alien = { ...claudeTask, id: 'codex-1', agent: 'codex-desktop' as AgentKind, createdAt: claudeTask.createdAt + 1000 }
+  ;(tm as unknown as { tasks: Map<string, Task> }).tasks.set('codex-1', alien)
+
+  tm.onHookEvent({ kind: 'turn-ended', sessionId: claudeTask.sessionId!, cwd: claudeTask.cwd, lastMessage: 'done here' })
+  await new Promise((r) => setTimeout(r, 30))
+
+  assert.equal(tm.get('codex-1')!.state, claudeTask.state === 'done' ? 'processing' : tm.get('codex-1')!.state,
+    'the driven task must not have been transitioned')
+  assert.equal((tm.get('codex-1')!.conversation ?? []).length, (alien.conversation ?? []).length,
+    'the driven task must not have gained a conversation')
+  assert.match(tm.get(cli)!.result?.detail ?? '', /done here/, 'the CLI task is the one that got it')
+  tm.killAll()
+})

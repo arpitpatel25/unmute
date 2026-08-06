@@ -788,12 +788,27 @@ export class TaskManager extends EventEmitter {
    *  we pin it with `--session-id`, so we own the mapping. `cwd` is the fallback
    *  for forked sessions, whose id Claude mints itself. */
   private taskForSession(sessionId: string, cwd?: string): Task | undefined {
-    for (const t of this.tasks.values()) if (t.sessionId === sessionId) return t
+    // ONLY A CLAUDE CODE CLI TASK CAN BE THE SUBJECT OF A HOOK.
+    //
+    // Hooks exist because we launch that session with `--settings`. A driven
+    // backend — Codex desktop, Claude desktop — is never launched by us at all,
+    // so it can never be the origin of one of these events. Without this filter
+    // the matching is by identity alone, and both fallbacks are reachable:
+    // a Codex task stores the Codex THREAD id in `sessionId`, and a Claude
+    // desktop task carries a real project `cwd` — so a CLI session firing hooks
+    // from the same repo could select the desktop card instead and we would
+    // write a derived status onto a task whose agent we never spoke to.
+    //
+    // The dispatch side is already guarded by construction (dispatch() forks to
+    // the drivers before any of this code runs). This is the same guarantee on
+    // the way IN, and it belongs here rather than at each call site.
+    const mine = (t: Task) => !isExternalAgent(t.agent)
+    for (const t of this.tasks.values()) if (mine(t) && t.sessionId === sessionId) return t
     if (!cwd) return undefined
     // Newest match wins: several tasks can share a project cwd.
     let best: Task | undefined
     for (const t of this.tasks.values()) {
-      if (t.cwd !== cwd || TERMINAL.includes(t.state)) continue
+      if (!mine(t) || t.cwd !== cwd || TERMINAL.includes(t.state)) continue
       if (!best || t.createdAt > best.createdAt) best = t
     }
     return best
