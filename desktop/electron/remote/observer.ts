@@ -54,30 +54,42 @@ export function isAnswerable(questions: readonly AskQuestion[]): boolean {
 }
 
 /**
- * The whole ask, written out for a card that cannot be clicked.
+ * The ask, for a card that cannot be clicked: THE QUESTIONS, NEVER THE OPTIONS.
  *
- * Refusing to drive a picker does not excuse us from showing what it asks. The
- * user still has to DECIDE, and deciding needs what the terminal shows: every
- * question, every option, and the description that makes one option different
- * from another. Listing the questions and hiding the options — which is what
- * shipped — left the user a set of things they could not evaluate and a
- * terminal they had to go read anyway, which is strictly worse than the
- * terminal alone.
+ * The card's job is to tell you what is being asked. The options are already on
+ * screen — the terminal directly below is drawing every one of them, with its
+ * description, in the picker you are about to answer. Repeating them here is
+ * not thoroughness, it is the same content twice, and it is not free: the card
+ * takes its height from the terminal, and the terminal's height IS the PTY.
+ * Rendering every option grew the card until the picker underneath was cut to
+ * ten rows of the eighteen it needs — so the surface telling you to answer down
+ * there is what made answering down there impossible.
  *
- * A plan is the one shape with no options: its "question" IS the document, so
- * it goes through whole, without numbering or bullets bolted around markdown.
+ * A plan is the one shape that does NOT follow this rule, and for the same
+ * reason: it has no options, its `question` IS a long markdown document, and a
+ * terminal clipped to a picker's height is a miserable place to read one. The
+ * rule is not "show less", it is SHOW WHAT THE TERMINAL SHOWS BADLY.
  */
 export function renderAsk(questions: readonly AskQuestion[]): string {
   if (questions.length === 1 && questions[0].options.length === 0) return questions[0].question
   const numbered = questions.length > 1
-  return questions
-    .map((q, i) => {
-      const head = numbered ? `${i + 1}. ${q.question}` : q.question
-      const rule = q.multiSelect ? 'pick any' : 'pick one'
-      const opts = q.options.map((o) => `   • ${o.label}${o.description ? ` — ${o.description}` : ''}`)
-      return [q.options.length ? `${head}  (${rule})` : head, ...opts].join('\n')
-    })
-    .join('\n\n')
+  return questions.map((q, i) => (numbered ? `${i + 1}. ${q.question}` : q.question)).join('\n')
+}
+
+/**
+ * The one short line for the HEADLINE — the slot beside the title that answers
+ * "what is going on", and the one place `question.text` must never reach.
+ *
+ * They were the same string. `activity` is `question.text` (notch-controller),
+ * the surface draws `activity` as its headline with no line limit, and the card
+ * draws `question.text` as its body — so the moment the card's text became more
+ * than a sentence, the whole ask printed twice, once above the user's own
+ * message. One field cannot be both a headline and a document.
+ */
+export function askHeadline(questions: readonly AskQuestion[]): string {
+  if (questions.length === 1 && questions[0].options.length === 0) return 'a plan is waiting for your approval'
+  if (questions.length > 1) return `${questions.length} questions waiting`
+  return 'waiting for you in the terminal'
 }
 
 // ─── Hook events (what a session emits) ─────────────────────────────────────
@@ -373,7 +385,9 @@ export function deriveStatus(event: HookEvent, ctx: ObserverContext): StatusPayl
         schema_version: 1,
         state: 'needs-user',
         updated_at: ctx.now,
-        step: answerable ? 'waiting for you' : 'waiting for you in the terminal',
+        // `step` IS the headline for a terminal-only ask (see askHeadline) — the
+        // card owns the question, so this slot owns the state.
+        step: answerable ? 'waiting for you' : askHeadline(event.questions),
         question: {
           text: answerable ? first.question : renderAsk(event.questions),
           kind: answerable ? 'choice' : 'terminal_only',

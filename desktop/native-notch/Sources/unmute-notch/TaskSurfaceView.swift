@@ -35,9 +35,16 @@ struct TaskSurfaceView: View {
                     // because raw scrollback is not a summary.
                     EmptyView()
                 } else if let summary = summaryLine(t) {
+                    // ONE LINE, STRUCTURALLY. The source is fixed too (see
+                    // headlineFor), but this slot sits above the exchange and
+                    // pushes the terminal down, so it must not be able to grow
+                    // no matter what reaches it. It had no limit, and a question
+                    // card's worth of text landed here: the whole ask printed
+                    // above the user's own message, and the terminal below lost
+                    // the rows it needed to draw the picker.
                     Text(summary)
                         .font(.system(size: 14)).foregroundColor(Theme.textDim)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(1).truncationMode(.tail)
                         .padding(.top, 12)
                 }
 

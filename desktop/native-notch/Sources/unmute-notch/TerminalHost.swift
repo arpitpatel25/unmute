@@ -15,6 +15,19 @@ struct TerminalPanel: View {
     let taskId: String
     let tmuxAvailable: Bool
 
+    /// THE FLOOR. This panel's height IS the PTY's size — `sizeChanged` below
+    /// sends `termResize`, so anything that squeezes the panel resizes the real
+    /// terminal and Claude Code redraws into whatever rows are left. A question
+    /// card grew large enough to cut it to ten rows against the eighteen an
+    /// `AskUserQuestion` picker needs, and the CLI started printing its own
+    /// "Jump to bottom" — while that same card was telling the user to go answer
+    /// down here. The surface that hands off must not starve what it hands to.
+    ///
+    /// 14 rows at fTerm's ~15.5pt line height, plus the header, is enough to
+    /// hold a picker's tab bar, its question and its options at once.
+    static let minRows = 14
+    static let floorHeight: CGFloat = CGFloat(minRows) * 15.5 + 30
+
     var body: some View {
         VStack(spacing: 0) {
             // A pinned header over scrolling content is exactly where the HARD
@@ -43,7 +56,7 @@ struct TerminalPanel: View {
 
             TerminalHost(model: model, taskId: taskId)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, minHeight: Self.floorHeight, maxHeight: .infinity)
         // The terminal is CONTENT, not chrome: opaque, flat, and never glass.
         // SwiftTerm renders into an NSView that cannot meaningfully sit on a
         // translucent material anyway.

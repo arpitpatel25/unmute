@@ -224,22 +224,47 @@ test('an answerable ask renders chips; a complex one hands over to the terminal'
   // typed AT that picker. The card must offer no reply it cannot deliver.
   assert.equal(complex.question?.kind, 'terminal_only', 'no input we cannot honour')
   assert.equal(complex.question?.choices, undefined)
-  assert.match(complex.step!, /terminal/)
 })
 
-test('a terminal-only card carries the WHOLE ask — every option, every description', () => {
-  // Refusing to drive the picker does not excuse hiding what it asks. Naming
-  // the questions and dropping the options left the user unable to decide
-  // without going to read the terminal anyway.
+test('a terminal-only card carries the QUESTIONS and never the options', () => {
+  // The options are already on screen — the terminal directly below is drawing
+  // every one of them in the picker. Repeating them here is the same content
+  // twice, and the card's height comes straight out of the terminal's, whose
+  // height IS the PTY: rendering every option cut the picker to ten rows of the
+  // eighteen it needs, so the card telling you to answer down there is what
+  // stopped you being able to.
   const s = deriveStatus({ kind: 'ask-opened', sessionId: 's', askId: 'a', questions: [
     { question: 'Colour?', multiSelect: false, options: [{ label: 'Blue', description: 'Cool and calm.' }] },
     { question: 'Languages?', multiSelect: true, options: [{ label: 'Go', description: 'Compiled.' }, { label: 'Rust' }] }] }, ctx())!
   const t = s.question!.text
-  for (const must of ['Colour?', 'Languages?', 'Blue', 'Cool and calm.', 'Go', 'Compiled.', 'Rust']) {
-    assert.ok(t.includes(must), `terminal-only card dropped "${must}"`)
+  assert.match(t, /1\. Colour\?/)
+  assert.match(t, /2\. Languages\?/)
+  for (const never of ['Blue', 'Cool and calm.', 'Go', 'Compiled.', 'Rust', 'pick one', 'pick any']) {
+    assert.ok(!t.includes(never), `the card repeated "${never}", which the terminal is already showing`)
   }
-  assert.match(t, /pick one/)   // multiSelect false
-  assert.match(t, /pick any/)   // multiSelect true
+  assert.equal(t.split('\n').length, 2, 'one line per question, nothing else')
+})
+
+test('the headline is a short state line, never the card body', () => {
+  // They were the same string: `activity` was `question.text`, and the surface
+  // draws activity as a headline with no line limit. The whole ask printed
+  // twice — once above the user's own message.
+  const two = deriveStatus({ kind: 'ask-opened', sessionId: 's', askId: 'a', questions: [
+    { question: 'Colour?', multiSelect: false, options: [{ label: 'Blue' }] },
+    { question: 'Languages?', multiSelect: true, options: [{ label: 'Go' }] }] }, ctx())!
+  assert.equal(two.step, '2 questions waiting')
+  assert.ok(!two.step!.includes('\n'), 'a headline is one line')
+  assert.notEqual(two.step, two.question!.text, 'the headline must not be the card body')
+
+  const plan = deriveStatus({ kind: 'ask-opened', sessionId: 's', askId: 'a', questions: [
+    { question: '# A plan\n\nlots of markdown', header: 'Plan', multiSelect: false, options: [] }] }, ctx())!
+  assert.equal(plan.step, 'a plan is waiting for your approval')
+
+  // …and a drivable ask still puts its question where it always was.
+  const one = deriveStatus({ kind: 'ask-opened', sessionId: 's', askId: 'a', questions: [
+    { question: 'Tabs or spaces?', multiSelect: false, options: [{ label: 'Tabs' }, { label: 'Spaces' }] }] }, ctx())!
+  assert.equal(one.question!.kind, 'choice')
+  assert.equal(one.step, 'waiting for you')
 })
 
 test('renderAsk lets a plan through whole, with no furniture around it', () => {

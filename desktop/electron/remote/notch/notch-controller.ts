@@ -165,6 +165,28 @@ function truncate(s: string, n = 48): string {
   return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…'
 }
 
+/**
+ * The ONE LINE beside the title: what is going on, not what is being asked.
+ *
+ * `activity` used to be `question.text` outright. That is fine while the text is
+ * one short question, and it is what the field was written for — but the same
+ * string is also the question card's BODY, and the surface draws the headline
+ * with no line limit. So the day the card started carrying the whole ask, the
+ * ask printed twice: once as a twelve-line "headline" above the user's own
+ * message, once in the card below it. One field cannot be a headline and a
+ * document at the same time.
+ *
+ * The split: when the question is `terminal_only` the CARD owns the ask, so the
+ * headline falls back to `step` — a short state line ("2 questions waiting").
+ * Every other kind keeps the question, because those cards are one line plus
+ * chips and the headline is the natural place for it.
+ */
+export function headlineFor(t: TaskLite): string | undefined {
+  const q = t.question
+  if (q && q.kind === 'terminal_only') return t.step ?? 'waiting for you in the terminal'
+  return q?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined
+}
+
 export function relativeAge(ts: number | undefined, now = Date.now()): string {
   if (!ts) return ''
   const s = Math.max(0, Math.round((now - ts) / 1000))
@@ -792,7 +814,7 @@ export class NotchController {
     return {
       id: t.id,
       title: t.name ?? truncate(t.intent),
-      activity: t.question?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined,
+      activity: headlineFor(t),
       status: t.state,
       kind: t.kind ?? 'oneoff',
       dir: this.dirLabel(t),
@@ -875,7 +897,7 @@ export class NotchController {
       // go blank. `model` is the persisted fact (Pack F, D6) and carries it
       // through. Neither is ever invented: absent stays absent.
       modelLabel: t.codexModelLabel || t.model || undefined,
-      activity: t.question?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined,
+      activity: headlineFor(t),
       question: t.question ?? undefined,
       result: t.result ?? undefined,
       error: t.error ?? undefined,

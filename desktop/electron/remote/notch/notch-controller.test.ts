@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import {
-  NotchController, classify, relativeAge,
+  NotchController, classify, relativeAge, headlineFor,
   type TaskLite, type NotchClientLike, type NotchControllerDeps, type ProposalLite,
 } from './notch-controller'
 import type { NotchCommand, NotchEvent, CockpitPayload } from './notch-client'
@@ -1039,4 +1039,23 @@ test('with auto-expand off the bar still only reaches attention', () => {
   h.controller.setAutoExpand(false)
   put(h, makeTask({ id: 't3', state: 'needs-user', name: 'quiet' }))
   assert.equal(h.client.last('setState')!.state, 'attention')
+})
+
+test('the headline never carries the card body — one field, two slots', () => {
+  // `activity` was `question.text` outright, and the surface draws it as a
+  // headline. The moment the card's text became more than a sentence, the whole
+  // ask printed twice: once above the user's own message, once in the card.
+  const ask = { text: '1. Colour?\n2. Languages?', kind: 'terminal_only' }
+  assert.equal(headlineFor({ id: 'x', intent: 'i', state: 'needs-user', question: ask, step: '2 questions waiting' }),
+    '2 questions waiting', 'a terminal-only card owns the ask; the headline owns the state')
+  // No step is still not an excuse to print the card body.
+  assert.equal(headlineFor({ id: 'x', intent: 'i', state: 'needs-user', question: ask }),
+    'waiting for you in the terminal')
+  // A drivable ask keeps the question in the headline — that card is one line
+  // plus chips, so there is nothing to duplicate.
+  assert.equal(headlineFor({ id: 'x', intent: 'i', state: 'needs-user', step: 'waiting for you',
+    question: { text: 'Tabs or spaces?', kind: 'choice', choices: ['Tabs', 'Spaces'] } }), 'Tabs or spaces?')
+  // And with no question at all, the old chain is untouched.
+  assert.equal(headlineFor({ id: 'x', intent: 'i', state: 'processing', step: 'reading the router' }), 'reading the router')
+  assert.equal(headlineFor({ id: 'x', intent: 'i', state: 'failed', error: { reason: 'boom' } }), 'boom')
 })
