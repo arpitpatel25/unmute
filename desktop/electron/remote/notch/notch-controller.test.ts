@@ -1294,3 +1294,39 @@ test('leaving with nothing expanded does nothing at all', () => {
   h.flush()
   assert.equal(h.client.last('setState')!.state, before)
 })
+
+test('the pocket holds ONLY what is demanding you', () => {
+  // Browsing an old session used to land it in the pocket beside the things
+  // actually waiting on you — and invited a whole second category to explain
+  // the difference. A task you are really working with will demand you again
+  // on its own, and the existing path pockets it then.
+  const h = setup()
+  put(h, makeTask({ id: 'live', state: 'processing', alive: true }))
+  put(h, makeTask({ id: 'old', state: 'done', alive: true }))
+  put(h, makeTask({ id: 'ask', state: 'needs-user', alive: true, question: { text: 'q' } }))
+
+  for (const [id, keptExpected] of [['old', false], ['live', false], ['ask', true]] as const) {
+    h.client.fire({ type: 'focusTask', id })
+    h.client.fire({ type: 'userLeft', reason: 'space' })
+    h.flush()
+    const inPocket = (pocketOf(h)?.slots ?? []).some((s) => s.id === id)
+    assert.equal(inPocket, keptExpected, `${id} pocketed=${inPocket}, expected ${keptExpected}`)
+  }
+  assert.deepEqual((pocketOf(h)!.slots).map((s) => s.id), ['ask'], 'only the demanding one survives')
+})
+
+test('closing follows the same rule as leaving', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'p', state: 'processing', alive: true }))
+  h.client.fire({ type: 'tap' })
+  h.client.fire({ type: 'closeStage' })
+  h.flush()
+  assert.equal(pocketOf(h)?.slots.length ?? 0, 0, 'a running task you closed is not "set aside"')
+
+  const h2 = setup()
+  put(h2, makeTask({ id: 'q', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h2.client.fire({ type: 'tap' })
+  h2.client.fire({ type: 'closeStage' })
+  h2.flush()
+  assert.equal(pocketOf(h2)!.slots.length, 1, 'a demanding one still is')
+})

@@ -646,6 +646,23 @@ export class NotchController {
     this.client.send({ type: 'pocket', data })
   }
 
+  /**
+   * THE ONLY THING THE POCKET EVER HOLDS: a task that is demanding you.
+   *
+   * It used to keep anything you left — which meant browsing an old session
+   * from the wall and pressing Escape put it in your pocket, beside the things
+   * actually waiting on you. Worse, it invited a whole second category
+   * ("working" vs "waiting") with its own ordering, clutter and expiry rules.
+   *
+   * None of that is needed, because a task you are genuinely working with will
+   * demand you again on its own — and the moment it does, the existing path
+   * pockets it. So the pocket stays exactly one thing, and everything else
+   * simply collapses when you leave it.
+   */
+  private isDemanding(t: TaskLite): boolean {
+    return t.state === 'needs-user' || t.state === 'stuck' || t.state === 'failed'
+  }
+
   /** Put a task in the pocket. Never mutes it, never takes it out of the crank
    *  — it is still your move, it is just not covering your screen. */
   private pocketTask(id: string, why: string): void {
@@ -680,7 +697,11 @@ export class NotchController {
     // getting out of the way does not.
     if (this.engaged === 'none') return
     const id = this.focusedId
-    if (id) this.pocketTask(id, reason)
+    const t = id ? this.deps.getTask(id) : undefined
+    // Demanding → pocket. Anything else just goes: you were looking at it,
+    // not being asked by it.
+    const kept = !!(t && this.isDemanding(t))
+    if (kept && id) this.pocketTask(id, reason)
     // Remember what to put back, so a return inside the window restores the
     // surface you were actually on rather than guessing at a task.
     this.returnTo = id ? { kind: 'task', id } : { kind: 'cockpit' }
@@ -688,7 +709,7 @@ export class NotchController {
     this.engaged = 'none'
     this.setFocus(null)
     this.setPocketMode('closed')
-    log.event('user-left', { reason, pocketed: id ?? null, was: this.returnTo.kind })
+    log.event('user-left', { reason, pocketed: kept ? id : null, state: t?.state ?? null, was: this.returnTo.kind })
     this.sendPocket()
     this.reconcile()
   }
@@ -831,10 +852,11 @@ export class NotchController {
       this.muted.set(t.id, t.state)
       this.queue = this.queue.filter((x) => x !== t.id)
       log.event('seen-on-close', { taskId: t.id, state: t.state })
-    } else if (t) {
-      // A BLOCKED TASK IS POCKETED, NOT DISMISSED. It is still your move — the
-      // only thing you asked for by closing was your screen back. It keeps its
-      // place in the crank, stays unmuted, and keeps the voice reachable.
+    } else if (t && this.isDemanding(t)) {
+      // A DEMANDING TASK IS POCKETED, NOT DISMISSED. It is still your move —
+      // the only thing you asked for by closing was your screen back. It keeps
+      // its place in the crank, stays unmuted, and stays reachable by voice.
+      // Anything NOT demanding just closes: you were reading it, not answering.
       this.pocketTask(t.id, 'closed')
     }
     if (opts.collapse) this.engaged = 'none'
