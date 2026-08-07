@@ -387,7 +387,7 @@ test('recall: contextTaskId rides on NEW when it names a known task (cold includ
 
 test('ready one-offs are RESUMABLE resume targets (the most natural continue)', () => {
   const finished: RoutableTask[] = [
-    { id: 'parked-ready', intent: 'load the CS2 video', name: 'CS2 video', state: 'ready', ageSec: 120 },
+    { id: 'parked-ready', intent: 'load the CS2 video', name: 'CS2 video', state: 'done', kind: 'session', ageSec: 120 },
   ]
   const p = buildRoutingPrompt('now summarize what the video says', [], '/d/decision.json', [], finished)
   assert.ok(p.includes('[parked-ready]') && p.includes('RESUMABLE'), 'ready one-off offered as a resume target')
@@ -399,7 +399,7 @@ test('ready one-offs are RESUMABLE resume targets (the most natural continue)', 
 // ─── Workspace grouping (spec 2026-07-16-cockpit-grouping) ────────────────
 
 const GROUPED: RoutableTask[] = [
-  { id: 'g1', intent: 'fix webhook ticket', state: 'ready', kind: 'session', ageSec: 60, group: 'on-call' },
+  { id: 'g1', intent: 'fix webhook ticket', state: 'done', kind: 'session', ageSec: 60, group: 'on-call' },
   { id: 'g2', intent: 'color grade the outro', state: 'done', kind: 'session', ageSec: 120, group: 'launch video' },
   { id: 'g3', intent: 'ungrouped errand', state: 'done', ageSec: 30 },
 ]

@@ -49,8 +49,18 @@ struct QuestionP: Codable {
 struct PocketSlotP: Codable, Equatable {
     let id: String
     let title: String
+    /// "seam" for the one boundary card between what is waiting on you and the
+    /// rest of today. Absent for an ordinary task. Never resolves to a task —
+    /// the voice deliberately has no address while you are standing on it.
+    let kind: String?
+    /// How many of today's tasks lie past the seam. Seam slots only.
+    let more: Int?
     let ask: String?
     let status: String?
+    /// Is this one actually waiting on you? The card reads quieter when not.
+    let demanding: Bool?
+
+    var isSeam: Bool { kind == "seam" }
 }
 
 struct PocketP: Codable, Equatable {

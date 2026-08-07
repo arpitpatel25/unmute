@@ -67,6 +67,12 @@ declare module 'electron' {
     availableFormats(): string[]
     clear(): void
   }
+  /** Seconds since the last SYSTEM-WIDE input event — the presence signal.
+   *  System-wide is the point: it sees you working in any app. */
+  export const powerMonitor: {
+    getSystemIdleTime(): number
+    on(event: string, cb: (...a: unknown[]) => void): void
+  }
   export interface App {
     on(event: string, cb: (...a: unknown[]) => void): void
     getPath(name: string): string

@@ -18,7 +18,7 @@
 // NOT unit-tested — exactly like paywall/main-extensions.ts. The logic it
 // orchestrates (TaskManager, executor, status-file) is unit-tested separately.
 
-import { ipcMain, BrowserWindow, Notification, shell, app, clipboard } from 'electron'
+import { ipcMain, BrowserWindow, Notification, shell, app, clipboard, powerMonitor } from 'electron'
 import Store from 'electron-store'
 import { join, dirname, basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -64,6 +64,7 @@ import { CdpLane } from './cua/lanes/cdp'
 import { Arming } from './cua/lanes/arming'
 import { runAppleScript } from './cua/lanes/applescript'
 import { type RouterCtx } from './cua/router'
+import { Presence } from './presence'
 import { applyAxRegistration } from './ax/register'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
@@ -1775,7 +1776,9 @@ function speakAbout(taskId: string | undefined): void {
       speakLine(`${name} is working. ${t.step ? t.step : t.threadContext ?? ''}`)
     } else if (t.state === 'failed' || t.state === 'stuck') {
       speakLine(`${name} ${t.state === 'stuck' ? 'is stuck' : 'errored'}. ${t.error?.reason ?? ''}`)
-    } else if (t.state === 'ready') {
+    } else if ((t.kind ?? 'oneoff') === 'session') {
+      // A THREAD finishing is a checkpoint, an ERRAND finishing is the end.
+      // Same state now; what differs is what the task is (see TaskState).
       speakLine(`${name} is ready for your next step. ${t.result?.summary ?? t.threadContext ?? ''}`)
     } else {
       speakLine(`${name} is done. ${t.result?.summary ?? t.threadContext ?? ''}`)
@@ -2023,7 +2026,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       const wall = manager.list().filter((t) => {
         if (t.shelved) return false
         if ((t.kind ?? 'oneoff') === 'session') return true
-        if (t.state === 'processing' || t.state === 'needs-user' || t.state === 'ready') return true
+        if (t.state === 'processing' || t.state === 'needs-user') return true
         const age = nowMs - t.updatedAt
         return t.state === 'done' ? age < DONE_FADE_MS : age < ATTN_FADE_MS
       }).map((t) => snapshotOf(t, nowMs, false))
@@ -2449,7 +2452,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     warmMs: getKnobs().taskWarmMs,
     navigateWarmMs: getKnobs().taskNavigateWarmMs,
     purgeAgeMs: getKnobs().taskPurgeAgeMs,
-    readyDecayMs: getKnobs().readyDecayMs,
     // Best-effort reaper for an orphan tmux session a past run left on our
     // private socket (app crashed before killAll). Per-session kill, never the
     // server (would hit live ones).
@@ -2693,7 +2695,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         scratchpadDeliver: (dest) => { void deliverScratchpad(dest) },
         scratchpadDiscard: () => discardScratchpad(),
         // (pill deps are wired separately, below — see PillController)
-      })
+      },
+      // PRESENCE. Two jobs: it is the ONLY thing allowed to open the surface by
+      // itself (idle → active, i.e. you touched the machine after a stretch of
+      // not touching it), and it owns the clock that demand windows are spent
+      // against — so an afternoon away costs a finished thread nothing.
+      //
+      // The idle source is system-wide on purpose: it sees you working in any
+      // app, which is the whole point. A listener of our own would only see
+      // input aimed at us and would call you idle while you typed all day.
+      new Presence(() => powerMonitor.getSystemIdleTime()))
       applyAutoExpand()
       // Seed the pad panel. Without this a pad adopted from a previous run is
       // invisible until something else happens to change it.
@@ -3092,7 +3103,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     }, 3000) // let Claude flush the transcript tail
   }
   manager.on('updated', (t: Task) => {
-    if (t.state === 'ready') { creditSkillUsage(t); curator.notifyCheckpoint(t.id) } // ready = a natural stopping point → sweep-eligible
+    // A finished THREAD is the natural stopping point curation wants. This
+    // keyed on `ready`, which no longer exists; the condition it was really
+    // asking — "did a step just end on something the user returns to" — is
+    // exactly done-on-a-session.
+    if (t.state === 'done' && (t.kind ?? 'oneoff') === 'session') { creditSkillUsage(t); curator.notifyCheckpoint(t.id) }
   })
 
   manager.on('done', (t: Task) => {

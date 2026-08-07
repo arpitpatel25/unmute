@@ -236,7 +236,7 @@ test('a relaunch does NOT replay an old completion as if it just happened', asyn
   await (m as unknown as { pollCodexDesktop(id: string): Promise<void> }).pollCodexDesktop(id)
 
   const t = m.get(id)!
-  assert.equal(t.state, 'ready')
+  assert.equal(t.state, 'done')
   assert.ok(Date.now() - t.updatedAt > 13 * 60 * 60 * 1000,
     'the task carries WHEN IT FINISHED, not when we noticed')
   m.killAll(); m.stopMaintenance()
@@ -255,7 +255,7 @@ test('the observed state is written to meta.json, so a restart restores it', asy
   await new Promise((r) => setTimeout(r, 30))
 
   const meta = JSON.parse(await fs.readFile(join(base, 'test', id, 'meta.json'), 'utf8'))
-  assert.equal(meta.state, 'ready', 'rehydrate has something real to restore')
+  assert.equal(meta.state, 'done', 'rehydrate has something real to restore')
   assert.ok(meta.updatedAt < Date.now() - 8 * 60 * 60 * 1000, 'and the honest timestamp with it')
   m.killAll(); m.stopMaintenance()
 })

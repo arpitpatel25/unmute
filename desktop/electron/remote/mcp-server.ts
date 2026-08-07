@@ -21,6 +21,7 @@
 import http from 'node:http'
 import { createLogger } from './log'
 import { HOOK_PATH } from './session-policy'
+import { normalizeState } from './status-file'
 
 const log = createLogger('mcp')
 
@@ -62,7 +63,7 @@ export interface McpHandlers {
 /** The optional self-report. Every field is optional except `state`: the point
  *  is that a session says only what the observer could not have known. */
 export interface McpStatusInput {
-  state: 'processing' | 'needs-user' | 'ready' | 'done' | 'failed'
+  state: 'processing' | 'needs-user' | 'done' | 'failed'
   summary?: string
   detail?: string
   question?: string
@@ -113,7 +114,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        state: { type: 'string', enum: ['processing', 'needs-user', 'ready', 'done', 'failed'], description: 'Where the task stands.' },
+        state: { type: 'string', enum: ['processing', 'needs-user', 'done', 'failed'], description: 'Where the task stands.' },
         summary: { type: 'string', description: 'One line. Omit to keep what Unmute derived from your reply.' },
         detail: { type: 'string', description: 'Full text. Omit to keep your reply itself, which is usually better.' },
         question: { type: 'string', description: 'What you need from the user (with state needs-user).' },
@@ -266,8 +267,13 @@ async function handleRequest(handlers: McpHandlers, req: http.IncomingMessage, r
         }
         if (toolName === 'unmute_status') {
           if (!handlers.setStatus) throw new Error('status reporting is not available')
-          const state = args.state
-          if (typeof state !== 'string' || !['processing', 'needs-user', 'ready', 'done', 'failed'].includes(state)) {
+          let state = args.state
+          // `ready` is still ACCEPTED on the wire and folded to `done`: an
+          // agent may be working from a cached copy of the old tool schema, and
+          // rejecting its status write would leave the task frozen mid-run over
+          // a word. See normalizeState.
+          state = normalizeState(state)
+          if (typeof state !== 'string' || !['processing', 'needs-user', 'done', 'failed'].includes(state)) {
             throw new Error('state must be one of: processing, needs-user, ready, done, failed')
           }
           await handlers.setStatus(caller, {

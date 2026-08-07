@@ -271,12 +271,10 @@ export function summarize(message: string, cap = 140): string {
  * section heading or a rhetorical framing than an actual ask, and mislabelling a
  * finished task as blocked parks it in the user's queue forever.
  */
-export function endsWithQuestion(message: string, maxLen = 200): boolean {
-  const lines = message.split('\n').map((l) => plainLine(l)).filter(Boolean)
-  const last = lines[lines.length - 1]
-  if (!last) return false
-  return last.endsWith('?') && last.length <= maxLen
-}
+/* `endsWithQuestion` lived here. It decided `ready` vs `done` from whether the
+ * agent's last line ended in "?" — see the turn-ended branch for why that is
+ * gone. Deliberately not replaced: no punctuation heuristic should ever again
+ * decide whether the user can still reach a task. */
 
 // ─── Deriving the status ────────────────────────────────────────────────────
 
@@ -329,10 +327,12 @@ export function deriveCategory(ctx: ObserverContext, urls: readonly string[]): T
 export function deriveThreadContext(summary: string, state: TaskState, kind: 'oneoff' | 'session'): string {
   const whose =
     state === 'needs-user' ? 'It is waiting on your answer before it can continue.'
-      : state === 'ready' ? 'It has finished this step and is waiting for your next direction.'
-        : state === 'failed' ? 'It stopped before finishing.'
-          : state === 'done' ? (kind === 'session' ? 'Nothing is pending on this thread right now.' : 'Nothing further is expected.')
-            : 'It is still working.'
+      : state === 'failed' ? 'It stopped before finishing.'
+        // A THREAD finishing is a checkpoint — the ball came back to you. An
+        // ERRAND finishing is the end of it. Same state, and the difference is
+        // what the task IS, not how its last sentence was punctuated.
+        : state === 'done' ? (kind === 'session' ? 'It has finished this step and is waiting for your next direction.' : 'Nothing further is expected.')
+          : 'It is still working.'
   return summary ? `${summary} ${whose}` : whose
 }
 
@@ -431,7 +431,7 @@ export function deriveStatus(event: HookEvent, ctx: ObserverContext): StatusPayl
     case 'session-ended': {
       // Only meaningful if the task never reached a terminal state — a session
       // that ends after finishing is just cleanup.
-      if (ctx.prior === 'done' || ctx.prior === 'failed' || ctx.prior === 'ready') return null
+      if (ctx.prior === 'done' || ctx.prior === 'failed') return null
       return {
         schema_version: 1,
         state: 'failed',
@@ -448,32 +448,33 @@ export function deriveStatus(event: HookEvent, ctx: ObserverContext): StatusPayl
         // happened, and saying so is the honest move (see the header).
         return {
           schema_version: 1,
-          state: ctx.kind === 'session' ? 'ready' : 'done',
+          state: 'done',
           updated_at: ctx.now,
           category: 'act',
           result: { summary: 'Finished — the session ended its turn without a written reply.' },
           thread_context: 'The task finished its turn but wrote no reply, so there is nothing to report back. Open it to see what it did.',
         }
       }
-      // A TRAILING QUESTION IS AN OFFER, NOT A BLOCK.
+      // THE TURN ENDED. THAT IS THE ONLY THING WE KNOW, AND ALL WE RECORD.
       //
-      // This used to set `needs-user`, and it was the only thing that ever
-      // could — so every "Want me to spec that first?" at the end of a finished
-      // answer became a task demanding a reply, presented as a one-line
-      // question with a text box and none of the reasoning that made it
-      // answerable.
+      // This used to choose between `ready` and `done` here, and it chose by
+      // asking whether the last non-empty line ended in a question mark. That
+      // was the single most consequential decision in the product — `ready`
+      // stayed reachable in the crank, `done` faded off the notch in fifteen
+      // minutes — and it was made by a regex on prose the user never sees and
+      // cannot correct. An agent that listed four questions and signed off with
+      // "Let me know" landed on `done` and disappeared.
       //
-      // But the turn ENDED. Nothing is blocked; the agent did the work and
-      // offered a next step. That is precisely `ready` in ORCHESTRATE-VISION's
-      // own words — "the step is over but the ball is with you". It still
-      // reaches the user through the queue; it just stops claiming to be stuck,
-      // and the composer is already there to answer it.
+      // Whether a finish wants the user is not a fact about this event. It is a
+      // fact about the TASK — did you start a thread you return to, or run an
+      // errand that ends — and it is now decided by `demanding()` at render
+      // time, from `kind`, fresh on every pass. Nothing is guessed here and
+      // nothing is frozen.
       //
-      // `needs-user` is now reserved for a REAL block — AskUserQuestion or a
+      // `needs-user` is still reserved for a REAL block — AskUserQuestion or a
       // PermissionRequest — where there is something concrete to answer and an
       // affordance to answer it with.
-      const offering = endsWithQuestion(message)
-      const state: TaskState = offering || ctx.kind === 'session' ? 'ready' : 'done'
+      const state: TaskState = 'done'
       const urls = urlsIn(message)
       const summary = summarize(message)
       const payload: StatusPayload = {

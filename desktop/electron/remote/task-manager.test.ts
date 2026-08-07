@@ -932,66 +932,61 @@ async function waitForState(tm: TaskManager, id: string, state: string, timeoutM
   }
 }
 
-test('ready parks the session WARM: state ready, executor alive, not counted active', { timeout: 5000 }, async () => {
+test('a finished THREAD parks the session WARM: executor alive, not counted active', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
   const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
   const id = await tm.dispatch('load the video and tell me about it')
-  await claudeWrites(tm.get(id)!.statusPath, { state: 'ready', result: { summary: 'Video loaded — ready for what you want next' } })
-  await waitForState(tm, id, 'ready')
-  assert.equal(fake.alive, true, 'the session stays warm — ready is a checkpoint, not an ending')
-  assert.equal(tm.activeCount(), 0, 'ready is turn-over: not "running"')
+  tm.setKind(id, 'session')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'Video loaded — ready for what you want next' } })
+  await waitForState(tm, id, 'done')
+  assert.equal(fake.alive, true, 'the thread stays warm — its turn ended, it did not end')
+  assert.equal(tm.activeCount(), 0, 'turn-over: not "running"')
   assert.equal(tm.get(id)!.result?.summary, 'Video loaded — ready for what you want next')
   tm.kill(id)
 })
 
-test('kill on a ready task settles it as failed (ready is NOT settled)', { timeout: 5000 }, async () => {
+test('killing a finished thread leaves it finished — it did not fail', { timeout: 5000 }, async () => {
+  // THIS ASSERTED 'failed' UNDER THE OLD MODEL, and it was right to: `ready`
+  // meant "awaiting you", so ending it there really was an interruption. A
+  // `done` thread genuinely completed its turn. Recording that as a failure
+  // would put a red row on the wall for work that succeeded — the user simply
+  // closed the session afterwards.
   const baseDir = await tmpBase()
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 60_000 })
   const id = await tm.dispatch('x')
-  await claudeWrites(tm.get(id)!.statusPath, { state: 'ready' })
-  await waitForState(tm, id, 'ready')
+  tm.setKind(id, 'session')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'done' })
+  await waitForState(tm, id, 'done')
   tm.kill(id)
-  // A killed ready task was awaiting the user — ending it there is an interruption,
-  // not a completion: it must read failed (resumable), never silently "done".
-  assert.equal(tm.get(id)!.state, 'failed')
+  assert.equal(tm.get(id)!.state, 'done')
 })
 
-test('decay valve: an ignored ready ONE-OFF settles to done after 60min; a ready SESSION never decays', { timeout: 5000 }, async () => {
-  const baseDir = await tmpBase()
-  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 600_000 })
-  const oneoff = await tm.dispatch('one-off errand')
-  const sess = await tm.dispatch('working session')
-  tm.setKind(sess, 'session')
-  for (const id of [oneoff, sess]) {
-    await claudeWrites(tm.get(id)!.statusPath, { state: 'ready' })
-    await waitForState(tm, id, 'ready')
-  }
-  // Backdate both past the 60-minute valve, then run the sweep.
-  tm.get(oneoff)!.updatedAt = Date.now() - 61 * 60_000
-  tm.get(sess)!.updatedAt = Date.now() - 61 * 60_000
-  await tm.purgeStale()
-  assert.equal(tm.get(oneoff)!.state, 'done', 'ignored ready one-off decays to done')
-  assert.equal(tm.get(sess)!.state, 'ready', 'a session\'s open loop is real until the user closes it')
-  tm.kill(oneoff); tm.kill(sess)
-})
+// THE DECAY-VALVE TEST LIVED HERE and the feature is gone with `ready`.
+//
+// It settled an ignored `ready` one-off to `done` after an hour so it would
+// stop haunting the queue. But `done` also meant "fades off the notch in
+// fifteen minutes", so the valve did not quiet a task — it removed it from
+// everywhere the user could reach without opening the dashboard. Quieting is
+// the notch's job now (DEMAND_WINDOW_MS), and it steps a task down a tier
+// rather than off a cliff. Nothing rewrites state behind the user any more.
 
-test('resume of a ready task is SILENT — warm re-entry, no continue nudge', { timeout: 5000 }, async () => {
+test('resume of a finished thread is SILENT — warm re-entry, no continue nudge', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
   const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   const tid = randomUUID()
   const dir = path.join(baseDir, 'local', tid)
   await fs.mkdir(dir, { recursive: true })
-  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'load the video', createdAt: Date.now() }))
-  await claudeWrites(path.join(dir, 'status.json'), { state: 'ready', result: { summary: 'loaded' } })
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'load the video', kind: 'session', createdAt: Date.now() }))
+  await claudeWrites(path.join(dir, 'status.json'), { state: 'done', result: { summary: 'loaded' } })
   await tm.rehydrate()
-  assert.equal(tm.get(tid)!.state, 'ready', 'rehydrate preserves ready — it was a deliberate parked state')
+  assert.equal(tm.get(tid)!.state, 'done')
   const ok = await tm.resume(tid)
   assert.equal(ok, true)
-  // Ready = the ball is with the USER. Nudging "continue" would snatch it back.
-  assert.ok(!fake.writes.some((w) => /resumed|continue now/i.test(w)), 'no nudge into a ready task')
-  assert.equal(tm.get(tid)!.state, 'ready')
+  // The ball is with the USER. Nudging "continue" would snatch it back.
+  assert.ok(!fake.writes.some((w) => /resumed|continue now/i.test(w)), 'no nudge into a finished thread')
+  assert.equal(tm.get(tid)!.state, 'done')
   tm.kill(tid)
 })
 
@@ -1017,14 +1012,14 @@ async function seedInterrupted(baseDir: string, kind: 'oneoff' | 'session', extr
   return id
 }
 
-test('a session closed by the quit switch comes back READY, not failed; a one-off still reads interrupted', async () => {
+test('a session closed by the quit switch comes back FINISHED, not failed; a one-off still reads interrupted', async () => {
   const baseDir = await tmpBase()
   const sid = await seedInterrupted(baseDir, 'session')
   const oid = await seedInterrupted(baseDir, 'oneoff')
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
   await tm.rehydrate()
   // The quit switch closes every session BY DESIGN — that is not a failure.
-  assert.equal(tm.get(sid)!.state, 'ready', 'persistent session restores as ball-with-you')
+  assert.equal(tm.get(sid)!.state, 'done', 'a thread restores as ball-with-you, not as a failure')
   assert.equal(tm.get(sid)!.error, undefined, 'and carries no error to explain away')
   // A one-off errand really was cut short: unchanged.
   assert.equal(tm.get(oid)!.state, 'failed')

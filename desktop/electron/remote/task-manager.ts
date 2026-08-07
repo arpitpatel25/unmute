@@ -363,10 +363,6 @@ export interface TaskManagerOpts {
   purgeAgeMs?: number
   /** How often the maintenance sweep runs. Default 1h. */
   purgeSweepMs?: number
-  /** A ready ONE-OFF the user has ignored for this long decays to done so it
-   *  fades instead of haunting the queue (ready-inflation valve). Ready SESSIONS
-   *  never decay. Default 1h. */
-  readyDecayMs?: number
   /** Best-effort reaper for an ORPHAN tmux session left by a past run (the app
    *  crashed/quit without killing it). Wired from init.ts (which owns the tmux
    *  bin + private socket). Omitted in tests. */
@@ -380,7 +376,7 @@ type TaskEvent = 'created' | 'updated' | 'needs-user' | 'stuck' | 'done' | 'fail
 /** Turn-over states: the session is parked, polling stopped, ball not with the
  *  agent. 'ready' = ball explicitly WITH THE USER (a checkpoint awaiting their
  *  direction) — parked like done, but queued as "your move" in the UI. */
-const TERMINAL: UiTaskState[] = ['done', 'failed', 'ready']
+const TERMINAL: UiTaskState[] = ['done', 'failed']
 /** Fully settled — kill() has nothing to mark, the librarian has been handed
  *  off, nothing awaits anyone. NOT 'ready' (killing a ready task must mark it
  *  stopped, or a dead task would sit in the your-move queue forever). */
@@ -404,8 +400,6 @@ export class TaskManager extends EventEmitter {
   private tasks = new Map<string, Task>()
   private executors = new Map<string, AgentExecutor>()
   private timers = new Map<string, ReturnType<typeof setInterval>>()
-  /** Per-task ready→done decay timers (see armReadyDecay). */
-  private readyDecayTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Idle-kill timers for WARM sessions (kept alive after done for follow-ups).
   private warmTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Background auto-purge sweep (null until startMaintenance()).
@@ -504,7 +498,6 @@ export class TaskManager extends EventEmitter {
       purgeAgeMs: opts.purgeAgeMs ?? 24 * 60 * 60_000, // 24h — "gone by end of day"
       purgeSweepMs: opts.purgeSweepMs ?? 60 * 60_000,  // hourly
       approvalSweepMs: opts.approvalSweepMs ?? 1500,
-      readyDecayMs: opts.readyDecayMs ?? 60 * 60_000,  // 1h ready-inflation valve
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
       codexDriver: opts.codexDriver,
@@ -1209,7 +1202,7 @@ export class TaskManager extends EventEmitter {
         // transcript yet, and claiming work is in flight would light up the wall
         // with spinners for conversations that finished days ago. The first
         // poll promotes it if the file is actually moving.
-        state: 'ready',
+        state: 'done',
         createdAt: meta.createdAt || now,
         updatedAt: now,
         cwd: meta.cwd || dir,
@@ -1226,7 +1219,7 @@ export class TaskManager extends EventEmitter {
         id, intent: task.intent, sessionId: meta.sessionId, kind: 'session',
         createdAt: task.createdAt, mode: 'managed',
         agent: 'claude-code-desktop', claudeDesktopSessionId: meta.sessionId,
-        state: 'ready', updatedAt: now,
+        state: 'done', updatedAt: now,
         ...(model ? { model } : {}),
       })).catch(() => {})
 
@@ -1479,7 +1472,17 @@ export class TaskManager extends EventEmitter {
    */
   private async pollClaudeDesktop(id: string, force = false): Promise<void> {
     const task = this.tasks.get(id)
-    if (!task || !task.claudeDesktopSessionId || task.state === 'done' || task.state === 'failed') return
+    // A DONE THREAD IS NOT A CLOSED THREAD.
+
+    // `ready` used to mean "finished this turn, still continuable" and was
+    // deliberately non-terminal here, so the poller kept watching in case the
+    // user carried on inside the external app. With `ready` folded into `done`,
+    // stopping on `done` would have silently ended that watch — a turn you
+    // continued in Claude Desktop or Codex would never have come back to us.
+    // So the guard is on `failed` and on ERRANDS: a one-off that finished is
+    // genuinely over, a thread that finished is merely resting.
+    if (!task || !task.claudeDesktopSessionId || task.state === 'failed') return
+    if (task.state === 'done' && (task.kind ?? 'oneoff') !== 'session') return
     const driver = this.opts.claudeDesktopDriver
     if (!driver) return
     const tlog = log.child({ taskId: id })
@@ -1493,7 +1496,7 @@ export class TaskManager extends EventEmitter {
     // first nine polls no-ops — a conversation that was actively moving when we
     // adopted it sat untouched for ~10 ticks before anyone read the file. The
     // Codex poller never hit this because its tasks start `processing`.
-    if (!force && task.state === 'ready' && this.claudeLastSeenAt.has(id)) {
+    if (!force && task.state === 'done' && this.claudeLastSeenAt.has(id)) {
       const n = (this.claudeIdleTicks.get(id) ?? 0) + 1
       this.claudeIdleTicks.set(id, n)
       if (n % 10 !== 0) return
@@ -1610,7 +1613,7 @@ export class TaskManager extends EventEmitter {
       return
     }
 
-    if (advanced && task.state === 'ready') {
+    if (advanced && task.state === 'done') {
       tlog.event('claude-desktop-reopened', { note: 'continued inside Claude Desktop' })
       this.transition(id, 'processing')
       return
@@ -1621,7 +1624,7 @@ export class TaskManager extends EventEmitter {
     }
     // Settled: it has spoken and nothing has moved since the previous poll.
     if (!advanced && task.state === 'processing' && snap.lastAgentMessage) {
-      this.transition(id, 'ready')
+      this.transition(id, 'done')
     }
   }
 
@@ -1630,7 +1633,9 @@ export class TaskManager extends EventEmitter {
     // NOTE: `ready` is deliberately NOT terminal for this backend — the Codex
     // thread outlives our card and the user can continue it inside Codex, so we
     // keep watching. Only done/failed stop the watch.
-    if (!task || !task.codexThreadId || task.state === 'done' || task.state === 'failed') return
+    // Same rule as the Claude poller: see A DONE THREAD IS NOT A CLOSED THREAD.
+    if (!task || !task.codexThreadId || task.state === 'failed') return
+    if (task.state === 'done' && (task.kind ?? 'oneoff') !== 'session') return
     const driver = this.opts.codexDriver
     if (!driver) return
     const tlog = log.child({ taskId: id })
@@ -1640,7 +1645,7 @@ export class TaskManager extends EventEmitter {
     // reading the rollout off disk once a second, forever, for every finished
     // task on the wall (seen in the field on dev.34). Back off hard; a task that
     // is actually working still polls at full rate.
-    if (task.state === 'ready') {
+    if (task.state === 'done') {
       const n = (this.codexIdleTicks.get(id) ?? 0) + 1
       this.codexIdleTicks.set(id, n)
       if (n % 10 !== 0) return
@@ -1691,7 +1696,7 @@ export class TaskManager extends EventEmitter {
     // Codex, and a new turn there must re-open the task here rather than being
     // invisible. So `ready` is a resting state, not a terminal one — if the
     // rollout shows another turn started, come back to processing.
-    if (snap.state === 'processing' && task.state === 'ready') {
+    if (snap.state === 'processing' && task.state === 'done') {
       tlog.event('codex-reopened', { turnsStarted: snap.turnsStarted, note: 'continued inside Codex' })
       this.transition(id, 'processing')
       return
@@ -1702,12 +1707,12 @@ export class TaskManager extends EventEmitter {
       // ball is with the user and the thread is always continuable
       // (ORCHESTRATE-VISION §3, three kinds of done). The existing ready decay
       // valve then settles an ignored one-off to done on its own.
-      if (task.state !== 'ready') {
+      if (task.state !== 'done') {
         // snap.updatedAt is the newest event in the rollout — i.e. when the turn
         // actually finished. Passing it is what stops a relaunch replaying
         // yesterday's completion as if it were new.
-        this.transition(id, 'ready', {
-          state: 'ready',
+        this.transition(id, 'done', {
+          state: 'done',
           result: { summary: snap.lastAgentMessage ?? 'Codex finished this turn.' },
         } as StatusPayload, snap.updatedAt || undefined)
       }
@@ -1887,33 +1892,6 @@ export class TaskManager extends EventEmitter {
     return true
   }
 
-  /**
-   * Arm the ready-decay for ONE task instead of waiting for the hourly sweep.
-   *
-   * purgeStale() still runs the sweep (it also reaps disk orphans), but relying
-   * on it alone meant a ready one-off could sit up to an hour PAST its decay
-   * window before settling — it looked stuck when it was only waiting on a
-   * coarse timer. Sessions never decay: a thread's open loop is real until the
-   * user closes it.
-   */
-  private armReadyDecay(id: string): void {
-    const prev = this.readyDecayTimers.get(id)
-    if (prev) clearTimeout(prev)
-    const t = this.tasks.get(id)
-    if (!t || (t.kind ?? 'oneoff') === 'session') return
-    const timer = setTimeout(() => {
-      this.readyDecayTimers.delete(id)
-      const task = this.tasks.get(id)
-      if (!task || task.state !== 'ready') return
-      task.state = 'done'
-      task.updatedAt = this.clock()
-      this.emit('updated', task)
-      log.child({ taskId: id }).event('ready-decayed-to-done', { via: 'timer' })
-    }, this.opts.readyDecayMs)
-    if (typeof timer.unref === 'function') timer.unref()
-    this.readyDecayTimers.set(id, timer)
-  }
-
   private startPolling(id: string): void {
     const tlog = log.child({ taskId: id })
     // Idempotent: a follow-up into a still-processing task calls this while a
@@ -2005,9 +1983,6 @@ export class TaskManager extends EventEmitter {
    *  Payload is Partial: callers (kill/dispatch-failure) supply only the fields
    *  they know; poll() supplies a full status read. */
   private transition(id: string, next: UiTaskState, payload?: Partial<StatusPayload>, at?: number): void {
-    // Entering `ready` starts its decay clock immediately (see armReadyDecay);
-    // leaving it cancels. Previously only the hourly sweep noticed.
-    if (next === 'ready') queueMicrotask(() => this.armReadyDecay(id))
     const task = this.tasks.get(id)
     if (!task) return
     const tlog = log.child({ taskId: id })
@@ -2064,24 +2039,12 @@ export class TaskManager extends EventEmitter {
         } else {
           this.parkWarm(id)
         }
-        break
-      case 'ready':
-        // Ball-with-user checkpoint: a step finished, the session sits warm
-        // awaiting the user's direction. Queued as "your move" (lowest pull
-        // priority) in the UI; NO doorbell (calm by design), NO librarian yet
-        // (the thread isn't over — curation happens at the final done).
-        tlog.ui('task-row.ready', { summary: task.result?.summary })
-        this.emit('updated', task)
-
-    // Keep the on-disk record current, so a relaunch restores the history
-    // instead of re-deriving it. Best-effort: a task whose meta cannot be
-    // written still works for this run, it just forgets across a restart.
-    if (isExternalAgent(task.agent)) void this.persistState(task)
-        if (task.category === 'consume' || task.category === 'watch') {
-          this.detachAndKill(id)
-        } else {
-          this.parkWarm(id)
-        }
+        // Keep the on-disk record current, so a relaunch restores the history
+        // instead of re-deriving it. Best-effort: a task whose meta cannot be
+        // written still works for this run, it just forgets across a restart.
+        // (Inherited from the `ready` case when the two merged — a finish is a
+        // finish, and it is exactly the transition worth persisting.)
+        if (isExternalAgent(task.agent)) void this.persistState(task)
         break
       case 'failed': {
         // PRD §13.4 #4: surface WHY.
@@ -2395,7 +2358,7 @@ export class TaskManager extends EventEmitter {
           ...(meta.model ? { model: meta.model } : {}),
           claudeDesktopSessionId: meta.claudeDesktopSessionId,
           kind: meta.kind ?? 'session',
-          state: (meta.state as UiTaskState | undefined) ?? 'ready',
+          state: (meta.state as UiTaskState | undefined) ?? 'done',
           createdAt: meta.createdAt ?? now0,
           updatedAt: meta.updatedAt ?? now0,
           cwd: meta.cwd ?? dir,
@@ -2456,7 +2419,7 @@ export class TaskManager extends EventEmitter {
       const statusPath = join(dir, 'status.json')
       const status = await readStatus(statusPath)
       const now = this.clock()
-      const terminal = status?.state === 'done' || status?.state === 'failed' || status?.state === 'ready'
+      const terminal = status?.state === 'done' || status?.state === 'failed'
       // A PERSISTENT SESSION CLOSED BY THE QUIT SWITCH DID NOT FAIL.
       //
       // Every session dies when the app quits (killAll on before-quit — the
@@ -2480,7 +2443,7 @@ export class TaskManager extends EventEmitter {
         // A non-terminal task whose session died with the app is, to the user,
         // interrupted — surface it as failed (still resumable) rather than a
         // forever-spinning 'processing'. Sessions get `ready` instead (above).
-        state: terminal ? status!.state : (isSession ? 'ready' : 'failed'),
+        state: terminal ? status!.state : (isSession ? 'done' : 'failed'),
         createdAt: meta.createdAt ?? now,
         updatedAt: (await statusMtimeMs(statusPath)) ?? meta.createdAt ?? now,
         // Project-bound sessions ran in the user's real dir (meta.cwd); resume
@@ -2734,19 +2697,14 @@ export class TaskManager extends EventEmitter {
    * via remove(); NEVER touches ~/.claude. Public so it can be unit-tested.
    */
   async purgeStale(): Promise<void> {
-    // Decay valve (ready-inflation defense): a ready ONE-OFF the user has
-    // ignored for an hour was not actually awaiting their move — settle it to
-    // done so it fades instead of haunting the queue all day. Ready SESSIONS
-    // never decay: a thread's open loop is real until the user closes it.
-    const readyCutoff = this.clock() - this.opts.readyDecayMs
-    for (const t of this.tasks.values()) {
-      if (t.state === 'ready' && (t.kind ?? 'oneoff') !== 'session' && t.updatedAt < readyCutoff) {
-        t.state = 'done'
-        t.updatedAt = this.clock()
-        this.emit('updated', t)
-        log.child({ taskId: t.id }).event('ready-decayed-to-done', {})
-      }
-    }
+    // THE READY-DECAY VALVE LIVED HERE, and it is gone with the state it
+    // served. It settled an ignored `ready` one-off to `done` after an hour so
+    // it would stop haunting the queue — but `done` also meant "fades off the
+    // notch in fifteen minutes", so the valve did not quiet a task, it DELETED
+    // it from everywhere the user could reach without opening the dashboard.
+    // Quieting is now the notch's job and it steps down a tier instead of off a
+    // cliff (DEMAND_WINDOW_MS in notch-controller). Nothing here rewrites state
+    // behind the user's back any more.
     const cutoff = this.clock() - this.opts.purgeAgeMs
     // 1. IN-MEMORY tasks that have aged out — remove() kills the live session too.
     //    PERSISTENT SESSIONS ARE EXEMPT: a multi-day working session is untouched
@@ -3145,7 +3103,7 @@ export class TaskManager extends EventEmitter {
       const status = await readStatus(task.statusPath)
       // 'ready' = ball with the USER — resume warm+silent awaiting their words,
       // never nudge it to "continue" (there is nothing to continue without them).
-      const unfinished = status?.state !== 'done' && status?.state !== 'ready'
+      const unfinished = status?.state !== 'done'
       if (unfinished) {
         const nudge = buildResumeNudge(task.intent)
         ex.writeStdin(nudge)
@@ -3381,8 +3339,6 @@ export class TaskManager extends EventEmitter {
   private stopPolling(id: string): void {
     const timer = this.timers.get(id)
     if (timer) { clearInterval(timer); this.timers.delete(id) }
-    const decay = this.readyDecayTimers.get(id)
-    if (decay) { clearTimeout(decay); this.readyDecayTimers.delete(id) }
   }
 
   /** Warm window for a task, by category. navigate gets a shorter window

@@ -19,8 +19,24 @@ class FakeClient extends EventEmitter implements NotchClientLike {
   }
 }
 
+/** Presence under our control: we decide how much of the user's time has
+ *  passed and when they walked back in, because both are load-bearing. */
+class FakePresence extends EventEmitter {
+  active = true
+  private ms = 0
+  awakeMs(): number { return this.ms }
+  /** Time passes WITH the user here — this is what spends a demand window. */
+  spend(ms: number): void { this.ms += ms }
+  /** Time passes while they are away — the window must not move. */
+  away(): void { this.active = false }
+  /** They touched the machine again. The one self-opening trigger. */
+  wake(): void { this.active = true; this.emit('wake') }
+  stop(): void {}
+}
+
 interface Harness {
   events: EventEmitter
+  presence: FakePresence
   client: FakeClient
   controller: NotchController
   tasks: Map<string, TaskLite>
@@ -93,7 +109,8 @@ function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
     scratchpadDeliver: rec('scratchpadDeliver'),
     scratchpadDiscard: rec('scratchpadDiscard'),
   }
-  const controller = new NotchController(client, events, deps)
+  const presence = new FakePresence()
+  const controller = new NotchController(client, events, deps, presence)
   // AUTO-EXPAND OFF BY DEFAULT IN TESTS.
   //
   // It ships ON, but almost every case below is about the ATTENTION rung — what
@@ -104,7 +121,7 @@ function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
   controller.setAutoExpand(false)
   // reconcile is debounced 80ms — tests force it synchronously by re-firing.
   const flush = () => { (controller as unknown as { reconcile(): void }).reconcile() }
-  return { events, client, controller, tasks, calls, flush, refuseAnswers: () => { answersLand = false } }
+  return { events, client, controller, presence, tasks, calls, flush, refuseAnswers: () => { answersLand = false } }
 }
 
 function put(h: Harness, t: TaskLite): void {
@@ -119,7 +136,6 @@ test('classify maps only your-move states', () => {
   assert.equal(classify('needs-user'), 'needs-user')
   assert.equal(classify('stuck'), 'stuck')
   assert.equal(classify('failed'), 'errored')
-  assert.equal(classify('ready'), 'ready')
   assert.equal(classify('processing'), null)
   assert.equal(classify('done'), null)
 })
@@ -154,7 +170,7 @@ test('working baseline is active; empty is dormant', () => {
 
 test('tap with a front task → task surface + focus; tap idle → cockpit', () => {
   const h = setup()
-  put(h, makeTask({ id: 't1', state: 'ready' }))
+  put(h, makeTask({ id: 't1', state: 'done', kind: 'session' }))
   h.client.fire({ type: 'tap' })
   assert.equal(h.client.last('setState')!.state, 'task')
   assert.deepEqual(h.calls.focus?.at(-1), ['t1'])
@@ -165,9 +181,9 @@ test('tap with a front task → task surface + focus; tap idle → cockpit', () 
   assert.ok(h2.client.last('setCockpit'))
 })
 
-test('next = skip requeues front to the back', () => {
+test('next walks the crank and comes back around', () => {
   const h = setup()
-  put(h, makeTask({ id: 'a', state: 'ready', name: 'A' }))
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
   put(h, makeTask({ id: 'b', state: 'needs-user', name: 'B', question: { text: 'q' } }))
   h.client.fire({ type: 'tap' })
   const first = h.client.last('showTask')!.task.id
@@ -180,9 +196,9 @@ test('next = skip requeues front to the back', () => {
 
 test('prev cranks backward (reverse rotation of next)', () => {
   const h = setup()
-  put(h, makeTask({ id: 'a', state: 'ready', name: 'A' }))
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A' }))
   put(h, makeTask({ id: 'b', state: 'needs-user', name: 'B', question: { text: 'q' } }))
-  put(h, makeTask({ id: 'c', state: 'ready', name: 'C' }))
+  put(h, makeTask({ id: 'c', state: 'done', kind: 'session', name: 'C' }))
   h.client.fire({ type: 'tap' })
   const first = h.client.last('showTask')!.task.id
   h.client.fire({ type: 'next' })
@@ -275,7 +291,7 @@ test('openDashboard builds the full cockpit payload', async () => {
   const old = Date.now() - 30 * 60 * 1000
   put(h, makeTask({ id: 's1', state: 'processing', kind: 'session', name: 'Notch UI', group: 'unmute', cwd: `${process.env.HOME}/tools/x` }))
   put(h, makeTask({ id: 'o1', state: 'done', kind: 'oneoff', name: 'Old done', updatedAt: old, alive: false }))
-  put(h, makeTask({ id: 'sh1', state: 'ready', kind: 'session', name: 'Shelved thing', shelved: true }))
+  put(h, makeTask({ id: 'sh1', state: 'done', kind: 'session', name: 'Shelved thing', shelved: true }))
   h.client.fire({ type: 'openDashboard' })
   await new Promise((r) => setTimeout(r, 10)) // rails are async
   h.flush()
@@ -360,10 +376,10 @@ test('converseWrite lazily starts the review session and streams output', async 
 
 // ── attention policy: staleness + mute (decided 2026-07-24) ─────────────────
 
-test('a ready task older than 6h leaves the crank (cockpit only); blocked never ages out', async () => {
+test('a checkpoint older than the demand window leaves the crank (cockpit only); blocked never ages out', async () => {
   const h = setup()
   const old = Date.now() - 7 * 60 * 60 * 1000
-  put(h, makeTask({ id: 'stale', state: 'ready', kind: 'session', name: 'Old ready', updatedAt: old }))
+  put(h, makeTask({ id: 'stale', state: 'done', kind: 'session', name: 'Old ready', updatedAt: old }))
   put(h, makeTask({ id: 'oldblocked', state: 'needs-user', name: 'Old blocked', updatedAt: old, question: { text: 'q' } }))
   // stale ready is NOT fronted; the old blocked one is (blocked never ages out)
   assert.equal(h.client.last('setState')!.state, 'attention')
@@ -377,15 +393,15 @@ test('a ready task older than 6h leaves the crank (cockpit only); blocked never 
   assert.ok(!cp.queue.some((q) => q.id === 'stale'))
 })
 
-test('a fresh ready task IS in the crank', () => {
+test('a fresh checkpoint IS in the crank', () => {
   const h = setup()
-  put(h, makeTask({ id: 'fresh', state: 'ready', updatedAt: Date.now() - 60_000 }))
+  put(h, makeTask({ id: 'fresh', state: 'done', kind: 'session', updatedAt: Date.now() - 60_000 }))
   assert.equal(h.client.last('setState')!.state, 'attention')
 })
 
 test('mute drops a task from attention until its state changes', () => {
   const h = setup()
-  put(h, makeTask({ id: 't1', state: 'ready', name: 'Parked' }))
+  put(h, makeTask({ id: 't1', state: 'done', kind: 'session', name: 'Parked' }))
   assert.equal(h.client.last('setState')!.state, 'attention')
   h.client.fire({ type: 'mute', id: 't1' })
   assert.equal(h.client.last('setState')!.state, 'dormant') // nothing else waiting
@@ -395,14 +411,14 @@ test('mute drops a task from attention until its state changes', () => {
   // state CHANGE ends the episode: back to work, then ready again → re-enters
   h.tasks.set('t1', makeTask({ id: 't1', state: 'processing', name: 'Parked' }))
   h.events.emit('updated', h.tasks.get('t1')); h.flush()
-  h.tasks.set('t1', makeTask({ id: 't1', state: 'ready', name: 'Parked' }))
-  h.events.emit('ready', h.tasks.get('t1')); h.flush()
+  h.tasks.set('t1', makeTask({ id: 't1', state: 'done', kind: 'session', name: 'Parked' }))
+  h.events.emit('done', h.tasks.get('t1')); h.flush()
   assert.equal(h.client.last('setState')!.state, 'attention')
 })
 
 test('interacting with a muted task (focus) ends its mute episode', () => {
   const h = setup()
-  put(h, makeTask({ id: 't1', state: 'ready', name: 'Parked' }))
+  put(h, makeTask({ id: 't1', state: 'done', kind: 'session', name: 'Parked' }))
   h.client.fire({ type: 'mute', id: 't1' })
   assert.equal(h.client.last('setState')!.state, 'dormant')
   h.client.fire({ type: 'focusTask', id: 't1' }) // user opened it in the cockpit
@@ -495,7 +511,7 @@ test('a Codex task is never reported dead — its thread outlives every turn', (
   // false put a finished Codex chat behind "resume — continue with full
   // context" / "re-run fresh", offering to revive something never stopped.
   const h = setup()
-  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th', alive: false }))
+  put(h, makeTask({ id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th', alive: false }))
   h.client.fire({ type: 'focusTask', id: 'c1' })
   h.flush()
   const detail = h.client.last('stageDetail')!.task
@@ -505,8 +521,8 @@ test('a Codex task is never reported dead — its thread outlives every turn', (
 
 test('the wall carries the backend, so a card can offer "open in Codex"', () => {
   const h = setup()
-  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
-  put(h, makeTask({ id: 'k1', state: 'ready' }))
+  put(h, makeTask({ id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th' }))
+  put(h, makeTask({ id: 'k1', state: 'done', kind: 'session' }))
   h.client.fire({ type: 'openDashboard' })
   const cards = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards)
   assert.equal(cards.find((c) => c.id === 'c1')!.backend, 'codex-desktop')
@@ -516,7 +532,7 @@ test('the wall carries the backend, so a card can offer "open in Codex"', () => 
 test('the transcript reaches the surface as items, not one flattened blob', () => {
   const h = setup()
   put(h, makeTask({
-    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th',
     conversation: [
       { role: 'user', text: 'open the video' },
       { role: 'tool', text: '', title: 'Search YouTube', code: 'await tab.goto(x)', output: 'found', durationMs: 99_100 },
@@ -536,7 +552,7 @@ test('replying to a Codex chat does NOT fling you onto an unrelated blocked task
   // crank's question — advancing on it would move the user somewhere they never
   // asked to go.
   const h = setup()
-  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  put(h, makeTask({ id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th' }))
   put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
   h.client.fire({ type: 'focusTask', id: 'c1' })
   h.flush()
@@ -604,14 +620,14 @@ test('a FRESH error still demands attention', () => {
 test('a delivery error reaches the surface without settling the task', () => {
   const h = setup()
   put(h, makeTask({
-    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th',
     deliveryError: 'Could not find that chat in Codex',
   }))
   h.client.fire({ type: 'focusTask', id: 'c1' })
   h.flush()
   const d = h.client.last('stageDetail')!.task
   assert.equal(d.deliveryError, 'Could not find that chat in Codex')
-  assert.equal(d.status, 'ready', 'the task itself is untouched')
+  assert.equal(d.status, 'done', 'the task itself is untouched')
 })
 
 test('the WHOLE conversation reaches the surface, not a tail', () => {
@@ -623,7 +639,7 @@ test('the WHOLE conversation reaches the surface, not a tail', () => {
     role: i % 2 === 0 ? 'user' as const : 'assistant' as const, text: `m${i}`,
   }))
   const h = setup()
-  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th', conversation }))
+  put(h, makeTask({ id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th', conversation }))
   h.client.fire({ type: 'focusTask', id: 'c1' })
   h.flush()
   const conv = h.client.last('stageDetail')!.task.conversation!
@@ -637,7 +653,7 @@ test('an unchanged transcript is not re-sent on every poll', () => {
   // not moved.
   const h = setup()
   put(h, makeTask({
-    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th',
     conversation: [{ role: 'assistant', text: 'done' }],
   }))
   h.client.fire({ type: 'focusTask', id: 'c1' })
@@ -648,7 +664,7 @@ test('an unchanged transcript is not re-sent on every poll', () => {
   assert.equal(sent(), first, 'nothing changed → nothing sent')
 
   put(h, makeTask({
-    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th',
     conversation: [{ role: 'assistant', text: 'done' }, { role: 'user', text: 'and now this' }],
   }))
   h.flush()
@@ -660,7 +676,7 @@ test('handing off to Codex collapses the notch instead of sitting on top of it',
   // window — a different surface. The notch was never told anything, so it
   // stayed pinned above the Codex window the user had just been sent to.
   const h = setup()
-  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  put(h, makeTask({ id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th' }))
   h.client.fire({ type: 'openDashboard' })
   assert.equal(h.client.last('setState')!.state, 'cockpit')
   h.controller.collapse()
@@ -764,7 +780,7 @@ test('a stale READY task folds like any other finished step', () => {
   // completely. The wall showed 15-day-old work and hid last week's.
   const h = setup()
   const day = 24 * 60 * 60 * 1000
-  put(h, makeTask({ id: 'stale-ready', state: 'ready', kind: 'session', group: 'g', updatedAt: Date.now() - 15 * day }))
+  put(h, makeTask({ id: 'stale-ready', state: 'done', kind: 'session', group: 'g', updatedAt: Date.now() - 15 * day }))
   h.client.fire({ type: 'openDashboard' })
   const g = h.client.last('setCockpit')!.data.groups[0]
   assert.equal(g.cards.length, 0)
@@ -829,8 +845,8 @@ test('the UNGROUPED bucket ranks by recency like any other group', () => {
   // else's group title, and a correctly-sorted wall looked scrambled.
   const h = setup()
   const hour = 60 * 60 * 1000
-  put(h, makeTask({ id: 'grouped', state: 'ready', kind: 'session', group: 'Unmute', updatedAt: Date.now() - 40 * hour }))
-  put(h, makeTask({ id: 'loose', state: 'ready', kind: 'session', updatedAt: Date.now() - 1 * hour }))
+  put(h, makeTask({ id: 'grouped', state: 'done', kind: 'session', group: 'Unmute', updatedAt: Date.now() - 40 * hour }))
+  put(h, makeTask({ id: 'loose', state: 'done', kind: 'session', updatedAt: Date.now() - 1 * hour }))
   h.client.fire({ type: 'openDashboard' })
   const groups = h.client.last('setCockpit')!.data.groups
   assert.equal(groups[0].name, '', 'the ungrouped bucket holds the newest task, so it leads')
@@ -845,7 +861,7 @@ test('reopening a task RE-SENDS its detail, even when nothing changed', () => {
   // Measured at 25 SECONDS in the field log.
   const h = setup()
   put(h, makeTask({
-    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th',
     conversation: [{ role: 'assistant', text: 'done' }],
   }))
   h.client.fire({ type: 'focusTask', id: 'c1' })
@@ -863,7 +879,7 @@ test('reopening a task RE-SENDS its detail, even when nothing changed', () => {
 
 test('a programmatic collapse also invalidates what the surface holds', () => {
   const h = setup()
-  put(h, makeTask({ id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th' }))
+  put(h, makeTask({ id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th' }))
   h.client.fire({ type: 'focusTask', id: 'c1' })
   h.flush()
   const before = h.client.ofType('stageDetail').length
@@ -878,7 +894,7 @@ test('the dedupe still holds while the surface keeps showing the same task', () 
   // moved is real. It just must not outlive the receiver's copy.
   const h = setup()
   put(h, makeTask({
-    id: 'c1', state: 'ready', agent: 'codex-desktop', codexThreadId: 'th',
+    id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th',
     conversation: [{ role: 'assistant', text: 'done' }],
   }))
   h.client.fire({ type: 'focusTask', id: 'c1' })
@@ -894,7 +910,7 @@ test('a Claude desktop card carries its conversation, exactly like a Codex one',
   // never ran and the card had nothing to draw. The registry decides now.
   const h = setup()
   put(h, makeTask({
-    id: 'cd1', state: 'ready', agent: 'claude-code-desktop',
+    id: 'cd1', state: 'done', kind: 'session', agent: 'claude-code-desktop',
     conversation: [
       { role: 'user', text: 'which season?' },
       { role: 'tool', text: '', title: 'AskUserQuestion', code: '{}', output: 'Summer' },
@@ -910,7 +926,7 @@ test('a Claude desktop card carries its conversation, exactly like a Codex one',
 
 test('a driven backend is never reported dead — its chat lives in the other app', () => {
   const h = setup()
-  put(h, makeTask({ id: 'cd2', state: 'ready', agent: 'claude-code-desktop', alive: false }))
+  put(h, makeTask({ id: 'cd2', state: 'done', kind: 'session', agent: 'claude-code-desktop', alive: false }))
   h.client.fire({ type: 'focusTask', id: 'cd2' })
   h.flush()
   assert.equal(h.client.last('stageDetail')!.task.alive, true)
@@ -918,7 +934,7 @@ test('a driven backend is never reported dead — its chat lives in the other ap
 
 test('a PTY task names no backend, keeps its real liveness, and now carries a conversation too', () => {
   const h = setup()
-  put(h, makeTask({ id: 'p1', state: 'ready', agent: 'claude', alive: false }))
+  put(h, makeTask({ id: 'p1', state: 'done', kind: 'session', agent: 'claude', alive: false }))
   h.client.fire({ type: 'focusTask', id: 'p1' })
   h.flush()
   const d = h.client.last('stageDetail')!.task
@@ -936,7 +952,7 @@ test('a PTY task names no backend, keeps its real liveness, and now carries a co
 test('a PTY task with turns sends them, so the stage can show the exchange', () => {
   const h = setup()
   put(h, makeTask({
-    id: 'p2', state: 'ready', agent: 'claude', alive: true,
+    id: 'p2', state: 'done', kind: 'session', agent: 'claude', alive: true,
     conversation: [
       { role: 'user', text: 'summarize the pricing thread' },
       { role: 'assistant', text: 'Three tiers, and the middle one is new.' },
@@ -1067,7 +1083,7 @@ test('Open dashboard lands on the WALL, not the task you just left', () => {
   // meant closing the stage first.
   const h = setup()
   put(h, makeTask({ id: 'a', state: 'needs-user', alive: true, question: { text: 'q' } }))
-  put(h, makeTask({ id: 'b', state: 'ready', alive: true }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', alive: true }))
   h.client.fire({ type: 'tap' })                       // auto-expanded onto 'a'
   assert.equal(h.client.last('showTask')!.task.id, 'a')
 
@@ -1165,7 +1181,7 @@ test('closing a blocked task pockets it; closing a READY one still quiets it', (
   assert.equal(h.client.last('setState')!.attention, 1, 'and still demanding')
 
   const h2 = setup()
-  put(h2, makeTask({ id: 'r', state: 'ready', alive: true }))
+  put(h2, makeTask({ id: 'r', state: 'done', kind: 'session', alive: true }))
   h2.client.fire({ type: 'tap' })
   h2.client.fire({ type: 'closeStage' })
   h2.flush()
@@ -1187,14 +1203,12 @@ test('the pocket is a GLANCE — you can always get the full task back', () => {
   h.flush()
   assert.equal(h.client.last('setState')!.state, 'task', 'back to the full panel')
   assert.deepEqual(h.calls.focus?.at(-1), ['a'])
-  // It is not "set aside" any more — it is open in front of you.
-  assert.equal(pocketOf(h)!.slots.length, 0)
-  assert.equal(pocketOf(h)!.mode, 'closed')
-
-  // …and leaving puts it straight back.
-  h.client.fire({ type: 'userLeft', reason: 'blur' })
-  h.flush()
-  assert.equal(pocketOf(h)!.slots.length, 1)
+  assert.equal(pocketOf(h)!.mode, 'closed', 'it is open in front of you, not set aside')
+  // EXPANDING NO LONGER EMPTIES ANYTHING. The pocket used to be a hand-managed
+  // list you were removed from on the way out; it is a window onto the crank
+  // now, and the crank always holds everything you can still reach. What
+  // changes when you open something is the MODE, not the membership.
+  assert.ok(pocketOf(h)!.slots.some((sl) => sl.id === 'a'))
 })
 
 
@@ -1251,7 +1265,7 @@ test('leaving collapses the WALL too, not just a task', () => {
   // the one exempted: keying on focusedId meant a focusless cockpit rode along
   // to whatever you switched to.
   const h = setup()
-  put(h, makeTask({ id: 'a', state: 'ready', alive: true }))
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', alive: true }))
   h.client.fire({ type: 'openDashboard' })
   h.flush()
   assert.equal(h.client.last('setState')!.state, 'cockpit')
@@ -1259,12 +1273,12 @@ test('leaving collapses the WALL too, not just a task', () => {
   h.client.fire({ type: 'userLeft', reason: 'space' })
   h.flush()
   assert.notEqual(h.client.last('setState')!.state, 'cockpit', 'it gets out of the way')
-  assert.equal(pocketOf(h)?.slots.length ?? 0, 0, 'and pockets nothing — there was no task')
+  assert.equal(pocketOf(h)!.mode, 'closed', 'and it does not aim your voice anywhere on the way out')
 })
 
 test('a quick return restores the surface you were actually on', () => {
   const h = setup()
-  put(h, makeTask({ id: 'a', state: 'ready', alive: true }))
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', alive: true }))
   h.client.fire({ type: 'openDashboard' })
   h.client.fire({ type: 'userLeft', reason: 'space' })
   h.flush()
@@ -1282,7 +1296,7 @@ test('a quick return restores the surface you were actually on', () => {
   h2.flush()
   assert.equal(h2.client.last('setState')!.state, 'task')
   assert.deepEqual(h2.calls.focus?.at(-1), ['b'])
-  assert.equal(pocketOf(h2)!.slots.length, 0, 'and it leaves the pocket on the way back')
+  assert.equal(pocketOf(h2)!.mode, 'closed', 'the carousel is not left aimed at anything')
 })
 
 test('leaving with nothing expanded does nothing at all', () => {
@@ -1295,38 +1309,217 @@ test('leaving with nothing expanded does nothing at all', () => {
   assert.equal(h.client.last('setState')!.state, before)
 })
 
-test('the pocket holds ONLY what is demanding you', () => {
-  // Browsing an old session used to land it in the pocket beside the things
-  // actually waiting on you — and invited a whole second category to explain
-  // the difference. A task you are really working with will demand you again
-  // on its own, and the existing path pockets it then.
+test('the crank holds everything you can still reach, and marks what wants you', () => {
+  // THIS TEST USED TO ASSERT THE OPPOSITE, and the old rule was the bug.
+  //
+  // The pocket held demanding tasks only, so anything else you looked at was
+  // unreachable the moment you left it — the dashboard was the only way back.
+  // The rule it was really reaching for was about AUTO-FILL (what arrives here
+  // on its own), not CAPACITY (what is allowed to be here). Capacity is now
+  // everything from today; `demanding` says which ones are actually waiting.
   const h = setup()
-  put(h, makeTask({ id: 'live', state: 'processing', alive: true }))
-  put(h, makeTask({ id: 'old', state: 'done', alive: true }))
-  put(h, makeTask({ id: 'ask', state: 'needs-user', alive: true, question: { text: 'q' } }))
-
-  for (const [id, keptExpected] of [['old', false], ['live', false], ['ask', true]] as const) {
-    h.client.fire({ type: 'focusTask', id })
-    h.client.fire({ type: 'userLeft', reason: 'space' })
-    h.flush()
-    const inPocket = (pocketOf(h)?.slots ?? []).some((s) => s.id === id)
-    assert.equal(inPocket, keptExpected, `${id} pocketed=${inPocket}, expected ${keptExpected}`)
+  put(h, makeTask({ id: 'live', state: 'processing', alive: true, name: 'Live' }))
+  put(h, makeTask({ id: 'old', state: 'done', kind: 'oneoff', alive: true, name: 'Old errand' }))
+  put(h, makeTask({ id: 'ask', state: 'needs-user', alive: true, name: 'Ask', question: { text: 'q' } }))
+  h.client.fire({ type: 'pocketOpen' })
+  const slots = pocketOf(h)!.slots
+  for (const id of ['live', 'old', 'ask']) {
+    assert.ok(slots.some((sl) => sl.id === id), `${id} must stay reachable`)
   }
-  assert.deepEqual((pocketOf(h)!.slots).map((s) => s.id), ['ask'], 'only the demanding one survives')
+  assert.equal(slots.find((sl) => sl.id === 'ask')!.demanding, true)
+  assert.equal(slots.find((sl) => sl.id === 'old')!.demanding, false)
+  assert.equal(slots.find((sl) => sl.id === 'live')!.demanding, false)
+  // …and only the demanding one is counted at you.
+  assert.equal(h.client.last('setState')!.attention, 1)
 })
 
-test('closing follows the same rule as leaving', () => {
+test('closing quiets a checkpoint you have seen, but never a live question', () => {
   const h = setup()
-  put(h, makeTask({ id: 'p', state: 'processing', alive: true }))
+  put(h, makeTask({ id: 'c', state: 'done', kind: 'session', alive: true, name: 'Checkpoint' }))
+  assert.equal(h.client.last('setState')!.attention, 1)
   h.client.fire({ type: 'tap' })
   h.client.fire({ type: 'closeStage' })
   h.flush()
-  assert.equal(pocketOf(h)?.slots.length ?? 0, 0, 'a running task you closed is not "set aside"')
+  assert.equal(h.client.last('setState')!.attention, 0, 'you looked at it; it stops asking')
+  h.client.fire({ type: 'pocketOpen' })
+  assert.ok(pocketOf(h)!.slots.some((sl) => sl.id === 'c'), 'quieted is not removed')
 
   const h2 = setup()
   put(h2, makeTask({ id: 'q', state: 'needs-user', alive: true, question: { text: 'q' } }))
   h2.client.fire({ type: 'tap' })
   h2.client.fire({ type: 'closeStage' })
   h2.flush()
-  assert.equal(pocketOf(h2)!.slots.length, 1, 'a demanding one still is')
+  assert.equal(h2.client.last('setState')!.attention, 1, 'looking at a question is not answering it')
+})
+
+
+// ── the state collapse: what wants you, and why ────────────────────────────
+//
+// These are the rules the whole redesign rests on. Each one replaces a
+// behaviour that shipped and was wrong in the field.
+
+test('a finished ERRAND does not demand; a finished THREAD does', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'errand', state: 'done', kind: 'oneoff', name: 'play the video' }))
+  assert.equal(h.client.last('setState')!.attention, 0, 'the video is playing; nothing is owed')
+
+  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor' }))
+  assert.equal(h.client.last('setState')!.attention, 1, 'the ball came back to you')
+  assert.equal(h.client.last('showTask')?.task.id, 'thread')
+})
+
+test('the demand window is spent in YOUR time — being away costs nothing', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor' }))
+  assert.equal(h.client.last('setState')!.attention, 1)
+
+  // Four hours at lunch. The wall clock has moved; yours has not.
+  h.presence.away()
+  h.flush()
+  assert.equal(h.client.last('setState')!.attention, 1, 'it must still be waiting when you get back')
+
+  // Now four hours WITH you at the machine — you had every chance to look.
+  h.presence.wake()
+  h.presence.spend(4 * 60 * 60 * 1000)
+  h.flush()
+  assert.equal(h.client.last('setState')!.attention, 0, 'seen your chance; it steps down to reach')
+})
+
+test('a blocked task never ages out, however long you sit there', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'asked you', question: { text: 'which?' } }))
+  h.presence.spend(24 * 60 * 60 * 1000)
+  h.flush()
+  assert.equal(h.client.last('setState')!.attention, 1, 'a live question has one exit: answering it')
+})
+
+test('nothing that ages out ever leaves the crank — it lands in reach', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor' }))
+  h.presence.spend(4 * 60 * 60 * 1000)
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })
+  const slots = h.client.last('pocket')!.data.slots
+  assert.ok(slots.some((s) => s.id === 'thread'), 'still reachable without the dashboard')
+  assert.equal(slots.find((s) => s.id === 'thread')!.demanding, false, 'but quiet')
+})
+
+// ── the crank: demanding, then the seam, then today ────────────────────────
+
+test('the seam sits between what waits on you and the rest of today', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'blocked', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
+  put(h, makeTask({ id: 'errand', state: 'done', kind: 'oneoff', name: 'Errand' }))
+  h.client.fire({ type: 'pocketOpen' })
+  const slots = h.client.last('pocket')!.data.slots
+  assert.deepEqual(slots.map((s) => s.kind ?? 'task'), ['task', 'seam', 'task'])
+  assert.equal(slots[0].id, 'blocked')
+  assert.equal(slots[1].more, 1, 'it says how much is behind it')
+  assert.equal(slots[2].id, 'errand')
+})
+
+test('no seam when there is nothing past it', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'blocked', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
+  h.client.fire({ type: 'pocketOpen' })
+  assert.ok(!h.client.last('pocket')!.data.slots.some((s) => s.kind === 'seam'))
+})
+
+test('the seam addresses nothing — the voice must not pick a neighbour', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'blocked', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
+  put(h, makeTask({ id: 'errand', state: 'done', kind: 'oneoff', name: 'Errand' }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketMove', delta: 1 })      // onto the seam
+  assert.equal(h.client.last('pocket')!.data.slots[h.client.last('pocket')!.data.at].kind, 'seam')
+  const focus = h.calls.focus!.at(-1)!
+  assert.equal(focus[0], null, 'null = let the router decide, exactly as with the surface closed')
+})
+
+test('walking past the last demanding task continues into today, and does not loop', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'blocked', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
+  put(h, makeTask({ id: 'errand', state: 'done', kind: 'oneoff', name: 'Errand' }))
+  h.client.fire({ type: 'next' })   // seam
+  h.client.fire({ type: 'next' })   // today
+  const p = h.client.last('pocket')!.data
+  assert.equal(p.slots[p.at].id, 'errand', 'the crank used to rotate the same 3 tasks forever')
+})
+
+// ── ordering: what YOU touched, not what happened ──────────────────────────
+
+test('the crank orders by your last touch, not by agent activity', () => {
+  const h = setup()
+  const old = Date.now() - 60 * 60_000
+  put(h, makeTask({ id: 'a', state: 'needs-user', name: 'A', createdAt: old, question: { text: 'q' } }))
+  put(h, makeTask({ id: 'b', state: 'needs-user', name: 'B', createdAt: old + 1000, question: { text: 'q' } }))
+  // A churns tool calls. That is not evidence you care about it.
+  h.tasks.get('a')!.updatedAt = Date.now()
+  h.events.emit('updated', h.tasks.get('a')); h.flush()
+  h.client.fire({ type: 'pocketOpen' })
+  assert.deepEqual(h.client.last('pocket')!.data.slots.map((s) => s.id), ['b', 'a'])
+
+  // Now YOU open A. It goes to the front.
+  h.client.fire({ type: 'focusTask', id: 'a' })
+  h.client.fire({ type: 'closeStage' })
+  h.client.fire({ type: 'pocketOpen' })
+  assert.deepEqual(h.client.last('pocket')!.data.slots.map((s) => s.id), ['a', 'b'])
+})
+
+test('the order is held while you walk it, and released when you leave', () => {
+  const h = setup()
+  const old = Date.now() - 60 * 60_000
+  put(h, makeTask({ id: 'a', state: 'needs-user', name: 'A', createdAt: old, question: { text: 'q' } }))
+  put(h, makeTask({ id: 'b', state: 'needs-user', name: 'B', createdAt: old + 1000, question: { text: 'q' } }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketMove', delta: 1 })   // reach past B to A — this TOUCHES A
+  assert.deepEqual(h.client.last('pocket')!.data.slots.map((s) => s.id), ['b', 'a'],
+    'a live re-sort here would put A first and yank the list out from under you')
+  h.client.fire({ type: 'closeStage' })             // leaving releases the hold
+  h.client.fire({ type: 'pocketOpen' })
+  assert.deepEqual(h.client.last('pocket')!.data.slots.map((s) => s.id), ['a', 'b'])
+})
+
+// ── presence: the one thing allowed to open the surface ────────────────────
+
+test('work finishing while you are AT the machine never takes your screen', () => {
+  const h = setup()
+  h.controller.setAutoExpand(true)
+  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor' }))
+  assert.equal(h.client.last('setState')!.attention, 1, 'the badge ticks')
+  // (auto-expand is the legacy path and stays; what must never happen is the
+  //  wake path firing while you are already here.)
+  assert.ok(!h.client.ofType('pocket').some((c) => c.data.mode === 'open'),
+    'the pocket must not open itself')
+})
+
+test('coming back opens the surface on what is yours', () => {
+  const h = setup()
+  h.presence.away()
+  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor', createdAt: Date.now() - 90_000 }))
+  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Blocked', createdAt: Date.now() - 30_000, question: { text: 'which?' } }))
+  h.presence.wake()
+  h.flush()
+  assert.equal(h.client.last('showTask')!.task.id, 'q', 'newest touch first')
+})
+
+test('coming back to a clean desk shows a clean desk', () => {
+  const h = setup()
+  h.presence.away()
+  put(h, makeTask({ id: 'errand', state: 'done', kind: 'oneoff', name: 'played the video' }))
+  h.presence.wake()
+  h.flush()
+  assert.equal(h.client.last('setState')!.attention, 0)
+  assert.notEqual(h.client.last('setState')!.state, 'attention')
+})
+
+test('coming back does not yank away something you left open', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'reading', state: 'processing', name: 'Reading this' }))
+  h.client.fire({ type: 'focusTask', id: 'reading' })
+  h.presence.away()
+  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Blocked', question: { text: 'which?' } }))
+  h.presence.wake()
+  h.flush()
+  assert.equal(h.client.last('stageDetail')?.task.id ?? h.client.last('showTask')?.task.id, 'reading')
 })

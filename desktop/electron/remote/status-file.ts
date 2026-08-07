@@ -24,7 +24,24 @@ const log = createLogger('status-file')
 
 // ─── Schema types (mirror the schema doc 1:1) ──────────────────────
 
-export type TaskState = 'processing' | 'needs-user' | 'ready' | 'done' | 'failed' // PRD §5.3 + ready (ball-with-user checkpoint)
+/**
+ * WHAT HAPPENED. Nothing here encodes what the UI should do about it.
+ *
+ * `ready` used to sit between `done` and `needs-user`, and it was never a fact
+ * about the task — it was a rendering decision ("put this in the crank") stored
+ * as if it were history. Two costs came with that. It had to be GUESSED at the
+ * earliest possible moment, from whether the agent's last line happened to end
+ * in a question mark. And once written it was a one-way door: `done` erased the
+ * knowledge that a finish had been a checkpoint, so nothing downstream could
+ * ever reconsider — which is why a `ready → done` decay read as a task
+ * vanishing rather than quieting down.
+ *
+ * Whether a finish wants you is now a PREDICATE (`demanding()` in the notch
+ * controller), evaluated fresh every render. It can change its mind as the
+ * clock moves, as you arrive, as you walk away — without rewriting what
+ * happened. Persisted `ready` from older builds normalises to `done` on read.
+ */
+export type TaskState = 'processing' | 'needs-user' | 'done' | 'failed'
 
 // The executor self-classifies the task so Unmute can drive presentation +
 // lifecycle (DECIDED). The executor knows best — it's the one doing the work.
@@ -134,7 +151,18 @@ export async function writeStatusFile(filePath: string, payload: StatusPayload):
 // ─── Tolerant read (PRD #2) ─────────────────────────────────────────
 
 function isValidState(s: unknown): s is TaskState {
-  return s === 'processing' || s === 'needs-user' || s === 'ready' || s === 'done' || s === 'failed'
+  return s === 'processing' || s === 'needs-user' || s === 'done' || s === 'failed'
+}
+
+/**
+ * `ready` was removed as a state (see TaskState). Files written by an older
+ * build — or by an agent working from an older tool schema — still carry it, so
+ * accept it on the way IN and fold it to `done`. It always meant "the turn
+ * ended"; the part that mattered (does this want you) is now derived, and a
+ * folded `ready` on a session still comes out demanding.
+ */
+export function normalizeState(s: unknown): unknown {
+  return s === 'ready' ? 'done' : s
 }
 
 /**
@@ -156,6 +184,10 @@ export async function readStatus(filePath: string): Promise<StatusPayload | null
     // Almost always a read that landed mid-write. Expected; debug not warn.
     log.debug('status read parse-miss (likely mid-write) — will retry', { filePath })
     return null
+  }
+  if (typeof parsed === 'object' && parsed !== null) {
+    const p = parsed as { state?: unknown }
+    p.state = normalizeState(p.state)
   }
   if (typeof parsed !== 'object' || parsed === null || !isValidState((parsed as StatusPayload).state)) {
     log.debug('status read missing/invalid state — treated as no-update', { filePath })

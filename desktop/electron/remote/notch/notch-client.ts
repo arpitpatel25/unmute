@@ -41,15 +41,33 @@ export type TaskStatusName = 'processing' | 'needs-user' | 'ready' | 'stuck' | '
  */
 export type PocketMode = 'closed' | 'open'
 
-/** One task you set aside. There are no synthetic entries: "let the router
- *  decide" is not a thing in a list of tasks, it is what happens when the list
- *  is not on screen. */
+/**
+ * One stop on the crank.
+ *
+ * Usually a task. Exactly once — between the things waiting on you and the rest
+ * of today — it is a `seam`, which is the only synthetic entry that has ever
+ * earned its place here. It is not a task and must never resolve to one: it
+ * marks the moment the crank changes meaning from triage to browsing. Without
+ * it that change happens silently and the next thing you say lands somewhere
+ * you were not aiming.
+ *
+ * ("Let the router decide" is still NOT a member of this list — that is what
+ * happens when the list is not on screen, and it was rightly removed.)
+ */
 export interface PocketSlotP {
   id: string
   title: string
+  /** 'seam' marks the boundary card. Absent means an ordinary task. */
+  kind?: 'seam'
+  /** How many of today's tasks lie past the seam. Seam slots only. */
+  more?: number
   /** The pending ask. The surface clamps it to two lines. */
   ask?: string
   status?: TaskStatusName
+  /** Is this one actually waiting on you? Drives the card's weight — the
+   *  surface must be able to show reach items as visibly quieter without
+   *  re-deriving a rule that only the controller can evaluate. */
+  demanding?: boolean
 }
 
 export interface PocketP {

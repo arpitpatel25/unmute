@@ -55,12 +55,7 @@ struct PocketCard: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             VStack(alignment: .leading, spacing: 7) {
-                header
-                Text(slot?.ask ?? "Waiting on you.")
-                    .font(.system(size: 12)).foregroundColor(Theme.textDim)
-                    .lineLimit(2).truncationMode(.tail)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if slot?.isSeam == true { seam } else { taskFace }
                 if pocket.slots.count > 1 { rail }
                 Spacer(minLength: 0)
                 route
@@ -83,6 +78,42 @@ struct PocketCard: View {
         }
     }
 
+    @ViewBuilder private var taskFace: some View {
+        header
+        Text(slot?.ask ?? "Waiting on you.")
+            .font(.system(size: 12)).foregroundColor(Theme.textDim)
+            .lineLimit(2).truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// THE SEAM — the one card that is not a task.
+    ///
+    /// It marks where the crank stops being triage and starts being browsing.
+    /// Without it that change happens in silence: you keep pressing, the cards
+    /// keep coming, and nothing tells you that everything waiting on you is
+    /// behind you — so the next thing you say lands in a task you were never
+    /// triaging. One keypress across a whole session, and it is where most
+    /// people will stop, which is exactly the point of drawing it.
+    ///
+    /// Deliberately centred and quiet: it is a threshold, not an item, and it
+    /// must not read as one more thing demanding something.
+    private var seam: some View {
+        VStack(spacing: 4) {
+            Text("Nothing else is waiting")
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundColor(Theme.text)
+            if let n = slot?.more, n > 0 {
+                Text("\(n) more from today  ›")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textDim)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.vertical, 6)
+        .padding(.trailing, 22)          // the close owns that corner
+    }
+
     // ── which task ────────────────────────────────────────────────────────
     //
     // The card is a GLANCE, not a destination: it exists because the panel is
@@ -90,10 +121,15 @@ struct PocketCard: View {
     // picker still needs the panel, so the way back is one tap.
     private var header: some View {
         HStack(spacing: 8) {
-            Circle().fill(slot?.status == "ready" ? Theme.cReady : Theme.cNeeds)
+            // WAITING ON YOU READS LOUDER THAN TODAY. The crank now carries
+            // both, and a reach item drawn at full weight would make the list
+            // look like a dozen things demanding you — which is precisely what
+            // the badge, and the seam, exist to stop it from claiming.
+            Circle().fill(slot?.demanding == false ? Theme.textDim : Theme.cNeeds)
                 .frame(width: 8, height: 8)
             Text(slot?.title ?? "Nothing in your pocket")
-                .font(.system(size: 13.5, weight: .semibold))
+                .font(.system(size: 13.5, weight: slot?.demanding == false ? .medium : .semibold))
+                .foregroundColor(slot?.demanding == false ? Theme.textDim : Theme.text)
                 .lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
             if slot != nil {

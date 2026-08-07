@@ -7,7 +7,6 @@ import {
   type AskQuestion,
   summarize,
   plainLine,
-  endsWithQuestion,
   deriveCategory,
   deriveStatus,
   type ObserverContext,
@@ -55,20 +54,20 @@ test('plainLine strips links to their text', () => {
 
 // ─── Blocked vs finished ────────────────────────────────────────────────────
 
-test('a short trailing question means the session is waiting on the user', () => {
-  assert.equal(endsWithQuestion('I found two candidates.\n\nWhich one should I use?'), true)
+test('a finish is a finish — punctuation decides nothing', () => {
+  // These three used to test endsWithQuestion, which chose `ready` vs `done`
+  // from whether the last line ended in "?" — and so decided whether the user
+  // could still reach the task at all. All three now land identically, because
+  // the turn ending is the ONLY thing this event knows. Whether it wants you is
+  // decided later, from `kind`, by demanding().
+  const asked = deriveStatus({ kind: 'turn-ended', sessionId: 's', lastMessage: 'I found two candidates.\n\nWhich one should I use?' }, ctx({ kind: 'oneoff' }))!
+  const told  = deriveStatus({ kind: 'turn-ended', sessionId: 's', lastMessage: 'Two options exist.\n\nLet me know which you prefer.' }, ctx({ kind: 'oneoff' }))!
+  const plain = deriveStatus({ kind: 'turn-ended', sessionId: 's', lastMessage: 'Done. Tests pass.' }, ctx({ kind: 'oneoff' }))!
+  assert.equal(asked.state, 'done')
+  assert.equal(told.state, 'done', 'the field bug: questions signed off with "Let me know" used to vanish')
+  assert.equal(plain.state, 'done')
 })
 
-test('a long trailing line ending in "?" is NOT treated as a question', () => {
-  // Conservative on purpose: mislabelling a finished task as blocked parks it
-  // in the user's queue forever, which is the worse of the two errors.
-  const rhetorical = `Here is the summary. ${'and more detail '.repeat(20)}right?`
-  assert.equal(endsWithQuestion(rhetorical), false)
-})
-
-test('a question that is not the last thing said does not count', () => {
-  assert.equal(endsWithQuestion('Should I refactor this?\n\nI went ahead and did it.'), false)
-})
 
 // ─── Category, from evidence rather than instruction ────────────────────────
 
@@ -89,7 +88,7 @@ test('a heartbeat is liveness, not news', () => {
 test('a finished one-off is done; a session that finished a step is ready', () => {
   const msg = 'Renamed the file and pushed.'
   assert.equal(deriveStatus({ kind: 'turn-ended', sessionId: 's', lastMessage: msg }, ctx({ kind: 'oneoff' }))?.state, 'done')
-  assert.equal(deriveStatus({ kind: 'turn-ended', sessionId: 's', lastMessage: msg }, ctx({ kind: 'session' }))?.state, 'ready')
+  assert.equal(deriveStatus({ kind: 'turn-ended', sessionId: 's', lastMessage: msg }, ctx({ kind: 'session' }))?.state, 'done')
 })
 
 test("the reply IS the result — verbatim, with a headline and its links", () => {
@@ -111,7 +110,7 @@ test('a trailing question is an OFFER — ready, not blocked, and not a question
     { kind: 'turn-ended', sessionId: 's', lastMessage: 'Two options exist.\n\nWhich do you want?' },
     ctx({ kind: 'oneoff' }),
   )!
-  assert.equal(s.state, 'ready')
+  assert.equal(s.state, 'done')
   assert.equal(s.question, undefined, 'no fake question box')
   assert.match(s.result!.detail!, /Two options exist/, 'the reasoning is still there in full')
 })
@@ -134,7 +133,7 @@ test('PreToolUse for any OTHER tool is not an ask', () => {
 test('a session that dies mid-work fails; one that dies after finishing does not', () => {
   assert.equal(deriveStatus({ kind: 'session-ended', sessionId: 's' }, ctx({ prior: 'processing' }))?.state, 'failed')
   assert.equal(deriveStatus({ kind: 'session-ended', sessionId: 's' }, ctx({ prior: 'done' })), null)
-  assert.equal(deriveStatus({ kind: 'session-ended', sessionId: 's' }, ctx({ prior: 'ready' })), null)
+  assert.equal(deriveStatus({ kind: 'session-ended', sessionId: 's' }, ctx({ prior: 'done' })), null)
 })
 
 test('when it cannot tell, it says so instead of inventing a result', () => {

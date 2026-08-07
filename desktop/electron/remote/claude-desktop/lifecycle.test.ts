@@ -104,11 +104,11 @@ test('adopted as a SESSION so the reaper never deletes a live chat', async () =>
   m.killAll(); m.stopMaintenance()
 })
 
-test('adopted READY, not processing — a chat from last week is not "working"', async () => {
+test('adopted FINISHED, not processing — a chat from last week is not "working"', async () => {
   const base = await tmp()
   const m = await makeManager(fakeDriver({ tasks: [{}] }), base)
   const [id] = await m.adoptClaudeDesktop()
-  assert.equal(m.get(id)!.state, 'ready')
+  assert.equal(m.get(id)!.state, 'done')
   m.killAll(); m.stopMaintenance()
 })
 
@@ -175,7 +175,7 @@ test('the FIRST poll seeds the baseline — an old chat must not light up as wor
   const m = await makeManager(d, base)
   const [id] = await m.adoptClaudeDesktop()
   await poll(m, id)
-  assert.equal(m.get(id)!.state, 'ready')
+  assert.equal(m.get(id)!.state, 'done')
   m.killAll(); m.stopMaintenance()
 })
 
@@ -193,7 +193,7 @@ test('a growing transcript moves the card to processing', async () => {
   m.killAll(); m.stopMaintenance()
 })
 
-test('quiet AND it has spoken ⇒ ready', async () => {
+test('quiet AND it has spoken ⇒ finished (the ball is back with you)', async () => {
   const base = await tmp()
   const d = fakeDriver({ tasks: [{}], snapshots: [
     { updatedAt: 5000, lastAgentMessage: 'working' },
@@ -205,7 +205,7 @@ test('quiet AND it has spoken ⇒ ready', async () => {
   // Forced = the tick that actually reads. A settled card is decimated 10:1,
   // so in production this is either every 10th tick or a watcher wake.
   await pollForced(m, id)                 // no growth, has spoken -> ready
-  assert.equal(m.get(id)!.state, 'ready')
+  assert.equal(m.get(id)!.state, 'done')
   assert.equal(m.get(id)!.threadContext, 'all done')
   m.killAll(); m.stopMaintenance()
 })
@@ -239,7 +239,7 @@ test('a new turn re-opens a settled card — the chat outlives our card', async 
   const [id] = await m.adoptClaudeDesktop()
   await poll(m, id)                       // seeds the baseline
   await pollForced(m, id)                 // quiet -> still ready
-  assert.equal(m.get(id)!.state, 'ready')
+  assert.equal(m.get(id)!.state, 'done')
   // The watcher path: proof the file moved, so it must not be decimated.
   await pollForced(m, id)
   assert.equal(m.get(id)!.state, 'processing')
@@ -253,7 +253,7 @@ test('a task deleted inside Claude Desktop keeps its last state, not an invented
   const [id] = await m.adoptClaudeDesktop()
   d.snapshot = async () => null            // vanished from the store
   await poll(m, id)
-  assert.equal(m.get(id)!.state, 'ready')
+  assert.equal(m.get(id)!.state, 'done')
   m.killAll(); m.stopMaintenance()
 })
 
@@ -385,7 +385,7 @@ test('no AX reader configured ⇒ cards still work from disk', async () => {
   const m = await makeManager(d, base)          // no ax
   const [id] = await m.adoptClaudeDesktop()
   await pollForced(m, id)
-  assert.equal(m.get(id)!.state, 'ready')
+  assert.equal(m.get(id)!.state, 'done')
   m.killAll(); m.stopMaintenance()
 })
 

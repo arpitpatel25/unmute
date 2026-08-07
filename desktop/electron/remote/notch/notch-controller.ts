@@ -15,6 +15,7 @@ import type {
   ScratchpadPayloadP, PocketP, PocketSlotP, PocketMode,
 } from './notch-client'
 import { providerOf, type ProviderId } from '../providers'
+import { ALWAYS_PRESENT, type PresenceLike } from '../presence'
 import { createLogger } from '../log'
 
 const log = createLogger('notch-controller')
@@ -140,24 +141,21 @@ export interface NotchClientLike {
   on(event: string, cb: (e: NotchEvent) => void): unknown
 }
 
-/** your-move classification; null ⇒ not the attention queue's business. */
-export function classify(state: TaskStatusName): 'needs-user' | 'stuck' | 'errored' | 'ready' | null {
+/**
+ * your-move classification, on STATE ALONE; null ⇒ never your move.
+ *
+ * `ready` is gone from here because it is gone from the state model — a finish
+ * is a finish, and whether it wants you depends on what the task IS, which a
+ * state cannot tell you. That question now needs the task, so it lives on the
+ * controller (`demanding()`), where the presence clock and `kind` are in reach.
+ * This stays for the two places that only ever had a state to look at.
+ */
+export function classify(state: TaskStatusName): 'needs-user' | 'stuck' | 'errored' | null {
   switch (state) {
     case 'needs-user': return 'needs-user'
     case 'stuck': return 'stuck'
     case 'failed': return 'errored'
-    case 'ready': return 'ready'
     default: return null
-  }
-}
-
-/** Queue rank (the wall's crank order): stuck/errored → needs-user → ready. */
-function rank(state: TaskStatusName): number {
-  switch (state) {
-    case 'stuck': case 'failed': return 0
-    case 'needs-user': return 1
-    case 'ready': return 2
-    default: return 99
   }
 }
 
@@ -203,21 +201,37 @@ const FADE_DONE_MS = 15 * 60 * 1000       // done fades from the wall after 15m
 const FADE_ERR_MS = 60 * 60 * 1000        // errored/stuck after 60m
 const AWAY_MS = 30 * 60 * 1000            // digest threshold
 const PROMOTED_BADGE_MS = 8 * 1000        // "↑ now a session" narration window
-/** Attention is for CHANGES; the cockpit is for STATE. A `ready` task older
- *  than this leaves the notch/crank entirely (still a cockpit card) — so a
- *  session parked ready for days can't hold the surface amber forever.
- *  Blocked states (needs-user/stuck/errored) never age out: they're stuck ON
- *  the user. (Decided 2026-07-24.)
+/**
+ * HOW LONG SOMETHING KEEPS SHOUTING — measured in YOUR time, not the day's.
  *
- *  Was 6h, which OUTLIVED TaskManager's readyDecayMs (1h) by five hours: the
- *  decay valve had already settled a ready one-off to done while the notch kept
- *  offering it in the crank. Now just past the decay window (+10m for the
- *  hourly sweep), so the two agree. */
-const STALE_READY_MS = 70 * 60 * 1000
+ * One number where there used to be three that disagreed (a 70m crank cutoff, a
+ * 3h error cutoff, and TaskManager's 1h ready-decay, which between them meant a
+ * checkpoint could leave the crank while the wall still called it ready).
+ *
+ * Two hours covers a lunch and does not survive a working day. Critically it is
+ * spent against `Presence.awakeMs()`, so being away costs nothing: the window
+ * exists to give you a CHANCE TO SEE the thing, and time at lunch is not a
+ * chance. Burn it on wall-clock and four hours out means five finished threads
+ * age out unseen and you come back to a clean badge — the exact failure the
+ * whole tier system exists to prevent.
+ *
+ * Nothing expires OFF the notch on this timer. It only steps down from
+ * "demanding" to "reachable" — see crankSlots().
+ */
+const DEMAND_WINDOW_MS = 2 * 60 * 60 * 1000
 
-/** How long an errored task keeps the surface. Longer than `ready` — a failure
- *  deserves more of your attention than a finished step — but still finite. */
-const STALE_ERROR_MS = 3 * 60 * 60 * 1000
+/** The reach list: today's work, whatever state it is in. Bounded on purpose.
+ *
+ *  The crank earns its keep by being short enough to EXHAUST — that is the
+ *  whole reason the seam means anything. An unbounded reach list is just the
+ *  dashboard operated one card at a time, which is strictly worse than the
+ *  dashboard. Past these bounds is a dashboard question. */
+const REACH_MAX = 12
+const REACH_AGE_MS = 12 * 60 * 60 * 1000
+
+/** The seam's slot id. Not a task, and nothing may ever resolve it to one —
+ *  the voice must refuse to land here rather than pick a neighbour. */
+export const SEAM_ID = '__seam__'
 
 /** How long a SETTLED card stays on the wall before folding into "show all".
  *  48h, not 24: a one-day cutoff hides Friday's work on Monday morning, which
@@ -281,13 +295,26 @@ export class NotchController {
   private expandedGroups = new Set<string>()
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
 
-  // ── The pocket ────────────────────────────────────────────────────────────
-  /** Task ids you set aside, most recent first. NOT a queue and NOT a mute:
-   *  a pocketed task keeps its place in the crank and keeps demanding. */
-  private pocket: string[] = []
+  // ── The crank / the pocket ────────────────────────────────────────────────
+  //
+  // These used to be two lists. The pocket held "things you set aside" and the
+  // queue held "things demanding you", each with its own membership rule — and
+  // the pocket's rule (demanding only) was really the AUTO-FILL rule wearing
+  // the costume of a capacity limit. A task earns a place here by YOU AIMING AT
+  // IT, not by its state; what its state decides is only whether it arrives
+  // there on its own. So there is one sequence now, `crankSlots()`, and the
+  // pocket is a window onto it.
   private pocketMode: PocketMode = 'closed'
-  /** Index into `pocketSlots()`. Whatever sits here is the voice's address. */
+  /** Index into `crankSlots()`. Whatever sits here is the voice's address. */
   private pocketAt = 0
+  /** True while the user is walking the crank — holds the order still. */
+  private crankHeld = false
+  /** id → presence-clock ms at which it began demanding. See demandSince(). */
+  private demandStamp = new Map<string, number>()
+  /** id → wall-clock ms of the user's last touch. See touchedAt(). */
+  private touchStamp = new Map<string, number>()
+  /** id → the state we last stamped for, so a change restarts the window. */
+  private stateSeen = new Map<string, TaskStatusName>()
   /** Set when leaving collapsed an expanded task; a return inside this window
    *  re-opens it, because you did not mean to leave. */
   private returnGraceUntil = 0
@@ -300,17 +327,36 @@ export class NotchController {
     private client: NotchClientLike,
     events: EventEmitter,
     private deps: NotchControllerDeps,
+    /** Are you here, and how much of YOUR time has passed. Defaults to
+     *  always-present so tests and any headless path need no power monitor. */
+    private presence: PresenceLike = ALWAYS_PRESENT,
   ) {
+    // THE ONLY THING THAT OPENS THE SURFACE BY ITSELF.
+    //
+    // Not "work finished" — you may be sitting right here, and taking the
+    // screen from someone who is already looking at it is the rudest thing the
+    // product can do. Coming back is the one moment where an interruption is
+    // free, because you were not mid-anything.
+    presence.on('wake', () => this.onWake())
     // Task runtime → queue + payload refresh (debounced).
     const onT = (t: TaskLite) => this.onTransition(t)
     events.on('created', onT)
     events.on('needs-user', onT)
-    events.on('ready', onT)
     events.on('failed', onT)
     events.on('stuck', onT)
     events.on('updated', onT)
-    events.on('done', (t: TaskLite) => { this.dequeue(t.id); this.scheduleReconcile() })
-    events.on('removed', (t: { id: string }) => { this.dequeue(t.id); this.scheduleReconcile() })
+    // `done` USED TO DEQUEUE UNCONDITIONALLY, and that single line is most of
+    // what this change is about: finishing removed a task from the surface, so
+    // a thread handing the ball back to you looked identical to an errand
+    // ending. It goes through the same transition as everything else now, and
+    // `demanding()` decides — thread finishes, it waits for you; errand
+    // finishes, it quietly joins today.
+    events.on('done', onT)
+    events.on('removed', (t: { id: string }) => {
+      this.dequeue(t.id)
+      this.demandStamp.delete(t.id); this.touchStamp.delete(t.id); this.stateSeen.delete(t.id)
+      this.scheduleReconcile()
+    })
     // Live PTY output → any open helper terminal.
     events.on('output', (d: { taskId: string; chunk: string }) => {
       if (this.openTerms.has(d.taskId)) {
@@ -422,30 +468,130 @@ export class NotchController {
 
   // ── queue ──────────────────────────────────────────────────────────────────
 
-  /** In the crank/attention flow? your-move AND not shelved AND not a stale
-   *  ready AND not episode-muted. Stale/muted stay cockpit-only. */
-  private crankEligible(t: TaskLite, now = Date.now()): boolean {
-    if (classify(t.state) === null || t.shelved) return false
-    if (t.state === 'ready' && now - (t.updatedAt ?? 0) > STALE_READY_MS) return false
-    // An errored task nagged FOREVER: only `ready` had a cut-off, and nothing
-    // else ever removed one from the queue. A failure you have already seen is
-    // not more urgent for being older — it stays a card on the wall, it just
-    // stops being in your face. (Field report: a task that errored once kept
-    // occupying the notch for hours.)
-    if (t.state === 'failed' && now - (t.updatedAt ?? 0) > STALE_ERROR_MS) return false
+  /**
+   * DOES THIS WANT YOU RIGHT NOW? The one predicate the surface is built on.
+   *
+   * Computed, never stored — that is the point of it. A stored answer is a
+   * decision frozen at the moment we know least, and it cannot be revisited
+   * when the clock moves or you walk back in. This one is asked again on every
+   * render and is free to change its mind.
+   *
+   *   blocked (needs-user / stuck)  always. A live question has exactly one
+   *                                 exit — you answer it — so it never ages.
+   *   failed                        for a window. You have seen it; it is not
+   *                                 getting worse for being older.
+   *   finished + THREAD             for a window. The agent's turn ending on a
+   *                                 thread is the ball landing back in your
+   *                                 court, and that is worth as much of your
+   *                                 attention as a block.
+   *   finished + ERRAND             never. The video is playing. Nothing is owed.
+   *
+   * That last pair is the whole fix. It used to be decided by whether the
+   * agent's closing line ended in a question mark; it is now decided by what
+   * the task IS, which is known at creation and never re-guessed.
+   */
+  private demanding(t: TaskLite): boolean {
+    if (t.shelved) return false
     if (this.muted.get(t.id) === t.state) return false
-    return true
+    if (t.state === 'needs-user' || t.state === 'stuck') return true
+    const fresh = this.presence.awakeMs() - this.demandSince(t) < DEMAND_WINDOW_MS
+    if (t.state === 'failed') return fresh
+    if (t.state === 'done' && (t.kind ?? 'oneoff') === 'session') return fresh
+    return false
   }
 
+  /**
+   * When this task started demanding, on the PRESENCE clock.
+   *
+   * Seeded on first sight from wall-clock age so a restart does not resurrect
+   * a morning's worth of finished threads as a wall of fresh demands — but
+   * clamped at the window, so the seed can only ever age a task OUT, never
+   * grant it more time than it had.
+   */
+  private demandSince(t: TaskLite): number {
+    const known = this.demandStamp.get(t.id)
+    if (known !== undefined) return known
+    const wallAge = Math.max(0, Date.now() - (t.updatedAt ?? Date.now()))
+    const seeded = this.presence.awakeMs() - Math.min(wallAge, DEMAND_WINDOW_MS)
+    this.demandStamp.set(t.id, seeded)
+    return seeded
+  }
+
+  /**
+   * When YOU last touched this — spoke to it, opened it, answered it, or
+   * started it. The single ordering key for the whole surface.
+   *
+   * NOT `updatedAt`. Agent activity is not evidence of your interest: the
+   * entire reason you fire a task is so it can work while you don't think about
+   * it, so ordering by it puts whatever is churning tool calls in front of the
+   * thing you were actually in. Seeded from `createdAt`, which is a real touch
+   * — you asked for it.
+   */
+  private touchedAt(t: TaskLite): number {
+    return this.touchStamp.get(t.id) ?? t.createdAt ?? 0
+  }
+
+  /** Record a touch. Called wherever the user aims at, opens, or answers one. */
+  private touch(id: string): void {
+    this.touchStamp.set(id, Date.now())
+  }
+
+  private byTouch = (a: TaskLite, b: TaskLite): number => this.touchedAt(b) - this.touchedAt(a)
+
   private rebuildQueue(): void {
+    const yours = this.deps.listTasks().filter((t) => this.demanding(t)).sort(this.byTouch)
+    const live = new Set(yours.map((t) => t.id))
+    // FROZEN WHILE YOU WALK IT. Reach past the first card to the fourth and a
+    // live re-sort would make that fourth card the first — the list you had
+    // just read is gone from under your thumb. ⌘-Tab freezes for the duration
+    // of a cycle for exactly this reason. Newcomers still append (they must be
+    // reachable), and the dead still drop; only the ORDER is held.
+    if (this.crankHeld) {
+      this.queue = this.queue.filter((id) => live.has(id))
+      const known = new Set(this.queue)
+      for (const t of yours) if (!known.has(t.id)) this.queue.push(t.id)
+      return
+    }
+    this.queue = yours.map((t) => t.id)
+  }
+
+  /**
+   * THE CRANK: what `→` walks through, and what the pocket can hold.
+   *
+   * Demanding first, then ONE seam card, then today's work. The seam is not
+   * decoration. Without it the crank silently changes meaning under you — you
+   * were triaging, now you are browsing, nothing said so, and the next thing
+   * you dictate lands in a task you were never triaging. It costs one keypress
+   * across a whole session and it is where most people will stop, which is the
+   * point: exhausting the demanding list should still FEEL like something.
+   */
+  private crankSlots(): PocketSlotP[] {
     const now = Date.now()
-    const yours = this.deps.listTasks()
-      .filter((t) => this.crankEligible(t, now))
-      .sort((a, b) => rank(a.state) - rank(b.state) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    const known = new Set(this.queue)
-    // Keep existing order (skip=requeue must stick); append newcomers by rank.
-    this.queue = this.queue.filter((id) => yours.some((t) => t.id === id))
-    for (const t of yours) if (!known.has(t.id)) this.queue.push(t.id)
+    const demanding = this.queue
+      .map((id) => this.deps.getTask(id))
+      .filter((t): t is TaskLite => !!t && t.alive !== false)
+
+    const inQueue = new Set(demanding.map((t) => t.id))
+    const reach = this.deps.listTasks()
+      .filter((t) => !inQueue.has(t.id) && !t.shelved && t.alive !== false
+        && now - this.touchedAt(t) < REACH_AGE_MS)
+      .sort(this.byTouch)
+      .slice(0, REACH_MAX)
+
+    const slot = (t: TaskLite): PocketSlotP => ({
+      id: t.id,
+      title: t.name ?? truncate(t.intent),
+      ask: t.question?.text ?? t.step ?? undefined,
+      status: t.state,
+      demanding: this.demanding(t),
+    })
+
+    const slots = demanding.map(slot)
+    if (reach.length) {
+      slots.push({ id: SEAM_ID, kind: 'seam', title: 'Nothing else is waiting', more: reach.length })
+      for (const t of reach) slots.push(slot(t))
+    }
+    return slots
   }
 
   private onTransition(t: TaskLite): void {
@@ -454,7 +600,23 @@ export class NotchController {
     // A state CHANGE ends a mute episode — the task re-enters the regular flow.
     const mutedIn = this.muted.get(t.id)
     if (mutedIn !== undefined && mutedIn !== t.state) this.muted.delete(t.id)
-    const eligible = this.crankEligible(t)
+    // A CHANGE RESTARTS THE DEMAND WINDOW. Answering a blocked task and letting
+    // it finish again is a NEW checkpoint, and it deserves the full window; it
+    // must not inherit the clock of the state it just left. Stamped before the
+    // predicate runs, since the predicate reads it.
+    //
+    // ONLY FOR A TASK WE HAVE ALREADY SEEN. A first sighting is not a
+    // transition — it is a restore, and on launch every task on disk arrives
+    // this way. Stamping those fresh would greet you with a wall of demands
+    // built out of yesterday's work every time the app started. Unseen tasks
+    // fall through to demandSince(), which seeds from their real age.
+    const seen = this.stateSeen.has(t.id)
+    if (this.stateSeen.get(t.id) !== t.state) {
+      this.stateSeen.set(t.id, t.state)
+      if (seen) this.demandStamp.set(t.id, this.presence.awakeMs())
+      else this.demandSince(t)     // seed from wall-clock age, once
+    }
+    const eligible = this.demanding(t)
     const queued = this.queue.includes(t.id)
     if (eligible && !queued) {
       this.queue.push(t.id)
@@ -490,9 +652,19 @@ export class NotchController {
   }
 
   private front(): TaskLite | undefined {
+    // WHILE YOU ARE WALKING, THE FRONT IS WHERE YOU ARE. Without this the
+    // surface kept showing queue[0] while the crank index moved underneath it,
+    // so `→` changed the pocket and nothing else.
+    if (this.crankHeld) {
+      const slot = this.crankSlots()[this.pocketAt]
+      if (slot && slot.kind !== 'seam') {
+        const t = this.deps.getTask(slot.id)
+        if (t) return t
+      }
+    }
     while (this.queue.length > 0) {
       const t = this.deps.getTask(this.queue[0])
-      if (t && this.crankEligible(t)) return t
+      if (t && this.demanding(t)) return t
       this.queue.shift()
     }
     return undefined
@@ -588,28 +760,10 @@ export class NotchController {
    * is on screen. Putting it in the ring made it look like a task, gave it a
    * name to argue about, and needed a rule about where it sat.
    */
-  private pocketSlots(): PocketSlotP[] {
-    return this.pocket
-      .map((id) => this.deps.getTask(id))
-      .filter((t): t is TaskLite => !!t && t.alive !== false)
-      .map((t) => ({
-        id: t.id,
-        title: t.name ?? truncate(t.intent),
-        ask: t.question?.text ?? t.step ?? undefined,
-        status: t.state,
-      }))
-  }
-
-  /** Drop ids that died, and keep `pocketAt` pointing at something real. */
-  private prunePocket(): void {
-    const before = this.pocket.length
-    this.pocket = this.pocket.filter((id) => {
-      const t = this.deps.getTask(id)
-      return !!t && t.alive !== false
-    })
-    // A shrinking ring must never leave the pointer past its end, or the voice
-    // would be aimed at a slot that no longer exists.
-    if (this.pocket.length !== before) this.pocketAt = Math.max(0, Math.min(this.pocketAt, this.pocketSlots().length - 1))
+  /** Keep `pocketAt` inside the ring — a shrinking crank must never leave the
+   *  voice aimed at a slot that no longer exists. */
+  private clampPocket(n: number): void {
+    this.pocketAt = n <= 0 ? 0 : Math.max(0, Math.min(this.pocketAt, n - 1))
   }
 
   /**
@@ -633,41 +787,21 @@ export class NotchController {
     // OPEN IS AIMED, CLOSED IS THE ROUTER. The pocket only ever opens because
     // the user opened it, so "is it open" is a decision they made, not a state
     // that happened to them.
-    const slot = this.pocketMode === 'open' ? this.pocketSlots()[this.pocketAt] : undefined
-    this.setFocus(slot?.id ?? null)
+    const slot = this.pocketMode === 'open' ? this.crankSlots()[this.pocketAt] : undefined
+    // THE SEAM IS NOT AN ADDRESS. Resolving it to a neighbour would put words
+    // into a task the user was not pointing at; null means "the router decides",
+    // which is the honest reading of "I am between the two lists".
+    this.setFocus(slot && slot.kind !== 'seam' ? slot.id : null)
   }
 
   private sendPocket(): void {
-    this.prunePocket()
-    const data: PocketP = { mode: this.pocketMode, at: this.pocketAt, slots: this.pocketSlots() }
+    const slots = this.crankSlots()
+    this.clampPocket(slots.length)
+    const data: PocketP = { mode: this.pocketMode, at: this.pocketAt, slots }
     const json = JSON.stringify(data)
     if (json === this.lastPocketJson) return
     this.lastPocketJson = json
     this.client.send({ type: 'pocket', data })
-  }
-
-  /**
-   * THE ONLY THING THE POCKET EVER HOLDS: a task that is demanding you.
-   *
-   * It used to keep anything you left — which meant browsing an old session
-   * from the wall and pressing Escape put it in your pocket, beside the things
-   * actually waiting on you. Worse, it invited a whole second category
-   * ("working" vs "waiting") with its own ordering, clutter and expiry rules.
-   *
-   * None of that is needed, because a task you are genuinely working with will
-   * demand you again on its own — and the moment it does, the existing path
-   * pockets it. So the pocket stays exactly one thing, and everything else
-   * simply collapses when you leave it.
-   */
-  private isDemanding(t: TaskLite): boolean {
-    return t.state === 'needs-user' || t.state === 'stuck' || t.state === 'failed'
-  }
-
-  /** Put a task in the pocket. Never mutes it, never takes it out of the crank
-   *  — it is still your move, it is just not covering your screen. */
-  private pocketTask(id: string, why: string): void {
-    this.pocket = [id, ...this.pocket.filter((x) => x !== id)]
-    log.event('pocketed', { taskId: id, why, size: this.pocket.length })
   }
 
   private setPocketMode(mode: PocketMode): void {
@@ -698,10 +832,11 @@ export class NotchController {
     if (this.engaged === 'none') return
     const id = this.focusedId
     const t = id ? this.deps.getTask(id) : undefined
-    // Demanding → pocket. Anything else just goes: you were looking at it,
-    // not being asked by it.
-    const kept = !!(t && this.isDemanding(t))
-    if (kept && id) this.pocketTask(id, reason)
+    // A TOUCH IS A TOUCH, even one that ends in leaving. You were in this task
+    // a second ago, so it belongs at the front of the crank when you come back
+    // — which is all "pocketing" ever meant, and it no longer needs its own
+    // list to say so.
+    if (id) this.touch(id)
     // Remember what to put back, so a return inside the window restores the
     // surface you were actually on rather than guessing at a task.
     this.returnTo = id ? { kind: 'task', id } : { kind: 'cockpit' }
@@ -709,7 +844,7 @@ export class NotchController {
     this.engaged = 'none'
     this.setFocus(null)
     this.setPocketMode('closed')
-    log.event('user-left', { reason, pocketed: kept ? id : null, state: t?.state ?? null, was: this.returnTo.kind })
+    log.event('user-left', { reason, taskId: id, state: t?.state ?? null, was: this.returnTo.kind })
     this.sendPocket()
     this.reconcile()
   }
@@ -726,7 +861,6 @@ export class NotchController {
     } else {
       const t = this.deps.getTask(back.id)
       if (!t) return
-      this.pocket = this.pocket.filter((x) => x !== back.id)
       this.engaged = 'task'
       this.setFocus(back.id)
       log.event('pocket-reopened-on-return', { taskId: back.id })
@@ -749,27 +883,58 @@ export class NotchController {
    * open in front of you. Leaving or closing puts it straight back.
    */
   private onPocketExpand(): void {
-    const slot = this.pocketSlots()[this.pocketAt]
+    const slot = this.crankSlots()[this.pocketAt]
     if (!slot) return
+    // Enter on the seam is not an expand — there is nothing to open. Treat it
+    // as "keep going", which is what the card is offering.
+    if (slot.kind === 'seam') { this.onPocketMove({ delta: 1 }); return }
     const id = slot.id
-    this.pocket = this.pocket.filter((x) => x !== id)
     this.pocketAt = 0
     this.engaged = 'task'
+    this.touch(id)
     this.setPocketMode('closed')
     this.setFocus(id)
     this.deps.opened?.(id)          // opening it IS the intent to work in it
-    log.event('pocket-expanded', { taskId: id, left: this.pocket.length })
+    log.event('pocket-expanded', { taskId: id })
     this.reconcile()
   }
 
   private onPocketMove(e: { delta?: number; to?: number }): void {
-    const n = this.pocketSlots().length
+    // Walking the crank HOLDS ITS ORDER (see rebuildQueue). Released when the
+    // surface closes, so the next visit re-sorts to what you touched last.
+    this.crankHeld = true
+    const n = this.crankSlots().length
     if (n <= 1) return
     this.pocketAt = typeof e.to === 'number'
       ? Math.max(0, Math.min(n - 1, e.to))
       : (this.pocketAt + (e.delta ?? 1) + n * 2) % n
     this.applyVoiceTarget()
     this.sendPocket()
+  }
+
+  /**
+   * IDLE → ACTIVE. You touched the machine after a stretch of not touching it.
+   *
+   * The one moment the surface is allowed to open itself, and it is allowed
+   * because it is the one moment you are not mid-anything. Everything that
+   * happened while you were gone is still demanding — the window that would
+   * have aged it out was frozen along with you (see Presence) — so this shows
+   * you the real backlog rather than whatever survived a wall clock.
+   *
+   * Silent when nothing wants you: coming back to a clean desk should look like
+   * a clean desk, not like a surface with an opinion.
+   */
+  private onWake(): void {
+    this.rebuildQueue()
+    if (!this.queue.length) return
+    if (this.engaged !== 'none') return   // you left something open; that wins
+    this.crankHeld = false                // fresh visit, fresh order
+    this.pocketAt = 0
+    this.engaged = 'task'
+    const front = this.front()
+    if (front) this.setFocus(front.id)
+    log.event('woke-into-backlog', { waiting: this.queue.length })
+    this.reconcile()
   }
 
   private openCockpit(): void {
@@ -790,24 +955,35 @@ export class NotchController {
     this.reconcile()
   }
 
-  private onNext(): void {
-    if (this.queue.length > 1) {
-      const first = this.queue.shift()!
-      this.queue.push(first) // skip = requeue to the back
-    }
-    const front = this.front()
-    if (front) this.setFocus(front.id)
-    this.reconcile()
-  }
+  /**
+   * WALK THE CRANK. Demanding first, then the seam, then today.
+   *
+   * This used to ROTATE the queue (skip = requeue to the back), which meant the
+   * list you were reading rearranged itself as you read it and there was no
+   * such thing as "the end" — you could crank forever and never learn that
+   * nothing was left. Now it is an index into a held sequence, so `→` past the
+   * last demanding task lands on the seam and says so, and everything past the
+   * seam is today's work rather than the same three tasks again.
+   */
+  private onNext(): void { this.crankStep(1) }
+  private onPrev(): void { this.crankStep(-1) }
 
-  /** Crank backward: the queue rotates the other way (last → front). */
-  private onPrev(): void {
-    if (this.queue.length > 1) {
-      const last = this.queue.pop()!
-      this.queue.unshift(last)
-    }
-    const front = this.front()
-    if (front) this.setFocus(front.id)
+  private crankStep(delta: number): void {
+    this.crankHeld = true
+    const slots = this.crankSlots()
+    const n = slots.length
+    if (!n) return
+    let at = (this.pocketAt + delta + n * 2) % n
+    // THE SEAM IS A POCKET AFFORDANCE. The expanded panel has nothing to draw
+    // for it, so stepping through it there would show an empty surface. Step
+    // over it and keep going in the direction you were heading.
+    if (this.engaged === 'task' && slots[at]?.kind === 'seam') at = (at + delta + n * 2) % n
+    this.pocketAt = at
+    const slot = slots[at]
+    // The seam addresses nothing — leave focus null so the router decides,
+    // exactly as it would with the surface closed.
+    if (slot && slot.kind !== 'seam') this.setFocus(slot.id)
+    else this.setFocus(null)
     this.reconcile()
   }
 
@@ -827,7 +1003,14 @@ export class NotchController {
   private setFocus(id: string | null): void {
     this.focusedId = id
     this.deps.focus(id) // focus IS the voice address (consent model)
-    if (id) this.muted.delete(id) // interacting with a task ends its mute episode
+    if (id) {
+      this.muted.delete(id) // interacting with a task ends its mute episode
+      // AIMING AT SOMETHING IS TOUCHING IT. This is the single place every
+      // route into a task passes through — crank, tap, wall, wake — so the
+      // ordering key is fed here rather than at a dozen call sites that would
+      // each have to remember.
+      this.touch(id)
+    }
   }
 
   /**
@@ -835,31 +1018,35 @@ export class NotchController {
    *
    * Opening used to CLEAR the mute and nothing ever set it, so the one gesture
    * that most obviously means "I've seen this" was the only one that didn't
-   * quiet the notch — a finished one-off held the surface until STALE_READY_MS.
+   * quiet the notch — a finished one-off held the surface indefinitely.
    *
-   * Only `ready` is quieted. Blocked states (needs-user/stuck/errored) are stuck
-   * ON the user: looking at an approval prompt is not answering it, so they keep
-   * demanding until acted on or explicitly muted. Muting is still the deliberate
-   * "I don't care about this one" gesture and works on ANY state.
+   * Only a CHECKPOINT is quieted: a thread whose turn ended, which you have now
+   * looked at. Blocked states (needs-user/stuck) are stuck ON the user — looking
+   * at an approval prompt is not answering it — so they keep demanding until
+   * acted on or explicitly muted, as does a failure. Muting is still the
+   * deliberate "I don't care about this one" gesture and works on ANY state.
    *
    * This reuses the episode-mute, so "comes back the moment its state changes"
-   * is inherited rather than reimplemented.
+   * is inherited rather than reimplemented. And quieting is never removal: the
+   * task drops out of the demanding group and lands in reach, one press away.
    */
   private seenThenClose(opts: { collapse?: boolean } = {}): void {
     const id = this.focusedId
     const t = id ? this.deps.getTask(id) : undefined
-    if (t && t.state === 'ready') {
-      this.muted.set(t.id, t.state)
-      this.queue = this.queue.filter((x) => x !== t.id)
-      log.event('seen-on-close', { taskId: t.id, state: t.state })
-    } else if (t && this.isDemanding(t)) {
-      // A DEMANDING TASK IS POCKETED, NOT DISMISSED. It is still your move —
-      // the only thing you asked for by closing was your screen back. It keeps
-      // its place in the crank, stays unmuted, and stays reachable by voice.
-      // Anything NOT demanding just closes: you were reading it, not answering.
-      this.pocketTask(t.id, 'closed')
+    if (t) {
+      // Closing something you had open is a touch — it belongs at the front of
+      // the crank next time, whatever we do with its demand.
+      this.touch(t.id)
+      if (t.state === 'done') {
+        this.muted.set(t.id, t.state)
+        this.queue = this.queue.filter((x) => x !== t.id)
+        log.event('seen-on-close', { taskId: t.id, state: t.state })
+      }
     }
     if (opts.collapse) this.engaged = 'none'
+    // Leaving the crank RELEASES ITS ORDER, so the next visit sorts by what you
+    // touched last rather than preserving a walk you already finished.
+    this.crankHeld = false
     this.setFocus(null)
     this.setPocketMode('closed')
     this.reconcile()
@@ -888,6 +1075,13 @@ export class NotchController {
 
   /** Throughput loop: answering advances to the next queued your-move task. */
   private advanceAfterAnswer(id: string): void {
+    // HOLD THE ORDER ACROSS THE ANSWER. Answering is a touch, and touch drives
+    // the sort — so without the hold the task you just replied to would sort
+    // straight back to the front and "advance" would land you on it again.
+    // Holding keeps it where it was; if it is still demanding it re-appends at
+    // the back, which is exactly the old skip-to-the-end behaviour.
+    this.crankHeld = true
+    this.pocketAt = 0
     this.queue = this.queue.filter((x) => x !== id)
     const next = this.front()
     if (next && (this.engaged === 'task' || this.focusedId === id)) this.setFocus(next.id)
