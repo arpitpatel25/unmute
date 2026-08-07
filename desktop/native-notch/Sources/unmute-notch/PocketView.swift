@@ -69,6 +69,12 @@ struct PocketCard: View {
     }
 
     // ── the address ───────────────────────────────────────────────────────
+    //
+    // THE POCKET IS A GLANCE, NOT A DESTINATION. It exists because the expanded
+    // panel takes the whole screen, not because the expanded panel is wrong —
+    // so getting back to it has to be one tap. Without this the state was a
+    // one-way door: leave a task and the only route back was the dashboard,
+    // which is the exact trip the pocket was built to save.
     private var header: some View {
         HStack(spacing: 8) {
             Circle().fill(dotColor).frame(width: 8, height: 8)
@@ -77,8 +83,31 @@ struct PocketCard: View {
                 .foregroundColor(isNew ? Theme.cWorking : Theme.text)
                 .lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
+            if canExpand {
+                Button { model.emit(.pocketExpand) } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 8.5, weight: .semibold))
+                        Text("Open").font(.system(size: 10.5, weight: .medium))
+                    }
+                    .foregroundColor(Theme.textDim)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Theme.raised))
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.hairline, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .help("Back to the full task")
+            }
         }
+        // The whole row is the target too — a card showing one task should open
+        // that task when you click it, button or no button.
+        .contentShape(Rectangle())
+        .onTapGesture { if canExpand { model.emit(.pocketExpand) } }
     }
+
+    /// Only a real task can be opened; the two synthetic stops have nothing
+    /// behind them to expand into.
+    private var canExpand: Bool { slot?.kind == "task" }
 
     @ViewBuilder private var detail: some View {
         // Two lines, hard. This card exists so you can remember WHICH thing you
@@ -94,7 +123,10 @@ struct PocketCard: View {
     private var detailText: String {
         guard let s = slot else { return "" }
         switch s.kind {
-        case "auto": return "Unmute picks from what you said — it may continue a task or start a new one."
+        // Says what it will do AND how to overrule it, because this is the stop
+        // you land on by simply pressing the key — the moment someone asks
+        // "how do I just start something new?"
+        case "auto": return "Unmute picks from what you said. Press → to force a new task, ← for one you set aside."
         case "new":  return "Whatever you say next starts something new. Nothing reaches what you set aside."
         default:     return s.ask ?? "Waiting on you."
         }
@@ -120,11 +152,18 @@ struct PocketCard: View {
         }
     }
 
+    /// EVERY STOP SAYS WHERE NEW TASK IS. The carousel wraps so `+ New task` is
+    /// one press from both places it ever starts — but `auto` had no hint at
+    /// all, which is where you land the moment you press the key with something
+    /// pocketed. So the commonest way in was the one with nothing pointing at
+    /// the way out, and "how do I just make a new task?" had no visible answer.
     private var ghost: (String, Color)? {
         guard pocket.slots.count > 1 else { return nil }
-        if pocket.at == 1 { return ("← + New task", Theme.cWorking) }        // first real task
-        if isNew, pocket.slots.count > 2 { return ("→ \(pocket.slots[1].title)", Theme.cNeeds) }
-        return nil
+        switch slot?.kind {
+        case "auto": return ("+ New task →", Theme.cWorking)   // one press RIGHT, wrapping
+        case "new":  return pocket.slots.count > 2 ? ("→ \(pocket.slots[1].title)", Theme.cNeeds) : nil
+        default:     return pocket.at == 1 ? ("← + New task", Theme.cWorking) : nil
+        }
     }
 
     private var pips: some View {

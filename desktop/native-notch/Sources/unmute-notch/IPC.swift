@@ -365,6 +365,9 @@ enum Event {
     case pocketMove(delta: Int)                    // carousel: which address
     case pocketOpen                                // tap it open (sticky = an explicit aim)
     case pocketRelease                             // let go — back to the notch
+    /// Back to the FULL task. The pocket is a glance, not a destination:
+    /// it exists because the panel is large, not because it is wrong.
+    case pocketExpand
     case chooseOption(id: String, index: Int)
     case answerText(id: String, text: String)      // free-text / confirm answer
     case mute(id: String)                          // drop from attention/crank this episode
@@ -425,6 +428,7 @@ enum Event {
         case let .pocketMove(delta): return ["type": "pocketMove", "delta": delta]
         case .pocketOpen: return ["type": "pocketOpen"]
         case .pocketRelease: return ["type": "pocketRelease"]
+        case .pocketExpand: return ["type": "pocketExpand"]
         case .chooseOption(let id, let index): return ["type": "chooseOption", "id": id, "index": index]
         case .answerText(let id, let text): return ["type": "answerText", "id": id, "text": text]
         case .mute(let id): return ["type": "mute", "id": id]

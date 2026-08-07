@@ -286,6 +286,10 @@ export type NotchEvent =
   /** Tap the pocket open (sticky), or let it go back to the notch. */
   | { type: 'pocketOpen' }
   | { type: 'pocketRelease' }
+  /** Back to the full task. The pocket is a GLANCE state — it exists
+   *  because the panel is large, not because the panel is wrong, so the
+   *  trip back has to be one tap or it is a one-way door. */
+  | { type: 'pocketExpand' }
   | { type: 'chooseOption'; id: string; index: number }
   | { type: 'answerText'; id: string; text: string }
   | { type: 'mute'; id: string }

@@ -335,6 +335,7 @@ export class NotchController {
     on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
     on('pocketOpen', () => { this.setPocketMode('sticky'); this.reconcile() })
     on('pocketRelease', () => { this.setPocketMode('closed'); this.reconcile() })
+    on('pocketExpand', () => this.onPocketExpand())
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
     on('mute', (e) => this.onMute((e as { id: string }).id))
     on('answerText', (e) => {
@@ -729,6 +730,33 @@ export class NotchController {
     this.setFocus(id)
     this.setPocketMode('closed')
     log.event('pocket-reopened-on-return', { taskId: id })
+    this.reconcile()
+  }
+
+  /**
+   * Back to the full task — the trip the pocket was missing.
+   *
+   * The pocket exists because the expanded panel takes the whole screen, NOT
+   * because the expanded panel is wrong. Reading the whole ask, watching the
+   * terminal, answering a picker: all of that still needs the panel, and the
+   * card deliberately shows two lines. Without a way back, setting something
+   * aside was a one-way door whose only return was the dashboard — the exact
+   * trip this feature was built to save.
+   *
+   * It LEAVES the pocket on the way out: it is not set aside any more, it is
+   * open in front of you. Leaving or closing puts it straight back.
+   */
+  private onPocketExpand(): void {
+    const slot = this.pocketSlots()[this.pocketAt]
+    if (slot?.kind !== 'task' || !slot.id) return
+    const id = slot.id
+    this.pocket = this.pocket.filter((x) => x !== id)
+    this.pocketAt = 0
+    this.engaged = 'task'
+    this.setPocketMode('closed')
+    this.setFocus(id)
+    this.deps.opened?.(id)          // opening it IS the intent to work in it
+    log.event('pocket-expanded', { taskId: id, left: this.pocket.length })
     this.reconcile()
   }
 

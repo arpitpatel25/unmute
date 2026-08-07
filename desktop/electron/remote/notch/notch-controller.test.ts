@@ -1238,3 +1238,58 @@ test('+ New task is ONE press from BOTH places the carousel starts', () => {
   assert.equal(pocketOf(h)!.slots[pocketOf(h)!.at].kind, 'new', 'one left from the first task')
   assert.deepEqual(h.calls.forceNewTask?.at(-1), [true])
 })
+
+test('the pocket is a GLANCE — you can always get the full task back', () => {
+  // Without this it was a one-way door: set something aside and the only route
+  // back was the dashboard, which is the trip the pocket exists to save.
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'tap' })
+  h.client.fire({ type: 'userLeft', reason: 'blur' })
+  h.flush()
+  h.client.fire({ type: 'pocketOpen' })
+  h.flush()
+
+  h.client.fire({ type: 'pocketExpand' })
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'task', 'back to the full panel')
+  assert.deepEqual(h.calls.focus?.at(-1), ['a'])
+  // It is not "set aside" any more — it is open in front of you.
+  assert.equal(pocketOf(h)!.slots.filter((s) => s.kind === 'task').length, 0)
+  assert.equal(pocketOf(h)!.mode, 'closed')
+
+  // …and leaving puts it straight back.
+  h.client.fire({ type: 'userLeft', reason: 'blur' })
+  h.flush()
+  assert.equal(pocketOf(h)!.slots.filter((s) => s.kind === 'task').length, 1)
+})
+
+test('expand does nothing on the two synthetic stops', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'tap' })
+  h.client.fire({ type: 'userLeft', reason: 'blur' })
+  h.flush()
+  h.controller.notifyCapturing(true)          // parks on `auto`
+  const before = h.client.last('setState')!.state
+  h.client.fire({ type: 'pocketExpand' })
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, before, 'auto has nothing to expand into')
+  assert.equal(pocketOf(h)!.slots.filter((s) => s.kind === 'task').length, 1, 'and nothing left the pocket')
+})
+
+test('pressing the key with a full pocket still aims at the ROUTER, not a task', () => {
+  // The reported symptom: the card appearing during a new-task utterance read
+  // as "it is going to land in the pocket". It never was — but nothing said so.
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  put(h, makeTask({ id: 'b', state: 'needs-user', alive: true, question: { text: 'q2' } }))
+  h.client.fire({ type: 'tap' })
+  h.client.fire({ type: 'userLeft', reason: 'blur' })
+  h.flush()
+  h.controller.notifyCapturing(true)
+  const p = pocketOf(h)!
+  assert.equal(p.slots[p.at].kind, 'auto')
+  assert.deepEqual(h.calls.focus?.at(-1), [null], 'no task is the address')
+  assert.deepEqual(h.calls.forceNewTask?.at(-1), [false], 'and nothing is forced either')
+})
