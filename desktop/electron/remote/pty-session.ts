@@ -230,29 +230,51 @@ export interface ClaudeCodeExecutorOpts {
   /** PRD §10.6 sandbox: allowlisted roots the session may reach (--add-dir).
    *  Empty ⇒ no sandbox (default posture). */
   addDirs?: string[]
-  /** Model for the executor session. DECIDED: 'opus' for task sessions
-   *  (the router uses a lighter model). Passed as `--model <model>`.
-   *  Set to '' / undefined to inherit the user's Claude Code default. */
+  /**
+   * Model for this session — ONLY when the user explicitly chose one.
+   *
+   * Absent means ABSENT: no `--model` flag at all, so the session runs on the
+   * user's own Claude Code default. We used to pass our default here
+   * unconditionally, which silently downgraded anyone whose own default was
+   * stronger than ours and is the most likely cause of "Claude Code works worse
+   * inside Unmute" — with nothing anywhere telling them. Do not reintroduce a
+   * fallback value at this seam.
+   */
   model?: string
-  /** Connect Claude-in-Chrome browser control for this session (`--chrome`).
-   *  DECIDED: always on for Remote (browser tasks need it; non-browser tasks
-   *  ignore it). Requires the extension installed + connected. */
+  /** Connect Claude-in-Chrome (`--chrome`) — ONLY for tasks that actually
+   *  target the browser. It was unconditional, which meant every coding session
+   *  carried a browser tool surface it would never use. */
   chrome?: boolean
+  /** `--settings <file>`: our lifecycle hooks, loaded as ADDITIONAL settings so
+   *  nothing is written into the user's project (hooks.ts). */
+  settingsPath?: string
+  /** `--append-system-prompt <text>`: the four-line SESSION_PREAMBLE. Framing
+   *  belongs in the system prompt — never typed as a user turn. */
+  appendSystemPrompt?: string
   /** Run inside a tmux session so it can be popped out to a real terminal. */
   tmux?: TmuxConfig
   ptyLoader?: () => NodePty
 }
 
+/** Build the exact argv Unmute adds to `claude`. Exported so the
+ *  no-modification guard (session-policy.ts + its test) can assert against the
+ *  real thing rather than a copy that drifts. */
+export function claudeLaunchArgs(opts: ClaudeCodeExecutorOpts): string[] {
+  const dirArgs = (opts.addDirs ?? []).flatMap((d) => ['--add-dir', d])
+  const modelArgs = opts.model ? ['--model', opts.model] : []
+  const chromeArgs = opts.chrome ? ['--chrome'] : []
+  const settingsArgs = opts.settingsPath ? ['--settings', opts.settingsPath] : []
+  const preambleArgs = opts.appendSystemPrompt ? ['--append-system-prompt', opts.appendSystemPrompt] : []
+  // Order: model + chrome first (stable), then our policy flags, then caller
+  // extras (e.g. --dangerously-skip-permissions), then sandbox --add-dir roots.
+  return [...modelArgs, ...chromeArgs, ...settingsArgs, ...preambleArgs, ...(opts.extraArgs || []), ...dirArgs]
+}
+
 export class ClaudeCodeExecutor extends CliAgentExecutor {
   constructor(opts: ClaudeCodeExecutorOpts = {}) {
-    const dirArgs = (opts.addDirs ?? []).flatMap((d) => ['--add-dir', d])
-    const modelArgs = opts.model ? ['--model', opts.model] : []
-    const chromeArgs = opts.chrome ? ['--chrome'] : []
     super({
       bin: opts.claudeBin || 'claude',
-      // Order: model + chrome first (stable), then caller extras (e.g.
-      // --dangerously-skip-permissions), then sandbox --add-dir roots.
-      extraArgs: [...modelArgs, ...chromeArgs, ...(opts.extraArgs || []), ...dirArgs],
+      extraArgs: claudeLaunchArgs(opts),
       // PRD §3.2: any of these flip billing off the subscription — strip all.
       stripEnvVars: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY'],
       ptyLoader: opts.ptyLoader,

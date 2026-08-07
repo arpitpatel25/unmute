@@ -42,7 +42,7 @@ async function tmpBase(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'remote-tm-'))
 }
 
-test('dispatch → scaffolds, installs contract, types payload, starts processing', async () => {
+test('dispatch → scaffolds status, types ONLY the intent, writes nothing into the cwd', async () => {
   const baseDir = await tmpBase()
   let spawned: SpawnOpts | null = null
   const tm = new TaskManager({
@@ -54,9 +54,13 @@ test('dispatch → scaffolds, installs contract, types payload, starts processin
   assert.equal(task.state, 'processing')
   // scaffolded status file exists
   assert.ok((await fs.stat(task.statusPath)).isFile())
-  // CLAUDE.md installed in the session cwd
-  assert.ok((await fs.readFile(path.join(task.cwd, 'CLAUDE.md'), 'utf8')).includes('Unmute Remote'))
-  // dispatch payload typed, carrying the status path
+  // NOTHING Unmute-authored lands in the session's working directory. This is
+  // the principle (session-policy.ts) as an assertion: no CLAUDE.md, no
+  // .claude/settings.json, no hook script, no marker files, no PROFILE.md.
+  const inCwd = await fs.readdir(task.cwd)
+  for (const forbidden of ['CLAUDE.md', '.claude', '.unmute-hook.sh', '.unmute-activity', 'PROFILE.md']) {
+    assert.ok(!inCwd.includes(forbidden), `dispatch wrote ${forbidden} into the session cwd`)
+  }
   assert.ok(spawned, 'executor spawned')
   // sessionId minted, set on the task, passed to the spawn (→ --session-id), and persisted.
   assert.ok(task.sessionId, 'task carries a minted sessionId')
@@ -218,10 +222,15 @@ test('needs-user surfaces the question; answer() pipes it into stdin (PRD §7)',
   const [q] = await needsUser
   assert.equal(q.question.text, 'Which Rishi?')
 
+  // TYPED, and correctly so. This question arrived through a STATUS WRITE, not
+  // through the AskUserQuestion hook — so there is no picker shape on record and
+  // no basis for sending an index. We drive the picker only when a hook told us
+  // its exact options (see the index test below); otherwise typing is the honest
+  // fallback, and the terminal can take it.
   const before = fake.writes.length
   tm.answer(id, 'A')
   assert.equal(fake.writes.length, before + 1)
-  assert.equal(fake.writes.at(-1), 'A') // answer piped to the session
+  assert.equal(fake.writes.at(-1), 'A')
   assert.equal(tm.get(id)!.state, 'processing') // optimistic resume
   tm.kill(id)
 })
@@ -242,20 +251,20 @@ test('staleness backstop flags a silent task as stuck (PRD §6.3)', { timeout: 5
   tm.kill(id)
 })
 
-test('deterministic hook heartbeat keeps a silent task alive; it goes stuck once activity stops', { timeout: 5000 }, async () => {
+test('a pushed hook heartbeat keeps a silent task alive; it goes stuck once the events stop', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({
     executorFactory: () => makeFakeExecutor(),
     baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 30, staleMs: 200,
   })
   const id = await tm.dispatch('a long task that works without writing status')
-  const cwd = tm.get(id)!.cwd
-  const activity = path.join(cwd, '.unmute-activity')
-  // Simulate PostToolUse firing every 60ms (real progress, NO status writes).
-  const beat = setInterval(() => { void fs.writeFile(activity, '') }, 60)
+  const sessionId = tm.get(id)!.sessionId!
+  // PostToolUse arriving every 60ms — real progress, NO status writes. These
+  // are PUSHED now (session-policy.ts) rather than inferred from a marker file.
+  const beat = setInterval(() => tm.onHookEvent({ kind: 'tool-used', sessionId }), 60)
   await new Promise((r) => setTimeout(r, 500)) // > 2x staleMs with no status write
   assert.notEqual(tm.get(id)!.state, 'stuck', 'hook heartbeat kept the silent task alive')
-  // Activity stops → no heartbeat, no status → the backstop must still fire.
+  // Events stop → no heartbeat, no status → the backstop must still fire.
   clearInterval(beat)
   const [stuckTask] = await once(tm, 'stuck')
   assert.equal(stuckTask.state, 'stuck', 'still goes stuck once genuinely silent')
@@ -418,10 +427,12 @@ test('followUp resumes a warm session — pipes text into stdin, back to process
   // for the fake executor; flush the microtask so the deferred write lands.
   await new Promise((r) => setTimeout(r, 0))
   assert.equal(fake.writes.length, before + 1)
-  // A follow-up re-sends the FULL dispatch payload (not raw text) so the model is
-  // re-anchored to the contract — the intent plus the status-file path.
-  assert.ok(fake.writes.at(-1)!.includes('reply to the second one')) // the new intent
-  assert.ok(fake.writes.at(-1)!.includes(task.statusPath))            // status-file path re-sent
+  // A FOLLOW-UP IS JUST WHAT THE USER SAID. The re-anchoring scaffolding —
+  // status path, recipe path, "Act now, follow the contract" — used to wrap
+  // every sentence for the life of the session. The Stop hook replaced the
+  // mechanism it existed to support, so it is gone.
+  assert.equal(fake.writes.at(-1)!, 'reply to the second one')
+  assert.ok(!fake.writes.at(-1)!.includes(task.statusPath), 'follow-up re-sent the status path')
   assert.equal(tm.get(id)!.state, 'processing')
   tm.kill(id)
 })
@@ -494,7 +505,15 @@ test('killAll terminates every session and marks running tasks stopped (PRD §10
   assert.equal(tm.activeCount(), 0)
 })
 
-// ── Memory layer: surface + mode, nursery injection, recipe-bearing handoff ──
+// ── Memory injection: REMOVED (2026-08-06) ───────────────────────────────────
+//
+// Dispatch used to copy graduated skills into the cwd, write a PROFILE.md, and
+// type hedged "memory leads" from the nursery into the payload. All three came
+// from the librarian, which has been parked since 2026-08-03 — so they were
+// unvetted hints from a system with no maintainer, and the project overview
+// already called them "noise that pollutes instruction packets".
+//
+// These tests pin the removal, so it cannot quietly come back.
 
 async function seedGmailNursery(baseDir: string) {
   await writeRecipe({
@@ -508,80 +527,71 @@ async function seedGmailNursery(baseDir: string) {
   }, baseDir)
 }
 
-test('managed dispatch injects + records the gmail nursery lead for the detected surface', async () => {
+test('a nursery recipe on disk is NOT injected, in managed mode or any other', async () => {
   const baseDir = await tmpBase()
   await seedGmailNursery(baseDir)
   const fake = makeFakeExecutor()
   const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25 })
   const id = await tm.dispatch('scan my inboxes') // detectSurface -> gmail, default managed
-  // hedged nursery lead is typed into the payload
-  assert.match(fake.writes.join(''), /unverified lead/i)
-  // and recorded on the task (tier nursery, surface gmail)
-  const injected = tm.get(id)!.injectedRecipes ?? []
-  assert.ok(injected.some((r) => r.name === 'gmail-inbox-sweep' && r.tier === 'nursery' && r.surface === 'gmail'),
-    'gmail nursery recipe recorded')
+  assert.equal(fake.writes.join(''), 'scan my inboxes', 'the payload is the intent and nothing else')
+  assert.doesNotMatch(fake.writes.join(''), /unverified lead/i)
+  assert.equal((tm.get(id)!.injectedRecipes ?? []).length, 0)
+  // surface + mode are still recorded — they route the work, they do not inject.
   assert.equal(tm.get(id)!.mode, 'managed')
   assert.equal(tm.get(id)!.surface, 'gmail')
   tm.kill(id)
 })
 
-test('raw dispatch skips injection, records no recipes, and never hands off on done', { timeout: 5000 }, async () => {
+test('no skills copy and no PROFILE.md land in the session directory', async () => {
   const baseDir = await tmpBase()
   await seedGmailNursery(baseDir)
-  const submits: any[] = []
-  const librarian = { submit: async (s: any) => { submits.push(s) } } as any
-  const fake = makeFakeExecutor()
-  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
-  const id = await tm.dispatch('open me a coding session', { mode: 'raw' })
-  assert.doesNotMatch(fake.writes.join(''), /unverified lead/i)
-  assert.equal((tm.get(id)!.injectedRecipes ?? []).length, 0)
-  const donePromise = once(tm, 'done')
-  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'ok' } })
-  await donePromise
-  await new Promise((r) => setTimeout(r, 50))
-  assert.equal(submits.length, 0) // raw mode never hands off
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('scan my inboxes')
+  const written = await fs.readdir(tm.get(id)!.cwd)
+  assert.ok(!written.includes('.claude'), 'skills were copied into the session cwd')
+  assert.ok(!written.includes('PROFILE.md'), 'a PROFILE.md was written into the session cwd')
+  tm.killAll()
 })
 
-test('managed done with an injected recipe hands off to the librarian once with outcome done', { timeout: 5000 }, async () => {
+test('managed done still hands off to the librarian; raw still never does', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
-  await seedGmailNursery(baseDir)
+  const submits: any[] = []
+  const librarian = { submit: async (s: any) => { submits.push(s) } } as any
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
+
+  const managed = await tm.dispatch('scan my inboxes')
+  const doneA = once(tm, 'done')
+  await claudeWrites(tm.get(managed)!.statusPath, { state: 'done', result: { summary: 'swept' } })
+  await doneA
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(submits.length, 1)
+  assert.equal(submits[0].outcome, 'done')
+  assert.deepEqual(submits[0].injectedRecipes, [], 'nothing was injected to grade against')
+
+  const raw = await tm.dispatch('open me a coding session', { mode: 'raw' })
+  const doneB = once(tm, 'done')
+  await claudeWrites(tm.get(raw)!.statusPath, { state: 'done', result: { summary: 'ok' } })
+  await doneB
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(submits.length, 1, 'raw mode never hands off')
+  tm.killAll()
+})
+
+test('a failed task no longer hands off — that gate required injected memory', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
   const submits: any[] = []
   const librarian = { submit: async (s: any) => { submits.push(s) } } as any
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
   const id = await tm.dispatch('scan my inboxes')
-  const donePromise = once(tm, 'done')
-  await claudeWrites(tm.get(id)!.statusPath, { state: 'done', result: { summary: 'swept' } })
-  await donePromise
+  const failed = once(tm, 'failed')
+  await claudeWrites(tm.get(id)!.statusPath, { state: 'failed', error: { reason: 'boom' } })
+  await failed
   await new Promise((r) => setTimeout(r, 50))
-  assert.equal(submits.length, 1)
-  assert.equal(submits[0].outcome, 'done')
-  assert.ok(submits[0].injectedRecipes.some((r: any) => r.name === 'gmail-inbox-sweep'))
-})
-
-test('managed failed hands off ONLY when an injected recipe is present', { timeout: 5000 }, async () => {
-  const baseDir = await tmpBase()
-  await seedGmailNursery(baseDir)
-  const submits: any[] = []
-  const librarian = { submit: async (s: any) => { submits.push(s) } } as any
-  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, librarian })
-
-  // (a) gmail surface has a recipe → failed hands off with outcome 'failed'
-  const withRecipe = await tm.dispatch('scan my inboxes')
-  const failedA = once(tm, 'failed')
-  await claudeWrites(tm.get(withRecipe)!.statusPath, { state: 'failed', error: { reason: 'boom' } })
-  await failedA
-  await new Promise((r) => setTimeout(r, 50))
-  assert.equal(submits.length, 1)
-  assert.equal(submits[0].outcome, 'failed')
-
-  // (b) general surface, no recipes → injectedRecipes empty → failed does NOT hand off
-  const noRecipe = await tm.dispatch('refactor the thing') // -> general, empty
-  assert.equal((tm.get(noRecipe)!.injectedRecipes ?? []).length, 0)
-  const failedB = once(tm, 'failed')
-  await claudeWrites(tm.get(noRecipe)!.statusPath, { state: 'failed', error: { reason: 'boom2' } })
-  await failedB
-  await new Promise((r) => setTimeout(r, 50))
-  assert.equal(submits.length, 1) // unchanged — recipe-less failure is not handed off
+  // The rule was "a wrong injected recipe is a contradiction signal". With
+  // nothing injected there is no signal, so a failure is just noise — exactly
+  // what the gate always said.
+  assert.equal(submits.length, 0)
+  tm.killAll()
 })
 
 // ─── Durable session model (Orchestrate): kind 'oneoff' | 'session' ───────────
@@ -683,7 +693,7 @@ test('setName persists the generated name into meta.json (survives restart)', as
 
 // ─── Project-bound spawn (Orchestrate): the agent runs IN the user's dir ──────
 
-test('project-bound dispatch: spawns in the project dir, pollutes NOTHING there, contract rides inline', async () => {
+test('project-bound dispatch: spawns in the project dir and pollutes NOTHING there', async () => {
   const baseDir = await tmpBase()
   const project = await fs.mkdtemp(path.join(os.tmpdir(), 'user-project-'))
   let spawned: SpawnOpts | null = null
@@ -702,9 +712,12 @@ test('project-bound dispatch: spawns in the project dir, pollutes NOTHING there,
   const written = await fs.readdir(project)
   assert.deepEqual(written, [], 'nothing written into the user project dir')
 
-  // The contract can't auto-load from a CLAUDE.md we never wrote → inline payload.
-  assert.ok(fake.writes[0].includes('Unmute operating contract'), 'contract inline in the payload')
-  assert.ok(fake.writes[0].includes(task.statusPath), 'status path in the payload')
+  // NO inline contract. It used to ride in the payload here — as a USER TURN —
+  // precisely because we would not write a CLAUDE.md into the user's repo. It
+  // now lives in the system prompt (--append-system-prompt) instead, so the
+  // conversation contains only what the user actually said.
+  assert.equal(fake.writes[0], 'work on the gating feature')
+  assert.ok(!fake.writes[0].includes(task.statusPath), 'status path leaked into the payload')
 
   // Receipt carries the project cwd so resume() respawns there after a restart.
   const meta = JSON.parse(await fs.readFile(path.join(task.home, 'meta.json'), 'utf8'))
@@ -726,8 +739,10 @@ test('project-bound dispatch falls back to scratch when the dir is unusable', as
   const task = tm.get(id)!
   assert.equal(task.cwd, task.home, 'fell back to the scratch spawn')
   assert.equal(spawned!.cwd, task.home)
-  // Scratch spawn = full machinery: CLAUDE.md installed as usual.
-  assert.ok((await fs.readFile(path.join(task.home, 'CLAUDE.md'), 'utf8')).includes('Unmute'))
+  // A scratch spawn is now exactly as clean as a project-bound one: no
+  // CLAUDE.md, and the payload is the intent.
+  const inHome = await fs.readdir(task.home)
+  assert.ok(!inHome.includes('CLAUDE.md'), 'scratch spawn still writes a CLAUDE.md')
   tm.killAll()
 })
 
@@ -1181,9 +1196,9 @@ test('stuck heals to processing when hook activity resumes (the API-retry recove
   // Silence past staleMs → stuck fires (the retry loop is hook-silent).
   const [stuckTask] = await once(tm, 'stuck')
   assert.equal(stuckTask.state, 'stuck')
-  // The retries work out — real tool execution resumes (PostToolUse marker).
-  const activity = path.join(tm.get(id)!.cwd, '.unmute-activity')
-  await fs.writeFile(activity, '')
+  // The retries work out — real tool execution resumes, and the PostToolUse
+  // hook tells us directly rather than us noticing a marker file's mtime.
+  tm.onHookEvent({ kind: 'tool-used', sessionId: tm.get(id)!.sessionId! })
   // The label must heal itself: stuck → processing, no human intervention.
   const t0 = Date.now()
   while (tm.get(id)!.state === 'stuck') {
@@ -1279,4 +1294,218 @@ test('typeUnsubmitted writes raw text with no CR to the task executor', async ()
   assert.deepEqual(fake.writes.filter((w) => w === '/pr-review '), []) // NOT via writeStdin (which appends CR)
   assert.equal(tm.typeUnsubmitted('nope', 'x'), false)    // unknown task
   tm.kill(id)
+})
+
+// ─── The conversation, for a PTY task too ────────────────────────────────────
+
+test('dispatch shows the ask immediately, and a follow-up replaces it', async () => {
+  // A card that is blank for the first thirty seconds of every task reads as
+  // broken — and the user already knows what they said. The transcript is still
+  // the source of truth; this is what fills the gap until a turn ends.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('summarize the pricing thread')
+  assert.deepEqual(tm.get(id)!.conversation, [{ role: 'user', text: 'summarize the pricing thread' }])
+
+  tm.followUp(id, 'now compare it with last quarter')
+  await new Promise((r) => setTimeout(r, 0))
+  assert.deepEqual(tm.get(id)!.conversation, [{ role: 'user', text: 'now compare it with last quarter' }])
+  tm.killAll()
+})
+
+test('a finished turn puts the model reply into the conversation, from the EVENT not the file', async () => {
+  // The field bug: the reply was read back from the transcript JSONL, which
+  // Claude Code has not flushed when Stop fires. The read came back empty, a
+  // length guard skipped the update, and a DONE task showed the user's question
+  // and nothing else — while the status file held the full 2.5k reply, because
+  // that path used the payload. One event, two fields, one of them going to a
+  // file that did not exist yet.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('summarize my bookmarks')
+  const sessionId = tm.get(id)!.sessionId!
+
+  const done = once(tm, 'done')
+  tm.onHookEvent({ kind: 'turn-ended', sessionId, lastMessage: 'Here are your 5 most recent bookmarks:\n\n1. prateek — kanban in Codex' })
+  await done
+
+  const convo = tm.get(id)!.conversation ?? []
+  assert.deepEqual(convo.map((t) => t.role), ['user', 'assistant'], 'both sides must be present')
+  assert.equal(convo[0].text, 'summarize my bookmarks')
+  assert.match(convo[1].text, /5 most recent bookmarks/)
+  // And the same text is what the status carries — one reply, two fields.
+  assert.match(tm.get(id)!.result!.detail!, /5 most recent bookmarks/)
+  tm.killAll()
+})
+
+test('a hook event can NEVER land on a driven backend, by session id or by cwd', async () => {
+  // The isolation is asymmetric: dispatch() forks to the drivers before any hook
+  // code runs, so the OUTBOUND side is guarded by construction. The inbound side
+  // matched on identity alone — and both fallbacks are reachable. A Codex task
+  // stores the Codex THREAD id in `sessionId`; a Claude-desktop task carries a
+  // real project `cwd`. So a CLI session firing hooks from the same repo could
+  // have selected the desktop card, and we would have written a derived status
+  // onto a task whose agent we never spoke to.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const cli = await tm.dispatch('a real claude task')
+  const claudeTask = tm.get(cli)!
+
+  // A driven task that shares BOTH keys with the hook payload.
+  const alien = { ...claudeTask, id: 'codex-1', agent: 'codex-desktop' as AgentKind, createdAt: claudeTask.createdAt + 1000 }
+  ;(tm as unknown as { tasks: Map<string, Task> }).tasks.set('codex-1', alien)
+
+  tm.onHookEvent({ kind: 'turn-ended', sessionId: claudeTask.sessionId!, cwd: claudeTask.cwd, lastMessage: 'done here' })
+  await new Promise((r) => setTimeout(r, 30))
+
+  assert.equal(tm.get('codex-1')!.state, claudeTask.state === 'done' ? 'processing' : tm.get('codex-1')!.state,
+    'the driven task must not have been transitioned')
+  assert.equal((tm.get('codex-1')!.conversation ?? []).length, (alien.conversation ?? []).length,
+    'the driven task must not have gained a conversation')
+  assert.match(tm.get(cli)!.result?.detail ?? '', /done here/, 'the CLI task is the one that got it')
+  tm.killAll()
+})
+
+test('a choice is answered by INDEX — typing the label picks the wrong option', async () => {
+  // Verified on a live session: AskUserQuestion is a numbered picker, so typing
+  // "Spaces" and pressing Enter recorded "Tabs" (the highlighted default). The
+  // user picks one thing, the agent receives another, and nothing reports an
+  // error — the worst class of bug this surface can have.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('pick something')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_1', questions: [{ question: 'Tabs or spaces?', multiSelect: false, options: [{ label: 'Tabs' }, { label: 'Spaces' }] }] })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(tm.get(id)!.state, 'needs-user')
+
+  const before = fake.raw.length
+  tm.answer(id, 'Spaces')                       // the SECOND option
+  assert.equal(fake.raw.slice(before).join(''), '2', 'must send the index, not the label')
+  assert.equal(tm.get(id)!.state, 'processing')
+  tm.killAll()
+})
+
+test('with no picker open, an answer is still typed as text', { timeout: 8000 }, async () => {
+  // The ordinary case: the session is at its prompt, not inside a widget. This
+  // is the path the refusal below must NOT swallow — a CLI task with no open
+  // ask keeps writing to stdin exactly as it always did.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('ask me something')
+  await new Promise((r) => setTimeout(r, 30))
+  const before = fake.writes.length
+  tm.answer(id, 'do the thing')
+  assert.equal(fake.writes.at(-1), 'do the thing')
+  assert.ok(fake.writes.length > before)
+  tm.killAll()
+})
+
+test('the conversation survives a restart', { timeout: 8000 }, async () => {
+  // It lived only in memory, so every relaunch emptied the chat strip for every
+  // existing task and left the short status line where the exchange should be.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('summarize the thread')
+  const sessionId = tm.get(id)!.sessionId!
+  const done = once(tm, 'done')
+  tm.onHookEvent({ kind: 'turn-ended', sessionId, lastMessage: 'Here is the summary.' })
+  await done
+  await new Promise((r) => setTimeout(r, 60))
+  tm.killAll()
+
+  const tm2 = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  await tm2.rehydrate()
+  const convo = tm2.get(id)?.conversation ?? []
+  assert.deepEqual(convo.map((t) => t.role), ['user', 'assistant'], 'both turns must come back')
+  assert.match(convo[1].text, /Here is the summary/)
+  tm2.killAll()
+})
+
+test('a complex ask is NOT answered by us — it goes to the terminal', { timeout: 8000 }, async () => {
+  // A tab bar: pick, auto-advance, toggle, Tab to an unnumbered Submit, Enter.
+  // We have watched that sequence and never driven it, and half-driving it
+  // leaves the model waiting on a picker nobody is holding.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('ask me two things')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_x', questions: [
+    { question: 'Colour?', multiSelect: false, options: [{ label: 'Blue' }] },
+    { question: 'Languages?', multiSelect: true, options: [{ label: 'Go' }] },
+  ] })
+  await new Promise((r) => setTimeout(r, 30))
+  const beforeRaw = fake.raw.length
+  const beforeWrites = fake.writes.length
+  tm.answer(id, 'Blue')
+  assert.equal(fake.raw.slice(beforeRaw).join(''), '', 'must not send an index for a shape we cannot drive')
+  // AND MUST NOT FALL BACK TO TYPING. This used to write "Blue" + Enter into a
+  // session rendering a picker: the prose lands nowhere and the Enter commits
+  // whatever is HIGHLIGHTED — the same wrong-option corruption the index branch
+  // exists to prevent, arriving through the fallback instead.
+  assert.equal(fake.writes.length, beforeWrites, 'must not type prose at an open picker')
+  assert.equal(tm.get(id)!.state, 'needs-user', 'still blocked — we did not answer it')
+  assert.match(tm.get(id)!.deliveryError ?? '', /terminal/, 'and it says why')
+  tm.killAll()
+})
+
+test('an answer that matches no option is refused too, not typed', { timeout: 8000 }, async () => {
+  // The ask IS drivable, but "purple" is not one of its options, so there is no
+  // index to send. The picker is still open, so typing the word is exactly as
+  // wrong here as it is for a shape we never drive.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('pick a colour')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_y', questions: [
+    { question: 'Colour?', multiSelect: false, options: [{ label: 'Blue' }, { label: 'Green' }] }] })
+  await new Promise((r) => setTimeout(r, 30))
+  const beforeRaw = fake.raw.length
+  const beforeWrites = fake.writes.length
+  tm.answer(id, 'purple')
+  assert.equal(fake.raw.slice(beforeRaw).join(''), '', 'nothing to index')
+  assert.equal(fake.writes.length, beforeWrites, 'and nothing typed at the picker')
+  assert.equal(tm.get(id)!.state, 'needs-user')
+  assert.match(tm.get(id)!.deliveryError ?? '', /purple/, 'names what did not match')
+  // The card is promoted to the refusal shape, which is what opens the terminal.
+  assert.equal(tm.get(id)!.question?.kind, 'terminal_only')
+  tm.killAll()
+})
+
+test('closing an ask clears it, so a stale question cannot shadow a live one', { timeout: 8000 }, async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('ask me')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_a', questions: [{ question: 'Q?', multiSelect: false, options: [{ label: 'A' }] }] })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(tm.get(id)!.state, 'needs-user')
+  tm.onHookEvent({ kind: 'ask-closed', sessionId, askId: 'toolu_a', answers: { 'Q?': 'A' } })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(tm.get(id)!.state, 'processing')
+  assert.equal(tm.get(id)!.openAsk, undefined)
+  tm.killAll()
+})
+
+test('a Notification cannot bury a live ask', { timeout: 8000 }, async () => {
+  // The football bug: question-asked → permission-asked → waiting, each
+  // overwriting, leaving "Claude needs your permission" with no options.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('football')
+  const sessionId = tm.get(id)!.sessionId!
+  tm.onHookEvent({ kind: 'ask-opened', sessionId, askId: 'toolu_f', questions: [
+    { question: 'Which sport?', multiSelect: false, options: [{ label: 'Soccer' }, { label: 'American football' }] }] })
+  await new Promise((r) => setTimeout(r, 30))
+  tm.onHookEvent({ kind: 'waiting', sessionId, message: 'Claude needs your permission', notificationType: 'permission_prompt' })
+  tm.onHookEvent({ kind: 'permission-asked', sessionId, tool: 'AskUserQuestion', summary: '' })
+  await new Promise((r) => setTimeout(r, 40))
+  assert.match(tm.get(id)!.question!.text, /Which sport/)
+  assert.deepEqual(tm.get(id)!.question!.choices, ['Soccer', 'American football'])
+  tm.killAll()
 })

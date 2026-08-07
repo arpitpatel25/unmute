@@ -66,6 +66,7 @@ final class AppController: NSObject, NotchResizing {
         installKeyMonitors()
         installOutsideClickMonitor()
         observeScreens()
+        observeAppSwitches()
         NotchLog.log("presented at dormant: window=\(NotchLog.rect(window.frame)) visible=\(window.isVisible)")
     }
 
@@ -147,6 +148,9 @@ final class AppController: NSObject, NotchResizing {
             // task's proportions until the next state change.
             let fillChanged = model.task?.hasTerminal != task.hasTerminal
             model.task = task
+            // The terminal stops being a drill-down when it is the only way to
+            // answer. Open it as the ask arrives — see needsTerminalToAnswer.
+            if needsTerminalToAnswer(task) { model.taskTerminalOpen = true }
             if model.state == .task && fillChanged { refit(animated: true) }
             // At bar level the fronted task IS the message — the right half
             // carries its activity, and the mass is as wide as what it says.
@@ -158,6 +162,7 @@ final class AppController: NSObject, NotchResizing {
             if model.focusedId == nil || model.focusedId == task.id {
                 model.focusedId = task.id
                 model.stageTask = task
+                if needsTerminalToAnswer(task) { model.stageTerminalOpen = true }
                 refit()
             }
 
@@ -222,6 +227,18 @@ final class AppController: NSObject, NotchResizing {
                 applyState(.dormant)
             } else if !isExpanded(model.state) {
                 refreshBar()
+            }
+
+        case let .pocket(p):
+            // A pocket that opens or closes changes the surface's SIZE, so it
+            // needs a refit — but only when it is the thing being shown. An
+            // expanded task outranks it: you are already looking at one address,
+            // and a card announcing a second would be two answers to one question.
+            let wasOpen = model.pocket.isOpen
+            model.pocket = p
+            NotchLog.log("CMD pocket mode=\(p.mode) at=\(p.at) slots=\(p.slots.count)")
+            if !isExpanded(model.state) || model.state == .attention {
+                if wasOpen != p.isOpen { refit(animated: true) } else { refreshBar() }
             }
 
         case let .toast(text):
@@ -309,9 +326,22 @@ final class AppController: NSObject, NotchResizing {
         if state != .task && state != .cockpit { userScale = 1 }
         let up = rung(state) >= rung(model.state)
         if state != .cockpit { model.focusedId = nil; model.stageTask = nil }
-        // Terminal is OPEN BY DEFAULT on the task surface ("hide terminal" is
-        // the choice); reset when leaving so re-entry starts open again.
-        model.taskTerminalOpen = (state == .task)
+        // TERMINAL CLOSED BY DEFAULT when a task is pulled to attention.
+        //
+        // It was open, which inverted the point of the surface: a task arrives
+        // BECAUSE it needs you, and the first thing you should see is what it
+        // said — not a wall of scrollback with the message squeezed above it.
+        // The terminal is one tap away and stays that way; it is the
+        // drill-down, not the greeting. Reset on leaving so every arrival is
+        // calm again. (The orchestrator's stage keeps its own default: you went
+        // there deliberately, so the terminal is what you asked for.)
+        //
+        // …UNLESS the terminal is the only way to answer. A `terminal_only` ask
+        // is a picker Unmute refuses to drive, so the card carries the whole
+        // question and no way to reply to it. Greeting that with a closed
+        // terminal is the dead end this rule was blamed for: an instruction to
+        // "answer in the terminal" beside a terminal that is not there.
+        model.taskTerminalOpen = model.task.map(needsTerminalToAnswer) ?? false
         // THE REVIEW POPUP CANNOT SURVIVE A COLLAPSE. It is drawn only on the
         // expanded surface, and a popup nobody can see still eats the next
         // Escape in stepDown. Leaving the expanded state ends it, exactly as
@@ -379,6 +409,20 @@ final class AppController: NSObject, NotchResizing {
                     BarContent())
 
         case .idle, .active, .attention:
+            // THE POCKET, OPEN — a card between the bar and the panel.
+            //
+            // Deliberately small and deliberately temporary: it is up only
+            // while you are speaking or because you tapped it, and its job is
+            // to say WHICH thing you are addressing, not to let you read the
+            // whole ask. Anything bigger and we are back to a surface that is
+            // in the way, which is the problem the pocket exists to solve.
+            if model.pocket.isOpen {
+                // Shorter without the ghost-hint row, and shorter again when a
+                // single task makes the carousel pointless.
+                return (geometry.topPinnedFrame(width: 348, height: model.pocket.slots.count > 1 ? 146 : 120),
+                        geometry.panelPlacement,
+                        BarContent())
+            }
             // BAR LEVEL. Height is the measured menu bar and nothing else; the
             // width follows what the mass has to say, bounded by the room
             // beside the cutout.
@@ -518,6 +562,21 @@ final class AppController: NSObject, NotchResizing {
         let sh = (geometry.screenFrame.height - geometry.barHeight) * 0.98 / max(base.height, 1)
         return max(1, min(sw, sh))
     }
+    /// Is the terminal the ONLY way to answer this task right now?
+    ///
+    /// True for a `terminal_only` ask — a picker open in the session that Unmute
+    /// has not proven it can drive, so the card shows the whole question and
+    /// deliberately offers no reply. In that one case the terminal stops being
+    /// the drill-down and becomes the control, so it opens with the ask instead
+    /// of waiting to be found.
+    ///
+    /// Claude Code CLI only, by construction: `terminal_only` is written from
+    /// hook events, and only a CLI session emits hooks. `alive` keeps a dead
+    /// session's last question from re-opening a terminal with nothing behind it.
+    private func needsTerminalToAnswer(_ t: TaskDetail) -> Bool {
+        t.alive && t.status == .needsUser && t.question?.kind == "terminal_only"
+    }
+
     /// Re-apply the current state's frame after something the frame depends on
     /// changed (the fronted task's backend, a stage detail arriving, a message
     /// the bar now has to carry).
@@ -786,6 +845,15 @@ final class AppController: NSObject, NotchResizing {
             model.proposal = nil; model.proposalLoadingId = nil; model.convLog = ""
             return
         }
+        // CLOSING THE POCKET IS THE AIM CONTROL, and Escape is how you close
+        // things. Open means your voice goes to the task on the card; Escape
+        // shuts it and the aim goes with it — mid-sentence or not, because that
+        // is already what closing means on the expanded panel. This is the
+        // whole reason no modifier and no separate "detach" gesture is needed.
+        if model.pocket.isOpen {
+            model.emit(.pocketRelease)
+            return
+        }
         switch model.state {
         case .cockpit:
             if model.focusedId != nil {
@@ -802,6 +870,54 @@ final class AppController: NSObject, NotchResizing {
     }
 
     // MARK: - Displays
+
+    /// CHANGING WINDOW IS THE SIGNAL.
+    ///
+    /// An expanded panel covering 70% of the display is right while you are
+    /// reading it and wrong the instant you go elsewhere — and you went
+    /// elsewhere FOR A REASON, usually to look at the thing you need in order
+    /// to answer. Before this, the only way to get your screen back was to
+    /// close the task, which says "done with this" and dropped you into the
+    /// dashboard to find it again. So leaving now pockets it instead.
+    ///
+    /// `NSWorkspace.didActivateApplicationNotification`, not app-resign: this
+    /// helper is an accessory that never takes key focus, so it is never the
+    /// app that resigns. What we can see is who came FORWARD.
+    private func observeAppSwitches() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let mine = app?.bundleIdentifier == Bundle.main.bundleIdentifier
+                || app?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            if mine {
+                // Straight back = you did not mean to leave. Main owns the grace
+                // window; we only report the return.
+                self.model.emit(.userReturned)
+            } else if self.isExpanded(self.model.state) {
+                NotchLog.log("user left for \(app?.bundleIdentifier ?? "?") — collapsing")
+                self.model.emit(.userLeft(reason: "blur"))
+            }
+        }
+
+        // A SPACE SWIPE IS LEAVING TOO, and it was invisible here.
+        //
+        // App activation does not fire when you swipe to another desktop, so an
+        // open orchestrator rode along to every Space — including the one you
+        // swiped to precisely because you needed to look at something. The
+        // surface joins all Spaces (`.canJoinAllSpaces`), which is what makes it
+        // reachable everywhere and also what let it follow you at full size.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isExpanded(self.model.state) else { return }
+            NotchLog.log("space changed — collapsing")
+            self.model.emit(.userLeft(reason: "space"))
+        }
+    }
 
     private func observeScreens() {
         // PER DISPLAY, NOT PER APP. Connected, disconnected, rearranged, main

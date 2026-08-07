@@ -12,7 +12,7 @@ import type { EventEmitter } from 'node:events'
 import type {
   NotchCommand, NotchEvent, NotchStateName, TaskStatusName,
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
-  ScratchpadPayloadP,
+  ScratchpadPayloadP, PocketP, PocketSlotP, PocketMode,
 } from './notch-client'
 import { providerOf, type ProviderId } from '../providers'
 import { createLogger } from '../log'
@@ -78,7 +78,9 @@ export interface NotchControllerDeps {
   // task runtime
   listTasks(): TaskLite[]
   getTask(id: string): TaskLite | undefined
-  answer(id: string, text: string): void
+  /** False when the answer was REFUSED — an open picker Unmute will not drive.
+   *  The task is still blocked, so the crank must not move off it. */
+  answer(id: string, text: string): boolean
   kill(id: string): void
   remove(id: string): Promise<void> | void
   killAll(): void
@@ -163,6 +165,28 @@ function truncate(s: string, n = 48): string {
   return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…'
 }
 
+/**
+ * The ONE LINE beside the title: what is going on, not what is being asked.
+ *
+ * `activity` used to be `question.text` outright. That is fine while the text is
+ * one short question, and it is what the field was written for — but the same
+ * string is also the question card's BODY, and the surface draws the headline
+ * with no line limit. So the day the card started carrying the whole ask, the
+ * ask printed twice: once as a twelve-line "headline" above the user's own
+ * message, once in the card below it. One field cannot be a headline and a
+ * document at the same time.
+ *
+ * The split: when the question is `terminal_only` the CARD owns the ask, so the
+ * headline falls back to `step` — a short state line ("2 questions waiting").
+ * Every other kind keeps the question, because those cards are one line plus
+ * chips and the headline is the natural place for it.
+ */
+export function headlineFor(t: TaskLite): string | undefined {
+  const q = t.question
+  if (q && q.kind === 'terminal_only') return t.step ?? 'waiting for you in the terminal'
+  return q?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined
+}
+
 export function relativeAge(ts: number | undefined, now = Date.now()): string {
   if (!ts) return ''
   const s = Math.max(0, Math.round((now - ts) / 1000))
@@ -172,6 +196,9 @@ export function relativeAge(ts: number | undefined, now = Date.now()): string {
   return `${Math.floor(s / 86400)}d`
 }
 
+/** Leave and come straight back and you did not mean to leave — a ⌘-Tab to
+ *  check the link the task just gave you should not cost you the panel. */
+const RETURN_GRACE_MS = 4000
 const FADE_DONE_MS = 15 * 60 * 1000       // done fades from the wall after 15m
 const FADE_ERR_MS = 60 * 60 * 1000        // errored/stuck after 60m
 const AWAY_MS = 30 * 60 * 1000            // digest threshold
@@ -254,6 +281,21 @@ export class NotchController {
   private expandedGroups = new Set<string>()
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
 
+  // ── The pocket ────────────────────────────────────────────────────────────
+  /** Task ids you set aside, most recent first. NOT a queue and NOT a mute:
+   *  a pocketed task keeps its place in the crank and keeps demanding. */
+  private pocket: string[] = []
+  private pocketMode: PocketMode = 'closed'
+  /** Index into `pocketSlots()`. Whatever sits here is the voice's address. */
+  private pocketAt = 0
+  /** Set when leaving collapsed an expanded task; a return inside this window
+   *  re-opens it, because you did not mean to leave. */
+  private returnGraceUntil = 0
+  /** What the last leave collapsed, so a quick return restores THAT rather
+   *  than guessing. Null once used or expired. */
+  private returnTo: { kind: 'task'; id: string } | { kind: 'cockpit' } | null = null
+  private lastPocketJson = ''
+
   constructor(
     private client: NotchClientLike,
     events: EventEmitter,
@@ -286,6 +328,12 @@ export class NotchController {
     on('prev', () => this.onPrev())
     on('focusTask', (e) => this.onFocusTask((e as { id: string }).id))
     on('closeStage', () => { this.seenThenClose() })
+    on('userLeft', (e) => this.onUserLeft((e as { reason: 'blur' | 'screenshot' | 'space' }).reason))
+    on('userReturned', () => this.onUserReturned())
+    on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
+    on('pocketOpen', () => { this.setPocketMode('open'); this.reconcile() })
+    on('pocketRelease', () => { this.setPocketMode('closed'); this.reconcile() })
+    on('pocketExpand', () => this.onPocketExpand())
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
     on('mute', (e) => this.onMute((e as { id: string }).id))
     on('answerText', (e) => {
@@ -298,8 +346,12 @@ export class NotchController {
       // (it is "your move"), so keying on it advanced away from a Codex chat the
       // user was mid-conversation with. Only `needs-user` is a question.
       const wasBlocking = this.deps.getTask(id)?.state === 'needs-user'
-      this.deps.answer(id, text)
-      if (wasBlocking) this.advanceAfterAnswer(id)
+      // A REFUSED ANSWER IS NOT AN ANSWER. When a picker we cannot drive is
+      // open, `answer` sends nothing and the task stays blocked — cranking to
+      // the next task there would carry the user away from the very question
+      // they still have to go answer, and away from the card explaining why.
+      const landed = this.deps.answer(id, text)
+      if (wasBlocking && landed) this.advanceAfterAnswer(id)
       else this.scheduleReconcile()
     })
     on('kill', (e) => this.deps.kill((e as { id: string }).id))
@@ -458,6 +510,10 @@ export class NotchController {
     // leaving cockpit, so our record of having sent it must go at the same time.
     if (this.engaged !== 'cockpit') this.lastDetailJson.delete('stageDetail')
     this.rebuildQueue()
+    // The pocket rides along on every pass: tasks in it can finish or be killed
+    // by anything, and a carousel offering a dead address would aim the voice
+    // at nothing. sendPocket is a no-op when the payload has not changed.
+    this.sendPocket()
     const front = this.front()
     const attention = this.queue.length
     const working = this.deps.listTasks().filter((t) => t.state === 'processing').length
@@ -521,8 +577,212 @@ export class NotchController {
     return working.length === 1 ? working[0] : undefined
   }
 
+  // ── The pocket ────────────────────────────────────────────────────────────
+
+  /**
+   * The carousel: the tasks you set aside, and nothing else.
+   *
+   * Earlier versions carried two synthetic entries — a forced "+ New task" and
+   * an "Unmute will choose" — and both were category errors. "Let the router
+   * decide" is not a member of a list of tasks; it is what happens when no list
+   * is on screen. Putting it in the ring made it look like a task, gave it a
+   * name to argue about, and needed a rule about where it sat.
+   */
+  private pocketSlots(): PocketSlotP[] {
+    return this.pocket
+      .map((id) => this.deps.getTask(id))
+      .filter((t): t is TaskLite => !!t && t.alive !== false)
+      .map((t) => ({
+        id: t.id,
+        title: t.name ?? truncate(t.intent),
+        ask: t.question?.text ?? t.step ?? undefined,
+        status: t.state,
+      }))
+  }
+
+  /** Drop ids that died, and keep `pocketAt` pointing at something real. */
+  private prunePocket(): void {
+    const before = this.pocket.length
+    this.pocket = this.pocket.filter((id) => {
+      const t = this.deps.getTask(id)
+      return !!t && t.alive !== false
+    })
+    // A shrinking ring must never leave the pointer past its end, or the voice
+    // would be aimed at a slot that no longer exists.
+    if (this.pocket.length !== before) this.pocketAt = Math.max(0, Math.min(this.pocketAt, this.pocketSlots().length - 1))
+  }
+
+  /**
+   * YOU ROUTE TO WHAT YOU CAN SEE.
+   *
+   * One rule, no timers, no hidden state — which is exactly why an earlier
+   * "the task stays yours for N minutes" idea was dropped: it made the address
+   * depend on elapsed time the user cannot see and will not remember.
+   *
+   *   expanded task            → that task
+   *   pocket open (sticky)     → whatever is at the forefront
+   *   pocket closed / speaking → the router decides, and the card says so
+   *
+   * `focus` is already the voice's address (init.ts short-circuits on it), so
+   * this is expressed by moving focus rather than by inventing a second
+   * channel. `forceNewTask` is the one thing focus cannot say: null focus means
+   * "let the router choose", which is not the same as "I want a new task".
+   */
+  private applyVoiceTarget(): void {
+    if (this.engaged === 'task' && this.focusedId) return
+    // OPEN IS AIMED, CLOSED IS THE ROUTER. The pocket only ever opens because
+    // the user opened it, so "is it open" is a decision they made, not a state
+    // that happened to them.
+    const slot = this.pocketMode === 'open' ? this.pocketSlots()[this.pocketAt] : undefined
+    this.setFocus(slot?.id ?? null)
+  }
+
+  private sendPocket(): void {
+    this.prunePocket()
+    const data: PocketP = { mode: this.pocketMode, at: this.pocketAt, slots: this.pocketSlots() }
+    const json = JSON.stringify(data)
+    if (json === this.lastPocketJson) return
+    this.lastPocketJson = json
+    this.client.send({ type: 'pocket', data })
+  }
+
+  /**
+   * THE ONLY THING THE POCKET EVER HOLDS: a task that is demanding you.
+   *
+   * It used to keep anything you left — which meant browsing an old session
+   * from the wall and pressing Escape put it in your pocket, beside the things
+   * actually waiting on you. Worse, it invited a whole second category
+   * ("working" vs "waiting") with its own ordering, clutter and expiry rules.
+   *
+   * None of that is needed, because a task you are genuinely working with will
+   * demand you again on its own — and the moment it does, the existing path
+   * pockets it. So the pocket stays exactly one thing, and everything else
+   * simply collapses when you leave it.
+   */
+  private isDemanding(t: TaskLite): boolean {
+    return t.state === 'needs-user' || t.state === 'stuck' || t.state === 'failed'
+  }
+
+  /** Put a task in the pocket. Never mutes it, never takes it out of the crank
+   *  — it is still your move, it is just not covering your screen. */
+  private pocketTask(id: string, why: string): void {
+    this.pocket = [id, ...this.pocket.filter((x) => x !== id)]
+    log.event('pocketed', { taskId: id, why, size: this.pocket.length })
+  }
+
+  private setPocketMode(mode: PocketMode): void {
+    if (this.pocketMode === mode) return
+    this.pocketMode = mode
+    if (mode === 'open') this.pocketAt = 0     // opening lands on the newest
+    this.applyVoiceTarget()
+    this.sendPocket()
+  }
+
+  /**
+   * The user left — switched app, or started a screen capture.
+   *
+   * An expanded panel covering 70% of the display is right while you are
+   * reading it and wrong the instant you go to look at something else, and
+   * changing window IS the signal that you have. Closing was the only escape
+   * before, and closing says "done with this", which is rarely what was meant.
+   */
+  private onUserLeft(reason: 'blur' | 'screenshot' | 'space'): void {
+    // ANY BIG SURFACE GETS OUT OF THE WAY, not just one holding a task.
+    //
+    // This keyed on `focusedId`, which exempted the one surface most likely to
+    // be covering the screen: the WALL. Tap an empty notch, get the whole
+    // orchestrator, swipe to another Space to look something up — and it was
+    // still there, because a focusless cockpit has no task to pocket. But
+    // pocketing and collapsing are different jobs. Pocketing needs a task;
+    // getting out of the way does not.
+    if (this.engaged === 'none') return
+    const id = this.focusedId
+    const t = id ? this.deps.getTask(id) : undefined
+    // Demanding → pocket. Anything else just goes: you were looking at it,
+    // not being asked by it.
+    const kept = !!(t && this.isDemanding(t))
+    if (kept && id) this.pocketTask(id, reason)
+    // Remember what to put back, so a return inside the window restores the
+    // surface you were actually on rather than guessing at a task.
+    this.returnTo = id ? { kind: 'task', id } : { kind: 'cockpit' }
+    this.returnGraceUntil = Date.now() + RETURN_GRACE_MS
+    this.engaged = 'none'
+    this.setFocus(null)
+    this.setPocketMode('closed')
+    log.event('user-left', { reason, pocketed: kept ? id : null, state: t?.state ?? null, was: this.returnTo.kind })
+    this.sendPocket()
+    this.reconcile()
+  }
+
+  /** Came straight back → you did not mean to leave. Re-open what collapsed. */
+  private onUserReturned(): void {
+    const back = this.returnTo
+    if (!back || Date.now() > this.returnGraceUntil) return
+    this.returnGraceUntil = 0
+    this.returnTo = null
+    if (back.kind === 'cockpit') {
+      this.engaged = 'cockpit'
+      log.event('cockpit-reopened-on-return', {})
+    } else {
+      const t = this.deps.getTask(back.id)
+      if (!t) return
+      this.pocket = this.pocket.filter((x) => x !== back.id)
+      this.engaged = 'task'
+      this.setFocus(back.id)
+      log.event('pocket-reopened-on-return', { taskId: back.id })
+    }
+    this.setPocketMode('closed')
+    this.reconcile()
+  }
+
+  /**
+   * Back to the full task — the trip the pocket was missing.
+   *
+   * The pocket exists because the expanded panel takes the whole screen, NOT
+   * because the expanded panel is wrong. Reading the whole ask, watching the
+   * terminal, answering a picker: all of that still needs the panel, and the
+   * card deliberately shows two lines. Without a way back, setting something
+   * aside was a one-way door whose only return was the dashboard — the exact
+   * trip this feature was built to save.
+   *
+   * It LEAVES the pocket on the way out: it is not set aside any more, it is
+   * open in front of you. Leaving or closing puts it straight back.
+   */
+  private onPocketExpand(): void {
+    const slot = this.pocketSlots()[this.pocketAt]
+    if (!slot) return
+    const id = slot.id
+    this.pocket = this.pocket.filter((x) => x !== id)
+    this.pocketAt = 0
+    this.engaged = 'task'
+    this.setPocketMode('closed')
+    this.setFocus(id)
+    this.deps.opened?.(id)          // opening it IS the intent to work in it
+    log.event('pocket-expanded', { taskId: id, left: this.pocket.length })
+    this.reconcile()
+  }
+
+  private onPocketMove(e: { delta?: number; to?: number }): void {
+    const n = this.pocketSlots().length
+    if (n <= 1) return
+    this.pocketAt = typeof e.to === 'number'
+      ? Math.max(0, Math.min(n - 1, e.to))
+      : (this.pocketAt + (e.delta ?? 1) + n * 2) % n
+    this.applyVoiceTarget()
+    this.sendPocket()
+  }
+
   private openCockpit(): void {
     this.engaged = 'cockpit'
+    // "OPEN DASHBOARD" MEANS THE DASHBOARD, NOT THE TASK YOU CAME FROM.
+    //
+    // The cockpit renders the focused task's STAGE whenever `focusedId` is set
+    // (reconcile sends stageDetail; NotchView draws the stage instead of the
+    // wall). Coming here from an auto-expanded task left that focus in place,
+    // so the one button whose label promises "all your tasks" delivered the
+    // single task you had just chosen to leave — and getting to the actual wall
+    // meant closing the stage first. Arriving at the dashboard clears focus.
+    this.setFocus(null)
     this.expandedGroups.clear()   // each visit starts on the live view
     this.computeDigest()
     this.deps.setLastSeen(Date.now())
@@ -592,9 +852,16 @@ export class NotchController {
       this.muted.set(t.id, t.state)
       this.queue = this.queue.filter((x) => x !== t.id)
       log.event('seen-on-close', { taskId: t.id, state: t.state })
+    } else if (t && this.isDemanding(t)) {
+      // A DEMANDING TASK IS POCKETED, NOT DISMISSED. It is still your move —
+      // the only thing you asked for by closing was your screen back. It keeps
+      // its place in the crank, stays unmuted, and stays reachable by voice.
+      // Anything NOT demanding just closes: you were reading it, not answering.
+      this.pocketTask(t.id, 'closed')
     }
     if (opts.collapse) this.engaged = 'none'
     this.setFocus(null)
+    this.setPocketMode('closed')
     this.reconcile()
   }
 
@@ -615,7 +882,7 @@ export class NotchController {
     const t = this.deps.getTask(id)
     const label = t?.question?.choices?.[index]
     if (label == null) return
-    this.deps.answer(id, label)
+    if (!this.deps.answer(id, label)) { this.scheduleReconcile(); return }
     this.advanceAfterAnswer(id)
   }
 
@@ -786,7 +1053,7 @@ export class NotchController {
     return {
       id: t.id,
       title: t.name ?? truncate(t.intent),
-      activity: t.question?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined,
+      activity: headlineFor(t),
       status: t.state,
       kind: t.kind ?? 'oneoff',
       dir: this.dirLabel(t),
@@ -830,16 +1097,21 @@ export class NotchController {
       // what picks the expanded surface's share of the screen (80% for a
       // terminal, 60% for a conversation). One registry, one answer.
       terminal: providerOf(t.agent).hasTerminal,
-      // An external backend has no PTY, so the panel renders the CONVERSATION
-      // where a Claude task renders its terminal. Both are "the real thing,
-      // shown raw" — neither is a re-implementation of the other app's UI.
+      // THE CONVERSATION IS SENT FOR EVERY BACKEND NOW.
+      //
+      // It used to be gated on `external`, because it was conceived as "what a
+      // driven backend has INSTEAD of a terminal". That made the stage an
+      // either/or, and a Claude task lost: it showed a raw PTY and no messages,
+      // so the one thing a returning user wants — what did I ask, what came
+      // back — was only reachable by reading scrollback.
+      //
+      // A Claude session's turns come from Claude's own transcript
+      // (transcript.ts), so all three backends now speak the same shape and the
+      // stage can show the message AND the terminal. `terminal` above still
+      // says whether there is a PTY to draw underneath it.
+      conversation: t.conversation ?? [],
       ...(external ? {
         backend: t.agent,
-        // The whole thread. The old windows here (6, then 40) were both
-        // downstream of a 6-item cut at the parse layer, so neither ever had
-        // anything to trim — widening this alone did nothing, which is exactly
-        // the mistake that let the truncation survive a round of "fixes".
-        conversation: t.conversation ?? [],
         ...(t.codexProject ? { project: t.codexProject } : {}),
       } : {}),
       status: t.state,
@@ -864,7 +1136,7 @@ export class NotchController {
       // go blank. `model` is the persisted fact (Pack F, D6) and carries it
       // through. Neither is ever invented: absent stays absent.
       modelLabel: t.codexModelLabel || t.model || undefined,
-      activity: t.question?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined,
+      activity: headlineFor(t),
       question: t.question ?? undefined,
       result: t.result ?? undefined,
       error: t.error ?? undefined,

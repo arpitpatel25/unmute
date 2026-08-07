@@ -48,6 +48,21 @@ final class NotchWindow: NSPanel {
         // trade, and it was taken deliberately: correct glass everywhere beats
         // a pinned position during the half-second of a transition.
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        // NEVER IN THE USER'S SCREENSHOT.
+        //
+        // Taking a screenshot to answer a task meant fighting the surface that
+        // asked the question: ⌘⇧4 caught the panel sitting over the very thing
+        // being captured, so the shot had to be retaken after putting Unmute
+        // away. `.none` removes the window from screen capture and screen
+        // sharing outright, which solves that whole class of annoyance rather
+        // than timing our way around it — and, as a bonus, keeps your task list
+        // out of a shared screen.
+        //
+        // The trade: you cannot deliberately screenshot the surface either. A
+        // support request needing a picture of the notch has to be a photo or a
+        // description. That is the right side of the trade for a panel whose
+        // job is to sit on top of everything you do.
+        sharingType = .none
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false                  // the shape draws its own

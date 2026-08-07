@@ -66,4 +66,18 @@ export interface AgentExecutor {
  *  only for brand-new work, where the user's current selection is the answer.
  *  Passing it is what stops a resumed task from being rebuilt on whatever the
  *  picker happens to say now — see codex/separation.test.ts. */
-export type ExecutorFactory = (resume?: boolean, agent?: import('./codex-executor').AgentKind) => AgentExecutor
+/** Per-spawn knobs the factory cannot derive from global settings. Optional so
+ *  every existing caller keeps working. */
+export interface ExecutorFactoryOpts {
+  /** Connect Claude-in-Chrome for THIS session. Browser control used to be on
+   *  unconditionally, which meant a session refactoring TypeScript still carried
+   *  a browser tool surface it would never touch. It now follows the task's
+   *  surface, so a coding task launches like an ordinary `claude`. */
+  browser?: boolean
+}
+
+export type ExecutorFactory = (
+  resume?: boolean,
+  agent?: import('./codex-executor').AgentKind,
+  opts?: ExecutorFactoryOpts,
+) => AgentExecutor

@@ -326,14 +326,14 @@ function DockPill({
         onMouseEnter={enter}
         onMouseLeave={leave}
         style={{
-          background: 'rgba(0,0,0,0.8)',
-          backdropFilter: 'blur(18px)',
-          WebkitBackdropFilter: 'blur(18px)',
+          // Flat plane, no backdrop blur (see GlassLip.swift): every surface is
+          // edged rather than lit, so nothing samples what is behind it.
+          background: '#161820',
           // Hairline border gives the pill a defined edge on both light and dark
           // surfaces. NO drop shadow — over a light desktop the blurred-black shadow
           // read as a soft gray "box" around the pill; the dark fill + border stand
           // on their own, matching the shadowless recording pill / model+raw chips.
-          border: '1px solid rgba(255, 255, 255, 0.55)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
           boxShadow: 'none',
           transformOrigin: 'bottom right',
           animation: 'unmuteDockPop 300ms cubic-bezier(0.16,1,0.3,1)',
@@ -446,9 +446,9 @@ export function OverlayApp() {
         style={{
           // Black glass: actual black at 80% opacity, light blur. No border, no
           // white frame (the document is forced transparent above).
-          background: 'rgba(0,0,0,0.8)',
-          backdropFilter: 'blur(18px)',
-          WebkitBackdropFilter: 'blur(18px)',
+          // Flat plane, no backdrop blur (see GlassLip.swift): every surface is
+          // edged rather than lit, so nothing samples what is behind it.
+          background: '#161820',
           transformOrigin: 'bottom right',
           animation: 'unmuteOverlayPop 300ms cubic-bezier(0.16,1,0.3,1)',
         }}

@@ -18,6 +18,47 @@ const log = createLogger('notch-client')
 export type NotchStateName = 'dormant' | 'idle' | 'active' | 'attention' | 'task' | 'cockpit'
 export type TaskStatusName = 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
 
+/**
+ * THE POCKET — a small expanded state.
+ *
+ * There is ONE concept here, not two: a task is in front of you. It comes in
+ * two sizes — the full panel, or this card — and the aim follows what you can
+ * see either way:
+ *
+ *   task expanded  -> that task
+ *   pocket open    -> the task on the card
+ *   neither        -> standard routing, exactly as it has always worked
+ *
+ * `open` therefore only ever happens because the user OPENED it. The pocket
+ * must never open itself: an earlier build bloomed the card whenever the mic
+ * went hot, which made every single utterance look — and under this rule, be —
+ * aimed at a pocketed task. Removing that is not a refinement of the rule, it
+ * is what makes the rule true.
+ *
+ * Closing is the whole control. Escape shuts the card and the aim goes with it,
+ * mid-sentence or not, because that is already what closing means on the
+ * expanded panel. Nothing new to learn, and no modifier to remember.
+ */
+export type PocketMode = 'closed' | 'open'
+
+/** One task you set aside. There are no synthetic entries: "let the router
+ *  decide" is not a thing in a list of tasks, it is what happens when the list
+ *  is not on screen. */
+export interface PocketSlotP {
+  id: string
+  title: string
+  /** The pending ask. The surface clamps it to two lines. */
+  ask?: string
+  status?: TaskStatusName
+}
+
+export interface PocketP {
+  mode: PocketMode
+  /** Index into `slots`. Whatever sits here is the address while open. */
+  at: number
+  slots: PocketSlotP[]
+}
+
 export interface ArtifactP { type: 'url' | 'path'; value: string }
 export interface QuestionP { text: string; kind?: string; choices?: string[]; irreversible?: boolean }
 export interface ResultP { summary: string; detail?: string; artifacts?: ArtifactP[] }
@@ -215,6 +256,7 @@ export type NotchCommand =
   | { type: 'proposal'; data: ProposalDetailP }
   | { type: 'convData'; id: string; text: string }
   | { type: 'capturePhase'; phase: string; target?: string }
+  | { type: 'pocket'; data: PocketP }
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
@@ -233,6 +275,21 @@ export type NotchEvent =
   | { type: 'prev' }
   | { type: 'focusTask'; id: string }
   | { type: 'closeStage' }
+  /** The user left: another app came forward, or they swiped to another Space.
+   *  Any expanded surface gets out of the way — a task goes to the pocket, the
+   *  wall simply collapses. You went elsewhere because you needed the screen. */
+  | { type: 'userLeft'; reason: 'blur' | 'screenshot' | 'space' }
+  /** …and came back. Within the grace window this re-opens what it collapsed. */
+  | { type: 'userReturned' }
+  /** Move the carousel. `to` is an absolute slot index; `delta` steps. */
+  | { type: 'pocketMove'; delta?: number; to?: number }
+  /** Tap the pocket open (sticky), or let it go back to the notch. */
+  | { type: 'pocketOpen' }
+  | { type: 'pocketRelease' }
+  /** Back to the full task. The pocket is a GLANCE state — it exists
+   *  because the panel is large, not because the panel is wrong, so the
+   *  trip back has to be one tap or it is a one-way door. */
+  | { type: 'pocketExpand' }
   | { type: 'chooseOption'; id: string; index: number }
   | { type: 'answerText'; id: string; text: string }
   | { type: 'mute'; id: string }

@@ -19,9 +19,13 @@ struct TaskSurfaceView: View {
             if let t {
                 header(t)
 
-                if t.status == .needsUser, let q = t.question {
-                    QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 12)
-                } else if t.backend == "codex-desktop" {
+                // THE ASK MOVED BELOW THE REASONING (see the strip further
+                // down). It was the FIRST thing on this surface, so a question
+                // like "Want me to spec that first?" met you stripped of the
+                // 2,800 characters that made it answerable — one line, a text
+                // box, and no argument. The headline chain keeps its other
+                // branches; only the question left the top.
+                if t.backend == "codex-desktop" {
                     // NO HEADLINE for a backend that shows its whole
                     // conversation. `activity` is derived from the last agent
                     // message, which IS the last line of the transcript below —
@@ -31,9 +35,16 @@ struct TaskSurfaceView: View {
                     // because raw scrollback is not a summary.
                     EmptyView()
                 } else if let summary = summaryLine(t) {
+                    // ONE LINE, STRUCTURALLY. The source is fixed too (see
+                    // headlineFor), but this slot sits above the exchange and
+                    // pushes the terminal down, so it must not be able to grow
+                    // no matter what reaches it. It had no limit, and a question
+                    // card's worth of text landed here: the whole ask printed
+                    // above the user's own message, and the terminal below lost
+                    // the rows it needed to draw the picker.
                     Text(summary)
                         .font(.system(size: 14)).foregroundColor(Theme.textDim)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(1).truncationMode(.tail)
                         .padding(.top, 12)
                 }
 
@@ -64,15 +75,30 @@ struct TaskSurfaceView: View {
                     CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
                                   modelLabel: t.modelLabel, sending: t.sending ?? false)
                         .padding(.top, 9)
-                } else if model.taskTerminalOpen && t.alive {
+                } else if t.alive {
+                    // The same message-then-terminal shape as the stage. The
+                    // strip is bounded and renders nothing when there are no
+                    // turns yet, so the terminal keeps the space it always had.
+                    ExchangeStrip(turns: t.conversation ?? [], status: t.status,
+                                  maxAnswerHeight: model.taskTerminalOpen ? 150 : .infinity)
+                        .padding(.top, 10)
+                    // …and the ask lands here, under the reasoning it came from.
+                    if t.status == .needsUser, let q = t.question {
+                        QuestionBlock(model: model, taskId: t.id, question: q,
+                                      terminalOpen: $model.taskTerminalOpen).padding(.top, 12)
+                    }
+                    if model.taskTerminalOpen {
                     // The terminal owns EVERYTHING left down to the action row
                     // (field feedback: never a fixed band with dead space below).
                     // .id ties the PTY stream to THIS task across Next/Prev.
-                    TerminalPanel(model: model, taskId: t.id,
-                                  tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
-                        .id(t.id)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 10)
+                        TerminalPanel(model: model, taskId: t.id,
+                                      tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
+                            .id(t.id)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.top, 10)
+                    } else {
+                        Spacer(minLength: 0)
+                    }
                 } else {
                     Spacer(minLength: 0)
                 }

@@ -41,13 +41,16 @@ struct StageView: View {
                 // with. It was also drawn with plain Text, so its markdown came
                 // out as literal asterisks next to a correctly-rendered copy of
                 // itself two lines below.
-                if t.backend != "codex-desktop", let warm = t.warmup, !warm.isEmpty {
+                // "Where you left off" is for a card with NOTHING to show —
+                // a session you are re-entering cold. Once the strip below
+                // carries the actual reply, this is the same text a third time
+                // (summary → strip → dead panel), which is what made a finished
+                // card read as an echo chamber.
+                if t.backend != "codex-desktop", let warm = t.warmup, !warm.isEmpty,
+                   !(t.conversation ?? []).contains(where: { $0.role == "assistant" && !$0.text.isEmpty }) {
                     warmupStrip(warm)
                 }
                 noteRow(t).padding(.top, 8)
-                if t.status == .needsUser, let q = t.question {
-                    QuestionBlock(model: model, taskId: t.id, question: q).padding(.top, 10)
-                }
                 if t.backend == "codex-desktop" {
                     // Wherever a Claude task shows its terminal, a Codex task
                     // shows its messages — and can be replied to. Neither the
@@ -63,10 +66,47 @@ struct StageView: View {
                                   modelLabel: t.modelLabel, sending: t.sending ?? false)
                         .padding(.top, 9)
                 } else if t.alive {
-                    TerminalPanel(model: model, taskId: t.id,
-                                  tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
+                    // MESSAGE, THEN TERMINAL — not one or the other.
+                    //
+                    // The exchange answers "what did I ask, what came back" at a
+                    // glance; the terminal underneath is still the real thing,
+                    // shown raw, for everything the headline leaves out. The
+                    // strip renders nothing at all when there are no turns yet,
+                    // so a fresh task looks exactly as it did before.
+                    // The stage keeps the terminal OPEN by default — you came
+                    // here deliberately, so it is what you asked for — but it
+                    // was the only surface with no way to put it away. The
+                    // message expands into the space when you do.
+// THE ASK COMES AFTER THE REASONING. QuestionBlock used to render
+                    // above the conversation — a layout from before the chat strip
+                    // existed. When the question is the last thing the model said,
+                    // showing it on top inverts the reading order: you meet the ask
+                    // before the argument that makes it answerable.
+                    ExchangeStrip(turns: t.conversation ?? [], status: t.status,
+                                  maxAnswerHeight: model.stageTerminalOpen ? 190 : .infinity)
                         .padding(.top, 10)
+                if t.status == .needsUser, let q = t.question {
+                    QuestionBlock(model: model, taskId: t.id, question: q,
+                                  terminalOpen: $model.stageTerminalOpen).padding(.top, 10)
+                }
+                    if model.stageTerminalOpen {
+                        TerminalPanel(model: model, taskId: t.id,
+                                      tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
+                            .padding(.top, 10)
+                    }
+                    // Say the next thing without opening the terminal. Voice is
+                    // still the primary way in — the placeholder says so — but
+                    // when the stage is already open and focused, making the
+                    // user reach into a PTY to type one line is the friction
+                    // this surface exists to remove.
+                    StageComposer(placeholder: "Reply — or hold right ⌥ and speak",
+                                  model: model, taskId: t.id,
+                                  deliveryError: t.deliveryError,
+                                  modelLabel: t.modelLabel, sending: t.sending ?? false)
+                        .padding(.top, 9)
                 } else {
+                    ExchangeStrip(turns: t.conversation ?? [], status: t.status)
+                        .padding(.top, 10)
                     DeadPanel(model: model, t: t).padding(.top, 10)
                     Spacer(minLength: 0)
                 }
@@ -220,7 +260,13 @@ struct QuestionBlock: View {
     @ObservedObject var model: NotchModel
     let taskId: String
     let question: QuestionP
+    /// The surface's own terminal toggle — the stage and the task surface each
+    /// own one, and a terminal-only ask has to be able to open whichever it is
+    /// sitting in. Without it the card can name the terminal but not reach it.
+    @Binding var terminalOpen: Bool
     @State private var answerText = ""
+
+    private var terminalOnly: Bool { question.kind == "terminal_only" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -231,10 +277,24 @@ struct QuestionBlock: View {
                 }
                 .foregroundColor(Theme.cError)
             }
-            Text(question.text)
-                .font(.system(size: 13.5)).foregroundColor(Theme.text)
-                .fixedSize(horizontal: false, vertical: true)
-            if let choices = question.choices, !choices.isEmpty {
+            // A TERMINAL-ONLY ASK IS THE WHOLE ASK, so it can be long — every
+            // question with every option, or a full plan in markdown. It scrolls
+            // inside the card rather than pushing the terminal off the surface,
+            // because the point of showing it is to decide here and act below.
+            if terminalOnly {
+                ScrollView {
+                    RichText(text: question.text, size: 13, color: Theme.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 240)
+            } else {
+                Text(question.text)
+                    .font(.system(size: 13.5)).foregroundColor(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if terminalOnly {
+                terminalHandoff
+            } else if let choices = question.choices, !choices.isEmpty {
                 FlowChips(choices: choices) { idx in
                     model.emit(.chooseOption(id: taskId, index: idx))
                 }
@@ -261,9 +321,28 @@ struct QuestionBlock: View {
         .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: Theme.cardRadius)
-            .fill(Theme.cNeeds.opacity(0.08)))
+            .fill(Theme.raised))
         .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
-            .stroke(Theme.cNeeds.opacity(0.26), lineWidth: 0.5))
+            .stroke(Theme.hairline, lineWidth: 0.5))
+    }
+
+    /// SAY WHY, AND OFFER THE WAY. A refusal with no route is just a dead end,
+    /// which is how this surface felt before: a card that said "answer in the
+    /// terminal" beside a terminal that was closed.
+    private var terminalHandoff: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                .font(.system(size: 9.5))
+            Text(terminalOpen
+                 ? "Choose in the terminal below — Unmute can't drive this picker."
+                 : "This one has to be answered in the terminal.")
+                .font(.system(size: 11))
+                .fixedSize(horizontal: false, vertical: true)
+            if !terminalOpen {
+                ActButton(label: "Open terminal", go: true) { terminalOpen = true }
+            }
+        }
+        .foregroundColor(Theme.textFaint)
     }
 
     private func send() {
@@ -325,15 +404,17 @@ struct DeadPanel: View {
         VStack(alignment: .leading, spacing: 9) {
             SectionLabel(text: "Session ended · \(Theme.statusLabel(t.status))")
 
+            // THE MESSAGE IS NOT OURS TO PRINT ANY MORE.
+            //
+            // This panel predates the chat strip, when it was the ONLY place a
+            // finished result could appear — so it printed `summary` and then
+            // `detail`, which is the same reply twice (the summary IS the
+            // detail's first line). With the strip above now showing the reply,
+            // a finished card showed it three times counting "where you left
+            // off". The strip owns the message; this panel keeps only what is
+            // genuinely its own — where the result POINTS, and what you can do
+            // next.
             if let r = t.result {
-                Text(r.summary).font(.system(size: 13.5)).foregroundColor(Theme.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let d = r.detail, !d.isEmpty {
-                    ScrollView {
-                        MarkdownText(text: d).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 180)
-                }
                 if let arts = r.artifacts, !arts.isEmpty {
                     HStack(spacing: 6) {
                         ForEach(Array(arts.enumerated()), id: \.offset) { _, a in
@@ -346,8 +427,8 @@ struct DeadPanel: View {
                                 }
                                 .foregroundColor(Theme.cReady)
                                 .padding(.horizontal, 9).padding(.vertical, 5)
-                                .background(Capsule().fill(Theme.cReady.opacity(0.11)))
-                                .overlay(Capsule().stroke(Theme.cReady.opacity(0.28), lineWidth: 0.5))
+                                .background(Capsule().fill(Theme.raised))
+                                .overlay(Capsule().stroke(Theme.hairline, lineWidth: 0.5))
                             }.buttonStyle(.plain)
                         }
                     }

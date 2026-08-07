@@ -51,7 +51,14 @@ export interface TaskError {
 
 export interface TaskQuestion {
   text: string
-  kind?: 'free_text' | 'choice' | 'confirm'
+  /**
+   * `terminal_only` is a REFUSAL, and the only kind that offers the user no way
+   * to reply from the card. It means a picker is open in the session that we
+   * have not proven we can drive, so the card shows the whole ask and the
+   * terminal underneath takes the answer. Every other kind invites a reply that
+   * Unmute promises to deliver; this one promises the opposite, out loud.
+   */
+  kind?: 'free_text' | 'choice' | 'confirm' | 'terminal_only'
   choices?: string[]
   irreversible?: boolean // PRD §10.7 destructive-action confirm
 }
@@ -95,6 +102,33 @@ export async function scaffoldStatusFile(filePath: string): Promise<void> {
   }
   await fs.writeFile(filePath, JSON.stringify(initial, null, 2), 'utf8')
   log.event('status-file-scaffolded', { filePath, state: 'processing' })
+}
+
+/**
+ * Write a status payload ATOMICALLY (temp file, then rename).
+ *
+ * This is the observer's write path (observer.ts) — and it is the same atomic
+ * dance the operating contract used to spend six lines instructing the model to
+ * perform by hand. Doing it in our own code is not merely tidier: a model can
+ * forget the rename, emit malformed JSON, or be interrupted mid-write, and all
+ * three produced the "caught mid-write, retry next poll" class of bug that
+ * readStatus() below exists to tolerate. Here it simply cannot happen.
+ *
+ * Returns false rather than throwing — a failed status write must never take
+ * down the task it was describing.
+ */
+export async function writeStatusFile(filePath: string, payload: StatusPayload): Promise<boolean> {
+  const tmp = `${filePath}.tmp`
+  try {
+    await fs.mkdir(dirname(filePath), { recursive: true })
+    await fs.writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8')
+    await fs.rename(tmp, filePath)
+    return true
+  } catch (e) {
+    log.warn('status write failed', { filePath, error: (e as Error).message })
+    try { await fs.rm(tmp, { force: true }) } catch { /* best effort */ }
+    return false
+  }
 }
 
 // ─── Tolerant read (PRD #2) ─────────────────────────────────────────

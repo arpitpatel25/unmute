@@ -1209,7 +1209,9 @@ export default function OrchestrateWall() {
         return (
           <div style={{
             position: 'fixed', right: hoveredSkill.rightPx, top: Math.max(10, Math.min(hoveredSkill.top - 6, window.innerHeight - 180)), width: 300, zIndex: 60,
-            background: 'rgba(21, 24, 29, 0.96)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+            // Flat plane, no backdrop blur — see GlassLip.swift for why every
+            // Unmute surface is edged rather than lit.
+            background: '#161820',
             border: `1px solid ${C.borderHi}`, borderRadius: 9, padding: '11px 13px',
             pointerEvents: 'none', fontFamily: C.mono,
           }}>

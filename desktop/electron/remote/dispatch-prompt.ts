@@ -1,99 +1,61 @@
-// Unmute Remote — dispatch payload builder (PRD §8.1, decision #3).
+// Unmute Remote — what we type into a session.
 //
-// We canNOT inject instructions mid-turn (the TUI processes one turn
-// sequentially), and we don't want to type the whole contract every task.
-// So the STABLE contract (status-file protocol, heartbeat cadence, atomic
-// writes, ask-channel, recipe-suggestion) lives in an auto-loaded file
-// (contract/contract.md installed into the session cwd / skills dir), and
-// only the PER-TASK bits — this task's status-file path + the cleaned intent
-// — are typed into stdin (decision #3).
+// It is the user's words. That is the whole module now, and the shrinking is
+// the point.
 //
-// Keep this terse. The obligations are in the loaded contract, not here.
+// It used to be a header, a status-file path, a recipe-scratch path, hedged
+// "memory leads" from a parked librarian, stale-skill caveats, an "Act now"
+// imperative, and — on project-bound spawns — the entire 244-line operating
+// contract pasted inline as a user turn. Then `followUp()` re-sent the same
+// scaffolding around EVERY subsequent sentence the user spoke, for the life of
+// the session.
+//
+// Two user complaints came out of that: their terminal was full of Unmute's
+// paperwork, and Claude Code behaved worse under Unmute than on its own. The
+// second is the serious one — the contract did not merely take up room, it
+// installed a different personality ("act, don't ask", "the browser is your
+// default tool", "scroll and paginate the full scope") onto sessions doing
+// careful engineering work, stated with more force and more words than the
+// user's actual request.
+//
+// Everything it carried now lives somewhere better:
+//   * the status protocol   → hooks report OUT (session-policy.ts, observer.ts)
+//   * the result            → Claude's own final reply (transcript.ts)
+//   * the four-line framing → the system prompt (SESSION_PREAMBLE), not a turn
+//   * the memory leads      → deleted; the librarian has been parked since
+//                             2026-08-03 and nothing consumed them
+//   * the recipe scratch    → deleted from the prompt, for the same reason
+//
+// If you are about to add a line here: that is exactly how the last one grew.
+// Ask first whether a hook can observe it instead.
 
 import { createLogger } from './log'
-import type { Confidence } from './recipe-store'
-import { devFields } from './curator-devlog'
 
 const log = createLogger('dispatch-prompt')
 
-const STANCE: Record<Confidence, string> = {
-  low: 'Unverified lead from a past run — treat skeptically and derive independently if it fails',
-  medium: 'Usually-right approach from past runs — confirm as you go',
-  high: 'Established approach',
-}
-
 export interface DispatchInput {
-  /** The cleaned intent string (post intent-cleanup, PRD §13.7). */
+  /** The cleaned intent (post intent-cleanup / router). Nothing else. */
   intent: string
-  /** Absolute path of THIS task's status file (Unmute-owned, PRD §6.1). */
-  statusPath: string
-  /** Absolute path of THIS task's recipe-suggestion scratch file (PRD §8.1). */
-  recipeScratchPath?: string
-  /** Nursery (low/medium) leads to inject HEDGED — never auto-fired skills. */
-  nurseryRecipes?: Array<{ name: string; confidence: Confidence; body: string }>
-  /** One-line "confirm before relying" notes for stale-high graduated skills. */
-  staleNotes?: string[]
-  /** The full operating contract, INLINE. Only for project-bound spawns: the
-   *  agent runs in the USER'S directory, where we never write a CLAUDE.md — so
-   *  the contract can't auto-load and rides in the payload instead. */
-  contractText?: string
 }
 
-/**
- * Build the exact text typed into the REPL's stdin to dispatch one task.
- * Short by construction — the full contract is already loaded (decision #3) —
- * EXCEPT project-bound spawns, which carry the contract inline (contractText).
- */
-export function buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes, staleNotes, contractText }: DispatchInput): string {
-  const lines = [
-    `[Unmute Remote task]`,
-    `Task: ${intent}`,
-    `Status file (yours to update per the ${contractText ? 'Unmute contract below' : 'loaded Unmute contract'}): ${statusPath}`,
-  ]
-  if (recipeScratchPath) {
-    lines.push(`Recipe-suggestion scratch file (write a suggestion here only if you learned a better/repeatable way): ${recipeScratchPath}`)
-  }
-  for (const note of staleNotes ?? []) lines.push(`Note: ${note}`)
-  for (const r of nurseryRecipes ?? []) {
-    lines.push('', `--- Memory lead (${STANCE[r.confidence]}): ${r.name} ---`, r.body.trim(), `--- end lead ---`)
-  }
-  if (contractText) {
-    lines.push('', `--- Unmute operating contract (not auto-loaded in this directory — follow it as written) ---`, contractText.trim(), `--- end contract ---`)
-    lines.push(`Act now. Follow the Unmute status-file contract above.`)
-  } else {
-    lines.push(`Act now. Follow the Unmute status-file contract that is already loaded.`)
-  }
-  const payload = lines.join('\n')
-  const injectedRecipes = nurseryRecipes ?? []
-  log.event('dispatch-payload-built', {
-    intent,
-    statusPath,
-    bytes: payload.length,
-    nursery: injectedRecipes.length,
-    // Calibration extras only — the event itself is kept for everyone.
-    ...devFields({
-      nurseryNames: injectedRecipes.map(r => r.name),
-      nurseryConfidences: injectedRecipes.map(r => r.confidence),
-    }),
-  })
+/** The exact text typed into a session to dispatch one task: the intent. */
+export function buildDispatch({ intent }: DispatchInput): string {
+  const payload = intent.trim()
+  log.event('dispatch-payload-built', { bytes: payload.length })
   return payload
 }
 
 /**
  * Built ONLY when resuming a task that did NOT finish (interrupted/killed
- * mid-work). `--continue` restores the session's full prior context, but the REPL
- * comes back idle — so without a nudge it just sits there. This is that nudge: it
- * tells the agent to pick up where it left off and finish, re-grounding it with
- * the original ask + its status path (belt-and-suspenders in case the restored
- * context is thin). NEVER sent to a task that already completed.
+ * mid-work). `--resume` restores the session's full prior context, but the REPL
+ * comes back idle — without a nudge it just sits there. This one stays because
+ * it is genuinely task content: it says continue rather than restart. NEVER
+ * sent to a task that already completed.
  */
-export function buildResumeNudge(intent: string, statusPath: string): string {
+export function buildResumeNudge(intent: string): string {
   return [
-    `[Unmute Remote — resumed]`,
-    `This task was interrupted before it finished and has just been resumed with your full prior context.`,
-    `Pick up exactly where you left off and complete it — do NOT restart from scratch.`,
+    'This was interrupted before it finished and has just been resumed with your full prior context.',
+    'Pick up exactly where you left off and complete it — do NOT restart from scratch.',
     `Original request: ${intent}`,
-    `Keep updating your status file per the loaded Unmute contract: ${statusPath}`,
-    `Continue now.`,
   ].join('\n')
 }

@@ -35,9 +35,33 @@ struct ArtifactP: Codable { let type: String; let value: String } // "url" | "pa
 
 struct QuestionP: Codable {
     let text: String
-    let kind: String?          // "free_text" | "choice" | "confirm"
+    /// "free_text" | "choice" | "confirm" | "terminal_only".
+    /// `terminal_only` is a REFUSAL: a picker we have not proven we can drive is
+    /// open in the session, so the card shows the whole ask and offers no reply.
+    let kind: String?
     let choices: [String]?
     let irreversible: Bool?
+}
+
+/// THE POCKET — a small expanded state. See notch-client.ts for the full why.
+/// `open` only ever happens because the user opened it: open is aimed, closed
+/// is the router, and the pocket must never open itself.
+struct PocketSlotP: Codable, Equatable {
+    let id: String
+    let title: String
+    let ask: String?
+    let status: String?
+}
+
+struct PocketP: Codable, Equatable {
+    let mode: String          // "closed" | "open"
+    let at: Int
+    let slots: [PocketSlotP]
+
+    static let empty = PocketP(mode: "closed", at: 0, slots: [])
+    var taskCount: Int { slots.count }
+    var current: PocketSlotP? { at >= 0 && at < slots.count ? slots[at] : nil }
+    var isOpen: Bool { mode == "open" && !slots.isEmpty }
 }
 
 struct ResultP: Codable { let summary: String; let detail: String?; let artifacts: [ArtifactP]? }
@@ -203,6 +227,7 @@ enum Command {
     case proposal(ProposalDetail)              // response to suggestionOpen
     case convData(id: String, text: String)    // review-conversation output chunk
     case capturePhase(phase: String, target: String?)
+    case pocket(PocketP)                       // what your next words could land on
     case toast(String)                         // transient message (e.g. accept error)
     case notchGeometry(hasNotch: Bool, x: Double, y: Double, w: Double, h: Double)
     /// Surface material preference, from unmute Settings. "system" (default)
@@ -298,6 +323,11 @@ enum Command {
         case "capturePhase":
             return .capturePhase(phase: obj["phase"] as? String ?? "",
                                  target: obj["target"] as? String)
+        case "pocket":
+            // A malformed payload falls back to EMPTY-AND-CLOSED, same rule as
+            // `scratchpad`: an unreadable pocket must never leave a card up
+            // claiming an address we cannot vouch for.
+            return .pocket(sub("data", PocketP.self) ?? .empty)
         case "toast":
             return .toast(obj["text"] as? String ?? "")
         case "notchGeometry":
@@ -325,6 +355,16 @@ enum Event {
     case focusTask(id: String)                     // card clicked → voice address
     case showAll(group: String?, on: Bool)         // reveal folded cards (nil = whole wall)
     case closeStage                                // Stage esc → back to wall
+    /// The user left Unmute — another app came forward, so an expanded task
+    /// goes to the pocket instead of staying in their way.
+    case userLeft(reason: String)                  // "blur" | "screenshot"
+    case userReturned                              // …and inside the grace window, it re-opens
+    case pocketMove(delta: Int)                    // carousel: which address
+    case pocketOpen                                // tap it open (sticky = an explicit aim)
+    case pocketRelease                             // let go — back to the notch
+    /// Back to the FULL task. The pocket is a glance, not a destination:
+    /// it exists because the panel is large, not because it is wrong.
+    case pocketExpand
     case chooseOption(id: String, index: Int)
     case answerText(id: String, text: String)      // free-text / confirm answer
     case mute(id: String)                          // drop from attention/crank this episode
@@ -380,6 +420,12 @@ enum Event {
             if let g = group { d["group"] = g }
             return d
         case .closeStage: return ["type": "closeStage"]
+        case let .userLeft(reason): return ["type": "userLeft", "reason": reason]
+        case .userReturned: return ["type": "userReturned"]
+        case let .pocketMove(delta): return ["type": "pocketMove", "delta": delta]
+        case .pocketOpen: return ["type": "pocketOpen"]
+        case .pocketRelease: return ["type": "pocketRelease"]
+        case .pocketExpand: return ["type": "pocketExpand"]
         case .chooseOption(let id, let index): return ["type": "chooseOption", "id": id, "index": index]
         case .answerText(let id, let text): return ["type": "answerText", "id": id, "text": text]
         case .mute(let id): return ["type": "mute", "id": id]

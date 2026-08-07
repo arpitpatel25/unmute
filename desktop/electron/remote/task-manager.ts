@@ -25,6 +25,7 @@ import { EventEmitter } from 'node:events'
 import { createLogger } from './log'
 import {
   scaffoldStatusFile,
+  writeStatusFile,
   readStatus,
   statusMtimeMs,
   isStale,
@@ -32,11 +33,10 @@ import {
   type TaskState,
 } from './status-file'
 import { buildDispatch, buildResumeNudge } from './dispatch-prompt'
-import { installContract, readContractText } from './contract/installer'
-import { installHooks, hookActivityMs } from './hooks'
-import { installSkillsIntoCwd, installProfileIntoCwd } from './skills'
 import { detectSurface } from './surface'
-import { readNurseryRecipes, listRecipes, isStaleHigh, selectNurseryWithinBudget, type Confidence } from './recipe-store'
+import { deriveStatus, isAnswerable, type HookEvent, type AskQuestion } from './observer'
+import { readTranscript, hadSideEffects, readLatestExchange } from './transcript'
+import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import { resolveTranscriptById } from './trace-reducer'
 import { projectSlug } from './projects'
@@ -166,8 +166,17 @@ export interface Task {
    *  so the conversation itself has to be what the panel carries. Kept to the
    *  last few turns deliberately — enough to re-enter, never a re-implementation
    *  of the other app's chat (ORCHESTRATE-VISION §3, the delete-the-wall test). */
-  /** A driven backend's conversation — this is what a desktop task has INSTEAD
-   *  of a terminal.
+  /** The task's conversation, for EVERY backend.
+   *
+   *  It began as "what a driven backend has instead of a terminal", because a
+   *  Codex thread has no PTY to show. That framing made the stage an either/or:
+   *  a Claude task showed a terminal and no messages at all, so the one thing a
+   *  returning user actually wants — what did I ask, what came back — was
+   *  reachable only by reading a scrollback.
+   *
+   *  A Claude session's turns now come from Claude's OWN record
+   *  (transcript.ts), not from scraping the screen, so all three backends fill
+   *  the same field and the stage can show the message AND the terminal.
    *
    *  Widened from `{role: 'user'|'assistant'}` to the shape the drivers actually
    *  emit. That narrow type predated the Codex backend and never matched it:
@@ -219,6 +228,14 @@ export interface Task {
    *  status write OR a deterministic hook event (hooks.ts). Decoupled from
    *  lastMtimeMs so hook heartbeats keep a task alive WITHOUT hiding status reads. */
   lastHeartbeatMs: number
+  /** The ask currently open on this task, keyed by the id that will close it.
+   *  Held because answering needs the SHAPE — which option is at which index —
+   *  and verification needs the labels to compare against what registered. */
+  openAsk?: { id: string; questions: AskQuestion[]; answeredWith?: string }
+  /** When the session last told us a prompt actually SUBMITTED (UserPromptSubmit
+   *  hook). The signal verifyDispatch waits for — a real event now, not a marker
+   *  file's mtime, so it works in project-bound sessions too. */
+  promptSubmittedAt?: number
   /** Executor self-classification (drives presentation + lifecycle). */
   category?: StatusPayload['category']
   /** Latest short progress label the executor wrote ("Editing X · 12/18 tests").
@@ -615,62 +632,36 @@ export class TaskManager extends EventEmitter {
       // Seed the heartbeat clock from the scaffold's real mtime so staleness is
       // measured from "task start", not the logical createdAt.
       task.lastMtimeMs = task.lastHeartbeatMs = (await statusMtimeMs(statusPath)) ?? now
-      // Contract + hooks are CWD-COUPLED (CLAUDE.md auto-load; .claude/settings.json
-      // hooks) — installed only for the scratch spawn, where the cwd is ours. For a
-      // project-bound session, writing either into the user's repo would pollute it
-      // (and .claude/settings.json could CLOBBER the project's own); the contract
-      // travels inline in the payload instead, and lifecycle falls back to the
-      // status-file path (the documented pre-hooks behaviour — fail-open).
-      if (!external) {
-        await installContract(dir) // CLAUDE.md auto-load (#3)
-        // Deterministic lifecycle hooks: heartbeat on real progress + enforce a
-        // status write before the turn ends. Best-effort — a failure here must not
-        // block dispatch (without hooks the task runs on the status-file path, i.e.
-        // today's behaviour). See hooks.ts.
-        await installHooks(dir).catch((e) => tlog.warn('installHooks failed — running without hooks', { error: (e as Error).message }))
-      }
 
-      // ── Memory injection (managed mode only). Raw mode SKIPS all three Unmute
-      //    memory injections (skills copy, profile, nursery leads) — protocol +
-      //    orchestration (scaffold/meta/contract/hooks above) still run. (§4.2) ──
-      let nurseryForDispatch: Array<{ name: string; confidence: Confidence; body: string }> = []
-      let staleNotes: string[] = []
-      if (mode === 'managed') {
-        await installSkillsIntoCwd(dir, { surface, baseDir: this.opts.baseDir }) // graduated skills auto-discovery, surface-scoped (PRD §8.3)
-        await installProfileIntoCwd(dir, this.opts.baseDir) // user facts/prefs the doer Reads on demand
-        const nurseryAll = await readNurseryRecipes(surface, this.opts.baseDir).catch((e) => {
-          tlog.warn('nursery read failed — no leads injected', { error: (e as Error).message }); return []
-        })
-        // Flood-backstop: in healthy operation this keeps everything (executor
-        // judges relevance); it only trims when a surface is bloated — and a trim
-        // is a CLEANUP signal (logged), never a silent drop of a relevant recipe.
-        const { kept: nursery, trimmed } = selectNurseryWithinBudget(nurseryAll)
-        if (trimmed > 0) {
-          tlog.warn('nursery injection trimmed to budget — surface may be bloated, consider cleanup', {
-            surface, total: nurseryAll.length, kept: nursery.length, trimmed,
-          })
-        }
-        nurseryForDispatch = nursery.map((r) => ({ name: r.frontmatter.name, confidence: r.frontmatter.confidence, body: r.body }))
-        const graduated = await listRecipes({ tier: 'skill', surface, baseDir: this.opts.baseDir }).catch((e) => {
-          tlog.warn('graduated read failed', { error: (e as Error).message }); return []
-        })
-        staleNotes = graduated
-          .filter((r) => isStaleHigh(r, this.clock()))
-          .map((r) => `${r.frontmatter.name} is high-confidence but unverified for a while — confirm before relying.`)
-        task.injectedRecipes = [
-          ...nursery.map((r) => ({ name: r.frontmatter.name, tier: 'nursery' as const, surface })),
-          ...graduated.map((r) => ({ name: r.frontmatter.name, tier: 'skill' as const, surface })),
-        ]
-      }
+      // NOTHING IS WRITTEN INTO THE SESSION'S WORKING DIRECTORY. This is the
+      // load-bearing change of 2026-08-06 (session-policy.ts). We used to drop a
+      // CLAUDE.md, a .claude/settings.json, a hook script, marker files, copied
+      // skills and a PROFILE.md into the cwd — and because doing that to a
+      // user's own repo was unacceptable, project-bound sessions silently got
+      // NO hooks at all, which is exactly backwards: the longest-lived sessions
+      // were the least instrumented.
+      //
+      // Hooks now ride on `--settings <our file>` and framing on
+      // `--append-system-prompt`, so every session — scratch or project-bound —
+      // is instrumented identically and the user's directory is untouched.
+      //
+      // The memory injections (nursery leads, stale-skill caveats, the skills
+      // copy, PROFILE.md) are gone with them. The librarian that authored and
+      // validated them has been parked since 2026-08-03, so they were unvetted
+      // hints from a system with no maintainer; the overview already called
+      // them "noise that pollutes instruction packets". `injectedRecipes` stays
+      // on the Task as an empty list so persisted meta.json keeps its shape.
       // Persist a tiny receipt so the task survives an app crash/restart. The
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
       await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, agent, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}), ...(task.model ? { model: task.model } : {}) }))
-      devEvent(tlog, 'dispatch-memory', { surface, mode, injectedRecipes: task.injectedRecipes, staleNotes: staleNotes.length })
+      devEvent(tlog, 'dispatch-memory', { surface, mode, injectedRecipes: task.injectedRecipes })
 
-      // Named, not left to the picker — see the task literal above.
-      const ex = this.opts.executorFactory(undefined, agent)
+      // Named, not left to the picker — see the task literal above. `browser`
+      // is decided per task now: a session working in the user's repo does not
+      // get browser control it will never use (session-policy.ts).
+      const ex = this.opts.executorFactory(undefined, agent, { browser: browserFor({ surface, projectBound: external }) })
       this.executors.set(id, ex)
       // Buffer raw PTY output (capped) for render-on-demand (§4.3/§13.4#8) and
       // emit it live so a watching terminal view updates in real time.
@@ -714,15 +705,17 @@ export class TaskManager extends EventEmitter {
       }
       tlog.event('folder-trust-accepted', {})
 
-      // Project-bound spawn: the contract can't auto-load from a CLAUDE.md we
-      // never wrote, so it rides inline in the payload (same obligations).
-      const contractText = external ? await readContractText() : undefined
-      const payload = mode === 'managed'
-        ? buildDispatch({ intent, statusPath, recipeScratchPath, nurseryRecipes: nurseryForDispatch, staleNotes, contractText })
-        : buildDispatch({ intent, statusPath, recipeScratchPath, contractText })
+      // The payload is the user's words. Nothing else — no status path, no
+      // recipe path, no contract, no "act now". See dispatch-prompt.ts.
+      const payload = buildDispatch({ intent })
       const dispatchedAt = Date.now()
       ex.writeStdin(payload)
-      tlog.event('task-dispatched', {})
+      tlog.event('task-dispatched', { bytes: payload.length })
+      // Show what was asked IMMEDIATELY, before any reply exists. The transcript
+      // is the source of truth and replaces this the moment the turn ends — but
+      // a card that is blank for the first thirty seconds of every task reads as
+      // broken, and the user already knows what they said.
+      task.conversation = [{ role: 'user', text: intent }]
 
       // Reliability fix: the multi-line payload occasionally lands one Enter
       // short of submitting in Claude's input box (proven on-device — a manual
@@ -736,20 +729,17 @@ export class TaskManager extends EventEmitter {
       }
 
       this.startPolling(id)
-      // Verify the prompt ACTUALLY submitted, and self-heal if not. The
-      // multi-line payload can get swallowed if it lands while the REPL is still
-      // painting — Claude's TUI mis-reads the embedded newlines and tips into
-      // reverse-search ("(search up)"), so the task sits at 0s forever with an
-      // empty prompt. We detect this via the UserPromptSubmit hook (it touches
-      // .unmute-activity ONLY on a real submit); if no such activity appears, we
-      // clear the input line with Ctrl-U (NEVER Esc — Esc = "No, exit" on a
-      // dialog and QUITS Claude) and re-inject. Background, fire-and-forget —
-      // adds ZERO latency to the happy path.
-      // SKIPPED for project-bound spawns: no hooks there means no submit signal —
-      // the verifier would read "never submitted" forever and re-inject a payload
-      // that DID land, double-dispatching the session. Fail-open instead.
-      if (!external) void this.verifyDispatch(id, ex, payload, dir, dispatchedAt)
-      else tlog.event('dispatch-verify-skipped', { reason: 'external-cwd-no-hooks', cwd: runCwd })
+      // Verify the prompt ACTUALLY submitted, and self-heal if not. A payload
+      // can be swallowed if it lands while the REPL is still painting — Claude's
+      // TUI mis-reads embedded newlines and tips into reverse-search, so the
+      // task sits at 0s forever with an empty prompt.
+      //
+      // The signal is the UserPromptSubmit hook, which now REACHES US DIRECTLY
+      // (session-policy.ts) instead of touching a marker file we then stat. That
+      // is why this no longer skips project-bound spawns: they get the same
+      // hooks as any other session, so the verifier finally protects the
+      // long-lived sessions it used to be disabled for.
+      void this.verifyDispatch(id, ex, payload, dispatchedAt)
     } catch (e) {
       tlog.error('dispatch failed before polling', { error: (e as Error).message })
       this.transition(id, 'failed', { error: { reason: 'Could not start the task', detail: (e as Error).message } })
@@ -758,18 +748,17 @@ export class TaskManager extends EventEmitter {
   }
 
   /** Verify the dispatched prompt actually SUBMITTED; self-heal if it didn't.
-   *  Signal: the UserPromptSubmit hook touches .unmute-activity ONLY on a real
-   *  submit, so hookActivityMs() returning null/old after dispatch means the
-   *  payload was swallowed (e.g. the REPL tipped into reverse-search while still
-   *  painting — the task then sits at 0s forever). We clear the input line with
-   *  Ctrl-U (NEVER Esc — Esc = "No, exit" on a dialog and QUITS Claude), then
-   *  re-inject. Bounded retries; only ever fires on a genuinely-unsubmitted
-   *  prompt, so it can't double-dispatch a live one. */
+   *  Signal: the UserPromptSubmit hook, pushed straight to us (session-policy.ts)
+   *  and recorded as `promptSubmittedAt`. Nothing to stat, no marker file, and —
+   *  unlike the old marker-mtime version — it works in EVERY session, including
+   *  project-bound ones where this used to be switched off entirely.
+   *  We clear the input line with Ctrl-U (NEVER Esc — Esc = "No, exit" on a
+   *  dialog and QUITS Claude), then re-inject. Bounded retries; only ever fires
+   *  on a genuinely-unsubmitted prompt, so it can't double-dispatch a live one. */
   private async verifyDispatch(
     id: string,
     ex: AgentExecutor,
     payload: string,
-    dir: string,
     dispatchedAt: number,
   ): Promise<void> {
     const tlog = log.child({ taskId: id })
@@ -778,10 +767,9 @@ export class TaskManager extends EventEmitter {
       const task = this.tasks.get(id)
       // Stop if the task is gone, the PTY died, or it already finished.
       if (!task || !ex.alive || task.state === 'done' || task.state === 'failed') return
-      const activity = await hookActivityMs(dir)
       // A UserPromptSubmit at/after our dispatch = the prompt submitted → done.
-      // (1s slack absorbs clock/mtime granularity.)
-      if (activity !== null && activity >= dispatchedAt - 1000) return
+      // (1s slack absorbs clock granularity between processes.)
+      if ((task.promptSubmittedAt ?? 0) >= dispatchedAt - 1000) return
       // Never submitted → clear any stuck partial input, re-inject.
       tlog.warn('dispatch not confirmed (no submit) — clearing input and re-injecting', { attempt })
       ex.write('\x15') // Ctrl-U — clear the input line; safe (NEVER Esc, which quits Claude)
@@ -792,6 +780,174 @@ export class TaskManager extends EventEmitter {
       if (ex.alive) ex.write('\r')
       tlog.event('dispatch-reinjected', { attempt })
     }
+  }
+
+  // ─── The observer: what a session emits becomes what Unmute knows ─────────
+  //
+  // Everything the operating contract used to demand in prose now arrives here
+  // as a lifecycle hook and is turned into a status by observer.ts. The session
+  // is never asked for any of it.
+
+  /** Find the task a hook event belongs to. `session_id` is authoritative —
+   *  we pin it with `--session-id`, so we own the mapping. `cwd` is the fallback
+   *  for forked sessions, whose id Claude mints itself. */
+  private taskForSession(sessionId: string, cwd?: string): Task | undefined {
+    // ONLY A CLAUDE CODE CLI TASK CAN BE THE SUBJECT OF A HOOK.
+    //
+    // Hooks exist because we launch that session with `--settings`. A driven
+    // backend — Codex desktop, Claude desktop — is never launched by us at all,
+    // so it can never be the origin of one of these events. Without this filter
+    // the matching is by identity alone, and both fallbacks are reachable:
+    // a Codex task stores the Codex THREAD id in `sessionId`, and a Claude
+    // desktop task carries a real project `cwd` — so a CLI session firing hooks
+    // from the same repo could select the desktop card instead and we would
+    // write a derived status onto a task whose agent we never spoke to.
+    //
+    // The dispatch side is already guarded by construction (dispatch() forks to
+    // the drivers before any of this code runs). This is the same guarantee on
+    // the way IN, and it belongs here rather than at each call site.
+    const mine = (t: Task) => !isExternalAgent(t.agent)
+    for (const t of this.tasks.values()) if (mine(t) && t.sessionId === sessionId) return t
+    if (!cwd) return undefined
+    // Newest match wins: several tasks can share a project cwd.
+    let best: Task | undefined
+    for (const t of this.tasks.values()) {
+      if (!mine(t) || t.cwd !== cwd || TERMINAL.includes(t.state)) continue
+      if (!best || t.createdAt > best.createdAt) best = t
+    }
+    return best
+  }
+
+  /**
+   * Apply one lifecycle hook event. Never throws — a hook is telemetry, and a
+   * bad one must not disturb the task it describes.
+   */
+  onHookEvent(event: HookEvent): void {
+    const task = this.taskForSession(event.sessionId, event.cwd)
+    if (!task) return
+    const tlog = log.child({ taskId: task.id })
+    const at = this.clock()
+
+    // Liveness first, for EVERY event. A hook firing is proof the session is
+    // alive, which also HEALS a false `stuck`: stuck is a verdict about silence,
+    // and this is the silence ending. Advances lastHeartbeatMs only — never
+    // lastMtimeMs, which is the status read cursor (see poll()).
+    task.lastHeartbeatMs = at
+    if (task.state === 'stuck') {
+      tlog.event('stuck-recovered', { via: 'hook' })
+      this.transition(task.id, 'processing')
+    }
+    if (event.kind === 'prompt-submitted') task.promptSubmittedAt = at
+    if (event.kind === 'tool-used') return // liveness only
+    // A Notification says nothing a keyed event has not already said better —
+    // it is liveness and nothing more (observer.ts explains why).
+    if (event.kind === 'waiting') return
+
+    // THE ASK INTERVAL. Opening records the shape; closing verifies what
+    // actually registered and clears it. Because both are keyed by askId, a
+    // second ask cannot overwrite the first and a stale one cannot linger.
+    if (event.kind === 'ask-opened') {
+      task.openAsk = { id: event.askId, questions: event.questions }
+      tlog.event('ask-opened', {
+        askId: event.askId, questions: event.questions.length,
+        answerable: isAnswerable(event.questions),
+      })
+    }
+    if (event.kind === 'ask-closed') {
+      const open = task.openAsk
+      // NEVER LET AN UNVERIFIED ANSWER LOOK SUCCESSFUL. `tool_response.answers`
+      // is what the picker actually recorded; if we sent a keystroke and it
+      // registered something else, that is the one failure mode of this design
+      // that corrupts rather than degrades — so it is logged loudly rather than
+      // hidden. (The class it guards: typing "Spaces" recorded "Tabs".)
+      if (open?.answeredWith) {
+        const got = event.answers[open.questions[0]?.question ?? ''] ?? ''
+        if (got && got !== open.answeredWith) {
+          tlog.error('ANSWER MISMATCH — the picker registered something else', {
+            sent: open.answeredWith, registered: got, askId: event.askId,
+          })
+        } else {
+          tlog.event('answer-verified', { answer: got || open.answeredWith })
+        }
+      }
+      if (task.openAsk?.id === event.askId || !task.openAsk) task.openAsk = undefined
+    }
+
+    void this.applyObservation(task, event).catch((e) =>
+      tlog.warn('observation failed', { error: (e as Error).message }))
+  }
+
+  /** Derive a status from an event and record it — in memory AND on disk, so
+   *  every existing reader (wall, notch, rehydrate, history) is unchanged. */
+  private async applyObservation(task: Task, event: HookEvent): Promise<void> {
+    const tlog = log.child({ taskId: task.id })
+    // `act` vs `info` is the one derivation needing more than the last message:
+    // did this session actually change anything? Read from its own transcript,
+    // and only when a turn ended (the sole event where category is decided).
+    let sideEffects = false
+    if (event.kind === 'turn-ended') {
+      const path = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
+      sideEffects = hadSideEffects(await readTranscript(path))
+
+      // THE REPLY COMES FROM THE EVENT, NOT THE TRANSCRIPT.
+      //
+      // This read the exchange back out of the JSONL, and it was wrong in a way
+      // that only showed up in the field: `Stop` fires AS the turn ends, before
+      // Claude Code has flushed the final assistant message to that file. So the
+      // read came back with no reply, a length guard skipped the update, and the
+      // card kept only the optimistic user turn — a finished task showing your
+      // question and nothing else. Meanwhile the status was complete, because it
+      // used the payload. Two fields, one event, one of them going to a file that
+      // had not been written yet.
+      //
+      // `event.lastMessage` IS the finished reply, in hand, already stripped of
+      // thinking and tool traffic by Claude Code itself. The transcript is still
+      // worth reading for the USER turn (it is the real record of what was sent),
+      // but it can never be required for the assistant turn.
+      const fromFile = await readLatestExchange(path)
+      const ask = fromFile.find((t) => t.role === 'user')
+        ?? (task.conversation ?? []).find((t) => t.role === 'user')
+      const reply = event.lastMessage.trim()
+      const turns: NonNullable<Task['conversation']> = []
+      if (ask?.text) turns.push({ role: 'user', text: ask.text })
+      if (reply) turns.push({ role: 'assistant', text: reply })
+      if (turns.length) {
+        task.conversation = turns
+        tlog.event('conversation-refreshed', { turns: turns.length, replyBytes: reply.length, askFrom: fromFile.length ? 'transcript' : 'dispatch' })
+        void this.persistState(task)
+      }
+    }
+    const payload = deriveStatus(event, {
+      kind: (task.kind ?? 'oneoff') as 'oneoff' | 'session',
+      surface: task.surface,
+      sideEffects,
+      prior: task.state as TaskState,
+      // A better-informed ask must not be clobbered by a poorer one arriving
+      // later — see ObserverContext.pendingQuestion.
+      pendingQuestion: task.state === 'needs-user' && !!task.question,
+      now: new Date().toISOString(),
+    })
+    if (!payload) return
+    tlog.event('observed', { event: event.kind, state: payload.state, category: payload.category ?? null })
+    // Write the file first so anything reading from disk agrees with the card,
+    // then advance the read cursor so poll() doesn't re-apply what we just did.
+    if (await writeStatusFile(task.statusPath, payload)) {
+      task.lastMtimeMs = (await statusMtimeMs(task.statusPath)) ?? task.lastMtimeMs
+    }
+    this.transition(task.id, payload.state, payload)
+  }
+
+  /** The OPTIONAL self-report (`unmute_status`). Same path as an observation —
+   *  a session that chooses to be precise simply overwrites what we inferred. */
+  async setReportedStatus(taskId: string, payload: StatusPayload): Promise<void> {
+    const task = this.tasks.get(taskId)
+    if (!task) throw new Error('unknown task')
+    task.lastHeartbeatMs = this.clock()
+    if (await writeStatusFile(task.statusPath, payload)) {
+      task.lastMtimeMs = (await statusMtimeMs(task.statusPath)) ?? task.lastMtimeMs
+    }
+    log.child({ taskId }).event('self-reported', { state: payload.state })
+    this.transition(taskId, payload.state, payload)
   }
 
   /** Poll the status file + run the staleness backstop until terminal. */
@@ -1813,30 +1969,13 @@ export class TaskManager extends EventEmitter {
       return
     }
 
-    // DETERMINISTIC hook heartbeat (hooks.ts): real progress (PostToolUse) and
-    // turn boundaries advance LIVENESS even when the model didn't write `step`.
-    // CRITICAL: this advances lastHeartbeatMs ONLY — never lastMtimeMs. The Stop
-    // hook fires AFTER the model writes its final 'done' status, so the hook mtime
-    // is LATER than that status write; if we let it touch lastMtimeMs (the read
-    // cursor) the 'done' write would be < cursor and never read → the task would
-    // sit and then false-stuck (observed). It keys off real tool execution, not
-    // TUI redraw noise, so a genuinely hung task (no hook events) still goes stale.
-    // If hooks never fired, hookMs is null ⇒ staleness falls back to status mtime.
-    const hookMs = await hookActivityMs(task.cwd)
-    if (hookMs !== null && hookMs > task.lastHeartbeatMs) {
-      task.lastHeartbeatMs = hookMs
-      // SELF-HEALING STUCK (the API-retry lesson): stuck is a verdict about
-      // SILENCE, and this hook event is proof the silence ended — real tool
-      // execution resumed (e.g. the API retries worked out). The label must
-      // heal itself; a card that says STUCK over a visibly-working terminal
-      // is a lie the user has to clean up by hand. Status writes already
-      // healed via transition(); this closes the other half.
-      if (task.state === 'stuck') {
-        tlog.event('stuck-recovered', { via: 'hook-activity' })
-        this.transition(id, 'processing')
-      }
-      return
-    }
+    // The hook heartbeat no longer needs polling for: PostToolUse is PUSHED to
+    // onHookEvent(), which advances lastHeartbeatMs the moment it happens and
+    // heals a false `stuck` on the spot. We used to stat a marker file here on
+    // every poll of every task — that is now zero syscalls and strictly fresher.
+    //
+    // The subtle rule it enforced still holds and lives in onHookEvent(): a hook
+    // advances lastHeartbeatMs ONLY, never lastMtimeMs (the status read cursor).
 
     // No fresh heartbeat this poll — staleness backstop (PRD §6.3). Keyed on
     // lastHeartbeatMs (status writes OR hook activity), NOT the status read cursor.
@@ -1998,8 +2137,14 @@ export class TaskManager extends EventEmitter {
    * Answer a needs-user question by piping the answer into the session's stdin
    * (PRD §7.2). NEVER auto-answered — this is only ever called with a real user
    * answer (PRD §7.3, §1.4).
+   *
+   * Returns FALSE only when the answer was REFUSED and the task is still blocked
+   * on the very same question — an open picker Unmute will not drive. The caller
+   * must not advance the crank on false, or the user is carried away from the
+   * question they still have to go answer. A dead session is not this case: the
+   * answer went nowhere, but the task is over, so the crank may move on.
    */
-  answer(id: string, userAnswer: string): void {
+  answer(id: string, userAnswer: string): boolean {
     const tlog = log.child({ taskId: id })
     // Codex desktop: answering IS the next turn — there is no separate blocked
     // channel to write into, and no PTY liveness to check (the thread always
@@ -2013,25 +2158,99 @@ export class TaskManager extends EventEmitter {
     if (target && target.agent === 'claude-code-desktop') {
       tlog.ui('task-row.answer-submitted', { answer: userAnswer })
       void this.answerOrSendClaudeDesktop(id, userAnswer)
-      return
+      return true
     }
     if (target && isExternalAgent(target.agent)) {
       tlog.ui('task-row.answer-submitted', { answer: userAnswer })
       // An outstanding APPROVAL is answered through the hook, not the composer:
       // typing "Approve" into the chat would leave the permission dialog still
       // waiting and add a stray message to the user's thread.
-      if (this.answerCodexApproval(target, userAnswer)) return
+      if (this.answerCodexApproval(target, userAnswer)) return true
       this.followUpCodexDesktop(id, userAnswer)
-      return
+      return true
     }
     const ex = this.executors.get(id)
     if (!ex || !ex.alive) {
       tlog.warn('answer dropped — no live session', {})
-      return
+      return true
     }
     const answered = this.tasks.get(id)
     if (answered) answered.lastUserInputAt = this.clock() // consent clock
     tlog.ui('task-row.answer-submitted', { answer: userAnswer }) // user spoke/typed an answer
+
+    // A CHOICE IS ANSWERED BY INDEX, NOT BY ITS LABEL.
+    //
+    // `AskUserQuestion` renders a NUMBERED PICKER in the TUI, not a text field.
+    // Typing the option's text does nothing to the selection, and the Enter that
+    // follows takes whatever is HIGHLIGHTED — which is option 1. Verified on a
+    // live session: answering "Spaces" recorded "Tabs".
+    //
+    // That is the worst class of bug this surface can have: the user picks one
+    // thing, the agent receives another, and nothing anywhere reports an error.
+    // So when the pending question came with choices, map the label back to its
+    // 1-based position and send that single keystroke — the picker selects
+    // immediately, with no Enter (also verified: "3" selected "Blue").
+    // We drive the picker ONLY for the shape we proved on a live session: one
+    // question, single-select. Anything else is a tab bar (pick, auto-advance,
+    // toggle, Tab to an unnumbered Submit, Enter) — a sequence we have watched
+    // but never driven through a PTY, and half-driving it leaves the model
+    // waiting on a picker nobody is holding. Those go to the terminal.
+    const ask = answered?.openAsk
+    const idx = ask && isAnswerable(ask.questions)
+      ? ask.questions[0].options.findIndex((o) => o.label.trim().toLowerCase() === userAnswer.trim().toLowerCase())
+      : -1
+    if (idx >= 0 && idx < 9) {
+      if (answered?.openAsk) answered.openAsk.answeredWith = ask!.questions[0].options[idx].label
+      ex.write(String(idx + 1))
+      tlog.event('answered-by-index', { index: idx + 1, label: userAnswer })
+      const t = this.tasks.get(id)
+      if (t && t.state === 'needs-user') {
+        t.state = 'processing'
+        t.updatedAt = this.clock()
+        this.emit('updated', t)
+      }
+      return true
+    }
+
+    // AN OPEN PICKER IS NOT A PROMPT — SO WE SEND NOTHING.
+    //
+    // If an ask is open and the branch above did not drive it, the session is
+    // rendering a picker right now. `writeStdin` below assumes a text input: it
+    // types the answer and follows with Enter. At a picker that is not an
+    // answer, it is prose landing on a widget that ignores most of it and an
+    // Enter that commits WHATEVER IS HIGHLIGHTED — option 1. That is the exact
+    // corruption the index branch above exists to prevent, arriving through the
+    // fallback path instead.
+    //
+    // So: refuse, say why, and hand the ask to the terminal. Two ways in here —
+    // a shape we never drive (a tab bar, checkboxes, a plan), or an answerable
+    // one where what the user said matches no option. Both mean the same thing
+    // to the picker, so both get the same treatment.
+    //
+    // CLAUDE CODE CLI ONLY, by construction: `openAsk` is written from hook
+    // events, and only a CLI session has hooks. Codex, Codex desktop and Claude
+    // desktop returned far above; a CLI task with no open picker still falls
+    // through to `writeStdin` exactly as before.
+    if (ask) {
+      const shaped = isAnswerable(ask.questions)
+      tlog.event('answer-refused-picker-open', {
+        askId: ask.id, questions: ask.questions.length, answerable: shaped, said: userAnswer,
+      })
+      if (answered) {
+        answered.deliveryError = shaped
+          ? `"${userAnswer}" isn't one of the options — pick one in the terminal.`
+          : 'This one has to be answered in the terminal.'
+        // Promote the card to the refusal shape. An answerable ask that just
+        // failed to match is, from here on, exactly as undrivable as the rest —
+        // and the surface opens the terminal off this kind, so saying it here is
+        // what actually gets the user to the picker.
+        if (answered.question) answered.question = { ...answered.question, kind: 'terminal_only' }
+        answered.updatedAt = this.clock()
+        this.emit('updated', answered)
+      }
+      return false
+    }
+
     ex.writeStdin(userAnswer)
     // Same submit-confirm as dispatch/followUp — the input occasionally lands one
     // Enter short of submitting, which would leave the blocked task waiting forever.
@@ -2046,6 +2265,7 @@ export class TaskManager extends EventEmitter {
       task.updatedAt = this.clock()
       this.emit('updated', task)
     }
+    return true
   }
 
   /** Merge the observed state + its timestamp into the task's meta.json. */
@@ -2054,8 +2274,18 @@ export class TaskManager extends EventEmitter {
     try {
       const raw = await fs.readFile(path, 'utf8')
       const meta = JSON.parse(raw) as Record<string, unknown>
-      if (meta.state === task.state && meta.updatedAt === task.updatedAt) return
-      await fs.writeFile(path, JSON.stringify({ ...meta, state: task.state, updatedAt: task.updatedAt }))
+      const convo = task.conversation ?? []
+      const sameConvo = JSON.stringify(meta.conversation ?? []) === JSON.stringify(convo)
+      if (meta.state === task.state && meta.updatedAt === task.updatedAt && sameConvo) return
+      // THE CONVERSATION HAS TO SURVIVE A RESTART. It lived only in memory, so
+      // every relaunch emptied the chat strip for every existing task and left
+      // the short status line standing where the exchange should be — which is
+      // exactly what a surface meant to replace reading the terminal cannot do.
+      // status.json already persists; this is the other half.
+      await fs.writeFile(path, JSON.stringify({
+        ...meta, state: task.state, updatedAt: task.updatedAt,
+        ...(convo.length ? { conversation: convo } : {}),
+      }))
     } catch { /* absent or unreadable — nothing to keep in sync */ }
   }
 
@@ -2131,7 +2361,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation'] }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       // EXTERNAL BACKEND: a Codex thread lives in Codex, so an Unmute restart
@@ -2268,6 +2498,10 @@ export class TaskManager extends EventEmitter {
         surface: meta.surface,
         mode: meta.mode ?? 'managed',
         injectedRecipes: meta.injectedRecipes ?? [],
+        // Restored so the chat strip is not empty after a relaunch — see
+        // persistState(). Without it the card falls back to the short status
+        // line where the exchange should be.
+        ...(Array.isArray(meta.conversation) ? { conversation: meta.conversation as Task['conversation'] } : {}),
         shelved: meta.shelved || undefined,
         note: meta.note || undefined,
         spawnedBy: meta.spawnedBy || undefined,
@@ -2770,12 +3004,23 @@ export class TaskManager extends EventEmitter {
     }
     this.emit('updated', task)
 
-    // A follow-up is a FRESH dispatch into the SAME session — the only thing
-    // shared is the terminal (for context). Send the full dispatch payload, not
-    // raw text, so the model is re-anchored to the contract (status-file path +
-    // "act now, update status"). Without this it answers conversationally and
-    // never writes status → Unmute never learns it finished → marks it stuck.
-    const payload = buildDispatch({ intent: text, statusPath: task.statusPath, recipeScratchPath: task.recipeScratchPath })
+    // A FOLLOW-UP IS JUST WHAT THE USER SAID.
+    //
+    // This used to re-send the whole dispatch payload — status path, recipe
+    // path, "Act now, follow the contract" — wrapped around every single
+    // sentence the user spoke, for the entire life of the session. The reason
+    // given was real at the time: without the re-anchor the model would answer
+    // conversationally, never write status, and Unmute would mark it stuck.
+    //
+    // That reason is gone. The Stop hook now tells us the turn ended and hands
+    // us the reply, so there is nothing left to re-anchor the model TO. The
+    // plumbing was the load-bearing part of a mechanism that no longer exists,
+    // and it was the bloat users saw growing on every turn.
+    const payload = buildDispatch({ intent: text })
+    // The user's new message appears on the card the instant they send it —
+    // whether they spoke it or typed it into the stage composer — rather than
+    // only after the turn ends. Replaced by the real transcript on turn-ended.
+    task.conversation = [{ role: 'user', text }]
 
     void (async () => {
       // CRITICAL: wait until the REPL is genuinely idle at the prompt before
@@ -2902,7 +3147,7 @@ export class TaskManager extends EventEmitter {
       // never nudge it to "continue" (there is nothing to continue without them).
       const unfinished = status?.state !== 'done' && status?.state !== 'ready'
       if (unfinished) {
-        const nudge = buildResumeNudge(task.intent, task.statusPath)
+        const nudge = buildResumeNudge(task.intent)
         ex.writeStdin(nudge)
         // Same submit-reliability fix as dispatch: a follow Enter guarantees the
         // multi-line prompt submits; a spare Enter on an empty prompt is a no-op.
