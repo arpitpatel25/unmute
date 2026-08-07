@@ -171,111 +171,36 @@ struct GlassSurface: View {
     @ObservedObject private var appearance = Appearance.shared
 
     var body: some View {
-        Group {
-            if appearance.translucent {
-                if #available(macOS 26.0, *) {
-                    // REAL LIQUID GLASS. Verified against this exact window
-                    // configuration — a non-activating borderless panel over
-                    // other apps — with a standalone probe: the desktop is
-                    // genuinely visible through it, and it lenses at its own
-                    // edge rather than merely blurring.
-                    //
-                    // NEVER WRAP THIS IN .shadow(). A shadow forces offscreen
-                    // rasterisation, and a rasterised layer has no backdrop to
-                    // sample — which is why the first attempt rendered a flat
-                    // neutral grey and why I wrongly concluded the API could not
-                    // work here at all. The rim below is an OVERLAY STROKE, not
-                    // a second material, so it composes legally: Apple's
-                    // prohibition is on stacking glass ON glass.
-                    Color.clear.glassEffect(glassStyle, in: shape)
-                } else {
-                    tierB
-                }
-            } else {
-                // FIXED GLASS — see PillView for the full reasoning. A lens that
-                // samples nothing: the specular rim and a top-down falloff are
-                // what read as glass, and both are static. Cannot go stale,
-                // cannot blink, immune to the macOS 26.2 backdrop-caching
-                // regression. Also covers Reduce Transparency.
-                ZStack {
-                    Color(red: 0.055, green: 0.06, blue: 0.075)
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.085),
-                                 Color.white.opacity(0.022),
-                                 Color.white.opacity(0.0)],
-                        startPoint: .top, endPoint: .bottom)
-                    if let tint { tint.opacity(0.16) }
-                }
-            }
-        }
-        // REBUILT whenever the backdrop is invalidated — see
-        // Appearance.backdropToken. macOS re-samples what is behind the glass
-        // only when something back there repaints, never merely because the
-        // Space changed; remaking the view is the one lever available.
-        .id(appearance.backdropToken)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(shape)
-        .contentShape(shape)
-        // The specular rim: bright top edge, almost nothing down the sides,
-        // bright again at the lip. Apple's own rim is subtle on a dark backdrop;
-        // this restores the definition the surface is designed around.
-        .overlay(shape.stroke(Glass.rim(highlight: rimHighlight),
-                              lineWidth: appearance.translucent ? rimWidth : max(rimWidth, 1)))
-        .animation(Theme.flip, value: appearance.translucent)
+        // FLAT, NOT LIT.
+        //
+        // Every surface is now one opaque plane with one uniform hairline, and
+        // that is the whole material. What was here before was not Liquid Glass
+        // either — `Appearance.preference` defaults to `.solid`, parked on the
+        // macOS 26.2 backdrop-caching bug, so the live branch never ran. What
+        // shipped was a flat base with two effects painted on top:
+        //
+        //   * a top-down white WASH (.085 -> .022 -> 0), which lightened the
+        //     upper third of every panel and read as grime rather than light
+        //   * a SPECULAR RIM, bright at the top AND the bottom (.55 / .045 /
+        //     .46), which on a 26pt bar is most of what you see
+        //
+        // Both are gone. A dark panel on a dark desktop still needs its shape
+        // defined, so the hairline does that and the drop shadow does the work
+        // the highlight used to — the surface is EDGED, not lit.
+        //
+        // The `tint` parameter is accepted and ignored: status is carried by
+        // the dot and the words, never by washing a container in colour.
+        Theme.plane
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipShape(shape)
+            .contentShape(shape)
+            .overlay(shape.stroke(Theme.hairline, lineWidth: 1))
     }
 
-    @available(macOS 26.0, *)
-    private var glassStyle: Glass26Style {
-        // `.regular` — all adaptive effects, legibility guaranteed in any
-        // context. Attention passes its status hue through Apple's tinting,
-        // which maps a tone range against the backdrop instead of pasting a
-        // flat wash on top.
-        if let tint { return .regular.tint(tint.opacity(0.55)) }
-        return .regular
-    }
+    // `glassStyle` and `tierB` lived here — the Liquid Glass style and the
+    // hand-composed macOS 13–15 floor. Both are gone with the branches that
+    // called them: there is one material now, and it is the plane above.
 
-    /// macOS 13–15: no Liquid Glass, so the material is composed by hand —
-    /// behind-window sampler, near-black wash, thickness. This is a genuine
-    /// floor, not the design.
-    private var tierB: some View {
-        ZStack {
-                VisualEffectBackdrop(material: .hudWindow)
-
-                // 2 · TINT — a near-black wash that carries the "black glass"
-                //     identity while leaving the wallpaper genuinely visible
-                //     through it. Deeper on the large surfaces, which simulate a
-                //     thicker material.
-                Glass.bodyTint(for: state)
-
-                // 3 · STATUS WASH — low alpha on purpose. At full strength an
-                //     unmodulated tint renders as flat saturated colour (the
-                //     orange-flash bug); Apple's adaptive tinting has a backdrop
-                //     to map against, ours does not, so we keep it a wash.
-                //     Never animated: it must switch with the state, not fade
-                //     across a frame change.
-                if let tint {
-                    tint.opacity(Glass.statusWashAlpha).blendMode(.softLight)
-                    tint.opacity(Glass.statusWashAlpha * 0.5)
-                }
-
-                // 4 · THICKNESS — inner light top and bottom, so the shape reads
-                //     as a slab with an edge rather than a hole in the screen.
-                shape
-                    .stroke(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .white.opacity(0.22), location: 0),
-                                .init(color: .clear, location: 0.28),
-                                .init(color: .clear, location: 0.82),
-                                .init(color: .white.opacity(0.28), location: 1),
-                            ],
-                            startPoint: .top, endPoint: .bottom),
-                        lineWidth: 1)
-                    .blur(radius: 0.5)
-                    .blendMode(.plusLighter)
-                    .opacity(0.9)
-        }
-    }
 }
 
 // The system glass style type. `Glass` is a namespace enum in this file, so the

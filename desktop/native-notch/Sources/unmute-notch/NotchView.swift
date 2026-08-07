@@ -167,15 +167,17 @@ struct NotchView: View {
     /// surface is deliberately held at attention, so the one state that must
     /// glow was the one state that did not.
     @ViewBuilder private var alarmGlow: some View {
+        // A BORDER, NOT A GLOW.
+        //
+        // This was a 2.5pt status-coloured stroke blurred to 3.5 and laid under
+        // a second coloured stroke — on a 26pt bar that is a wash of orange
+        // across the whole surface, not an accent on it. The state is already
+        // said by the dot and by the words; the edge only has to agree with
+        // them, quietly.
         if model.state == .attention, let status = model.content.alarm {
-            ZStack {
-                shape.stroke(Theme.status(status), lineWidth: 2.5)
-                    .blur(radius: 3.5)
-                    .opacity(0.9)
-                shape.stroke(Theme.status(status).opacity(0.55), lineWidth: 1)
-            }
-            .clipShape(shape)
-            .allowsHitTesting(false)
+            shape.stroke(Theme.status(status).opacity(0.7), lineWidth: 1)
+                .clipShape(shape)
+                .allowsHitTesting(false)
         }
     }
 

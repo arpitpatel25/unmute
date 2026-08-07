@@ -452,8 +452,8 @@ struct WallView: View {
                         .font(Theme.fSub).foregroundColor(Theme.cNeeds)
                         .lineLimit(1)
                         .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(Capsule().fill(Theme.cNeeds.opacity(0.14)))
-                        .overlay(Capsule().stroke(Theme.cNeeds.opacity(0.30), lineWidth: 0.5))
+                        .background(Capsule().fill(Theme.raised))
+                        .overlay(Capsule().stroke(Theme.hairline, lineWidth: 0.5))
                 }.buttonStyle(.plain)
             }
             Button(action: { model.emit(.bellToggle) }) {

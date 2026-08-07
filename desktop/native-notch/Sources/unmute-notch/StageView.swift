@@ -321,9 +321,9 @@ struct QuestionBlock: View {
         .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: Theme.cardRadius)
-            .fill(Theme.cNeeds.opacity(0.08)))
+            .fill(Theme.raised))
         .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
-            .stroke(Theme.cNeeds.opacity(0.26), lineWidth: 0.5))
+            .stroke(Theme.hairline, lineWidth: 0.5))
     }
 
     /// SAY WHY, AND OFFER THE WAY. A refusal with no route is just a dead end,
@@ -427,8 +427,8 @@ struct DeadPanel: View {
                                 }
                                 .foregroundColor(Theme.cReady)
                                 .padding(.horizontal, 9).padding(.vertical, 5)
-                                .background(Capsule().fill(Theme.cReady.opacity(0.11)))
-                                .overlay(Capsule().stroke(Theme.cReady.opacity(0.28), lineWidth: 0.5))
+                                .background(Capsule().fill(Theme.raised))
+                                .overlay(Capsule().stroke(Theme.hairline, lineWidth: 0.5))
                             }.buttonStyle(.plain)
                         }
                     }
