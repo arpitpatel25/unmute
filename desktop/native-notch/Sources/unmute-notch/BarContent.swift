@@ -146,7 +146,7 @@ struct BarContent: Equatable {
                                alarm: .needsUser)
             // Hovering names the one your voice would reach — the only question
             // a bare count raises.
-            if hovering, let first = m.pocket.slots.first(where: { $0.kind == "task" }) {
+            if hovering, let first = m.pocket.slots.first {
                 c.right = first.title
             }
             return c

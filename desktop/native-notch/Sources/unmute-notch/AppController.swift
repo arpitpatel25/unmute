@@ -417,7 +417,9 @@ final class AppController: NSObject, NotchResizing {
             // whole ask. Anything bigger and we are back to a surface that is
             // in the way, which is the problem the pocket exists to solve.
             if model.pocket.isOpen {
-                return (geometry.topPinnedFrame(width: 360, height: 158),
+                // Shorter without the ghost-hint row, and shorter again when a
+                // single task makes the carousel pointless.
+                return (geometry.topPinnedFrame(width: 348, height: model.pocket.slots.count > 1 ? 146 : 120),
                         geometry.panelPlacement,
                         BarContent())
             }
@@ -841,6 +843,15 @@ final class AppController: NSObject, NotchResizing {
         if isExpanded(model.state), model.proposal != nil || model.proposalLoadingId != nil {
             if let p = model.proposal { model.emit(.converseStop(id: p.id)) }
             model.proposal = nil; model.proposalLoadingId = nil; model.convLog = ""
+            return
+        }
+        // CLOSING THE POCKET IS THE AIM CONTROL, and Escape is how you close
+        // things. Open means your voice goes to the task on the card; Escape
+        // shuts it and the aim goes with it — mid-sentence or not, because that
+        // is already what closing means on the expanded panel. This is the
+        // whole reason no modifier and no separate "detach" gesture is needed.
+        if model.pocket.isOpen {
+            model.emit(.pocketRelease)
             return
         }
         switch model.state {

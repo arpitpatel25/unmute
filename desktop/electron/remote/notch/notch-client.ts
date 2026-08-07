@@ -19,34 +19,33 @@ export type NotchStateName = 'dormant' | 'idle' | 'active' | 'attention' | 'task
 export type TaskStatusName = 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
 
 /**
- * THE POCKET — the state between expanded and gone.
+ * THE POCKET — a small expanded state.
  *
- * Leaving a task used to mean closing it, and closing carries a meaning ("I am
- * done with this") the user rarely intends: they changed window BECAUSE they
- * had to go look at something in order to answer. So the expanded panel now
- * collapses into the notch instead — the task stays alive, queued and unmuted,
- * and the voice stays pointed at it.
+ * There is ONE concept here, not two: a task is in front of you. It comes in
+ * two sizes — the full panel, or this card — and the aim follows what you can
+ * see either way:
  *
- *   closed    — it lives in the notch as a count. The footprint IS the notch,
- *               so it covers nothing. Voice falls back to the router.
- *   transient — the card is up because you are SPEAKING. It shows where the
- *               words will land; it does not decide it.
- *   sticky    — the card is up because you TAPPED it open. Now the forefront
- *               IS the address.
+ *   task expanded  -> that task
+ *   pocket open    -> the task on the card
+ *   neither        -> standard routing, exactly as it has always worked
  *
- * The last two must stay distinct. If merely speaking counted as opening the
- * pocket, every utterance would silently aim at a pocketed task — precisely
- * what a closed pocket exists to prevent.
+ * `open` therefore only ever happens because the user OPENED it. The pocket
+ * must never open itself: an earlier build bloomed the card whenever the mic
+ * went hot, which made every single utterance look — and under this rule, be —
+ * aimed at a pocketed task. Removing that is not a refinement of the rule, it
+ * is what makes the rule true.
+ *
+ * Closing is the whole control. Escape shuts the card and the aim goes with it,
+ * mid-sentence or not, because that is already what closing means on the
+ * expanded panel. Nothing new to learn, and no modifier to remember.
  */
-export type PocketMode = 'closed' | 'transient' | 'sticky'
+export type PocketMode = 'closed' | 'open'
 
-/** One stop in the carousel: something your next words could land on. */
+/** One task you set aside. There are no synthetic entries: "let the router
+ *  decide" is not a thing in a list of tasks, it is what happens when the list
+ *  is not on screen. */
 export interface PocketSlotP {
-  /** Task id; null for the two synthetic stops. */
-  id: string | null
-  /** `auto` = let the router decide (it has not heard you yet, so nothing
-   *  truthful can be shown); `new` = force a new task. */
-  kind: 'auto' | 'task' | 'new'
+  id: string
   title: string
   /** The pending ask. The surface clamps it to two lines. */
   ask?: string
@@ -55,7 +54,7 @@ export interface PocketSlotP {
 
 export interface PocketP {
   mode: PocketMode
-  /** Index into `slots`. Whatever sits here is the address. */
+  /** Index into `slots`. Whatever sits here is the address while open. */
   at: number
   slots: PocketSlotP[]
 }

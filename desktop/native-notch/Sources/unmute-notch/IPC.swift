@@ -43,28 +43,25 @@ struct QuestionP: Codable {
     let irreversible: Bool?
 }
 
-/// THE POCKET — see notch-client.ts for why this state exists at all.
-/// `closed` lives in the notch as a count; `transient` is showing because you
-/// are speaking; `sticky` is showing because you tapped it. Only the last one
-/// makes the forefront the voice's address.
+/// THE POCKET — a small expanded state. See notch-client.ts for the full why.
+/// `open` only ever happens because the user opened it: open is aimed, closed
+/// is the router, and the pocket must never open itself.
 struct PocketSlotP: Codable, Equatable {
-    let id: String?
-    let kind: String          // "auto" | "task" | "new"
+    let id: String
     let title: String
     let ask: String?
     let status: String?
 }
 
 struct PocketP: Codable, Equatable {
-    let mode: String          // "closed" | "transient" | "sticky"
+    let mode: String          // "closed" | "open"
     let at: Int
     let slots: [PocketSlotP]
 
     static let empty = PocketP(mode: "closed", at: 0, slots: [])
-    /// Only the real tasks — the two synthetic stops are not things you set aside.
-    var taskCount: Int { slots.filter { $0.kind == "task" }.count }
+    var taskCount: Int { slots.count }
     var current: PocketSlotP? { at >= 0 && at < slots.count ? slots[at] : nil }
-    var isOpen: Bool { mode != "closed" && !slots.isEmpty }
+    var isOpen: Bool { mode == "open" && !slots.isEmpty }
 }
 
 struct ResultP: Codable { let summary: String; let detail: String?; let artifacts: [ArtifactP]? }

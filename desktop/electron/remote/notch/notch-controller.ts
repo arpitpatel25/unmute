@@ -91,11 +91,6 @@ export interface NotchControllerDeps {
   setShelved(id: string, on: boolean): void
   setNote(id: string, note: string): void
   focus(id: string | null): void
-  /** The one thing focus cannot express. A null focus means "let the router
-   *  choose", which is NOT the same as "I want a new task" — and the pocket's
-   *  `+ New task` slot means exactly the second. Optional so a host that does
-   *  not wire it simply never gets the forced-new slot's behaviour. */
-  forceNewTask?(on: boolean): void
   /** The user opened this card (tap / cockpit stage). Revives a persistent
    *  session whose PTY the quit switch closed — see TaskManager.opened. Optional
    *  so a host that doesn't wire it simply keeps the manual Resume button. */
@@ -333,7 +328,7 @@ export class NotchController {
     on('userLeft', (e) => this.onUserLeft((e as { reason: 'blur' | 'screenshot' }).reason))
     on('userReturned', () => this.onUserReturned())
     on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
-    on('pocketOpen', () => { this.setPocketMode('sticky'); this.reconcile() })
+    on('pocketOpen', () => { this.setPocketMode('open'); this.reconcile() })
     on('pocketRelease', () => { this.setPocketMode('closed'); this.reconcile() })
     on('pocketExpand', () => this.onPocketExpand())
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
@@ -582,41 +577,25 @@ export class NotchController {
   // ── The pocket ────────────────────────────────────────────────────────────
 
   /**
-   * The carousel: everything your next words could land on.
+   * The carousel: the tasks you set aside, and nothing else.
    *
-   *   [ + new task ] [ …pocketed tasks… ] [ auto ]
-   *
-   * THE ORDER IS THE FEATURE. There are exactly two places the carousel ever
-   * STARTS — the first task (you tapped it open, so you meant to address
-   * something) and `auto` (you are just speaking) — and `+ new task` sits one
-   * press from both: left from the first task, right-with-wrap from `auto`.
-   * That is the whole answer to "how do I start something new when I have five
-   * things pocketed", and it holds however many are in there.
-   *
-   * `auto` is not a cop-out. When the pocket is closed the router has not heard
-   * the utterance yet, so there is no honest target to display — "Unmute will
-   * choose" is the truth, and stepping off it turns that unknown into a
-   * decision the user made on purpose.
+   * Earlier versions carried two synthetic entries — a forced "+ New task" and
+   * an "Unmute will choose" — and both were category errors. "Let the router
+   * decide" is not a member of a list of tasks; it is what happens when no list
+   * is on screen. Putting it in the ring made it look like a task, gave it a
+   * name to argue about, and needed a rule about where it sat.
    */
   private pocketSlots(): PocketSlotP[] {
-    const live = this.pocket
+    return this.pocket
       .map((id) => this.deps.getTask(id))
       .filter((t): t is TaskLite => !!t && t.alive !== false)
-    return [
-      { id: null, kind: 'new', title: '+ New task' },
-      ...live.map((t) => ({
+      .map((t) => ({
         id: t.id,
-        kind: 'task' as const,
         title: t.name ?? truncate(t.intent),
         ask: t.question?.text ?? t.step ?? undefined,
         status: t.state,
-      })),
-      { id: null, kind: 'auto', title: 'Unmute will choose' },
-    ]
+      }))
   }
-
-  /** Where the carousel sits when nobody has aimed it: `auto`, the last stop. */
-  private autoIdx(): number { return this.pocketSlots().length - 1 }
 
   /** Drop ids that died, and keep `pocketAt` pointing at something real. */
   private prunePocket(): void {
@@ -627,7 +606,7 @@ export class NotchController {
     })
     // A shrinking ring must never leave the pointer past its end, or the voice
     // would be aimed at a slot that no longer exists.
-    if (this.pocket.length !== before) this.pocketAt = Math.min(this.pocketAt, this.autoIdx())
+    if (this.pocket.length !== before) this.pocketAt = Math.max(0, Math.min(this.pocketAt, this.pocketSlots().length - 1))
   }
 
   /**
@@ -647,17 +626,12 @@ export class NotchController {
    * "let the router choose", which is not the same as "I want a new task".
    */
   private applyVoiceTarget(): void {
-    if (this.engaged === 'task' && this.focusedId) { this.deps.forceNewTask?.(false); return }
-    if (this.pocketMode !== 'sticky') {
-      // Closed, or merely showing while you speak. Speaking must never become
-      // an act of aiming — that is the whole point of the transient/sticky split.
-      if (this.focusedId) this.setFocus(null)
-      this.deps.forceNewTask?.(false)
-      return
-    }
-    const slot = this.pocketSlots()[this.pocketAt]
-    this.deps.forceNewTask?.(slot?.kind === 'new')
-    this.setFocus(slot?.kind === 'task' ? slot.id : null)
+    if (this.engaged === 'task' && this.focusedId) return
+    // OPEN IS AIMED, CLOSED IS THE ROUTER. The pocket only ever opens because
+    // the user opened it, so "is it open" is a decision they made, not a state
+    // that happened to them.
+    const slot = this.pocketMode === 'open' ? this.pocketSlots()[this.pocketAt] : undefined
+    this.setFocus(slot?.id ?? null)
   }
 
   private sendPocket(): void {
@@ -679,16 +653,7 @@ export class NotchController {
   private setPocketMode(mode: PocketMode): void {
     if (this.pocketMode === mode) return
     this.pocketMode = mode
-    if (mode === 'sticky') {
-      // Opening lands on the first real task, because opening it IS the act of
-      // choosing to address something. `+ New task` is then one press left.
-      if (this.pocketSlots().length > 2) this.pocketAt = 1
-    } else {
-      // Closed or merely speaking: back to `auto`. A carousel that remembered
-      // where it was left would make the address depend on invisible history —
-      // the same failure as the freshness timer this design already rejected.
-      this.pocketAt = this.autoIdx()
-    }
+    if (mode === 'open') this.pocketAt = 0     // opening lands on the newest
     this.applyVoiceTarget()
     this.sendPocket()
   }
@@ -748,7 +713,7 @@ export class NotchController {
    */
   private onPocketExpand(): void {
     const slot = this.pocketSlots()[this.pocketAt]
-    if (slot?.kind !== 'task' || !slot.id) return
+    if (!slot) return
     const id = slot.id
     this.pocket = this.pocket.filter((x) => x !== id)
     this.pocketAt = 0
@@ -766,20 +731,8 @@ export class NotchController {
     this.pocketAt = typeof e.to === 'number'
       ? Math.max(0, Math.min(n - 1, e.to))
       : (this.pocketAt + (e.delta ?? 1) + n * 2) % n
-    // Moving the carousel is an explicit aim even while merely speaking: you
-    // stepped off `auto` on purpose, so honour it.
-    const slot = this.pocketSlots()[this.pocketAt]
-    this.deps.forceNewTask?.(slot.kind === 'new')
-    this.setFocus(slot.kind === 'task' ? slot.id : null)
+    this.applyVoiceTarget()
     this.sendPocket()
-  }
-
-  /** Right-⌥ started/stopped listening. Remote is TAP-TOGGLE (keyboard.ts:197
-   *  makes key-up a no-op), so the card is up for the whole utterance — there
-   *  is no hold to fumble arrows inside of. */
-  notifyCapturing(on: boolean): void {
-    if (this.pocketMode === 'sticky') return           // an explicit aim outranks it
-    this.setPocketMode(on && this.pocket.length > 0 ? 'transient' : 'closed')
   }
 
   private openCockpit(): void {
