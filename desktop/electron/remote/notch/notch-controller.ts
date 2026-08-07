@@ -291,6 +291,9 @@ export class NotchController {
   /** Set when leaving collapsed an expanded task; a return inside this window
    *  re-opens it, because you did not mean to leave. */
   private returnGraceUntil = 0
+  /** What the last leave collapsed, so a quick return restores THAT rather
+   *  than guessing. Null once used or expired. */
+  private returnTo: { kind: 'task'; id: string } | { kind: 'cockpit' } | null = null
   private lastPocketJson = ''
 
   constructor(
@@ -325,7 +328,7 @@ export class NotchController {
     on('prev', () => this.onPrev())
     on('focusTask', (e) => this.onFocusTask((e as { id: string }).id))
     on('closeStage', () => { this.seenThenClose() })
-    on('userLeft', (e) => this.onUserLeft((e as { reason: 'blur' | 'screenshot' }).reason))
+    on('userLeft', (e) => this.onUserLeft((e as { reason: 'blur' | 'screenshot' | 'space' }).reason))
     on('userReturned', () => this.onUserReturned())
     on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
     on('pocketOpen', () => { this.setPocketMode('open'); this.reconcile() })
@@ -666,35 +669,48 @@ export class NotchController {
    * changing window IS the signal that you have. Closing was the only escape
    * before, and closing says "done with this", which is rarely what was meant.
    */
-  private onUserLeft(reason: 'blur' | 'screenshot'): void {
-    // FOCUS, NOT THE SURFACE. The task panel and the cockpit's stage are two
-    // ways of looking at exactly one task, and leaving means the same thing in
-    // both. Keying on `engaged === 'task'` silently exempted the stage — you
-    // could be staring at a task, switch to Chrome, and come back to find it
-    // still covering the screen. The wall has no single task, so a focusless
-    // cockpit has nothing to pocket and is left alone.
-    if (!this.focusedId) return
+  private onUserLeft(reason: 'blur' | 'screenshot' | 'space'): void {
+    // ANY BIG SURFACE GETS OUT OF THE WAY, not just one holding a task.
+    //
+    // This keyed on `focusedId`, which exempted the one surface most likely to
+    // be covering the screen: the WALL. Tap an empty notch, get the whole
+    // orchestrator, swipe to another Space to look something up — and it was
+    // still there, because a focusless cockpit has no task to pocket. But
+    // pocketing and collapsing are different jobs. Pocketing needs a task;
+    // getting out of the way does not.
+    if (this.engaged === 'none') return
     const id = this.focusedId
-    this.pocketTask(id, reason)
+    if (id) this.pocketTask(id, reason)
+    // Remember what to put back, so a return inside the window restores the
+    // surface you were actually on rather than guessing at a task.
+    this.returnTo = id ? { kind: 'task', id } : { kind: 'cockpit' }
     this.returnGraceUntil = Date.now() + RETURN_GRACE_MS
     this.engaged = 'none'
     this.setFocus(null)
     this.setPocketMode('closed')
+    log.event('user-left', { reason, pocketed: id ?? null, was: this.returnTo.kind })
     this.sendPocket()
     this.reconcile()
   }
 
   /** Came straight back → you did not mean to leave. Re-open what collapsed. */
   private onUserReturned(): void {
-    if (Date.now() > this.returnGraceUntil) return
-    const id = this.pocket[0]
-    const t = id ? this.deps.getTask(id) : undefined
-    if (!t) return
+    const back = this.returnTo
+    if (!back || Date.now() > this.returnGraceUntil) return
     this.returnGraceUntil = 0
-    this.engaged = 'task'
-    this.setFocus(id)
+    this.returnTo = null
+    if (back.kind === 'cockpit') {
+      this.engaged = 'cockpit'
+      log.event('cockpit-reopened-on-return', {})
+    } else {
+      const t = this.deps.getTask(back.id)
+      if (!t) return
+      this.pocket = this.pocket.filter((x) => x !== back.id)
+      this.engaged = 'task'
+      this.setFocus(back.id)
+      log.event('pocket-reopened-on-return', { taskId: back.id })
+    }
     this.setPocketMode('closed')
-    log.event('pocket-reopened-on-return', { taskId: id })
     this.reconcile()
   }
 

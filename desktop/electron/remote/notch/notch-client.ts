@@ -275,9 +275,10 @@ export type NotchEvent =
   | { type: 'prev' }
   | { type: 'focusTask'; id: string }
   | { type: 'closeStage' }
-  /** The user left Unmute (app deactivated, or a screen capture began). An
-   *  expanded task goes to the pocket rather than being dismissed. */
-  | { type: 'userLeft'; reason: 'blur' | 'screenshot' }
+  /** The user left: another app came forward, or they swiped to another Space.
+   *  Any expanded surface gets out of the way — a task goes to the pocket, the
+   *  wall simply collapses. You went elsewhere because you needed the screen. */
+  | { type: 'userLeft'; reason: 'blur' | 'screenshot' | 'space' }
   /** …and came back. Within the grace window this re-opens what it collapsed. */
   | { type: 'userReturned' }
   /** Move the carousel. `to` is an absolute slot index; `delta` steps. */

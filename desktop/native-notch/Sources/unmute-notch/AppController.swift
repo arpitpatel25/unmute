@@ -897,9 +897,25 @@ final class AppController: NSObject, NotchResizing {
                 // window; we only report the return.
                 self.model.emit(.userReturned)
             } else if self.isExpanded(self.model.state) {
-                NotchLog.log("user left for \(app?.bundleIdentifier ?? "?") — pocketing")
+                NotchLog.log("user left for \(app?.bundleIdentifier ?? "?") — collapsing")
                 self.model.emit(.userLeft(reason: "blur"))
             }
+        }
+
+        // A SPACE SWIPE IS LEAVING TOO, and it was invisible here.
+        //
+        // App activation does not fire when you swipe to another desktop, so an
+        // open orchestrator rode along to every Space — including the one you
+        // swiped to precisely because you needed to look at something. The
+        // surface joins all Spaces (`.canJoinAllSpaces`), which is what makes it
+        // reachable everywhere and also what let it follow you at full size.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isExpanded(self.model.state) else { return }
+            NotchLog.log("space changed — collapsing")
+            self.model.emit(.userLeft(reason: "space"))
         }
     }
 

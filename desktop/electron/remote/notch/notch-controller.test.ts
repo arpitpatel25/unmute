@@ -1245,3 +1245,52 @@ test('the pocket NEVER opens itself — no controller path can do it', () => {
   assert.equal(typeof (h.controller as unknown as { notifyCapturing?: unknown }).notifyCapturing,
     'undefined', 'no capture-driven open survives')
 })
+
+test('leaving collapses the WALL too, not just a task', () => {
+  // The wall is the surface most likely to be covering the screen, and it was
+  // the one exempted: keying on focusedId meant a focusless cockpit rode along
+  // to whatever you switched to.
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'ready', alive: true }))
+  h.client.fire({ type: 'openDashboard' })
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'cockpit')
+
+  h.client.fire({ type: 'userLeft', reason: 'space' })
+  h.flush()
+  assert.notEqual(h.client.last('setState')!.state, 'cockpit', 'it gets out of the way')
+  assert.equal(pocketOf(h)?.slots.length ?? 0, 0, 'and pockets nothing — there was no task')
+})
+
+test('a quick return restores the surface you were actually on', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'ready', alive: true }))
+  h.client.fire({ type: 'openDashboard' })
+  h.client.fire({ type: 'userLeft', reason: 'space' })
+  h.flush()
+  h.client.fire({ type: 'userReturned' })
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, 'cockpit', 'the wall comes back as the wall')
+
+  // …and a task comes back as that task, not as the wall.
+  const h2 = setup()
+  put(h2, makeTask({ id: 'b', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h2.client.fire({ type: 'tap' })
+  h2.client.fire({ type: 'userLeft', reason: 'blur' })
+  h2.flush()
+  h2.client.fire({ type: 'userReturned' })
+  h2.flush()
+  assert.equal(h2.client.last('setState')!.state, 'task')
+  assert.deepEqual(h2.calls.focus?.at(-1), ['b'])
+  assert.equal(pocketOf(h2)!.slots.length, 0, 'and it leaves the pocket on the way back')
+})
+
+test('leaving with nothing expanded does nothing at all', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'processing', alive: true }))
+  h.flush()
+  const before = h.client.last('setState')!.state
+  h.client.fire({ type: 'userLeft', reason: 'space' })
+  h.flush()
+  assert.equal(h.client.last('setState')!.state, before)
+})
