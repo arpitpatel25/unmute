@@ -52,6 +52,8 @@ struct BarContent: Equatable {
     static let wordmarkTracking: CGFloat = 2.1
 
     static let wordmarkSize: CGFloat = 9.5
+    /// Cap height of the drawn mark that replaced the word "unmute".
+    static let markHeight: CGFloat = 13
     static let statusSize: CGFloat = 11
     static let detailSize: CGFloat = 11.5
 
@@ -75,10 +77,12 @@ struct BarContent: Equatable {
         guard dot != nil || (left?.isEmpty == false) else { return 0 }
         var w = Self.inset
         if dot != nil { w += Self.dotSize + Self.gap }
-        if let t = left, !t.isEmpty {
-            w += emphasis == .wordmark
-                ? Self.measure(t, Self.wordmarkFont, tracking: Self.wordmarkTracking)
-                : Self.measure(t, Self.statusFont)
+        if emphasis == .wordmark {
+            // The identity is DRAWN now (UnMark), so its width is a geometric
+            // fact rather than a text measurement.
+            w += UnMark.width(for: Self.markHeight)
+        } else if let t = left, !t.isEmpty {
+            w += Self.measure(t, Self.statusFont)
         }
         if let b = badge, b > 1 { w += Self.gap + Self.badgeWidth(b) }
         return ceil(w + Self.gap)
@@ -206,7 +210,11 @@ struct BarContent: Equatable {
 
     static func countPhrase(_ n: Int) -> String {
         switch n {
-        case 0:  return "Nothing running"
+        // "Nothing running" reported an absence, which is a strange thing for a
+        // surface to volunteer — and it was the ONLY thing idle ever said.
+        // "Ready" says the same fact from the user's side: it is here, it works,
+        // press it.
+        case 0:  return "Ready"
         case 1:  return "1 running"
         default: return "\(n) running"
         }

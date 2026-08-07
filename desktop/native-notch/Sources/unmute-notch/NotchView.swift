@@ -242,12 +242,14 @@ struct NotchView: View {
                 if let d = c.dot {
                     Dot(status: d, size: BarContent.dotSize, breathing: d == .processing)
                 }
-                if let t = c.left {
+                // THE IDENTITY IS THE MARK, NOT THE WORD. Idle used to set
+                // "unmute" in 9.5pt light type, which on a black bar reads as a
+                // small grey label rather than as us.
+                if c.emphasis == .wordmark {
+                    UnMark(height: BarContent.markHeight, ink: leftInk)
+                } else if let t = c.left {
                     Text(t)
-                        .font(.system(size: c.emphasis == .wordmark
-                                        ? BarContent.wordmarkSize : BarContent.statusSize,
-                                      weight: c.emphasis == .wordmark ? .light : .medium))
-                        .tracking(c.emphasis == .wordmark ? BarContent.wordmarkTracking : 0)
+                        .font(.system(size: BarContent.statusSize, weight: .medium))
                         .foregroundColor(leftInk)
                         // NEVER TRUNCATES. The left half carries status, is short
                         // by construction, and is the last thing that may be cut.
@@ -277,7 +279,10 @@ struct NotchView: View {
 
     private var leftInk: Color {
         let c = model.content
-        if c.emphasis == .wordmark { return Color.white.opacity(model.working > 0 ? 0.62 : 0.52) }
+        // The MARK, not a word. 0.52 was tuned for 9.5pt light type, where a
+        // dim grey reads as restraint; at that value a drawn glyph just looks
+        // smudged. The identity should be legible without being loud.
+        if c.emphasis == .wordmark { return Color.white.opacity(model.working > 0 ? 0.92 : 0.85) }
         if let alarm = c.alarm { return Theme.status(alarm) }
         return Theme.text
     }
