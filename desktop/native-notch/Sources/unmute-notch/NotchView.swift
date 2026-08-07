@@ -256,7 +256,7 @@ struct NotchView: View {
                         .fixedSize()
                 }
                 if let b = c.badge, b > 1 {
-                    Badge(text: "\(b)", color: Theme.status(c.alarm ?? .needsUser))
+                    Badge(text: "\(b)", color: Theme.status(c.alarm ?? c.dot ?? .needsUser))
                 }
             }
             .padding(.leading, BarContent.inset)

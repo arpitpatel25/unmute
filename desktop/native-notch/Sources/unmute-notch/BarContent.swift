@@ -129,7 +129,7 @@ struct BarContent: Equatable {
         // ever rendered inside the expanded wall, where nobody is looking at
         // that moment. This is that same signal, at bar level.
         if m.capturePhase == "routing", !isExpandedState(state) {
-            return BarContent(dot: .processing, left: "creating task", emphasis: .status)
+            return BarContent(dot: .processing, left: "Sending", emphasis: .status)
         }
         // THE POCKET AT REST IS THE NOTCH ITSELF.
         //
@@ -176,14 +176,23 @@ struct BarContent: Equatable {
             if !m.hasNotch && !hovering { return BarContent(resting: true) }
             // One segment: there is no second thing to say. Hovering adds the
             // count, which is the answer to the only question idle raises.
-            var c = BarContent(left: "unmute", emphasis: .wordmark)
-            if hovering { c.right = countPhrase(m.working) }
-            return c
+            // NO HOVER TEXT. The controller sends `active` the moment anything
+            // is running, so idle's count was always zero — hovering "revealed"
+            // the words "Nothing running", which is a surface volunteering an
+            // absence. And "Ready" cannot be borrowed here: it already means a
+            // finished task awaiting you. The mark alone is the state.
+            return BarContent(left: "unmute", emphasis: .wordmark)
 
         case .active:
+            // ONE WORD FOR ONE STATE. This said "1 running" while the very same
+            // slot says "Working" for a single task's status — two vocabularies
+            // for the same fact, which is what made the bar read as arbitrary
+            // text. The count moves to the badge, which is exactly how attention
+            // already carries "and N more like this".
             var c = BarContent(dot: .processing,
-                               left: countPhrase(m.working),
-                               emphasis: .status)
+                               left: Theme.statusLabel(.processing),
+                               emphasis: .status,
+                               badge: m.working)
             // Left is the count; right is what is actually happening. Hovering a
             // running task shows its NAME, which is the one thing the activity
             // line does not carry.
@@ -208,15 +217,7 @@ struct BarContent: Equatable {
         }
     }
 
-    static func countPhrase(_ n: Int) -> String {
-        switch n {
-        // "Nothing running" reported an absence, which is a strange thing for a
-        // surface to volunteer — and it was the ONLY thing idle ever said.
-        // "Ready" says the same fact from the user's side: it is here, it works,
-        // press it.
-        case 0:  return "Ready"
-        case 1:  return "1 running"
-        default: return "\(n) running"
-        }
-    }
+    // `countPhrase` lived here — "Nothing running" / "N running". Both of its
+    // callers are gone: idle never had a count to show, and active now says
+    // "Working" with the number in the badge.
 }
