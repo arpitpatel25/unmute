@@ -611,7 +611,12 @@ export class NotchController {
   private rebuildQueue(): void {
     const tasks = this.deps.listTasks()
     for (const t of tasks) this.demandSeen.set(t.id, this.demanding(t))
-    this.queue = tasks.filter((t) => this.demanding(t))
+    // ADDRESSABLE, NOT JUST DEMANDING. The queue is what the badge counts and
+    // what the crank walks, and the pocket filtered it again downstream — so a
+    // task that was demanding but unreachable made the two disagree: the
+    // surface said three were waiting while the crank had a list of one and
+    // `→` could not move. One filter, applied once, at the source.
+    this.queue = tasks.filter((t) => this.demanding(t) && this.addressable(t))
       .sort(this.byEngagement).map((t) => t.id)
   }
 
@@ -632,21 +637,33 @@ export class NotchController {
    * day is twenty items, which is just the dashboard with worse ergonomics.
    */
   /**
-   * CAN THE VOICE REACH THIS? Not "does it have a PTY".
+   * CAN THE VOICE REACH THIS? Not "is it running right now".
    *
-   * `alive` is `executors.get(id)?.alive` — the PTY map. A Codex or Claude
-   * Desktop task is driven through its app, has no PTY by design, and so is
-   * permanently `alive: false`. The pocket filtered on that, which meant a
-   * Codex task could NEVER appear in it: the bar counted it as working, the
-   * dashboard listed it, and the pocket silently could not hold it. Reported
-   * from the field with three tasks running and two in the pocket.
+   * Two wrong answers preceded this one, and the second was mine.
    *
-   * The same correction already exists twice, at toCard and sendDetail, with
-   * the same rule — a driver-transport task is never dead. This is that rule,
-   * named, so the next surface does not have to rediscover it.
+   * It first tested `alive`, which is `executors.get(id)?.alive` — the PTY map.
+   * A Codex or Claude Desktop task is driven through its own app and has no PTY
+   * by design, so it was permanently excluded: the bar counted it, the wall
+   * listed it, and the pocket could not hold it.
+   *
+   * Exempting driver transports fixed that case and left the real one. Quitting
+   * the app kills every local session, so after a relaunch EVERY Claude Code
+   * task is `alive: false` — and the pocket came back holding nothing but the
+   * Codex thread, with the crank stuck on a list of one while the surface
+   * reported three waiting.
+   *
+   * The liveness test is obsolete anyway. Sending to a cold session revives it
+   * and delivers (TaskManager.answer), so sleeping is not unreachable — it is
+   * one message from awake. What the pocket must exclude is what can never be
+   * reached again: a task that is gone, or one you shelved. Nothing else.
    */
   private addressable(t: TaskLite): boolean {
-    return providerOf(t.agent).transport === 'driver' ? true : t.alive !== false
+    if (t.shelved) return false
+    if (providerOf(t.agent).transport === 'driver') return true
+    // A session sleeps; it does not die. A finished ONE-OFF with no process is
+    // genuinely over — there is no thread to continue and nothing to say to it.
+    if ((t.kind ?? 'oneoff') === 'session') return true
+    return t.alive !== false
   }
 
   private pocketList(): TaskLite[] {

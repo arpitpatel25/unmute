@@ -1680,11 +1680,17 @@ test('a Codex task can be in the pocket — it has no PTY and that is not death'
   assert.ok(ids.includes('cc'))
 })
 
-test('a genuinely dead local task stays out of the pocket', () => {
+test('a finished one-off with no process stays out — it is genuinely over', () => {
+  // The distinction is thread vs errand, not running vs not. An errand that
+  // finished has no thread to continue and nothing to say to it; a session
+  // that finished is asleep, and one message wakes it.
   const h = setup()
-  put(h, makeTask({ id: 'dead', state: 'done', kind: 'session', name: 'Dead', alive: false }))
+  put(h, makeTask({ id: 'errand', state: 'done', kind: 'oneoff', name: 'Errand', alive: false }))
+  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'Thread', alive: false }))
   h.client.fire({ type: 'pocketOpen' })
-  assert.ok(!(pocketOf(h)?.slots ?? []).some((s) => s.id === 'dead'))
+  const ids = (pocketOf(h)?.slots ?? []).map((s) => s.id)
+  assert.ok(!ids.includes('errand'))
+  assert.ok(ids.includes('thread'))
 })
 
 test('the wall holds its order while you are reading it', async () => {
@@ -1712,4 +1718,31 @@ test('the wall holds its order while you are reading it', async () => {
   h.flush()
   const reopened = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards).map((c) => c.id)
   assert.deepEqual(reopened, ['a', 'b'], 'released on the next visit')
+})
+
+test('a sleeping session is still in the pocket — quitting the app is not death', () => {
+  // AFTER A RELAUNCH every local session has `alive: false`: the quit killed
+  // them all and nothing has resumed one yet. The pocket used to drop them, so
+  // it came back holding only the Codex thread while the surface still reported
+  // three waiting and `→` sat on a list of one. Sending revives (see
+  // TaskManager.answer), so sleeping is one message from awake, not gone.
+  const h = setup()
+  put(h, makeTask({ id: 'cc1', state: 'done', kind: 'session', name: 'Claude one', alive: false }))
+  put(h, makeTask({ id: 'cc2', state: 'done', kind: 'session', name: 'Claude two', alive: false }))
+  put(h, makeTask({ id: 'cx', state: 'processing', name: 'Codex', agent: 'codex-desktop', codexThreadId: 'th', alive: false }))
+  h.client.fire({ type: 'pocketOpen' })
+  const ids = pocketOf(h)!.slots.map((s) => s.id)
+  for (const id of ['cc1', 'cc2', 'cx']) assert.ok(ids.includes(id), `${id} must be reachable`)
+})
+
+test('the count and the crank can never disagree', () => {
+  const h = setup()
+  // Demanding but unreachable: a finished one-off with no process behind it.
+  put(h, makeTask({ id: 'ghost', state: 'failed', kind: 'oneoff', name: 'Ghost', alive: false }))
+  put(h, makeTask({ id: 'real', state: 'needs-user', name: 'Real', question: { text: 'q' } }))
+  h.client.fire({ type: 'pocketOpen' })
+  const p = pocketOf(h)!
+  assert.equal(h.client.last('setState')!.attention, p.waiting,
+    'the number on the bar is the number of cards you can actually reach')
+  assert.ok(!p.slots.some((s) => s.id === 'ghost'))
 })
