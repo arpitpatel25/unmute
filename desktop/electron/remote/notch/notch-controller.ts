@@ -346,6 +346,7 @@ export class NotchController {
    *  than guessing. Null once used or expired. */
   private returnTo: { kind: 'task'; id: string } | { kind: 'cockpit' } | null = null
   private lastPocketJson = ''
+  private lastWaiting = 0
 
   constructor(
     private client: NotchClientLike,
@@ -785,12 +786,13 @@ export class NotchController {
     if (this.queue.length === 0 && this.engaged === 'task') this.engaged = 'none'
   }
 
-  private front(): TaskLite | undefined {
+  private front(slots?: PocketSlotP[]): TaskLite | undefined {
     // WHILE YOU ARE WALKING, THE FRONT IS WHERE YOU ARE. Without this the
     // surface kept showing queue[0] while the crank index moved underneath it,
-    // so `→` changed the pocket and nothing else.
+    // so `→` changed the pocket and nothing else. Reads the SAME slots the
+    // payload was built from when reconcile hands them over.
     if (this.frozenOrder) {
-      const id = this.pocketOrder()[this.pocketAt]
+      const id = (slots ? slots.map((sl) => sl.id) : this.pocketOrder())[this.pocketAt]
       const t = id ? this.deps.getTask(id) : undefined
       if (t) return t
     }
@@ -814,12 +816,20 @@ export class NotchController {
     // leaving cockpit, so our record of having sent it must go at the same time.
     if (this.engaged !== 'cockpit') this.lastDetailJson.delete('stageDetail')
     this.rebuildQueue()
+    // THE ONE DERIVATION. Everything below reads this array — the payload the
+    // surface draws, the number on the bar, and which task is fronted. They are
+    // the same list by construction, so they cannot disagree; `attention` used
+    // to be `queue.length` and matched `waiting` only because two independent
+    // filters happened to agree, which is how "3 waiting" shipped beside a
+    // crank of one.
+    const slots = this.crankSlots()
     // The pocket rides along on every pass: tasks in it can finish or be killed
     // by anything, and a carousel offering a dead address would aim the voice
     // at nothing. sendPocket is a no-op when the payload has not changed.
-    this.sendPocket()
-    const front = this.front()
-    const attention = this.queue.length
+    this.sendPocket(slots)
+    const front = this.front(slots)
+    const attention = slots.filter((sl) => sl.demanding).length
+    this.lastWaiting = attention
     const working = this.deps.listTasks().filter((t) => t.state === 'processing').length
 
     if (this.engaged === 'cockpit') {
@@ -924,8 +934,22 @@ export class NotchController {
     this.setFocus(id ?? null)
   }
 
-  private sendPocket(): void {
-    const slots = this.crankSlots()
+  /**
+   * ONE DERIVATION, MANY READERS.
+   *
+   * `slots` is passed in from reconcile rather than recomputed, because it is
+   * also what the badge counts and what `front()` reads. Every bug in this file
+   * this week had the same shape: the same question answered in two places that
+   * then drifted. "Is it addressable" was answered three times and one copy was
+   * wrong. "Is it demanding" was applied by the queue and again by the pocket,
+   * so the bar could say three while the crank had one. "Does this count as
+   * interaction" was stamped at four call sites, two of them wrong.
+   *
+   * So the rule for this surface is now: derive once per pass, hand the result
+   * around, and never re-answer downstream. If you find yourself recomputing
+   * one of these, that is the bug — not the thing you were about to fix.
+   */
+  private sendPocket(slots: PocketSlotP[] = this.crankSlots()): void {
     this.clampPocket(slots.length)
     const waiting = slots.filter((sl) => sl.demanding).length
     const data: PocketP = {
@@ -1725,6 +1749,8 @@ export class NotchController {
   }
 
   // Test hooks.
-  get attentionCount(): number { return this.queue.length }
+  /** What the surface was last told is waiting. Reads the rendered payload, not
+   *  a parallel recount — see sendPocket. */
+  get attentionCount(): number { return this.lastWaiting }
   get engagedState(): Engaged { return this.engaged }
 }

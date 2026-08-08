@@ -1785,3 +1785,68 @@ test('a finished thread you closed stays quiet — returning to the pocket must 
   assert.ok(pocketOf(h)!.slots.some((s) => s.id === 'x'), 'but it is still reachable')
   assert.equal(h.client.last('setState')!.attention, 0)
 })
+
+// ── THE INVARIANT ───────────────────────────────────────────────────────────
+//
+// Nearly every bug in this surface this week was one question answered twice.
+// "Is it addressable" had three implementations and one was wrong. "Is it
+// demanding" was applied by the queue and again by the pocket, so the bar could
+// say three while the crank held one and `→` did nothing. This asserts the
+// property those bugs violated, under conditions designed to break it — so the
+// next divergence fails here instead of on someone's screen.
+
+test('INVARIANT: everything demanding is reachable, and the count matches', () => {
+  const h = setup()
+  // Checked against the TASK LIST, not against the payload. Asserting the
+  // payload agrees with itself proves nothing once they share a derivation —
+  // the first version of this test did exactly that and survived having the
+  // original defect pasted back in. The question is whether the surface has
+  // dropped something that is genuinely waiting on you.
+  const ctl = h.controller as unknown as { demanding(t: TaskLite): boolean }
+  const mixed: Array<Partial<TaskLite> & { id: string }> = [
+    { id: 'blocked', state: 'needs-user', question: { text: 'q' } },
+    { id: 'thread', state: 'done', kind: 'session' },
+    { id: 'errand', state: 'done', kind: 'oneoff' },
+    { id: 'running', state: 'processing' },
+    { id: 'broke', state: 'failed' },
+    { id: 'codex', state: 'processing', agent: 'codex-desktop', codexThreadId: 'th', alive: false },
+    { id: 'deadErrand', state: 'done', kind: 'oneoff', alive: false },
+    { id: 'shelved', state: 'needs-user', shelved: true, question: { text: 'q' } },
+    { id: 'sleeping', state: 'done', kind: 'session', alive: false },
+  ]
+  for (const t of mixed) put(h, makeTask(t))
+
+  const check = (why: string) => {
+    const p = pocketOf(h)!
+    const owed = [...h.tasks.values()].filter((t) => ctl.demanding(t))
+    for (const t of owed) {
+      assert.ok(p.slots.some((sl) => sl.id === t.id),
+        `${t.id} is waiting on you but has no slot — ${why}`)
+    }
+    assert.equal(p.waiting, owed.length, `waiting vs what is owed — ${why}`)
+    assert.equal(h.client.last('setState')!.attention, owed.length, `attention — ${why}`)
+    assert.equal(h.controller.attentionCount, owed.length, `attentionCount — ${why}`)
+    assert.equal(new Set(p.slots.map((sl) => sl.id)).size, p.slots.length, `no duplicates — ${why}`)
+    assert.ok(p.at < Math.max(1, p.slots.length), `index inside the ring — ${why}`)
+  }
+
+  check('at rest')
+  h.client.fire({ type: 'pocketOpen' }); check('pocket open')
+  for (let i = 0; i < 12; i++) { h.client.fire({ type: 'pocketMove', delta: 1 }); check(`after ${i + 1} moves`) }
+  h.presence.spend(3 * 60 * 60 * 1000); h.flush(); check('after every window expired')
+  h.client.fire({ type: 'pocketExpand' }); h.client.fire({ type: 'closeStage' }); check('after expand and close')
+  h.tasks.delete('blocked'); h.events.emit('removed', { id: 'blocked' }); h.flush(); check('after a task vanished')
+})
+
+test('INVARIANT: every slot resolves to a task the voice can actually reach', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'needs-user', question: { text: 'q' } }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', alive: false }))
+  put(h, makeTask({ id: 'gone', state: 'done', kind: 'oneoff', alive: false }))
+  h.client.fire({ type: 'pocketOpen' })
+  for (const sl of pocketOf(h)!.slots) {
+    const t = h.tasks.get(sl.id)
+    assert.ok(t, `slot ${sl.id} has no task behind it`)
+    assert.ok(!t!.shelved, `slot ${sl.id} is shelved`)
+  }
+})
