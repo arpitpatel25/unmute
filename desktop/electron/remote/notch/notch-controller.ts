@@ -303,6 +303,8 @@ export class NotchController {
    * A control in a group header must act on that group.
    */
   private expandedGroups = new Set<string>()
+  /** The wall's card order, held while the dashboard is open. See heldWallOrder. */
+  private wallOrder: string[] | null = null
   /** Dashboard "Today" filter. Off by default — the wall's default answer to
    *  "what is going on" is still everything it would otherwise show. */
   private todayOnly = false
@@ -462,6 +464,7 @@ export class NotchController {
       // to see everything; leaving per-group "show all" live inside it would
       // let a group quietly put back exactly what the filter took out.
       if (this.todayOnly) this.expandedGroups.clear()
+      this.wallOrder = null       // the filter changes what is here; re-sort it
       log.event('today-filter', { on: this.todayOnly })
       this.reconcile()
     })
@@ -628,15 +631,33 @@ export class NotchController {
    * size is what decides whether a carousel is usable — twelve hours of a busy
    * day is twenty items, which is just the dashboard with worse ergonomics.
    */
+  /**
+   * CAN THE VOICE REACH THIS? Not "does it have a PTY".
+   *
+   * `alive` is `executors.get(id)?.alive` — the PTY map. A Codex or Claude
+   * Desktop task is driven through its app, has no PTY by design, and so is
+   * permanently `alive: false`. The pocket filtered on that, which meant a
+   * Codex task could NEVER appear in it: the bar counted it as working, the
+   * dashboard listed it, and the pocket silently could not hold it. Reported
+   * from the field with three tasks running and two in the pocket.
+   *
+   * The same correction already exists twice, at toCard and sendDetail, with
+   * the same rule — a driver-transport task is never dead. This is that rule,
+   * named, so the next surface does not have to rediscover it.
+   */
+  private addressable(t: TaskLite): boolean {
+    return providerOf(t.agent).transport === 'driver' ? true : t.alive !== false
+  }
+
   private pocketList(): TaskLite[] {
     const now = Date.now()
     const demanding = this.queue
       .map((id) => this.deps.getTask(id))
-      .filter((t): t is TaskLite => !!t && t.alive !== false)
+      .filter((t): t is TaskLite => !!t && this.addressable(t))
 
     const already = new Set(demanding.map((t) => t.id))
     const rest = this.deps.listTasks()
-      .filter((t) => !already.has(t.id) && !t.shelved && t.alive !== false
+      .filter((t) => !already.has(t.id) && !t.shelved && this.addressable(t)
         // Recent by the task's OWN clock. Opening one from the wall no longer
         // qualifies it — nothing about reading a task moves this.
         && now - this.engagedAt(t) < POCKET_IDLE_MS)
@@ -1032,6 +1053,7 @@ export class NotchController {
     // single task you had just chosen to leave — and getting to the actual wall
     // meant closing the stage first. Arriving at the dashboard clears focus.
     this.setFocus(null)
+    this.wallOrder = null         // a fresh visit re-sorts to what has moved
     this.expandedGroups.clear()   // each visit starts on the live view
     this.computeDigest()
     this.deps.setLastSeen(Date.now())
@@ -1502,6 +1524,30 @@ export class NotchController {
       .map((t) => (t.group ?? '').trim()))]
   }
 
+  /**
+   * HOLD THE WALL STILL WHILE YOU ARE READING IT.
+   *
+   * The wall sorts by `updatedAt`, every running task polls once a second, and
+   * every status write bumps that clock. With three tasks running their order
+   * genuinely flipped several times a second — and because cards are keyed by
+   * id, SwiftUI MOVES them rather than redrawing, so they visibly slide around.
+   * Reported from the field as cards bouncing, and it is exactly that.
+   *
+   * Same answer as the pocket: contents stay live, ORDER is nailed down while
+   * the surface is open, and it re-sorts next time you come to it. Newcomers
+   * append so nothing is unreachable; the dead drop.
+   */
+  private heldWallOrder(sorted: TaskLite[]): TaskLite[] {
+    if (this.engaged !== 'cockpit') { this.wallOrder = null; return sorted }
+    const byId = new Map(sorted.map((t) => [t.id, t]))
+    if (!this.wallOrder) { this.wallOrder = sorted.map((t) => t.id); return sorted }
+    const held = this.wallOrder.filter((id) => byId.has(id))
+    const known = new Set(held)
+    for (const t of sorted) if (!known.has(t.id)) held.push(t.id)
+    this.wallOrder = held
+    return held.map((id) => byId.get(id)!)
+  }
+
   buildCockpit(): CockpitPayload {
     const now = Date.now()
     const tasks = this.deps.listTasks()
@@ -1526,9 +1572,9 @@ export class NotchController {
     // ANYTHING WAITING ON YOU IGNORES IT. A filter that can hide a blocked task
     // is a way to lose work, not a way to focus — the same reason UNFOLDABLE
     // exists for the fold.
-    const wall = tasks.filter((t) => this.notchVisible(t, now))
+    const wall = this.heldWallOrder(tasks.filter((t) => this.notchVisible(t, now))
       .filter((t) => !this.todayOnly || this.demanding(t) || now - (t.updatedAt ?? 0) < TODAY_MS)
-      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)))
     const byGroup = new Map<string, TaskLite[]>()
     for (const t of wall) {
       const g = (t.group ?? '').trim()
@@ -1539,8 +1585,13 @@ export class NotchController {
     // whatever it held, and it renders without a heading, so the newest task on
     // the wall sat at the bottom under someone else's group title — which made
     // a correctly-sorted wall look scrambled.
+    //
+    // Insertion order IS the ranking, and no longer needs its own sort: `wall`
+    // arrives newest-first, so a group first appears exactly at its newest
+    // member — which is what ranking by `Math.max(updatedAt)` computed. Deriving
+    // it instead of recomputing it means the group order inherits the hold
+    // below for free, rather than churning while the cards inside stay put.
     const ranked = [...byGroup.entries()]
-      .sort((a, b) => Math.max(...b[1].map((t) => t.updatedAt ?? 0)) - Math.max(...a[1].map((t) => t.updatedAt ?? 0)))
 
     /**
      * Collapse the stale tail of a group behind "show all".

@@ -46,10 +46,28 @@ interface Harness {
   flush(): void
 }
 
+/**
+ * ONE CLOCK READING FOR EVERY DEFAULTED TASK — not `Date.now()` per call.
+ *
+ * The controller orders the queue by `updatedAt` DESCENDING (`byEngagement`),
+ * so two tasks built back to back were a coin flip: land in the same
+ * millisecond and the stable sort keeps `put` order, land one millisecond apart
+ * and the SECOND one fronts. Every test that puts two tasks and then asserts
+ * which one the surface is showing was therefore flaky — measured at roughly
+ * 1 in 4 for `a REFUSED chip click keeps the surface on the question too`,
+ * which is how it turned up as a single red test in an otherwise green suite.
+ *
+ * Freezing the default makes every defaulted task tie, and a tie under a stable
+ * sort is `put` order — which is what the tests were already assuming. A test
+ * that genuinely cares about recency passes its own `updatedAt` and overrides
+ * this, so nothing that meant to exercise the ordering stops doing so.
+ */
+const T0 = Date.now()
+
 function makeTask(partial: Partial<TaskLite> & { id: string }): TaskLite {
   return {
     intent: 'do the thing', state: 'processing', kind: 'oneoff', alive: true,
-    createdAt: Date.now() - 60_000, updatedAt: Date.now(), ...partial,
+    createdAt: T0 - 60_000, updatedAt: T0, ...partial,
   }
 }
 
@@ -1646,4 +1664,52 @@ test('a group emptied by Today disappears rather than leaving a bare heading', (
   const names = h.client.last('setCockpit')!.data.groups.map((g) => g.name)
   assert.ok(!names.includes('Gone'))
   assert.ok(names.includes('Here'))
+})
+
+test('a Codex task can be in the pocket — it has no PTY and that is not death', async () => {
+  // THE FIELD REPORT: three tasks running, two in the pocket. The missing one
+  // was Codex. `alive` is the PTY map, and a driver-backed task has no PTY by
+  // design, so the pocket could never hold one — while the bar counted it and
+  // the dashboard listed it.
+  const h = setup()
+  put(h, makeTask({ id: 'cc', state: 'processing', name: 'Claude', alive: true }))
+  put(h, makeTask({ id: 'cx', state: 'processing', name: 'Codex', agent: 'codex-desktop', codexThreadId: 'th', alive: false }))
+  h.client.fire({ type: 'pocketOpen' })
+  const ids = pocketOf(h)!.slots.map((s) => s.id)
+  assert.ok(ids.includes('cx'), 'the Codex thread is addressable and belongs in the pocket')
+  assert.ok(ids.includes('cc'))
+})
+
+test('a genuinely dead local task stays out of the pocket', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'dead', state: 'done', kind: 'session', name: 'Dead', alive: false }))
+  h.client.fire({ type: 'pocketOpen' })
+  assert.ok(!(pocketOf(h)?.slots ?? []).some((s) => s.id === 'dead'))
+})
+
+test('the wall holds its order while you are reading it', async () => {
+  // Cards are keyed by id, so a re-sort MOVES them on screen. Three tasks
+  // polling once a second re-sorted the wall several times a second — the
+  // "bouncing cards" report.
+  const h = setup()
+  const t0 = Date.now()
+  put(h, makeTask({ id: 'a', state: 'processing', name: 'A', updatedAt: t0 - 2000 }))
+  put(h, makeTask({ id: 'b', state: 'processing', name: 'B', updatedAt: t0 - 1000 }))
+  h.client.fire({ type: 'openDashboard' })
+  await new Promise((r) => setTimeout(r, 10)); h.flush()
+  const first = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards).map((c) => c.id)
+  assert.deepEqual(first, ['b', 'a'])
+
+  // A polls and bumps its clock. The wall must not rearrange under the reader.
+  h.tasks.get('a')!.updatedAt = Date.now()
+  h.events.emit('updated', h.tasks.get('a')); h.flush()
+  const after = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards).map((c) => c.id)
+  assert.deepEqual(after, ['b', 'a'], 'held while open')
+
+  // Leaving and coming back re-sorts to what actually moved.
+  h.client.fire({ type: 'closeStage' })
+  h.client.fire({ type: 'openDashboard' })
+  h.flush()
+  const reopened = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards).map((c) => c.id)
+  assert.deepEqual(reopened, ['a', 'b'], 'released on the next visit')
 })
