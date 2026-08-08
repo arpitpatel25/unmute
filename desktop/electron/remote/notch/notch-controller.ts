@@ -332,8 +332,6 @@ export class NotchController {
   private cameFromPocket = false
   /** id → presence-clock ms at which it began demanding. See demandSince(). */
   private demandStamp = new Map<string, number>()
-  /** id → wall-clock ms of your last real engagement. See engage(). */
-  private engageStamp = new Map<string, number>()
   /** id → the state we last stamped for, so a change restarts the window. */
   private stateSeen = new Map<string, TaskStatusName>()
   /** Set when leaving collapsed an expanded task; a return inside this window
@@ -388,7 +386,7 @@ export class NotchController {
     events.on('done', onT)
     events.on('removed', (t: { id: string }) => {
       this.dequeue(t.id)
-      this.demandStamp.delete(t.id); this.engageStamp.delete(t.id)
+      this.demandStamp.delete(t.id)
       this.stateSeen.delete(t.id); this.demandSeen.delete(t.id)
       this.scheduleReconcile()
     })
@@ -413,9 +411,17 @@ export class NotchController {
     on('userReturned', () => this.onUserReturned())
     on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
     on('pocketOpen', () => { this.setPocketMode('open'); this.reconcile() })
-    on('pocketRelease', () => { this.setPocketMode('closed'); this.reconcile() })
+    on('pocketRelease', () => {
+      // CLOSING THE POCKET RELEASES ITS ORDER — the next open re-sorts to
+      // whatever has actually moved since. Expanding a card out of the pocket
+      // does NOT come through here and deliberately keeps the order, so Escape
+      // puts you back exactly where you were standing.
+      this.frozenOrder = null
+      this.setPocketMode('closed')
+      this.reconcile()
+    })
     on('pocketExpand', () => this.onPocketExpand())
-    on('chooseOption', (e) => { const c = e as { id: string; index: number }; this.engage(c.id); this.onChoose(c) })
+    on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
     on('mute', (e) => this.onMute((e as { id: string }).id))
     on('answerText', (e) => {
       const { id, text } = e as { id: string; text: string }
@@ -431,7 +437,6 @@ export class NotchController {
       // open, `answer` sends nothing and the task stays blocked — cranking to
       // the next task there would carry the user away from the very question
       // they still have to go answer, and away from the card explaining why.
-      this.engage(id)   // speaking to it is engagement — see engage()
       const landed = this.deps.answer(id, text)
       if (wasBlocking && landed) this.advanceAfterAnswer(id)
       else this.scheduleReconcile()
@@ -573,25 +578,25 @@ export class NotchController {
    * thing you were actually in. Seeded from `createdAt`, which is a real touch
    * — you asked for it.
    */
+  /**
+   * When this task last actually moved.
+   *
+   * `updatedAt` — and it is now safe to use, which it was not before. The
+   * objection was that agent churn is not evidence of your interest, so a task
+   * grinding through tool calls would shoulder its way to the front. But the
+   * only things that move this clock now are a real status change: you sent it
+   * something, or the agent answered. Opening a task no longer touches it, and
+   * neither does walking past it in the carousel. So the parallel engagement
+   * map this used to keep is gone — one clock, and it is the task's own.
+   */
   private engagedAt(t: TaskLite): number {
-    return this.engageStamp.get(t.id) ?? t.createdAt ?? 0
+    return t.updatedAt ?? t.createdAt ?? 0
   }
 
-  /**
-   * Record real engagement. EXPANDING, ANSWERING, SPEAKING TO — never browsing.
-   *
-   * This used to be called from `setFocus`, which every route into a task passes
-   * through, including the carousel. So merely cranking past a card counted as
-   * working on it: the list re-sorted around whatever you had just glanced at,
-   * and by the time the payload was rebuilt the slot under your index held a
-   * different task. That is the whole "next next gives the same two tasks", and
-   * the reason expanding sometimes opened a task you were not looking at.
-   *
-   * Glancing is not working. Only the three deliberate acts count.
-   */
-  private engage(id: string): void {
-    this.engageStamp.set(id, Date.now())
-  }
+  /* `engage()` and its map lived here. Both are gone: `updatedAt` already
+   * records the only thing that counts as interaction — a message sent, or a
+   * response received — so keeping a second notion of recency beside it only
+   * created ways for the two to disagree. Opening a task writes neither. */
 
   private byEngagement = (a: TaskLite, b: TaskLite): number => this.engagedAt(b) - this.engagedAt(a)
 
@@ -632,9 +637,8 @@ export class NotchController {
     const already = new Set(demanding.map((t) => t.id))
     const rest = this.deps.listTasks()
       .filter((t) => !already.has(t.id) && !t.shelved && t.alive !== false
-        // Only things you actually worked in. An untouched task has never been
-        // in your hands, so it belongs on the wall, not at your fingertips.
-        && this.engageStamp.has(t.id)
+        // Recent by the task's OWN clock. Opening one from the wall no longer
+        // qualifies it — nothing about reading a task moves this.
         && now - this.engagedAt(t) < POCKET_IDLE_MS)
       .sort(this.byEngagement)
       .slice(0, POCKET_MAX)
@@ -818,9 +822,9 @@ export class NotchController {
     const target = this.front() ?? this.soleWorking()
     if (!target) { this.openCockpit(); return }
     this.engaged = 'task'
-    this.engage(target.id)
+    // No auto-resume. Opening is reading; a cold session comes back when you
+    // actually send it something (TaskManager.answer).
     this.setFocus(target.id) // voice routes to the fronted task
-    this.deps.opened?.(target.id) // a closed working session comes back by itself
     this.reconcile()
   }
 
@@ -917,10 +921,6 @@ export class NotchController {
     if (this.engaged === 'none') return
     const id = this.focusedId
     const t = id ? this.deps.getTask(id) : undefined
-    // YOU WERE IN THIS TASK a second ago, so it belongs at the front of the
-    // pocket when you come back — which is all "pocketing" ever meant, and it
-    // no longer needs a list of its own to say so.
-    if (id) this.engage(id)
     // Remember what to put back, so a return inside the window restores the
     // surface you were actually on rather than guessing at a task.
     this.returnTo = id ? { kind: 'task', id } : { kind: 'cockpit' }
@@ -976,10 +976,8 @@ export class NotchController {
     // return. Index deliberately kept, not reset.
     this.cameFromPocket = this.pocketMode === 'open'
     this.engaged = 'task'
-    this.engage(id)
     this.setPocketMode('closed')
     this.setFocus(id)
-    this.deps.opened?.(id)          // opening it IS the intent to work in it
     log.event('pocket-expanded', { taskId: id })
     this.reconcile()
   }
@@ -987,7 +985,7 @@ export class NotchController {
   private onPocketMove(e: { delta?: number; to?: number }): void {
     // Walking HOLDS THE ORDER (see pocketOrder). Released when the pocket
     // closes, so the next visit re-sorts to what you last worked in. Browsing
-    // itself never re-ranks anything — see engage().
+    // itself never re-ranks anything.
     this.holdOrder()
     const n = this.crankSlots().length
     if (n <= 1) return
@@ -1069,11 +1067,24 @@ export class NotchController {
     if (!this.frozenOrder) this.frozenOrder = this.pocketList().map((t) => t.id)
   }
 
+  /**
+   * OPENING A TASK CHANGES NOTHING ABOUT IT.
+   *
+   * This did two things that both moved a task you were only reading. It
+   * stamped engagement, so the task appeared in the pocket. And it called
+   * `opened()`, which auto-resumes a dead session — and a resume transitions
+   * the task, which sets `updatedAt = now`, which is what Today filters on and
+   * what the wall sorts by. So opening a five-day-old session rewrote its clock
+   * to this instant and it jumped into Today, to the top of the wall, and said
+   * "Working".
+   *
+   * Reading is not interacting. The session comes back when you actually send
+   * it something (see TaskManager.answer), which is the moment there is a real
+   * update to record.
+   */
   private onFocusTask(id: string): void {
     this.engaged = 'cockpit'
-    this.engage(id)   // opening it from the wall is working in it
     this.setFocus(id)
-    this.deps.opened?.(id) // opening the stage IS the intent to work in it
     this.reconcile()
   }
 
@@ -1092,7 +1103,8 @@ export class NotchController {
       // passes through here, including the carousel, so recording it made
       // browsing re-rank the list you were browsing — and the slot under your
       // index changed between choosing it and drawing it. Engagement is stamped
-      // at the three deliberate acts instead. See engage().
+      // recorded by the task's own `updatedAt` instead, which only a real
+      // status change moves.
     }
   }
 
@@ -1117,9 +1129,6 @@ export class NotchController {
     const id = this.focusedId
     const t = id ? this.deps.getTask(id) : undefined
     if (t) {
-      // Closing something you had open is engagement — it belongs at the front
-      // of the pocket next time, whatever we do with its demand.
-      this.engage(t.id)
       if (t.state === 'done') {
         this.muted.set(t.id, t.state)
         this.queue = this.queue.filter((x) => x !== t.id)

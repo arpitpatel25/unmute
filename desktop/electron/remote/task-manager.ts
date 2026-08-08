@@ -2121,7 +2121,7 @@ export class TaskManager extends EventEmitter {
    * question they still have to go answer. A dead session is not this case: the
    * answer went nowhere, but the task is over, so the crank may move on.
    */
-  answer(id: string, userAnswer: string): boolean {
+  answer(id: string, userAnswer: string, revived = false): boolean {
     const tlog = log.child({ taskId: id })
     // Codex desktop: answering IS the next turn — there is no separate blocked
     // channel to write into, and no PTY liveness to check (the thread always
@@ -2148,6 +2148,35 @@ export class TaskManager extends EventEmitter {
     }
     const ex = this.executors.get(id)
     if (!ex || !ex.alive) {
+      // A COLD SESSION IS REVIVED BY YOUR MESSAGE, NOT BY YOUR CURIOSITY.
+      //
+      // This dropped the message and returned TRUE — reporting success for
+      // something that went nowhere, so the crank advanced past a task whose
+      // reply had vanished. The reason nobody noticed is that opening a task
+      // auto-resumed it (`opened()`), so by the time you typed there was
+      // usually a live session. That auto-resume is what rewrote a five-day-old
+      // task's `updatedAt` to now and threw it into Today, at the top of the
+      // wall, saying "Working" — the cost of reading being paid as if it were
+      // working.
+      //
+      // The revive belongs here instead. Sending IS the interaction, and it is
+      // the moment there is something real to record. Queued and delivered when
+      // the session is ready, so we swap a silent drop for an actual delivery
+      // rather than for a different silent drop.
+      // `revived` stops this recursing: one attempt, then the honest warning.
+      if (!revived && target && (target.kind ?? 'oneoff') === 'session' && !this.resuming.has(id)) {
+        tlog.event('revive-on-send', { queued: userAnswer.length })
+        void this.resume(id)
+          .then((ok) => {
+            if (!ok) { tlog.warn('revive-on-send did not take — message not delivered', {}); return }
+            // Re-enter with the session up. `revived` guarantees this is the
+            // last attempt, so a resume that lies about succeeding warns rather
+            // than spinning.
+            this.answer(id, userAnswer, true)
+          })
+          .catch((e) => tlog.error('revive-on-send threw', { error: (e as Error).message }))
+        return true
+      }
       tlog.warn('answer dropped — no live session', {})
       return true
     }

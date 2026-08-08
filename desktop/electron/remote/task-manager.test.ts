@@ -1504,3 +1504,22 @@ test('a Notification cannot bury a live ask', { timeout: 8000 }, async () => {
   assert.deepEqual(tm.get(id)!.question!.choices, ['Soccer', 'American football'])
   tm.killAll()
 })
+
+test('a message to a cold session revives it and is delivered, not dropped', { timeout: 8000 }, async () => {
+  // IT USED TO DROP THE MESSAGE AND RETURN TRUE — reporting success for a reply
+  // that went nowhere, so the crank advanced past a task you had just answered.
+  // Nobody noticed because merely OPENING a task auto-resumed it, which is the
+  // same call that rewrote a five-day-old task's clock and threw it into Today.
+  // The revive belongs on the send: that is the interaction.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25 })
+  const id = await tm.dispatch('go through the repo')
+  tm.setKind(id, 'session')
+  fake.writes.length = 0
+  fake.alive = false                       // the session died with the app
+  assert.equal(tm.answer(id, 'carry on'), true)
+  await waitFor(() => fake.writes.some((w) => w.includes('carry on')), 4000)
+  assert.ok(fake.alive, 'and the session is back')
+  tm.kill(id)
+})

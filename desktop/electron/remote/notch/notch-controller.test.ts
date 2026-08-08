@@ -1426,46 +1426,55 @@ test('the pocket runs demanding first, then what you have worked in', () => {
   assert.equal(pocketOf(h)!.waiting, 1, 'only the demanding one is ever counted at you')
 })
 
-test('an untouched task is NOT in the pocket — it belongs on the wall', () => {
+test('opening a task from the dashboard puts it nowhere and moves nothing', () => {
+  // THE FIELD REPORT: open an old finished task just to read it, and it landed
+  // in the pocket. Two causes, both on this path — it stamped engagement, and
+  // it auto-resumed the session, which rewrote `updatedAt` to now and threw the
+  // task into Today at the top of the wall saying "Working". Reading is not
+  // interacting.
   const h = setup()
-  put(h, makeTask({ id: 'never', state: 'done', kind: 'oneoff', name: 'Never opened' }))
+  const old = Date.now() - 5 * 24 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'ancient', state: 'done', kind: 'session', name: 'Five days ago', createdAt: old, updatedAt: old }))
+  h.client.fire({ type: 'focusTask', id: 'ancient' })
+  h.client.fire({ type: 'closeStage' })
   h.client.fire({ type: 'pocketOpen' })
-  assert.equal((pocketOf(h)?.slots ?? []).length, 0,
-    'the pocket is what you have in hand, not everything that exists')
+  assert.ok(!(pocketOf(h)?.slots ?? []).some((sl) => sl.id === 'ancient'), 'not in the pocket')
+  assert.equal(h.tasks.get('ancient')!.updatedAt, old, 'and its clock was not touched')
+  assert.equal((h.calls.opened ?? []).length, 0, 'no auto-resume — that is what moved the clock')
 })
 
 // ── ordering: what YOU touched, not what happened ──────────────────────────
 
-test('the crank orders by your last touch, not by agent activity', () => {
+test('the pocket orders by when a task actually moved', () => {
   const h = setup()
-  const old = Date.now() - 60 * 60_000
-  put(h, makeTask({ id: 'a', state: 'needs-user', name: 'A', createdAt: old, question: { text: 'q' } }))
-  put(h, makeTask({ id: 'b', state: 'needs-user', name: 'B', createdAt: old + 1000, question: { text: 'q' } }))
-  // A churns tool calls. That is not evidence you care about it.
+  const t0 = Date.now()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A', updatedAt: t0 - 5 * 60_000 }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B', updatedAt: t0 - 60_000 }))
+  h.client.fire({ type: 'pocketOpen' })
+  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['b', 'a'])
+
+  // A moves for real — a message went in, or the agent answered.
+  h.client.fire({ type: 'pocketRelease' })
   h.tasks.get('a')!.updatedAt = Date.now()
   h.events.emit('updated', h.tasks.get('a')); h.flush()
   h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(h.client.last('pocket')!.data.slots.map((s) => s.id), ['b', 'a'])
-
-  // Now YOU open A. It goes to the front.
-  h.client.fire({ type: 'focusTask', id: 'a' })
-  h.client.fire({ type: 'closeStage' })
-  h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(h.client.last('pocket')!.data.slots.map((s) => s.id), ['a', 'b'])
+  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['a', 'b'])
 })
 
-test('the order is held while you walk it, and released when you leave', () => {
+test('the order is held while you walk it, and released when you close it', () => {
   const h = setup()
-  const old = Date.now() - 60 * 60_000
-  put(h, makeTask({ id: 'a', state: 'needs-user', name: 'A', createdAt: old, question: { text: 'q' } }))
-  put(h, makeTask({ id: 'b', state: 'needs-user', name: 'B', createdAt: old + 1000, question: { text: 'q' } }))
+  const t0 = Date.now()
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', name: 'A', updatedAt: t0 - 5 * 60_000 }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', name: 'B', updatedAt: t0 - 60_000 }))
   h.client.fire({ type: 'pocketOpen' })
-  h.client.fire({ type: 'pocketMove', delta: 1 })   // reach past B to A — this TOUCHES A
-  assert.deepEqual(h.client.last('pocket')!.data.slots.map((s) => s.id), ['b', 'a'],
-    'a live re-sort here would put A first and yank the list out from under you')
-  h.client.fire({ type: 'closeStage' })             // leaving releases the hold
+  h.client.fire({ type: 'pocketMove', delta: 1 })     // walking — order now held
+  h.tasks.get('a')!.updatedAt = Date.now()            // A moves underneath you
+  h.events.emit('updated', h.tasks.get('a')); h.flush()
+  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['b', 'a'],
+    'the list you are reading must not reshuffle under your thumb')
+  h.client.fire({ type: 'pocketRelease' })
   h.client.fire({ type: 'pocketOpen' })
-  assert.deepEqual(h.client.last('pocket')!.data.slots.map((s) => s.id), ['a', 'b'])
+  assert.deepEqual(pocketOf(h)!.slots.map((sl) => sl.id), ['a', 'b'], 'released on close')
 })
 
 // ── presence: the one thing allowed to open the surface ────────────────────
@@ -1484,8 +1493,8 @@ test('work finishing while you are AT the machine never takes your screen', () =
 test('coming back opens the surface on what is yours', () => {
   const h = setup()
   h.presence.away()
-  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor', createdAt: Date.now() - 90_000 }))
-  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Blocked', createdAt: Date.now() - 30_000, question: { text: 'which?' } }))
+  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor', updatedAt: Date.now() - 90_000 }))
+  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Blocked', updatedAt: Date.now() - 30_000, question: { text: 'which?' } }))
   h.presence.wake()
   h.flush()
   assert.equal(h.client.last('showTask')!.task.id, 'q', 'newest touch first')
