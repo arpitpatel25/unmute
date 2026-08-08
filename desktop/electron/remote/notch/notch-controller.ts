@@ -415,7 +415,7 @@ export class NotchController {
     on('userLeft', (e) => this.onUserLeft((e as { reason: 'blur' | 'screenshot' | 'space' }).reason))
     on('userReturned', () => this.onUserReturned())
     on('pocketMove', (e) => this.onPocketMove(e as { delta?: number; to?: number }))
-    on('pocketOpen', () => { this.setPocketMode('open'); this.reconcile() })
+    on('pocketOpen', () => { this.pocketAt = 0; this.setPocketMode('open'); this.reconcile() })
     on('pocketRelease', () => {
       // CLOSING THE POCKET RELEASES ITS ORDER — the next open re-sorts to
       // whatever has actually moved since. Expanding a card out of the pocket
@@ -442,6 +442,7 @@ export class NotchController {
       // open, `answer` sends nothing and the task stays blocked — cranking to
       // the next task there would carry the user away from the very question
       // they still have to go answer, and away from the card explaining why.
+      this.muted.delete(id)   // speaking to it ends any mute episode
       const landed = this.deps.answer(id, text)
       if (wasBlocking && landed) this.advanceAfterAnswer(id)
       else this.scheduleReconcile()
@@ -940,7 +941,10 @@ export class NotchController {
   private setPocketMode(mode: PocketMode): void {
     if (this.pocketMode === mode) return
     this.pocketMode = mode
-    if (mode === 'open') this.pocketAt = 0     // opening lands on the newest
+    // DELIBERATELY DOES NOT RESET THE INDEX. It used to land on 0 on every
+    // open, which is right for a FRESH open (the `pocketOpen` handler resets
+    // there) and wrong for coming back from an expanded card: you left from
+    // slot 3, and returning put you on slot 1 every single time.
     this.applyVoiceTarget()
     this.sendPocket()
   }
@@ -1019,6 +1023,7 @@ export class NotchController {
     // and re-find your place. The pocket is where you were; it is where you
     // return. Index deliberately kept, not reset.
     this.cameFromPocket = this.pocketMode === 'open'
+    this.muted.delete(id)          // opening it IS asking to hear about it again
     this.engaged = 'task'
     this.setPocketMode('closed')
     this.setFocus(id)
@@ -1094,8 +1099,23 @@ export class NotchController {
    * last demanding task lands on the seam and says so, and everything past the
    * seam is today's work rather than the same three tasks again.
    */
-  private onNext(): void { this.crankStep(1) }
-  private onPrev(): void { this.crankStep(-1) }
+  /**
+   * WHERE `next` GOES DEPENDS ON WHAT IS ON SCREEN.
+   *
+   * With the pocket open it is the carousel — the same movement the ‹ › on the
+   * card make. It used to run the crank regardless, which promoted the surface
+   * from the small card to the full task panel: you pressed next expecting the
+   * second card and got the whole terminal. A control must not change what kind
+   * of thing it is doing based on nothing the user did.
+   */
+  private onNext(): void {
+    if (this.pocketMode === 'open') { this.onPocketMove({ delta: 1 }); return }
+    this.crankStep(1)
+  }
+  private onPrev(): void {
+    if (this.pocketMode === 'open') { this.onPocketMove({ delta: -1 }); return }
+    this.crankStep(-1)
+  }
 
   private crankStep(delta: number): void {
     this.holdOrder()
@@ -1143,7 +1163,13 @@ export class NotchController {
     this.focusedId = id
     this.deps.focus(id) // focus IS the voice address (consent model)
     if (id) {
-      this.muted.delete(id) // interacting with a task ends its mute episode
+      // MUTE IS NOT CLEARED HERE, and that was the bug behind "I closed them and
+      // the bar still says three". Closing a finished thread mutes it, then the
+      // return to the pocket called applyVoiceTarget → setFocus → and this line
+      // un-muted the very task you had just dismissed, so it went straight back
+      // to demanding. Aiming the carousel at something is not asking to hear
+      // about it again. A mute now ends where it should: when you open the task
+      // or send it something, or when its state changes.
       // DELIBERATELY DOES NOT COUNT AS ENGAGEMENT. Every route into a task
       // passes through here, including the carousel, so recording it made
       // browsing re-rank the list you were browsing — and the slot under your

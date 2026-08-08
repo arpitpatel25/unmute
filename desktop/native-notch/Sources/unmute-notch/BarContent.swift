@@ -152,7 +152,13 @@ struct BarContent: Equatable {
         if m.pocket.waiting > 0, !isExpandedState(state), !m.pocket.isOpen {
             let n = m.pocket.waiting
             var c = BarContent(dot: .needsUser,
-                               left: n == 1 ? "1 in your pocket" : "\(n) in your pocket",
+                               // SAY WHAT THE NUMBER COUNTS. It reads
+                               // `pocket.waiting` — things actually waiting on
+                               // you — but still called them "in your pocket",
+                               // which is the larger list and includes work you
+                               // have already dealt with. Two different sets
+                               // sharing one sentence.
+                               left: n == 1 ? "1 waiting on you" : "\(n) waiting on you",
                                emphasis: .status,
                                alarm: .needsUser)
             // Hovering names the one your voice would reach — the only question

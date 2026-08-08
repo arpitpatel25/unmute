@@ -1746,3 +1746,42 @@ test('the count and the crank can never disagree', () => {
     'the number on the bar is the number of cards you can actually reach')
   assert.ok(!p.slots.some((s) => s.id === 'ghost'))
 })
+
+test('coming back from an expanded card returns to the slot you left from', () => {
+  const h = setup()
+  for (const id of ['a', 'b', 'c']) {
+    put(h, makeTask({ id, state: 'needs-user', name: id.toUpperCase(), question: { text: 'q' } }))
+  }
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketMove', delta: 2 })          // stand on slot 3
+  const standingOn = pocketOf(h)!.slots[pocketOf(h)!.at].id
+  h.client.fire({ type: 'pocketExpand' })
+  h.client.fire({ type: 'closeStage' })
+  const p = pocketOf(h)!
+  assert.equal(p.mode, 'open')
+  assert.equal(p.slots[p.at].id, standingOn, 'it used to land on slot 1 every time')
+})
+
+test('next with the pocket open moves the carousel, it does not open the task', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'needs-user', name: 'A', question: { text: 'q' } }))
+  put(h, makeTask({ id: 'b', state: 'needs-user', name: 'B', question: { text: 'q' } }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'next' })
+  assert.equal(pocketOf(h)!.mode, 'open', 'still the card, not the full panel')
+  assert.equal(pocketOf(h)!.at, 1, 'and it moved')
+})
+
+test('a finished thread you closed stays quiet — returning to the pocket must not un-mute it', () => {
+  // The count kept saying three after all three had been read and closed:
+  // closing muted the task, then the return to the pocket ran setFocus, which
+  // cleared the mute, and it went straight back to demanding.
+  const h = setup()
+  put(h, makeTask({ id: 'x', state: 'done', kind: 'session', name: 'Seen' }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketExpand' })
+  h.client.fire({ type: 'closeStage' })
+  assert.equal(pocketOf(h)!.waiting, 0, 'nothing is waiting on you any more')
+  assert.ok(pocketOf(h)!.slots.some((s) => s.id === 'x'), 'but it is still reachable')
+  assert.equal(h.client.last('setState')!.attention, 0)
+})
