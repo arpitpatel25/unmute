@@ -202,6 +202,9 @@ struct CockpitData: Codable {
     let hiddenTotal: Int?
     /// True while "show all" is on for this visit.
     let showingAll: Bool?
+    /// Is the 24-hour Today filter on? A filter over the whole wall, NOT the
+    /// per-group fold — two controls, two questions, two words.
+    let todayOnly: Bool?
     let queue: [QueueItemP]
     let oneoffs: [OneoffP]
     let unmuteSkills: [SkillP]
@@ -363,6 +366,7 @@ enum Event {
     case prev                                      // crank backward
     case focusTask(id: String)                     // card clicked → voice address
     case showAll(group: String?, on: Bool)         // reveal folded cards (nil = whole wall)
+    case today(on: Bool)                           // 24h filter over the whole wall
     case closeStage                                // Stage esc → back to wall
     /// The user left Unmute — another app came forward, so an expanded task
     /// goes to the pocket instead of staying in their way.
@@ -424,6 +428,7 @@ enum Event {
         case .next: return ["type": "next"]
         case .prev: return ["type": "prev"]
         case .focusTask(let id): return ["type": "focusTask", "id": id]
+        case let .today(on): return ["type": "today", "on": on]
         case .showAll(let group, let on):
             var d: [String: Any] = ["type": "showAll", "on": on]
             if let g = group { d["group"] = g }

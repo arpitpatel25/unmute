@@ -14,7 +14,7 @@ struct WallView: View {
     let topInset: CGFloat
 
     private var data: CockpitData {
-        model.cockpit ?? CockpitData(groups: [], hiddenTotal: 0, showingAll: false,
+        model.cockpit ?? CockpitData(groups: [], hiddenTotal: 0, showingAll: false, todayOnly: false,
                                      queue: [], oneoffs: [],
                                      unmuteSkills: [], skills: [], shelf: [],
                                      digest: nil, doorbell: true,
@@ -73,11 +73,35 @@ struct WallView: View {
     private var header: some View {
         HStack(spacing: 10) {
             SectionLabel(text: "Orchestrator")
+            // TODAY — a straight 24-hour filter over the wall. Grouping and
+            // order are untouched; older cards simply are not there. It is not
+            // the fold beside it: that unfolds one group's stale tail, this
+            // hides everything old everywhere, and the two must never be
+            // mistaken for each other.
+            //
+            // While it is on the fold is deliberately absent. A filter with an
+            // escape hatch is just a fold wearing a filter's name — turning
+            // Today off IS the way back.
+            Button { model.emit(.today(on: !(data.todayOnly ?? false))) } label: {
+                Text("Today")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundColor(data.todayOnly == true ? Theme.text : Theme.textDim)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(data.todayOnly == true ? Theme.raised : Color.clear))
+                    .overlay(RoundedRectangle(cornerRadius: 6)
+                        .stroke(data.todayOnly == true ? Theme.accent.opacity(0.55) : Theme.hairline,
+                                lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .help("Only what has moved in the last 24 hours")
             Spacer(minLength: 0)
             // The wall-level way back. Deliberately not dependent on any group
             // rendering its own header — that dependency is what made folded
             // work unreachable.
-            if data.showingAll == true {
+            if data.todayOnly == true {
+                EmptyView()
+            } else if data.showingAll == true {
                 QuietButton(label: "Hide older everywhere") {
                     model.emit(.showAll(group: nil, on: false))
                 }

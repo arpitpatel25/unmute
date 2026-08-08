@@ -180,6 +180,9 @@ export interface CockpitPayload {
   /** Cards folded away across the whole wall — the reveal control keys off this
    *  so it never depends on one group happening to render. */
   hiddenTotal?: number
+  /** Is the dashboard's Today filter on? A straight 24h filter over the wall —
+   *  NOT the per-group "show all" fold, which answers a different question. */
+  todayOnly?: boolean
   /** True while "show all" is on for this visit to the cockpit. */
   showingAll?: boolean
   queue: QueueItemP[]
@@ -320,6 +323,7 @@ export type NotchEvent =
   | { type: 'openProject'; path: string; name: string }
   | { type: 'clearFinished' }
   | { type: 'showAll'; group?: string; on: boolean }
+  | { type: 'today'; on: boolean }
   | { type: 'digestDismiss' }
   | { type: 'bellToggle' }
   | { type: 'offerAccept'; newTaskId: string }

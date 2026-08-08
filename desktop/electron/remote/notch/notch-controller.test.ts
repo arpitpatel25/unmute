@@ -1593,3 +1593,48 @@ test('a finished task headlines what it produced, not what it was doing', () => 
                        result: { summary: 'Read the README and the design docs.' } })
   assert.equal(headlineFor(t), 'Read the README and the design docs.')
 })
+
+// ── the dashboard's Today filter ────────────────────────────────────────────
+
+test('Today hides what has not moved in 24h, and keeps grouping intact', async () => {
+  const h = setup()
+  const old = Date.now() - 30 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'fresh', state: 'done', kind: 'session', group: 'A', name: 'Fresh', updatedAt: Date.now() }))
+  put(h, makeTask({ id: 'stale', state: 'done', kind: 'session', group: 'A', name: 'Stale', updatedAt: old, createdAt: old }))
+  h.client.fire({ type: 'openDashboard' })
+  await new Promise((r) => setTimeout(r, 10)); h.flush()
+  const all = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards).map((c) => c.id)
+  assert.ok(all.includes('stale'), 'off by default — the wall still shows everything')
+
+  h.client.fire({ type: 'today', on: true })
+  h.flush()
+  const cp = h.client.last('setCockpit')!.data
+  const ids = cp.groups.flatMap((g) => g.cards).map((c) => c.id)
+  assert.ok(ids.includes('fresh'))
+  assert.ok(!ids.includes('stale'), 'older than 24h is gone, not folded')
+  assert.equal(cp.todayOnly, true)
+})
+
+test('Today never hides something waiting on you', () => {
+  const h = setup()
+  const old = Date.now() - 30 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'oldask', state: 'needs-user', name: 'Old blocked', updatedAt: old, createdAt: old, question: { text: 'q' } }))
+  h.client.fire({ type: 'openDashboard' })
+  h.client.fire({ type: 'today', on: true })
+  h.flush()
+  const ids = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards).map((c) => c.id)
+  assert.ok(ids.includes('oldask'), 'a filter that can hide a blocked task is a way to lose work')
+})
+
+test('a group emptied by Today disappears rather than leaving a bare heading', () => {
+  const h = setup()
+  const old = Date.now() - 30 * 60 * 60 * 1000
+  put(h, makeTask({ id: 'a', state: 'done', kind: 'session', group: 'Gone', name: 'A', updatedAt: old, createdAt: old }))
+  put(h, makeTask({ id: 'b', state: 'done', kind: 'session', group: 'Here', name: 'B', updatedAt: Date.now() }))
+  h.client.fire({ type: 'openDashboard' })
+  h.client.fire({ type: 'today', on: true })
+  h.flush()
+  const names = h.client.last('setCockpit')!.data.groups.map((g) => g.name)
+  assert.ok(!names.includes('Gone'))
+  assert.ok(names.includes('Here'))
+})

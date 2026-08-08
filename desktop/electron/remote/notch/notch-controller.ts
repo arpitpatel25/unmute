@@ -237,6 +237,9 @@ const DEMAND_WINDOW_MS = 2 * 60 * 60 * 1000
  *  desk, not your week — and a carousel you cannot exhaust is a dashboard you
  *  operate one card at a time. Age is only a backstop so a quiet day does not
  *  leave yesterday lying around. */
+/** The dashboard's Today window. */
+const TODAY_MS = 24 * 60 * 60 * 1000
+
 const POCKET_MAX = 8
 const POCKET_IDLE_MS = 12 * 60 * 60 * 1000
 
@@ -300,6 +303,9 @@ export class NotchController {
    * A control in a group header must act on that group.
    */
   private expandedGroups = new Set<string>()
+  /** Dashboard "Today" filter. Off by default — the wall's default answer to
+   *  "what is going on" is still everything it would otherwise show. */
+  private todayOnly = false
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
   private demandTimer: ReturnType<typeof setInterval> | null = null
   /** id → the last `demanding()` answer we rendered, so the tick can notice a
@@ -445,6 +451,15 @@ export class NotchController {
     on('clearFinished', () => { this.clearedAt = Date.now(); this.reconcile() })
     // Temporary, and deliberately not persisted: "show all" lasts as long as
     // this look at the cockpit, then the wall goes back to being about now.
+    on('today', (e) => {
+      this.todayOnly = (e as { on: boolean }).on
+      // A FILTER WITH AN ESCAPE HATCH IS A FOLD. Turning Today OFF is the way
+      // to see everything; leaving per-group "show all" live inside it would
+      // let a group quietly put back exactly what the filter took out.
+      if (this.todayOnly) this.expandedGroups.clear()
+      log.event('today-filter', { on: this.todayOnly })
+      this.reconcile()
+    })
     on('showAll', (e) => {
       const { group, on } = e as { group?: string; on?: boolean }
       // No group named ⇒ the wall-level control: everything, or nothing.
@@ -1490,7 +1505,20 @@ export class NotchController {
     // arbitrary: a task touched five minutes ago but created three weeks ago
     // promoted its whole group to the top and then sat at the BOTTOM of it, so
     // the group said "something here is fresh" and the cards never showed which.
+    // TODAY: hide anything that has not moved in 24 hours.
+    //
+    // A straight filter, not a fold — grouping, ordering and every card are
+    // untouched; the old ones simply are not there. That is the difference from
+    // "show all", which unfolds ONE group's stale tail and is a different
+    // control answering a different question. This one already existed in the
+    // React wall (OrchestrateWall's `Last 24h / All`); the Swift cockpit, the
+    // one actually in use, never got it.
+    //
+    // ANYTHING WAITING ON YOU IGNORES IT. A filter that can hide a blocked task
+    // is a way to lose work, not a way to focus — the same reason UNFOLDABLE
+    // exists for the fold.
     const wall = tasks.filter((t) => this.notchVisible(t, now))
+      .filter((t) => !this.todayOnly || this.demanding(t) || now - (t.updatedAt ?? 0) < TODAY_MS)
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     const byGroup = new Map<string, TaskLite[]>()
     for (const t of wall) {
@@ -1525,7 +1553,10 @@ export class NotchController {
       return { cards: kept.map((t) => this.toCard(t, now, qpos)), hidden: ts.length - kept.length, expanded }
     }
 
+    // An EMPTY GROUP is not a group. Under Today a whole group can lose every
+    // card, and a bare heading over nothing reads as something failing to load.
     const groups = ranked.map(([name, ts]) => ({ name, ...collapse(name, ts) }))
+      .filter((g) => g.cards.length > 0 || g.hidden > 0)
     // A WALL-LEVEL total, so the way back never depends on one particular group
     // rendering its header. Without this, folding every card in every group
     // left the reveal control nowhere on screen and the tasks unreachable.
@@ -1553,6 +1584,7 @@ export class NotchController {
     return {
       groups,
       hiddenTotal,
+      todayOnly: this.todayOnly,
       showingAll: groups.length > 0 && groups.every((x) => x.expanded),
       queue,
       oneoffs,
