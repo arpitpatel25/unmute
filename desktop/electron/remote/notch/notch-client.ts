@@ -63,6 +63,10 @@ export interface PocketSlotP {
 
 export interface PocketP {
   mode: PocketMode
+  /** Which key routes to the pocket — 'fn' or 'right-option'. The card names
+   *  it rather than saying "your voice", because RAW DICTATION NEVER LANDS
+   *  HERE: it goes to the cursor. Saying "voice" claims both. */
+  remoteKey?: 'fn' | 'right-option'
   /** How many slots are demanding. THE ONLY NUMBER THE CLOSED SURFACE MAY SHOW.
    *  `slots.length` counted everything you had merely worked in, so a quiet
    *  pocket announced itself as though work were waiting. */

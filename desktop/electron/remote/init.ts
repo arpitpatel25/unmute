@@ -2611,6 +2611,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         setNote: (id, note) => mgr.setNote(id, note),
         focus: (id) => { orchestrateFocusId = id },
         opened: (id) => mgr.opened(id),
+        remoteKey: () => getRemoteKey(),
         // terminal — same as remote:get-output/terminal-input/terminal-resize
         getOutput: (id) => mgr.getOutput(id),
         sendInput: (id, data) => mgr.sendInput(id, data),

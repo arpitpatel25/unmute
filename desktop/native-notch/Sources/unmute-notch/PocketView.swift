@@ -103,11 +103,17 @@ struct PocketCard: View {
 
     @ViewBuilder private var taskFace: some View {
         header
+        // TWO LINES OF ROOM, ALWAYS — reserved whether or not they are used.
+        //
+        // This sized itself to its content, so a one-line ask and a two-line
+        // ask produced cards of different heights and the rail beneath them sat
+        // in two different places. Cranking through, the ‹ › you were aiming at
+        // moved under the pointer between cards. Controls have to be somewhere
+        // you can learn; a little unused space is a cheap price for that.
         Text(slot?.ask ?? "Waiting on you.")
             .font(.system(size: 12)).foregroundColor(Theme.textDim)
             .lineLimit(2).truncationMode(.tail)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 31, maxHeight: 31, alignment: .topLeading)
     }
 
     // THE SEAM CARD LIVED HERE and it is gone. It marked where "waiting on
@@ -188,7 +194,7 @@ struct PocketCard: View {
             if listening { Circle().fill(Theme.cError).frame(width: 6, height: 6) }
             Text(listening
                  ? "listening → \(slot?.title ?? "nothing")"
-                 : "your voice goes to \(slot?.title ?? "nothing")")
+                 : "\(pocket.routeKeyLabel) goes to \(slot?.title ?? "nothing")")
                 .font(.system(size: 10.5, design: .monospaced))
                 .foregroundColor(listening ? Theme.text : Theme.textFaint)
                 .lineLimit(1).truncationMode(.tail)

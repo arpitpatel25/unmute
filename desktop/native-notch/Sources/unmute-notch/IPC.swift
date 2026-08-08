@@ -65,9 +65,16 @@ struct PocketP: Codable, Equatable {
     /// pocket holding two finished tasks announced "3 in your pocket" and made
     /// a quiet shelf look like a queue.
     let waiting: Int
+    /// Which key routes here — "fn" or "right-option".
+    let remoteKey: String?
     let slots: [PocketSlotP]
 
-    static let empty = PocketP(mode: "closed", at: 0, waiting: 0, slots: [])
+    static let empty = PocketP(mode: "closed", at: 0, waiting: 0, remoteKey: nil, slots: [])
+
+    /// How the routing key is written on the card. RAW DICTATION NEVER LANDS
+    /// HERE — it goes to the cursor — so "your voice" claimed a key it does not
+    /// own. Name the one that actually routes.
+    var routeKeyLabel: String { remoteKey == "fn" ? "Fn" : "Right ⌥" }
     var taskCount: Int { slots.count }
     var current: PocketSlotP? { at >= 0 && at < slots.count ? slots[at] : nil }
     var isOpen: Bool { mode == "open" && !slots.isEmpty }

@@ -96,6 +96,9 @@ export interface NotchControllerDeps {
    *  session whose PTY the quit switch closed — see TaskManager.opened. Optional
    *  so a host that doesn't wire it simply keeps the manual Resume button. */
   opened?(id: string): void
+  /** Which key the user has bound to Remote — whichever of fn / right-option
+   *  dictation did NOT take. The pocket names it instead of saying "voice". */
+  remoteKey?(): 'fn' | 'right-option'
   // terminal
   getOutput(id: string): string
   sendInput(id: string, data: string): void
@@ -924,7 +927,10 @@ export class NotchController {
     const slots = this.crankSlots()
     this.clampPocket(slots.length)
     const waiting = slots.filter((sl) => sl.demanding).length
-    const data: PocketP = { mode: this.pocketMode, at: this.pocketAt, waiting, slots }
+    const data: PocketP = {
+      mode: this.pocketMode, at: this.pocketAt, waiting, slots,
+      remoteKey: this.deps.remoteKey?.() ?? 'right-option',
+    }
     const json = JSON.stringify(data)
     if (json === this.lastPocketJson) return
     this.lastPocketJson = json
