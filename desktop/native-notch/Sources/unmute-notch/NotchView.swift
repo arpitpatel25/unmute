@@ -100,12 +100,23 @@ struct NotchView: View {
 
     @ViewBuilder private var surface: some View {
         if expanded {
-            GlassSurface(
-                shape: shape,
-                state: model.state,
-                rimHighlight: .white,
-                rimWidth: 1
-            )
+            // ONE MATERIAL, EVERYWHERE. The large surfaces used to be a separate
+            // one — Theme.plane, a dark blue-grey, under a white 1pt rim — while
+            // the bar and the pocket are pure black because they continue the
+            // hardware. Side by side that reads as two apps: the pocket sits in
+            // true black with its cards floating on it, and the dashboard is a
+            // grey panel in a white outline.
+            //
+            // Black is also what makes the cards work. `Theme.raised` is white
+            // at 5.5%; on black it reads as the soft grey-black the pocket has,
+            // and on Theme.plane it is nearly invisible. The card treatment was
+            // always designed against this ground.
+            //
+            // Edge definition is the drop shadow's job now (GlassSurface's own
+            // note says as much) plus the faintest hairline — enough to hold the
+            // corner against a black wallpaper, far below reading as a border.
+            shape.fill(Color.black)
+                .overlay(shape.stroke(Theme.hairlineSoft, lineWidth: 0.5))
         } else if model.content.resting {
             restingNub
         } else if model.state == .dormant {
