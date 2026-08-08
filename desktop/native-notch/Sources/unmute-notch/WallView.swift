@@ -12,11 +12,15 @@ import SwiftUI
 struct WallView: View {
     @ObservedObject var model: NotchModel
     let topInset: CGFloat
+    /// The row awaiting confirmation, if any. Import puts a card on the wall
+    /// that was not there a moment ago, so a stray click in a scrolling list
+    /// must not do it.
+    @State private var confirmImport: ImportableP? = nil
 
     private var data: CockpitData {
         model.cockpit ?? CockpitData(groups: [], hiddenTotal: 0, showingAll: false, todayOnly: false,
                                      queue: [], oneoffs: [],
-                                     unmuteSkills: [], skills: [], shelf: [],
+                                     unmuteSkills: [], skills: [], shelf: [], importable: [],
                                      digest: nil, doorbell: true,
                                      routeOffer: nil, tmuxAvailable: false)
     }
@@ -68,6 +72,15 @@ struct WallView: View {
             .padding(.bottom, 60)
         }
         .scrollEdge(topInset + 18)
+        .alert("Import this session?",
+               isPresented: Binding(get: { confirmImport != nil },
+                                    set: { if !$0 { confirmImport = nil } }),
+               presenting: confirmImport) { row in
+            Button("Import") { model.emit(.importSession(sessionId: row.sessionId)); confirmImport = nil }
+            Button("Cancel", role: .cancel) { confirmImport = nil }
+        } message: { row in
+            Text("\(row.title) — from \(row.project). It keeps its full history and nothing starts running until you speak to it.")
+        }
     }
 
     private var header: some View {
@@ -316,6 +329,44 @@ struct WallView: View {
                                         ? "Show less" : "\(data.skills.count - 6) more…") {
                                 model.skillsExpanded.toggle()
                             }
+                        }
+                    }
+                }
+                // OTHER CLAUDE CODE SESSIONS — the import rail.
+                //
+                // Threads the user already has running in a terminal somewhere.
+                // Sole purpose: adopt one. A row that is already a task never
+                // appears, so an empty rail means there is nothing to import
+                // and it draws nothing at all.
+                if let rows = data.importable, !rows.isEmpty {
+                    railSection("Other Claude Code sessions · \(rows.count)") {
+                        ForEach(rows, id: \.sessionId) { r in
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(r.title).font(Theme.fBody)
+                                        .foregroundColor(Theme.text).lineLimit(1)
+                                    Text("\(r.project) · \(r.age)")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(Theme.textFaint).lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                                // Confirms before adopting. Import is cheap and
+                                // reversible, but it puts a card on the wall
+                                // that was not there a second ago, and a list
+                                // you scroll should not act on a stray click.
+                                Button(action: { confirmImport = r }) {
+                                    Text("Import")
+                                        .font(.system(size: 10.5, weight: .medium))
+                                        .foregroundColor(Theme.textDim)
+                                        .padding(.horizontal, 8).padding(.vertical, 3)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.raised))
+                                        .overlay(RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Theme.hairline, lineWidth: 0.5))
+                                }
+                                .buttonStyle(.plain)
+                                .help("Bring this session onto the wall — it keeps its history and starts nothing")
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 4)
                         }
                     }
                 }

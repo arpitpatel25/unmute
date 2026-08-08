@@ -2892,6 +2892,81 @@ export class TaskManager extends EventEmitter {
    *  warm-kill timer — the whole point is that the session now outlives idle
    *  windows. Demotion re-arms lifecycle on the next park. Persists to meta so
    *  the species survives restarts; emits 'updated' for the UIs. */
+  /**
+   * ADOPT A CLAUDE CODE CLI SESSION THE USER ALREADY HAS.
+   *
+   * A card for a thread that exists in someone's terminal. It does NOT start
+   * anything: no PTY, no `--resume`, no process. The session stays exactly
+   * where it is until the user sends it something, and then the ordinary
+   * revive-on-send path brings it back by id (see `answer`).
+   *
+   * That restraint is the whole design. Importing twenty sessions must not
+   * spawn twenty REPLs — and importing is reading, not interacting, which is
+   * the rule the rest of this surface now runs on.
+   *
+   * `state: 'done'` because that is the truth: the thread is not working, its
+   * turn ended some time ago in another window. It is a THREAD, so a finished
+   * one is a checkpoint and the notch will offer it — which is right, since you
+   * imported it precisely to pick it back up.
+   */
+  async adoptClaudeCliSession(input: {
+    sessionId: string
+    title: string
+    cwd: string
+    lastActivityAt: number
+    group?: string
+  }): Promise<string | null> {
+    for (const t of this.tasks.values()) {
+      if (t.sessionId === input.sessionId) return t.id   // already ours
+    }
+    const id = randomUUID()
+    const dir = join(this.opts.baseDir, this.opts.userKey ?? 'local', id)
+    const tlog = log.child({ taskId: id })
+    try {
+      await fs.mkdir(dir, { recursive: true })
+    } catch (e) {
+      tlog.error('adopt-cli-session mkdir failed', { error: (e as Error).message })
+      return null
+    }
+    const now = this.clock()
+    const task = {
+      id,
+      intent: input.title,
+      name: input.title,
+      sessionId: input.sessionId,
+      agent: 'claude' as const,
+      // A thread the user owns elsewhere is persistent by nature: never
+      // idle-killed, never auto-purged.
+      kind: 'session' as const,
+      state: 'done' as const,
+      ...(input.group ? { group: input.group } : {}),
+      // The REAL last interaction, not now. Stamping `now` would shove every
+      // import to the top of the wall and into Today, which is the same
+      // "reading rewrote its history" fault the open path just had.
+      createdAt: input.lastActivityAt,
+      updatedAt: input.lastActivityAt,
+      cwd: input.cwd,
+      home: dir,
+      statusPath: join(dir, 'status.json'),
+      recipeScratchPath: join(dir, 'recipe.json'),
+      lastMtimeMs: 0,
+      lastHeartbeatMs: input.lastActivityAt,
+      mode: 'managed' as const,
+    } as Task
+    this.tasks.set(id, task)
+    await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
+      id, intent: task.intent, name: task.name, sessionId: input.sessionId,
+      kind: 'session', agent: 'claude', state: 'done',
+      ...(input.group ? { group: input.group } : {}),
+      createdAt: task.createdAt, updatedAt: task.updatedAt,
+      cwd: input.cwd, mode: 'managed', importedFromCli: true,
+    }, null, 2)).catch((e) => tlog.warn('adopt-cli-session meta write failed', { error: (e as Error).message }))
+
+    tlog.event('cli-session-adopted', { sessionId: input.sessionId, cwd: input.cwd, group: input.group ?? null })
+    this.emit('created', task)
+    return id
+  }
+
   setKind(id: string, kind: 'oneoff' | 'session'): void {
     const task = this.tasks.get(id)
     if (!task || task.kind === kind) return

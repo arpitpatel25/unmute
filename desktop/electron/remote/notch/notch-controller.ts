@@ -99,6 +99,11 @@ export interface NotchControllerDeps {
   /** Which key the user has bound to Remote — whichever of fn / right-option
    *  dictation did NOT take. The pocket names it instead of saying "voice". */
   remoteKey?(): 'fn' | 'right-option'
+  /** CLI sessions on this machine that are not tasks yet. Refreshed with the
+   *  rails, not on every reconcile — it touches the filesystem. */
+  listImportable?(): Promise<Array<{ sessionId: string; title: string; project: string; lastActivityAt: number }>>
+  /** Adopt one. Creates a card and starts nothing. */
+  importSession?(sessionId: string): Promise<boolean>
   // terminal
   getOutput(id: string): string
   sendInput(id: string, data: string): void
@@ -294,6 +299,9 @@ export class NotchController {
   private skills: SkillItemP[] = []
   private projects: Array<{ name: string; path: string }> = []
   private proposals: ProposalLite[] = []
+  /** The import rail. Cached like the other rails: it hits the filesystem, and
+   *  reconcile runs on every task event. */
+  private importable: Array<{ sessionId: string; title: string; project: string; lastActivityAt: number }> = []
   private railsTimer: ReturnType<typeof setInterval> | null = null
   /** (surface, task) → last payload sent, so an unchanged detail is not resent. */
   private lastDetailJson = new Map<string, { id: string; json: string }>()
@@ -427,6 +435,7 @@ export class NotchController {
       this.reconcile()
     })
     on('pocketExpand', () => this.onPocketExpand())
+    on('importSession', (e) => void this.onImportSession((e as { sessionId: string }).sessionId))
     on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
     on('mute', (e) => this.onMute((e as { id: string }).id))
     on('answerText', (e) => {
@@ -1094,6 +1103,21 @@ export class NotchController {
     this.reconcile()
   }
 
+  /**
+   * Adopt a CLI session the user already had running elsewhere.
+   *
+   * Drops it from the rail immediately rather than waiting for the next scan —
+   * the row's only purpose was to import it, and a row that has done its job
+   * and is still sitting there invites a second import.
+   */
+  private async onImportSession(sessionId: string): Promise<void> {
+    const ok = await this.deps.importSession?.(sessionId)
+    if (ok) this.importable = this.importable.filter((s) => s.sessionId !== sessionId)
+    log.event('import-session', { sessionId, ok: !!ok })
+    await this.refreshRails(true)
+    this.reconcile()
+  }
+
   private openCockpit(): void {
     this.engaged = 'cockpit'
     // "OPEN DASHBOARD" MEANS THE DASHBOARD, NOT THE TASK YOU CAME FROM.
@@ -1391,10 +1415,12 @@ export class NotchController {
 
   private async refreshRails(force = false): Promise<void> {
     try {
-      const [skills, projects, proposals] = await Promise.all([
+      const [skills, projects, proposals, importable] = await Promise.all([
         this.deps.listSkills(), this.deps.listProjects(), this.deps.listProposals(),
+        this.deps.listImportable?.() ?? Promise.resolve([]),
       ])
       this.skills = skills; this.projects = projects; this.proposals = proposals
+      this.importable = importable
     } catch (e) {
       log.warn('rails refresh failed', { error: (e as Error).message })
     }
@@ -1724,6 +1750,12 @@ export class NotchController {
       unmuteSkills: this.skills.filter((s) => s.origin === 'unmute'),
       skills: this.skills.filter((s) => s.origin !== 'unmute'),
       shelf,
+      importable: this.importable.map((s) => ({
+        sessionId: s.sessionId,
+        title: s.title,
+        project: s.project,
+        age: relativeAge(s.lastActivityAt, now),
+      })),
       digest: this.digestText,
       doorbell: this.deps.getDoorbell(),
       routeOffer: this.routeOffer,

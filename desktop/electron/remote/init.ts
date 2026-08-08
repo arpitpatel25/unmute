@@ -65,6 +65,7 @@ import { Arming } from './cua/lanes/arming'
 import { runAppleScript } from './cua/lanes/applescript'
 import { type RouterCtx } from './cua/router'
 import { Presence } from './presence'
+import { listImportableSessions } from './claude-cli-sessions'
 import { applyAxRegistration } from './ax/register'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
@@ -2616,6 +2617,30 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         focus: (id) => { orchestrateFocusId = id },
         opened: (id) => mgr.opened(id),
         remoteKey: () => getRemoteKey(),
+        // THE IMPORT RAIL. Sessions this machine has and unmute does not.
+        listImportable: async () => {
+          const known = new Set(mgr.list().map((t) => t.sessionId).filter(Boolean) as string[])
+          const rows = await listImportableSessions(known).catch(() => [])
+          return rows.map((r) => ({
+            sessionId: r.sessionId, title: r.title, project: r.project, lastActivityAt: r.lastActivityAt,
+          }))
+        },
+        importSession: async (sessionId) => {
+          const known = new Set(mgr.list().map((t) => t.sessionId).filter(Boolean) as string[])
+          const row = (await listImportableSessions(known).catch(() => []))
+            .find((r) => r.sessionId === sessionId)
+          if (!row) return false
+          // GROUPED BY PROJECT, not by the router. An import has no intent to
+          // route — only a title and a history — and the directory it ran in is
+          // the axis you actually want ("all my unmute-cloud threads"), for
+          // free and with no model. A session earns a semantic group later, if
+          // the router gives it one when you actually work in it.
+          const id = await mgr.adoptClaudeCliSession({
+            sessionId: row.sessionId, title: row.title, cwd: row.cwd,
+            lastActivityAt: row.lastActivityAt, group: row.project,
+          })
+          return !!id
+        },
         // terminal — same as remote:get-output/terminal-input/terminal-resize
         getOutput: (id) => mgr.getOutput(id),
         sendInput: (id, data) => mgr.sendInput(id, data),

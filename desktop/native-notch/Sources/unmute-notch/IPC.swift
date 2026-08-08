@@ -200,6 +200,14 @@ struct SkillP: Codable {
     let origin: String?        // "unmute" for curator-authored
 }
 struct ShelfItemP: Codable { let id: String; let name: String }
+/// A Claude Code CLI session on this machine that unmute does not have. Exists
+/// only to be imported; once it is a task it stops being listed.
+struct ImportableP: Codable, Equatable {
+    let sessionId: String
+    let title: String
+    let project: String
+    let age: String
+}
 struct RouteOfferP: Codable { let newTaskId: String; let altTaskId: String; let altName: String }
 
 /// The whole wall.
@@ -217,6 +225,7 @@ struct CockpitData: Codable {
     let unmuteSkills: [SkillP]
     let skills: [SkillP]
     let shelf: [ShelfItemP]
+    let importable: [ImportableP]?
     let digest: String?        // "while you were away: …" or nil
     let doorbell: Bool
     let routeOffer: RouteOfferP?
@@ -378,6 +387,7 @@ enum Event {
     case focusTask(id: String)                     // card clicked → voice address
     case showAll(group: String?, on: Bool)         // reveal folded cards (nil = whole wall)
     case today(on: Bool)                           // 24h filter over the whole wall
+    case importSession(sessionId: String)          // adopt a CLI session as a task
     case closeStage                                // Stage esc → back to wall
     /// The user left Unmute — another app came forward, so an expanded task
     /// goes to the pocket instead of staying in their way.
@@ -440,6 +450,7 @@ enum Event {
         case .prev: return ["type": "prev"]
         case .focusTask(let id): return ["type": "focusTask", "id": id]
         case let .today(on): return ["type": "today", "on": on]
+        case let .importSession(sessionId): return ["type": "importSession", "sessionId": sessionId]
         case .showAll(let group, let on):
             var d: [String: Any] = ["type": "showAll", "on": on]
             if let g = group { d["group"] = g }

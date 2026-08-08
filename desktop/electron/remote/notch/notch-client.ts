@@ -176,6 +176,15 @@ export interface SkillItemP {
   description?: string
   origin?: 'unmute'
 }
+/** One offerable CLI session. See claude-cli-sessions.ts. */
+export interface ImportableP {
+  sessionId: string
+  title: string
+  project: string
+  /** Relative age of the last interaction, pre-rendered ("2h", "3d"). */
+  age: string
+}
+
 export interface ShelfItemP { id: string; name: string }
 export interface RouteOfferP { newTaskId: string; altTaskId: string; altName: string }
 
@@ -198,6 +207,10 @@ export interface CockpitPayload {
   unmuteSkills: SkillItemP[]
   skills: SkillItemP[]
   shelf: ShelfItemP[]
+  /** Claude Code CLI sessions on this machine that unmute does NOT have.
+   *  The only thing this list is for is importing them; a row that is already
+   *  a task never appears. */
+  importable?: ImportableP[]
   digest: string | null
   doorbell: boolean
   routeOffer: RouteOfferP | null
@@ -333,6 +346,8 @@ export type NotchEvent =
   | { type: 'clearFinished' }
   | { type: 'showAll'; group?: string; on: boolean }
   | { type: 'today'; on: boolean }
+  /** Adopt a CLI session as a task. Creates a card; starts nothing. */
+  | { type: 'importSession'; sessionId: string }
   | { type: 'digestDismiss' }
   | { type: 'bellToggle' }
   | { type: 'offerAccept'; newTaskId: string }
