@@ -83,15 +83,27 @@ struct WallView: View {
             // escape hatch is just a fold wearing a filter's name — turning
             // Today off IS the way back.
             Button { model.emit(.today(on: !(data.todayOnly ?? false))) } label: {
+                // ON HAS TO LOOK ON. The first cut separated the two states by a
+                // 5.5%-white fill and a near-white stroke — and `Theme.accent`
+                // carries no hue at all (white at 93%), by design, because the
+                // primary action is meant to be quiet. On a black ground that
+                // left "filtering" and "not filtering" looking alike, which is
+                // the one thing a filter must never do: you cannot trust a wall
+                // if you cannot tell whether something is being hidden from it.
+                //
+                // Teal, because it is already the app's affirmative — armed on
+                // the pill, edited on the stage, new in the skill list. A new
+                // hue for one toggle would be a second vocabulary.
+                let on = data.todayOnly == true
                 Text("Today")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundColor(data.todayOnly == true ? Theme.text : Theme.textDim)
+                    .font(.system(size: 10.5, weight: on ? .semibold : .medium))
+                    .foregroundColor(on ? Theme.cReady : Theme.textDim)
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(RoundedRectangle(cornerRadius: 6)
-                        .fill(data.todayOnly == true ? Theme.raised : Color.clear))
+                        .fill(on ? Theme.cReady.opacity(0.18) : Color.clear))
                     .overlay(RoundedRectangle(cornerRadius: 6)
-                        .stroke(data.todayOnly == true ? Theme.accent.opacity(0.55) : Theme.hairline,
-                                lineWidth: 0.5))
+                        .stroke(on ? Theme.cReady.opacity(0.70) : Theme.hairline,
+                                lineWidth: on ? 0.75 : 0.5))
             }
             .buttonStyle(.plain)
             .help("Only what has moved in the last 24 hours")
