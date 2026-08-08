@@ -142,8 +142,15 @@ struct BarContent: Equatable {
         // Ranked below `routing` (that is happening now, and briefly) and above
         // the resting states, because something waiting on you outranks a
         // wordmark.
-        if m.pocket.taskCount > 0, !isExpandedState(state), !m.pocket.isOpen {
-            let n = m.pocket.taskCount
+        // ONLY WHAT IS WAITING MAY SPEAK FROM THE CLOSED SURFACE.
+        //
+        // This read `taskCount`, i.e. every slot — so a pocket holding tasks you
+        // had merely opened announced them in the bar, in the your-move colour,
+        // as though work were waiting. It was attention-grabbing on behalf of
+        // things that had already been seen and settled, which is exactly the
+        // way to teach someone to ignore the one channel that matters.
+        if m.pocket.waiting > 0, !isExpandedState(state), !m.pocket.isOpen {
+            let n = m.pocket.waiting
             var c = BarContent(dot: .needsUser,
                                left: n == 1 ? "1 in your pocket" : "\(n) in your pocket",
                                emphasis: .status,

@@ -42,36 +42,31 @@ export type TaskStatusName = 'processing' | 'needs-user' | 'ready' | 'stuck' | '
 export type PocketMode = 'closed' | 'open'
 
 /**
- * One stop on the crank.
+ * One stop in the pocket. Always a task — there are no synthetic entries.
  *
- * Usually a task. Exactly once — between the things waiting on you and the rest
- * of today — it is a `seam`, which is the only synthetic entry that has ever
- * earned its place here. It is not a task and must never resolve to one: it
- * marks the moment the crank changes meaning from triage to browsing. Without
- * it that change happens silently and the next thing you say lands somewhere
- * you were not aiming.
- *
- * ("Let the router decide" is still NOT a member of this list — that is what
- * happens when the list is not on screen, and it was rightly removed.)
+ * A `seam` card briefly lived here, marking where "waiting on you" ended. It
+ * was a mistake: with nothing demanding it took slot 0 and announced the end of
+ * a list you had not begun, it got counted as a task so two read as three, and
+ * it turned a boundary you should SEE into one you had to press through. The
+ * cards carry the boundary now — `demanding` ones render loud, the rest quiet.
  */
 export interface PocketSlotP {
   id: string
   title: string
-  /** 'seam' marks the boundary card. Absent means an ordinary task. */
-  kind?: 'seam'
-  /** How many of today's tasks lie past the seam. Seam slots only. */
-  more?: number
-  /** The pending ask. The surface clamps it to two lines. */
+  /** The pending ask, or what it produced. The surface clamps it to two lines. */
   ask?: string
   status?: TaskStatusName
-  /** Is this one actually waiting on you? Drives the card's weight — the
-   *  surface must be able to show reach items as visibly quieter without
-   *  re-deriving a rule that only the controller can evaluate. */
+  /** Is this one actually waiting on you? Drives the card's weight, and is the
+   *  only thing the closed surface is allowed to count. */
   demanding?: boolean
 }
 
 export interface PocketP {
   mode: PocketMode
+  /** How many slots are demanding. THE ONLY NUMBER THE CLOSED SURFACE MAY SHOW.
+   *  `slots.length` counted everything you had merely worked in, so a quiet
+   *  pocket announced itself as though work were waiting. */
+  waiting: number
   /** Index into `slots`. Whatever sits here is the address while open. */
   at: number
   slots: PocketSlotP[]

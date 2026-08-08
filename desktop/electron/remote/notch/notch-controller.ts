@@ -182,7 +182,12 @@ function truncate(s: string, n = 48): string {
 export function headlineFor(t: TaskLite): string | undefined {
   const q = t.question
   if (q && q.kind === 'terminal_only') return t.step ?? 'waiting for you in the terminal'
-  return q?.text ?? t.error?.reason ?? t.step ?? t.result?.summary ?? undefined
+  // RESULT BEFORE STEP. `step` used to win, so a finished task described what it
+  // had been doing rather than what it produced — "working on…" printed beside a
+  // badge reading done. TaskManager now clears `step` on a terminal transition
+  // too, but the ordering matters independently: once there is a result, the
+  // result IS the headline, and a leftover step is never the better sentence.
+  return q?.text ?? t.error?.reason ?? t.result?.summary ?? t.step ?? undefined
 }
 
 export function relativeAge(ts: number | undefined, now = Date.now()): string {
@@ -226,12 +231,14 @@ const DEMAND_WINDOW_MS = 2 * 60 * 60 * 1000
  *  whole reason the seam means anything. An unbounded reach list is just the
  *  dashboard operated one card at a time, which is strictly worse than the
  *  dashboard. Past these bounds is a dashboard question. */
-const REACH_MAX = 12
-const REACH_AGE_MS = 12 * 60 * 60 * 1000
-
-/** The seam's slot id. Not a task, and nothing may ever resolve it to one —
- *  the voice must refuse to land here rather than pick a neighbour. */
-export const SEAM_ID = '__seam__'
+/** How many tasks the pocket keeps beyond the ones demanding you.
+ *
+ *  COUNT, not time, is the real bound. The pocket is what is at hand — your
+ *  desk, not your week — and a carousel you cannot exhaust is a dashboard you
+ *  operate one card at a time. Age is only a backstop so a quiet day does not
+ *  leave yesterday lying around. */
+const POCKET_MAX = 8
+const POCKET_IDLE_MS = 12 * 60 * 60 * 1000
 
 /** How long a SETTLED card stays on the wall before folding into "show all".
  *  48h, not 24: a one-day cutoff hides Friday's work on Monday morning, which
@@ -294,6 +301,10 @@ export class NotchController {
    */
   private expandedGroups = new Set<string>()
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
+  private demandTimer: ReturnType<typeof setInterval> | null = null
+  /** id → the last `demanding()` answer we rendered, so the tick can notice a
+   *  window closing without re-rendering the world every minute. */
+  private demandSeen = new Map<string, boolean>()
 
   // ── The crank / the pocket ────────────────────────────────────────────────
   //
@@ -307,12 +318,16 @@ export class NotchController {
   private pocketMode: PocketMode = 'closed'
   /** Index into `crankSlots()`. Whatever sits here is the voice's address. */
   private pocketAt = 0
-  /** True while the user is walking the crank — holds the order still. */
-  private crankHeld = false
+  /** The pocket's order, nailed down for the duration of a visit. Null when
+   *  the pocket is closed, so the next open re-sorts to what you last worked in. */
+  private frozenOrder: string[] | null = null
+  /** Set while an expanded task came FROM an open pocket, so closing it goes
+   *  back there rather than dumping you onto the bare notch. */
+  private cameFromPocket = false
   /** id → presence-clock ms at which it began demanding. See demandSince(). */
   private demandStamp = new Map<string, number>()
-  /** id → wall-clock ms of the user's last touch. See touchedAt(). */
-  private touchStamp = new Map<string, number>()
+  /** id → wall-clock ms of your last real engagement. See engage(). */
+  private engageStamp = new Map<string, number>()
   /** id → the state we last stamped for, so a change restarts the window. */
   private stateSeen = new Map<string, TaskStatusName>()
   /** Set when leaving collapsed an expanded task; a return inside this window
@@ -338,6 +353,19 @@ export class NotchController {
     // product can do. Coming back is the one moment where an interruption is
     // free, because you were not mid-anything.
     presence.on('wake', () => this.onWake())
+
+    // THE PREDICATE NEEDS A CLOCK TO TICK AGAINST.
+    //
+    // `demanding()` depends on elapsed presence time, but reconcile only ran on
+    // task and helper events — so a task stopped shouting whenever something
+    // UNRELATED happened to trigger a render, which from the outside looks like
+    // the surface being slow and stale. The old decay timers did this job by
+    // accident; deleting them without replacing the tick was the mistake.
+    // A minute is far finer than a two-hour window needs and costs nothing.
+    this.demandTimer = setInterval(() => {
+      if (this.deps.listTasks().some((t) => this.demandingChanged(t))) this.scheduleReconcile()
+    }, 60_000)
+    this.demandTimer.unref?.()
     // Task runtime → queue + payload refresh (debounced).
     const onT = (t: TaskLite) => this.onTransition(t)
     events.on('created', onT)
@@ -354,7 +382,8 @@ export class NotchController {
     events.on('done', onT)
     events.on('removed', (t: { id: string }) => {
       this.dequeue(t.id)
-      this.demandStamp.delete(t.id); this.touchStamp.delete(t.id); this.stateSeen.delete(t.id)
+      this.demandStamp.delete(t.id); this.engageStamp.delete(t.id)
+      this.stateSeen.delete(t.id); this.demandSeen.delete(t.id)
       this.scheduleReconcile()
     })
     // Live PTY output → any open helper terminal.
@@ -380,7 +409,7 @@ export class NotchController {
     on('pocketOpen', () => { this.setPocketMode('open'); this.reconcile() })
     on('pocketRelease', () => { this.setPocketMode('closed'); this.reconcile() })
     on('pocketExpand', () => this.onPocketExpand())
-    on('chooseOption', (e) => this.onChoose(e as { id: string; index: number }))
+    on('chooseOption', (e) => { const c = e as { id: string; index: number }; this.engage(c.id); this.onChoose(c) })
     on('mute', (e) => this.onMute((e as { id: string }).id))
     on('answerText', (e) => {
       const { id, text } = e as { id: string; text: string }
@@ -396,6 +425,7 @@ export class NotchController {
       // open, `answer` sends nothing and the task stays blocked — cranking to
       // the next task there would carry the user away from the very question
       // they still have to go answer, and away from the card explaining why.
+      this.engage(id)   // speaking to it is engagement — see engage()
       const landed = this.deps.answer(id, text)
       if (wasBlocking && landed) this.advanceAfterAnswer(id)
       else this.scheduleReconcile()
@@ -464,6 +494,7 @@ export class NotchController {
   dispose(): void {
     if (this.railsTimer) clearInterval(this.railsTimer)
     if (this.reconcileTimer) clearTimeout(this.reconcileTimer)
+    if (this.demandTimer) clearInterval(this.demandTimer)
   }
 
   // ── queue ──────────────────────────────────────────────────────────────────
@@ -527,71 +558,113 @@ export class NotchController {
    * thing you were actually in. Seeded from `createdAt`, which is a real touch
    * — you asked for it.
    */
-  private touchedAt(t: TaskLite): number {
-    return this.touchStamp.get(t.id) ?? t.createdAt ?? 0
-  }
-
-  /** Record a touch. Called wherever the user aims at, opens, or answers one. */
-  private touch(id: string): void {
-    this.touchStamp.set(id, Date.now())
-  }
-
-  private byTouch = (a: TaskLite, b: TaskLite): number => this.touchedAt(b) - this.touchedAt(a)
-
-  private rebuildQueue(): void {
-    const yours = this.deps.listTasks().filter((t) => this.demanding(t)).sort(this.byTouch)
-    const live = new Set(yours.map((t) => t.id))
-    // FROZEN WHILE YOU WALK IT. Reach past the first card to the fourth and a
-    // live re-sort would make that fourth card the first — the list you had
-    // just read is gone from under your thumb. ⌘-Tab freezes for the duration
-    // of a cycle for exactly this reason. Newcomers still append (they must be
-    // reachable), and the dead still drop; only the ORDER is held.
-    if (this.crankHeld) {
-      this.queue = this.queue.filter((id) => live.has(id))
-      const known = new Set(this.queue)
-      for (const t of yours) if (!known.has(t.id)) this.queue.push(t.id)
-      return
-    }
-    this.queue = yours.map((t) => t.id)
+  private engagedAt(t: TaskLite): number {
+    return this.engageStamp.get(t.id) ?? t.createdAt ?? 0
   }
 
   /**
-   * THE CRANK: what `→` walks through, and what the pocket can hold.
+   * Record real engagement. EXPANDING, ANSWERING, SPEAKING TO — never browsing.
    *
-   * Demanding first, then ONE seam card, then today's work. The seam is not
-   * decoration. Without it the crank silently changes meaning under you — you
-   * were triaging, now you are browsing, nothing said so, and the next thing
-   * you dictate lands in a task you were never triaging. It costs one keypress
-   * across a whole session and it is where most people will stop, which is the
-   * point: exhausting the demanding list should still FEEL like something.
+   * This used to be called from `setFocus`, which every route into a task passes
+   * through, including the carousel. So merely cranking past a card counted as
+   * working on it: the list re-sorted around whatever you had just glanced at,
+   * and by the time the payload was rebuilt the slot under your index held a
+   * different task. That is the whole "next next gives the same two tasks", and
+   * the reason expanding sometimes opened a task you were not looking at.
+   *
+   * Glancing is not working. Only the three deliberate acts count.
    */
-  private crankSlots(): PocketSlotP[] {
+  private engage(id: string): void {
+    this.engageStamp.set(id, Date.now())
+  }
+
+  private byEngagement = (a: TaskLite, b: TaskLite): number => this.engagedAt(b) - this.engagedAt(a)
+
+  /** Has this task's answer to `demanding()` moved since we last drew it? */
+  private demandingChanged(t: TaskLite): boolean {
+    return this.demandSeen.get(t.id) !== this.demanding(t)
+  }
+
+  private rebuildQueue(): void {
+    const tasks = this.deps.listTasks()
+    for (const t of tasks) this.demandSeen.set(t.id, this.demanding(t))
+    this.queue = tasks.filter((t) => this.demanding(t))
+      .sort(this.byEngagement).map((t) => t.id)
+  }
+
+  /**
+   * WHAT THE POCKET HOLDS: everything waiting on you, then everything you have
+   * recently worked in. One list, two halves, no divider.
+   *
+   * There WAS a divider — a seam card reading "Nothing else is waiting". It is
+   * gone. With nothing demanding it landed in slot 0 and announced the end of a
+   * list you had not started; it got counted as a task, so two tasks read as
+   * three; and it made the boundary something you had to press through rather
+   * than see. The boundary is carried by the cards themselves instead: the ones
+   * waiting on you render loud, the rest render quiet, and the badge counts only
+   * the loud ones.
+   *
+   * Bounded by COUNT first, age second. Time alone does not bound the size, and
+   * size is what decides whether a carousel is usable — twelve hours of a busy
+   * day is twenty items, which is just the dashboard with worse ergonomics.
+   */
+  private pocketList(): TaskLite[] {
     const now = Date.now()
     const demanding = this.queue
       .map((id) => this.deps.getTask(id))
       .filter((t): t is TaskLite => !!t && t.alive !== false)
 
-    const inQueue = new Set(demanding.map((t) => t.id))
-    const reach = this.deps.listTasks()
-      .filter((t) => !inQueue.has(t.id) && !t.shelved && t.alive !== false
-        && now - this.touchedAt(t) < REACH_AGE_MS)
-      .sort(this.byTouch)
-      .slice(0, REACH_MAX)
+    const already = new Set(demanding.map((t) => t.id))
+    const rest = this.deps.listTasks()
+      .filter((t) => !already.has(t.id) && !t.shelved && t.alive !== false
+        // Only things you actually worked in. An untouched task has never been
+        // in your hands, so it belongs on the wall, not at your fingertips.
+        && this.engageStamp.has(t.id)
+        && now - this.engagedAt(t) < POCKET_IDLE_MS)
+      .sort(this.byEngagement)
+      .slice(0, POCKET_MAX)
 
-    const slot = (t: TaskLite): PocketSlotP => ({
-      id: t.id,
-      title: t.name ?? truncate(t.intent),
-      ask: t.question?.text ?? t.step ?? undefined,
-      status: t.state,
-      demanding: this.demanding(t),
-    })
+    return [...demanding, ...rest]
+  }
 
-    const slots = demanding.map(slot)
-    if (reach.length) {
-      slots.push({ id: SEAM_ID, kind: 'seam', title: 'Nothing else is waiting', more: reach.length })
-      for (const t of reach) slots.push(slot(t))
-    }
-    return slots
+  /**
+   * The ordered ids the pocket is currently showing.
+   *
+   * HELD FOR THE WHOLE VISIT. The previous version froze only the demanding
+   * half and rebuilt the rest on every single call — including twice inside one
+   * keypress — so the list reshuffled between choosing a slot and rendering it.
+   * An index into a list that rebuilds itself is not an address.
+   *
+   * Newcomers append and the dead drop, because the pocket must stay truthful;
+   * only the ORDER is nailed down, and only until you close it.
+   */
+  private pocketOrder(): string[] {
+    const live = this.pocketList()
+    const liveIds = live.map((t) => t.id)
+    if (!this.frozenOrder) return liveIds
+    const alive = new Set(liveIds)
+    const held = this.frozenOrder.filter((id) => alive.has(id))
+    const known = new Set(held)
+    for (const id of liveIds) if (!known.has(id)) held.push(id)
+    this.frozenOrder = held
+    return held
+  }
+
+  private crankSlots(): PocketSlotP[] {
+    const byId = new Map(this.pocketList().map((t) => [t.id, t]))
+    return this.pocketOrder()
+      .map((id) => byId.get(id))
+      .filter((t): t is TaskLite => !!t)
+      .map((t) => ({
+        id: t.id,
+        title: t.name ?? truncate(t.intent),
+        // Same ranking as headlineFor: what it PRODUCED beats what it was doing.
+        // The pocket used to go question → step and stop, so a finished task
+        // could only ever show the stale step it had while running.
+        ask: t.question?.text ?? t.result?.summary ?? t.step ?? undefined,
+        status: t.state,
+        demanding: this.demanding(t),
+      }))
   }
 
   private onTransition(t: TaskLite): void {
@@ -655,12 +728,10 @@ export class NotchController {
     // WHILE YOU ARE WALKING, THE FRONT IS WHERE YOU ARE. Without this the
     // surface kept showing queue[0] while the crank index moved underneath it,
     // so `→` changed the pocket and nothing else.
-    if (this.crankHeld) {
-      const slot = this.crankSlots()[this.pocketAt]
-      if (slot && slot.kind !== 'seam') {
-        const t = this.deps.getTask(slot.id)
-        if (t) return t
-      }
+    if (this.frozenOrder) {
+      const id = this.pocketOrder()[this.pocketAt]
+      const t = id ? this.deps.getTask(id) : undefined
+      if (t) return t
     }
     while (this.queue.length > 0) {
       const t = this.deps.getTask(this.queue[0])
@@ -732,6 +803,7 @@ export class NotchController {
     const target = this.front() ?? this.soleWorking()
     if (!target) { this.openCockpit(); return }
     this.engaged = 'task'
+    this.engage(target.id)
     this.setFocus(target.id) // voice routes to the fronted task
     this.deps.opened?.(target.id) // a closed working session comes back by itself
     this.reconcile()
@@ -787,17 +859,15 @@ export class NotchController {
     // OPEN IS AIMED, CLOSED IS THE ROUTER. The pocket only ever opens because
     // the user opened it, so "is it open" is a decision they made, not a state
     // that happened to them.
-    const slot = this.pocketMode === 'open' ? this.crankSlots()[this.pocketAt] : undefined
-    // THE SEAM IS NOT AN ADDRESS. Resolving it to a neighbour would put words
-    // into a task the user was not pointing at; null means "the router decides",
-    // which is the honest reading of "I am between the two lists".
-    this.setFocus(slot && slot.kind !== 'seam' ? slot.id : null)
+    const id = this.pocketMode === 'open' ? this.pocketOrder()[this.pocketAt] : undefined
+    this.setFocus(id ?? null)
   }
 
   private sendPocket(): void {
     const slots = this.crankSlots()
     this.clampPocket(slots.length)
-    const data: PocketP = { mode: this.pocketMode, at: this.pocketAt, slots }
+    const waiting = slots.filter((sl) => sl.demanding).length
+    const data: PocketP = { mode: this.pocketMode, at: this.pocketAt, waiting, slots }
     const json = JSON.stringify(data)
     if (json === this.lastPocketJson) return
     this.lastPocketJson = json
@@ -832,11 +902,10 @@ export class NotchController {
     if (this.engaged === 'none') return
     const id = this.focusedId
     const t = id ? this.deps.getTask(id) : undefined
-    // A TOUCH IS A TOUCH, even one that ends in leaving. You were in this task
-    // a second ago, so it belongs at the front of the crank when you come back
-    // — which is all "pocketing" ever meant, and it no longer needs its own
-    // list to say so.
-    if (id) this.touch(id)
+    // YOU WERE IN THIS TASK a second ago, so it belongs at the front of the
+    // pocket when you come back — which is all "pocketing" ever meant, and it
+    // no longer needs a list of its own to say so.
+    if (id) this.engage(id)
     // Remember what to put back, so a return inside the window restores the
     // surface you were actually on rather than guessing at a task.
     this.returnTo = id ? { kind: 'task', id } : { kind: 'cockpit' }
@@ -885,13 +954,14 @@ export class NotchController {
   private onPocketExpand(): void {
     const slot = this.crankSlots()[this.pocketAt]
     if (!slot) return
-    // Enter on the seam is not an expand — there is nothing to open. Treat it
-    // as "keep going", which is what the card is offering.
-    if (slot.kind === 'seam') { this.onPocketMove({ delta: 1 }); return }
     const id = slot.id
-    this.pocketAt = 0
+    // COMING BACK MEANS COMING BACK HERE. Expanding used to close the pocket
+    // outright, so Escape dropped you onto the bare notch and you had to reopen
+    // and re-find your place. The pocket is where you were; it is where you
+    // return. Index deliberately kept, not reset.
+    this.cameFromPocket = this.pocketMode === 'open'
     this.engaged = 'task'
-    this.touch(id)
+    this.engage(id)
     this.setPocketMode('closed')
     this.setFocus(id)
     this.deps.opened?.(id)          // opening it IS the intent to work in it
@@ -900,9 +970,10 @@ export class NotchController {
   }
 
   private onPocketMove(e: { delta?: number; to?: number }): void {
-    // Walking the crank HOLDS ITS ORDER (see rebuildQueue). Released when the
-    // surface closes, so the next visit re-sorts to what you touched last.
-    this.crankHeld = true
+    // Walking HOLDS THE ORDER (see pocketOrder). Released when the pocket
+    // closes, so the next visit re-sorts to what you last worked in. Browsing
+    // itself never re-ranks anything — see engage().
+    this.holdOrder()
     const n = this.crankSlots().length
     if (n <= 1) return
     this.pocketAt = typeof e.to === 'number'
@@ -928,7 +999,7 @@ export class NotchController {
     this.rebuildQueue()
     if (!this.queue.length) return
     if (this.engaged !== 'none') return   // you left something open; that wins
-    this.crankHeld = false                // fresh visit, fresh order
+    this.frozenOrder = null               // fresh visit, fresh order
     this.pocketAt = 0
     this.engaged = 'task'
     const front = this.front()
@@ -969,26 +1040,23 @@ export class NotchController {
   private onPrev(): void { this.crankStep(-1) }
 
   private crankStep(delta: number): void {
-    this.crankHeld = true
-    const slots = this.crankSlots()
-    const n = slots.length
+    this.holdOrder()
+    const order = this.pocketOrder()
+    const n = order.length
     if (!n) return
-    let at = (this.pocketAt + delta + n * 2) % n
-    // THE SEAM IS A POCKET AFFORDANCE. The expanded panel has nothing to draw
-    // for it, so stepping through it there would show an empty surface. Step
-    // over it and keep going in the direction you were heading.
-    if (this.engaged === 'task' && slots[at]?.kind === 'seam') at = (at + delta + n * 2) % n
-    this.pocketAt = at
-    const slot = slots[at]
-    // The seam addresses nothing — leave focus null so the router decides,
-    // exactly as it would with the surface closed.
-    if (slot && slot.kind !== 'seam') this.setFocus(slot.id)
-    else this.setFocus(null)
+    this.pocketAt = (this.pocketAt + delta + n * 2) % n
+    this.setFocus(order[this.pocketAt] ?? null)
     this.reconcile()
+  }
+
+  /** Nail the pocket's order down for this visit. Idempotent. */
+  private holdOrder(): void {
+    if (!this.frozenOrder) this.frozenOrder = this.pocketList().map((t) => t.id)
   }
 
   private onFocusTask(id: string): void {
     this.engaged = 'cockpit'
+    this.engage(id)   // opening it from the wall is working in it
     this.setFocus(id)
     this.deps.opened?.(id) // opening the stage IS the intent to work in it
     this.reconcile()
@@ -1005,11 +1073,11 @@ export class NotchController {
     this.deps.focus(id) // focus IS the voice address (consent model)
     if (id) {
       this.muted.delete(id) // interacting with a task ends its mute episode
-      // AIMING AT SOMETHING IS TOUCHING IT. This is the single place every
-      // route into a task passes through — crank, tap, wall, wake — so the
-      // ordering key is fed here rather than at a dozen call sites that would
-      // each have to remember.
-      this.touch(id)
+      // DELIBERATELY DOES NOT COUNT AS ENGAGEMENT. Every route into a task
+      // passes through here, including the carousel, so recording it made
+      // browsing re-rank the list you were browsing — and the slot under your
+      // index changed between choosing it and drawing it. Engagement is stamped
+      // at the three deliberate acts instead. See engage().
     }
   }
 
@@ -1034,9 +1102,9 @@ export class NotchController {
     const id = this.focusedId
     const t = id ? this.deps.getTask(id) : undefined
     if (t) {
-      // Closing something you had open is a touch — it belongs at the front of
-      // the crank next time, whatever we do with its demand.
-      this.touch(t.id)
+      // Closing something you had open is engagement — it belongs at the front
+      // of the pocket next time, whatever we do with its demand.
+      this.engage(t.id)
       if (t.state === 'done') {
         this.muted.set(t.id, t.state)
         this.queue = this.queue.filter((x) => x !== t.id)
@@ -1044,9 +1112,23 @@ export class NotchController {
       }
     }
     if (opts.collapse) this.engaged = 'none'
-    // Leaving the crank RELEASES ITS ORDER, so the next visit sorts by what you
-    // touched last rather than preserving a walk you already finished.
-    this.crankHeld = false
+    // BACK TO WHERE YOU CAME FROM. If this task was expanded out of an open
+    // pocket, closing it returns you to that pocket — same order, same place in
+    // it. Anything else collapses as before. Without this, Escape from a card
+    // you opened out of the pocket dumped you on the bare notch and you had to
+    // reopen and re-find your place, which is the opposite of what the pocket
+    // is for.
+    if (this.cameFromPocket) {
+      this.cameFromPocket = false
+      this.engaged = 'none'
+      this.setPocketMode('open')      // keeps frozenOrder — you never left
+      this.applyVoiceTarget()
+      this.reconcile()
+      return
+    }
+    // Leaving RELEASES THE ORDER, so the next visit sorts by what you last
+    // worked in rather than preserving a walk you already finished.
+    this.frozenOrder = null
     this.setFocus(null)
     this.setPocketMode('closed')
     this.reconcile()
@@ -1075,12 +1157,16 @@ export class NotchController {
 
   /** Throughput loop: answering advances to the next queued your-move task. */
   private advanceAfterAnswer(id: string): void {
-    // HOLD THE ORDER ACROSS THE ANSWER. Answering is a touch, and touch drives
-    // the sort — so without the hold the task you just replied to would sort
-    // straight back to the front and "advance" would land you on it again.
-    // Holding keeps it where it was; if it is still demanding it re-appends at
-    // the back, which is exactly the old skip-to-the-end behaviour.
-    this.crankHeld = true
+    // HOLD THE ORDER ACROSS THE ANSWER. Answering IS engagement, and engagement
+    // drives the sort — so without the hold the task you just replied to would
+    // sort straight back to the front and "advance" would land you on it again.
+    this.holdOrder()
+    // ADVANCE MEANS PAST THIS ONE. Dropping it from the held order is what
+    // makes the next thing the next thing — leave it in and `front()` reads
+    // position 0 and hands you straight back the task you just answered.
+    // pocketOrder() re-appends it at the END if it is still demanding, which is
+    // precisely the old skip-to-the-back behaviour.
+    if (this.frozenOrder) this.frozenOrder = this.frozenOrder.filter((x) => x !== id)
     this.pocketAt = 0
     this.queue = this.queue.filter((x) => x !== id)
     const next = this.front()

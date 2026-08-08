@@ -1309,18 +1309,19 @@ test('leaving with nothing expanded does nothing at all', () => {
   assert.equal(h.client.last('setState')!.state, before)
 })
 
-test('the crank holds everything you can still reach, and marks what wants you', () => {
-  // THIS TEST USED TO ASSERT THE OPPOSITE, and the old rule was the bug.
-  //
-  // The pocket held demanding tasks only, so anything else you looked at was
-  // unreachable the moment you left it — the dashboard was the only way back.
-  // The rule it was really reaching for was about AUTO-FILL (what arrives here
-  // on its own), not CAPACITY (what is allowed to be here). Capacity is now
-  // everything from today; `demanding` says which ones are actually waiting.
+test('the pocket keeps what you worked in, and marks what wants you', () => {
+  // THIS ONCE ASSERTED THE OPPOSITE — the pocket held demanding tasks only, so
+  // anything else you looked at became unreachable the moment you left it. But
+  // the rule it was reaching for was about AUTO-FILL, not capacity. Capacity is
+  // what you have worked in; `demanding` says which of those is waiting.
   const h = setup()
   put(h, makeTask({ id: 'live', state: 'processing', alive: true, name: 'Live' }))
   put(h, makeTask({ id: 'old', state: 'done', kind: 'oneoff', alive: true, name: 'Old errand' }))
   put(h, makeTask({ id: 'ask', state: 'needs-user', alive: true, name: 'Ask', question: { text: 'q' } }))
+  for (const id of ['live', 'old']) {
+    h.client.fire({ type: 'focusTask', id })
+    h.client.fire({ type: 'closeStage' })
+  }
   h.client.fire({ type: 'pocketOpen' })
   const slots = pocketOf(h)!.slots
   for (const id of ['live', 'old', 'ask']) {
@@ -1328,8 +1329,6 @@ test('the crank holds everything you can still reach, and marks what wants you',
   }
   assert.equal(slots.find((sl) => sl.id === 'ask')!.demanding, true)
   assert.equal(slots.find((sl) => sl.id === 'old')!.demanding, false)
-  assert.equal(slots.find((sl) => sl.id === 'live')!.demanding, false)
-  // …and only the demanding one is counted at you.
   assert.equal(h.client.last('setState')!.attention, 1)
 })
 
@@ -1393,57 +1392,46 @@ test('a blocked task never ages out, however long you sit there', () => {
   assert.equal(h.client.last('setState')!.attention, 1, 'a live question has one exit: answering it')
 })
 
-test('nothing that ages out ever leaves the crank — it lands in reach', () => {
+test('nothing that ages out ever leaves the pocket — it just goes quiet', () => {
   const h = setup()
   put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor' }))
+  h.client.fire({ type: 'focusTask', id: 'thread' })   // worked in it
+  h.client.fire({ type: 'closeStage' })
   h.presence.spend(4 * 60 * 60 * 1000)
   h.flush()
   h.client.fire({ type: 'pocketOpen' })
-  const slots = h.client.last('pocket')!.data.slots
-  assert.ok(slots.some((s) => s.id === 'thread'), 'still reachable without the dashboard')
-  assert.equal(slots.find((s) => s.id === 'thread')!.demanding, false, 'but quiet')
+  const slots = pocketOf(h)!.slots
+  assert.ok(slots.some((sl) => sl.id === 'thread'), 'still reachable without the dashboard')
+  assert.equal(slots.find((sl) => sl.id === 'thread')!.demanding, false, 'but quiet')
+  assert.equal(pocketOf(h)!.waiting, 0)
 })
 
 // ── the crank: demanding, then the seam, then today ────────────────────────
 
-test('the seam sits between what waits on you and the rest of today', () => {
-  const h = setup()
-  put(h, makeTask({ id: 'blocked', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
-  put(h, makeTask({ id: 'errand', state: 'done', kind: 'oneoff', name: 'Errand' }))
-  h.client.fire({ type: 'pocketOpen' })
-  const slots = h.client.last('pocket')!.data.slots
-  assert.deepEqual(slots.map((s) => s.kind ?? 'task'), ['task', 'seam', 'task'])
-  assert.equal(slots[0].id, 'blocked')
-  assert.equal(slots[1].more, 1, 'it says how much is behind it')
-  assert.equal(slots[2].id, 'errand')
-})
 
-test('no seam when there is nothing past it', () => {
+
+
+test('the pocket runs demanding first, then what you have worked in', () => {
   const h = setup()
+  put(h, makeTask({ id: 'errand', state: 'done', kind: 'oneoff', name: 'Errand' }))
+  h.client.fire({ type: 'focusTask', id: 'errand' })    // you worked in it
+  h.client.fire({ type: 'closeStage' })
   put(h, makeTask({ id: 'blocked', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
   h.client.fire({ type: 'pocketOpen' })
-  assert.ok(!h.client.last('pocket')!.data.slots.some((s) => s.kind === 'seam'))
+  const slots = pocketOf(h)!.slots
+  assert.deepEqual(slots.map((sl) => sl.id), ['blocked', 'errand'],
+    'waiting on you first, then the rest — and no divider between them')
+  assert.equal(slots[0].demanding, true)
+  assert.equal(slots[1].demanding, false)
+  assert.equal(pocketOf(h)!.waiting, 1, 'only the demanding one is ever counted at you')
 })
 
-test('the seam addresses nothing — the voice must not pick a neighbour', () => {
+test('an untouched task is NOT in the pocket — it belongs on the wall', () => {
   const h = setup()
-  put(h, makeTask({ id: 'blocked', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
-  put(h, makeTask({ id: 'errand', state: 'done', kind: 'oneoff', name: 'Errand' }))
+  put(h, makeTask({ id: 'never', state: 'done', kind: 'oneoff', name: 'Never opened' }))
   h.client.fire({ type: 'pocketOpen' })
-  h.client.fire({ type: 'pocketMove', delta: 1 })      // onto the seam
-  assert.equal(h.client.last('pocket')!.data.slots[h.client.last('pocket')!.data.at].kind, 'seam')
-  const focus = h.calls.focus!.at(-1)!
-  assert.equal(focus[0], null, 'null = let the router decide, exactly as with the surface closed')
-})
-
-test('walking past the last demanding task continues into today, and does not loop', () => {
-  const h = setup()
-  put(h, makeTask({ id: 'blocked', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
-  put(h, makeTask({ id: 'errand', state: 'done', kind: 'oneoff', name: 'Errand' }))
-  h.client.fire({ type: 'next' })   // seam
-  h.client.fire({ type: 'next' })   // today
-  const p = h.client.last('pocket')!.data
-  assert.equal(p.slots[p.at].id, 'errand', 'the crank used to rotate the same 3 tasks forever')
+  assert.equal((pocketOf(h)?.slots ?? []).length, 0,
+    'the pocket is what you have in hand, not everything that exists')
 })
 
 // ── ordering: what YOU touched, not what happened ──────────────────────────
@@ -1522,4 +1510,86 @@ test('coming back does not yank away something you left open', () => {
   h.presence.wake()
   h.flush()
   assert.equal(h.client.last('stageDetail')?.task.id ?? h.client.last('showTask')?.task.id, 'reading')
+})
+
+// ── the field report, 2026-08-08 ────────────────────────────────────────────
+//
+// Every one of these reproduces something seen in use on 1.4.22-dev.1.
+
+test('browsing never re-ranks — the list you are reading holds still', () => {
+  // THE FIELD BUG: `→ →` showed the same task twice and expanding opened a
+  // different one than the card on screen. setFocus() stamped engagement, so
+  // merely cranking past a card re-sorted the list around it — and the slot
+  // under the index changed between choosing it and drawing it.
+  const h = setup()
+  for (const id of ['a', 'b', 'c']) {
+    put(h, makeTask({ id, state: 'done', kind: 'oneoff', name: id.toUpperCase() }))
+    h.client.fire({ type: 'focusTask', id })
+    h.client.fire({ type: 'closeStage' })
+  }
+  h.client.fire({ type: 'pocketOpen' })
+  const before = pocketOf(h)!.slots.map((s) => s.id)
+  for (let i = 0; i < 3; i++) h.client.fire({ type: 'pocketMove', delta: 1 })
+  assert.deepEqual(pocketOf(h)!.slots.map((s) => s.id), before, 'order unmoved after a full lap')
+})
+
+test('what you expand is what was on the card', () => {
+  const h = setup()
+  for (const id of ['a', 'b']) {
+    put(h, makeTask({ id, state: 'done', kind: 'oneoff', name: id.toUpperCase() }))
+    h.client.fire({ type: 'focusTask', id })
+    h.client.fire({ type: 'closeStage' })
+  }
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketMove', delta: 1 })
+  const p = pocketOf(h)!
+  const showing = p.slots[p.at].id
+  h.client.fire({ type: 'pocketExpand' })
+  assert.equal(h.calls.focus!.at(-1)![0], showing, 'expanded the card you were looking at')
+})
+
+test('escape from a card you opened out of the pocket goes back to the pocket', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.fire({ type: 'pocketExpand' })
+  assert.equal(pocketOf(h)!.mode, 'closed', 'expanded: the pocket steps aside')
+  h.client.fire({ type: 'closeStage' })
+  assert.equal(pocketOf(h)!.mode, 'open', 'and comes straight back when you leave')
+})
+
+test('a task you never opened from the pocket still just closes', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'q', state: 'needs-user', name: 'Blocked', question: { text: 'q' } }))
+  h.client.fire({ type: 'tap' })            // straight to the task, no pocket
+  h.client.fire({ type: 'closeStage' })
+  assert.equal(pocketOf(h)!.mode, 'closed')
+})
+
+test('the closed surface counts only what is waiting', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'seen', state: 'done', kind: 'session', name: 'Seen' }))
+  h.client.fire({ type: 'tap' })
+  h.client.fire({ type: 'closeStage' })     // seen → leaves the interruption queue
+  const p = pocketOf(h)!
+  assert.ok(p.slots.some((s) => s.id === 'seen'), 'still in the pocket')
+  assert.equal(p.waiting, 0, 'but the closed surface has nothing to say about it')
+})
+
+test('a demand window that expires re-renders on its own', () => {
+  // The predicate is time-dependent; nothing used to re-run it, so a task went
+  // quiet only when something unrelated happened to trigger a render.
+  const h = setup()
+  put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'Thread' }))
+  assert.equal(h.client.last('setState')!.attention, 1)
+  h.presence.spend(3 * 60 * 60 * 1000)
+  const ctl = h.controller as unknown as { demandingChanged(t: TaskLite): boolean }
+  assert.equal(ctl.demandingChanged(h.tasks.get('thread')!), true,
+    'the tick can see the window has closed without a task event')
+})
+
+test('a finished task headlines what it produced, not what it was doing', () => {
+  const t = makeTask({ id: 'x', state: 'done', step: 'reading the repository',
+                       result: { summary: 'Read the README and the design docs.' } })
+  assert.equal(headlineFor(t), 'Read the README and the design docs.')
 })

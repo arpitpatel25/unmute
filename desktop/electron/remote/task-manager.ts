@@ -29,6 +29,7 @@ import {
   readStatus,
   statusMtimeMs,
   isStale,
+  normalizeState,
   type StatusPayload,
   type TaskState,
 } from './status-file'
@@ -1997,6 +1998,19 @@ export class TaskManager extends EventEmitter {
     task.updatedAt = at ?? this.clock()
     if (payload?.category) task.category = payload.category
     if (payload?.step) task.step = payload.step
+    // A CAPTION MUST NOT OUTLIVE ITS PICTURE.
+    //
+    // `step` is "what I am doing right now", written while the task runs, and
+    // nothing ever cleared it. So a task that finished at 10:43 kept announcing
+    // what it was doing at 10:42 — for hours. On screen that reads as a task
+    // stuck in working, beside a badge that correctly says done, because the
+    // badge is `state` and the sentence under it is `step`. Two fields, one
+    // updated, one not.
+    //
+    // Reaching a terminal state means there is no longer a current step. Clear
+    // it and the card falls through to `result.summary`, which is what the task
+    // actually produced.
+    if (TERMINAL.includes(next)) task.step = undefined
     if (payload?.result) task.result = payload.result
     if (payload?.error) task.error = payload.error
     if (payload?.question) task.question = payload.question
@@ -2358,7 +2372,7 @@ export class TaskManager extends EventEmitter {
           ...(meta.model ? { model: meta.model } : {}),
           claudeDesktopSessionId: meta.claudeDesktopSessionId,
           kind: meta.kind ?? 'session',
-          state: (meta.state as UiTaskState | undefined) ?? 'done',
+          state: (normalizeState(meta.state) as UiTaskState | undefined) ?? 'done',
           createdAt: meta.createdAt ?? now0,
           updatedAt: meta.updatedAt ?? now0,
           cwd: meta.cwd ?? dir,
@@ -2393,7 +2407,7 @@ export class TaskManager extends EventEmitter {
           // RESTORE what we last observed. Defaulting to 'processing' meant the
           // first poll always "discovered" completion afresh and re-stamped it,
           // so a finished thread announced itself on every single launch.
-          state: (meta.state as UiTaskState | undefined) ?? 'processing',
+          state: (normalizeState(meta.state) as UiTaskState | undefined) ?? 'processing',
           createdAt: meta.createdAt ?? now0,
           updatedAt: meta.updatedAt ?? meta.createdAt ?? now0,
           cwd: dir,

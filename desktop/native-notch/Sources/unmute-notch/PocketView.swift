@@ -34,7 +34,7 @@ struct PocketNub: View {
     var body: some View {
         HStack(spacing: 8) {
             Circle().fill(Theme.cNeeds).frame(width: 8, height: 8)
-            Text(pocket.taskCount == 1 ? "1 in your pocket" : "\(pocket.taskCount) in your pocket")
+            Text(pocket.waiting == 1 ? "1 waiting on you" : "\(pocket.waiting) waiting on you")
                 .font(Theme.fSub).foregroundColor(Theme.textDim)
                 .lineLimit(1)
         }
@@ -55,26 +55,49 @@ struct PocketCard: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             VStack(alignment: .leading, spacing: 7) {
-                if slot?.isSeam == true { seam } else { taskFace }
+                taskFace
                 if pocket.slots.count > 1 { rail }
                 Spacer(minLength: 0)
                 route
             }
             .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 9)
+            // THE WHOLE CARD IS THE BUTTON. Expanding used to require hitting a
+            // 30pt "Open" chip; everything else was dead pixels on a surface
+            // whose entire job is to be reached at a glance. Buttons inside
+            // still win — SwiftUI gives the nested Button the hit first.
+            .contentShape(Rectangle())
+            .onTapGesture { if slot != nil { model.emit(.pocketExpand) } }
 
             // TOP-RIGHT, AND THE STANDARD CONTROL. It sat mid-card beside the
             // arrows, which is nowhere anyone looks for a close.
-            Button { model.emit(.pocketRelease) } label: {
-                Image(systemName: "xmark")
+            HStack(spacing: 6) {
+                // A WAY OUT TO THE WALL, from the card. There was none: from
+                // the pocket the only forward motion was INTO a task, so seeing
+                // everything meant closing, tapping the empty notch, and hoping
+                // it read as "open the dashboard".
+                Button { model.emit(.openDashboard) } label: {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .foregroundColor(Theme.textDim)
+                        .frame(width: 17, height: 17)
+                        .background(Circle().fill(Theme.raised))
+                        .overlay(Circle().stroke(Theme.hairline, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .help("Open the dashboard")
+
+                Button { model.emit(.pocketRelease) } label: {
+                    Image(systemName: "xmark")
                     .font(.system(size: 8, weight: .bold))
                     .foregroundColor(Theme.textDim)
                     .frame(width: 17, height: 17)
-                    .background(Circle().fill(Theme.raised))
-                    .overlay(Circle().stroke(Theme.hairline, lineWidth: 0.5))
+                        .background(Circle().fill(Theme.raised))
+                        .overlay(Circle().stroke(Theme.hairline, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .help("Close — your voice goes back to normal routing")
             }
-            .buttonStyle(.plain)
             .padding(9)
-            .help("Close — your voice goes back to normal routing")
         }
     }
 
@@ -87,32 +110,13 @@ struct PocketCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// THE SEAM — the one card that is not a task.
-    ///
-    /// It marks where the crank stops being triage and starts being browsing.
-    /// Without it that change happens in silence: you keep pressing, the cards
-    /// keep coming, and nothing tells you that everything waiting on you is
-    /// behind you — so the next thing you say lands in a task you were never
-    /// triaging. One keypress across a whole session, and it is where most
-    /// people will stop, which is exactly the point of drawing it.
-    ///
-    /// Deliberately centred and quiet: it is a threshold, not an item, and it
-    /// must not read as one more thing demanding something.
-    private var seam: some View {
-        VStack(spacing: 4) {
-            Text("Nothing else is waiting")
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundColor(Theme.text)
-            if let n = slot?.more, n > 0 {
-                Text("\(n) more from today  ›")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.textDim)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.vertical, 6)
-        .padding(.trailing, 22)          // the close owns that corner
-    }
+    // THE SEAM CARD LIVED HERE and it is gone. It marked where "waiting on
+    // you" ended, but with nothing demanding it took the first slot and
+    // announced the end of a list you had not begun; it was counted as a task,
+    // so two tasks read as three; and it made a boundary you should be able to
+    // SEE into one you had to press through. The cards carry it now — the ones
+    // demanding you are drawn loud, the rest quiet — and the bar counts only
+    // the loud ones.
 
     // ── which task ────────────────────────────────────────────────────────
     //
@@ -145,7 +149,7 @@ struct PocketCard: View {
                 .help("Back to the full task")
             }
         }
-        .padding(.trailing, 22)          // the close owns that corner
+        .padding(.trailing, 46)          // the two corner buttons own that space
         .contentShape(Rectangle())
         .onTapGesture { if slot != nil { model.emit(.pocketExpand) } }
     }
