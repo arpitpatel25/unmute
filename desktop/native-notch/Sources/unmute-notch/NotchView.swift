@@ -246,7 +246,9 @@ struct NotchView: View {
                 // "unmute" in 9.5pt light type, which on a black bar reads as a
                 // small grey label rather than as us.
                 if c.emphasis == .wordmark {
-                    UnMark(height: BarContent.markHeight, ink: leftInk)
+                    // Not tinted with `leftInk`: the mark carries the brand's own
+                    // colours and must not shift with the bar's state.
+                    UnMark(height: BarContent.markHeight)
                 } else if let t = c.left {
                     Text(t)
                         .font(.system(size: BarContent.statusSize, weight: .medium))
