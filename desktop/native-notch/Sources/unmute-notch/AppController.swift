@@ -73,7 +73,7 @@ final class AppController: NSObject, NotchResizing {
     /// Content inset that clears the physical cutout on the EXPANDED surfaces
     /// (bar height + breathing room), or just the surface's own chrome on a
     /// display with no cutout.
-    private var topInset: CGFloat { geometry.hasNotch ? geometry.barHeight + 10 : 14 }
+    private var topInset: CGFloat { geometry.hasNotch ? geometry.cutoutHeight + 10 : 14 }
 
     // MARK: - The input surface
 
@@ -150,7 +150,7 @@ final class AppController: NSObject, NotchResizing {
             model.task = task
             // The terminal stops being a drill-down when it is the only way to
             // answer. Open it as the ask arrives — see needsTerminalToAnswer.
-            if needsTerminalToAnswer(task) { model.taskTerminalOpen = true }
+            if needsTerminalToAnswer(task) || model.terminalAutoExpand { model.taskTerminalOpen = true }
             if model.state == .task && fillChanged { refit(animated: true) }
             // At bar level the fronted task IS the message — the right half
             // carries its activity, and the mass is as wide as what it says.
@@ -258,6 +258,9 @@ final class AppController: NSObject, NotchResizing {
             NotchLog.log("CMD autoPresent \(on)")
             autoPresent = on
 
+        case let .terminalAutoExpand(on):
+            model.terminalAutoExpand = on
+            NotchLog.log("CMD terminalAutoExpand \(on)")
         case let .surfaceFill(fill):
             // Clamped again here, not only in main: this process outlives a
             // single engine run and a bad value would resize every surface
@@ -341,7 +344,10 @@ final class AppController: NSObject, NotchResizing {
         // question and no way to reply to it. Greeting that with a closed
         // terminal is the dead end this rule was blamed for: an instruction to
         // "answer in the terminal" beside a terminal that is not there.
-        model.taskTerminalOpen = model.task.map(needsTerminalToAnswer) ?? false
+        // The preference decides the default; a terminal-only ask overrides it
+        // upward and never downward. Turning auto-expand OFF must not strand
+        // someone on "answer in the terminal" with no terminal.
+        model.taskTerminalOpen = model.task.map { needsTerminalToAnswer($0) || model.terminalAutoExpand } ?? false
         // THE REVIEW POPUP CANNOT SURVIVE A COLLAPSE. It is drawn only on the
         // expanded surface, and a popup nobody can see still eats the next
         // Escape in stepDown. Leaving the expanded state ends it, exactly as
@@ -419,7 +425,12 @@ final class AppController: NSObject, NotchResizing {
             if model.pocket.isOpen {
                 // Shorter without the ghost-hint row, and shorter again when a
                 // single task makes the carousel pointless.
-                return (geometry.topPinnedFrame(width: 348, height: model.pocket.slots.count > 1 ? 146 : 120),
+                // ROOM FOR THE HOUSING ON TOP OF THE CARD, not instead of it.
+                // The card keeps its full height; the window grows by whatever
+                // the cutout occupies so the card still fits underneath it.
+                // Zero on a notchless display, so nothing moves there.
+                let clearance = geometry.hasNotch ? topInset : 0
+                return (geometry.topPinnedFrame(width: 348, height: (model.pocket.slots.count > 1 ? 146 : 120) + clearance),
                         geometry.panelPlacement,
                         BarContent())
             }

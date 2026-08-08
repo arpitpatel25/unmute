@@ -68,6 +68,13 @@ final class NotchModel: ObservableObject {
 
     // Terminal visibility (task surface toggle; Stage shows it by default when alive).
     @Published var taskTerminalOpen: Bool = false
+    /// Does opening a CLI task show its terminal immediately?
+    ///
+    /// OFF by default, which is the behaviour that shipped: the panel opens on
+    /// the answer and the terminal is one tap away. People who live in the
+    /// terminal want the opposite and were re-opening it on every task, so it
+    /// is a preference now rather than a decision made for them.
+    @Published var terminalAutoExpand: Bool = false
     /// The orchestrator stage's own terminal toggle. Separate from
     /// `taskTerminalOpen` on purpose: the two surfaces answer different
     /// questions. A task pulled to ATTENTION should greet you with what it

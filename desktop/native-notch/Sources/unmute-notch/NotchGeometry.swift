@@ -103,7 +103,24 @@ struct NotchGeometry: Equatable {
         // that it fakes only the CUTOUT: the bar height stays the real measured
         // one, because a simulation that also lied about the bar would hide the
         // very bug this pack exists to fix.
-        let simulate = ProcessInfo.processInfo.environment["UNMUTE_FAKE_NOTCH"] == "1"
+        // Accepts "1" for a rough guess, or "WxH" in points for a specific
+        // machine — UNMUTE_FAKE_NOTCH=200x34 is a 14" Pro, 168x32 an Air 13".
+        //
+        // The sizes MATTER and "1" alone was not enough. It derived the width
+        // from a screen fraction and took the HEIGHT from the local menu bar —
+        // about 24pt on a notchless Mac against a real cutout's ~34. Height is
+        // the dimension that ate the pocket's title row, so the one simulation
+        // we had under-tested the exact fault it existed to catch, and could
+        // not tell a 16" from an Air either way.
+        let fake = ProcessInfo.processInfo.environment["UNMUTE_FAKE_NOTCH"] ?? ""
+        let simulate = !fake.isEmpty && fake != "0"
+        var fakeSize: CGSize? = nil
+        if simulate {
+            let parts = fake.lowercased().split(separator: "x")
+            if parts.count == 2, let w = Double(parts[0]), let h = Double(parts[1]), w > 0, h > 0 {
+                fakeSize = CGSize(width: w, height: h)
+            }
+        }
         let real = inset > 0
 
         // MEASURED, in preference order:
@@ -129,11 +146,16 @@ struct NotchGeometry: Equatable {
             leftUsable = l.width
             rightUsable = r.width
         } else if real || simulate {
-            let w = round(frame.width * Self.estimatedCutoutFraction)
-            cutout = NSRect(x: round(frame.midX - w / 2), y: frame.maxY - barHeight,
-                            width: w, height: barHeight)
+            let w = fakeSize?.width ?? round(frame.width * Self.estimatedCutoutFraction)
+            // A simulated cutout may be TALLER than the local menu bar, which is
+            // the whole point: that is what a real notch is, and it is what the
+            // surfaces have to clear.
+            let h = fakeSize?.height ?? barHeight
+            cutout = NSRect(x: round(frame.midX - w / 2), y: frame.maxY - h,
+                            width: w, height: h)
             leftUsable = (frame.width - w) / 2
             rightUsable = leftUsable
+            if simulate { NotchLog.log("cutout SIMULATED w=\(Int(w)) h=\(Int(h)) — UNMUTE_FAKE_NOTCH") }
             // Logged only for the case that should never happen. The test
             // harness takes this branch on every measurement and would otherwise
             // fill the log with a line per state change.
@@ -151,6 +173,10 @@ struct NotchGeometry: Equatable {
     // MARK: - Derived shape numbers
 
     var cutoutWidth: CGFloat { cutout?.width ?? 0 }
+    /// How far down a large surface must start to clear the housing. The real
+    /// cutout's height, which is NOT always the bar height — a simulated one can
+    /// be taller, and on some displays the two genuinely differ.
+    var cutoutHeight: CGFloat { cutout?.height ?? barHeight }
     /// The x the mass's middle is anchored on: the hole, or the screen's centre
     /// when there is none.
     var anchorX: CGFloat { cutout?.midX ?? screenFrame.midX }

@@ -218,6 +218,9 @@ export const remotePreloadExtensions = {
    *  tinting the bar and waiting for a tap. */
   remoteSetNotchAutoExpand: (on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-notch-auto-expand', on),
+  /** Show a CLI task's terminal the moment the task opens. Off by default. */
+  remoteSetTerminalAutoExpand: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-terminal-auto-expand', on),
   /** Share of the screen an expanded surface fills: 0.7 | 0.8 | 0.9. */
   remoteSetSurfaceFill: (fill: number): Promise<number> =>
     ipcRenderer.invoke('remote:set-surface-fill', fill),

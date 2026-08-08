@@ -281,6 +281,11 @@ export type NotchCommand =
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
   | { type: 'surfaceFill'; fill: number }
+  /** Should opening a CLI task show its terminal straight away? A preference,
+   *  not a rule — a task that can ONLY be answered in the terminal still opens
+   *  it regardless, because the alternative is telling someone to answer in a
+   *  terminal that is not on screen. */
+  | { type: 'terminalAutoExpand'; on: boolean }
   | { type: 'collapse' }
   | { type: 'quit' }
 

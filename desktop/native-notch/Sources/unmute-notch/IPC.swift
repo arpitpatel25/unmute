@@ -266,6 +266,8 @@ enum Command {
     /// an expanded surface fills. An engine too old to send it leaves the
     /// built-in 0.8, so this is safe to ignore.
     case surfaceFill(CGFloat)
+    /// `{"type":"terminalAutoExpand","on":true}` — see NotchModel.
+    case terminalAutoExpand(Bool)
     /// Full state of the bottom-centre input surface. Pushed on every change,
     /// including the per-frame level during a capture — one float, which is the
     /// only new traffic the capture path gains.
@@ -322,6 +324,8 @@ enum Command {
             // ignoring the user's accessibility setting.
             let raw = obj["value"] as? String ?? "system"
             return .appearance(SurfaceAppearance(rawValue: raw) ?? .system)
+        case "terminalAutoExpand":
+            return .terminalAutoExpand(obj["on"] as? Bool ?? false)
         case "surfaceFill":
             // A missing or malformed value means the default, not a dropped
             // command — same rule as `appearance` above. AppController clamps

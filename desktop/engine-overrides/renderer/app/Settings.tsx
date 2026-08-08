@@ -99,6 +99,7 @@ interface SettingsApi {
   remoteGetSettings?: () => Promise<{
     overlayAutoPresent?: boolean
     notchAutoExpand?: boolean
+    notchTerminalAutoExpand?: boolean
     voiceFeedback?: boolean
     surfaceFill?: number
     librarianWriteEnabled?: boolean
@@ -106,6 +107,7 @@ interface SettingsApi {
   }>
   remoteSetOverlayAutoPresent?: (on: boolean) => Promise<boolean>
   remoteSetNotchAutoExpand?: (on: boolean) => Promise<boolean>
+  remoteSetTerminalAutoExpand?: (on: boolean) => Promise<boolean>
   remoteSetVoiceFeedback?: (on: boolean) => Promise<boolean>
   remoteSetSurfaceFill?: (fill: number) => Promise<number>
   /** Handled in main (remote/init.ts:3444) but NOT exposed by the preload —
@@ -234,6 +236,10 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // to look. The controller guards it on `engaged === 'none'`, so this never
   // yanks you out of a task you are already reading.
   const [notchAutoExpand, setNotchAutoExpand] = useState<boolean>(true)
+  // DEFAULT OFF — the behaviour that shipped. People who live in the terminal
+  // want the opposite and were re-opening it on every task; that is a
+  // preference, not something to decide for everyone.
+  const [terminalAutoExpand, setTerminalAutoExpand] = useState<boolean>(false)
   // DEFAULT OFF. It speaks through the macOS system voice, and the thing it was
   // really answering — "did that land?" — is now shown in the notch instead.
   const [voiceFeedback, setVoiceFeedback] = useState<boolean>(false)
@@ -307,6 +313,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
       if (!s) return
       setNotchAutoPresent(s.overlayAutoPresent !== false)
       setNotchAutoExpand(s.notchAutoExpand !== false)
+      setTerminalAutoExpand(s.notchTerminalAutoExpand === true)
       setVoiceFeedback(s.voiceFeedback === true)
       setSurfaceFill(typeof s.surfaceFill === 'number' ? s.surfaceFill : 0.8)
       setLibrarianEnabled(s.librarianWriteEnabled === true)
@@ -373,6 +380,10 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   function handleNotchAutoExpandChange(next: boolean): void {
     setNotchAutoExpand(next)
     void api().remoteSetNotchAutoExpand?.(next)
+  }
+  function handleTerminalAutoExpandChange(next: boolean): void {
+    setTerminalAutoExpand(next)
+    void api().remoteSetTerminalAutoExpand?.(next)
   }
   function handleSurfaceFillChange(value: string): void {
     const v = Number(value)
@@ -659,6 +670,12 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
               description="Expand straight to the task instead of just turning amber and waiting to be tapped. It never interrupts you mid-task — if you already have something open, the new one waits."
             >
               <Toggle checked={notchAutoExpand} onChange={handleNotchAutoExpandChange} />
+            </SettingRow>
+            <SettingRow
+              label="Show the terminal straight away"
+              description="For tasks running in the CLI, open with the terminal already showing instead of one tap away. Either way the icon toggles it, and a question that can only be answered in the terminal always opens it."
+            >
+              <Toggle checked={terminalAutoExpand} onChange={handleTerminalAutoExpandChange} />
             </SettingRow>
             <SettingRow
               label="Expanded size"

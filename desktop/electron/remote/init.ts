@@ -142,6 +142,8 @@ interface RemoteSettings {
   /** Open the task surface when something starts needing you, rather than only
    *  tinting the bar amber and waiting for a tap. Default true. */
   notchAutoExpand: boolean
+  /** Show a CLI task's terminal the moment it opens. Default off. */
+  notchTerminalAutoExpand: boolean
   /** Speak short confirmations ("On it.") through the macOS `say` voice.
    *  DEFAULT OFF — see speakLine for why. */
   voiceFeedback: boolean
@@ -210,6 +212,8 @@ const settings = new Store<RemoteSettings>({
     osNotifications: false,
     overlayAutoPresent: true,
     notchAutoExpand: true,
+    // OFF — the behaviour that shipped. The terminal stays one tap away.
+    notchTerminalAutoExpand: false,
     voiceFeedback: false,
     surfaceFill: 0.8,
     overlayDocked: true,
@@ -2876,6 +2880,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // Same reason: the helper compiles its own defaults (0.8 fill, auto-present
       // on), so a user who chose otherwise would get one wrong frame per launch.
       notchClient.send({ type: 'surfaceFill', fill: settings.get('surfaceFill') ?? 0.8 })
+      notchClient.send({ type: 'terminalAutoExpand', on: settings.get('notchTerminalAutoExpand') === true })
       notchClient.send({ type: 'autoPresent', on: settings.get('overlayAutoPresent') !== false } as never)
 
       log.info('notch shell started', { bin: notchBin })
@@ -3639,6 +3644,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('voice-feedback-set', { on: !!on })
     return true
   })
+  ipcMain.handle('remote:set-terminal-auto-expand', async (_e, on: boolean) => {
+    settings.set('notchTerminalAutoExpand', !!on)
+    notchClient?.send({ type: 'terminalAutoExpand', on: !!on })
+    log.event('terminal-auto-expand-set', { on: !!on })
+    return true
+  })
   ipcMain.handle('remote:set-notch-auto-expand', async (_e, on: boolean) => {
     settings.set('notchAutoExpand', !!on)
     notchController?.setAutoExpand(!!on)
@@ -3769,6 +3780,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     browserEnabled: settings.get('browserEnabled') !== false,
     overlayAutoPresent: settings.get('overlayAutoPresent') !== false,
     notchAutoExpand: settings.get('notchAutoExpand') !== false,
+    notchTerminalAutoExpand: settings.get('notchTerminalAutoExpand') === true,
     voiceFeedback: settings.get('voiceFeedback') === true,
     surfaceFill: settings.get('surfaceFill') ?? 0.8,
     overlayDocked: settings.get('overlayDocked') !== false,

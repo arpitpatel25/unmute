@@ -44,7 +44,20 @@ struct NotchView: View {
             // message that simply never appeared.
             if expanded {
                 if model.proposal != nil || model.proposalLoadingId != nil {
+                    // CLEARS THE CUTOUT LIKE EVERY OTHER LARGE SURFACE. This is
+                    // drawn OUTSIDE `plane`, so it never received the inset the
+                    // task view and the wall get, and its root VStack is
+                    // top-anchored with 13pt of padding — on a notched Mac the
+                    // housing would eat its header, exactly as it ate the
+                    // pocket's title row.
+                    //
+                    // Found by audit, not by a bug report, and it could not have
+                    // been found by use: the skill curator is PARKED, so this
+                    // view never renders today. It would have broken on the day
+                    // the curator came back, on hardware we cannot test, months
+                    // from the change that caused it.
                     SkillPopupView(model: model)
+                        .padding(.top, topInset)
                 }
                 if let toast = model.toast { toastView(toast) }
             }
@@ -213,7 +226,7 @@ struct NotchView: View {
             // looking at one address, and a card naming a second would be two
             // answers to the same question.
             else if model.pocket.isOpen {
-                plane { PocketCard(model: model, listening: model.capturePhase == "listening") }
+                pocketPlane { PocketCard(model: model, listening: model.capturePhase == "listening") }
             }
             else { barRow }
         }
@@ -330,6 +343,40 @@ struct NotchView: View {
             .background(RoundedRectangle(cornerRadius: Theme.planeRadius).fill(Theme.plane))
             .clipShape(RoundedRectangle(cornerRadius: Theme.planeRadius))
             .padding(.vertical, Theme.panelPadding)
+            .padding(.horizontal, Theme.panelPadding + model.bar.fillet)
+    }
+
+    /// THE POCKET'S PLANE, HELD CLEAR OF THE CAMERA HOUSING.
+    ///
+    /// The pocket used `plane`, which insets uniformly — a few points on every
+    /// side. On a notchless display that is right and the card hangs neatly from
+    /// the top. On a MacBook with a cutout those few points are nowhere near
+    /// enough: the housing is ~34pt tall and lands squarely on the card's title
+    /// row and its buttons.
+    ///
+    /// Two things went wrong there, and only one of them was the missing text.
+    /// The grey plane is a DIFFERENT MATERIAL from the black around it, so where
+    /// it passed behind the housing it simply stopped being displayed — taking
+    /// chunks of its own rounded corners and hairline with it. That is the
+    /// chopped, uneven border reported from the field: not a drawing fault, a
+    /// second rounded shape competing with a physical one.
+    ///
+    /// The answer is NOT to cut this plane around the cutout. NotchShape's own
+    /// notes rule that out — "two wings can never look right" — and the black
+    /// surface beneath already runs straight through the hole, invisibly,
+    /// because it is the same colour as the housing. What must stay clear of it
+    /// is anything that ISN'T that black: this plane, and the content on it.
+    ///
+    /// So the top inset becomes the cutout's height plus breathing room, which
+    /// is exactly the number the task surface and the wall already take. The
+    /// pocket is the one large surface that was never handed it.
+    @ViewBuilder private func pocketPlane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {
+        body()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: Theme.planeRadius).fill(Theme.plane))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.planeRadius))
+            .padding(.top, topInset)
+            .padding(.bottom, Theme.panelPadding)
             .padding(.horizontal, Theme.panelPadding + model.bar.fillet)
     }
 
