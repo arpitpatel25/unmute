@@ -10,6 +10,7 @@
 // billing (PRD §11.2). Codex is driven in its interactive REPL, never headless.
 
 import { CliAgentExecutor, type CliAgentConfig } from './pty-session'
+import type { SpawnOpts } from './executor'
 import { providerOf, type ProviderId } from './providers'
 
 type NodePtyLoader = CliAgentConfig['ptyLoader']
@@ -18,13 +19,50 @@ export interface CodexExecutorOpts {
   codexBin?: string
   extraArgs?: string[]
   ptyLoader?: NodePtyLoader
+  /** Model to run on, e.g. 'o3'. Codex takes it as TOML config, not a flag. */
+  model?: string
+}
+
+/**
+ * CODEX'S ARGV, WHICH IS NOT CLAUDE'S.
+ *
+ * The same three ideas, spelled entirely differently (verified against
+ * codex-cli 0.142.5):
+ *
+ *   fork   → codex fork <id>       Claude: --resume <id> --fork-session
+ *   resume → codex resume <id>     Claude: --resume <id>
+ *   fresh  → (nothing)             Claude: --session-id <id>
+ *
+ * SUBCOMMANDS, NOT FLAGS, and that distinction is the whole reason this exists.
+ * Codex forwards unrecognised options to its interactive CLI rather than
+ * failing, so feeding it `--resume <uuid>` does not error — it opens a FRESH
+ * conversation and silently drops the context the resume was for. A resume that
+ * looks like it worked and lost your history is worse than one that refuses.
+ *
+ * AND THE SESSION ID CANNOT BE PINNED. Claude accepts `--session-id` so we mint
+ * the id and know it up front. Codex mints its own, so a fresh spawn passes
+ * nothing and the id is learned afterwards from the rollout — which is where
+ * every other fact about a Codex session comes from anyway (cli-observer.ts).
+ *
+ * The model is `-c model="…"`, a dotted TOML override, NOT `--model`. Same
+ * failure mode: pass `--model o3` and Codex takes it as a prompt, so the task
+ * runs on the default model and appears to have worked.
+ */
+export function codexArgs(o: SpawnOpts, base: readonly string[]): string[] {
+  if (o.forkFromSessionId) return ['fork', o.forkFromSessionId, ...base]
+  if (o.resumeSessionId) return ['resume', o.resumeSessionId, ...base]
+  return [...base]   // fresh: Codex mints the id itself
 }
 
 export class CodexExecutor extends CliAgentExecutor {
   constructor(opts: CodexExecutorOpts = {}) {
     super({
       bin: opts.codexBin || 'codex',
-      extraArgs: opts.extraArgs || [],
+      extraArgs: [
+        ...(opts.model ? ['-c', `model="${opts.model}"`] : []),
+        ...(opts.extraArgs || []),
+      ],
+      buildArgs: codexArgs,
       // Keep Codex on the subscription/login pool, not API billing.
       stripEnvVars: ['OPENAI_API_KEY', 'OPENAI_API_BASE'],
       ptyLoader: opts.ptyLoader,

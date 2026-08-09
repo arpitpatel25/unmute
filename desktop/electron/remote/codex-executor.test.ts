@@ -1,31 +1,39 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CodexExecutor } from './codex-executor.ts'
+import { codexArgs } from './codex-executor'
+import { claudeArgs } from './pty-session'
 
-function makeFakePty() {
-  const calls: { file?: string; args?: string[]; opts?: Record<string, unknown> } = {}
-  const loader = () => ({
-    spawn(file: string, args: string[], opts: Record<string, unknown>) {
-      calls.file = file; calls.args = args; calls.opts = opts
-      return { onData() {}, onExit() {}, write() {}, kill() {} }
-    },
-  })
-  return { loader, calls }
-}
+const base: string[] = []
 
-test('Codex adapter spawns the codex binary, never headless (PRD §11)', async () => {
-  const fake = makeFakePty()
-  const ex = new CodexExecutor({ ptyLoader: fake.loader })
-  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 't1' })
-  assert.equal(fake.calls.file, 'codex')
-  assert.ok(!(fake.calls.args || []).includes('-p'))
+test('Codex resumes with a SUBCOMMAND, where Claude uses a flag', () => {
+  // The distinction is the whole point. Codex forwards unrecognised options to
+  // its interactive CLI instead of failing, so `--resume <uuid>` does not
+  // error — it opens a FRESH conversation and silently drops the history. A
+  // resume that looks like it worked and lost your context is the worst
+  // possible outcome, so this is pinned.
+  assert.deepEqual(codexArgs({ cwd: '/x', env: {}, taskId: 't', resumeSessionId: 'abc' }, base),
+    ['resume', 'abc'])
+  assert.deepEqual(claudeArgs({ cwd: '/x', env: {}, taskId: 't', resumeSessionId: 'abc' }, base),
+    ['--resume', 'abc'])
 })
 
-test('Codex adapter strips OPENAI_API_KEY to stay off API billing (PRD §11.2)', async () => {
-  const fake = makeFakePty()
-  const ex = new CodexExecutor({ ptyLoader: fake.loader })
-  await ex.spawn({ cwd: '/tmp/t', env: { OPENAI_API_KEY: 'sk-x', PATH: '/usr/bin' }, taskId: 't1' })
-  const env = fake.calls.opts?.env as Record<string, string>
-  assert.equal(env.OPENAI_API_KEY, undefined)
-  assert.equal(env.PATH, '/usr/bin') // unrelated env preserved
+test('fork is a subcommand too, and never carries --fork-session', () => {
+  assert.deepEqual(codexArgs({ cwd: '/x', env: {}, taskId: 't', forkFromSessionId: 'abc' }, base),
+    ['fork', 'abc'])
+})
+
+test('a fresh Codex spawn pins nothing — Codex mints its own id', () => {
+  // Claude accepts --session-id so we know the id up front. Codex does not, so
+  // passing one would be a stray argument taken as a prompt. The id is learned
+  // afterwards from the rollout.
+  assert.deepEqual(codexArgs({ cwd: '/x', env: {}, taskId: 't', sessionId: 'ours' }, base), [])
+  assert.deepEqual(claudeArgs({ cwd: '/x', env: {}, taskId: 't', sessionId: 'ours' }, base),
+    ['--session-id', 'ours'])
+})
+
+test('the model rides as a TOML override, not a --model flag', async () => {
+  const { CodexExecutor } = await import('./codex-executor')
+  const ex = new CodexExecutor({ model: 'o3' }) as unknown as { cfg: { extraArgs: string[] } }
+  assert.deepEqual(ex.cfg.extraArgs, ['-c', 'model="o3"'],
+    '`--model o3` would be taken as a PROMPT and the task would run on the default')
 })

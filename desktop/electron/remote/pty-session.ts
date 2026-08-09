@@ -54,6 +54,8 @@ const READY_MAX_MS = 8000 // hard cap so we never wait forever
 export interface CliAgentConfig {
   /** The agent binary, e.g. 'claude' or 'codex'. */
   bin: string
+  /** How THIS agent spells resume/fork/fresh. Omitted ⇒ Claude's flags. */
+  buildArgs?: (opts: SpawnOpts, base: readonly string[]) => string[]
   /** Extra launch args. NEVER include a headless flag (-p / --print). */
   extraArgs: string[]
   /** Env vars to delete before spawn — the billing-pool guard (PRD §3.2). */
@@ -105,18 +107,22 @@ export class CliAgentExecutor implements AgentExecutor {
     //   • fork  → --resume <id> --fork-session (branch a NEW conversation off it)
     //   • resume→ --resume <id>                (CONTINUE that exact conversation)
     //   • fresh → --session-id <id>            (pin a newly-minted conversation)
-    const extraArgs = spawnOpts.forkFromSessionId
-      // Fork spawn: inherit an existing conversation's context. Claude mints
-      // the fork's NEW session id itself (cannot be pinned) — the dispatcher
-      // discovers it post-boot from the project slug.
-      ? [...this.cfg.extraArgs, '--resume', spawnOpts.forkFromSessionId, '--fork-session']
-      : spawnOpts.resumeSessionId
-        // Resume: continue THIS exact session by id (no --fork-session — that
-        // would branch a new conversation instead of resuming the existing one).
-        ? [...this.cfg.extraArgs, '--resume', spawnOpts.resumeSessionId]
-        : spawnOpts.sessionId
-          ? [...this.cfg.extraArgs, '--session-id', spawnOpts.sessionId]
-          : this.cfg.extraArgs
+    // WHICH ARGV SHAPE — and it is NOT the same for every agent.
+    //
+    // This built Claude's flags unconditionally: `--resume <id>`,
+    // `--session-id <id>`, `--fork-session`. Codex expresses the same three
+    // ideas as SUBCOMMANDS (`codex resume <id>`, `codex fork <id>`) and mints
+    // its own session id with no way to pin one. Reusing Claude's shape there
+    // does not error loudly — Codex forwards unknown options to the
+    // interactive CLI — so the session would come up as a fresh conversation
+    // and quietly lose the context the resume existed to keep.
+    //
+    // The registry already says what each backend IS; this is the one place
+    // that has to know how it is SPOKEN TO, so the shape belongs to the
+    // adapter and this layer just asks for it.
+    const extraArgs = this.cfg.buildArgs
+      ? this.cfg.buildArgs(spawnOpts, this.cfg.extraArgs)
+      : claudeArgs(spawnOpts, this.cfg.extraArgs)
     let args = extraArgs
     if (this.cfg.tmux) {
       const session = sessionNameFor(this.taskId)
@@ -254,6 +260,21 @@ export interface ClaudeCodeExecutorOpts {
   /** Run inside a tmux session so it can be popped out to a real terminal. */
   tmux?: TmuxConfig
   ptyLoader?: () => NodePty
+}
+
+/**
+ * Claude's argv shape — the default, and unchanged in behaviour.
+ *
+ * Three mutually-exclusive forms:
+ *   fork   → --resume <id> --fork-session   (branch a NEW conversation off it)
+ *   resume → --resume <id>                  (CONTINUE that exact conversation)
+ *   fresh  → --session-id <id>              (pin a newly-minted conversation)
+ */
+export function claudeArgs(o: SpawnOpts, base: readonly string[]): string[] {
+  if (o.forkFromSessionId) return [...base, '--resume', o.forkFromSessionId, '--fork-session']
+  if (o.resumeSessionId) return [...base, '--resume', o.resumeSessionId]
+  if (o.sessionId) return [...base, '--session-id', o.sessionId]
+  return [...base]
 }
 
 /** Build the exact argv Unmute adds to `claude`. Exported so the
