@@ -66,6 +66,7 @@ import { runAppleScript } from './cua/lanes/applescript'
 import { type RouterCtx } from './cua/router'
 import { Presence } from './presence'
 import { listImportableSessions, findSessionCwd } from './claude-cli-sessions'
+import { listImportableCodexSessions } from './codex/cli-session'
 import { applyAxRegistration } from './ax/register'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
@@ -2640,24 +2641,41 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         // THE IMPORT RAIL. Sessions this machine has and unmute does not.
         listImportable: async () => {
           const known = new Set(mgr.list().map((t) => t.sessionId).filter(Boolean) as string[])
-          const rows = await listImportableSessions(known).catch(() => [])
-          return rows.map((r) => ({
-            sessionId: r.sessionId, title: r.title, project: r.project, lastActivityAt: r.lastActivityAt,
-          }))
+          // BOTH CLIs IN ONE RAIL. The question the rail answers is "what do I
+          // already have that unmute does not", and the user does not think of
+          // that per-backend. Interleaved by last activity for the same reason.
+          const [claude, codex] = await Promise.all([
+            listImportableSessions(known).catch(() => []),
+            listImportableCodexSessions(known).catch(() => []),
+          ])
+          return [
+            ...claude.map((r) => ({ ...r, agent: 'claude' as const })),
+            ...codex.map((r) => ({ ...r, agent: 'codex' as const })),
+          ]
+            .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+            .map((r) => ({
+              sessionId: r.sessionId, title: r.title, project: r.project,
+              lastActivityAt: r.lastActivityAt, agent: r.agent,
+            }))
         },
         importSession: async (sessionId) => {
           const known = new Set(mgr.list().map((t) => t.sessionId).filter(Boolean) as string[])
-          const row = (await listImportableSessions(known).catch(() => []))
-            .find((r) => r.sessionId === sessionId)
+          const [claude, codex] = await Promise.all([
+            listImportableSessions(known).catch(() => []),
+            listImportableCodexSessions(known).catch(() => []),
+          ])
+          const codexRow = codex.find((r) => r.sessionId === sessionId)
+          const row = claude.find((r) => r.sessionId === sessionId) ?? codexRow
           if (!row) return false
           // GROUPED BY PROJECT, not by the router. An import has no intent to
           // route — only a title and a history — and the directory it ran in is
           // the axis you actually want ("all my unmute-cloud threads"), for
           // free and with no model. A session earns a semantic group later, if
           // the router gives it one when you actually work in it.
-          const id = await mgr.adoptClaudeCliSession({
+          const id = await mgr.adoptCliSession({
             sessionId: row.sessionId, title: row.title, cwd: row.cwd,
             lastActivityAt: row.lastActivityAt, group: row.project,
+            agent: codexRow ? 'codex' : 'claude',
           })
           return !!id
         },

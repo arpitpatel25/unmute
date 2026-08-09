@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { findRollout, readRolloutEvents, discoverSessionId } from './cli-session'
+import { findRollout, readRolloutEvents, discoverSessionId, listImportableCodexSessions } from './cli-session'
 
 const UUID_A = '019fccd9-d64b-7142-bf79-f721387b9e97'
 const UUID_B = '019fccd9-aaaa-7142-bf79-f721387b9e98'
@@ -66,4 +66,46 @@ test('a session in a DIFFERENT directory is never adopted', async () => {
 test('no ~/.codex at all is not an error', async () => {
   assert.equal(await findRollout(UUID_A, '/nope/nowhere'), null)
   assert.equal(await discoverSessionId('/repo', Date.now(), '/nope/nowhere'), null)
+})
+
+test('the import list offers Codex sessions, titled by what you actually asked', async () => {
+  // Claude writes an aiTitle; Codex writes none. The first user_message is the
+  // honest stand-in — it is what the person asked for, which beats anything we
+  // would invent and costs no model.
+  const h = await home()
+  const cwd = join(h, 'project')
+  await fs.mkdir(cwd, { recursive: true })
+  const p = join(h, '.codex/sessions/2026/08/09', `rollout-old-${UUID_A}.jsonl`)
+  await fs.writeFile(p, [
+    meta(cwd, UUID_A, '2026-08-09T09:00:00.000Z'),
+    JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'refactor the notch geometry' } }),
+  ].join('\n') + '\n')
+  const old = new Date(Date.now() - 60 * 60_000)
+  await fs.utimes(p, old, old)
+
+  const rows = await listImportableCodexSessions(new Set(), { home: h })
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].title, 'refactor the notch geometry')
+  assert.equal(rows[0].cwd, cwd, 'authoritative, from session_meta — nothing reconstructed')
+  assert.equal(rows[0].project, 'project')
+})
+
+test('already-imported, still-live, and vanished-project sessions are not offered', async () => {
+  const h = await home()
+  const cwd = join(h, 'project')
+  await fs.mkdir(cwd, { recursive: true })
+  const dir = join(h, '.codex/sessions/2026/08/09')
+  const write = async (id: string, at: number, where = cwd) => {
+    const p = join(dir, `rollout-x-${id}.jsonl`)
+    await fs.writeFile(p, meta(where, id, '2026-08-09T09:00:00.000Z') + '\n')
+    await fs.utimes(p, new Date(at), new Date(at))
+    return p
+  }
+  const hour = Date.now() - 60 * 60_000
+  await write(UUID_A, hour)
+  await write(UUID_B, Date.now())                                  // live
+  await write('019fccd9-cccc-7142-bf79-f721387b9e99', hour, join(h, 'gone'))  // no cwd
+
+  const ids = (await listImportableCodexSessions(new Set([UUID_A]), { home: h })).map((r) => r.sessionId)
+  assert.deepEqual(ids, [], 'known, live and cwd-less are all excluded')
 })

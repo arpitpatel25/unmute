@@ -2985,12 +2985,14 @@ export class TaskManager extends EventEmitter {
    * one is a checkpoint and the notch will offer it — which is right, since you
    * imported it precisely to pick it back up.
    */
-  async adoptClaudeCliSession(input: {
+  async adoptCliSession(input: {
     sessionId: string
     title: string
     cwd: string
     lastActivityAt: number
     group?: string
+    /** Which CLI wrote it. Absent ⇒ Claude, matching the persisted default. */
+    agent?: 'claude' | 'codex'
   }): Promise<string | null> {
     for (const t of this.tasks.values()) {
       if (t.sessionId !== input.sessionId) continue
@@ -3044,7 +3046,9 @@ export class TaskManager extends EventEmitter {
       intent: input.title,
       name: input.title,
       sessionId: input.sessionId,
-      agent: 'claude' as const,
+      agent: input.agent ?? 'claude',
+      // Codex resumes by the id it minted, which IS the rollout id.
+      ...(input.agent === 'codex' ? { codexRolloutId: input.sessionId } : {}),
       // A thread the user owns elsewhere is persistent by nature: never
       // idle-killed, never auto-purged.
       kind: 'session' as const,
@@ -3066,7 +3070,7 @@ export class TaskManager extends EventEmitter {
     this.tasks.set(id, task)
     await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
       id, intent: task.intent, name: task.name, sessionId: input.sessionId,
-      kind: 'session', agent: 'claude', state: 'done',
+      kind: 'session', agent: input.agent ?? 'claude', state: 'done',
       ...(input.group ? { group: input.group } : {}),
       createdAt: task.createdAt, updatedAt: task.updatedAt,
       cwd: input.cwd, mode: 'managed', importedFromCli: true,

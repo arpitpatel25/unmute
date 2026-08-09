@@ -98,6 +98,76 @@ export async function readRolloutEvents(path: string): Promise<RolloutEvent[]> {
  * rounds the wrong way would make the session we are looking for invisible
  * forever.
  */
+/** One importable Codex session — same shape the Claude scanner produces, so
+ *  the rail can hold both without knowing which is which. */
+export interface ImportableCodexSession {
+  sessionId: string
+  title: string
+  cwd: string
+  lastActivityAt: number
+  project: string
+}
+
+const WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+/** Written to this recently and someone is almost certainly still typing in it.
+ *  Same heuristic and same reason as the Claude rail: a live session sorts to
+ *  the top by mtime and `codex resume` against a running process is not a
+ *  resume. */
+const LIVE_MS = 2 * 60 * 1000
+
+/**
+ * Codex CLI sessions on this machine that unmute does not have.
+ *
+ * The Codex half of the import rail. Deliberately mirrors
+ * claude-cli-sessions.ts down to the bounds, because the two lists sit in one
+ * rail and a user should not have to learn that one of them ages out sooner.
+ *
+ * TITLES ARE NOT GIVEN TO US. Claude writes an `aiTitle` on line 1; Codex
+ * writes none, so the first user_message is the honest stand-in — it is what
+ * the person actually asked for, which is a better name than anything we would
+ * invent and costs no model.
+ *
+ * The cwd comes from `session_meta`, which is authoritative — unlike Claude's
+ * directory names, nothing here has to be reconstructed from a lossy path.
+ */
+export async function listImportableCodexSessions(
+  known: ReadonlySet<string>,
+  opts: { home?: string; now?: number; windowMs?: number; cap?: number; liveMs?: number } = {},
+): Promise<ImportableCodexSession[]> {
+  const now = opts.now ?? Date.now()
+  const windowMs = opts.windowMs ?? WINDOW_MS
+  const liveMs = opts.liveMs ?? LIVE_MS
+  const out: ImportableCodexSession[] = []
+  let skippedKnown = 0, skippedOld = 0, skippedLive = 0, skippedNoCwd = 0
+
+  for (const r of await allRollouts(opts.home)) {
+    if (known.has(r.sessionId)) { skippedKnown++; continue }
+    if (now - r.mtimeMs > windowMs) { skippedOld++; continue }
+    if (now - r.mtimeMs < liveMs) { skippedLive++; continue }
+    const events = await readRolloutEvents(r.path)
+    const meta = events.find((e) => e.type === 'session_meta')?.payload as { cwd?: string } | undefined
+    if (!meta?.cwd) { skippedNoCwd++; continue }
+    // A session whose project is gone cannot be resumed — `resume()` refuses a
+    // cwd it cannot reach, so listing it is listing a dead button.
+    try { await fs.access(meta.cwd) } catch { skippedNoCwd++; continue }
+    const firstAsk = events.find((e) => e.type === 'event_msg' && e.payload?.type === 'user_message')
+    const raw = String((firstAsk?.payload?.message ?? firstAsk?.payload?.text ?? '')).trim()
+    const project = meta.cwd.split('/').filter(Boolean).pop() ?? meta.cwd
+    out.push({
+      sessionId: r.sessionId,
+      title: raw ? (raw.length > 60 ? raw.slice(0, 59).trimEnd() + '…' : raw.split('\n')[0]) : project,
+      cwd: meta.cwd,
+      lastActivityAt: r.mtimeMs,
+      project,
+    })
+    if (out.length >= (opts.cap ?? 40)) break
+  }
+  log.event('codex-cli-importable-scanned', {
+    offered: out.length, skippedKnown, skippedOld, skippedLive, skippedNoCwd,
+  })
+  return out
+}
+
 export async function discoverSessionId(
   cwd: string, sinceMs: number, home?: string, graceMs = 5_000,
 ): Promise<string | null> {
