@@ -40,6 +40,8 @@ import { readTranscript, hadSideEffects, readLatestExchange } from './transcript
 import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import { resolveTranscriptById } from './trace-reducer'
+import { rollupCodexEvents } from './codex/cli-observer'
+import { discoverSessionId, findRollout, readRolloutEvents } from './codex/cli-session'
 import { projectSlug } from './projects'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
@@ -109,6 +111,10 @@ export interface Task {
    *  `local:` prefix). This is the whole handle — it addresses the rollout file
    *  for reads and the sidebar row for open/send. */
   codexThreadId?: string
+  /** Codex CLI: the rollout/session uuid Codex minted for this task. Learned
+   *  after spawn (Codex assigns its own), then pinned — it is both where state
+   *  is read from and what `codex resume <id>` takes. */
+  codexRolloutId?: string
   /** The id Codex's SIDEBAR uses for this thread, when it differs from the
    *  durable one. A not-yet-persisted thread is labelled
    *  `local:client-new-thread:<unrelated-uuid>` and nothing on the row joins the
@@ -1633,6 +1639,48 @@ export class TaskManager extends EventEmitter {
     }
   }
 
+  /**
+   * Poll a Codex CLI task by reading its rollout.
+   *
+   * Two phases, because the session id is DISCOVERED rather than assigned:
+   * Codex mints its own, so a freshly spawned task has no id until Codex has
+   * written one. Until then each poll looks for the rollout that appeared in
+   * our cwd at-or-after our spawn; once found it is pinned and never looked up
+   * again.
+   */
+  private async pollCodexCli(id: string): Promise<void> {
+    const task = this.tasks.get(id)
+    if (!task) return
+    const tlog = log.child({ taskId: id })
+
+    if (!task.codexRolloutId) {
+      const found = await discoverSessionId(task.cwd, task.createdAt)
+      if (!found) return                       // Codex has not written one yet
+      task.codexRolloutId = found
+      // The rollout id IS the session id for resume — `codex resume <uuid>`.
+      if (!task.sessionId || task.sessionId === id) task.sessionId = found
+      tlog.event('codex-cli-session-pinned', { sessionId: found })
+      void this.persistState(task).catch(() => {})
+    }
+
+    const path = await findRollout(task.codexRolloutId)
+    if (!path) return                          // archived mid-read, or gone
+    const events = await readRolloutEvents(path)
+    const { status, lastActivityAt } = rollupCodexEvents(events, {
+      now: new Date(this.clock()).toISOString(),
+      kind: (task.kind ?? 'oneoff') === 'session' ? 'session' : 'oneoff',
+    })
+    if (lastActivityAt) task.lastHeartbeatMs = lastActivityAt
+    if (!status) return
+    // Unchanged state with no new text is not news — transitioning on every
+    // poll would rewrite updatedAt once a second and shove the task to the top
+    // of the wall forever.
+    const sameState = task.state === status.state
+    const sameText = (task.result?.detail ?? '') === (status.result?.detail ?? '')
+    if (sameState && sameText) return
+    this.transition(id, status.state, status, lastActivityAt ?? undefined)
+  }
+
   private async pollCodexDesktop(id: string): Promise<void> {
     const task = this.tasks.get(id)
     // NOTE: `ready` is deliberately NOT terminal for this backend — the Codex
@@ -1929,6 +1977,19 @@ export class TaskManager extends EventEmitter {
         ? this.pollClaudeDesktop(id)
         : this.pollCodexDesktop(id)
     }
+    // CODEX CLI READS A ROLLOUT, NOT A STATUS FILE.
+    //
+    // Everything below this line polls status.json — the file Claude writes
+    // because Unmute installs hooks telling it to. Codex is given no hooks and
+    // writes no status.json, so it would have fallen through here, found
+    // nothing, and sat at its first state forever.
+    //
+    // It needs none: Codex already records every turn to a rollout for its own
+    // reasons, and those records are a richer signal than the hooks we ask
+    // Claude for (cli-observer.ts). Reading a file it already writes is also
+    // what keeps the observe-never-modify rule true for this backend without
+    // any work at all.
+    if (task && task.agent === 'codex') return this.pollCodexCli(id)
     if (!task || TERMINAL.includes(task.state)) return
     const tlog = log.child({ taskId: id })
 
