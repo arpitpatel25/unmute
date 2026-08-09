@@ -325,10 +325,18 @@ function refreshTmux(): void {
 async function probeBackends(): Promise<BackendProbe[]> {
   const out: BackendProbe[] = []
   for (const p of Object.values(PROVIDERS)) {
-    if (p.id === 'codex') continue
     if (p.transport === 'pty') {
-      // An owned-PTY backend needs its CLI on the PATH the executors will get.
-      const ok = await claudeCliAvailable()
+      // An owned-PTY backend needs ITS OWN CLI on the PATH the executors get.
+      //
+      // This asked `claudeCliAvailable()` for every PTY backend and skipped
+      // Codex outright, which is why Codex CLI never appeared in the picker
+      // however installed and ready it was. Two faults in three lines: a probe
+      // hard-coded to one binary, and an explicit `continue` past the provider
+      // the registry already described.
+      //
+      // Asking each backend about its own binary is the whole point of walking
+      // the registry — otherwise the loop is a two-entry literal wearing a for.
+      const ok = p.id === 'codex' ? await codexCliAvailable() : await claudeCliAvailable()
       out.push({ id: p.id, label: p.label, installed: ok, ready: ok, ...(ok ? {} : { reason: 'not-installed' }) })
       continue
     }
@@ -3954,7 +3962,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         })),
       }
     }
-    const catalog = getModelCatalog()
+    // SCOPED TO THE BACKEND ASKED FOR. Unscoped, this returned Claude's list to
+    // Codex — and the exact lie the comment above warns about: `-c model="opus"`
+    // is valid TOML for a model Codex does not have, so it fails at the API
+    // rather than the picker, long after the user chose.
+    const catalog = getModelCatalog(id)
     log.event('model-options', { agent: id, models: catalog.length })
     return { agent: id, models: catalog.map((m) => ({ id: m.id, label: m.label, description: m.description })) }
   })
