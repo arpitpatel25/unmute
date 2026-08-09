@@ -33,7 +33,7 @@ import {
   type StatusPayload,
   type TaskState,
 } from './status-file'
-import { buildDispatch, buildResumeNudge } from './dispatch-prompt'
+import { buildDispatch } from './dispatch-prompt'
 import { detectSurface } from './surface'
 import { deriveStatus, isAnswerable, type HookEvent, type AskQuestion } from './observer'
 import { readTranscript, hadSideEffects, readLatestExchange } from './transcript'
@@ -3289,34 +3289,30 @@ export class TaskManager extends EventEmitter {
       ex.writeStdin('') // accept folder-trust; session reopens with full prior context
       await new Promise((r) => setTimeout(r, this.opts.trustAcceptMs))
 
-      // Two scenarios, distinguished by whether the task ever completed:
-      //  1. UNFINISHED (interrupted/killed mid-work, status never reached 'done')
-      //     → the session is back but idle; NUDGE it to continue so it actually
-      //       resumes the work, flip to processing, and re-start polling.
-      //  2. FINISHED ('done') → leave it warm and silent for the user's next
-      //     prompt — exactly the prior behavior (no regression to this path).
-      const status = await readStatus(task.statusPath)
-      // 'ready' = ball with the USER — resume warm+silent awaiting their words,
-      // never nudge it to "continue" (there is nothing to continue without them).
-      const unfinished = status?.state !== 'done'
-      if (unfinished) {
-        const nudge = buildResumeNudge(task.intent)
-        ex.writeStdin(nudge)
-        // Same submit-reliability fix as dispatch: a follow Enter guarantees the
-        // multi-line prompt submits; a spare Enter on an empty prompt is a no-op.
-        await new Promise((r) => setTimeout(r, this.opts.submitConfirmMs))
-        if (ex.alive) ex.write('\r')
-        task.error = undefined // clear the "interrupted" reason; it's running again
-        this.transition(id, 'processing', {})
-        this.startPolling(id)
-        tlog.event('resume-continued', { unfinished: true })
-        return true
-      }
-      // Finished task: warm + silent, awaiting the user's next prompt (unchanged).
+      // RESUMING IS NOT PROMPTING. It brings the session back and stops there.
+      //
+      // This used to type a "you were interrupted, pick up where you left off"
+      // nudge into any task whose status was not `done`, and submit it. So
+      // pressing Resume did not restore a conversation — it took a turn in it,
+      // on your behalf, with words you never wrote. On an IMPORTED session it
+      // was worse: those carry no status file at all, so `status?.state` is
+      // undefined, `undefined !== 'done'` is true, and every single import got
+      // prompted the moment it came back.
+      //
+      // The rule, and it holds for every backend: resume makes a session
+      // reachable again — terminal on screen, ready for your words — and sends
+      // nothing. What to say next is yours. A task that really was cut off
+      // mid-work is still cut off mid-work; the user can see that in the
+      // terminal and decide, which is the whole reason we show it to them.
+      //
+      // The nudge builder stays in dispatch-prompt for now; nothing calls it.
       task.updatedAt = this.clock()
+      // The "interrupted" reason is stale the moment the session is back — the
+      // card should not keep explaining a failure that no longer applies.
+      task.error = undefined
       this.parkWarm(id)
       this.emit('updated', task)
-      tlog.event('resume-ready', { unfinished: false })
+      tlog.event('resume-silent', {})
       return true
     } catch (e) {
       const error = (e as Error).message

@@ -70,24 +70,31 @@ test('dispatch → scaffolds status, types ONLY the intent, writes nothing into 
   tm.kill(id) // stop polling
 })
 
-test('resume NUDGES an unfinished (interrupted) task to continue, and goes back to processing', async () => {
-  const baseDir = await tmpBase()
-  const fake = makeFakeExecutor()
-  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
-  // Simulate an interrupted task: a meta receipt + a NON-done status on disk.
-  const tid = randomUUID()
-  const dir = path.join(baseDir, 'local', tid)
-  await fs.mkdir(dir, { recursive: true })
-  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'scroll my feed', createdAt: Date.now() }))
-  await claudeWrites(path.join(dir, 'status.json'), { state: 'processing' })
-  await tm.rehydrate() // rehydrate sets no executor, so resume will spawn a fresh one
-  const ok = await tm.resume(tid)
-  assert.equal(ok, true)
-  // A continuation nudge was typed (re-grounding it with the original intent).
-  assert.ok(fake.writes.some((w) => /resumed|continue/i.test(w) && w.includes('scroll my feed')),
-    'a continue nudge carrying the intent was sent')
-  assert.equal(tm.get(tid)!.state, 'processing') // tracking again
-  tm.kill(tid) // stop polling so the test process exits cleanly
+test('resume brings an interrupted task back WITHOUT speaking for the user', () => {
+  // THIS ASSERTED THE OPPOSITE, and the behaviour it pinned was the bug: an
+  // interrupted task was re-grounded by typing the original intent back into
+  // it. Plausible, and still wrong — pressing Resume took a turn in the
+  // conversation on the user's behalf. What was cut off is visible in the
+  // terminal; what to say about it is theirs.
+  //
+  // The assertion is inverted rather than deleted, so the old behaviour cannot
+  // quietly return.
+  return (async () => {
+    const baseDir = await tmpBase()
+    const fake = makeFakeExecutor()
+    const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+    const tid = randomUUID()
+    const dir = path.join(baseDir, 'local', tid)
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: tid, intent: 'scroll my feed', createdAt: Date.now() }))
+    await claudeWrites(path.join(dir, 'status.json'), { state: 'processing' })
+    await tm.rehydrate()
+    fake.writes.length = 0
+    assert.equal(await tm.resume(tid), true, 'the session still comes back')
+    assert.deepEqual(fake.writes.filter((w) => /resumed|continue|scroll my feed/i.test(w)), [],
+      'and it arrives silent')
+    tm.kill(tid)
+  })()
 })
 
 test('resume does NOT nudge a task that already completed (no regression to the finished case)', async () => {
@@ -1041,8 +1048,9 @@ test('opening a persistent session revives it with no Resume tap; a one-off is l
   tm.opened(sid)
   await waitFor(() => tm.isAlive(sid))
   assert.equal(spawns, 1, 'opening the card resumed it')
-  // Mid-work when it closed ⇒ the resume NUDGES it to carry on.
-  assert.equal(tm.get(sid)!.state, 'processing')
+  // The session is BACK, not restarted. Resume no longer nudges it into
+  // 'processing' — nothing has been said to it, so nothing is in flight.
+  assert.equal(tm.isAlive(sid), true, 'reachable again, which is all resume promises')
 
   // A one-off is opened to READ its result — resuming it would spawn a REPL
   // behind the user's back (and after a purge there is nothing to resume).
@@ -1572,4 +1580,30 @@ test('resume still refuses — loudly — when there is nothing to recover', asy
   ;(tm as unknown as { executors: Map<string, unknown> }).executors.delete(id)
   assert.equal(await tm.resume(id), false, 'false is what makes the surface say so')
   tm.kill(id)
+})
+
+test('resume sends NOTHING — it makes a session reachable, it does not take a turn in it', async () => {
+  // THE FIELD REPORT: resuming an imported session typed "This was interrupted
+  // before it finished and has just been resumed… pick up exactly where you
+  // left off" into it and submitted. Resume did not restore a conversation, it
+  // spoke in one, with words the user never wrote.
+  //
+  // Imports made it certain: they carry no status file, so `status?.state` was
+  // undefined, `undefined !== 'done'` was true, and every single one got
+  // prompted the moment it came back.
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  const id = await tm.dispatch('go through the repo')
+  tm.setKind(id, 'session')
+  // No status file at all — exactly an imported session's shape.
+  await fs.rm(tm.get(id)!.statusPath, { force: true })
+  fake.alive = false
+  ;(tm as unknown as { executors: Map<string, unknown> }).executors.delete(id)
+  fake.writes.length = 0
+
+  assert.equal(await tm.resume(id), true)
+  const said = fake.writes.join('')
+  assert.ok(!/interrupted|pick up|resumed|continue/i.test(said),
+    `resume must not speak, but it wrote: ${said.slice(0, 120)}`)
 })
