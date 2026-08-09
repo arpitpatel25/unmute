@@ -1051,19 +1051,21 @@ function executorFactory(resume = false, forTask?: AgentKind, factoryOpts?: Exec
     throw new Error(`AGENT_SEPARATION_VIOLATION: ${agent} has no PTY executor; dispatch must route it to its driver`)
   }
   if (agent === 'codex') {
-    // Codex CLI resume is NOT wired (its continuation mechanism differs from
-    // Claude's --resume/--continue). Building a plain executor here would spawn a
-    // BRAND-NEW, context-free codex REPL behind a button that promises "continue
-    // with full context" — and, now that opening a session can resume it without
-    // a tap, it would do so silently. Fail loudly instead: resume() catches this,
-    // reports false, and the card keeps its (honest) ended state. Dormant today —
-    // the picker offers Claude and Codex desktop only — this is the guard for
-    // when the CLI backend ships.
-    if (resume) {
-      log.error('codex CLI resume is not implemented — refusing to spawn a context-free session', { agent })
-      throw new Error('CODEX_CLI_RESUME_UNSUPPORTED: a fresh codex REPL would not continue this task')
-    }
-    return new CodexExecutor({})
+    // A GUARD LIVED HERE THAT THREW ON RESUME, and it was right: Codex's
+    // continuation is not Claude's, so building a plain executor would have
+    // spawned a brand-new context-free REPL behind a button promising "continue
+    // with full context". Failing loudly beat that.
+    //
+    // It is wired now. `codexArgs` emits `codex resume <id>` — a subcommand,
+    // not a flag — and `resume()` proves the session exists by finding its
+    // rollout rather than asking Claude's transcript resolver. So the guard
+    // would now refuse the very thing it was protecting.
+    //
+    // The model is read here rather than baked into the executor: the picker
+    // writes `codexCliModel`, and it reaches Codex as `-c model="…"` (TOML
+    // config, NOT --model — see codexArgs).
+    const model = (settings.get('codexCliModel' as never) as string) || undefined
+    return new CodexExecutor({ model: model && model !== 'default' ? model : undefined })
   }
   // PRD §10.1/§10.6 interaction: a sandbox is the "fenced yard" — when it's ON
   // we do NOT skip permissions globally (out-of-fence access still prompts via
@@ -1309,6 +1311,24 @@ async function pushPillChips(): Promise<void> {
       chips.modelAxes = []
       // Unmute owns no process here, so there is no injection for raw to skip.
       chips.raw = null
+    } else if (agent === 'codex') {
+      // CODEX CLI HAS ITS OWN LIST AND ITS OWN SETTING. It used to fall into the
+      // Claude branch below — same wrong-list bug the two branches above exist
+      // to prevent, one backend later, and this time in the builder rather than
+      // the IPC handler. Two places answer "what models does this backend
+      // have", and fixing one is not fixing it.
+      //
+      // Sharing Claude's `model` key would be worse than the wrong labels: the
+      // id is passed as `-c model="opus"`, which is valid TOML for a model
+      // Codex does not have, so it fails at the API rather than the picker.
+      const catalog = getModelCatalog('codex')
+      const current = (settings.get('codexCliModel' as never) as string) || 'default'
+      chips.model = catalog.find((c) => c.id === current)?.label ?? current
+      chips.modelOptions = catalog.map((c) => ({
+        id: c.id, label: c.label, detail: c.description ?? '',
+      }))
+      chips.modelAxes = []          // Codex CLI exposes no effort axis
+      chips.raw = injectionDisabled()
     } else {
       const catalog = getModelCatalog()
       const current = settings.get('model') || getModels().doerDefault
@@ -2841,6 +2861,22 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // tasks run on, from a menu that was showing a different backend.
           if ((settings.get('agent') as AgentKind) === 'claude-code-desktop') {
             void setClaudeDesktopModel(m)
+            return
+          }
+          // CODEX CLI WRITES ITS OWN KEY. Sharing Claude's would store an id
+          // Codex does not have — and `isSelectableModel` validates against
+          // Claude's catalog, so a Codex id would be rejected and silently
+          // replaced by the Claude default, changing the model your CLAUDE
+          // tasks run on from a menu showing Codex's.
+          if ((settings.get('agent') as AgentKind) === 'codex') {
+            const codexIds = getModelCatalog('codex').map((c) => c.id)
+            if (!codexIds.includes(m)) { log.warn('pick-model-rejected', { agent: 'codex', model: m }); return }
+            settings.set('codexCliModel' as never, m as never)
+            for (const w of BrowserWindow.getAllWindows()) {
+              if (!w.isDestroyed()) w.webContents.send('remote:model-changed', m)
+            }
+            log.event('model-set', { agent: 'codex', model: m })
+            void pushPillChips()
             return
           }
           const model = isSelectableModel(m) ? m : (settings.get('model') || getModels().doerDefault)
