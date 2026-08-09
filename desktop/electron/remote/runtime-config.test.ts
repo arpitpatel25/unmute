@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { MODELS, PROMPTS, MODEL_CATALOG } from './config.ts'
+import { MODELS, PROMPTS, MODEL_CATALOG, modelsFor } from './config.ts'
 import { CONTRACT_TEXT } from './contract/contract-text.ts'
 import {
   compiledDefaults, mergeConfig,
@@ -137,8 +137,11 @@ test('getModelCatalog + isSelectableModel reflect the effective catalog after a 
       { id: 'sonnet', label: 'Sonnet' }, { id: 'claude-opus-4-8', label: 'Opus 4.8' },
     ] } }),
   })
-  // before refresh: compiled catalog
-  assert.deepEqual(getModelCatalog().map((c) => c.id), MODEL_CATALOG.map((c) => c.id))
+  // before refresh: the compiled catalog, SCOPED TO CLAUDE. The catalog carries
+  // Codex entries too now, and getModelCatalog() defaults to Claude — an
+  // unscoped read would put nine models in the picker, two called 'default'.
+  assert.deepEqual(getModelCatalog().map((c) => c.id), modelsFor('claude').map((c) => c.id))
+  assert.deepEqual(getModelCatalog('codex').map((c) => c.id), modelsFor('codex').map((c) => c.id))
   assert.equal(isSelectableModel('opus'), true)
   assert.equal(await refreshRemoteConfig(), 'updated')
   // after: the config catalog

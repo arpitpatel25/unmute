@@ -37,7 +37,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { MODELS, PROMPTS, MODEL_CATALOG, type DoerModel, type ModelChoice } from './config'
+import { MODELS, PROMPTS, MODEL_CATALOG, modelsFor, type DoerModel, type ModelChoice } from './config'
 import { CONTRACT_TEXT } from './contract/contract-text'
 import { createLogger } from './log'
 
@@ -350,8 +350,16 @@ export function __resetRuntimeConfigForTest(): void {
 // ─── Synchronous accessors (the hot path — never touch the network) ──────────
 
 export function getModels(): ConfigModels { return live.models }
-/** The effective (config-extended) selectable model catalog — for the selector. */
-export function getModelCatalog(): ModelChoice[] { return live.models.available }
+/** The effective (config-extended) selectable model catalog — for the selector.
+ *
+ *  SCOPED TO A BACKEND, and defaulting to Claude. The catalog gained Codex
+ *  entries when Codex CLI became a provider, so an unscoped read started
+ *  returning both sets — nine models in the picker, two of them called
+ *  'default'. Every existing caller wants Claude's, and gets it by asking for
+ *  nothing, which is the same contract `modelsFor` uses. */
+export function getModelCatalog(provider?: string): ModelChoice[] {
+  return modelsFor(provider, live.models.available)
+}
 /** True if `id` is a model a user may currently select (in the effective catalog). */
 export function isSelectableModel(id: unknown): id is string {
   return typeof id === 'string' && live.models.available.some((c) => c.id === id)
