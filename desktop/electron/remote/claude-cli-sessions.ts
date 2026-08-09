@@ -70,18 +70,45 @@ function projectOf(cwd: string): string {
   return parts[parts.length - 1] || cwd
 }
 
-/** First line only. These transcripts run to megabytes and we need 200 bytes of
- *  the first one; reading whole files to find a title would make opening the
- *  dashboard wait on hundreds of megabytes of JSON. */
-async function readHead(path: string): Promise<{ aiTitle?: string; sessionId?: string } | null> {
+/**
+ * Title and TRUE working directory, from the head of the transcript.
+ *
+ * The title is on line 1. The cwd is NOT — line 1 is a summary record — but it
+ * appears within the first handful of message entries, and it is the only
+ * trustworthy source for it.
+ *
+ * WHY NOT DERIVE THE CWD FROM THE DIRECTORY NAME: because that encoding is
+ * lossy and the loss is not cosmetic. `~/.claude/projects` replaces every slash
+ * with a dash, so `/Users/me/tools/unmute/unmute-cloud` and
+ * `/Users/me/tools/unmute/unmute/cloud` are the same directory name, and
+ * reconstructing picks the wrong one for any project with a dash in it — which
+ * is most of them. The first version of this file guessed, and the guess did
+ * not merely mislabel the group: `resume()` checks `fs.access(task.cwd)` and
+ * bails silently when it fails, so every imported session from a dashed path
+ * produced a card whose Resume button did nothing at all.
+ *
+ * A bounded read, not the whole file: these run to megabytes and we need the
+ * first few records.
+ */
+async function readHeader(path: string): Promise<{ aiTitle?: string; cwd?: string } | null> {
   let fh
   try {
     fh = await fs.open(path, 'r')
-    const buf = Buffer.alloc(4096)
-    const { bytesRead } = await fh.read(buf, 0, 4096, 0)
-    const nl = buf.indexOf(0x0a)
-    const line = buf.subarray(0, nl > 0 ? nl : bytesRead).toString('utf8')
-    return JSON.parse(line) as { aiTitle?: string; sessionId?: string }
+    const buf = Buffer.alloc(65536)
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
+    const text = buf.subarray(0, bytesRead).toString('utf8')
+    // Drop the trailing fragment: the last line is almost certainly cut mid-way.
+    const lines = text.split('\n').slice(0, -1)
+    const out: { aiTitle?: string; cwd?: string } = {}
+    for (const line of lines) {
+      if (!line) continue
+      let rec: { aiTitle?: string; cwd?: string }
+      try { rec = JSON.parse(line) } catch { continue }
+      if (!out.aiTitle && typeof rec.aiTitle === 'string') out.aiTitle = rec.aiTitle
+      if (!out.cwd && typeof rec.cwd === 'string') out.cwd = rec.cwd
+      if (out.aiTitle && out.cwd) break
+    }
+    return out
   } catch {
     return null // truncated, mid-write, or not JSON — it simply does not list
   } finally {
@@ -112,7 +139,7 @@ export async function listImportableSessions(
   }
 
   const out: ImportableSession[] = []
-  let scanned = 0, skippedTemp = 0, skippedOld = 0, skippedKnown = 0
+  let scanned = 0, skippedTemp = 0, skippedOld = 0, skippedKnown = 0, skippedNoCwd = 0
 
   for (const dirName of dirs) {
     if (NOT_A_PROJECT.test(dirName)) { skippedTemp++; continue }
@@ -134,8 +161,14 @@ export async function listImportableSessions(
       // abandoned. Importing one gives you a card with nothing behind it.
       if (stat.size < 2048) continue
 
-      const head = await readHead(join(dir, file))
-      const cwd = decodeCwd(dirName)
+      const head = await readHeader(join(dir, file))
+      // The transcript's own record wins; the directory name is a last resort
+      // and is known to be wrong for dashed paths (see readHeader).
+      const cwd = head?.cwd ?? decodeCwd(dirName)
+      // A SESSION WHOSE PROJECT IS GONE CANNOT BE RESUMED. `resume()` requires
+      // the directory to exist and returns false without it, so offering one is
+      // offering a button that does nothing — the exact failure this fix is for.
+      try { await fs.access(cwd) } catch { skippedNoCwd++; continue }
       out.push({
         sessionId,
         title: head?.aiTitle?.trim() || projectOf(cwd),
@@ -148,7 +181,7 @@ export async function listImportableSessions(
 
   out.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   log.event('cli-sessions-scanned', {
-    scanned, offered: Math.min(out.length, cap), skippedTemp, skippedOld, skippedKnown,
+    scanned, offered: Math.min(out.length, cap), skippedTemp, skippedOld, skippedKnown, skippedNoCwd,
   })
   return out.slice(0, cap)
 }

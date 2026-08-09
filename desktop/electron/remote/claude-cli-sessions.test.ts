@@ -6,45 +6,66 @@ import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { listImportableSessions } from './claude-cli-sessions'
 
-async function fixture(): Promise<string> {
-  const root = join(tmpdir(), 'unmute-cli-' + randomUUID())
+/** A fake ~/.claude/projects plus the real working directories it points at —
+ *  both are needed, because a session whose project is gone is not offered. */
+async function fixture(): Promise<{ root: string; work: string }> {
+  const base = join(tmpdir(), 'unmute-cli-' + randomUUID())
+  const root = join(base, 'projects')
+  const work = join(base, 'work')
   const now = Date.now()
-  const mk = async (dir: string, id: string, title: string | null, ageMs: number, size = 4096) => {
+  // The dashed directory name is DELIBERATELY ambiguous: 'unmute-cloud' has a
+  // dash in it, so reconstructing the path from this name gives the wrong
+  // directory. Only the transcript's own `cwd` record gets it right.
+  const mk = async (dir: string, id: string, title: string | null,
+                    cwd: string | null, ageMs: number, size = 4096) => {
     const d = join(root, dir)
     await fs.mkdir(d, { recursive: true })
     const head = title ? JSON.stringify({ type: 'summary', aiTitle: title, sessionId: id }) : '{"type":"x"}'
-    await fs.writeFile(join(d, id + '.jsonl'), head + '\n' + 'x'.repeat(Math.max(0, size - head.length)))
+    // cwd lives on a LATER record, as it does in a real transcript.
+    const second = cwd ? JSON.stringify({ type: 'user', cwd }) : '{"type":"user"}'
+    const body = head + '\n' + second + '\n'
+    await fs.writeFile(join(d, id + '.jsonl'), body + 'x'.repeat(Math.max(0, size - body.length)) + '\n')
     const t = new Date(now - ageMs)
     await fs.utimes(join(d, id + '.jsonl'), t, t)
   }
-  await mk('-Users-me-code-unmute-cloud', 'aaa', 'Fix the notch geometry', 60_000)
-  await mk('-Users-me-code-unmute-cloud', 'bbb', 'Older thread', 3 * 60 * 60_000)
-  await mk('-Users-me-code-other', 'ccc', 'Another project', 30 * 60_000)
-  await mk('-private-tmp-probe3', 'ddd', 'Scratch probe', 60_000)          // temp → skipped
-  await mk('-Users-me-code-unmute-cloud', 'eee', 'Ancient', 60 * 24 * 60 * 60_000) // old → skipped
-  await mk('-Users-me-code-unmute-cloud', 'fff', 'Abandoned', 60_000, 100) // tiny → skipped
-  return root
+  const real = join(work, 'unmute-cloud')
+  const other = join(work, 'other')
+  await fs.mkdir(real, { recursive: true })
+  await fs.mkdir(other, { recursive: true })
+
+  await mk('-w-unmute-cloud', 'aaa', 'Fix the notch geometry', real, 60_000)
+  await mk('-w-unmute-cloud', 'bbb', 'Older thread', real, 3 * 60 * 60_000)
+  await mk('-w-other', 'ccc', 'Another project', other, 30 * 60_000)
+  await mk('-private-tmp-probe3', 'ddd', 'Scratch probe', real, 60_000)              // temp → skipped
+  await mk('-w-unmute-cloud', 'eee', 'Ancient', real, 60 * 24 * 60 * 60_000)         // old → skipped
+  await mk('-w-unmute-cloud', 'fff', 'Abandoned', real, 60_000, 100)                 // tiny → skipped
+  await mk('-w-deleted', 'ggg', 'Project deleted', join(work, 'gone'), 60_000)       // no cwd → skipped
+  return { root, work }
 }
 
 test('offers real sessions, newest first, titled by Claude Code itself', async () => {
-  const root = await fixture()
+  const { root, work } = await fixture()
   const rows = await listImportableSessions(new Set(), { root })
   assert.deepEqual(rows.map((r) => r.sessionId), ['aaa', 'ccc', 'bbb'], 'sorted by last interaction')
   assert.equal(rows[0].title, 'Fix the notch geometry', 'the aiTitle on line 1, not a guess')
-  // THE PATH ENCODING IS LOSSY and this pins it rather than pretending
-  // otherwise: ~/.claude/projects replaces every slash with a dash, so a
-  // directory that legitimately contains a dash — `unmute-cloud` — is
-  // indistinguishable from a separator and comes back as `unmute/cloud`.
-  // The project label is therefore 'cloud', not 'unmute-cloud'. It is wrong
-  // and it is the best available, because the information is gone before we
-  // see it. Worth knowing if the grouping ever looks odd.
-  assert.equal(rows[0].cwd, '/Users/me/code/unmute/cloud')
-  assert.equal(rows[0].project, 'cloud')
+  // THE CWD COMES FROM THE TRANSCRIPT, NOT THE FOLDER NAME — and this is the
+  // whole bug. `-w-unmute-cloud` reconstructs to `/w/unmute/cloud`, which does
+  // not exist, and `resume()` bails silently on a cwd it cannot access. So an
+  // imported session's Resume button did nothing, for every project with a
+  // dash in its name.
+  assert.equal(rows[0].cwd, join(work, 'unmute-cloud'))
+  assert.equal(rows[0].project, 'unmute-cloud', 'and the group label is right as a consequence')
+})
+
+test('a session whose project is gone is not offered — Resume could not work', async () => {
+  const { root } = await fixture()
+  const ids = (await listImportableSessions(new Set(), { root })).map((r) => r.sessionId)
+  assert.ok(!ids.includes('ggg'), 'offering it would be offering a button that does nothing')
 })
 
 test('a haystack is not a list — temp paths, stale and abandoned sessions are left out', async () => {
   // 745 transcripts on a real machine, of which a couple of dozen are work.
-  const root = await fixture()
+  const { root } = await fixture()
   const ids = (await listImportableSessions(new Set(), { root })).map((r) => r.sessionId)
   assert.ok(!ids.includes('ddd'), '/private/tmp is not a project')
   assert.ok(!ids.includes('eee'), 'older than the window is history')
@@ -52,7 +73,7 @@ test('a haystack is not a list — temp paths, stale and abandoned sessions are 
 })
 
 test('what unmute already has is never offered', async () => {
-  const root = await fixture()
+  const { root } = await fixture()
   const rows = await listImportableSessions(new Set(['aaa']), { root })
   assert.ok(!rows.some((r) => r.sessionId === 'aaa'), 'a row whose only job is done must not linger')
 })
