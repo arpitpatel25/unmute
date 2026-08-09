@@ -35,12 +35,18 @@
 
 /** One selectable model: the `--model` value + how it reads in the UI. */
 export interface ModelChoice {
-  /** The value passed to Claude Code as `--model` (alias or full name). */
+  /** The value the backend is given. Claude takes it as `--model <id>`; Codex
+   *  takes it as `-c model="<id>"`, which is a TOML override and NOT a flag —
+   *  see codexArgs. The catalog stores the bare id and each adapter spells it. */
   id: string
   /** Short UI label. */
   label: string
   /** One-line helper shown under the selector. */
   description?: string
+  /** Which backend this model belongs to. Absent ⇒ Claude, because every entry
+   *  predates a second CLI and the persisted `model` setting has no provider
+   *  key — so absent must keep meaning Claude rather than "any". */
+  provider?: 'claude' | 'codex'
 }
 
 /** The DEFAULT model catalog — the Claude Code `/model` aliases, which
@@ -54,12 +60,29 @@ export const MODEL_CATALOG: ModelChoice[] = [
   { id: 'sonnet',   label: 'Sonnet',    description: 'Balanced speed and capability. Great default.' },
   { id: 'opus',     label: 'Opus',      description: 'Most capable — best for hard, multi-step tasks.' },
   { id: 'opusplan', label: 'Opus Plan', description: 'Plans with Opus, executes with Sonnet.' },
+  // CODEX CLI. Tagged, because a Claude id handed to Codex is not an error —
+  // `-c model="sonnet"` is a valid TOML override for a model that does not
+  // exist, and Codex would fail at the API rather than at the picker.
+  { id: 'default', label: 'Default', description: 'Your Codex default — recommended.', provider: 'codex' },
+  { id: 'gpt-5.1-codex-max', label: 'Codex Max', description: 'Most capable — best for hard, multi-step work.', provider: 'codex' },
+  { id: 'gpt-5.1-codex', label: 'Codex', description: 'Balanced speed and capability.', provider: 'codex' },
+  { id: 'gpt-5.1-codex-mini', label: 'Codex Mini', description: 'Fastest — best for simple, quick tasks.', provider: 'codex' },
 ]
+
+/** The models selectable for a given backend.
+ *
+ *  Absent `provider` means Claude — the catalog predates a second CLI and the
+ *  persisted `model` setting carries no provider key, so an untagged entry must
+ *  keep meaning what it always did. */
+export function modelsFor(provider: string | undefined, catalog: readonly ModelChoice[] = MODEL_CATALOG): ModelChoice[] {
+  const want = provider === 'codex' ? 'codex' : 'claude'
+  return catalog.filter((m) => (m.provider ?? 'claude') === want)
+}
 
 /** The compiled default set of selectable model ids (catalog ids). Kept for
  *  backward-compat; the EFFECTIVE selectable set is runtime/config-driven
  *  (getModelCatalog() in runtime-config.ts). */
-export const DOER_MODELS: string[] = MODEL_CATALOG.map((m) => m.id)
+export const DOER_MODELS: string[] = modelsFor('claude').map((m) => m.id)
 /** A selectable model id. Relaxed to `string`: the set is now runtime-driven,
  *  so it can no longer be a fixed compile-time union. */
 export type DoerModel = string

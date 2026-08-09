@@ -3313,7 +3313,16 @@ export class TaskManager extends EventEmitter {
     // when the id can't be confirmed (a fork whose id-adoption never landed, or a
     // pre-sessionId receipt whose sessionId defaulted to the taskId) so resume
     // still works. NEVER passes --fork-session — that would branch, not resume.
-    const byId = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
+    // WHICH TRANSCRIPT PROVES THE SESSION EXISTS depends on the backend.
+    // Claude's lives in ~/.claude keyed by cwd; Codex's is a rollout in
+    // ~/.codex found by id alone. Asking Claude's resolver about a Codex
+    // session finds nothing, so resume would fall back to `--continue` — which
+    // for Codex is not even a flag, and would have opened a fresh conversation
+    // with the history dropped.
+    const byId = !task.sessionId ? null
+      : task.agent === 'codex'
+        ? await findRollout(task.codexRolloutId ?? task.sessionId)
+        : await resolveTranscriptById(task.cwd, task.sessionId)
     // ONE RESUME AT A TIME. `alive` only turns true once the PTY has spawned, so
     // a second call arriving during the (seconds-long) respawn passed the check
     // above and built a SECOND session — orphaning the first, which nothing then
@@ -3345,7 +3354,12 @@ export class TaskManager extends EventEmitter {
         this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
         this.emit('output', { taskId: id, chunk })
       })
-      await ex.spawn({ cwd: task.cwd, env: process.env, taskId: id, resumeSessionId: byId ? task.sessionId : undefined })
+      await ex.spawn({
+        cwd: task.cwd, env: process.env, taskId: id,
+        resumeSessionId: byId
+          ? (task.agent === 'codex' ? (task.codexRolloutId ?? task.sessionId) : task.sessionId)
+          : undefined,
+      })
       await ex.isReady()
       ex.writeStdin('') // accept folder-trust; session reopens with full prior context
       await new Promise((r) => setTimeout(r, this.opts.trustAcceptMs))

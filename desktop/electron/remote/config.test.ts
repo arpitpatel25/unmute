@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MODELS, DOER_MODELS, MODEL_CATALOG, isDoerModel, PROMPTS } from './config.ts'
+import { MODELS, DOER_MODELS, MODEL_CATALOG, modelsFor, isDoerModel, PROMPTS } from './config.ts'
 
 // This refactor MOVED model choices + the two static prompts into config.ts
 // with the promise that every value is BYTE-IDENTICAL to what was inline before
@@ -11,9 +11,11 @@ import { MODELS, DOER_MODELS, MODEL_CATALOG, isDoerModel, PROMPTS } from './conf
 test('default catalog is the Claude Code /model aliases, fast → capable', () => {
   assert.deepEqual([...DOER_MODELS], ['default', 'haiku', 'sonnet', 'opus', 'opusplan'])
   // DOER_MODELS is derived from the catalog — they must stay in lockstep.
-  assert.deepEqual(MODEL_CATALOG.map((m) => m.id), [...DOER_MODELS])
+  // Scoped to Claude: the catalog now carries Codex entries too, and both
+  // backends legitimately offer an id called 'default'.
+  assert.deepEqual(modelsFor('claude').map((m) => m.id), [...DOER_MODELS])
   // Every catalog entry is renderable (id + label).
-  for (const c of MODEL_CATALOG) {
+  for (const c of modelsFor('claude')) {
     assert.ok(c.id.length > 0 && c.label.length > 0, `${c.id} has id+label`)
   }
 })
@@ -59,4 +61,15 @@ test('task-name prompt is byte-identical to the original', () => {
       'Reply with ONLY a 2-5 word title in plain text — no quotes, no punctuation, no trailing period. ' +
       'Capture the essence, e.g. "Twitter strategy folder summary", "Open Dodo women\'s page", "Fresh Claude session".',
   )
+})
+
+test('each backend gets its own models, and an untagged entry still means Claude', () => {
+  const claude = modelsFor('claude').map((m) => m.id)
+  const codex = modelsFor('codex').map((m) => m.id)
+  assert.ok(claude.includes('opus') && !claude.includes('gpt-5.1-codex'))
+  assert.ok(codex.includes('gpt-5.1-codex') && !codex.includes('opus'),
+    'a Claude id given to Codex is not an error — `-c model="opus"` is valid TOML for a model that does not exist, so it would fail at the API rather than the picker')
+  // Absent provider must keep meaning Claude: the catalog predates a second CLI
+  // and the persisted `model` setting carries no provider key.
+  assert.equal(modelsFor(undefined).length, claude.length)
 })

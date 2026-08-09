@@ -426,16 +426,31 @@ function driverForProvider(id: ProviderId): ProbeableDriver | null {
  * Checked against the SAME PATH the executors get (fixPath has already run by
  * the time anything routes), cached briefly because it is asked per dispatch.
  */
-let claudeCliCache: { at: number; ok: boolean } | null = null
 export async function claudeCliAvailable(): Promise<boolean> {
-  if (claudeCliCache && Date.now() - claudeCliCache.at < 60_000) return claudeCliCache.ok
+  return cliOnPath('claude', 'claude-cli-availability')
+}
+
+/** Is the Codex CLI installed? Same contract as Claude's: a `which`, cached for
+ *  a minute. The router may only ever name a backend that appears in
+ *  agentAvailability, so without this a Codex CLI task could be promised to
+ *  someone who does not have it and would fail at spawn with nothing useful
+ *  said — the shape of the setup-probe bug. */
+export async function codexCliAvailable(): Promise<boolean> {
+  return cliOnPath('codex', 'codex-cli-availability')
+}
+
+const cliCache = new Map<string, { at: number; ok: boolean }>()
+
+async function cliOnPath(bin: string, event: string): Promise<boolean> {
+  const hit = cliCache.get(bin)
+  if (hit && Date.now() - hit.at < 60_000) return hit.ok
   const ok = await new Promise<boolean>((resolve) => {
-    execFile('/usr/bin/which', ['claude'], { env: process.env }, (err, stdout) => {
+    execFile('/usr/bin/which', [bin], { env: process.env }, (err, stdout) => {
       resolve(!err && !!String(stdout).trim())
     })
   })
-  if (claudeCliCache?.ok !== ok) log.event('claude-cli-availability', { ok })
-  claudeCliCache = { at: Date.now(), ok }
+  if (hit?.ok !== ok) log.event(event, { ok })
+  cliCache.set(bin, { at: Date.now(), ok })
   return ok
 }
 
@@ -490,6 +505,9 @@ async function setClaudeDesktopModel(id: string): Promise<void> {
 async function agentAvailability(): Promise<AgentAvailability> {
   const agents: ProviderId[] = []
   if (await claudeCliAvailable()) agents.push('claude')
+  // Codex CLI stands on its own footing, separate from Codex DESKTOP below:
+  // having the app says nothing about having the binary, and vice versa.
+  if (await codexCliAvailable()) agents.push('codex')
   let codexProjects: string[] | undefined
   if (codexDriver) {
     try {
