@@ -429,7 +429,10 @@ final class AppController: NSObject, NotchResizing {
                 // The card keeps its full height; the window grows by whatever
                 // the cutout occupies so the card still fits underneath it.
                 // Zero on a notchless display, so nothing moves there.
-                let clearance = geometry.hasNotch ? topInset : 0
+                // GROW BY WHAT THE PLANE ACTUALLY ADDS, which is the inset
+                // MINUS the padding it replaced — not the whole inset. And zero
+                // on a notchless display, where the plane is unchanged.
+                let clearance = geometry.hasNotch ? max(0, topInset - Theme.panelPadding) : 0
                 return (geometry.topPinnedFrame(width: 348, height: (model.pocket.slots.count > 1 ? 146 : 120) + clearance),
                         geometry.panelPlacement,
                         BarContent())

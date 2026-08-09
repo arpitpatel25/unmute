@@ -140,12 +140,33 @@ struct NotchView: View {
             // housing — while keeping a target the pointer can find, which is
             // the gesture people already know. On a display with no cutout there
             // is nothing to hide behind, so nothing is drawn at all.
-            if model.hasNotch { shape.fill(Color.black) }
+            // FADES OUT, NEVER BLINKS OUT. `if hasNotch { … }` meant that on a
+            // notchless display the black was simply ABSENT the instant the
+            // state became dormant — so collapsing out of the pocket did not
+            // shrink, it disappeared, and an invisible window then finished
+            // travelling to its resting size. There was no shape left to
+            // animate. Drawing it at zero opacity keeps one there for the whole
+            // journey and still ends up showing nothing.
+            shape.fill(Color.black).opacity(model.hasNotch ? 1 : 0)
         } else {
             // D5: opaque, always. Pure black, because the hardware it continues
             // is pure black and any other value shows up as a seam at the join.
             shape.fill(Color.black)
                 .overlay(alarmGlow)
+                // THE POCKET IS A PANEL AND NEEDS A PANEL'S EDGE. The expanded
+                // branch above gained a hairline when the material was unified;
+                // this branch kept only `alarmGlow`, which draws at all only in
+                // attention-with-an-alarm and is clipped to the path — so half
+                // the line is thrown away and it thins to nothing on the tight
+                // curves. On the bar that absence is right; on a 350pt card
+                // floating over a desktop it is a missing edge.
+                .overlay(pocketEdge)
+        }
+    }
+
+    @ViewBuilder private var pocketEdge: some View {
+        if model.pocket.isOpen {
+            shape.stroke(Theme.hairlineSoft, lineWidth: 0.5).allowsHitTesting(false)
         }
     }
 
@@ -370,12 +391,23 @@ struct NotchView: View {
     /// So the top inset becomes the cutout's height plus breathing room, which
     /// is exactly the number the task surface and the wall already take. The
     /// pocket is the one large surface that was never handed it.
+    /// How far down the pocket's plane starts.
+    ///
+    /// ONLY DIFFERENT WHEN THERE IS A CUTOUT TO CLEAR. The first version used
+    /// `topInset` unconditionally, which is 14 on a notchless display against
+    /// the 6 every other plane uses — so the card dropped 8pt inside a window
+    /// that had only been grown on notched Macs. Its bottom 8pt, rounded
+    /// corners included, fell outside the window and was clipped, and its top
+    /// no longer nested in the shape's concave flare. A notch fix that broke
+    /// every machine without one.
+    private var pocketTopPad: CGFloat { model.hasNotch ? topInset : Theme.panelPadding }
+
     @ViewBuilder private func pocketPlane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {
         body()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(RoundedRectangle(cornerRadius: Theme.planeRadius).fill(Theme.plane))
             .clipShape(RoundedRectangle(cornerRadius: Theme.planeRadius))
-            .padding(.top, topInset)
+            .padding(.top, pocketTopPad)
             .padding(.bottom, Theme.panelPadding)
             .padding(.horizontal, Theme.panelPadding + model.bar.fillet)
     }
