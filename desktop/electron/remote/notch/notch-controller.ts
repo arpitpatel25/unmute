@@ -458,7 +458,24 @@ export class NotchController {
       else this.scheduleReconcile()
     })
     on('kill', (e) => this.deps.kill((e as { id: string }).id))
-    on('resume', (e) => void this.deps.resume((e as { id: string }).id))
+    // A RESUME THAT FAILS MUST SAY SO.
+    //
+    // This was fire-and-forget: the boolean went nowhere, and a resume that
+    // could not proceed left the card exactly as it was. From the outside that
+    // is a dead button — observed in the field as two presses ten seconds
+    // apart, because nothing acknowledged the first. Whatever happens now, the
+    // surface hears about it.
+    on('resume', (e) => {
+      const id = (e as { id: string }).id
+      void Promise.resolve(this.deps.resume(id)).then((ok) => {
+        if (ok) return
+        log.event('resume-refused', { taskId: id })
+        this.client.send({ type: 'toast', text: "Couldn't reach that session's folder — it may have moved or been deleted." })
+      }).catch((err) => {
+        log.warn('resume threw', { taskId: id, error: (err as Error).message })
+        this.client.send({ type: 'toast', text: 'Could not resume that session.' })
+      })
+    })
     on('rerun', (e) => { const t = this.deps.getTask((e as { id: string }).id); if (t) this.deps.rerun(t.intent) })
     on('remove', (e) => void this.deps.remove((e as { id: string }).id))
     on('killAll', () => this.deps.killAll())

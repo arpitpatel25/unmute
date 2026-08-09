@@ -1523,3 +1523,53 @@ test('a message to a cold session revives it and is delivered, not dropped', { t
   assert.ok(fake.alive, 'and the session is back')
   tm.kill(id)
 })
+
+test('resume heals a task whose cwd is wrong, from any caller', async () => {
+  // THE FIELD BUG: an imported card's Resume did nothing, twice, ten seconds
+  // apart — `fs.access(task.cwd)` failed and `resume` returned false into a log
+  // nobody reads. The path was wrong because an early import reconstructed it
+  // from the transcript FOLDER name, which is lossy.
+  //
+  // Healing at the import path would have fixed one door. This asserts it heals
+  // at `resume` itself, which is the door the button, voice, the router and
+  // revive-on-send all pass through.
+  const baseDir = await tmpBase()
+  const real = path.join(baseDir, 'a-real-project')
+  await fs.mkdir(real, { recursive: true })
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({
+    executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+    resolveSessionCwd: async () => real,
+  })
+  const id = await tm.dispatch('go through the repo')
+  tm.setKind(id, 'session')
+  const t = tm.get(id)!
+  t.sessionId = 'sess-1'
+  t.cwd = path.join(baseDir, 'gone', 'never', 'existed')
+  // A DEAD session, properly: `resume` short-circuits on a registered live
+  // executor, so clearing the flag alone leaves it returning true before it
+  // ever reaches the recovery. The first version of this test did exactly that
+  // and passed while proving nothing.
+  fake.alive = false
+  ;(tm as unknown as { executors: Map<string, unknown> }).executors.delete(id)
+
+  await tm.resume(id)
+  assert.equal(tm.get(id)!.cwd, real, 'the task keeps the corrected path')
+  tm.kill(id)
+})
+
+test('resume still refuses — loudly — when there is nothing to recover', async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({
+    executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+    resolveSessionCwd: async () => null,        // no transcript anywhere
+  })
+  const id = await tm.dispatch('x')
+  tm.setKind(id, 'session')
+  tm.get(id)!.cwd = path.join(baseDir, 'gone')
+  fake.alive = false
+  ;(tm as unknown as { executors: Map<string, unknown> }).executors.delete(id)
+  assert.equal(await tm.resume(id), false, 'false is what makes the surface say so')
+  tm.kill(id)
+})

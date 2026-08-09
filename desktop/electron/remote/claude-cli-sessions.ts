@@ -48,6 +48,24 @@ export interface ImportableSession {
 const WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 
 /**
+ * Written to this recently and something is almost certainly still typing in it.
+ *
+ * A LIVE session is the least importable thing on the list, and it sorts to the
+ * TOP because it has the newest mtime — so it is the row you reach for first.
+ * `--resume` against a running process is not a resume; at best Claude Code
+ * refuses, at worst two processes share one transcript.
+ *
+ * Found the hard way: the first session offered by this rail was the one the
+ * user was talking to us in.
+ *
+ * A HEURISTIC, and named as one. Freshness is evidence of life, not proof — a
+ * session someone abandoned ninety seconds ago is excluded too. That is the
+ * right way to be wrong: the cost is waiting two minutes to import something,
+ * against handing someone a button that corrupts a running conversation.
+ */
+const LIVE_MS = 2 * 60 * 1000
+
+/**
  * Paths that are not projects.
  *
  * A machine with 745 transcripts has maybe twenty that are real work; the rest
@@ -124,7 +142,7 @@ async function readHeader(path: string): Promise<{ aiTitle?: string; cwd?: strin
  */
 export async function listImportableSessions(
   known: ReadonlySet<string>,
-  opts: { root?: string; now?: number; windowMs?: number; cap?: number } = {},
+  opts: { root?: string; now?: number; windowMs?: number; cap?: number; liveMs?: number } = {},
 ): Promise<ImportableSession[]> {
   const root = opts.root ?? join(homedir(), '.claude', 'projects')
   const now = opts.now ?? Date.now()
@@ -139,7 +157,7 @@ export async function listImportableSessions(
   }
 
   const out: ImportableSession[] = []
-  let scanned = 0, skippedTemp = 0, skippedOld = 0, skippedKnown = 0, skippedNoCwd = 0
+  let scanned = 0, skippedTemp = 0, skippedOld = 0, skippedKnown = 0, skippedNoCwd = 0, skippedLive = 0
 
   for (const dirName of dirs) {
     if (NOT_A_PROJECT.test(dirName)) { skippedTemp++; continue }
@@ -157,6 +175,7 @@ export async function listImportableSessions(
       try { stat = await fs.stat(join(dir, file)) } catch { continue }
       const lastActivityAt = stat.mtimeMs
       if (now - lastActivityAt > windowMs) { skippedOld++; continue }
+      if (now - lastActivityAt < (opts.liveMs ?? LIVE_MS)) { skippedLive++; continue }
       // An empty or near-empty transcript is a session that was opened and
       // abandoned. Importing one gives you a card with nothing behind it.
       if (stat.size < 2048) continue
@@ -181,7 +200,40 @@ export async function listImportableSessions(
 
   out.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   log.event('cli-sessions-scanned', {
-    scanned, offered: Math.min(out.length, cap), skippedTemp, skippedOld, skippedKnown, skippedNoCwd,
+    scanned, offered: Math.min(out.length, cap), skippedTemp, skippedOld, skippedKnown, skippedNoCwd, skippedLive,
   })
   return out.slice(0, cap)
+}
+
+/**
+ * The TRUE working directory of a session, found by id alone.
+ *
+ * The recovery half of the cwd bug. A task can hold a path that is wrong (an
+ * import made before the scanner read the transcript) or merely stale (the repo
+ * moved, the folder was renamed), and `resume()` refuses to spawn into a
+ * directory it cannot reach — silently, for every caller.
+ *
+ * Rather than repair records at one entry point and hope the others never see
+ * them, `resume()` calls this and heals the task in place. Every surface that
+ * can resume — the card, voice, the router, revive-on-send — inherits it,
+ * because they all pass through that one function.
+ *
+ * Searches by FILENAME, which is the session id, so it does not need to know
+ * where the session used to live.
+ */
+export async function findSessionCwd(sessionId: string, root?: string): Promise<string | null> {
+  const base = root ?? join(homedir(), '.claude', 'projects')
+  let dirs: string[]
+  try { dirs = await fs.readdir(base) } catch { return null }
+  for (const dirName of dirs) {
+    const file = join(base, dirName, sessionId + '.jsonl')
+    try { await fs.access(file) } catch { continue }
+    const head = await readHeader(file)
+    if (head?.cwd) {
+      // Only useful if it is somewhere we can actually spawn.
+      try { await fs.access(head.cwd); return head.cwd } catch { return null }
+    }
+    return null
+  }
+  return null
 }

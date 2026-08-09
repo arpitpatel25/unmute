@@ -65,7 +65,7 @@ import { Arming } from './cua/lanes/arming'
 import { runAppleScript } from './cua/lanes/applescript'
 import { type RouterCtx } from './cua/router'
 import { Presence } from './presence'
-import { listImportableSessions } from './claude-cli-sessions'
+import { listImportableSessions, findSessionCwd } from './claude-cli-sessions'
 import { applyAxRegistration } from './ax/register'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
@@ -2460,6 +2460,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // Best-effort reaper for an orphan tmux session a past run left on our
     // private socket (app crashed before killAll). Per-session kill, never the
     // server (would hit live ones).
+    // Recovery for a task whose cwd is wrong or stale — see TaskManager.resume.
+    resolveSessionCwd: (sessionId) => findSessionCwd(sessionId),
     reapSession: (id) => {
       if (!tmuxBin) return
       try { execFile(tmuxBin, tmuxKillSessionArgs(sessionNameFor(id)), () => {}) } catch { /* best-effort */ }

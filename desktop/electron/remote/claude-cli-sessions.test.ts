@@ -33,13 +33,14 @@ async function fixture(): Promise<{ root: string; work: string }> {
   await fs.mkdir(real, { recursive: true })
   await fs.mkdir(other, { recursive: true })
 
-  await mk('-w-unmute-cloud', 'aaa', 'Fix the notch geometry', real, 60_000)
+  await mk('-w-unmute-cloud', 'aaa', 'Fix the notch geometry', real, 10 * 60_000)
   await mk('-w-unmute-cloud', 'bbb', 'Older thread', real, 3 * 60 * 60_000)
   await mk('-w-other', 'ccc', 'Another project', other, 30 * 60_000)
-  await mk('-private-tmp-probe3', 'ddd', 'Scratch probe', real, 60_000)              // temp → skipped
+  await mk('-w-unmute-cloud', 'live', 'Still typing in it', real, 5_000)   // alive → skipped
+  await mk('-private-tmp-probe3', 'ddd', 'Scratch probe', real, 10 * 60_000)              // temp → skipped
   await mk('-w-unmute-cloud', 'eee', 'Ancient', real, 60 * 24 * 60 * 60_000)         // old → skipped
-  await mk('-w-unmute-cloud', 'fff', 'Abandoned', real, 60_000, 100)                 // tiny → skipped
-  await mk('-w-deleted', 'ggg', 'Project deleted', join(work, 'gone'), 60_000)       // no cwd → skipped
+  await mk('-w-unmute-cloud', 'fff', 'Abandoned', real, 10 * 60_000, 100)                 // tiny → skipped
+  await mk('-w-deleted', 'ggg', 'Project deleted', join(work, 'gone'), 10 * 60_000)       // no cwd → skipped
   return { root, work }
 }
 
@@ -80,4 +81,16 @@ test('what unmute already has is never offered', async () => {
 
 test('a missing ~/.claude is not an error — it is a machine without Claude Code', async () => {
   assert.deepEqual(await listImportableSessions(new Set(), { root: '/nope/nowhere' }), [])
+})
+
+test('a session someone is still typing in is never offered', async () => {
+  // The first row this rail ever produced was the conversation the user was
+  // having with us at that moment — newest mtime, so it sorted to the top.
+  // `--resume` against a live process is not a resume.
+  const { root } = await fixture()
+  const ids = (await listImportableSessions(new Set(), { root })).map((r) => r.sessionId)
+  assert.ok(!ids.includes('live'), 'freshly written means something is still in it')
+  // And it is a HEURISTIC, not proof — with the window off, it is offered.
+  const all = (await listImportableSessions(new Set(), { root, liveMs: 0 })).map((r) => r.sessionId)
+  assert.ok(all.includes('live'))
 })

@@ -368,6 +368,9 @@ export interface TaskManagerOpts {
    *  crashed/quit without killing it). Wired from init.ts (which owns the tmux
    *  bin + private socket). Omitted in tests. */
   reapSession?: (taskId: string) => void
+  /** The true cwd of a Claude session, by id — the recovery half of resume().
+   *  Injected so this module stays free of the transcript layout. */
+  resolveSessionCwd?: (sessionId: string) => Promise<string | null>
   /** clock + sleep injectable for tests. */
   now?: () => number
 }
@@ -463,8 +466,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -472,6 +475,7 @@ export class TaskManager extends EventEmitter {
       executorFactory: opts.executorFactory,
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       pollMs: opts.pollMs ?? 1000,
+      resolveSessionCwd: opts.resolveSessionCwd,
       staleMs: opts.staleMs ?? 4 * 60_000,
       // How long a frozen, mid-tool-call Codex turn must sit before we call it
       // blocked-on-the-user. Shorter than staleMs on purpose: a consent dialog
@@ -2274,6 +2278,17 @@ export class TaskManager extends EventEmitter {
     return true
   }
 
+  /** Write a REPAIRED cwd through to meta.json.
+   *
+   *  Not persistState: that merges only state, updatedAt and the conversation,
+   *  and early-returns when none of the three has moved — so a heal routed
+   *  through it would hold for this run and come back broken on the next. */
+  private async persistCwd(task: Task): Promise<void> {
+    const path = join(task.home, 'meta.json')
+    const meta = JSON.parse(await fs.readFile(path, 'utf8')) as Record<string, unknown>
+    await fs.writeFile(path, JSON.stringify({ ...meta, cwd: task.cwd }, null, 2))
+  }
+
   /** Merge the observed state + its timestamp into the task's meta.json. */
   private async persistState(task: Task): Promise<void> {
     const path = join(task.home, 'meta.json')
@@ -2917,7 +2932,41 @@ export class TaskManager extends EventEmitter {
     group?: string
   }): Promise<string | null> {
     for (const t of this.tasks.values()) {
-      if (t.sessionId === input.sessionId) return t.id   // already ours
+      if (t.sessionId !== input.sessionId) continue
+      // ALREADY OURS — but possibly with a BROKEN PATH.
+      //
+      // Imports made before the cwd fix stored a reconstructed path, which is
+      // wrong for any project with a dash in its name. `resume()` bails on a
+      // directory it cannot access, so those cards have a button that does
+      // nothing — and dedupe meant re-importing handed back the same broken
+      // task, so the only repair was to notice, delete the card, and import
+      // again. Nobody should have to know that. If the stored path is gone and
+      // we now have a real one, fix it in place.
+      if (t.cwd !== input.cwd) {
+        let stale = false
+        try { await fs.access(t.cwd) } catch { stale = true }
+        if (stale) {
+          const was = t.cwd
+          t.cwd = input.cwd
+          if (input.group && !t.group) t.group = input.group
+          // WRITTEN DIRECTLY, not via persistState: that merges only state,
+          // updatedAt and the conversation, and early-returns when none of the
+          // three has moved — so a repair routed through it would hold until
+          // the next relaunch and then come back broken.
+          void (async () => {
+            const path = join(t.home, 'meta.json')
+            try {
+              const meta = JSON.parse(await fs.readFile(path, 'utf8')) as Record<string, unknown>
+              await fs.writeFile(path, JSON.stringify({ ...meta, cwd: t.cwd, group: t.group }, null, 2))
+            } catch (e) {
+              log.child({ taskId: t.id }).warn('cwd repair not persisted', { error: (e as Error).message })
+            }
+          })()
+          log.child({ taskId: t.id }).event('cli-session-cwd-repaired', { from: was, to: input.cwd })
+          this.emit('updated', t)
+        }
+      }
+      return t.id
     }
     const id = randomUUID()
     const dir = join(this.opts.baseDir, this.opts.userKey ?? 'local', id)
@@ -3166,7 +3215,35 @@ export class TaskManager extends EventEmitter {
     }
 
     if (this.executors.get(id)?.alive) { tlog.event('resume-noop-already-alive', {}); return true }
-    try { await fs.access(task.cwd) } catch { tlog.warn('resume: task dir gone — cannot resume', {}); return false }
+
+    // A WRONG PATH HEALS HERE, ONCE, FOR EVERY CALLER.
+    //
+    // This used to bail outright, and silently: `return false` into a log
+    // nobody reads while the card showed nothing at all. In the field that read
+    // as a dead button — pressed twice, ten seconds apart, because nothing
+    // acknowledged the first press.
+    //
+    // A task's cwd can be wrong (imported before the scanner read the real one
+    // out of the transcript) or merely stale (the repo moved, the folder was
+    // renamed). Both are recoverable: the session id is in hand, and the
+    // transcript records where it ran. Repairing it HERE rather than at the
+    // import path is the whole point — resume is the single door that the
+    // button, voice, the router and revive-on-send all pass through, so fixing
+    // it once fixes it everywhere, and old records heal as they are touched
+    // instead of needing a migration or a delete-and-re-import.
+    let reachable = true
+    try { await fs.access(task.cwd) } catch { reachable = false }
+    if (!reachable) {
+      const found = task.sessionId ? await this.opts.resolveSessionCwd?.(task.sessionId) ?? null : null
+      if (!found) {
+        tlog.warn('resume: task dir gone and no transcript to recover it from', { cwd: task.cwd })
+        return false
+      }
+      tlog.event('resume-cwd-healed', { from: task.cwd, to: found })
+      task.cwd = found
+      await this.persistCwd(task).catch(() => {})
+      this.emit('updated', task)
+    }
 
     // Resume by the task's PINNED session id when that exact conversation exists
     // on disk: `--resume <id>` attaches to THIS task's session even when several
