@@ -1011,9 +1011,14 @@ async function modelForDispatch(agent: AgentKind | undefined): Promise<string | 
       // cover only the first, and would attribute the composer's CURRENT model
       // to conversations that never ran on it.
       return undefined
+    case 'codex':
+      // Codex CLI keeps its own setting, like every other backend: its ids are
+      // its own vocabulary ('gpt-5.1-codex-max'), and sharing Claude's key
+      // would record — and then RUN — a model the target does not have.
+      // Absent means Codex's own default, which is the honest answer for a
+      // user who has never opened the picker.
+      return (settings.get('codexCliModel' as never) as string) || undefined
     default:
-      // 'codex' (the Codex CLI) is not dispatchable — isDispatchable() excludes
-      // it and it has no creation path to record anything on.
       return undefined
   }
 }

@@ -73,14 +73,18 @@ test('every provider carries a human label for the task card', () => {
   }
 })
 
-test('every registered backend is dispatchable except the unwired CLI adapter', () => {
+test('every registered backend is dispatchable — the registry IS the answer', () => {
   // The rule this replaces was written as a literal pair at each call site, so
   // a newly registered backend was silently dropped — the pill row rendered,
   // the tap landed, and nothing happened.
-  assert.equal(isDispatchable('claude'), true)
-  assert.equal(isDispatchable('codex-desktop'), true)
-  assert.equal(isDispatchable('claude-code-desktop'), true)
-  assert.equal(isDispatchable('codex'), false, 'the CLI adapter is unwired')
+  //
+  // 'codex' was then carved out here for the same reason, and reproduced the
+  // same bug it warns about: the option rendered, the tap landed, and it was
+  // dropped one line later with a WARN nobody reads. Field report, verbatim:
+  // "nothing happens when I press Codex CLI".
+  for (const id of Object.keys(PROVIDERS)) {
+    assert.equal(isDispatchable(id), true, `${id} is in the registry and must be dispatchable`)
+  }
 })
 
 test('an unknown or malformed id is refused', () => {

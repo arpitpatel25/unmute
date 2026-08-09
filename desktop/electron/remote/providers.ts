@@ -109,13 +109,18 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
  * and logs nothing is the worst version of that: the option is visible, the
  * click lands, and the app simply ignores it.
  *
- * 'codex' (the CLI adapter) is the one real exclusion: it is unwired, and
- * startup migrates a stored 'codex' back to 'claude'. Everything else in the
- * registry is dispatchable — whether it is REACHABLE right now is a separate
- * question, answered by each backend's own driver.
+ * 'codex' USED TO BE EXCLUDED HERE, paired with a startup migration that reset
+ * a stored 'codex' back to 'claude'. Correct while the CLI adapter was a stub.
+ * It is wired now — dispatch, rollout-driven state, resume, models, import — so
+ * the exclusion did exactly what the paragraph above condemns: the option
+ * rendered, the tap landed, and it was dropped one line later with only a WARN
+ * nobody reads.
+ *
+ * Everything in the registry is dispatchable. Whether a backend is REACHABLE
+ * right now is a separate question, answered by its own probe.
  */
 export function isDispatchable(id: unknown): id is ProviderId {
-  return typeof id === 'string' && id !== 'codex' && Object.hasOwn(PROVIDERS, id)
+  return typeof id === 'string' && Object.hasOwn(PROVIDERS, id)
 }
 
 /** Look up a provider, defaulting an absent/unknown id to Claude.
