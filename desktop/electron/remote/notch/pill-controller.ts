@@ -170,7 +170,20 @@ export class PillController {
       case 'pillUndo':        this.deps.undo(); break
       case 'pillAcceptDraft': this.deps.acceptDraft(); break
       case 'pillPickModel':   if (value) this.deps.pickModel(value); break
-      case 'pillPickAgent':   if (value) this.deps.pickAgent(value); break
+      // NO VALUE MEANS CYCLE. The chip is a tap-to-cycle control and sends a
+      // bare event; the list sends the id you chose. This handled only the
+      // second, so every tap on the chip was swallowed — no selection, no
+      // rejection, nothing logged. Reported as "nothing happens when I press
+      // Codex CLI", and it was never about Codex: the chip had not worked for
+      // any backend.
+      case 'pillPickAgent':
+        // ABSENT means cycle; MALFORMED means nothing. `value` is normalised to
+        // undefined when it is not a string, so a garbage payload would
+        // otherwise be indistinguishable from a bare tap and would act. Read
+        // the raw event to tell "no value was sent" from "a bad one was".
+        if (value) this.deps.pickAgent(value)
+        else if ((e as { value?: unknown }).value === undefined) void this.deps.cycleAgent()
+        break
       case 'pillCycleAgent':  void this.deps.cycleAgent(); break
       case 'pillPickAxis': {
         const axis = typeof e.axis === 'string' ? e.axis : ''

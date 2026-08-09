@@ -113,11 +113,22 @@ describe('PillController events', () => {
     assert.deepEqual(h.calls, [])
   })
 
-  test('a pick with no value is dropped rather than dispatched empty', () => {
+  test('a malformed pick is dropped rather than dispatched empty', () => {
     const h = harness()
-    h.fire({ type: 'pillPickModel' })
-    h.fire({ type: 'pillPickAgent', value: 3 })
-    assert.deepEqual(h.calls, [])
+    h.fire({ type: 'pillPickModel' })                // no value
+    h.fire({ type: 'pillPickAgent', value: 3 })      // not an id
+    assert.deepEqual(h.calls, [], 'neither reaches a dep')
+  })
+
+  test('a BARE agent pick cycles — the chip is a tap-to-cycle control', () => {
+    // This previously asserted the bare event was dropped, and that is what
+    // shipped: every tap on the agent chip did nothing at all, for every
+    // backend. Reported as "nothing happens when I press Codex CLI"; it was
+    // never about Codex. The list sends an id, the chip sends nothing and
+    // means "next".
+    const h = harness()
+    h.fire({ type: 'pillPickAgent' })
+    assert.deepEqual(h.calls, ['cycleAgent'])
   })
 
   test('an axis pick needs BOTH an axis and a value — a half-formed one is dropped', () => {

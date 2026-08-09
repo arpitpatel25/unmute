@@ -3125,10 +3125,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     settings.set('surfaceAppearance', 'solid')
     log.event('surface-migrated-system-to-fixed', {})
   }
-  // Codex isn't wired yet (shown as "coming soon"). If a past build stored it as
-  // the agent, reset to claude so Remote works instead of failing every task.
-  // Only the unwired CLI adapter is reset; 'codex-desktop' is a supported choice.
-  if (settings.get('agent') === 'codex') { settings.set('agent', 'claude'); log.event('agent-reset-codex-to-claude', {}) }
+  // A STARTUP RESET FORCING CODEX CLI BACK TO CLAUDE LIVED HERE, and it was
+  // right when it was written: the CLI adapter was a stub, so a stored 'codex'
+  // meant every task failed. It is wired now — dispatch, rollout-driven state,
+  // resume, models, import — so the reset would do the opposite of its purpose:
+  // silently revert a deliberate choice on every launch.
 
   // Fan task lifecycle out to renderers (PRD §13). Terminal/attention states
   // also AUTO-PRESENT the overlay (the canonical surface; OS notifications off).
