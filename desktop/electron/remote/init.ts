@@ -927,6 +927,13 @@ function serializeTask(t: Task) {
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,
+    // WHAT IT IS DOING RIGHT NOW. Carried as the structured Activity rather
+    // than a pre-rendered sentence so the surface can style it (and one day
+    // group by it) instead of parsing prose back apart.
+    // `undefined`, not null: absent means "not doing anything right now", and
+    // TaskLite's optional field says exactly that. A null would have to be
+    // handled as a third case by every reader.
+    codexActivity: t.codexActivity,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     result: t.result ?? null,

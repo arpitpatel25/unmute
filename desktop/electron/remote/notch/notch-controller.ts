@@ -9,6 +9,7 @@
 // handlers call. Pure orchestration over injected deps — unit-testable without
 // a TaskManager, window, or child process.
 import type { EventEmitter } from 'node:events'
+import { describeActivity, type Activity } from '../activity'
 import type {
   NotchCommand, NotchEvent, NotchStateName, TaskStatusName,
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
@@ -22,6 +23,10 @@ const log = createLogger('notch-controller')
 
 // Task shape as serializeTask emits it (the same object remote:list returns).
 export interface TaskLite {
+  /** What the task is doing right now (activity.ts). Present only while it is
+   *  actually doing it — cleared the moment the work stops, so it can never be
+   *  the stale sentence on a finished card. */
+  codexActivity?: Activity
   id: string
   intent: string
   name?: string | null
@@ -190,6 +195,18 @@ function truncate(s: string, n = 48): string {
 export function headlineFor(t: TaskLite): string | undefined {
   const q = t.question
   if (q && q.kind === 'terminal_only') return t.step ?? 'waiting for you in the terminal'
+  // WHAT IT IS DOING BEATS THE WORD "WORKING", but only while it IS doing it.
+  //
+  // Ordered above `step` and below the result for the same reason the comment
+  // below gives: a live activity is the best sentence for a running task, and
+  // the worst one for a finished task. `codexActivity` is cleared the instant
+  // the work stops (applyHubPatch), so this cannot outlive its truth — and it
+  // is checked against the state anyway, because one stale field should not be
+  // able to make a done card claim it is still running a command.
+  if (t.state === 'processing' && t.codexActivity) {
+    const said = describeActivity(t.codexActivity)
+    if (said) return said
+  }
   // RESULT BEFORE STEP. `step` used to win, so a finished task described what it
   // had been doing rather than what it produced — "working on…" printed beside a
   // badge reading done. TaskManager now clears `step` on a terminal transition

@@ -1075,6 +1075,26 @@ test('with auto-expand off the bar still only reaches attention', () => {
   assert.equal(h.client.last('setState')!.state, 'attention')
 })
 
+test('a running task says what it is doing, not "working"', () => {
+  // The whole reason the activity layer exists: "Working" is true of every busy
+  // task and useful about none of them.
+  assert.equal(
+    headlineFor({ id: 'x', intent: 'i', state: 'processing', codexActivity: { kind: 'running', label: 'npm test' } }),
+    'running npm test')
+  // A RESULT STILL WINS. Once there is something to show, the activity is the
+  // worse sentence — the same ordering rule that put result above step.
+  assert.equal(
+    headlineFor({ id: 'x', intent: 'i', state: 'done', result: { summary: 'all green' },
+      codexActivity: { kind: 'running', label: 'npm test' } }),
+    'all green')
+  // And a stale activity on a finished task can never speak, even with no
+  // result to displace it — one leftover field must not make a done card claim
+  // it is still running a command.
+  assert.equal(
+    headlineFor({ id: 'x', intent: 'i', state: 'done', codexActivity: { kind: 'running', label: 'npm test' } }),
+    undefined)
+})
+
 test('the headline never carries the card body — one field, two slots', () => {
   // `activity` was `question.text` outright, and the surface draws it as a
   // headline. The moment the card's text became more than a sentence, the whole
