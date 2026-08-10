@@ -63,6 +63,10 @@ export interface PillStateP {
   /** Codex's own axes. When present they REPLACE modelOptions — the two
    *  platforms never share a model list. */
   modelAxes?: Array<{ axis: string; values: string[]; current?: string }>
+  /** What the model column should SAY when there is nothing to choose from.
+   *  Sent, not inferred: the reason is the backend's own ("connect Codex", "the
+   *  codex command couldn't be reached"), and the view cannot know which. */
+  modelEmpty?: string
   agent?: string
   agentOptions?: PillOptionP[]
   /** Is the selected backend reachable right now? Drives the dot and the

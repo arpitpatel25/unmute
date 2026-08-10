@@ -160,6 +160,12 @@ struct PillState: Codable, Equatable {
     /// modelOptions; a Claude catalog shown under Codex is how the chip ended up
     /// reading "Opus" with Codex selected.
     var modelAxes: [PillAxis]? = nil
+    /// What to say when there is nothing to choose from — sent by the engine,
+    /// because the reason is the backend's own ("connect Codex", "the codex
+    /// command couldn't be reached") and only the engine knows which applies.
+    /// The alternative was Swift inferring it from the backend id, which is the
+    /// bug this replaces.
+    var modelEmpty: String? = nil
     var agent: String? = nil
     var agentOptions: [PillOption]? = nil
     /// Is the selected backend reachable right now? Drives the dot on the agent
@@ -207,6 +213,7 @@ struct PillState: Codable, Equatable {
         model        = try? c.decodeIfPresent(String.self, forKey: .model)
         modelOptions = try? c.decodeIfPresent([PillOption].self, forKey: .modelOptions)
         modelAxes    = try? c.decodeIfPresent([PillAxis].self, forKey: .modelAxes)
+        modelEmpty   = try? c.decodeIfPresent(String.self, forKey: .modelEmpty)
         agent        = try? c.decodeIfPresent(String.self, forKey: .agent)
         agentOptions = try? c.decodeIfPresent([PillOption].self, forKey: .agentOptions)
         agentConnected = v(.agentConnected, true)

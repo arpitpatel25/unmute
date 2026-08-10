@@ -1481,6 +1481,7 @@ async function pushPillChips(): Promise<void> {
       // picking a "Codex model" wrote Claude's setting while the Codex label
       // never moved. Absent means keep; empty means cleared.
       chips.modelOptions = []
+      chips.modelEmpty = 'Connect Codex to choose a model'
       // RAW is not offered on Codex at all — dispatchCodexDesktop returns before
       // `mode` is ever read and then records 'managed', so there is nothing for
       // raw to skip. A control that cannot act is worse than no control.
@@ -1508,6 +1509,7 @@ async function pushPillChips(): Promise<void> {
         ? (composer.effort ? `${composer.model} · ${composer.effort}` : composer.model)
         : 'From Claude Desktop'
       chips.modelAxes = []
+      chips.modelEmpty = 'Open Claude desktop to choose a model'
       // Unmute owns no process here, so there is no injection for raw to skip.
       chips.raw = null
     } else if (agent === 'codex') {
@@ -1548,6 +1550,7 @@ async function pushPillChips(): Promise<void> {
       // an absent key keeps the previous backend's list (the bug the Codex
       // desktop branch documents above).
       chips.modelOptions = []
+      chips.modelEmpty = 'Unmute couldn’t reach the codex command'
       chips.raw = injectionDisabled()
     } else {
       const catalog = getModelCatalog()
@@ -1557,9 +1560,20 @@ async function pushPillChips(): Promise<void> {
         id: c.id, label: c.label, detail: c.description ?? '',
       }))
       chips.modelAxes = []          // same reasoning — clear, do not omit
+      chips.modelEmpty = 'No models available'
       chips.raw = injectionDisabled()
     }
 
+    // WHAT WAS ACTUALLY HANDED TO THE PILL. Added after an empty Model column
+    // could only be diagnosed by reading Swift: the engine logged the models it
+    // read and the agent it switched to, and nothing about the payload between
+    // them, so the one broken link was the only one not written down.
+    log.event('pill-chips', {
+      agent: chips.agent ?? null,
+      model: chips.model ?? null,
+      axes: (chips.modelAxes ?? []).map((a) => `${a.axis}:${a.values.length}`),
+      options: chips.modelOptions?.length ?? null,
+    })
     pillController.push(chips)
   } catch (e) {
     log.warn('pill chips push failed', { error: (e as Error).message })

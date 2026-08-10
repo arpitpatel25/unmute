@@ -762,13 +762,31 @@ private struct SelectorPanel: View {
     @Binding var open: Bool
 
     private var axes: [PillAxis] { state.modelAxes ?? [] }
+    private var options: [PillOption] { state.modelOptions ?? [] }
     /// The SELECTED backend's id, resolved through the options the engine sent.
     /// Was a label comparison against the literal "Codex", which is both a
     /// display string and unable to name a third backend.
     private var agentId: String {
         state.agentOptions?.first(where: { $0.label == (state.agent ?? "") })?.id ?? "claude"
     }
-    private var isCodex: Bool { agentId == "codex-desktop" }
+
+    /// HOW THE MODEL CONTROL IS SHAPED, decided by WHAT THE ENGINE SENT rather
+    /// than by which backend this is.
+    ///
+    /// This was `agentId == "codex-desktop"`, and it is the reason Codex CLI
+    /// shipped with an empty Model column in 1.4.24-dev.6. That backend's id is
+    /// `codex`, so the literal was false, so this drew the flat list — from
+    /// `modelOptions`, which the engine had deliberately left empty because it
+    /// was sending axes. Six models arrived, decoded, and were never drawn.
+    ///
+    /// A LITERAL BACKEND NAME CANNOT ANSWER THIS QUESTION. Two Codex backends
+    /// want axes and two Claude ones want a list, so the rule is not "is this
+    /// Codex" and never was — it is "did the engine send me axes or a list",
+    /// which is answerable from the payload alone and stays right for the next
+    /// backend without a line of Swift changing. The comment on `agentId` above
+    /// says exactly this about its own literal; the fix stopped one line short.
+    private enum Chooser { case axes, list, empty }
+    private var chooser: Chooser { !axes.isEmpty ? .axes : (options.isEmpty ? .empty : .list) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -790,30 +808,34 @@ private struct SelectorPanel: View {
                     }
                 }
 
-                if isCodex && axes.isEmpty {
-                    // HONEST EMPTY STATE. Falling through to the other
-                    // platform's list is what made picking a model silently
-                    // write the wrong setting.
-                    VStack(alignment: .leading, spacing: 2) {
-                        header("Model")
-                        Text("Connect Codex to choose a model")
-                            .font(.system(size: 12)).foregroundColor(Theme.textFaint)
-                            .padding(.horizontal, 10).padding(.vertical, 7)
-                    }
-                    .frame(minWidth: 150, alignment: .leading)
-                } else if isCodex {
+                switch chooser {
+                case .axes:
                     ForEach(axes) { a in
                         column(a.axis, rows: a.values.map { ($0, $0 == a.current) }) { v in
                             model.emit(.pickAxis(axis: a.axis, value: v))
                         }
                     }
-                } else {
-                    let opts = state.modelOptions ?? []
-                    column("Model", rows: opts.map { ($0.label, $0.label == state.model) }) { label in
-                        if let o = opts.first(where: { $0.label == label }) {
+                case .list:
+                    column("Model", rows: options.map { ($0.label, $0.label == state.model) }) { label in
+                        if let o = options.first(where: { $0.label == label }) {
                             model.emit(.pickModel(o.id))
                         }
                     }
+                case .empty:
+                    // HONEST EMPTY STATE, IN THE ENGINE'S WORDS. Falling through
+                    // to another backend's list is what made picking a model
+                    // silently write the wrong setting. The sentence is sent
+                    // rather than written here because the reason differs by
+                    // backend — an app to open, or a command that could not be
+                    // reached — and this view has no way to know which.
+                    VStack(alignment: .leading, spacing: 2) {
+                        header("Model")
+                        Text(state.modelEmpty ?? "No models to choose from")
+                            .font(.system(size: 12)).foregroundColor(Theme.textFaint)
+                            .padding(.horizontal, 10).padding(.vertical, 7)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(minWidth: 150, maxWidth: 220, alignment: .leading)
                 }
             }
         }
@@ -823,10 +845,11 @@ private struct SelectorPanel: View {
     }
 
     private var summary: String {
-        if isCodex {
-            let vals = axes.compactMap(\.current)
-            return vals.isEmpty ? "Not connected" : vals.joined(separator: " · ")
-        }
+        // Axes describe themselves ("5.6 Terra · Extra High"); a flat list is
+        // named by the chip. Keyed off the payload for the same reason as
+        // `chooser` — a backend name here would drift from the branch above.
+        let vals = axes.compactMap(\.current)
+        if !vals.isEmpty { return vals.joined(separator: " · ") }
         return state.model ?? "Model"
     }
 
