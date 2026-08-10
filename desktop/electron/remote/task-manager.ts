@@ -304,6 +304,18 @@ export interface TaskManagerOpts {
   sandboxRoots?: () => string[]
   /** Has the user consented to full-access Codex CLI tasks? Absent ⇒ no. */
   codexFullAccess?: () => boolean
+  /**
+   * Codex CLI's chosen model and effort as WIRE VALUES.
+   *
+   * SEPARATE FROM `opts.model`, which is the display record ("gpt-5.6-luna
+   * high") stamped at dispatch so a card can say what it ran on. Passing that
+   * string to `thread/start` sent Codex a model literally named
+   * "gpt-5.6-luna high" and every task died with
+   *   "The 'gpt-5.6-luna high' model is not supported when using Codex with a
+   *    ChatGPT account."
+   * One value cannot be both a sentence and an id.
+   */
+  codexCliChoice?: () => { model?: string; effort?: string }
   /** The Codex CLI App Server hub. Absent ⇒ Codex CLI tasks fall back to the
    *  PTY + rollout path, which is what shipped before the protocol client and
    *  is kept so a Codex too old for `app-server` still runs. */
@@ -490,8 +502,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -500,6 +512,7 @@ export class TaskManager extends EventEmitter {
       codexHub: opts.codexHub,
       sandboxRoots: opts.sandboxRoots,
       codexFullAccess: opts.codexFullAccess,
+      codexCliChoice: opts.codexCliChoice,
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       pollMs: opts.pollMs ?? 1000,
       resolveSessionCwd: opts.resolveSessionCwd,
@@ -1179,8 +1192,11 @@ export class TaskManager extends EventEmitter {
       sandboxRoots: this.opts.sandboxRoots?.() ?? [],
       fullAccessAllowed: this.opts.codexFullAccess?.() === true,
     })
+    // WIRE VALUES, never the display record. `opts.model` is the sentence a
+    // card shows; this is the id Codex is asked to run.
+    const wire = this.opts.codexCliChoice?.() ?? {}
     const { threadId, url } = await hub.startThread(id, {
-      cwd: runCwd, model: opts.model, effort: opts.effort,
+      cwd: runCwd, model: wire.model, effort: wire.effort,
       approvalPolicy: posture.approvalPolicy, sandbox: posture.sandbox,
     })
 
@@ -1202,7 +1218,8 @@ export class TaskManager extends EventEmitter {
       lastHeartbeatMs: now,
       surface,
       mode: 'managed',
-      ...(opts.model ? { model: [opts.model, opts.effort].filter(Boolean).join(' ') } : {}),
+      // The record: already the display string, stamped by the dispatch wrapper.
+      ...(opts.model ? { model: opts.model } : {}),
       ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
     } as Task
     this.tasks.set(id, task)
@@ -1248,7 +1265,7 @@ export class TaskManager extends EventEmitter {
       this.transition(id, 'failed', { state: 'failed', error: { reason: 'Codex would not start the turn' } })
     }
     tlog.event('codex-cli-dispatched', {
-      threadId, cwd: runCwd, model: opts.model ?? null, effort: opts.effort ?? null,
+      threadId, cwd: runCwd, model: wire.model ?? null, effort: wire.effort ?? null,
       approvalPolicy: posture.approvalPolicy, sandbox: posture.sandbox, fullAccess: posture.fullAccess,
     })
     return id

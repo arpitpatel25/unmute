@@ -54,7 +54,7 @@
  * our lifetime, gone when unmute quits.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { createLogger } from '../log'
 
@@ -135,7 +135,15 @@ export class CodexAppServer {
     this.port = this.deps.port ?? await freePort()
     const spawnImpl = this.deps.spawnImpl ?? spawn
     const args = ['app-server', '--listen', `ws://127.0.0.1:${this.port}`]
-    this.proc = spawnImpl(this.deps.bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    // A MARKER SO OUR STRAYS CAN BE FOUND AND REAPED. Four dead app-servers
+    // were left running on this machine by starts that threw before `stop()`
+    // could own them — each one a Codex process the user never launched and
+    // cannot see. `env` is the only channel that survives into `ps` without
+    // changing the command Codex parses.
+    this.proc = spawnImpl(this.deps.bin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, UNMUTE_APP_SERVER: '1' },
+    })
     log.event('app-server-spawn', { bin: this.deps.bin, port: this.port, pid: this.proc.pid ?? null })
 
     // Codex writes its banner to stdout and its complaints to stderr. Neither is
@@ -303,6 +311,40 @@ export class CodexAppServer {
   private failAllPending(e: Error): void {
     for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(e) }
     this.pending.clear()
+  }
+
+  /**
+   * Kill app-servers WE started that outlived their owner.
+   *
+   * Only ours: matched on the UNMUTE_APP_SERVER marker in the environment, so a
+   * Codex the user launched — or the desktop app's own app-server — is never
+   * touched. Best-effort and silent on failure; a stray process is a leak, not
+   * a reason to fail a launch.
+   *
+   * Needed because `stop()` only ever reaches the servers this process owns. A
+   * start that throws, a crash, or a reinstall leaves the child behind, and
+   * they accumulate: twelve were found running after a day of failed starts.
+   */
+  static reapStrays(execFileImpl = execFile): void {
+    execFileImpl('/bin/ps', ['-eo', 'pid=,command='], (err, stdout) => {
+      if (err) return
+      const mine: string[] = []
+      for (const line of String(stdout).split('\n')) {
+        if (!/codex.*app-server .*--listen ws:\/\/127\.0\.0\.1/.test(line)) continue
+        const pid = line.trim().split(/\s+/)[0]
+        if (pid && pid !== String(process.pid)) mine.push(pid)
+      }
+      if (!mine.length) return
+      // Confirm each one is OURS before killing — the command line alone cannot
+      // tell our server from one the user started the same way.
+      for (const pid of mine) {
+        execFileImpl('/bin/ps', ['-p', pid, '-wwEo', 'command='], (e2, out2) => {
+          if (e2 || !String(out2).includes('UNMUTE_APP_SERVER=1')) return
+          try { process.kill(Number(pid)) ; log.event('app-server-stray-reaped', { pid }) }
+          catch { /* already gone */ }
+        })
+      }
+    })
   }
 
   /** Stop the server. Safe to call twice; safe to call when never started. */

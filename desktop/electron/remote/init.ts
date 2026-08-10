@@ -61,6 +61,7 @@ import { PillController, type PillStateP } from './notch/pill-controller'
 import { listCodexModels, matchCurrent, type CodexModel } from './codex/appserver'
 import { listCodexCliModels, resolveCodexCliChoice, codexCliChoiceLabel } from './codex/cli-models'
 import { CodexHub } from './codex/hub'
+import { CodexAppServer } from './codex/app-server-client'
 import { resolveCodexCli } from './codex/driver'
 import { DriverManager } from './cua/driver-manager'
 import { CdpLane } from './cua/lanes/cdp'
@@ -2794,6 +2795,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // Consent gates full access. Read per dispatch so revoking it takes effect
     // on the next task rather than the next launch.
     codexFullAccess: () => settings.get('codexFullAccessConsent') === true,
+    // The WIRE pair, kept apart from the display record the wrapper stamps.
+    codexCliChoice: () => codexCliSpawnArgs(),
     codexDriver,
     claudeDesktopDriver,
     claudeDesktopAx,
@@ -3593,6 +3596,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Prove the App Server transport in THIS build, once, at launch. Backgrounded
   // and delayed so it never sits in the startup path — which is next to the
   // capture path, and must not wait on someone else's binary.
+  // Reap strays from a previous run BEFORE the self-check starts a new one, so
+  // the count cannot creep up across launches.
+  CodexAppServer.reapStrays()
   setTimeout(() => { void codexHub?.selfCheck() }, 8000).unref?.()
 
   // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
