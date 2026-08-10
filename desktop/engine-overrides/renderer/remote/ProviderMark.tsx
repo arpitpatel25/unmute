@@ -18,7 +18,7 @@
  */
 import type { RemoteTask } from './taskFacts'
 import { hasTerminal, providerLabel } from './taskFacts'
-import { PROVIDER_LOGOS } from './providerLogos'
+import { PROVIDER_LOGOS, opticalScale } from './providerLogos'
 
 /** Which vendor's mark to draw. Two surfaces per vendor share one logo — Codex
  *  CLI and Codex desktop are the same product wearing different clothes, and
@@ -54,7 +54,7 @@ export function ProviderMark({ task, size = 14 }: { task: RemoteTask; size?: num
             src={art.src}
             alt=""
             aria-hidden
-            style={{ width: size * art.scale, height: size * art.scale, objectFit: 'contain' }}
+            style={{ width: size * opticalScale(art.ink), height: size * opticalScale(art.ink), objectFit: 'contain' }}
           />
         </span>
       ) : (
