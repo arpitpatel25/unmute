@@ -576,7 +576,56 @@ export class TaskManager extends EventEmitter {
    * Dispatch a new task. Returns the taskId immediately; execution + polling
    * proceed asynchronously (PRD §4.4 — dispatch and forget).
    */
+  /**
+   * WHICH DISPATCH DOES THIS BACKEND USE — a table, not a chain of ifs.
+   *
+   * Four backends now start work four different ways: a driven app, a driven
+   * window, a JSON-RPC thread, an owned PTY. Written as `if (agent === X)
+   * … else if (agent === Y) …`, the FALL-THROUGH is the answer for anything
+   * unlisted — and the fall-through here builds a Claude PTY. So the failure
+   * mode of forgetting a backend is not an error, it is silently running the
+   * user's work on the wrong agent, which is exactly what happened on
+   * 2026-07-25.
+   *
+   * A table makes "unlisted" mean `undefined`, and `undefined` takes the PTY
+   * path deliberately rather than accidentally. `null` marks a backend that
+   * shares the PTY path on purpose.
+   */
+  private dispatchRoute(agent: AgentKind | undefined):
+    ((intent: string, opts: Parameters<TaskManager['dispatch']>[1]) => Promise<string>) | null {
+    switch (agent) {
+      case 'claude-code-desktop':
+        return async (intent) => {
+          const res = await this.createClaudeDesktop(intent)
+          if (!res.ok) throw new Error(`CLAUDE_DESKTOP_UNAVAILABLE: ${res.reason ?? 'unknown'}`)
+          if (res.id) return res.id
+          // Created, but the store had not written it yet. The work HAS started
+          // — saying otherwise is what produced a duplicate run on the Codex
+          // side — so surface a typed reason rather than a false failure.
+          throw new Error('CLAUDE_DESKTOP_ID_UNRESOLVED')
+        }
+      case 'codex-desktop':
+        return (intent, opts) => this.dispatchCodexDesktop(intent, opts ?? {})
+      case 'codex':
+        // Only when a hub is wired. Without one, Codex CLI falls to the PTY +
+        // rollout path, so a Codex too old for `app-server` still runs.
+        return this.opts.codexHub ? (intent, opts) => this.dispatchCodexCli(intent, opts ?? {}) : null
+      case 'claude':
+      case undefined:
+        return null                       // the owned-PTY path below, deliberately
+      default: {
+        // A backend in the registry with no route. Loud, because the
+        // alternative is running it as Claude.
+        const exhaustive: never = agent
+        log.error('dispatch: no route for backend', { agent: exhaustive })
+        return null
+      }
+    }
+  }
+
   async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string } = {}): Promise<string> {
+    const route = this.dispatchRoute(opts.agent)
+    if (route) return route(intent, opts)
     // EXTERNAL BACKEND FORK (codex-desktop). Everything below this point — the
     // status file, the CLAUDE.md contract, the owned PTY, the trust prompt, the
     // dispatch payload — presumes Unmute spawns and owns the process. Codex
@@ -586,22 +635,6 @@ export class TaskManager extends EventEmitter {
     // an API, only a window to drive. Routing it here rather than letting
     // isExternalAgent send it to dispatchCodexDesktop, which would try to talk
     // to Codex over CDP about a conversation that does not exist there.
-    if (opts.agent === 'claude-code-desktop') {
-      const res = await this.createClaudeDesktop(intent)
-      if (!res.ok) throw new Error(`CLAUDE_DESKTOP_UNAVAILABLE: ${res.reason ?? 'unknown'}`)
-      if (res.id) return res.id
-      // Created, but the store had not written it yet. The work HAS started —
-      // saying otherwise is what produced a duplicate run on the Codex side —
-      // so surface the same typed reason instead of a false failure.
-      throw new Error('CLAUDE_DESKTOP_ID_UNRESOLVED')
-    }
-    if (isExternalAgent(opts.agent)) return this.dispatchCodexDesktop(intent, opts)
-    // CODEX CLI ON THE PROTOCOL when a hub is wired. Falls through to the PTY +
-    // rollout path when it is not, so a Codex too old for `app-server` — or a
-    // hub that failed to start — still runs the task rather than failing it.
-    if (opts.agent === 'codex' && this.opts.codexHub) {
-      return this.dispatchCodexCli(intent, opts)
-    }
     const id = randomUUID()
     // Mint the Claude session id up front so we own a stable handle to the
     // session this task will spawn (passed as --session-id below).
