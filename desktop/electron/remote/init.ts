@@ -29,7 +29,7 @@ import { TaskManager, type Task } from './task-manager'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor'
-import { providerOf, PROVIDERS, isDispatchable, type ProviderId } from './providers'
+import { providerOf, PROVIDERS, isDispatchable, type ProviderId, DEFAULT_PROVIDER } from './providers'
 import { CodexDesktopDriver } from './codex/driver'
 import { ClaudeDesktopDriver } from './claude-desktop/driver'
 import { ClaudeDesktopAx } from './claude-desktop/ax'
@@ -2309,6 +2309,19 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
   // the reason their utterances fell to failsafeDecision).
   if (router || codexRouter) {
     const awaitingIds = new Set(manager.tasksAwaitingUser().map((t) => t.id))
+    // WHICH BACKEND THIS UTTERANCE COMMITTED TO, visible to the catch below.
+    //
+    // The failsafe there re-dispatches on error, and it used to decide whether
+    // that was safe by MATCHING TWO ERROR STRINGS. Anything else fell through —
+    // so when the App Server client threw `bufferUtil$1.mask is not a function`
+    // in the packaged app, a task the user had explicitly pointed at Codex was
+    // silently started on Claude instead. Twice, with no explanation.
+    //
+    // The rule was never about which error it was. Once a backend has been
+    // chosen, a failure belongs to THAT backend; only a routing failure that
+    // never got as far as choosing may fall back to a plain task.
+    let committedBackend: AgentKind | undefined
+
     try {
       const tRoute = Date.now()
       // The user's real project universe (curated + recency-ranked, read-only
@@ -2565,6 +2578,7 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // between the probe and the dispatch, the task lands on Claude with a log
       // rather than throwing in the user's face mid-sentence.
       const chosenAgent = await resolveAgent(decision.agent, avail)
+      committedBackend = chosenAgent
       const newId = await manager.dispatch(intentText, {
         surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir,
         agent: chosenAgent,
@@ -2598,6 +2612,17 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
       // silently moved a Codex task onto Claude Code and ran the user's work
       // twice, on an agent they did not pick (2026-07-25). A backend failure is
       // a FAILED TASK on that backend, never a task somewhere else.
+      // COMMITTED ⇒ NEVER SOMEWHERE ELSE. Checked before the string matches
+      // below, and it is the rule that actually holds: whatever went wrong
+      // after a backend was chosen is that backend's failure to report, not a
+      // reason to run the user's words on a different agent.
+      if (committedBackend && committedBackend !== DEFAULT_PROVIDER) {
+        const label = providerOf(committedBackend).label
+        log.error('backend failure after commit — NOT falling back to another agent',
+          { agent: committedBackend, error: msg })
+        speakLine(`${label} could not take that task.`)
+        return null
+      }
       if (msg.startsWith('CODEX_UNAVAILABLE') || msg.startsWith('AGENT_SEPARATION_VIOLATION')) {
         log.error('backend failure — NOT falling back to another agent', { error: msg })
         speakLine('Codex could not take that task.')
@@ -3565,6 +3590,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // orphan a Codex the user never started and cannot see.
     try { codexHub?.stop() } catch (e) { log.warn('codex hub shutdown failed', { error: (e as Error).message }) }
   })
+  // Prove the App Server transport in THIS build, once, at launch. Backgrounded
+  // and delayed so it never sits in the startup path — which is next to the
+  // capture path, and must not wait on someone else's binary.
+  setTimeout(() => { void codexHub?.selfCheck() }, 8000).unref?.()
+
   // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
   manager.on('output', (d: { taskId: string; chunk: string }) => {
     for (const w of BrowserWindow.getAllWindows()) {

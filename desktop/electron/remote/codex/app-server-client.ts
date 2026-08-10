@@ -33,6 +33,21 @@
  *     --ws-auth modes exist for non-loopback listeners), and comes with a
  *     /readyz endpoint so startup is a fact rather than a sleep.
  *
+ * THE PLATFORM'S WebSocket, NOT THE `ws` PACKAGE, and this is a scar.
+ *
+ * The first version imported `ws`. It passed a live end-to-end test under tsx
+ * and then threw `bufferUtil$1.mask is not a function` on its very first frame
+ * in the packaged app: `ws` ships optional native addons and falls back to JS
+ * when they are missing, but the bundler inlined a broken reference to the
+ * native masker. The dispatch then fell through a fallback and the user's task
+ * silently ran on Claude instead.
+ *
+ * A GLOBAL CANNOT BE BUNDLED WRONGLY. There is no import for rollup to resolve
+ * and no optional binary to lose — which is a stronger guarantee than "this
+ * dependency happens to work today". Electron 40 / Node 24 provides WebSocket
+ * in the main process (verified in the actual runtime, not in tsx, because
+ * verifying in the wrong runtime is exactly how the first version shipped).
+ *
  * NOT CODEX'S MANAGED DAEMON. `codex app-server daemon start` would give us a
  * machine-global server that outlives unmute and is entangled with
  * remote-control pairing and the desktop app. This process is ours: our port,
@@ -41,7 +56,6 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
-import WebSocket from 'ws'
 import { createLogger } from '../log'
 
 const log = createLogger('codex-app-server')
@@ -103,7 +117,7 @@ export class CodexAppServer {
 
   /** The URL a TUI attaches to: `codex --remote <this>`. Empty until started. */
   get url(): string { return this.port ? `ws://127.0.0.1:${this.port}` : '' }
-  get running(): boolean { return !!this.ws && this.ws.readyState === WebSocket.OPEN }
+  get running(): boolean { return !!this.ws && this.ws.readyState === 1 /* OPEN */ }
 
   /**
    * Start the server and connect. Idempotent and coalesced — several tasks
@@ -168,18 +182,25 @@ export class CodexAppServer {
     this.ws = ws
     await new Promise<void>((resolve, reject) => {
       const onOpen = () => { cleanup(); resolve() }
-      const onErr = (e: Error) => { cleanup(); reject(e) }
-      const cleanup = () => { ws.off('open', onOpen); ws.off('error', onErr) }
-      ws.on('open', onOpen)
-      ws.on('error', onErr)
+      const onErr = () => { cleanup(); reject(new Error('websocket failed to open')) }
+      const cleanup = () => {
+        ws.removeEventListener('open', onOpen)
+        ws.removeEventListener('error', onErr)
+      }
+      ws.addEventListener('open', onOpen)
+      ws.addEventListener('error', onErr)
     })
-    ws.on('message', (data: Buffer | string) => this.onMessage(String(data)))
-    ws.on('close', () => {
+    // `data` is a string for text frames on the platform WebSocket; Blob/
+    // ArrayBuffer only for binary, which this protocol never sends. Coerced
+    // anyway so a binary frame degrades to an unparseable line rather than a
+    // crash in the message loop.
+    ws.addEventListener('message', (ev: MessageEvent) => this.onMessage(String(ev.data)))
+    ws.addEventListener('close', () => {
       log.warn('app-server-socket-closed', {})
       this.failAllPending(new Error('socket closed'))
       this.ws = null
     })
-    ws.on('error', (e: Error) => log.warn('app-server-socket-error', { error: e.message }))
+    ws.addEventListener('error', () => log.warn('app-server-socket-error', {}))
   }
 
   /**
@@ -242,7 +263,7 @@ export class CodexAppServer {
   }
 
   private send(o: unknown): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) { log.warn('app-server-send-dropped', {}); return }
+    if (!this.ws || this.ws.readyState !== 1 /* OPEN */) { log.warn('app-server-send-dropped', {}); return }
     this.ws.send(JSON.stringify(o))
   }
 

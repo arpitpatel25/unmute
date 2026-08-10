@@ -172,6 +172,43 @@ export class CodexHub {
 
   threadIdFor(taskId: string): string | undefined { return this.byTask.get(taskId)?.threadId }
 
+  /**
+   * PROVE THE TRANSPORT WORKS, IN THIS BUILD, BEFORE A TASK DEPENDS ON IT.
+   *
+   * Starts the server, completes the handshake, asks one harmless question, and
+   * shuts down. Non-fatal and fire-and-forget: it exists to LOG, not to gate.
+   *
+   * It exists because the App Server client was verified end-to-end under tsx
+   * and then failed on its first frame in the packaged app — `ws` had been
+   * bundled with a broken native masker. A dev-runtime test cannot see that
+   * class of fault, and the way the user met it was two tasks silently running
+   * on the wrong agent. Now the packaged app says so on its own, at launch,
+   * before anyone asks it to do anything.
+   *
+   * Cheap enough to be unconditional: one short-lived Codex process, once.
+   */
+  async selfCheck(): Promise<{ ok: boolean; reason?: string }> {
+    const started = Date.now()
+    try {
+      const srv = await this.ensure()
+      // A REQUEST, not just a connection. The `ws` fault only appeared when a
+      // frame was actually SENT, so a check that merely opened the socket would
+      // have passed while the thing it was checking was broken.
+      await srv.request('model/list', {})
+      log.event('codex-selfcheck-ok', { ms: Date.now() - started, url: srv.url })
+      return { ok: true }
+    } catch (e) {
+      const reason = (e as Error).message
+      // ERROR, not warn: Codex CLI cannot work in this build, and the failure is
+      // ours rather than the user's. Everything still runs — dispatch falls back
+      // to the PTY path — but the reason is now on the record at launch.
+      log.error('codex-selfcheck-failed — Codex CLI will fall back to the PTY path', {
+        ms: Date.now() - started, reason,
+      })
+      return { ok: false, reason }
+    }
+  }
+
   /** Forget a task. Does NOT delete the Codex thread — the conversation is the
    *  user's, and it stays resumable from disk after unmute lets go of it. */
   release(taskId: string): void {
