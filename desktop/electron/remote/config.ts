@@ -69,14 +69,24 @@ export const MODEL_CATALOG: ModelChoice[] = [
   { id: 'gpt-5.1-codex-mini', label: 'Codex Mini', description: 'Fastest — best for simple, quick tasks.', provider: 'codex' },
 ]
 
+/** Which backend an entry belongs to, with the absent-means-Claude rule applied.
+ *
+ *  ONE definition, because the rule is now read in three places — the picker
+ *  (modelsFor), the config merge, and the selectable-id guard — and the way
+ *  this breaks is not a crash. Spelled twice and drifted, a backend's models
+ *  quietly land in another backend's menu. */
+export function providerOfModel(m: ModelChoice): string {
+  return m.provider ?? 'claude'
+}
+
 /** The models selectable for a given backend.
  *
  *  Absent `provider` means Claude — the catalog predates a second CLI and the
  *  persisted `model` setting carries no provider key, so an untagged entry must
  *  keep meaning what it always did. */
 export function modelsFor(provider: string | undefined, catalog: readonly ModelChoice[] = MODEL_CATALOG): ModelChoice[] {
-  const want = provider === 'codex' ? 'codex' : 'claude'
-  return catalog.filter((m) => (m.provider ?? 'claude') === want)
+  const want = provider || 'claude'
+  return catalog.filter((m) => providerOfModel(m) === want)
 }
 
 /** The compiled default set of selectable model ids (catalog ids). Kept for

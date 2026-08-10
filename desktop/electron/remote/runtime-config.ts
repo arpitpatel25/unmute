@@ -37,7 +37,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { MODELS, PROMPTS, MODEL_CATALOG, modelsFor, type DoerModel, type ModelChoice } from './config'
+import { MODELS, PROMPTS, MODEL_CATALOG, modelsFor, providerOfModel, type DoerModel, type ModelChoice } from './config'
 import { CONTRACT_TEXT } from './contract/contract-text'
 import { createLogger } from './log'
 
@@ -145,19 +145,67 @@ export function compiledDefaults(): RuntimeConfigData {
 const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0
 
 /** Validate a config-provided model catalog: keep only entries with a non-empty
- *  string id + label, de-duplicated by id. Anything malformed is skipped. */
+ *  string id + label, de-duplicated. Anything malformed is skipped.
+ *
+ *  `provider` IS CARRIED THROUGH, and the de-dup key is (provider, id) rather
+ *  than id. Both used to be otherwise, and both were silent data loss:
+ *
+ *  • Dropping the tag meant a config could never describe a non-Claude model —
+ *    every entry came back untagged, which `modelsFor` reads as Claude. Adding
+ *    Codex models to the served config would have put them in Claude's picker.
+ *  • De-duping on the bare id meant the SECOND 'default' lost. Every backend
+ *    has a 'default'; on any config carrying two backends, one of them silently
+ *    had its default entry deleted.
+ *
+ *  An UNRECOGNISED provider is kept as-is, not coerced to Claude. It then
+ *  belongs to no backend that exists yet and shows up nowhere — which is what a
+ *  config from a newer app should do on an older one, rather than leaking a
+ *  future backend's models into today's menu. */
 function sanitizeCatalog(v: unknown): ModelChoice[] {
   if (!Array.isArray(v)) return []
   const out: ModelChoice[] = []
   const seen = new Set<string>()
   for (const e of v) {
     if (!e || typeof e !== 'object') continue
-    const { id, label, description } = e as Record<string, unknown>
-    if (!isNonEmptyString(id) || !isNonEmptyString(label) || seen.has(id)) continue
-    seen.add(id)
-    out.push({ id, label, description: isNonEmptyString(description) ? description : undefined })
+    const { id, label, description, provider } = e as Record<string, unknown>
+    if (!isNonEmptyString(id) || !isNonEmptyString(label)) continue
+    const p = isNonEmptyString(provider) ? provider.trim() : undefined
+    const key = `${p ?? 'claude'} ${id}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({
+      id, label,
+      description: isNonEmptyString(description) ? description : undefined,
+      ...(p ? { provider: p as ModelChoice['provider'] } : {}),
+    })
   }
   return out
+}
+
+/**
+ * Fold a config catalog over the compiled one, PER BACKEND.
+ *
+ * A config layer replaces the models of every backend it mentions, and leaves
+ * every backend it does not mention exactly as it found it.
+ *
+ * IT USED TO REPLACE THE WHOLE LIST, and that is what emptied Codex CLI's
+ * picker in 1.4.24-dev.4. The served config (version 2) lists eight Claude
+ * models and knows nothing about Codex — it was written before Codex CLI was a
+ * backend. Replacing wholesale deleted the four compiled Codex entries, so
+ * `modelsFor('codex')` returned nothing: no models in the menu, and the pill
+ * fell back to showing the raw id 'default' because there was no entry left to
+ * read a label from.
+ *
+ * The shape of that bug matters more than the instance. Every backend added
+ * from here on is born into a served config that predates it, so a whole-list
+ * replace deletes each new backend's models the moment the app fetches — which
+ * reads as "the feature was never built" and cannot be fixed from the app.
+ * Per-provider means a config only ever speaks for what it names.
+ */
+function foldCatalog(base: readonly ModelChoice[], override: readonly ModelChoice[]): ModelChoice[] {
+  const spokenFor = new Set(override.map(providerOfModel))
+  const kept = base.filter((c) => !spokenFor.has(providerOfModel(c)))
+  return [...override.map((c) => ({ ...c })), ...kept]
 }
 
 /** Fold a partial override over a base, dropping (and logging) any invalid key.
@@ -176,16 +224,20 @@ export function mergeConfig(base: RuntimeConfigData, override: unknown, source: 
 
   const m = o.models as Record<string, unknown> | undefined
   if (m && typeof m === 'object') {
-    // 1. Catalog: a valid non-empty array REPLACES the selectable set (config
-    //    defines the full catalog — that's how new models arrive without a
-    //    build). Invalid/empty → keep the base catalog.
+    // 1. Catalog: a valid non-empty array replaces the selectable set FOR THE
+    //    BACKENDS IT NAMES (config defines the catalog — that's how new models
+    //    arrive without a build). Invalid/empty → keep the base catalog.
     if ('available' in m) {
       const sanitized = sanitizeCatalog(m.available)
-      if (sanitized.length) out.models.available = sanitized
+      if (sanitized.length) out.models.available = foldCatalog(out.models.available, sanitized)
       else log.warn('dropped invalid model catalog override', { source })
     }
     // 2. Picks: accept a model only if it's in the EFFECTIVE catalog just set.
-    const allowed = new Set(out.models.available.map((c) => c.id))
+    //    CLAUDE'S HALF of it — these three keys name Claude models (see MODELS
+    //    in config.ts), and an unscoped check would accept a Codex id for the
+    //    router, which then runs every classification against a model the
+    //    Claude CLI does not have.
+    const allowed = new Set(modelsFor('claude', out.models.available).map((c) => c.id))
     for (const k of ['doerDefault', 'router', 'librarian'] as const) {
       if (k in m) {
         if (typeof m[k] === 'string' && allowed.has(m[k] as string)) out.models[k] = m[k] as string
@@ -360,9 +412,14 @@ export function getModels(): ConfigModels { return live.models }
 export function getModelCatalog(provider?: string): ModelChoice[] {
   return modelsFor(provider, live.models.available)
 }
-/** True if `id` is a model a user may currently select (in the effective catalog). */
-export function isSelectableModel(id: unknown): id is string {
-  return typeof id === 'string' && live.models.available.some((c) => c.id === id)
+/** True if `id` is a model a user may currently select ON THIS BACKEND.
+ *
+ *  Scoped for the same reason getModelCatalog is: unscoped, this said yes to a
+ *  Codex id being written into Claude's `model` setting — a menu showing one
+ *  backend silently changing what the other one runs on. Defaults to Claude,
+ *  which is what both callers mean. */
+export function isSelectableModel(id: unknown, provider?: string): id is string {
+  return typeof id === 'string' && modelsFor(provider, live.models.available).some((c) => c.id === id)
 }
 export function getPrompts(): ConfigPrompts { return live.prompts }
 export function getKnobs(): ConfigKnobs { return live.knobs }

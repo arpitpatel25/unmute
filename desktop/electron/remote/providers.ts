@@ -40,6 +40,16 @@ export interface Provider {
   hasTerminal: boolean
   /** Can a finished/interrupted task be brought back? Gates the Resume button. */
   canResume: boolean
+  /** The settings key holding the user's chosen model for this backend, or null
+   *  when the backend owns that choice itself (a desktop app we drive — you
+   *  pick the model in the app, and Unmute reads it back).
+   *
+   *  A TABLE BECAUSE IT WAS THREE INLINE BRANCHES. Codex CLI's key was written
+   *  as `settings.get('codexCliModel' as never)` in four places, each with its
+   *  own fallback; the pill, the settings screen and the executor each decided
+   *  separately which key a backend uses, and the settings screen decided
+   *  wrong — it wrote Claude's key from a menu labelled Codex. */
+  modelSetting: 'model' | 'codexCliModel' | null
 }
 
 /** Absent `agent` ⇒ Claude. PTY tasks have always been persisted with no agent
@@ -55,6 +65,7 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     transport: 'pty',
     hasTerminal: true,
     canResume: true,
+    modelSetting: 'model',
   },
   codex: {
     id: 'codex',
@@ -69,6 +80,10 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     // that is a behaviour change, and this table exists to preserve behaviour
     // exactly while moving where it is decided.
     canResume: true,
+    // ITS OWN KEY, never Claude's. The id is passed as `-c model="…"`, a TOML
+    // override Codex accepts for any string — so a Claude alias stored here
+    // does not fail at the picker, it fails at the API, after the task ran.
+    modelSetting: 'codexCliModel',
   },
   'codex-desktop': {
     id: 'codex-desktop',
@@ -78,6 +93,8 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     transport: 'driver',
     hasTerminal: false,
     canResume: false,
+    // The app owns the choice — Unmute reads Model/Effort/Speed back out of it.
+    modelSetting: null,
   },
   // The id is 'claude-code-desktop', NOT 'claude-desktop', because that string
   // was already written down in two places before this provider existed — the
@@ -97,6 +114,8 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     // send another message — but until that path exists, offering the button
     // would produce a dead control.
     canResume: false,
+    // Read from the composer in the app itself, same as codex-desktop.
+    modelSetting: null,
   },
 }
 

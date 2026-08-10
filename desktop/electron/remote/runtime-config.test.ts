@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { MODELS, PROMPTS, MODEL_CATALOG, modelsFor } from './config.ts'
 import { CONTRACT_TEXT } from './contract/contract-text.ts'
+import { PROVIDERS } from './providers.ts'
 import {
   compiledDefaults, mergeConfig,
   initRuntimeConfig, refreshRemoteConfig, stopRuntimeConfig, __resetRuntimeConfigForTest,
@@ -13,6 +14,15 @@ import {
 } from './runtime-config.ts'
 
 function tmp(): string { return mkdtempSync(join(tmpdir(), 'unmute-rc-')) }
+
+/** The ids one backend offers, out of a merged config. Every catalog assertion
+ *  is scoped now: the list holds several backends, and asserting on the whole
+ *  of it is how a change to one backend's models silently passes as a change to
+ *  another's. */
+function idsFor(d: RuntimeConfigData, provider: string): string[] {
+  return modelsFor(provider, d.models.available).map((c) => c.id)
+}
+const claudeIds = (d: RuntimeConfigData): string[] => idsFor(d, 'claude')
 
 // A fetch double that returns one JSON body with a given status.
 function fetchReturning(body: unknown, ok = true, status = 200): typeof fetch {
@@ -99,7 +109,8 @@ test('config catalog REPLACES the selectable set and unlocks new picks', () => {
       doerDefault: 'claude-opus-4-8', // a pinned id — valid ONLY because the catalog above added it
     },
   }, 'test')
-  assert.deepEqual(merged.models.available.map((c) => c.id), ['sonnet', 'claude-opus-4-8'])
+  // SCOPED: a Claude-only override replaces Claude's models, not the whole list.
+  assert.deepEqual(claudeIds(merged), ['sonnet', 'claude-opus-4-8'])
   assert.equal(merged.models.doerDefault, 'claude-opus-4-8')
 })
 
@@ -109,7 +120,7 @@ test('a pick not present in the effective catalog is dropped', () => {
   const merged = mergeConfig(compiledDefaults(), {
     models: { available: [{ id: 'haiku', label: 'Haiku' }], doerDefault: 'opus' },
   }, 'test')
-  assert.deepEqual(merged.models.available.map((c) => c.id), ['haiku'])
+  assert.deepEqual(claudeIds(merged), ['haiku'])
   assert.equal(merged.models.doerDefault, MODELS.doerDefault) // 'opus' not in catalog → dropped
 })
 
@@ -119,14 +130,92 @@ test('malformed catalog entries are sanitized; a fully-invalid catalog keeps the
       { id: 'sonnet', label: 'Sonnet' },
       { id: '', label: 'no id' },
       { label: 'missing id' },
-      { id: 'dupe', label: 'A' }, { id: 'dupe', label: 'B' }, // de-dup by id
+      { id: 'dupe', label: 'A' }, { id: 'dupe', label: 'B' }, // de-dup within a backend
       'garbage',
     ] },
   }, 'test')
-  assert.deepEqual(merged.models.available.map((c) => c.id), ['sonnet', 'dupe'])
+  assert.deepEqual(claudeIds(merged), ['sonnet', 'dupe'])
 
   const kept = mergeConfig(compiledDefaults(), { models: { available: [] } }, 'test')
   assert.deepEqual(kept.models.available, compiledDefaults().models.available) // empty → base kept
+})
+
+// ─── The catalog belongs to backends, not to the config as a whole ───────────
+//
+// THE 1.4.24 FIELD BUG, and the shape of it. The served config (version 2) was
+// written before Codex CLI existed, so it lists eight Claude models and nothing
+// else. The merge replaced the whole catalog with it, which deleted the four
+// compiled Codex entries — Codex CLI's model menu was empty in the shipped
+// build, and the pill showed the raw id 'default' because no entry survived to
+// read a label from.
+//
+// What makes it worth three tests rather than one line: every backend added
+// from here on is born into a served config that predates it. A whole-list
+// replace deletes each new backend's models the moment the app fetches, on a
+// path no local change can fix.
+
+test('a config that predates a backend cannot delete that backend’s models', () => {
+  const merged = mergeConfig(compiledDefaults(), {
+    models: { available: [
+      { id: 'sonnet', label: 'Sonnet' },
+      { id: 'claude-opus-4-8', label: 'Opus 4.8' },
+    ] },
+  }, 'test')
+  assert.deepEqual(claudeIds(merged), ['sonnet', 'claude-opus-4-8'])   // spoken for → replaced
+  assert.deepEqual(idsFor(merged, 'codex'), modelsFor('codex').map((c) => c.id)) // silent on → untouched
+})
+
+test('a config CAN describe a non-Claude backend, and two backends may each have a “default”', () => {
+  const merged = mergeConfig(compiledDefaults(), {
+    models: { available: [
+      { id: 'default', label: 'Default' },
+      // Same id, different backend. De-duping on the bare id dropped this one,
+      // so whichever backend came second lost its default entry.
+      { id: 'default', label: 'Codex default', provider: 'codex' },
+      { id: 'gpt-6-codex', label: 'Codex 6', provider: 'codex' },
+    ] },
+  }, 'test')
+  assert.deepEqual(claudeIds(merged), ['default'])
+  assert.deepEqual(idsFor(merged, 'codex'), ['default', 'gpt-6-codex'])
+  // The tag survives the round trip — dropping it filed Codex's models under Claude.
+  assert.equal(merged.models.available.find((c) => c.id === 'gpt-6-codex')?.provider, 'codex')
+})
+
+test('a backend the running app does not know about is kept, and shown nowhere', () => {
+  // A config from a newer app. Coercing the unknown tag to Claude would leak a
+  // future backend's models into today's Claude menu.
+  const merged = mergeConfig(compiledDefaults(), {
+    models: { available: [{ id: 'some-future-model', label: 'Future', provider: 'gemini' }] },
+  }, 'test')
+  assert.ok(!claudeIds(merged).includes('some-future-model'))
+  assert.ok(!idsFor(merged, 'codex').includes('some-future-model'))
+  assert.deepEqual(claudeIds(merged), modelsFor('claude').map((c) => c.id)) // Claude untouched
+})
+
+test('INVARIANT: no CLI backend can be left with an empty model picker by any config', () => {
+  // The structural version of the bug above. Each case is a config that speaks
+  // for some backends and not others; whatever it says, a backend Unmute spawns
+  // must still have something to offer, because an empty picker is
+  // indistinguishable from an unbuilt feature.
+  const layers: unknown[] = [
+    { models: { available: [{ id: 'sonnet', label: 'Sonnet' }] } },                        // Claude only
+    { models: { available: [{ id: 'gpt-6', label: 'GPT-6', provider: 'codex' }] } },       // Codex only
+    { models: { available: [{ id: 'x', label: 'X', provider: 'gemini' }] } },              // neither
+    { models: { available: ['garbage', { id: '', label: '' }] } },                         // all invalid
+    { models: {} },
+    {},
+  ]
+  const cliBackends = Object.values(PROVIDERS).filter((p) => p.transport === 'pty')
+  assert.ok(cliBackends.length >= 2, 'this invariant is vacuous with one CLI backend')
+  for (const layer of layers) {
+    const merged = mergeConfig(compiledDefaults(), layer, 'test')
+    for (const p of cliBackends) {
+      assert.ok(
+        idsFor(merged, p.id).length > 0,
+        `${p.label} has no selectable models after config ${JSON.stringify(layer)}`,
+      )
+    }
+  }
 })
 
 test('getModelCatalog + isSelectableModel reflect the effective catalog after a fetch', async () => {
@@ -146,8 +235,16 @@ test('getModelCatalog + isSelectableModel reflect the effective catalog after a 
   assert.equal(await refreshRemoteConfig(), 'updated')
   // after: the config catalog
   assert.deepEqual(getModelCatalog().map((c) => c.id), ['sonnet', 'claude-opus-4-8'])
+  // AND CODEX STILL HAS ITS MODELS. This is the assertion the suite was missing:
+  // the fetched config is Claude-only, and before the per-provider fold it wiped
+  // every Codex entry — so the shipped app offered Codex CLI an empty picker.
+  assert.deepEqual(getModelCatalog('codex').map((c) => c.id), modelsFor('codex').map((c) => c.id))
   assert.equal(isSelectableModel('claude-opus-4-8'), true)
   assert.equal(isSelectableModel('opus'), false) // no longer in the effective catalog
+  // Scoped both ways: a Claude id is not selectable on Codex, and vice versa.
+  assert.equal(isSelectableModel('claude-opus-4-8', 'codex'), false)
+  assert.equal(isSelectableModel('gpt-5.1-codex-max', 'codex'), true)
+  assert.equal(isSelectableModel('gpt-5.1-codex-max'), false)
   rmSync(dir, { recursive: true, force: true })
 })
 

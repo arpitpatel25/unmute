@@ -28,9 +28,11 @@ import { SectionHeader, SettingRow, Toggle } from '../app/_shared'
 interface Settings {
   permissionMode: 'prompt' | 'auto-approve'
   remoteKey: 'fn' | 'right-option'
-  /** 'codex' is the legacy CLI adapter, kept only so a stored value still
-   *  parses; it is migrated to 'claude' at startup and never offered. */
-  agent: 'claude' | 'codex' | 'codex-desktop'
+  /** A provider id from the registry (electron/remote/providers.ts). The old
+   *  comment here called 'codex' a legacy stub migrated away at startup; that
+   *  stopped being true when the Codex CLI was wired, and the migration it
+   *  described has been deleted. */
+  agent: 'claude' | 'codex' | 'codex-desktop' | 'claude-code-desktop'
   sandboxRoots: string[]
   model: string
   browserEnabled: boolean
@@ -87,6 +89,7 @@ function api(): API {
  *  sentence rather than a guessed one. */
 const AGENT_PITCH: Record<string, string> = {
   claude: 'Runs on your machine in a real terminal. Live output, and you can resume a session later.',
+  codex: 'Runs on your machine in a real terminal, same as Claude Code — its own models, its own sessions.',
   'codex-desktop': 'Runs in the Codex app you already have open. No terminal here — the thread lives in Codex.',
   'claude-code-desktop': 'Runs in the Claude desktop app. The conversation lives there; Unmute conducts it.',
 }
@@ -209,14 +212,21 @@ function LaneIcon() {
  *  visibly inert instead of quietly wrong. */
 const MODEL_SOURCE: Record<string, 'catalog' | 'own-app'> = {
   claude: 'catalog',
+  // MISSING UNTIL 1.4.24, which is what "forgetting is visibly inert" bought:
+  // Codex CLI drew the no-model-list paragraph on a backend that has four, and
+  // said so in words that read like a limitation rather than an omission.
+  codex: 'catalog',
   'claude-code-desktop': 'catalog',
   'codex-desktop': 'own-app',
 }
 
-function Models({ agentId, model, onPickClaudeModel }: {
+function Models({ agentId, model, onPickModel }: {
   agentId: string
   model: string
-  onPickClaudeModel: (id: string) => void
+  /** Not Claude-specific, which is what its old name claimed while it wrote
+   *  Claude's setting no matter which backend the picker was showing. The IPC
+   *  now routes the write by the selected agent (setModelFor in init.ts). */
+  onPickModel: (id: string) => void
 }) {
   const source = MODEL_SOURCE[agentId]
   const [catalog, setCatalog] = useState<ModelChoice[] | null>(null)
@@ -292,7 +302,7 @@ function Models({ agentId, model, onPickClaudeModel }: {
       <Chips
         options={catalog.map((m) => ({ id: m.id, label: m.label, title: m.description }))}
         value={model}
-        onPick={onPickClaudeModel}
+        onPick={onPickModel}
       />
       <p className="mt-2 text-[11px] text-ink-35">
         {catalog.find((m) => m.id === model)?.description ?? model}
@@ -583,7 +593,7 @@ export function RemoteSettings({ onOpenHowItWorks }: {
           <Models
             agentId={agentId}
             model={s.model}
-            onPickClaudeModel={(id) => { update({ model: id }); void api().remoteSetModel?.(id) }}
+            onPickModel={(id) => { update({ model: id }); void api().remoteSetModel?.(id) }}
           />
         </div>
       </Panel>

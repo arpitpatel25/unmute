@@ -129,6 +129,17 @@ interface RemoteSettings {
   // True once the user explicitly picks a model in the selector — gates the
   // one-time opus→sonnet default migration so an explicit choice is never reset.
   modelUserSet: boolean
+  // Codex CLI's model, in Codex's own vocabulary ('gpt-5.1-codex-max'). A
+  // SEPARATE KEY from `model` because the two backends share no ids, and Codex
+  // takes whatever it is given (`-c model="…"` is a TOML override, valid for
+  // any string) — so a Claude alias stored here would not be rejected, it would
+  // run and fail at the API. 'default' ⇒ whatever Codex is already set to.
+  //
+  // DECLARED HERE rather than written as `settings.get('codexCliModel' as never)`,
+  // which is how it started life. An untyped key has no default, so every read
+  // site invented its own fallback and the compiler could not tell a typo from
+  // a key.
+  codexCliModel: string
   // DECIDED: connect Claude-in-Chrome by default (browser tasks need it; others
   // ignore it). User can disable. Setup of the extension is guided/one-time.
   browserEnabled: boolean
@@ -209,6 +220,8 @@ const settings = new Store<RemoteSettings>({
     // ./config — the single source for every model choice.)
     model: MODELS.doerDefault,
     modelUserSet: false,
+    // Codex's own default — we do not second-guess what the user set in Codex.
+    codexCliModel: 'default',
     browserEnabled: true,
     setupConfirmations: {},
     osNotifications: false,
@@ -986,6 +999,68 @@ async function codexDesktopModel(): Promise<string | undefined> {
   return cur.model ? [cur.model, cur.effort].filter(Boolean).join(' ') : label
 }
 
+/* ─── One model choice per backend ──────────────────────────────────────────
+ *
+ * Which key holds a backend's model is answered by the registry
+ * (`providerOf(agent).modelSetting`), and these two functions are the only
+ * things that touch it. Three surfaces ask the same question — the pill chip,
+ * the Remote settings screen, and the executor at spawn — and before this they
+ * each answered it themselves. The settings screen answered wrong: it wrote
+ * Claude's `model` key from a picker labelled Codex, so choosing a Codex model
+ * changed what your CLAUDE tasks ran on and left Codex untouched.
+ *
+ * A backend whose `modelSetting` is null owns its own choice (the desktop apps
+ * — you set the model in the app and Unmute reads it back). Reading gives ''
+ * and writing is refused, rather than falling through to Claude's key.
+ */
+
+/** Codex's model as an ARGUMENT: the id to pass, or undefined for "leave Codex
+ *  on whatever it is already set to".
+ *
+ *  'default' is a real entry in the picker and a real stored value, but it is
+ *  not a model — passing `-c model="default"` would make Codex look up a model
+ *  called 'default' and fail at the API, long after the task started. Both the
+ *  spawn and the record-what-it-ran-on path go through here so they cannot
+ *  disagree. */
+function codexCliModelArg(): string | undefined {
+  const m = currentModelFor('codex')
+  return m && m !== 'default' ? m : undefined
+}
+
+/** What this backend is currently set to run on. '' when the backend owns the
+ *  choice itself. */
+function currentModelFor(agent: AgentKind): string {
+  const key = providerOf(agent).modelSetting
+  if (!key) return ''
+  if (key === 'model') return settings.get('model') || getModels().doerDefault
+  return settings.get('codexCliModel') || 'default'
+}
+
+/**
+ * Record a model pick for a backend. Returns the value actually stored, or null
+ * if the pick was refused.
+ *
+ * VALIDATED AGAINST THAT BACKEND'S OWN CATALOG. An id from another backend is
+ * refused outright rather than coerced: a Codex id silently replaced by Claude's
+ * default is a menu that appears to work and quietly moves a different setting.
+ */
+function setModelFor(agent: AgentKind, m: string): string | null {
+  const key = providerOf(agent).modelSetting
+  if (!key) { log.warn('model-pick-refused', { agent, reason: 'backend owns its own model' }); return null }
+  if (!isSelectableModel(m, agent)) { log.warn('pick-model-rejected', { agent, model: m }); return null }
+  if (key === 'model') {
+    settings.set('model', m)
+    settings.set('modelUserSet', true) // explicit choice — never auto-migrate it
+  } else {
+    settings.set('codexCliModel', m)
+  }
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('remote:model-changed', m)
+  }
+  log.event('model-set', { agent, model: m })
+  return m
+}
+
 /**
  * The model to RECORD on a task at dispatch — a historical fact (D6).
  *
@@ -1015,9 +1090,10 @@ async function modelForDispatch(agent: AgentKind | undefined): Promise<string | 
       // Codex CLI keeps its own setting, like every other backend: its ids are
       // its own vocabulary ('gpt-5.1-codex-max'), and sharing Claude's key
       // would record — and then RUN — a model the target does not have.
-      // Absent means Codex's own default, which is the honest answer for a
-      // user who has never opened the picker.
-      return (settings.get('codexCliModel' as never) as string) || undefined
+      // 'default' means Codex's own default, which is the honest answer for a
+      // user who has never opened the picker — and recording the literal string
+      // 'default' on the card would claim a model that does not exist.
+      return codexCliModelArg()
     default:
       return undefined
   }
@@ -1032,7 +1108,12 @@ function executorFactory(resume = false, forTask?: AgentKind, factoryOpts?: Exec
   const agent: AgentKind = forTask ?? settings.get('agent')
   const sandboxRoots = settings.get('sandboxRoots') ?? []
   const sandboxed = sandboxRoots.length > 0
-  const model = doerModel()
+  // THE MODEL OF THE BACKEND BEING BUILT, not Claude's. This line read
+  // `doerModel()` unconditionally, so a Codex spawn logged whatever the Claude
+  // picker happened to say — the one record of what a task started on, naming a
+  // model from the other vendor. (The Claude path below still uses `model`; the
+  // Codex branch reads its own key.)
+  const model = providerOf(agent).modelSetting === 'model' ? doerModel() : (codexCliModelArg() ?? '')
   // TWO gates now, not one. The setting is the user's master switch; the caller
   // says whether THIS task actually touches a browser. Unconditional --chrome
   // put a browser tool surface into every coding session, and the old contract
@@ -1064,8 +1145,7 @@ function executorFactory(resume = false, forTask?: AgentKind, factoryOpts?: Exec
     // The model is read here rather than baked into the executor: the picker
     // writes `codexCliModel`, and it reaches Codex as `-c model="…"` (TOML
     // config, NOT --model — see codexArgs).
-    const model = (settings.get('codexCliModel' as never) as string) || undefined
-    return new CodexExecutor({ model: model && model !== 'default' ? model : undefined })
+    return new CodexExecutor({ model: codexCliModelArg() })
   }
   // PRD §10.1/§10.6 interaction: a sandbox is the "fenced yard" — when it's ON
   // we do NOT skip permissions globally (out-of-fence access still prompts via
@@ -1322,7 +1402,7 @@ async function pushPillChips(): Promise<void> {
       // id is passed as `-c model="opus"`, which is valid TOML for a model
       // Codex does not have, so it fails at the API rather than the picker.
       const catalog = getModelCatalog('codex')
-      const current = (settings.get('codexCliModel' as never) as string) || 'default'
+      const current = currentModelFor('codex')
       chips.model = catalog.find((c) => c.id === current)?.label ?? current
       chips.modelOptions = catalog.map((c) => ({
         id: c.id, label: c.label, detail: c.description ?? '',
@@ -1331,7 +1411,7 @@ async function pushPillChips(): Promise<void> {
       chips.raw = injectionDisabled()
     } else {
       const catalog = getModelCatalog()
-      const current = settings.get('model') || getModels().doerDefault
+      const current = currentModelFor('claude')
       chips.model = catalog.find((c) => c.id === current)?.label ?? current
       chips.modelOptions = catalog.map((c) => ({
         id: c.id, label: c.label, detail: c.description ?? '',
@@ -2863,29 +2943,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
             void setClaudeDesktopModel(m)
             return
           }
-          // CODEX CLI WRITES ITS OWN KEY. Sharing Claude's would store an id
-          // Codex does not have — and `isSelectableModel` validates against
-          // Claude's catalog, so a Codex id would be rejected and silently
-          // replaced by the Claude default, changing the model your CLAUDE
-          // tasks run on from a menu showing Codex's.
-          if ((settings.get('agent') as AgentKind) === 'codex') {
-            const codexIds = getModelCatalog('codex').map((c) => c.id)
-            if (!codexIds.includes(m)) { log.warn('pick-model-rejected', { agent: 'codex', model: m }); return }
-            settings.set('codexCliModel' as never, m as never)
-            for (const w of BrowserWindow.getAllWindows()) {
-              if (!w.isDestroyed()) w.webContents.send('remote:model-changed', m)
-            }
-            log.event('model-set', { agent: 'codex', model: m })
-            void pushPillChips()
-            return
-          }
-          const model = isSelectableModel(m) ? m : (settings.get('model') || getModels().doerDefault)
-          settings.set('model', model)
-          settings.set('modelUserSet', true) // explicit choice — never auto-migrate it
-          for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send('remote:model-changed', model)
-          }
-          log.event('model-set', { model, from: 'pill' })
+          // EVERY OTHER BACKEND WRITES ITS OWN KEY, chosen by the registry.
+          // Spelled out here per-backend, this was already wrong once: Codex CLI
+          // fell into the Claude branch, where `isSelectableModel` rejected the
+          // Codex id and silently substituted the Claude default — changing the
+          // model your CLAUDE tasks run on, from a menu showing Codex's.
+          setModelFor(settings.get('agent') as AgentKind, m)
           // RE-PUSH, or the chip keeps its old label for the rest of the
           // capture. The setting changed correctly and the surface said
           // otherwise, which reads exactly like a dead control.
@@ -3789,13 +3852,15 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // not a hardcoded list) — so new models arrive via config without a rebuild.
   ipcMain.handle('remote:get-model-catalog', async () => getModelCatalog())
   ipcMain.handle('remote:set-model', async (_e, m: string) => {
-    const model = isSelectableModel(m) ? m : (settings.get('model') || getModels().doerDefault)
-    settings.set('model', model)
-    settings.set('modelUserSet', true) // explicit choice — never auto-migrate it
-    for (const w of BrowserWindow.getAllWindows()) {
-      if (!w.isDestroyed()) w.webContents.send('remote:model-changed', model)
-    }
-    log.event('model-set', { model })
+    // ROUTED BY THE SELECTED BACKEND, through the same function the pill uses.
+    // This handler used to write `model` unconditionally, so the Remote screen's
+    // Codex picker moved Claude's setting — the one bug the pill had already
+    // been fixed for, still live one surface over. Two places answering "where
+    // does this backend's model live" is how that happens; now there is one.
+    const agent = settings.get('agent') as AgentKind
+    const model = setModelFor(agent, m) ?? currentModelFor(agent)
+    // Keep the pill's chip honest — the two surfaces write the same settings.
+    void pushPillChips()
     return model
   })
   // ── The input surface: renderer → native pill ──
@@ -3889,7 +3954,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     remoteKey: getRemoteKey(),
     agent: settings.get('agent'),
     sandboxRoots: settings.get('sandboxRoots') ?? [],
-    model: settings.get('model') || getModels().doerDefault,
+    // THE SELECTED BACKEND'S model, not Claude's. The Remote screen draws this
+    // as the chosen chip under a picker labelled with the current agent; hard-
+    // wiring Claude's key meant that with Codex selected, the screen highlighted
+    // a Claude alias that is not in Codex's list — so nothing looked selected.
+    model: currentModelFor(settings.get('agent')),
     browserEnabled: settings.get('browserEnabled') !== false,
     overlayAutoPresent: settings.get('overlayAutoPresent') !== false,
     notchAutoExpand: settings.get('notchAutoExpand') !== false,
