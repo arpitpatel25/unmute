@@ -59,6 +59,7 @@ import { NotchClient } from './notch/notch-client'
 import { NotchController } from './notch/notch-controller'
 import { PillController, type PillStateP } from './notch/pill-controller'
 import { listCodexModels, matchCurrent, type CodexModel } from './codex/appserver'
+import { listCodexCliModels, resolveCodexCliChoice, codexCliChoiceLabel } from './codex/cli-models'
 import { DriverManager } from './cua/driver-manager'
 import { CdpLane } from './cua/lanes/cdp'
 import { Arming } from './cua/lanes/arming'
@@ -140,6 +141,11 @@ interface RemoteSettings {
   // site invented its own fallback and the compiler could not tell a typo from
   // a key.
   codexCliModel: string
+  // Codex CLI's reasoning effort, as a WIRE value ('xhigh', not 'Extra High').
+  // Efforts belong to a model — Sol and Terra offer six, Luna five — so this is
+  // only ever meaningful alongside codexCliModel, and picking a model resets it
+  // to that model's default. '' ⇒ whatever the model defaults to.
+  codexCliEffort: string
   // DECIDED: connect Claude-in-Chrome by default (browser tasks need it; others
   // ignore it). User can disable. Setup of the extension is guided/one-time.
   browserEnabled: boolean
@@ -220,8 +226,12 @@ const settings = new Store<RemoteSettings>({
     // ./config — the single source for every model choice.)
     model: MODELS.doerDefault,
     modelUserSet: false,
-    // Codex's own default — we do not second-guess what the user set in Codex.
-    codexCliModel: 'default',
+    // EMPTY, not 'default'. '' means "we have no opinion — run whatever Codex
+    // is already set to", which is the honest state for a user who has never
+    // opened the picker. The old value was the literal string 'default', an id
+    // from the invented catalogue that no Codex has ever had.
+    codexCliModel: '',
+    codexCliEffort: '',
     browserEnabled: true,
     setupConfirmations: {},
     osNotifications: false,
@@ -1014,17 +1024,112 @@ async function codexDesktopModel(): Promise<string | undefined> {
  * and writing is refused, rather than falling through to Claude's key.
  */
 
-/** Codex's model as an ARGUMENT: the id to pass, or undefined for "leave Codex
- *  on whatever it is already set to".
+/**
+ * Codex CLI's live model list plus the user's resolved choice within it.
  *
- *  'default' is a real entry in the picker and a real stored value, but it is
- *  not a model — passing `-c model="default"` would make Codex look up a model
- *  called 'default' and fail at the API, long after the task started. Both the
- *  spawn and the record-what-it-ran-on path go through here so they cannot
- *  disagree. */
+ * SELF-HEALING, and that is the point of routing every surface through here.
+ * `codex update` can retire a model out from under a stored setting — which is
+ * not hypothetical, it is exactly what happened to the four invented ids this
+ * replaced. A stored value Codex no longer offers is CLEARED here, so the spawn
+ * path (which is synchronous and cannot re-ask) can never pass an id that would
+ * start a task and fail at the API.
+ *
+ * Nothing is cleared when the list is empty: a Codex that could not be asked is
+ * not a Codex that dropped your model.
+ */
+async function codexCliChoice(): Promise<{ models: CodexModel[]; model?: CodexModel; effort?: string }> {
+  const models = await listCodexCliModels().catch(() => [] as CodexModel[])
+  const storedModel = settings.get('codexCliModel') || undefined
+  const storedEffort = settings.get('codexCliEffort') || undefined
+  const r = resolveCodexCliChoice(models, storedModel, storedEffort)
+  if (models.length && storedModel && !r.model) {
+    log.warn('codex-cli-choice-healed', { storedModel, storedEffort: storedEffort ?? null, reason: 'no longer offered' })
+    settings.set('codexCliModel', '')
+    settings.set('codexCliEffort', '')
+  } else if (models.length && storedEffort && r.model && !r.effort) {
+    log.warn('codex-cli-effort-healed', { model: r.model.id, storedEffort })
+    settings.set('codexCliEffort', '')
+  }
+  return { models, ...r }
+}
+
+/**
+ * Record a Codex CLI axis pick.
+ *
+ * The values arriving here are MENU SPELLINGS ('5.6 Terra', 'Extra High'),
+ * because that is what the picker displayed and a control must hand back what
+ * it showed. They are translated to wire ids against the live list, and a value
+ * that matches nothing is refused rather than stored: an unmatched string
+ * written to `codexCliModel` would reach Codex as `-c model="5.6 Terra"`, which
+ * is valid TOML for a model that does not exist.
+ *
+ * PICKING A MODEL RESETS THE EFFORT to that model's default, because efforts
+ * belong to models — carrying 'ultra' from Sol onto Luna, which has no 'ultra',
+ * would silently produce an invalid pair.
+ */
+async function pickCodexCliAxis(axis: 'Model' | 'Effort' | 'Speed', value: string): Promise<void> {
+  // Codex CLI has no Speed axis — that one is the desktop app's. It never
+  // appears in the chips built above, so arriving here means a stale payload.
+  if (axis === 'Speed') { log.warn('codex-cli-pick-ignored', { axis, value, reason: 'no such axis' }); return }
+  const { models, model: currentModel } = await codexCliChoice()
+  if (!models.length) { log.warn('codex-cli-pick-ignored', { axis, value, reason: 'no model list' }); return }
+
+  if (axis === 'Model') {
+    const picked = models.find((m) => m.uiLabel === value)
+    if (!picked) { log.warn('codex-cli-pick-ignored', { axis, value, offered: models.map((m) => m.uiLabel) }); return }
+    settings.set('codexCliModel', picked.id)
+    settings.set('codexCliEffort', picked.defaultEffort ?? '')
+    log.event('codex-cli-pick', { axis, model: picked.id, effort: picked.defaultEffort ?? null })
+  } else {
+    const target = currentModel ?? models[0]
+    const i = target.effortLabels.indexOf(value)
+    if (i < 0) { log.warn('codex-cli-pick-ignored', { axis, value, model: target.id, offered: target.effortLabels }); return }
+    // An effort pick on a model the user never explicitly chose pins that model
+    // too — otherwise the effort would apply to whatever Codex defaults to next.
+    settings.set('codexCliModel', target.id)
+    settings.set('codexCliEffort', target.efforts[i])
+    log.event('codex-cli-pick', { axis, model: target.id, effort: target.efforts[i] })
+  }
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('remote:model-changed', settings.get('codexCliModel'))
+  }
+  void pushPillChips()
+}
+
+/** An effort's menu spelling for a given model ('xhigh' → 'Extra High'), or
+ *  undefined. Index-aligned lookup rather than a re-derivation, because the two
+ *  spellings are not a transform of each other — 'low' prints as 'Light'. */
+function effortLabelOf(model: CodexModel | undefined, effort: string | undefined): string | undefined {
+  if (!model || !effort) return undefined
+  const i = model.efforts.indexOf(effort)
+  return i >= 0 ? model.effortLabels[i] : undefined
+}
+
+/**
+ * What to pass Codex at spawn: a wire model id and effort, or nothing.
+ *
+ * NOTHING IS A VALID ANSWER — it means "run on whatever Codex is already set
+ * to", which is what a user who never opened the picker wants, and it is also
+ * what they get in their own terminal. The alternative that shipped was the
+ * literal string 'default' from the invented catalogue, which as `-c
+ * model="default"` would have Codex look up a model by that name.
+ *
+ * Read SYNCHRONOUSLY off settings, which is safe only because every surface
+ * that writes them goes through codexCliChoice() and clears a value Codex no
+ * longer offers. If that self-heal is ever bypassed, this is where a retired
+ * model id would reach the API.
+ */
+function codexCliSpawnArgs(): { model?: string; effort?: string } {
+  const model = settings.get('codexCliModel') || undefined
+  const effort = settings.get('codexCliEffort') || undefined
+  // An effort without a model is meaningless — efforts are a property OF a
+  // model, and Codex would apply it to whichever model it defaults to.
+  return model ? { model, effort } : {}
+}
+
+/** Just the model id, for the places that record what a task ran on. */
 function codexCliModelArg(): string | undefined {
-  const m = currentModelFor('codex')
-  return m && m !== 'default' ? m : undefined
+  return codexCliSpawnArgs().model
 }
 
 /** What this backend is currently set to run on. '' when the backend owns the
@@ -1033,7 +1138,7 @@ function currentModelFor(agent: AgentKind): string {
   const key = providerOf(agent).modelSetting
   if (!key) return ''
   if (key === 'model') return settings.get('model') || getModels().doerDefault
-  return settings.get('codexCliModel') || 'default'
+  return settings.get('codexCliModel') || ''
 }
 
 /**
@@ -1045,8 +1150,18 @@ function currentModelFor(agent: AgentKind): string {
  * default is a menu that appears to work and quietly moves a different setting.
  */
 function setModelFor(agent: AgentKind, m: string): string | null {
-  const key = providerOf(agent).modelSetting
+  const p = providerOf(agent)
+  const key = p.modelSetting
   if (!key) { log.warn('model-pick-refused', { agent, reason: 'backend owns its own model' }); return null }
+  // A BACKEND WHOSE MODELS COME FROM ITS OWN BINARY IS NOT PICKED HERE. Codex
+  // CLI's choice is a (model, effort) pair validated against a live list, which
+  // this function cannot do synchronously — it goes through pickCodexCliAxis.
+  // Falling through would validate a Codex id against Unmute's catalogue, which
+  // has no Codex entries by design, and reject every legitimate pick.
+  if (p.modelSource !== 'catalog') {
+    log.warn('model-pick-refused', { agent, reason: `models come from ${p.modelSource}`, model: m })
+    return null
+  }
   if (!isSelectableModel(m, agent)) { log.warn('pick-model-rejected', { agent, model: m }); return null }
   if (key === 'model') {
     settings.set('model', m)
@@ -1088,12 +1203,16 @@ async function modelForDispatch(agent: AgentKind | undefined): Promise<string | 
       return undefined
     case 'codex':
       // Codex CLI keeps its own setting, like every other backend: its ids are
-      // its own vocabulary ('gpt-5.1-codex-max'), and sharing Claude's key
-      // would record — and then RUN — a model the target does not have.
-      // 'default' means Codex's own default, which is the honest answer for a
-      // user who has never opened the picker — and recording the literal string
-      // 'default' on the card would claim a model that does not exist.
-      return codexCliModelArg()
+      // its own vocabulary ('gpt-5.6-terra'), and sharing Claude's key would
+      // record — and then RUN — a model the target does not have.
+      // Absent means Codex's own default, which is the honest answer for a user
+      // who has never opened the picker. Recorded WITH THE EFFORT, in Codex's
+      // own spelling — its header reads `model: gpt-5.6-terra xhigh`, and the
+      // model alone would not say what the task actually ran at.
+      {
+        const { model, effort } = codexCliSpawnArgs()
+        return model ? [model, effort].filter(Boolean).join(' ') : undefined
+      }
     default:
       return undefined
   }
@@ -1145,7 +1264,7 @@ function executorFactory(resume = false, forTask?: AgentKind, factoryOpts?: Exec
     // The model is read here rather than baked into the executor: the picker
     // writes `codexCliModel`, and it reaches Codex as `-c model="…"` (TOML
     // config, NOT --model — see codexArgs).
-    return new CodexExecutor({ model: codexCliModelArg() })
+    return new CodexExecutor(codexCliSpawnArgs())
   }
   // PRD §10.1/§10.6 interaction: a sandbox is the "fenced yard" — when it's ON
   // we do NOT skip permissions globally (out-of-fence access still prompts via
@@ -1401,13 +1520,34 @@ async function pushPillChips(): Promise<void> {
       // Sharing Claude's `model` key would be worse than the wrong labels: the
       // id is passed as `-c model="opus"`, which is valid TOML for a model
       // Codex does not have, so it fails at the API rather than the picker.
-      const catalog = getModelCatalog('codex')
-      const current = currentModelFor('codex')
-      chips.model = catalog.find((c) => c.id === current)?.label ?? current
-      chips.modelOptions = catalog.map((c) => ({
-        id: c.id, label: c.label, detail: c.description ?? '',
-      }))
-      chips.modelAxes = []          // Codex CLI exposes no effort axis
+      // ASKED OF CODEX, NOT LISTED HERE. This branch used to read a hardcoded
+      // catalogue of four ids that were never checked against a running Codex —
+      // 'Codex Max', 'Codex', 'Codex Mini' — none of which exist. The real
+      // codex-cli 0.147 offers six models under different names entirely, and
+      // the line-up turned over completely from the release before it.
+      const { models, model, effort } = await codexCliChoice()
+      chips.model = codexCliChoiceLabel(model, effort ?? model?.defaultEffort)
+      // TWO AXES, because Codex's own picker has two: its header reads
+      // `model: gpt-5.6-terra xhigh` and the menu is titled "Select Model and
+      // Effort". The line this replaces asserted "Codex CLI exposes no effort
+      // axis", which was never true — it was true of the invented catalogue.
+      //
+      // Efforts follow the SELECTED model rather than being a flat list: Sol and
+      // Terra offer six, Luna five, the 5.4/5.5 family four. Offering a model's
+      // efforts under another model is the same class of lie as the wrong list.
+      const shown = model ?? models[0]
+      chips.modelAxes = models.length
+        ? [
+          { axis: 'Model', values: models.map((m) => m.uiLabel), current: shown?.uiLabel },
+          { axis: 'Effort', values: shown?.effortLabels ?? [],
+            current: effortLabelOf(shown, effort ?? shown?.defaultEffort) },
+        ].filter((a) => a.values.length > 0)
+        : []
+      // EMPTY, not the catalogue. With axes carrying the choice, a flat list
+      // would be a second control for the same setting — and `push` MERGES, so
+      // an absent key keeps the previous backend's list (the bug the Codex
+      // desktop branch documents above).
+      chips.modelOptions = []
       chips.raw = injectionDisabled()
     } else {
       const catalog = getModelCatalog()
@@ -2985,6 +3125,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // Speed IS a real axis (the menu offers Standard / Fast); it was
           // dropped only because the old reader could not see it.
           if (axis !== 'Model' && axis !== 'Effort' && axis !== 'Speed') return
+          // WHOSE AXES ARE THESE? Both Codex backends show a Model/Effort
+          // picker and the values look alike, but the write is nothing alike:
+          // the DESKTOP one clicks a menu in another app, the CLI one records a
+          // setting we pass at spawn. Everything below this line assumes the
+          // driver — so without this, picking a Codex CLI model logged
+          // 'no-driver' and did nothing, which is the same dead control the
+          // agent chip had.
+          if ((settings.get('agent') as AgentKind) === 'codex') { void pickCodexCliAxis(axis, value); return }
           log.event('codex-pick-start', { axis, value, from: 'pill', hasDriver: !!codexDriver })
           if (!codexDriver) {
             // Say so. This returned silently, and a pick that never left the
@@ -4073,6 +4221,21 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         })),
       }
     }
+    if (providerOf(id).modelSource === 'own-binary') {
+      // ASKED OF THE BINARY THE TASK WILL RUN. Same treatment as the app-owned
+      // backend above, and for the same reason: this list is not Unmute's to
+      // write down. Empty means Codex could not be asked, and the surface draws
+      // nothing selectable rather than a remembered guess.
+      const models = await listCodexCliModels().catch(() => [] as CodexModel[])
+      log.event('model-options', { agent: id, models: models.length, source: 'own-binary' })
+      return {
+        agent: id,
+        models: models.map((m) => ({
+          id: m.id, label: m.uiLabel, description: m.description,
+          effortLevels: m.effortLabels, defaultEffort: m.defaultEffort,
+        })),
+      }
+    }
     // SCOPED TO THE BACKEND ASKED FOR. Unscoped, this returned Claude's list to
     // Codex — and the exact lie the comment above warns about: `-c model="opus"`
     // is valid TOML for a model Codex does not have, so it fails at the API
@@ -4080,6 +4243,41 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const catalog = getModelCatalog(id)
     log.event('model-options', { agent: id, models: catalog.length })
     return { agent: id, models: catalog.map((m) => ({ id: m.id, label: m.label, description: m.description })) }
+  })
+
+  /**
+   * Codex CLI's Model/Effort axes, in the SAME SHAPE the Codex desktop backend
+   * reports — so the settings screen renders both with one component.
+   *
+   * Two axes rather than a flat model list, because that is Codex's own design:
+   * its header reads `model: gpt-5.6-terra xhigh` and its picker is titled
+   * "Select Model and Effort". The efforts offered follow the SELECTED model
+   * (Sol and Terra have six, Luna five), which a flat list cannot express.
+   *
+   * The values are MENU SPELLINGS in both directions — what is shown is what
+   * comes back on a pick — matching the desktop contract so the two cannot
+   * drift into different vocabularies.
+   */
+  ipcMain.handle('remote:codex-cli-reasoning', async () => {
+    const { models, model, effort } = await codexCliChoice()
+    const shown = model ?? models[0]
+    return {
+      label: model ? codexCliChoiceLabel(model, effort ?? model.defaultEffort) : null,
+      current: {
+        ...(shown ? { Model: shown.uiLabel } : {}),
+        ...(effortLabelOf(shown, effort ?? shown?.defaultEffort) ? { Effort: effortLabelOf(shown, effort ?? shown?.defaultEffort) } : {}),
+      },
+      options: {
+        Model: models.map((m) => m.uiLabel),
+        Effort: shown?.effortLabels ?? [],
+      },
+    }
+  })
+  ipcMain.handle('remote:codex-cli-reasoning-set', async (_e, axis: unknown, value: unknown) => {
+    if (typeof axis !== 'string' || typeof value !== 'string') return false
+    if (axis !== 'Model' && axis !== 'Effort') return false
+    await pickCodexCliAxis(axis, value)
+    return true
   })
 
   // Explicit "Connect Codex": quits and relaunches Codex WITH the debug port,

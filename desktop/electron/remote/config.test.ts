@@ -65,10 +65,19 @@ test('task-name prompt is byte-identical to the original', () => {
 
 test('each backend gets its own models, and an untagged entry still means Claude', () => {
   const claude = modelsFor('claude').map((m) => m.id)
-  const codex = modelsFor('codex').map((m) => m.id)
-  assert.ok(claude.includes('opus') && !claude.includes('gpt-5.1-codex'))
-  assert.ok(codex.includes('gpt-5.1-codex') && !codex.includes('opus'),
-    'a Claude id given to Codex is not an error — `-c model="opus"` is valid TOML for a model that does not exist, so it would fail at the API rather than the picker')
+  assert.ok(claude.includes('opus'))
+  // A BACKEND THE CATALOGUE DOES NOT SPEAK FOR GETS NOTHING, never Claude's
+  // list under its name. A Claude id handed to Codex is not an error you would
+  // see: `-c model="opus"` is valid TOML for a model that does not exist, so it
+  // fails at the API rather than at the picker.
+  assert.deepEqual(modelsFor('codex'), [])
+  // Tagged entries are filtered by tag, whoever supplies them (config can).
+  const tagged = [
+    { id: 'a', label: 'A' },
+    { id: 'b', label: 'B', provider: 'codex' as const },
+  ]
+  assert.deepEqual(modelsFor('claude', tagged).map((m) => m.id), ['a'])
+  assert.deepEqual(modelsFor('codex', tagged).map((m) => m.id), ['b'])
   // Absent provider must keep meaning Claude: the catalog predates a second CLI
   // and the persisted `model` setting carries no provider key.
   assert.equal(modelsFor(undefined).length, claude.length)

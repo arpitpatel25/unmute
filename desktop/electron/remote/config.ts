@@ -60,13 +60,23 @@ export const MODEL_CATALOG: ModelChoice[] = [
   { id: 'sonnet',   label: 'Sonnet',    description: 'Balanced speed and capability. Great default.' },
   { id: 'opus',     label: 'Opus',      description: 'Most capable — best for hard, multi-step tasks.' },
   { id: 'opusplan', label: 'Opus Plan', description: 'Plans with Opus, executes with Sonnet.' },
-  // CODEX CLI. Tagged, because a Claude id handed to Codex is not an error —
-  // `-c model="sonnet"` is a valid TOML override for a model that does not
-  // exist, and Codex would fail at the API rather than at the picker.
-  { id: 'default', label: 'Default', description: 'Your Codex default — recommended.', provider: 'codex' },
-  { id: 'gpt-5.1-codex-max', label: 'Codex Max', description: 'Most capable — best for hard, multi-step work.', provider: 'codex' },
-  { id: 'gpt-5.1-codex', label: 'Codex', description: 'Balanced speed and capability.', provider: 'codex' },
-  { id: 'gpt-5.1-codex-mini', label: 'Codex Mini', description: 'Fastest — best for simple, quick tasks.', provider: 'codex' },
+  // NO CODEX ENTRIES, DELIBERATELY, AND THIS IS THE SECOND ANSWER TO THE SAME
+  // QUESTION. Four were written here — 'gpt-5.1-codex-max', 'gpt-5.1-codex',
+  // 'gpt-5.1-codex-mini', 'default' — and they were invented, never checked
+  // against a running Codex. The real codex-cli 0.147 offers six models under
+  // entirely different names, each with its own reasoning efforts.
+  //
+  // The fix is not better constants. Codex's line-up is Codex's to change and
+  // it turned over completely between two point releases, so ANY value written
+  // here is a claim about someone else's product with no way to notice it going
+  // stale: a wrong id does not fail at the picker, because `-c model="…"` is a
+  // valid TOML override for any string. The task starts and fails at the API.
+  //
+  // Codex CLI's models are ASKED FOR at read time (codex/cli-models.ts, via the
+  // app-server `model/list` the desktop backend already uses). This catalogue is
+  // for backends whose vocabulary Unmute genuinely owns — the Claude Code
+  // aliases, which are stable and which config can extend without a build. See
+  // `modelSource` in providers.ts for which backend is which.
 ]
 
 /** Which backend an entry belongs to, with the absent-means-Claude rule applied.

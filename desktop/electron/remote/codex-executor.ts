@@ -19,8 +19,13 @@ export interface CodexExecutorOpts {
   codexBin?: string
   extraArgs?: string[]
   ptyLoader?: NodePtyLoader
-  /** Model to run on, e.g. 'o3'. Codex takes it as TOML config, not a flag. */
+  /** Model to run on, e.g. 'gpt-5.6-terra'. Codex takes it as TOML config, not
+   *  a flag. Verified against `codex config.toml`, key `model`. */
   model?: string
+  /** Reasoning effort, as a WIRE value ('xhigh', not 'Extra High'). Codex's key
+   *  is `model_reasoning_effort`, and it is a property OF the model — Sol and
+   *  Terra offer six levels, Luna five — so it is only sent alongside one. */
+  effort?: string
 }
 
 /**
@@ -44,9 +49,15 @@ export interface CodexExecutorOpts {
  * nothing and the id is learned afterwards from the rollout — which is where
  * every other fact about a Codex session comes from anyway (cli-observer.ts).
  *
- * The model is `-c model="…"`, a dotted TOML override, NOT `--model`. Same
- * failure mode: pass `--model o3` and Codex takes it as a prompt, so the task
- * runs on the default model and appears to have worked.
+ * The model is `-c model="…"`, a dotted TOML override matching the key in
+ * ~/.codex/config.toml, with `-c model_reasoning_effort="…"` beside it. (0.147
+ * does also accept `-m/--model`; the TOML form is used because it spells both
+ * halves the same way and matches what the user's own config file holds.)
+ *
+ * THE IDS ARE NOT WRITTEN DOWN ANYWHERE IN UNMUTE. They come from Codex itself
+ * at read time (codex/cli-models.ts) — a hardcoded list shipped once and every
+ * id in it was wrong, which does not fail at the picker: `-c model="anything"`
+ * is valid TOML, so the task starts and dies at the API.
  */
 export function codexArgs(o: SpawnOpts, base: readonly string[]): string[] {
   if (o.forkFromSessionId) return ['fork', o.forkFromSessionId, ...base]
@@ -60,6 +71,9 @@ export class CodexExecutor extends CliAgentExecutor {
       bin: opts.codexBin || 'codex',
       extraArgs: [
         ...(opts.model ? ['-c', `model="${opts.model}"`] : []),
+        // Only ever WITH a model. An effort alone would apply to whatever Codex
+        // happens to default to, and the levels are not the same across models.
+        ...(opts.model && opts.effort ? ['-c', `model_reasoning_effort="${opts.effort}"`] : []),
         ...(opts.extraArgs || []),
       ],
       buildArgs: codexArgs,

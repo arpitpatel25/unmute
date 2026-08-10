@@ -74,6 +74,10 @@ type API = {
   remoteOnModelChanged?: (cb: (model: string) => void) => () => void
   remoteCodexReasoning?: () => Promise<CodexReasoning>
   remoteCodexReasoningSet?: (axis: CodexAxis, value: string) => Promise<boolean>
+  /** Codex CLI's own Model/Effort, read from the `codex` binary. Same shape as
+   *  the desktop reader — see the preload note. */
+  remoteCodexCliReasoning?: () => Promise<CodexReasoning>
+  remoteCodexCliReasoningSet?: (axis: CodexAxis, value: string) => Promise<boolean>
   remoteSetOsNotifications?: (on: boolean) => Promise<boolean>
   remoteSetForceRaw?: (on: boolean) => Promise<boolean>
   remoteSetAgentTasks?: (v: boolean) => Promise<boolean>
@@ -210,12 +214,17 @@ function LaneIcon() {
  *  alternative is another vendor's models under this one's name. Adding a
  *  backend to the registry should mean adding one line here; forgetting is
  *  visibly inert instead of quietly wrong. */
-const MODEL_SOURCE: Record<string, 'catalog' | 'own-app'> = {
+const MODEL_SOURCE: Record<string, 'catalog' | 'own-app' | 'own-binary'> = {
   claude: 'catalog',
-  // MISSING UNTIL 1.4.24, which is what "forgetting is visibly inert" bought:
-  // Codex CLI drew the no-model-list paragraph on a backend that has four, and
-  // said so in words that read like a limitation rather than an omission.
-  codex: 'catalog',
+  // MISSING ENTIRELY UNTIL 1.4.24, which is what "forgetting is visibly inert"
+  // bought: Codex CLI drew the no-model-list paragraph on a backend that has
+  // six, in words that read like a limitation rather than an omission.
+  //
+  // 'own-binary', NOT 'catalog'. Codex's models are Codex's — its line-up
+  // turned over completely between two point releases — so they are read from
+  // the `codex` on PATH, the same binary the task will run on. Its Model and
+  // Effort are one choice, exactly as in `codex`'s own picker.
+  codex: 'own-binary',
   'claude-code-desktop': 'catalog',
   'codex-desktop': 'own-app',
 }
@@ -236,8 +245,9 @@ function Models({ agentId, model, onPickModel }: {
     let cancelled = false
     setCatalog(null)
     setCodex(null)
-    if (source === 'own-app') {
-      void api().remoteCodexReasoning?.().then((r) => { if (!cancelled) setCodex(r ?? null) }).catch(() => { if (!cancelled) setCodex(null) })
+    if (source === 'own-app' || source === 'own-binary') {
+      const read = source === 'own-app' ? api().remoteCodexReasoning : api().remoteCodexCliReasoning
+      void read?.().then((r) => { if (!cancelled) setCodex(r ?? null) }).catch(() => { if (!cancelled) setCodex(null) })
       return () => { cancelled = true }
     }
     if (source === 'catalog') {
@@ -257,15 +267,32 @@ function Models({ agentId, model, onPickModel }: {
     )
   }
 
-  if (source === 'own-app') {
+  // ONE RENDERER FOR BOTH CODEX BACKENDS. They offer the same choice — Codex's
+  // own picker is titled "Select Model and Effort" in the CLI and shows the same
+  // axes in the app — and the two readers were deliberately given one shape so
+  // this could not become two pickers that drift apart. Only the source of the
+  // list and the empty-state sentence differ.
+  if (source === 'own-app' || source === 'own-binary') {
+    // Speed is the desktop app's alone; the CLI reader never sends it, and the
+    // filter below drops an axis with no values rather than drawing an empty row.
     const axes = (['Model', 'Effort', 'Speed'] as const)
       .map((axis) => ({ axis, values: codex?.options[axis] ?? [], current: codex?.current[axis] }))
       .filter((a) => a.values.length)
     if (!axes.length) {
       return (
         <p className="text-[11px] text-ink-35 leading-relaxed">
-          Codex&rsquo;s models are read from the Codex app itself. Open Codex and connect it
-          from <b>Agents &amp; setup</b> above, and its own choices appear here.
+          {source === 'own-binary' ? (
+            <>
+              Codex&rsquo;s models are read from the <code>codex</code> command itself, and it
+              couldn&rsquo;t be reached. Once <code>codex</code> runs in your terminal, its own
+              models appear here.
+            </>
+          ) : (
+            <>
+              Codex&rsquo;s models are read from the Codex app itself. Open Codex and connect it
+              from <b>Agents &amp; setup</b> above, and its own choices appear here.
+            </>
+          )}
         </p>
       )
     }
@@ -279,7 +306,18 @@ function Models({ agentId, model, onPickModel }: {
               value={a.current}
               onPick={(v) => {
                 setCodex((prev) => (prev ? { ...prev, current: { ...prev.current, [a.axis]: v } } : prev))
-                void api().remoteCodexReasoningSet?.(a.axis, v)
+                const write = source === 'own-app' ? api().remoteCodexReasoningSet : api().remoteCodexCliReasoningSet
+                const done = write?.(a.axis, v)
+                // Picking a MODEL changes which efforts exist — Sol offers six,
+                // Luna five — so the panel re-reads rather than leaving the
+                // previous model's levels on screen under the new model's name.
+                if (a.axis === 'Model') {
+                  const read = source === 'own-app' ? api().remoteCodexReasoning : api().remoteCodexCliReasoning
+                  void Promise.resolve(done)
+                    .then(() => read?.())
+                    .then((r) => { if (r) setCodex(r) })
+                    .catch(() => { /* leave what is on screen */ })
+                }
               }}
             />
           </div>

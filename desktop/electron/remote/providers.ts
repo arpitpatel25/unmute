@@ -50,6 +50,22 @@ export interface Provider {
    *  separately which key a backend uses, and the settings screen decided
    *  wrong — it wrote Claude's key from a menu labelled Codex. */
   modelSetting: 'model' | 'codexCliModel' | null
+  /** Where the list of models comes from.
+   *
+   *  'catalog'    — Unmute's own catalogue (config-extendable). Only honest for
+   *                 a vocabulary Unmute owns: the Claude Code aliases.
+   *  'own-binary' — ask the backend's executable. Codex CLI answers `model/list`
+   *                 over its app-server in ~1ms.
+   *  'own-app'    — the desktop app owns the choice; we read it back from there.
+   *
+   *  WRITTEN DOWN BECAUSE GUESSING IT COST A RELEASE. Codex CLI's models were
+   *  put in the catalogue as four invented ids; they were wrong, and nothing
+   *  could have caught it, because a catalogue cannot be checked against a
+   *  product that ships its own list. This field is what makes "does this
+   *  backend's picker have anything in it" a question the tests can ask
+   *  correctly — an empty catalogue is a bug for 'catalog' and expected for the
+   *  other two, which fail to an honest empty state instead. */
+  modelSource: 'catalog' | 'own-binary' | 'own-app'
 }
 
 /** Absent `agent` ⇒ Claude. PTY tasks have always been persisted with no agent
@@ -66,6 +82,7 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     hasTerminal: true,
     canResume: true,
     modelSetting: 'model',
+    modelSource: 'catalog',
   },
   codex: {
     id: 'codex',
@@ -84,6 +101,9 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     // override Codex accepts for any string — so a Claude alias stored here
     // does not fail at the picker, it fails at the API, after the task ran.
     modelSetting: 'codexCliModel',
+    // ASKED, NOT LISTED — see codex/cli-models.ts. Codex's line-up turned over
+    // completely between 0.142 and 0.147.
+    modelSource: 'own-binary',
   },
   'codex-desktop': {
     id: 'codex-desktop',
@@ -95,6 +115,7 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     canResume: false,
     // The app owns the choice — Unmute reads Model/Effort/Speed back out of it.
     modelSetting: null,
+    modelSource: 'own-app',
   },
   // The id is 'claude-code-desktop', NOT 'claude-desktop', because that string
   // was already written down in two places before this provider existed — the
@@ -116,6 +137,7 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     canResume: false,
     // Read from the composer in the app itself, same as codex-desktop.
     modelSetting: null,
+    modelSource: 'own-app',
   },
 }
 

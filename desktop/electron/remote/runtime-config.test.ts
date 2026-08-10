@@ -155,14 +155,29 @@ test('malformed catalog entries are sanitized; a fully-invalid catalog keeps the
 // path no local change can fix.
 
 test('a config that predates a backend cannot delete that backend’s models', () => {
-  const merged = mergeConfig(compiledDefaults(), {
+  // A base that knows about two backends — the state the shipped app was in,
+  // where the compiled catalogue carried Codex entries and the served config
+  // did not. (Codex CLI no longer uses the catalogue at all; the invariant is
+  // about ANY second backend, so the second one is supplied here rather than
+  // borrowed from the registry.)
+  const twoBackends = mergeConfig(compiledDefaults(), {
+    models: { available: [
+      { id: 'sonnet', label: 'Sonnet' },
+      { id: 'other-1', label: 'Other One', provider: 'other' },
+      { id: 'other-2', label: 'Other Two', provider: 'other' },
+    ] },
+  }, 'base')
+  assert.deepEqual(idsFor(twoBackends, 'other'), ['other-1', 'other-2'])
+
+  // Now a layer that speaks only for Claude — the served config's shape.
+  const merged = mergeConfig(twoBackends, {
     models: { available: [
       { id: 'sonnet', label: 'Sonnet' },
       { id: 'claude-opus-4-8', label: 'Opus 4.8' },
     ] },
   }, 'test')
-  assert.deepEqual(claudeIds(merged), ['sonnet', 'claude-opus-4-8'])   // spoken for → replaced
-  assert.deepEqual(idsFor(merged, 'codex'), modelsFor('codex').map((c) => c.id)) // silent on → untouched
+  assert.deepEqual(claudeIds(merged), ['sonnet', 'claude-opus-4-8'])      // spoken for → replaced
+  assert.deepEqual(idsFor(merged, 'other'), ['other-1', 'other-2'])       // silent on → untouched
 })
 
 test('a config CAN describe a non-Claude backend, and two backends may each have a “default”', () => {
@@ -192,11 +207,17 @@ test('a backend the running app does not know about is kept, and shown nowhere',
   assert.deepEqual(claudeIds(merged), modelsFor('claude').map((c) => c.id)) // Claude untouched
 })
 
-test('INVARIANT: no CLI backend can be left with an empty model picker by any config', () => {
+test('INVARIANT: no catalogue-backed backend can be left with an empty picker by any config', () => {
   // The structural version of the bug above. Each case is a config that speaks
-  // for some backends and not others; whatever it says, a backend Unmute spawns
-  // must still have something to offer, because an empty picker is
-  // indistinguishable from an unbuilt feature.
+  // for some backends and not others; whatever it says, a backend whose models
+  // ARE Unmute's to list must still have something to offer, because an empty
+  // picker is indistinguishable from an unbuilt feature.
+  //
+  // SCOPED TO modelSource === 'catalog', which is the honest form of this
+  // invariant. Codex CLI reads its models from the `codex` binary — its
+  // catalogue entries are empty ON PURPOSE, because a list of someone else's
+  // model ids written down here goes stale silently, which is how four invented
+  // ids shipped. Asserting non-empty for it would demand exactly the mistake.
   const layers: unknown[] = [
     { models: { available: [{ id: 'sonnet', label: 'Sonnet' }] } },                        // Claude only
     { models: { available: [{ id: 'gpt-6', label: 'GPT-6', provider: 'codex' }] } },       // Codex only
@@ -205,16 +226,31 @@ test('INVARIANT: no CLI backend can be left with an empty model picker by any co
     { models: {} },
     {},
   ]
-  const cliBackends = Object.values(PROVIDERS).filter((p) => p.transport === 'pty')
-  assert.ok(cliBackends.length >= 2, 'this invariant is vacuous with one CLI backend')
+  const catalogBackends = Object.values(PROVIDERS).filter((p) => p.modelSource === 'catalog')
+  assert.ok(catalogBackends.length >= 1)
   for (const layer of layers) {
     const merged = mergeConfig(compiledDefaults(), layer, 'test')
-    for (const p of cliBackends) {
+    for (const p of catalogBackends) {
       assert.ok(
         idsFor(merged, p.id).length > 0,
         `${p.label} has no selectable models after config ${JSON.stringify(layer)}`,
       )
     }
+  }
+})
+
+test('INVARIANT: the compiled catalogue only speaks for backends whose models Unmute owns', () => {
+  // The other half. A backend that reads its own list must have NOTHING here —
+  // an entry would be a hardcoded claim about someone else's product, which is
+  // precisely what shipped as 'Codex Max' / 'Codex' / 'Codex Mini' and was
+  // wrong in every id. Nothing can catch that at runtime, because `-c
+  // model="anything"` is valid TOML; it fails at the API, after the task ran.
+  for (const p of Object.values(PROVIDERS)) {
+    if (p.modelSource === 'catalog') continue
+    assert.deepEqual(
+      modelsFor(p.id, MODEL_CATALOG), [],
+      `${p.label} reads its models from ${p.modelSource}, so the catalogue must not name any`,
+    )
   }
 })
 
@@ -226,25 +262,20 @@ test('getModelCatalog + isSelectableModel reflect the effective catalog after a 
       { id: 'sonnet', label: 'Sonnet' }, { id: 'claude-opus-4-8', label: 'Opus 4.8' },
     ] } }),
   })
-  // before refresh: the compiled catalog, SCOPED TO CLAUDE. The catalog carries
-  // Codex entries too now, and getModelCatalog() defaults to Claude — an
-  // unscoped read would put nine models in the picker, two called 'default'.
+  // before refresh: the compiled catalog, SCOPED TO CLAUDE. Asking for a
+  // backend the catalogue does not speak for returns nothing — never Claude's
+  // list under another backend's name.
   assert.deepEqual(getModelCatalog().map((c) => c.id), modelsFor('claude').map((c) => c.id))
-  assert.deepEqual(getModelCatalog('codex').map((c) => c.id), modelsFor('codex').map((c) => c.id))
+  assert.deepEqual(getModelCatalog('codex'), [])
   assert.equal(isSelectableModel('opus'), true)
   assert.equal(await refreshRemoteConfig(), 'updated')
   // after: the config catalog
   assert.deepEqual(getModelCatalog().map((c) => c.id), ['sonnet', 'claude-opus-4-8'])
-  // AND CODEX STILL HAS ITS MODELS. This is the assertion the suite was missing:
-  // the fetched config is Claude-only, and before the per-provider fold it wiped
-  // every Codex entry — so the shipped app offered Codex CLI an empty picker.
-  assert.deepEqual(getModelCatalog('codex').map((c) => c.id), modelsFor('codex').map((c) => c.id))
   assert.equal(isSelectableModel('claude-opus-4-8'), true)
   assert.equal(isSelectableModel('opus'), false) // no longer in the effective catalog
-  // Scoped both ways: a Claude id is not selectable on Codex, and vice versa.
+  // SCOPED. A Claude id is not selectable on another backend — unscoped, this
+  // said yes, and the Claude picker could write the router's model.
   assert.equal(isSelectableModel('claude-opus-4-8', 'codex'), false)
-  assert.equal(isSelectableModel('gpt-5.1-codex-max', 'codex'), true)
-  assert.equal(isSelectableModel('gpt-5.1-codex-max'), false)
   rmSync(dir, { recursive: true, force: true })
 })
 

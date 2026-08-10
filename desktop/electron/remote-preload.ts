@@ -249,6 +249,18 @@ export const remotePreloadExtensions = {
   remoteCodexReasoningSet: (axis: 'Model' | 'Effort' | 'Speed', value: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:codex-reasoning-set', axis, value),
   remoteCodexReasoningRefresh: (): Promise<unknown> => ipcRenderer.invoke('remote:codex-reasoning-refresh'),
+  /** The same two axes for the Codex CLI, read from the `codex` binary on PATH
+   *  rather than from a running app. Deliberately the SAME SHAPE as the desktop
+   *  reader above so one component renders both — the two backends genuinely do
+   *  offer the same choice, and giving them different shapes is how one of them
+   *  ends up with a picker nobody updated. */
+  remoteCodexCliReasoning: (): Promise<{
+    label: string | null
+    current: Partial<Record<'Model' | 'Effort', string>>
+    options: Partial<Record<'Model' | 'Effort', string[]>>
+  }> => ipcRenderer.invoke('remote:codex-cli-reasoning'),
+  remoteCodexCliReasoningSet: (axis: 'Model' | 'Effort', value: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:codex-cli-reasoning-set', axis, value),
   /** Set the doer model; applies to the next dispatched task. Returns the
    *  validated value actually stored. */
   remoteSetModel: (m: string): Promise<string> => ipcRenderer.invoke('remote:set-model', m),
