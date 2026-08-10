@@ -94,7 +94,7 @@ struct StageView: View {
 
     /// The message view: what was said, and the way to say the next thing.
     @ViewBuilder private func messagesMode(_ t: TaskDetail) -> some View {
-        if t.backend != "codex-desktop", let warm = t.warmup, !warm.isEmpty,
+        if t.hasTerminal, let warm = t.warmup, !warm.isEmpty,
            !(t.conversation ?? []).contains(where: { $0.role == "assistant" && !$0.text.isEmpty }) {
             warmupStrip(warm)
         }
@@ -170,8 +170,8 @@ struct StageView: View {
             // dead arm — while the same change made Codex tasks report alive, so
             // the button could never render at all. Two edits that cancelled out.
             HStack(spacing: 4) {
-                if t.backend == "codex-desktop" {
-                    KeyButton(label: "Open in Codex", symbol: "arrow.up.forward.app") {
+                if !t.isOwned {
+                    KeyButton(label: "Open in \(t.foreignAppName)", symbol: "arrow.up.forward.app") {
                         model.emit(.openInTerminal(id: t.id))
                     }
                 } else if t.alive {

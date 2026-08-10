@@ -128,6 +128,15 @@ struct TaskDetail: Codable {
     /// forgetting silently handed the new agent a terminal's frame.
     let terminal: Bool?
 
+    /// Can a finished task be brought back? SENT, not inferred. The nine
+    /// `backend == "codex-desktop"` checks this replaces were each a negation of
+    /// one backend, and each one silently mis-answered for the next backend to
+    /// arrive — the shape of every recent bug on this surface.
+    let resumable: Bool?
+    /// Did Unmute spawn the process? Decides Kill (ours to stop) versus Remove
+    /// (forget the card, leave the user's app alone).
+    let owned: Bool?
+
     /// Fallback for an engine older than the `terminal` field, and ONLY that.
     /// Do not add backends here — add them to providers.ts.
     private static let legacyDesktopBackends: Set<String> = ["codex-desktop", "claude-code-desktop"]
@@ -135,6 +144,31 @@ struct TaskDetail: Codable {
     /// Does this task have a live terminal? Absent backend ⇒ Claude's PTY.
     var hasTerminal: Bool {
         if let terminal { return terminal }
+        guard let backend else { return true }
+        return !Self.legacyDesktopBackends.contains(backend)
+    }
+
+    /// Same legacy fallback as `hasTerminal`, and for the same reason: an engine
+    /// older than these fields must still classify correctly rather than
+    /// defaulting every backend to Claude's answers.
+    var canResume: Bool {
+        if let resumable { return resumable }
+        guard let backend else { return true }
+        return !Self.legacyDesktopBackends.contains(backend)
+    }
+    /// The app this task's work lives in, when it is not ours. Naming is
+    /// display; the DECISION to show a door into it is `isOwned` — a capability
+    /// — so a backend added tomorrow gets the affordance without a Swift edit,
+    /// and only its name is missing rather than the whole button.
+    var foreignAppName: String {
+        switch backend {
+        case "codex-desktop":       return "Codex"
+        case "claude-code-desktop": return "Claude"
+        default:                    return "the app"
+        }
+    }
+    var isOwned: Bool {
+        if let owned { return owned }
         guard let backend else { return true }
         return !Self.legacyDesktopBackends.contains(backend)
     }

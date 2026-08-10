@@ -25,7 +25,7 @@ struct TaskSurfaceView: View {
                 // 2,800 characters that made it answerable — one line, a text
                 // box, and no argument. The headline chain keeps its other
                 // branches; only the question left the top.
-                if t.backend == "codex-desktop" {
+                if !t.hasTerminal {
                     // NO HEADLINE for a backend that shows its whole
                     // conversation. `activity` is derived from the last agent
                     // message, which IS the last line of the transcript below —
@@ -51,7 +51,7 @@ struct TaskSurfaceView: View {
                 // DeadPanel is a PTY concept — "the session ended, resume or
                 // re-run it". A Codex thread never ends that way, so offering it
                 // there is an invitation to revive something still alive.
-                if (t.status == .done || t.status == .failed) && t.backend != "codex-desktop" {
+                if (t.status == .done || t.status == .failed) && t.canResume {
                     ScrollView { DeadPanel(model: model, t: t) }
                         .frame(maxHeight: 280)
                         .padding(.top, 12)
@@ -61,7 +61,7 @@ struct TaskSurfaceView: View {
                 // what this panel carries — the same role the terminal plays for a
                 // CLI task. Showing an empty terminal frame here is what made the
                 // panel read as a giant void.
-                if t.backend == "codex-desktop" {
+                if !t.hasTerminal {
                     // NOT wrapped in a ScrollView — the panel owns one. Nesting
                     // them gave the inner scroller unbounded height, so it had no
                     // overflow to scroll and the outer one scrolled instead;
@@ -151,7 +151,7 @@ struct TaskSurfaceView: View {
 
     private func actions(_ t: TaskDetail) -> some View {
         HStack(spacing: 6) {
-            if t.backend == "codex-desktop" {
+            if !t.hasTerminal {
                 // "resume" / "re-run" / "terminal" are PTY concepts and mean
                 // nothing for a thread living in another app. The one thing that
                 // does make sense is a door into it.
@@ -173,7 +173,7 @@ struct TaskSurfaceView: View {
             // This drops OUR card; it has never touched the agent's session. For
             // a Codex thread — which lives on until you delete it in Codex —
             // "kill" claims something we do not do and would not want to.
-            KeyButton(label: t.backend == "codex-desktop" ? "Remove" : "Kill",
+            KeyButton(label: t.isOwned ? "Kill" : "Remove",
                       danger: true, symbol: "trash") { model.emit(.remove(id: t.id)) }
         }
         .padding(.top, 11)

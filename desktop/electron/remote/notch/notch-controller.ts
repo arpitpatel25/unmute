@@ -1556,6 +1556,18 @@ export class NotchController {
       // what picks the expanded surface's share of the screen (80% for a
       // terminal, 60% for a conversation). One registry, one answer.
       terminal: providerOf(t.agent).hasTerminal,
+      // CAPABILITIES, NOT A NAME. Nine places in Swift still asked
+      // `backend == "codex-desktop"` to decide whether to offer Resume, whether
+      // the destructive button says Kill or Remove, whether there is a process
+      // at all. Every one of them is a negation of one backend, and every one
+      // silently mis-answers for the next backend to arrive — which is exactly
+      // how the Codex CLI model picker shipped empty. The registry already
+      // knows; it just was not being told to the view.
+      resumable: providerOf(t.agent).canResume,
+      /** True when Unmute spawned the process — so killing it is ours to do.
+       *  A driver-backed task has nothing of ours to kill; the card offers
+       *  Remove instead, which forgets it without touching the user's app. */
+      owned: providerOf(t.agent).transport === 'pty',
       // THE CONVERSATION IS SENT FOR EVERY BACKEND NOW.
       //
       // It used to be gated on `external`, because it was conceived as "what a

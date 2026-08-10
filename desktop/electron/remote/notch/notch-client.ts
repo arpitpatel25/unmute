@@ -100,6 +100,13 @@ export interface TaskDetailP {
   status: TaskStatusName
   kind: 'oneoff' | 'session'
   alive: boolean
+  /** Capabilities from the provider registry, SENT rather than inferred from
+   *  the backend's name. Nine Swift checks used to read `backend ==
+   *  "codex-desktop"`, each a negation of one backend and each silently wrong
+   *  for the next one to arrive. */
+  resumable?: boolean
+  /** Did Unmute spawn the process? Decides Kill versus Remove. */
+  owned?: boolean
   shelved?: boolean
   dir?: string
   age?: string
