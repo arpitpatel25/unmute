@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { ComputerUseSettings } from './ComputerUseSettings'
+import { ProviderGlyph } from './ProviderMark'
 import { SectionHeader, SettingRow, Toggle } from '../app/_shared'
 
 interface Settings {
@@ -601,6 +602,14 @@ export function RemoteSettings({ onOpenHowItWorks }: {
                   }`}
                 >
                   <span className="flex items-center gap-2">
+                    {/* THE MARK, THEN THE NAME. This row is where a backend is
+                        chosen, so it should look like the cards the choice
+                        produces. The availability dot stays — unlike the pill,
+                        this list shows backends you have NOT connected, and
+                        "which of these is ready" is the question the row is
+                        answering. */}
+                    <ProviderGlyph backend={o.id} title={o.label}
+                                   style={{ opacity: o.available ? 1 : 0.4 }} />
                     <span className={`w-[7px] h-[7px] rounded-full shrink-0 ${o.available ? 'bg-success' : 'bg-ink-35'}`} />
                     <span className="text-[13px] font-medium text-ink">{o.label}</span>
                     {!o.available && (

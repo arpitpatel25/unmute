@@ -16,17 +16,9 @@
  * CLI backend added later gets it with no edit here and a desktop backend never
  * claims a terminal it does not have.
  */
-import type { RemoteTask } from './taskFacts'
+import type { RemoteTask } from './useRemoteTasks'
 import { hasTerminal, providerLabel } from './taskFacts'
 import { PROVIDER_LOGOS, opticalScale } from './providerLogos'
-
-/** Which vendor's mark to draw. Two surfaces per vendor share one logo — Codex
- *  CLI and Codex desktop are the same product wearing different clothes, and
- *  the terminal glyph is what tells them apart. */
-function vendorOf(t: RemoteTask): 'codex' | 'claude' {
-  const a = t.provider?.id ?? t.agent
-  return a === 'codex' || a === 'codex-desktop' ? 'codex' : 'claude'
-}
 
 /** ONE SIZE, EVERYWHERE — the Swift twin holds the same constant. Call sites
  *  that drift by a point make one mark read as a different asset rather than a
@@ -34,17 +26,43 @@ function vendorOf(t: RemoteTask): 'codex' | 'claude' {
 export const MARK_SIZE = 13
 
 export function ProviderMark({ task, size = MARK_SIZE }: { task: RemoteTask; size?: number }) {
-  const vendor = vendorOf(task)
+  return (
+    <ProviderGlyph
+      backend={task.provider?.id ?? task.agent}
+      terminal={hasTerminal(task)}
+      title={`${providerLabel(task)}${hasTerminal(task) ? ' · has a terminal' : ''}`}
+      size={size}
+    />
+  )
+}
+
+/**
+ * The mark for a BACKEND, with no task involved.
+ *
+ * Settings talks about providers in the abstract — "which agent runs your
+ * work" — where there is no task to read a provider off. Splitting this out
+ * rather than inventing a fake task keeps one implementation of "how a provider
+ * looks" instead of a second one that drifts.
+ */
+export function ProviderGlyph({ backend, terminal = false, title, size = MARK_SIZE, style }: {
+  backend?: string
+  terminal?: boolean
+  title?: string
+  size?: number
+  /** For the one case that needs it: a backend listed but not connected reads
+   *  dimmed, the same way the pill fades its mark. */
+  style?: React.CSSProperties
+}) {
+  const vendor: 'codex' | 'claude' =
+    backend === 'codex' || backend === 'codex-desktop' ? 'codex' : 'claude'
   const art = PROVIDER_LOGOS[vendor]
-  const terminal = hasTerminal(task)
-  const title = `${providerLabel(task)}${terminal ? ' · has a terminal' : ''}`
 
   return (
     <span
       title={title}
       aria-label={title}
       role="img"
-      style={{ display: 'inline-flex', alignItems: 'center', gap: size * 0.31, flex: 'none' }}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: size * 0.31, flex: 'none', ...style }}
     >
       {art ? (
         // SIZED BY ITS INK, NOT BY ITS FILE — `scale` is measured from the

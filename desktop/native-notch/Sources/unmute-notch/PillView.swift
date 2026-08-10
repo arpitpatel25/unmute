@@ -716,20 +716,19 @@ private struct AgentModelControl: View {
     var body: some View {
         Button(action: { open.toggle() }) {
             HStack(spacing: 9) {
-                // THE CONNECTION DOT — functional, not decorative. Green when
-                // the backend can take work right now, dim when it cannot, and
-                // the label then says so.
-                Circle()
-                    .fill(state.agentConnected
-                          ? Color(red: 0.436, green: 0.749, blue: 0.604)
-                          : Color.white.opacity(0.35))
-                    .frame(width: 7, height: 7)
+                // THE CONNECTION DOT IS GONE, and its job was reassigned rather
+                // than dropped. It said "this backend can take work right now"
+                // — but the label has always spelled that out too ("· connect"),
+                // and beside a logo the dot read as decoration. The mark itself
+                // now carries the state: full strength when reachable, faded
+                // when not, next to a label that says why.
                 // WHAT YOU PICKED, WEARING ITS MARK — the closed chip is the
                 // part you read at a glance, and it named the backend in words
                 // while every other surface had learned to show it. 13pt, the
                 // same figure as the cards and the rows inside this panel.
                 if let picked = state.agentOptions?.first(where: { $0.label == (state.agent ?? "") }) {
                     ProviderMark(backend: picked.id, terminal: picked.terminal ?? true)
+                        .opacity(state.agentConnected ? 1 : 0.45)
                 }
                 Text((state.agent ?? "Claude Code") + (state.agentConnected ? "" : " · connect"))
                     .font(.system(size: 12.5, weight: .semibold))
