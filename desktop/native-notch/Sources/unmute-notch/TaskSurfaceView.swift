@@ -25,82 +25,55 @@ struct TaskSurfaceView: View {
                 // 2,800 characters that made it answerable — one line, a text
                 // box, and no argument. The headline chain keeps its other
                 // branches; only the question left the top.
-                if !t.hasTerminal {
-                    // NO HEADLINE for a backend that shows its whole
-                    // conversation. `activity` is derived from the last agent
-                    // message, which IS the last line of the transcript below —
-                    // so this printed the same sentence twice, once unstyled
-                    // (literal **asterisks**) and once properly. The headline
-                    // earns its place only where the panel shows a terminal,
-                    // because raw scrollback is not a summary.
-                    EmptyView()
-                } else if let summary = summaryLine(t) {
-                    // ONE LINE, STRUCTURALLY. The source is fixed too (see
-                    // headlineFor), but this slot sits above the exchange and
-                    // pushes the terminal down, so it must not be able to grow
-                    // no matter what reaches it. It had no limit, and a question
-                    // card's worth of text landed here: the whole ask printed
-                    // above the user's own message, and the terminal below lost
-                    // the rows it needed to draw the picker.
-                    Text(summary)
-                        .font(.system(size: 14)).foregroundColor(Theme.textDim)
-                        .lineLimit(1).truncationMode(.tail)
-                        .padding(.top, 12)
-                }
-
-                // DeadPanel is a PTY concept — "the session ended, resume or
-                // re-run it". A Codex thread never ends that way, so offering it
-                // there is an invitation to revive something still alive.
-                if (t.status == .done || t.status == .failed) && t.canResume {
-                    ScrollView { DeadPanel(model: model, t: t) }
-                        .frame(maxHeight: 280)
-                        .padding(.top, 12)
-                }
-
-                // EXTERNAL BACKEND (Codex): no PTY exists, so the CONVERSATION is
-                // what this panel carries — the same role the terminal plays for a
-                // CLI task. Showing an empty terminal frame here is what made the
-                // panel read as a giant void.
-                if !t.hasTerminal {
-                    // NOT wrapped in a ScrollView — the panel owns one. Nesting
-                    // them gave the inner scroller unbounded height, so it had no
-                    // overflow to scroll and the outer one scrolled instead;
-                    // scrollTo then addressed a view that could not move.
+                if terminalMode(t) {
+                    // ONE EXCEPTION TO "TERMINAL ONLY": AN ASK YOU MUST ANSWER.
+                    //
+                    // Codex CLI's approvals now arrive over the App Server, which
+                    // means the TUI never renders them — hiding the block here
+                    // would leave a terminal sitting at a prompt with no visible
+                    // question and no way to reply. A demand outranks the layout.
+                    if t.status == .needsUser, let q = t.question {
+                        QuestionBlock(model: model, taskId: t.id, question: q,
+                                      terminalOpen: $model.taskTerminalOpen).padding(.top, 10)
+                    }
+                    // TERMINAL MODE — THE TERMINAL IS THE PANEL.
+                    //
+                    // This surface used to stack the exchange strip (capped at
+                    // 150pt) ABOVE the terminal, so opening the terminal gave you
+                    // both at once and neither properly: messages squeezed into a
+                    // band, the terminal taking what was left.
+                    //
+                    // A message view and a terminal view are two readings of the
+                    // SAME session, not two halves of one screen. The stage was
+                    // fixed first and this one was missed — which is the whole
+                    // reason the redesign looked unimplemented from the outside.
+                    TerminalPanel(model: model, taskId: t.id,
+                                  tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
+                        .id(t.id)   // ties the PTY stream to THIS task across Next/Prev
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 10)
+                } else {
+                    // MESSAGE MODE. One transcript for every backend — this was
+                    // ConversationPanel for driver backends and ExchangeStrip for
+                    // the rest, two components showing the same thing where only
+                    // one of them filled the space it was given.
                     ConversationPanel(turns: t.conversation ?? [], id: t.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 10)
-                    // Always available: a Codex chat is continuable until you
-                    // delete it, so there is no state in which you have nothing
-                    // to say to it.
-                    CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
-                                  modelLabel: t.modelLabel, sending: t.sending ?? false)
-                        .padding(.top, 9)
-                } else if t.alive {
-                    // The same message-then-terminal shape as the stage. The
-                    // strip is bounded and renders nothing when there are no
-                    // turns yet, so the terminal keeps the space it always had.
-                    ExchangeStrip(turns: t.conversation ?? [], status: t.status,
-                                  maxAnswerHeight: model.taskTerminalOpen ? 150 : .infinity)
-                        .padding(.top, 10)
-                    // …and the ask lands here, under the reasoning it came from.
                     if t.status == .needsUser, let q = t.question {
                         QuestionBlock(model: model, taskId: t.id, question: q,
                                       terminalOpen: $model.taskTerminalOpen).padding(.top, 12)
                     }
-                    if model.taskTerminalOpen {
-                    // The terminal owns EVERYTHING left down to the action row
-                    // (field feedback: never a fixed band with dead space below).
-                    // .id ties the PTY stream to THIS task across Next/Prev.
-                        TerminalPanel(model: model, taskId: t.id,
-                                      tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
-                            .id(t.id)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .padding(.top, 10)
-                    } else {
-                        Spacer(minLength: 0)
+                    // ALWAYS OFFERED, unless this is an errand that has genuinely
+                    // finished. A session that completed a step is waiting for your
+                    // next line, not over — and `alive` (a PTY handle) is the wrong
+                    // question to ask about that, which is what this branch used to
+                    // ask before falling through to an empty Spacer.
+                    if !ended(t) {
+                        CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
+                                      modelLabel: t.modelLabel, sending: t.sending ?? false)
+                            .padding(.top, 9)
                     }
-                } else {
-                    Spacer(minLength: 0)
                 }
 
                 actions(t)
@@ -147,6 +120,19 @@ struct TaskSurfaceView: View {
             if model.canGoBack { BackButton { model.onBack() } }
             CloseButton { model.emit(.collapsed) }
         }
+    }
+
+
+    /// Is the terminal the whole panel right now? `hasTerminal` comes from the
+    /// provider registry via the engine — a backend with no PTY has no terminal
+    /// to show and no toggle to offer.
+    private func terminalMode(_ t: TaskDetail) -> Bool { t.hasTerminal && model.taskTerminalOpen }
+
+    /// Has this task actually finished for good? STATE, not `alive`. Same rule
+    /// as StageView.ended — a session finishing a step is what a session does
+    /// between your messages; only an errand is over.
+    private func ended(_ t: TaskDetail) -> Bool {
+        (t.status == .done || t.status == .failed) && t.kind != "session"
     }
 
     private func actions(_ t: TaskDetail) -> some View {

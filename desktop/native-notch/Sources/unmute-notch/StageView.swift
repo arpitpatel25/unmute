@@ -37,6 +37,14 @@ struct StageView: View {
             if let t {
                 header(t)
                 if terminalMode(t) {
+                    // ONE EXCEPTION TO "TERMINAL ONLY": AN ASK YOU MUST ANSWER.
+                    // Codex CLI approvals arrive over the App Server, so the TUI
+                    // never shows them — hiding the block would leave a terminal
+                    // stalled at a prompt with no visible question.
+                    if t.status == .needsUser, let q = t.question {
+                        QuestionBlock(model: model, taskId: t.id, question: q,
+                                      terminalOpen: $model.stageTerminalOpen).padding(.top, 10)
+                    }
                     // TERMINAL MODE — THE TERMINAL IS THE PANEL.
                     //
                     // Nothing renders above it but the header, and nothing below
