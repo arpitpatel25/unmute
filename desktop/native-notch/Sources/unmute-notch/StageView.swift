@@ -142,7 +142,7 @@ struct StageView: View {
     private func header(_ t: TaskDetail) -> some View {
         HStack(spacing: 6) {
             Dot(status: t.status, size: 9, breathing: t.status == .processing)
-            ProviderMark(backend: t.backend, terminal: t.hasTerminal, size: 13)
+            ProviderMark(backend: t.backend, terminal: t.hasTerminal)
             if renaming {
                 TextField("Name", text: $renameText, onCommit: {
                     let v = renameText.trimmingCharacters(in: .whitespaces)

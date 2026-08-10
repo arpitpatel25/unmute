@@ -33,6 +33,11 @@ export interface PillOptionP {
   label: string
   detail?: string
   available?: boolean
+  /** AGENT ROWS ONLY: does this backend own a terminal? Sent so the pill draws
+   *  the same capability-driven mark as every other surface, rather than
+   *  re-deriving it from the id — which is the inference that has produced a
+   *  bug on this exact control twice. */
+  terminal?: boolean
 }
 
 export interface PillCoachingP {

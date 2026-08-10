@@ -116,7 +116,7 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
             The row states the current setting rather than implying the task ran
             under it — inventing one would be the same sin as inventing a model. */}
         <div className="flex items-center gap-2 mt-2 text-[11px] text-ink-35 min-w-0">
-          <ProviderMark task={task} size={13} />
+          <ProviderMark task={task} />
           {/* Only the MODEL survives as text — the mark says the rest, and the
               full "ran on …" sentence stays in its tooltip. */}
           {task.model && (

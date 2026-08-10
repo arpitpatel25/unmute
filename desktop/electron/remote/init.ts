@@ -1432,7 +1432,10 @@ async function pushPillChips(): Promise<void> {
     // use. This was a two-entry literal, so the pill could not show a third
     // backend even while agent-options was already offering it.
     const probes = await probeBackends()
-    const agentOptions = probes.map((p) => ({ id: p.id, label: p.label, available: p.ready }))
+    const agentOptions = probes.map((p) => ({
+      id: p.id, label: p.label, available: p.ready,
+      terminal: providerOf(p.id as ProviderId).hasTerminal,
+    }))
     const selected = agentOptions.find((o) => o.id === agent)
     const chips: PillStateP = {
       // The LABEL comes from the registry rather than a ternary, so a new

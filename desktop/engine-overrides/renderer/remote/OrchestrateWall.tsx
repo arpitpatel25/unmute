@@ -209,7 +209,7 @@ function Card({ t, now, queuePos, promoted = false, attention = false, onClick }
           dim ink throughout, never competing with the title. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10.5, color: C.dimText }}>
         {/* vendor mark — scannable without reading */}
-        <ProviderMark task={t} size={13} />
+        <ProviderMark task={t} />
         {/* The backend, present for every card. `model` is a HISTORICAL FACT
             sent by main (D6): when it is absent the agent stands alone — no
             default, no settings read, no placeholder word. */}

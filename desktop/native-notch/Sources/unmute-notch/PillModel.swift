@@ -73,6 +73,9 @@ struct PillOption: Codable, Identifiable, Equatable {
     let detail: String?
     /// False renders the row dimmed and unselectable (e.g. Codex not running).
     let available: Bool?
+    /// AGENT ROWS ONLY: owns a terminal. Drives the glyph beside the mark, sent
+    /// rather than guessed from the id.
+    let terminal: Bool?
     var isAvailable: Bool { available ?? true }
 }
 

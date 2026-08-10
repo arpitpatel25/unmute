@@ -232,7 +232,7 @@ struct WallView: View {
                     // directory, an age and a model — and it was WRONG for Codex
                     // CLI besides, because the card arrived with no backend and
                     // the label fell through to its default.
-                    ProviderMark(backend: c.backend, terminal: c.terminal ?? true, size: 12)
+                    ProviderMark(backend: c.backend, terminal: c.terminal ?? true)
                     NumText(text: c.kind == "session" ? (c.dir ?? "session") : "one-off")
                     Spacer(minLength: 0)
                     if c.backend == "codex-desktop" {

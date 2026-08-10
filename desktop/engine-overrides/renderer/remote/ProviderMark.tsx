@@ -28,7 +28,12 @@ function vendorOf(t: RemoteTask): 'codex' | 'claude' {
   return a === 'codex' || a === 'codex-desktop' ? 'codex' : 'claude'
 }
 
-export function ProviderMark({ task, size = 14 }: { task: RemoteTask; size?: number }) {
+/** ONE SIZE, EVERYWHERE — the Swift twin holds the same constant. Call sites
+ *  that drift by a point make one mark read as a different asset rather than a
+ *  smaller one. Override only with a reason (the panel's fact value is 15). */
+export const MARK_SIZE = 13
+
+export function ProviderMark({ task, size = MARK_SIZE }: { task: RemoteTask; size?: number }) {
   const vendor = vendorOf(task)
   const art = PROVIDER_LOGOS[vendor]
   const terminal = hasTerminal(task)

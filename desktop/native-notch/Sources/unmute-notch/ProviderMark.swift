@@ -21,9 +21,17 @@ struct ProviderMark: View {
     let backend: String?
     /// Does this backend own a terminal? Drives the glyph.
     let terminal: Bool
-    /// The mark's height. Everything else is derived from it, so a caller can
-    /// only ever make it bigger or smaller — never lopsided.
-    var size: CGFloat = 13
+    /// ONE SIZE, EVERYWHERE. Call sites drifted to 12 in the denser rows and 13
+    /// in the headers, which is exactly how a mark stops reading as the same
+    /// mark: the eye compares them across surfaces, and a point of difference
+    /// looks like a different asset rather than a smaller one.
+    ///
+    /// A caller may still override — the panel that shows a mark at 15pt as a
+    /// fact's value has a reason — but nothing should pass 12 or 13 by hand.
+    static let standard: CGFloat = 13
+    /// The mark's height. Everything else derives from it, so a caller can only
+    /// make it bigger or smaller — never lopsided.
+    var size: CGFloat = ProviderMark.standard
 
     var body: some View {
         HStack(spacing: size * 0.31) {

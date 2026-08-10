@@ -724,6 +724,13 @@ private struct AgentModelControl: View {
                           ? Color(red: 0.436, green: 0.749, blue: 0.604)
                           : Color.white.opacity(0.35))
                     .frame(width: 7, height: 7)
+                // WHAT YOU PICKED, WEARING ITS MARK — the closed chip is the
+                // part you read at a glance, and it named the backend in words
+                // while every other surface had learned to show it. 13pt, the
+                // same figure as the cards and the rows inside this panel.
+                if let picked = state.agentOptions?.first(where: { $0.label == (state.agent ?? "") }) {
+                    ProviderMark(backend: picked.id, terminal: picked.terminal ?? true)
+                }
                 Text((state.agent ?? "Claude Code") + (state.agentConnected ? "" : " · connect"))
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundColor(Theme.text.opacity(state.agentConnected ? 1 : 0.55))
@@ -801,12 +808,7 @@ private struct SelectorPanel: View {
                 // this column could never show a third backend however ready it
                 // was — the engine had been offering three for a whole build
                 // and this drew two. Same shape as the Model column below.
-                let agents = state.agentOptions ?? []
-                column("Agent", rows: agents.map { ($0.label, $0.id == agentId) }) { label in
-                    if let o = agents.first(where: { $0.label == label }) {
-                        model.emit(.pickAgent(o.id))
-                    }
-                }
+                agentColumn(state.agentOptions ?? [])
 
                 switch chooser {
                 case .axes:
@@ -871,11 +873,31 @@ private struct SelectorPanel: View {
         }
         .frame(minWidth: 118, alignment: .leading)
     }
+
+    /// The AGENT column: the same rows, each wearing its provider's mark.
+    /// Separate from `column` because only backends have marks — a model or an
+    /// effort is not a product with a logo.
+    private func agentColumn(_ agents: [PillOption]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            header("Agent")
+            ForEach(agents) { o in
+                SelectorRow(label: o.label, on: o.id == agentId,
+                            backend: o.id, terminal: o.terminal ?? true) {
+                    model.emit(.pickAgent(o.id))
+                }
+            }
+        }
+        .frame(minWidth: 118, alignment: .leading)
+    }
 }
 
 private struct SelectorRow: View {
     let label: String
     let on: Bool
+    /// AGENT ROWS ONLY: the backend this row picks, so it can wear its mark.
+    /// Absent for model/effort/speed rows, which are not backends.
+    var backend: String? = nil
+    var terminal: Bool = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -886,6 +908,12 @@ private struct SelectorRow: View {
                     .font(.system(size: 9, weight: .bold))
                     .opacity(on ? 1 : 0)
                     .frame(width: 11)
+                // THE SAME MARK, THE SAME SIZE, as the pocket and the cards.
+                // A picker that names backends should show them the way every
+                // other surface does — 13pt is the shared figure.
+                if let b = backend {
+                    ProviderMark(backend: b, terminal: terminal)
+                }
                 Text(label).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
                 Spacer(minLength: 0)
             }
