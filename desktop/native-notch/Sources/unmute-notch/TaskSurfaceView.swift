@@ -144,16 +144,36 @@ struct TaskSurfaceView: View {
                 KeyButton(label: "Open in Codex", symbol: "arrow.up.forward.app") {
                     model.emit(.openInTerminal(id: t.id))
                 }
-            } else if t.alive {
-                KeyButton(label: "Stop", symbol: "stop.circle") { model.emit(.kill(id: t.id)) }
-                KeyButton(label: model.taskTerminalOpen ? "Hide terminal" : "Terminal",
-                          symbol: "terminal") {
-                    model.taskTerminalOpen.toggle()
-                    model.emit(model.taskTerminalOpen ? .termOpen(id: t.id) : .termClose(id: t.id))
-                }
             } else {
-                KeyButton(label: "Re-run", symbol: "arrow.clockwise") { model.emit(.rerun(id: t.id)) }
-                KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
+                // STOP ONLY WHAT IS RUNNING — that one genuinely is a question
+                // about the process.
+                if t.alive {
+                    KeyButton(label: "Stop", symbol: "stop.circle") { model.emit(.kill(id: t.id)) }
+                }
+                // THE TERMINAL TOGGLE IS A VIEW CONTROL, NOT A PROCESS CONTROL.
+                //
+                // It used to live inside `else if t.alive`, so the moment a PTY
+                // was parked the button VANISHED — and with the panel now
+                // offering two views, losing the toggle means being stuck in one
+                // of them with no way across. A parked session still has
+                // scrollback worth reading, and opening it is how you get back
+                // to a session you left.
+                if t.hasTerminal {
+                    KeyButton(label: model.taskTerminalOpen ? "Hide terminal" : "Terminal",
+                              symbol: "terminal") {
+                        model.taskTerminalOpen.toggle()
+                        model.emit(model.taskTerminalOpen ? .termOpen(id: t.id) : .termClose(id: t.id))
+                    }
+                }
+                // Re-run and Resume belong to a task that has STOPPED, which is a
+                // question about the task, not about whether a process happens to
+                // be held right now.
+                if ended(t) {
+                    KeyButton(label: "Re-run", symbol: "arrow.clockwise") { model.emit(.rerun(id: t.id)) }
+                }
+                if !t.alive && t.canResume {
+                    KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
+                }
             }
             Spacer(minLength: 0)
             // This drops OUR card; it has never touched the agent's session. For

@@ -186,7 +186,10 @@ struct StageView: View {
                     KeyButton(label: "Kill", danger: true, symbol: "stop.circle") {
                         model.emit(.kill(id: t.id))
                     }
-                } else {
+                } else if t.canResume {
+                    // GATED ON THE CAPABILITY, not just on the absence of a
+                    // process: a backend that cannot be resumed was being offered
+                    // a Resume button the moment its PTY went away.
                     KeyButton(label: "Resume", symbol: "play") { model.emit(.resume(id: t.id)) }
                 }
             }
