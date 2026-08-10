@@ -105,11 +105,26 @@ export class CodexHub {
    */
   async startThread(taskId: string, o: StartThreadOpts): Promise<{ threadId: string; url: string }> {
     const srv = await this.ensure()
+    // A MODEL ID IS NEVER A SENTENCE.
+    //
+    // 'gpt-5.6-terra high' — the display record, model and effort joined for a
+    // card — reached this call once and every task died at the API with "model
+    // is not supported when using Codex with a ChatGPT account". The caller was
+    // fixed; this refuses the whole CLASS, because the next thing to hand a
+    // human-readable string to a machine field will not be that caller.
+    //
+    // Dropped rather than rejected: no model means Codex's own default, which
+    // runs. Failing the task over a display bug would turn a wrong label into
+    // no work at all.
+    const model = o.model && /\s/.test(o.model) ? undefined : o.model
+    if (o.model && !model) {
+      log.error('refused a model id containing whitespace — that is a label, not an id', { taskId, got: o.model })
+    }
     const res = await srv.request<Record<string, unknown>>('thread/start', {
       cwd: o.cwd,
       approvalPolicy: o.approvalPolicy,
       sandbox: o.sandbox,
-      ...(o.model ? { model: o.model } : {}),
+      ...(model ? { model } : {}),
     })
     const threadId = String(res?.threadId ?? (res?.thread as { id?: string } | undefined)?.id ?? res?.id ?? '')
     if (!threadId) throw new Error('thread/start returned no thread id')

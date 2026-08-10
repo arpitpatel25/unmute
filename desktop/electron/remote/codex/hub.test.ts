@@ -57,6 +57,48 @@ test('a thread carries its own permissions — that is what one server buys', as
   assert.equal(starts[1].model, undefined, 'no model ⇒ Codex runs on its own default, not a made-up id')
 })
 
+test('REGRESSION: a display label is never sent as a model id', async () => {
+  // 'gpt-5.6-terra high' is model+effort joined for a card. It reached
+  // thread/start once and every Codex task died at the API:
+  //   "The 'gpt-5.6-terra high' model is not supported when using Codex with a
+  //    ChatGPT account."
+  // The caller was fixed; this asserts the CLASS is refused, because the next
+  // thing to hand a human-readable string to a machine field will not be that
+  // caller.
+  const { hub, calls } = makeHub()
+  await hub.startThread('task-a', {
+    cwd: '/tmp/a', approvalPolicy: 'never', sandbox: 'danger-full-access',
+    model: 'gpt-5.6-terra high',
+  })
+  const start = calls.find((c) => c.method === 'thread/start')!.params as Record<string, unknown>
+  assert.equal(start.model, undefined, 'a label must be dropped, not forwarded')
+  // Dropped, not fatal: no model means Codex's own default, which runs. Failing
+  // the task over a display bug would turn a wrong label into no work at all.
+  assert.equal(hub.threadIdFor('task-a'), 'th_1')
+})
+
+test('a real wire id passes through untouched', async () => {
+  const { hub, calls } = makeHub()
+  await hub.startThread('task-a', {
+    cwd: '/tmp/a', approvalPolicy: 'never', sandbox: 'workspace-write', model: 'gpt-5.6-luna',
+  })
+  const start = calls.find((c) => c.method === 'thread/start')!.params as Record<string, unknown>
+  assert.equal(start.model, 'gpt-5.6-luna')
+})
+
+test('effort rides on the turn, not the thread', async () => {
+  // thread/start has no effort parameter; turn/start does. Sent on the wrong
+  // one it is silently ignored, and the Effort axis becomes a control that
+  // moves a setting Codex never sees.
+  const { hub, calls } = makeHub()
+  await hub.startThread('task-a', { cwd: '/tmp/a', approvalPolicy: 'never', sandbox: 'workspace-write', model: 'gpt-5.6-sol' })
+  await hub.send('task-a', 'go', { effort: 'xhigh' })
+  const start = calls.find((c) => c.method === 'thread/start')!.params as Record<string, unknown>
+  const turn = calls.find((c) => c.method === 'turn/start')!.params as Record<string, unknown>
+  assert.equal(start.effort, undefined)
+  assert.equal(turn.effort, 'xhigh')
+})
+
 test('events reach the task that owns the thread, and only that task', async () => {
   const { hub, patches, emit } = makeHub()
   await hub.startThread('task-a', { cwd: '/tmp/a', approvalPolicy: 'never', sandbox: 'workspace-write' })

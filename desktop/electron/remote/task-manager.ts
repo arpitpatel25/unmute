@@ -1259,7 +1259,10 @@ export class TaskManager extends EventEmitter {
     // an answer to a question it never shows — `intent` lives on the task and
     // the card's title, but the chat view reads `conversation`.
     task.conversation = [{ role: 'user', text: intent }]
-    const sent = await hub.send(id, intent)
+    // EFFORT RIDES ON THE TURN, not the thread — `thread/start` has no effort
+    // parameter, `turn/start` does. Omitted here, the Effort axis would move a
+    // setting that never reached Codex: a picker that appears to work.
+    const sent = await hub.send(id, intent, { effort: wire.effort })
     if (!sent) {
       tlog.warn('codex-cli turn/start refused', {})
       this.transition(id, 'failed', { state: 'failed', error: { reason: 'Codex would not start the turn' } })
@@ -2458,7 +2461,7 @@ export class TaskManager extends EventEmitter {
       tlog.ui('task-row.answer-submitted', { answer: userAnswer })
       target.conversation = [...(target.conversation ?? []), { role: 'user', text: userAnswer }]
       target.lastUserInputAt = this.clock()
-      void this.opts.codexHub.send(id, userAnswer).then((ok) => {
+      void this.opts.codexHub.send(id, userAnswer, { effort: this.opts.codexCliChoice?.().effort }).then((ok) => {
         if (!ok) tlog.warn('codex-cli reply not delivered', {})
       })
       return true
