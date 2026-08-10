@@ -27,6 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
 import { groupSections } from './groupSections'
 import { LiveTerminal } from './LiveTerminal'
+import { ProviderMark } from './ProviderMark'
 import {
   agentAndModel, canKill, canResume, dirLabel, hasTerminal, openInLabel,
   providerLabel, vendorMark,
@@ -208,13 +209,15 @@ function Card({ t, now, queuePos, promoted = false, attention = false, onClick }
           dim ink throughout, never competing with the title. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10.5, color: C.dimText }}>
         {/* vendor mark — scannable without reading */}
-        <span aria-hidden style={{ width: 6, height: 6, borderRadius: 2, flex: 'none', background: vendorMark(t) }} />
+        <ProviderMark task={t} size={13} />
         {/* The backend, present for every card. `model` is a HISTORICAL FACT
             sent by main (D6): when it is absent the agent stands alone — no
             default, no settings read, no placeholder word. */}
         <span style={{ flex: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }}
           title={t.model ? `Ran on ${providerLabel(t)} · ${t.model}` : `Ran on ${providerLabel(t)}`}>
-          {providerLabel(t)}{t.model ? ` · ${t.model}` : ''}
+          {/* THE MARK CARRIES THE PROVIDER; this line keeps only the model,
+              which the mark cannot say. The name lives in the tooltip. */}
+          {t.model ?? ''}
         </span>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl', textAlign: 'left' }}
           title={t.cwd || undefined}>
@@ -284,7 +287,7 @@ function TicketFacts({ t }: { t: RemoteTask }) {
   }, [])
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 26px', padding: '9px 14px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
-      <Fact label="agent" value={<><span aria-hidden style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 2, background: vendorMark(t), marginRight: 6 }} />{providerLabel(t)}</>} />
+      <Fact label="agent" value={<ProviderMark task={t} size={15} />} />
       <Fact label="model" value={t.model || <span style={{ color: C.faintText }}>not recorded</span>} />
       <Fact label="working directory" value={dirLabel(t) || <span style={{ color: C.faintText }}>none</span>} title={t.cwd || undefined} />
       <Fact label="permissions" value={permission ? `${permission}` : '…'} title="The current Orchestrator setting — permission mode is not recorded per task." />

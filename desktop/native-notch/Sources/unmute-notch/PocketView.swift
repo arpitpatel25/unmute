@@ -137,6 +137,12 @@ struct PocketCard: View {
             // the badge, and the seam, exist to stop it from claiming.
             Circle().fill(slot?.demanding == false ? Theme.textDim : Theme.cNeeds)
                 .frame(width: 8, height: 8)
+            // WHAT RAN IT, as a mark. The pocket is the surface you live in and
+            // it was the one place that never said which backend a task belongs
+            // to — you had to expand it to find out.
+            if let s = slot {
+                ProviderMark(backend: s.backend, terminal: s.terminal ?? true, size: 12)
+            }
             Text(slot?.title ?? "Nothing in your pocket")
                 .font(.system(size: 13.5, weight: slot?.demanding == false ? .medium : .semibold))
                 .foregroundColor(slot?.demanding == false ? Theme.textDim : Theme.text)

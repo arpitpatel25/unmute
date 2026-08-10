@@ -59,6 +59,13 @@ export interface PocketSlotP {
   /** Is this one actually waiting on you? Drives the card's weight, and is the
    *  only thing the closed surface is allowed to count. */
   demanding?: boolean
+  /** WHICH BACKEND, so the surface can show its mark. Sent on the pocket slot
+   *  too — the pocket is the surface you see most and was the one place a task
+   *  never said what it runs on. */
+  backend?: string
+  /** Does it own a terminal? Drives the small terminal glyph beside the mark:
+   *  a capability, so a CLI added later gets it without a UI edit. */
+  terminal?: boolean
 }
 
 export interface PocketP {
@@ -149,9 +156,13 @@ export interface CardP {
   qpos?: number
   promoted?: boolean
   agent?: boolean
-  /** WHICH backend runs this task — 'claude' (owned PTY) or 'codex-desktop'
-   *  (the Codex app). Rendered as a small tag so a mixed wall is unambiguous. */
+  /** WHICH backend runs this task. ALWAYS SENT — this was driver-only, so a
+   *  Codex CLI card arrived with no backend and the wall's label fell through
+   *  to its default, printing "Claude Code CLI" on a Codex task. */
   backend?: ProviderId
+  /** Owns a terminal. A capability, so the mark's terminal glyph follows the
+   *  registry rather than a list of backend names. */
+  terminal?: boolean
   /** Codex project name, when backend is 'codex-desktop'. */
   project?: string
   /** The model that actually RAN this task, recorded at dispatch and persisted

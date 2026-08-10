@@ -537,14 +537,40 @@ test('a Codex task is never reported dead — its thread outlives every turn', (
   assert.equal(detail.backend, 'codex-desktop')
 })
 
-test('the wall carries the backend, so a card can offer "open in Codex"', () => {
+test('a pocket slot names its backend too — the surface you live in', () => {
+  // The pocket showed nothing about which backend a task ran on: you had to
+  // expand it to find out. It draws a mark now, which needs the same two facts
+  // every other surface gets.
+  const h = setup()
+  put(h, makeTask({ id: 'x1', state: 'needs-user', kind: 'session', agent: 'codex',
+    question: { text: 'ok?' } }))
+  const pocket = h.client.last('pocket')!.data as { slots: Array<Record<string, unknown>> }
+  const slot = pocket.slots.find((s) => s.id === 'x1')!
+  assert.equal(slot.backend, 'codex')
+  assert.equal(slot.terminal, true)
+})
+
+test('EVERY card names its backend — absent must not mean "the default one"', () => {
+  // This asserted `undefined` for a Claude card, because `backend` was sent for
+  // driver backends only. That is what put "Claude Code CLI" on Codex CLI
+  // cards: the card arrived with no backend and the wall's label fell through
+  // to its default. Now the surface draws a MARK from this field, so an absent
+  // value would silently mark a Codex task as Claude.
   const h = setup()
   put(h, makeTask({ id: 'c1', state: 'done', kind: 'session', agent: 'codex-desktop', codexThreadId: 'th' }))
+  put(h, makeTask({ id: 'x1', state: 'done', kind: 'session', agent: 'codex' }))
   put(h, makeTask({ id: 'k1', state: 'done', kind: 'session' }))
   h.client.fire({ type: 'openDashboard' })
   const cards = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards)
-  assert.equal(cards.find((c) => c.id === 'c1')!.backend, 'codex-desktop')
-  assert.equal(cards.find((c) => c.id === 'k1')!.backend, undefined)
+  const card = (id: string) => cards.find((c) => c.id === id)!
+  assert.equal(card('c1').backend, 'codex-desktop')
+  assert.equal(card('x1').backend, 'codex')
+  assert.equal(card('k1').backend, 'claude')
+  // …and whether it owns a terminal, so the mark's glyph is a capability
+  // rather than a list of backend names the view has to keep up with.
+  assert.equal(card('c1').terminal, false)
+  assert.equal(card('x1').terminal, true)
+  assert.equal(card('k1').terminal, true)
 })
 
 test('the transcript reaches the surface as items, not one flattened blob', () => {

@@ -54,6 +54,10 @@ struct PocketSlotP: Codable, Equatable {
     /// Is this one actually waiting on you? The card reads quieter when not,
     /// and only these are ever counted at you.
     let demanding: Bool?
+    /// Which backend this slot runs on, so the pocket can show its mark.
+    let backend: String?
+    /// Owns a terminal — drives the terminal glyph beside the mark.
+    let terminal: Bool?
 }
 
 struct PocketP: Codable, Equatable {
@@ -208,6 +212,8 @@ struct CardP: Codable {
     let alive: Bool
     /// Which backend runs this card. Absent ⇒ Claude (PTY-backed).
     let backend: String?
+    /// Owns a terminal. Absent ⇒ assume yes for a PTY-era engine.
+    let terminal: Bool?
     let project: String?
     /// The model that RAN this task (D6). Absent ⇒ show the agent alone.
     let model: String?

@@ -23,6 +23,7 @@ import { useEffect, useState } from 'react'
 import { useRemoteTasks, type RemoteTask } from './useRemoteTasks'
 import { LiveTerminal } from './LiveTerminal'
 import { Markdown } from './Markdown'
+import { ProviderMark } from './ProviderMark'
 import {
   agentAndModel, canKill, canResume, dirLabel, hasTerminal, openInLabel, vendorMark,
 } from './taskFacts'
@@ -115,8 +116,12 @@ function Ticket({ task, permission, onAnswer, onKill, onRerun, onRemove, onResum
             The row states the current setting rather than implying the task ran
             under it — inventing one would be the same sin as inventing a model. */}
         <div className="flex items-center gap-2 mt-2 text-[11px] text-ink-35 min-w-0">
-          <span aria-hidden className="w-[6px] h-[6px] rounded-sm shrink-0" style={{ background: vendorMark(task) }} />
-          <span className="shrink-0 truncate max-w-[45%]" title={`Ran on ${agentAndModel(task)}`}>{agentAndModel(task)}</span>
+          <ProviderMark task={task} size={13} />
+          {/* Only the MODEL survives as text — the mark says the rest, and the
+              full "ran on …" sentence stays in its tooltip. */}
+          {task.model && (
+            <span className="shrink-0 truncate max-w-[45%]" title={`Ran on ${agentAndModel(task)}`}>{task.model}</span>
+          )}
           {dirLabel(task) && (
             <span className="truncate" title={task.cwd}>{dirLabel(task)}</span>
           )}

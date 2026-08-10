@@ -107,6 +107,11 @@ struct TaskSurfaceView: View {
     private func header(_ t: TaskDetail) -> some View {
         HStack(spacing: 9) {
             Dot(status: t.status, size: 9, breathing: t.status == .processing)
+            // WHAT RAN IT, beside what it is. Opening a task used to be the only
+            // way to learn its backend, and then the expansion did not say
+            // either — it was inferred from whether a terminal happened to be
+            // offered.
+            ProviderMark(backend: t.backend, terminal: t.hasTerminal, size: 13)
             Text(t.title).font(Theme.fTitle).foregroundColor(Theme.text).lineLimit(1)
             StatusLabel(status: t.status)
             if let e = t.elapsed { NumText(text: e) }

@@ -769,6 +769,8 @@ export class NotchController {
         ask: t.question?.text ?? t.result?.summary ?? t.step ?? undefined,
         status: t.state,
         demanding: this.demanding(t),
+        backend: t.agent ?? 'claude',
+        terminal: providerOf(t.agent).hasTerminal,
       }))
   }
 
@@ -1524,7 +1526,14 @@ export class NotchController {
       // `=== 'codex-desktop'` these silently excluded the next driver backend:
       // a Claude Desktop card arrived with no backend, so the Swift side read
       // it as a PTY task and gave it a terminal's frame with nothing in it.
-      backend: providerOf(t.agent).transport === 'driver' ? t.agent : undefined,
+      // ALWAYS SENT, for every backend. This used to be driver-only, so a
+      // Codex CLI card arrived with no backend at all and the wall's label
+      // fell through to its default — "Claude Code CLI" printed on a Codex
+      // task. Absent must mean "we do not know", never "it is the default one".
+      backend: t.agent ?? 'claude',
+      /** Does it own a terminal? A capability, so the mark's terminal glyph
+       *  follows the registry rather than a list of backend names. */
+      terminal: providerOf(t.agent).hasTerminal,
       project: t.agent === 'codex-desktop' ? (t.codexProject ?? undefined) : undefined,
       // Absent stays absent (D6) — the card renders the agent alone.
       model: t.model || undefined,

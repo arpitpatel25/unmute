@@ -227,7 +227,12 @@ struct WallView: View {
                     // Model is appended only when it was actually recorded (D6):
                     // an absent model renders the agent alone rather than
                     // inheriting whatever the picker says today.
-                    NumText(text: agentLabel(c))
+                    // THE MARK, NOT THE SENTENCE. "Claude Code CLI" is four
+                    // words of chrome on a row that already carries a title, a
+                    // directory, an age and a model — and it was WRONG for Codex
+                    // CLI besides, because the card arrived with no backend and
+                    // the label fell through to its default.
+                    ProviderMark(backend: c.backend, terminal: c.terminal ?? true, size: 12)
                     NumText(text: c.kind == "session" ? (c.dir ?? "session") : "one-off")
                     Spacer(minLength: 0)
                     if c.backend == "codex-desktop" {
