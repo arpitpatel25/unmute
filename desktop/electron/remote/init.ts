@@ -148,6 +148,17 @@ interface RemoteSettings {
   // only ever meaningful alongside codexCliModel, and picking a model resets it
   // to that model's default. '' ⇒ whatever the model defaults to.
   codexCliEffort: string
+  /** Has the user agreed that unmute-launched Codex CLI tasks may run with full
+   *  access to their Mac?
+   *
+   *  DEFAULT FALSE, and it gates REACH only — not whether we interrupt them.
+   *  Without it, Codex tasks run at its own defaults (workspace-write, ask on
+   *  request), which is what a person gets typing `codex` themselves. Granting
+   *  the whole machine is a decision the user makes once, knowingly, and can
+   *  take back; assuming it because `permissionMode` happens to say
+   *  auto-approve would be reading a convenience setting as consent to
+   *  something much larger. */
+  codexFullAccessConsent: boolean
   // DECIDED: connect Claude-in-Chrome by default (browser tasks need it; others
   // ignore it). User can disable. Setup of the extension is guided/one-time.
   browserEnabled: boolean
@@ -234,6 +245,7 @@ const settings = new Store<RemoteSettings>({
     // from the invented catalogue that no Codex has ever had.
     codexCliModel: '',
     codexCliEffort: '',
+    codexFullAccessConsent: false,
     browserEnabled: true,
     setupConfirmations: {},
     osNotifications: false,
@@ -2754,6 +2766,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // setting changed honours the new value. This is what stops Codex walking
     // through a boundary Claude respects.
     sandboxRoots: () => settings.get('sandboxRoots') ?? [],
+    // Consent gates full access. Read per dispatch so revoking it takes effect
+    // on the next task rather than the next launch.
+    codexFullAccess: () => settings.get('codexFullAccessConsent') === true,
     codexDriver,
     claudeDesktopDriver,
     claudeDesktopAx,
@@ -3632,6 +3647,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // The Unmute MCP master switch (agent-created tasks).
   ipcMain.handle('remote:get-agent-tasks', async () => settings.get('agentTasksEnabled') !== false)
   ipcMain.handle('remote:set-agent-tasks', async (_e, on: boolean) => { settings.set('agentTasksEnabled', !!on); return true })
+  /** Consent for full-access Codex CLI tasks. Logged either way: granting the
+   *  whole machine to an agent is a decision worth being able to point at
+   *  afterwards, and so is taking it back. */
+  ipcMain.handle('remote:set-codex-full-access', async (_e, on: boolean) => {
+    settings.set('codexFullAccessConsent', !!on)
+    log.event('codex-full-access-consent', { granted: !!on })
+    return !!on
+  })
   ipcMain.handle('remote:set-screenshot-capture', async (_e, on: boolean) => {
     settings.set('captureEnabled', !!on)
     log.event('screenshot-capture-set', { on: !!on })
@@ -4173,6 +4196,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     librarianWriteEnabled: settings.get('librarianWriteEnabled') === true,
     forceRawMode: settings.get('forceRawMode') === true,
     screenshotCapture: settings.get('captureEnabled') !== false,
+    codexFullAccessConsent: settings.get('codexFullAccessConsent') === true,
     logFile: getRemoteLogFilePath(),
   }))
   // ── Onboarding / guided one-time setup (PRD §12) ──

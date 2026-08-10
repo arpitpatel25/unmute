@@ -302,6 +302,8 @@ export interface TaskManagerOpts {
    *  a task started after the setting changed honours the new value. Absent ⇒
    *  unfenced. */
   sandboxRoots?: () => string[]
+  /** Has the user consented to full-access Codex CLI tasks? Absent ⇒ no. */
+  codexFullAccess?: () => boolean
   /** The Codex CLI App Server hub. Absent ⇒ Codex CLI tasks fall back to the
    *  PTY + rollout path, which is what shipped before the protocol client and
    *  is kept so a Codex too old for `app-server` still runs. */
@@ -488,8 +490,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -497,6 +499,7 @@ export class TaskManager extends EventEmitter {
       executorFactory: opts.executorFactory,
       codexHub: opts.codexHub,
       sandboxRoots: opts.sandboxRoots,
+      codexFullAccess: opts.codexFullAccess,
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       pollMs: opts.pollMs ?? 1000,
       resolveSessionCwd: opts.resolveSessionCwd,
@@ -1141,6 +1144,7 @@ export class TaskManager extends EventEmitter {
     const posture = codexPosture({
       permissionMode: (this.opts.permissionMode?.() === 'auto-approve' ? 'auto-approve' : 'prompt') as PermissionMode,
       sandboxRoots: this.opts.sandboxRoots?.() ?? [],
+      fullAccessAllowed: this.opts.codexFullAccess?.() === true,
     })
     const { threadId, url } = await hub.startThread(id, {
       cwd: runCwd, model: opts.model, effort: opts.effort,
@@ -1201,6 +1205,10 @@ export class TaskManager extends EventEmitter {
     // TUI is how the Claude path has to work and it is the source of every
     // paste race and trust-prompt dance in this file; here the thread takes the
     // message directly and the terminal simply shows it arriving.
+    // THE ASK IS PART OF THE CONVERSATION. Without this the transcript opens on
+    // an answer to a question it never shows — `intent` lives on the task and
+    // the card's title, but the chat view reads `conversation`.
+    task.conversation = [{ role: 'user', text: intent }]
     const sent = await hub.send(id, intent)
     if (!sent) {
       tlog.warn('codex-cli turn/start refused', {})
@@ -1830,6 +1838,16 @@ export class TaskManager extends EventEmitter {
   private async pollCodexCli(id: string): Promise<void> {
     const task = this.tasks.get(id)
     if (!task) return
+    // THE PROTOCOL WINS. When the hub owns this thread, state arrives pushed and
+    // this reader would be a second, slower opinion derived from Codex's
+    // internal storage — the one that already went stale once when the rollout
+    // format changed. Two writers for one task's state is how a card flickers
+    // between "done" and "working".
+    //
+    // This path stays for the tasks the hub does NOT own: sessions rehydrated
+    // after a restart, imports the user started in their own terminal, and a
+    // Codex too old for `app-server`.
+    if (this.opts.codexHub?.threadIdFor(id)) return
     const tlog = log.child({ taskId: id })
 
     if (!task.codexRolloutId) {
@@ -2379,6 +2397,20 @@ export class TaskManager extends EventEmitter {
     if (target && target.agent === 'claude-code-desktop') {
       tlog.ui('task-row.answer-submitted', { answer: userAnswer })
       void this.answerOrSendClaudeDesktop(id, userAnswer)
+      return true
+    }
+    // CODEX CLI ON THE APP SERVER. The reply goes over the protocol, not typed
+    // into a PTY — and if a turn is blocked on an approval, `hub.send` answers
+    // THAT rather than starting a new one (see hub.send). Routed before the
+    // executor checks below, which are all about a process we own; here the
+    // thread is the session and the terminal is only a view of it.
+    if (target && target.agent === 'codex' && this.opts.codexHub?.threadIdFor(id)) {
+      tlog.ui('task-row.answer-submitted', { answer: userAnswer })
+      target.conversation = [...(target.conversation ?? []), { role: 'user', text: userAnswer }]
+      target.lastUserInputAt = this.clock()
+      void this.opts.codexHub.send(id, userAnswer).then((ok) => {
+        if (!ok) tlog.warn('codex-cli reply not delivered', {})
+      })
       return true
     }
     if (target && isExternalAgent(target.agent)) {

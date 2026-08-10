@@ -47,6 +47,7 @@ interface Settings {
   // one place, Settings.tsx, under a label that says so ("Capture while
   // dictating"). One setting, one honest description.
   agentTasksEnabled?: boolean
+  codexFullAccessConsent?: boolean
   logFile: string | null
 }
 
@@ -69,6 +70,7 @@ type API = {
   remoteSetSandboxRoots?: (r: string[]) => Promise<boolean>
   remoteSetBrowserEnabled?: (enabled: boolean) => Promise<boolean>
   remoteSetModel?: (m: string) => Promise<string>
+  remoteSetCodexFullAccess?: (on: boolean) => Promise<boolean>
   /** Models for ONE backend, in that backend's own vocabulary. */
   remoteModelOptions?: (agent: string) => Promise<{ agent: string; models: ModelChoice[] }>
   remoteOnModelChanged?: (cb: (model: string) => void) => () => void
@@ -627,12 +629,25 @@ export function RemoteSettings({ onOpenHowItWorks }: {
           <p className="text-[13px] font-medium text-ink">Applies to the next task</p>
           <p className="text-[11px] text-ink-35 mt-0.5 mb-2.5">
             Tasks already running keep the model they started on — a card always says what it ran.
-          </p>
-          <Models
+          </p>          <Models
             agentId={agentId}
             model={s.model}
             onPickModel={(id) => { update({ model: id }); void api().remoteSetModel?.(id) }}
           />
+
+          {agentId === 'codex' && (
+            <div className="mt-4 pt-4 border-t border-border">
+              <SettingRow
+                label="Let unmute's Codex tasks use your whole Mac"
+                description="Codex normally asks before touching anything outside the task folder, and has no network. Turn this on and unmute's own Codex tasks run without stopping to ask. Your own codex sessions are never affected. If you've set allowed folders under Reach, those win and this does nothing."
+              >
+                <Toggle
+                  checked={s.codexFullAccessConsent === true}
+                  onChange={(on) => { update({ codexFullAccessConsent: on }); void api().remoteSetCodexFullAccess?.(on) }}
+                />
+              </SettingRow>
+            </div>
+          )}
         </div>
       </Panel>
 

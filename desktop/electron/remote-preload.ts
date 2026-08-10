@@ -264,6 +264,9 @@ export const remotePreloadExtensions = {
   /** Set the doer model; applies to the next dispatched task. Returns the
    *  validated value actually stored. */
   remoteSetModel: (m: string): Promise<string> => ipcRenderer.invoke('remote:set-model', m),
+  /** Grant or revoke full-access for unmute-launched Codex CLI tasks. */
+  remoteSetCodexFullAccess: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-codex-full-access', on),
   // ── Raw mode (no Unmute memory injection / librarian) ──
   /** Current raw state: the saved default, the session override (null = none), and
    *  what's effectively in force right now. */
