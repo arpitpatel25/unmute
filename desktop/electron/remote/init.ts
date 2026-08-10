@@ -320,7 +320,7 @@ function refreshTmux(): void {
  * Driven by the provider registry rather than a hand-written list, so a backend
  * added to providers.ts gets a setup row without touching this function or the
  * renderer. `codex` (the CLI adapter) is skipped: it is not a user-selectable
- * backend today — startup migrates a stored 'codex' back to 'claude'.
+ * backend today.
  */
 async function probeBackends(): Promise<BackendProbe[]> {
   const out: BackendProbe[] = []
@@ -4133,11 +4133,18 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
 
   ipcMain.handle('remote:set-agent', async (_e, agent: AgentKind) => {
-    // 'codex' (the CLI adapter) is still unwired, so it is coerced away. But
-    // 'codex-desktop' IS wired (codex/driver.ts) and must pass through — it is
-    // the whole point of the per-task picker.
-    const a: AgentKind = agent === 'codex' ? 'claude' : agent
-    settings.set('agent', a)
+    // THE FIFTH "COMING SOON" GUARD, and the last. Codex CLI was coerced to
+    // Claude here too — so even a selection that survived isDispatchable would
+    // be silently rewritten on its way to the setting.
+    //
+    // Every one of these was correct when written and every one failed
+    // SILENTLY once it was not: no error, no log the user sees, just a control
+    // that does nothing. They were spread across five files with no common
+    // marker, which is why using the feature found them and reading the code
+    // did not.
+    if (!isDispatchable(agent)) { log.warn('set-agent-rejected', { agent }); return false }
+    settings.set('agent', agent)
+    const a = agent
     // Warm the catalog in the background so the chip has real values ready the
     // moment the user looks at it, instead of on a 3s delay mid-capture.
     if (a === 'codex-desktop') void refreshCodexReasoning()
