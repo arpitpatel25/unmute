@@ -74,6 +74,13 @@ export interface ExecutorFactoryOpts {
    *  a browser tool surface it would never touch. It now follows the task's
    *  surface, so a coding task launches like an ordinary `claude`. */
   browser?: boolean
+  /** CODEX CLI ONLY: attach the spawned TUI to an existing App Server thread
+   *  rather than starting a conversation of its own.
+   *
+   *  `codex resume <threadId> --remote <url>`. Without the thread id the TUI
+   *  would open a SECOND conversation against the same server, and the terminal
+   *  would show a session unrelated to the card wrapped around it. */
+  codexRemote?: { url: string; threadId: string }
 }
 
 export type ExecutorFactory = (

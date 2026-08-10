@@ -60,6 +60,8 @@ import { NotchController } from './notch/notch-controller'
 import { PillController, type PillStateP } from './notch/pill-controller'
 import { listCodexModels, matchCurrent, type CodexModel } from './codex/appserver'
 import { listCodexCliModels, resolveCodexCliChoice, codexCliChoiceLabel } from './codex/cli-models'
+import { CodexHub } from './codex/hub'
+import { resolveCodexCli } from './codex/driver'
 import { DriverManager } from './cua/driver-manager'
 import { CdpLane } from './cua/lanes/cdp'
 import { Arming } from './cua/lanes/arming'
@@ -403,6 +405,8 @@ async function getSetupStatus() {
 }
 
 let manager: TaskManager | null = null
+/** The Codex CLI App Server. One per app; started lazily by the hub itself. */
+let codexHub: CodexHub | null = null
 /** Codex desktop backend — inert until a task targets it (see codex/driver.ts). */
 let codexDriver: CodexDesktopDriver | null = null
 /** Claude desktop backend, READ half — see claude-desktop/driver.ts. */
@@ -1264,6 +1268,11 @@ function executorFactory(resume = false, forTask?: AgentKind, factoryOpts?: Exec
     // The model is read here rather than baked into the executor: the picker
     // writes `codexCliModel`, and it reaches Codex as `-c model="…"` (TOML
     // config, NOT --model — see codexArgs).
+    // ATTACHED TO A THREAD when the App Server owns the conversation: the PTY
+    // is then a VIEW of that thread, not a second one. The model/effort are
+    // already baked into the thread by `thread/start`, so they are not repeated
+    // here — see modelArgs in codex-executor.ts.
+    if (factoryOpts?.codexRemote) return new CodexExecutor({ remote: factoryOpts.codexRemote })
     return new CodexExecutor(codexCliSpawnArgs())
   }
   // PRD §10.1/§10.6 interaction: a sandbox is the "fenced yard" — when it's ON
@@ -2715,8 +2724,29 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   claudeDesktopAx = new ClaudeDesktopAx({})
   // The only Claude-desktop component that steals focus. Serialized internally.
   claudeActuator = new ClaudeActuator({})
+  // THE CODEX CLI APP SERVER. Lazily started by the hub on the first Codex CLI
+  // task — not here — so a user who never touches Codex never pays for a Codex
+  // process, and unmute's launch path (which sits next to the capture path)
+  // never waits on someone else's binary.
+  //
+  // `onPatch` is deliberately a late-bound lookup rather than a captured
+  // reference: the hub is constructed BEFORE the manager it feeds, and closing
+  // over a `manager` that is still undefined is how a stream of events would
+  // land silently on nothing.
+  codexHub = new CodexHub({
+    resolveBin: () => resolveCodexCli((bin) => new Promise<string | null>((res) => {
+      execFile('/usr/bin/which', [bin], { env: process.env }, (err, stdout) => res(err ? null : String(stdout).trim() || null))
+    })),
+    onPatch: (p) => { try { manager?.applyHubPatch(p) } catch (e) { log.warn('hub patch failed', { error: (e as Error).message }) } },
+  })
+
   manager = new TaskManager({
     executorFactory,
+    codexHub,
+    // The path fence, read fresh per dispatch so a task started after the
+    // setting changed honours the new value. This is what stops Codex walking
+    // through a boundary Claude respects.
+    sandboxRoots: () => settings.get('sandboxRoots') ?? [],
     codexDriver,
     claudeDesktopDriver,
     claudeDesktopAx,
@@ -3508,6 +3538,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     try { pillController?.hide() } catch { /* best-effort */ }
     try { notchController?.dispose(); notchClient?.dispose() } catch (e) { log.warn('notch shutdown failed', { error: (e as Error).message }) }
     try { router?.dispose() } catch { /* best-effort */ }
+    // OUR app-server dies with us. It is a process unmute spawned on its own
+    // port, not Codex's machine-global daemon, so leaving it running would
+    // orphan a Codex the user never started and cannot see.
+    try { codexHub?.stop() } catch (e) { log.warn('codex hub shutdown failed', { error: (e as Error).message }) }
   })
   // Live PTY output → renderer (render-on-demand terminal, PRD §13.4#8).
   manager.on('output', (d: { taskId: string; chunk: string }) => {

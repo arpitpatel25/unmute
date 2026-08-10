@@ -17,6 +17,12 @@ type NodePtyLoader = CliAgentConfig['ptyLoader']
 
 export interface CodexExecutorOpts {
   codexBin?: string
+  /** Attach the TUI to an App Server thread instead of starting its own.
+   *  `codex resume <threadId> --remote <url>` — the terminal view of a thread
+   *  the protocol already owns. Without the thread id the TUI would open a
+   *  SECOND conversation on the same server and the terminal would show a
+   *  session unrelated to the card around it. */
+  remote?: { url: string; threadId: string }
   extraArgs?: string[]
   ptyLoader?: NodePtyLoader
   /** Model to run on, e.g. 'gpt-5.6-terra'. Codex takes it as TOML config, not
@@ -65,15 +71,27 @@ export function codexArgs(o: SpawnOpts, base: readonly string[]): string[] {
   return [...base]   // fresh: Codex mints the id itself
 }
 
+/** The model/effort overrides a PTY spawn carries. Skipped entirely when the
+ *  TUI is attaching to an App Server thread: that thread was created WITH its
+ *  model and posture, and repeating them on the client would be a second
+ *  source of truth for a decision already made. */
+function modelArgs(o: CodexExecutorOpts): string[] {
+  if (o.remote) return []
+  return [
+    ...(o.model ? ['-c', `model="${o.model}"`] : []),
+    ...(o.model && o.effort ? ['-c', `model_reasoning_effort="${o.effort}"`] : []),
+  ]
+}
+
 export class CodexExecutor extends CliAgentExecutor {
   constructor(opts: CodexExecutorOpts = {}) {
     super({
       bin: opts.codexBin || 'codex',
       extraArgs: [
-        ...(opts.model ? ['-c', `model="${opts.model}"`] : []),
-        // Only ever WITH a model. An effort alone would apply to whatever Codex
-        // happens to default to, and the levels are not the same across models.
-        ...(opts.model && opts.effort ? ['-c', `model_reasoning_effort="${opts.effort}"`] : []),
+        // ATTACHED, NOT FRESH. Order matters: `resume <id>` is a subcommand, so
+        // codexArgs puts it first and these follow as its options.
+        ...(opts.remote ? ['--remote', opts.remote.url] : []),
+        ...modelArgs(opts),
         ...(opts.extraArgs || []),
       ],
       buildArgs: codexArgs,

@@ -48,6 +48,9 @@ import type { AgentExecutor, ExecutorFactory } from './executor'
 import { settleRepl } from './repl-settle'
 import { type AgentKind, isExternalAgent } from './codex-executor'
 import type { CodexDesktopDriver } from './codex/driver'
+import type { CodexHub, HubPatch } from './codex/hub'
+import type { Activity } from './activity'
+import { codexPosture, type PermissionMode } from './codex/posture'
 import type { ClaudeDesktopDriver } from './claude-desktop/driver'
 import type { ClaudeDesktopAx, ClaudeSidebarRow } from './claude-desktop/ax'
 import { statusForTitle, readState as readAxState, readSidebarRows as readAxSidebar } from './claude-desktop/ax'
@@ -110,6 +113,11 @@ export interface Task {
   /** For 'codex-desktop': the Codex thread this task drives (durable id, no
    *  `local:` prefix). This is the whole handle — it addresses the rollout file
    *  for reads and the sidebar row for open/send. */
+  /** What this task is doing RIGHT NOW (activity.ts). Not a state: it lives
+   *  inside `processing` and is cleared the moment the work stops. Held on the
+   *  task rather than in the status file because it changes several times a
+   *  second and nothing should be written to disk at that rate. */
+  codexActivity?: Activity
   codexThreadId?: string
   /** Codex CLI: the rollout/session uuid Codex minted for this task. Learned
    *  after spawn (Codex assigns its own), then pinned — it is both where state
@@ -290,6 +298,14 @@ export interface Task {
 export interface TaskManagerOpts {
   /** Creates a fresh executor per task (default: ClaudeCodeExecutor). */
   executorFactory: ExecutorFactory
+  /** The user's path fence, as the Remote screen holds it. Read per dispatch so
+   *  a task started after the setting changed honours the new value. Absent ⇒
+   *  unfenced. */
+  sandboxRoots?: () => string[]
+  /** The Codex CLI App Server hub. Absent ⇒ Codex CLI tasks fall back to the
+   *  PTY + rollout path, which is what shipped before the protocol client and
+   *  is kept so a Codex too old for `app-server` still runs. */
+  codexHub?: CodexHub
   /** Backend for `agent: 'codex-desktop'` tasks. Absent ⇒ those dispatches fail
    *  fast with a typed reason instead of silently falling back to Claude, which
    *  would put the task in an app the user never asked for. */
@@ -472,13 +488,15 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots'>
 
   constructor(opts: TaskManagerOpts) {
     super()
     this.opts = {
       executorFactory: opts.executorFactory,
+      codexHub: opts.codexHub,
+      sandboxRoots: opts.sandboxRoots,
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       pollMs: opts.pollMs ?? 1000,
       resolveSessionCwd: opts.resolveSessionCwd,
@@ -575,6 +593,12 @@ export class TaskManager extends EventEmitter {
       throw new Error('CLAUDE_DESKTOP_ID_UNRESOLVED')
     }
     if (isExternalAgent(opts.agent)) return this.dispatchCodexDesktop(intent, opts)
+    // CODEX CLI ON THE PROTOCOL when a hub is wired. Falls through to the PTY +
+    // rollout path when it is not, so a Codex too old for `app-server` — or a
+    // hub that failed to start — still runs the task rather than failing it.
+    if (opts.agent === 'codex' && this.opts.codexHub) {
+      return this.dispatchCodexCli(intent, opts)
+    }
     const id = randomUUID()
     // Mint the Claude session id up front so we own a stable handle to the
     // session this task will spawn (passed as --session-id below).
@@ -1072,6 +1096,161 @@ export class TaskManager extends EventEmitter {
     tlog.event('codex-task-dispatched', { threadId: created.threadId, project: opts.project ?? null })
     this.startPolling(id)
     return id
+  }
+
+  /**
+   * CODEX CLI ON THE APP SERVER.
+   *
+   * The same Task record as every other backend; a completely different way of
+   * learning what happens to it. There is no status file to poll and no rollout
+   * to parse — the thread pushes state, activity and replies over JSON-RPC, and
+   * `applyHubPatch` folds them in.
+   *
+   * A PTY IS STILL SPAWNED, and it is a TUI attached to the same thread
+   * (`codex resume <threadId> --remote <url>`), not a second conversation. That
+   * is what gives this backend both views: hide the terminal and you are
+   * reading the event stream, show it and you are looking at Codex's own
+   * interface onto the very same thread.
+   *
+   * PERMISSIONS TRAVEL WITH THE THREAD (posture.ts), so the user's path fence
+   * is honoured per task rather than being a global posture we set once and
+   * hope suits everything.
+   */
+  private async dispatchCodexCli(
+    intent: string,
+    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; cwd?: string; project?: string | null; model?: string; effort?: string },
+  ): Promise<string> {
+    const hub = this.opts.codexHub
+    if (!hub) throw new Error('CODEX_CLI_UNAVAILABLE: no app-server hub')
+    const id = randomUUID()
+    const tlog = log.child({ taskId: id })
+    const dir = join(this.opts.baseDir, this.opts.userKey!, id)
+    const now = this.clock()
+    const surface = opts.surface ?? detectSurface(intent)
+    const kind = opts.kind ?? 'oneoff'
+    await fs.mkdir(dir, { recursive: true }).catch(() => {})
+
+    // The task runs in the user's project when there is one, exactly as the PTY
+    // path decides it — a Codex thread with a real cwd sees their git and their
+    // tooling. Falls back to our scratch dir, never fails the dispatch.
+    let runCwd = dir
+    if (opts.cwd) {
+      try { if ((await fs.stat(opts.cwd)).isDirectory()) runCwd = opts.cwd } catch { /* keep scratch */ }
+    }
+
+    const posture = codexPosture({
+      permissionMode: (this.opts.permissionMode?.() === 'auto-approve' ? 'auto-approve' : 'prompt') as PermissionMode,
+      sandboxRoots: this.opts.sandboxRoots?.() ?? [],
+    })
+    const { threadId, url } = await hub.startThread(id, {
+      cwd: runCwd, model: opts.model, effort: opts.effort,
+      approvalPolicy: posture.approvalPolicy, sandbox: posture.sandbox,
+    })
+
+    const task: Task = {
+      id,
+      intent,
+      sessionId: threadId,          // `codex resume <threadId>` — the same handle
+      agent: 'codex',
+      codexRolloutId: threadId,     // the thread id IS the rollout id on disk
+      kind,
+      state: 'processing',
+      createdAt: now,
+      updatedAt: now,
+      cwd: runCwd,
+      home: dir,
+      statusPath: join(dir, 'status.json'),
+      recipeScratchPath: join(dir, 'recipe.json'),
+      lastMtimeMs: 0,
+      lastHeartbeatMs: now,
+      surface,
+      mode: 'managed',
+      ...(opts.model ? { model: [opts.model, opts.effort].filter(Boolean).join(' ') } : {}),
+      ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
+    } as Task
+    this.tasks.set(id, task)
+    await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
+      id, intent, sessionId: threadId, kind, createdAt: now, surface, mode: 'managed',
+      agent: 'codex', codexRolloutId: threadId, state: 'processing', updatedAt: now,
+      ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
+      ...(task.model ? { model: task.model } : {}),
+    })).catch(() => {})
+    this.emit('created', task)
+
+    // THE TERMINAL VIEW. A TUI on the SAME thread — never a fresh one, which is
+    // why this is `resume <threadId>` and not a bare `codex`. Non-fatal by
+    // construction: the App Server owns the conversation, so a terminal that
+    // fails to attach costs the second view and nothing else.
+    try {
+      const ex = this.opts.executorFactory(false, 'codex', { browser: false, codexRemote: { url, threadId } })
+      this.executors.set(id, ex)
+      this.outputBuffers.set(id, '')
+      ex.onData((chunk) => {
+        const cur = (this.outputBuffers.get(id) ?? '') + chunk
+        this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
+        this.emit('output', { taskId: id, chunk })
+      })
+      // `resume <threadId>` — codexArgs turns resumeSessionId into the
+      // subcommand, and --remote (from the factory) points it at our server.
+      await ex.spawn({ cwd: runCwd, env: process.env, taskId: id, resumeSessionId: threadId })
+    } catch (e) {
+      tlog.warn('codex-cli terminal view unavailable — the thread is unaffected', { error: (e as Error).message })
+    }
+
+    // THE PROMPT GOES OVER THE PROTOCOL, not typed into the PTY. Typing into a
+    // TUI is how the Claude path has to work and it is the source of every
+    // paste race and trust-prompt dance in this file; here the thread takes the
+    // message directly and the terminal simply shows it arriving.
+    const sent = await hub.send(id, intent)
+    if (!sent) {
+      tlog.warn('codex-cli turn/start refused', {})
+      this.transition(id, 'failed', { state: 'failed', error: { reason: 'Codex would not start the turn' } })
+    }
+    tlog.event('codex-cli-dispatched', {
+      threadId, cwd: runCwd, model: opts.model ?? null, effort: opts.effort ?? null,
+      approvalPolicy: posture.approvalPolicy, sandbox: posture.sandbox, fullAccess: posture.fullAccess,
+    })
+    return id
+  }
+
+  /**
+   * Fold one hub patch into a task.
+   *
+   * The App Server's answer to poll(). Patches are partial by design — an event
+   * that says only "it started running npm test" must not restate the state, so
+   * `undefined` means unchanged and `null` (on activity) means cleared.
+   */
+  applyHubPatch(p: HubPatch): void {
+    const task = this.tasks.get(p.taskId)
+    if (!task) return
+    if (p.threadId && !task.codexRolloutId) task.codexRolloutId = p.threadId
+    if (p.name && !task.name) task.name = p.name
+    if (p.assistantText) {
+      task.conversation = [...(task.conversation ?? []), { role: 'assistant', text: p.assistantText }]
+    }
+    if ('activity' in p) task.codexActivity = p.activity ?? undefined
+    if (p.clearQuestion) task.question = undefined
+
+    // A STATE CHANGE IS THE ONLY THING THAT TRANSITIONS. Everything above is
+    // detail about a task that is already where it is; routing it through
+    // transition() would rewrite updatedAt on every keystroke of streamed output
+    // and shove the task to the top of the wall forever.
+    if (p.state) {
+      const status: StatusPayload = {
+        schema_version: 1,
+        state: p.state,
+        updated_at: new Date(this.clock()).toISOString(),
+        ...(p.question ? { question: p.question } : {}),
+        ...(p.errorReason ? { error: { reason: p.errorReason } } : {}),
+        ...(p.state === 'done' && p.assistantText
+          ? { result: { summary: p.assistantText.split('\n')[0].slice(0, 140), detail: p.assistantText } }
+          : {}),
+      }
+      this.transition(p.taskId, p.state, status, this.clock())
+      return
+    }
+    task.updatedAt = this.clock()
+    this.emit('updated', task)
   }
 
   /**
