@@ -17,7 +17,7 @@
  * claims a terminal it does not have.
  */
 import type { RemoteTask } from './taskFacts'
-import { hasTerminal, providerLabel, vendorMark } from './taskFacts'
+import { hasTerminal, providerLabel } from './taskFacts'
 import { PROVIDER_LOGOS } from './providerLogos'
 
 /** Which vendor's mark to draw. Two surfaces per vendor share one logo — Codex
@@ -58,16 +58,12 @@ export function ProviderMark({ task, size = 14 }: { task: RemoteTask; size?: num
           />
         </span>
       ) : (
-        // NO ART YET ⇒ THE MARK ALREADY SHIPPED. The wall used a small coloured
-        // square before logos existed, so an absent asset degrades to the
-        // previous design rather than to a hole — and never to an invented
-        // glyph, which is how four made-up model ids reached a picker in this
-        // same branch.
-        <span aria-hidden style={{
-          width: size * 0.45, height: size * 0.45, borderRadius: 2,
-          background: vendorMark(task), flex: 'none',
-          margin: `0 ${(size - size * 0.45) / 2}px`,
-        }} />
+        // NO ART YET ⇒ THE NAME, not a shape. A missing logo means we cannot
+        // show the mark; it does not mean we cannot say which backend this is,
+        // and the point of the change was to make that MORE legible.
+        <span aria-hidden style={{ fontSize: size * 0.82, opacity: 0.65, whiteSpace: 'nowrap' }}>
+          {vendor === 'codex' ? 'Codex' : 'Claude'}
+        </span>
       )}
       {terminal && (
         <svg width={size * 0.8} height={size * 0.8} viewBox="0 0 16 16" fill="none"

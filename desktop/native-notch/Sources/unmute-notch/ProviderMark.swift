@@ -57,15 +57,23 @@ struct ProviderMark: View {
                 .frame(width: size * art.scale, height: size * art.scale)
                 .frame(width: size, height: size)   // a common box, so rows align
         } else {
-            // NO ART YET ⇒ THE MARK WE ALREADY SHIPPED. A coloured dot is what
-            // the wall used before, so an absent asset degrades to the previous
-            // design rather than to a hole. It is deliberately not a letter or
-            // an invented glyph: guessing at someone's brand is how four made-up
-            // model ids reached a picker earlier in this same branch.
-            Circle()
-                .fill(ProviderMarkArt.fallbackColor(backend))
-                .frame(width: size * 0.62, height: size * 0.62)
-                .frame(width: size, height: size)
+            // NO ART YET ⇒ THE NAME. Not a dot.
+            //
+            // The first version fell back to a coloured dot, on the reasoning
+            // that it was "the design the wall already used". That was true of
+            // the RENDERER, which drew a small square beside the text — it was
+            // never true here, where the label was plain words. So this replaced
+            // "Codex CLI" with a dot that says nothing, sitting beside the
+            // status dot that was already in the row: two dots, no information,
+            // strictly worse than the text it removed.
+            //
+            // A missing logo means we cannot show the mark. It does not mean we
+            // cannot say which backend it is — and the whole point of the change
+            // was to make that fact MORE legible, not less.
+            Text(ProviderMarkArt.shortName(backend))
+                .font(.system(size: size * 0.82, weight: .medium))
+                .foregroundColor(Theme.textDim)
+                .fixedSize()
         }
     }
 }

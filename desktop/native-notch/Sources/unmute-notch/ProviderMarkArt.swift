@@ -56,10 +56,11 @@ enum ProviderMarkArt {
         return Art(image: img, scale: isCodex ? codexScale : claudeScale)
     }
 
-    /// The dot the wall used before logos existed. Kept as the fallback so a
-    /// missing asset is a quieter version of the old design, not a gap.
-    static func fallbackColor(_ backend: String?) -> Color {
-        vendor(backend) == "codex" ? Theme.cReady : Theme.cWorking
+    /// The fallback when there is no logo: the vendor's name, short enough to
+    /// sit where a mark would. NOT a colour — a dot beside the status dot is two
+    /// dots and no information, which is what the first version shipped.
+    static func shortName(_ backend: String?) -> String {
+        vendor(backend) == "codex" ? "Codex" : "Claude"
     }
 
     /// For VoiceOver and the tooltip. The label is gone from the row; it must
