@@ -36,79 +36,27 @@ struct StageView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let t {
                 header(t)
-                // Same duplication as the task surface: for Codex, `warmup` is
-                // the last agent message, which the transcript already ends
-                // with. It was also drawn with plain Text, so its markdown came
-                // out as literal asterisks next to a correctly-rendered copy of
-                // itself two lines below.
-                // "Where you left off" is for a card with NOTHING to show —
-                // a session you are re-entering cold. Once the strip below
-                // carries the actual reply, this is the same text a third time
-                // (summary → strip → dead panel), which is what made a finished
-                // card read as an echo chamber.
-                if t.backend != "codex-desktop", let warm = t.warmup, !warm.isEmpty,
-                   !(t.conversation ?? []).contains(where: { $0.role == "assistant" && !$0.text.isEmpty }) {
-                    warmupStrip(warm)
-                }
-                noteRow(t).padding(.top, 8)
-                if t.backend == "codex-desktop" {
-                    // Wherever a Claude task shows its terminal, a Codex task
-                    // shows its messages — and can be replied to. Neither the
-                    // terminal nor DeadPanel belongs here: the first does not
-                    // exist for this backend, and the second offered to "resume"
-                    // a chat that had never stopped.
-                    // The panel scrolls itself; a second ScrollView around it
-                    // would disable that.
-                    ConversationPanel(turns: t.conversation ?? [], id: t.id)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 10)
-                    CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
-                                  modelLabel: t.modelLabel, sending: t.sending ?? false)
-                        .padding(.top, 9)
-                } else if t.alive {
-                    // MESSAGE, THEN TERMINAL — not one or the other.
+                if terminalMode(t) {
+                    // TERMINAL MODE — THE TERMINAL IS THE PANEL.
                     //
-                    // The exchange answers "what did I ask, what came back" at a
-                    // glance; the terminal underneath is still the real thing,
-                    // shown raw, for everything the headline leaves out. The
-                    // strip renders nothing at all when there are no turns yet,
-                    // so a fresh task looks exactly as it did before.
-                    // The stage keeps the terminal OPEN by default — you came
-                    // here deliberately, so it is what you asked for — but it
-                    // was the only surface with no way to put it away. The
-                    // message expands into the space when you do.
-// THE ASK COMES AFTER THE REASONING. QuestionBlock used to render
-                    // above the conversation — a layout from before the chat strip
-                    // existed. When the question is the last thing the model said,
-                    // showing it on top inverts the reading order: you meet the ask
-                    // before the argument that makes it answerable.
-                    ExchangeStrip(turns: t.conversation ?? [], status: t.status,
-                                  maxAnswerHeight: model.stageTerminalOpen ? 190 : .infinity)
-                        .padding(.top, 10)
-                if t.status == .needsUser, let q = t.question {
-                    QuestionBlock(model: model, taskId: t.id, question: q,
-                                  terminalOpen: $model.stageTerminalOpen).padding(.top, 10)
-                }
-                    if model.stageTerminalOpen {
-                        TerminalPanel(model: model, taskId: t.id,
-                                      tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
-                            .padding(.top, 10)
-                    }
-                    // Say the next thing without opening the terminal. Voice is
-                    // still the primary way in — the placeholder says so — but
-                    // when the stage is already open and focused, making the
-                    // user reach into a PTY to type one line is the friction
-                    // this surface exists to remove.
-                    StageComposer(placeholder: "Reply — or hold right ⌥ and speak",
-                                  model: model, taskId: t.id,
-                                  deliveryError: t.deliveryError,
-                                  modelLabel: t.modelLabel, sending: t.sending ?? false)
-                        .padding(.top, 9)
+                    // Nothing renders above it but the header, and nothing below
+                    // it but its own controls. Everything that used to stack here
+                    // — the where-you-left-off strip, the note row, the exchange
+                    // strip capped at 190pt, the composer — was competing with
+                    // the one thing you opened this view to look at, and on a
+                    // task with little to say it left a band of empty space
+                    // above a squashed terminal.
+                    //
+                    // A message view and a terminal view are two ways of reading
+                    // the SAME session, not two halves of one screen. Hiding the
+                    // terminal gives you the messages; showing it gives you the
+                    // terminal.
+                    TerminalPanel(model: model, taskId: t.id,
+                                  tmuxAvailable: model.cockpit?.tmuxAvailable ?? false)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 8)
                 } else {
-                    ExchangeStrip(turns: t.conversation ?? [], status: t.status)
-                        .padding(.top, 10)
-                    DeadPanel(model: model, t: t).padding(.top, 10)
-                    Spacer(minLength: 0)
+                    messagesMode(t)
                 }
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -117,6 +65,60 @@ struct StageView: View {
         .padding(.horizontal, Theme.gutter)
         .padding(.top, topInset + 4)
         .padding(.bottom, 14)
+    }
+
+
+    /// Is the terminal the whole panel right now?
+    ///
+    /// `hasTerminal` comes from the provider registry via the engine — a backend
+    /// with no PTY has no terminal to show and no toggle to offer.
+    private func terminalMode(_ t: TaskDetail) -> Bool { t.hasTerminal && model.stageTerminalOpen }
+
+    /// Has this task actually finished for good?
+    ///
+    /// STATE, NOT `alive`. This branch used to ask whether the PTY handle was
+    /// still held, which is a Claude-shaped question: for Claude a dead process
+    /// did mean the session was over. It is wrong for every backend where a
+    /// session outlives its process — Codex reports `task_complete` after every
+    /// TURN, so a thread that was merely waiting for the next instruction was
+    /// declared ended, its terminal reaped, and the panel offered to "resume" a
+    /// conversation that had never stopped.
+    ///
+    /// A SESSION IS NEVER ENDED BY FINISHING A STEP. Finishing is what a session
+    /// does between your messages; you reply and it carries on. Only an ERRAND
+    /// — one question, one answer — is actually over when it reaches a terminal
+    /// state.
+    private func ended(_ t: TaskDetail) -> Bool {
+        (t.status == .done || t.status == .failed) && t.kind != "session"
+    }
+
+    /// The message view: what was said, and the way to say the next thing.
+    @ViewBuilder private func messagesMode(_ t: TaskDetail) -> some View {
+        if t.backend != "codex-desktop", let warm = t.warmup, !warm.isEmpty,
+           !(t.conversation ?? []).contains(where: { $0.role == "assistant" && !$0.text.isEmpty }) {
+            warmupStrip(warm)
+        }
+        noteRow(t).padding(.top, 8)
+        // ONE TRANSCRIPT FOR EVERY BACKEND. This was ConversationPanel for Codex
+        // desktop and ExchangeStrip for everything else — two components showing
+        // the same thing, and only one of them scrolled or filled the space it
+        // was given, which is the other half of the empty-band problem.
+        ConversationPanel(turns: t.conversation ?? [], id: t.id)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.top, 10)
+        if t.status == .needsUser, let q = t.question {
+            QuestionBlock(model: model, taskId: t.id, question: q,
+                          terminalOpen: $model.stageTerminalOpen).padding(.top, 10)
+        }
+        if ended(t) {
+            DeadPanel(model: model, t: t).padding(.top, 10)
+        } else {
+            StageComposer(placeholder: "Reply — or hold right ⌥ and speak",
+                          model: model, taskId: t.id,
+                          deliveryError: t.deliveryError,
+                          modelLabel: t.modelLabel, sending: t.sending ?? false)
+                .padding(.top, 9)
+        }
     }
 
     private func warmupStrip(_ warm: String) -> some View {
@@ -402,7 +404,15 @@ struct DeadPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            SectionLabel(text: "Session ended · \(Theme.statusLabel(t.status))")
+            // "Session ended" WAS A LIE FOR HALF THE CARDS THAT SHOWED IT.
+            // This panel is now reached only from `ended()` — a one-off that has
+            // actually finished — so the sentence is true when it appears. It
+            // used to be reached whenever the PTY handle was gone, which for a
+            // session meant "finished a step", and the panel announced the end
+            // of a conversation that was waiting for the next line.
+            SectionLabel(text: t.kind == "session"
+                ? "Waiting for you · \(Theme.statusLabel(t.status))"
+                : "Finished · \(Theme.statusLabel(t.status))")
 
             // THE MESSAGE IS NOT OURS TO PRINT ANY MORE.
             //
@@ -454,7 +464,15 @@ struct DeadPanel: View {
                     }
                     .help("Click to copy")
             } else {
-                Text("No recorded output.").font(Theme.fBody).foregroundColor(Theme.textFaint)
+                // ONLY WHEN THERE IS GENUINELY NOTHING. This said "No recorded
+                // output" whenever `result.summary` was empty — including every
+                // Codex CLI task, whose replies the observer failed to capture
+                // because it matched an event name the CLI stopped emitting. The
+                // transcript above was full and the panel underneath called it
+                // empty. If there are turns, they ARE the output.
+                if (t.conversation ?? []).isEmpty {
+                    Text("No recorded output.").font(Theme.fBody).foregroundColor(Theme.textFaint)
+                }
             }
 
             HStack(spacing: 8) {
