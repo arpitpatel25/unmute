@@ -16,3 +16,8 @@ desktop/native-notch/node_modules
 
 # Subagent-driven-development scratch (ledgers, briefs, review packages)
 .superpowers/sdd/
+
+# Local git worktrees. Each is its own checkout, so `git add -A` from the root
+# stages them as embedded-repo gitlinks — ten of them landed in a commit once,
+# alongside unrelated working-tree edits that happened to be dirty at the time.
+.claude/worktrees/
