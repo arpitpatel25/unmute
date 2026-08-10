@@ -24,6 +24,22 @@ case "$name" in
 esac
 [ -f "$src" ] || { echo "no such file: $src" >&2; exit 2; }
 
+# NORMALISE FIRST — the two logos come from different places and arrive in
+# different formats and sizes (one PNG, one WEBP, as it turned out). Everything
+# downstream assumes 8-bit RGBA PNG, so convert and cap the raster here rather
+# than making the caller care.
+#
+# CAPPED AT 128px because this is compiled into the binary and inlined into the
+# renderer bundle: it is drawn at 12-15pt, so anything larger is bytes shipped
+# to every user for pixels nobody sees. 128 keeps it crisp on a 2x display with
+# room to spare.
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+png="$tmp/logo.png"
+if ! /usr/bin/sips -s format png -Z 128 "$src" --out "$png" >/dev/null 2>&1; then
+  echo "could not convert $src to PNG (sips)" >&2; exit 1
+fi
+src="$png"
+
 here="$(cd "$(dirname "$0")" && pwd)"
 art="$here/../Sources/unmute-notch/ProviderMarkArt.swift"
 [ -f "$art" ] || { echo "missing $art" >&2; exit 1; }
