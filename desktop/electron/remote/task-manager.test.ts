@@ -1607,3 +1607,33 @@ test('resume sends NOTHING — it makes a session reachable, it does not take a 
   assert.ok(!/interrupted|pick up|resumed|continue/i.test(said),
     `resume must not speak, but it wrote: ${said.slice(0, 120)}`)
 })
+
+test('a Codex CLI task writes its state down, so a restart does not call it failed', async () => {
+  // THE BUG THIS PINS. rehydrate() decides a restarted task's state from
+  // status.json: a non-terminal file means "its session died with the app",
+  // which for a one-off is reported as failed/interrupted. Right for Claude,
+  // whose agent writes that file through the hooks Unmute installs.
+  //
+  // Nothing wrote it for Codex CLI — state arrives over the App Server and
+  // landed in memory only — so the file kept the 'processing' the scaffold put
+  // there at spawn, and every finished Codex task came back RED after any
+  // restart. Seen in the field on two tasks that had completed forty minutes
+  // earlier.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor({}),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 50,
+  })
+  const id = await tm.dispatch('summarise the release notes')
+  const task = tm.get(id)!
+
+  tm.applyHubPatch({ taskId: id, state: 'done', assistantText: 'Summarised.' })
+  await new Promise((r) => setTimeout(r, 30))          // the write is fire-and-forget
+
+  const onDisk = JSON.parse(await fs.readFile(task.statusPath, 'utf8'))
+  assert.equal(onDisk.state, 'done', 'the finished state must survive the process')
+  assert.equal(onDisk.result?.detail, 'Summarised.')
+  // …which is exactly what rehydrate reads to decide the task is terminal
+  // rather than interrupted.
+  assert.ok(onDisk.state === 'done' || onDisk.state === 'failed')
+})

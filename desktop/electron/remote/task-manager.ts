@@ -1308,6 +1308,23 @@ export class TaskManager extends EventEmitter {
           : {}),
       }
       this.transition(p.taskId, p.state, status, this.clock())
+      // AND WRITE IT DOWN, or a restart calls this task failed.
+      //
+      // rehydrate() decides a restarted task's state from status.json: a
+      // non-terminal file means "its session died with the app", which for a
+      // one-off is reported as failed/interrupted. That is right for Claude,
+      // whose agent WRITES that file through the hooks Unmute installs.
+      //
+      // Nothing writes it for a Codex CLI task. State arrives over the protocol
+      // and lands in memory, so the file kept the 'processing' the scaffold put
+      // there at spawn — and every finished Codex task came back red after any
+      // restart. Observed in the field, twice, on tasks that had completed
+      // perfectly forty minutes earlier.
+      //
+      // Unmute is the writer for this backend, which breaks no rule: the
+      // observe-never-modify contract is about the user's SESSION, and this
+      // file is ours — Codex neither writes nor reads it.
+      void writeStatusFile(task.statusPath, status).catch(() => {})
       return
     }
     task.updatedAt = this.clock()
