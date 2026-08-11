@@ -34,6 +34,11 @@ export type PillPhase =
 // simply 20× less of an already-safe thing, and no longer touches the audio
 // graph at all.
 const TICK_MS = 1000
+/** The waveform's own cadence. Fast enough to follow a voice, slow enough that
+ *  the send stays a rounding error next to the capture itself — heavy work on
+ *  this path is what corrupts audio, so this does an RMS over one analyser
+ *  frame in the RENDERER and fires a fire-and-forget IPC. */
+const LEVEL_MS = 70
 
 export interface PillBridgeApi {
   pillPushState?: (state: Record<string, unknown>) => void
@@ -94,13 +99,34 @@ export function usePillTicker(
   recording: boolean,
   elapsed: () => number,
   enabled: boolean,
+  /** Live mic amplitude, 0…1. Absent ⇒ the pill shows no movement, which is
+   *  honest: a waveform that animates without a signal claims to be hearing
+   *  something it is not. */
+  analyser?: AnalyserNode | null,
 ): void {
   useEffect(() => {
     if (!enabled || !recording) return
-    api().pillPushLevel?.(0, elapsed())     // land 0:00 immediately
-    const id = setInterval(() => api().pillPushLevel?.(0, elapsed()), TICK_MS)
+    // THE LEVEL WAS HARDCODED TO ZERO for as long as this existed. The header
+    // above always said "analyser → pillPushLevel"; the ticker only ever
+    // carried `elapsed`, because a timer is all the pill drew. The waveform
+    // that replaced the timer sat flat through entire sentences.
+    const buf = analyser ? new Uint8Array(analyser.frequencyBinCount) : null
+    const read = (): number => {
+      if (!analyser || !buf) return 0
+      analyser.getByteTimeDomainData(buf)
+      let sum = 0
+      for (let i = 0; i < buf.length; i++) {
+        const n = (buf[i] - 128) / 128
+        sum += n * n
+      }
+      // RMS of a speaking voice sits around 0.05–0.2, so it is scaled to put
+      // ordinary speech in the middle of the bar rather than the bottom tenth.
+      return Math.min(1, Math.sqrt(sum / buf.length) * 4)
+    }
+    api().pillPushLevel?.(read(), elapsed())     // land immediately
+    const id = setInterval(() => api().pillPushLevel?.(read(), elapsed()), LEVEL_MS)
     return () => clearInterval(id)
-  }, [recording, enabled, elapsed])
+  }, [recording, enabled, elapsed, analyser])
 }
 
 /** Route gestures from the native surface back into this renderer. */

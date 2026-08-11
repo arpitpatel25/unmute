@@ -1198,7 +1198,7 @@ export default function WidgetApp() {
        dismissedTick, mic.preference, mic.devices, mic.featureEnabled, micStatus])
 
   usePillState(pillState, nativePill)
-  usePillTicker(recordingNow, elapsedSec, nativePill)
+  usePillTicker(recordingNow, elapsedSec, nativePill, analyserNode)
   usePillEvents({
     stop: () => { void handleStop() },
     cancel: () => { void handleCancel() },
