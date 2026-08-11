@@ -810,6 +810,21 @@ export class NotchController {
       // engaged back to 'none', so the surface stays shut for the task they
       // dismissed, and the NEXT thing that needs them opens it again.
       if (this.autoExpand && this.engaged === 'none') {
+        // WHY THE SURFACE OPENED, on the record.
+        //
+        // Four clauses can make a task demanding, and from the outside they are
+        // indistinguishable — the panel simply appears. A Codex task reported as
+        // "popping up again and again while the model is still working" cost an
+        // afternoon of reasoning that ruled out three suspects and found none,
+        // because nothing said which clause fired. One line ends that.
+        log.event('auto-expanded', {
+          taskId: t.id, state: t.state, kind: t.kind ?? 'oneoff',
+          agent: t.agent ?? 'claude',
+          why: t.state === 'needs-user' ? 'needs-user'
+            : t.state === 'stuck' ? 'stuck'
+            : t.state === 'failed' ? 'failed-fresh'
+            : 'done-session-fresh',
+        })
         this.engaged = 'task'
         this.setFocus(t.id)
       }
