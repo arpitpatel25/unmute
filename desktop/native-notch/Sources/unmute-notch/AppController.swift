@@ -221,6 +221,12 @@ final class AppController: NSObject, NotchResizing {
             let was = model.capturePhase
             model.capturePhase = phase.isEmpty || phase == "idle" ? nil : phase
             model.captureTarget = target
+            // Recomputed on BOTH inputs, so neither can leave it stale: the
+            // phase ending clears the aim even if no further pill frame arrives.
+            if model.capturePhase != "listening" {
+                model.captureAimed = false
+                model.captureLevel = 0
+            }
             // ROUTING IS THE ONE PHASE THE BAR ITSELF HAS TO SHOW.
             //
             // Setting the model is not enough on two counts. The bar is built
@@ -299,6 +305,14 @@ final class AppController: NSObject, NotchResizing {
             // reached the pill's. The pocket card shows where your voice is
             // going, so it has to know whether anything is being heard.
             model.captureLevel = state.phase == .recording ? state.level : 0
+            // A CAPTURE THAT IS NOT RECORDING CANNOT BE LISTENING. The phase
+            // arrives from the keyboard path and ends on key-up; this one
+            // arrives from the audio path and cannot outlive the microphone. If
+            // a key-up is ever missed, the aim clears here instead of leaving a
+            // chip claiming the user's voice is going somewhere it is not.
+            model.captureAimed = state.phase == .recording
+                && state.kind == .remote
+                && model.capturePhase == "listening"
             reconcileSurfaces()
 
         case let .scratchpad(payload):

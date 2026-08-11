@@ -247,7 +247,7 @@ struct NotchView: View {
             // looking at one address, and a card naming a second would be two
             // answers to the same question.
             else if model.pocket.isOpen {
-                pocketPlane { PocketCard(model: model, listening: model.capturePhase == "listening") }
+                pocketPlane { PocketCard(model: model, listening: model.captureAimed) }
             }
             else { barRow }
         }

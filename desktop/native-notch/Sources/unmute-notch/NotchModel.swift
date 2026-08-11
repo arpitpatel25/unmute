@@ -72,6 +72,19 @@ final class NotchModel: ObservableObject {
     /// running and zero otherwise. The pocket draws it so the card you are
     /// aiming at shows that it is being heard.
     @Published var captureLevel: Double = 0
+    /// IS A TASK-DIRECTED CAPTURE RUNNING RIGHT NOW?
+    ///
+    /// Derived in one place from TWO independent signals, and read by three
+    /// surfaces. `capturePhase == "listening"` alone was the condition, and it
+    /// is only as reliable as the key-up that ends it: miss that event and the
+    /// chip stays lit forever, telling the user their voice is going somewhere
+    /// it is not. The pill's own phase is the corroborating witness — it says
+    /// whether audio is actually being captured, and of which kind.
+    ///
+    /// `remote` ONLY. Dictation and the Caps-Lock formatter both put text where
+    /// the cursor is, not into a task, so a mic on a card would be a lie about
+    /// both.
+    @Published var captureAimed: Bool = false
     /// Does opening a CLI task show its terminal immediately?
     ///
     /// OFF by default, which is the behaviour that shipped: the panel opens on

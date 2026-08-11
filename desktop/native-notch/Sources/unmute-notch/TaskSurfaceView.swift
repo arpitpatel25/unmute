@@ -123,7 +123,7 @@ struct TaskSurfaceView: View {
             //
             // Its ABSENCE is the useful half. Speak with no chip showing and
             // the words are going to the router to become a new task.
-            if model.capturePhase == "listening" {
+            if model.captureAimed {
                 AimedChip(level: model.captureLevel, compact: true)
             }
             Text(t.title).font(Theme.fTitle).foregroundColor(Theme.text).lineLimit(1)
