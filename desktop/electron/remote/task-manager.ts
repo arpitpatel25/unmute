@@ -1307,6 +1307,24 @@ export class TaskManager extends EventEmitter {
           ? { result: { summary: p.assistantText.split('\n')[0].slice(0, 140), detail: p.assistantText } }
           : {}),
       }
+      // NOTHING CHANGED IS NOT NEWS — the guard pollCodexCli has, missing here.
+      //
+      // Several events carry a state without changing one: `turn/started` says
+      // processing on a task already processing, and `thread/status/changed:
+      // active` says it again. Transitioning anyway rewrites updatedAt, which
+      // re-sorts the wall, re-enters the attention path and re-opens the
+      // surface — observed as a Codex task that "keeps expanding every few
+      // seconds as if something interrupted it".
+      //
+      // Text still counts as news even at the same state: a streamed reply
+      // arriving while the task stays `processing` must reach the card.
+      const sameState = task.state === p.state
+      const sameText = !p.assistantText
+      const sameQuestion = !p.question
+      if (sameState && sameText && sameQuestion) {
+        task.lastHeartbeatMs = this.clock()   // still alive, just not newsworthy
+        return
+      }
       this.transition(p.taskId, p.state, status, this.clock())
       // AND WRITE IT DOWN, or a restart calls this task failed.
       //

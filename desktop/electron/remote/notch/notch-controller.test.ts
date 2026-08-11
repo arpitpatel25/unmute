@@ -976,13 +976,21 @@ test('a driven backend is never reported dead — its chat lives in the other ap
   assert.equal(h.client.last('stageDetail')!.task.alive, true)
 })
 
-test('a PTY task names no backend, keeps its real liveness, and now carries a conversation too', () => {
+test('EVERY task names its backend in the detail, keeps its real liveness, and carries a conversation', () => {
+  // CHANGED 2026-08-11. This asserted `backend === undefined` for a PTY task,
+  // because the detail sent it for driver backends only. The expansion draws a
+  // provider MARK from that field now, so absent meant "Claude" — and a Codex
+  // CLI task showed Codex in the pocket and Claude the moment you opened it.
   const h = setup()
   put(h, makeTask({ id: 'p1', state: 'done', kind: 'session', agent: 'claude', alive: false }))
+  put(h, makeTask({ id: 'x1', state: 'done', kind: 'session', agent: 'codex', alive: false }))
+  h.client.fire({ type: 'focusTask', id: 'x1' })
+  h.flush()
+  assert.equal(h.client.last('stageDetail')!.task.backend, 'codex')
   h.client.fire({ type: 'focusTask', id: 'p1' })
   h.flush()
   const d = h.client.last('stageDetail')!.task
-  assert.equal(d.backend, undefined, 'a PTY backend names no backend')
+  assert.equal(d.backend, 'claude', 'absent must never stand in for the default backend')
   assert.equal(d.alive, false)
   // CHANGED 2026-08-06. `conversation` used to be gated on `external`, which
   // made the stage an either/or: a Claude task showed a terminal and no

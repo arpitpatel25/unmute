@@ -147,10 +147,25 @@ final class AppController: NSObject, NotchResizing {
             // state unchanged. Without this the frame would keep the previous
             // task's proportions until the next state change.
             let fillChanged = model.task?.hasTerminal != task.hasTerminal
+            // Read BEFORE the assignment below — after it, every payload looks
+            // like the same task and the default would never apply at all.
+            let switchedTask = model.task?.id != task.id
             model.task = task
-            // The terminal stops being a drill-down when it is the only way to
-            // answer. Open it as the ask arrives — see needsTerminalToAnswer.
-            if needsTerminalToAnswer(task) || model.terminalAutoExpand { model.taskTerminalOpen = true }
+            // A PREFERENCE IS A DEFAULT, NOT A CORRECTION.
+            //
+            // This ran on EVERY payload, so `terminalAutoExpand` re-asserted
+            // itself against whatever the user had just chosen: hide the
+            // terminal, and the next update put it back. Claude polls only on
+            // real change so it was rare; the App Server streams, so a Codex
+            // task snapped back constantly and the toggle looked broken.
+            //
+            // The default now applies when the task CHANGES — which is the
+            // moment there is no choice of the user's to override.
+            if switchedTask && model.terminalAutoExpand { model.taskTerminalOpen = true }
+            // The one thing that still overrides a live choice, and only
+            // upward: an ask that can ONLY be answered in the terminal. Leaving
+            // that hidden is the dead end the rule exists to prevent.
+            if needsTerminalToAnswer(task) { model.taskTerminalOpen = true }
             if model.state == .task && fillChanged { refit(animated: true) }
             // At bar level the fronted task IS the message — the right half
             // carries its activity, and the mass is as wide as what it says.

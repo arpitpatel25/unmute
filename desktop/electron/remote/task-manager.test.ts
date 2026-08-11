@@ -1637,3 +1637,34 @@ test('a Codex CLI task writes its state down, so a restart does not call it fail
   // rather than interrupted.
   assert.ok(onDisk.state === 'done' || onDisk.state === 'failed')
 })
+
+test('an unchanged state is not news — the surface must not be re-triggered', async () => {
+  // WHY THIS EXISTS. Several App Server events carry a state without changing
+  // one: `turn/started` says processing on a task already processing, and
+  // `thread/status/changed: active` says it again. Transitioning anyway
+  // rewrites updatedAt, which re-sorts the wall, re-enters the attention path
+  // and re-opens the surface — reported as a Codex task that "keeps expanding
+  // every few seconds as if something interrupted it".
+  //
+  // pollCodexCli has had this guard all along; the hub path shipped without it.
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor({}),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 50,
+  })
+  const id = await tm.dispatch('watch the build')
+  const before = tm.get(id)!.updatedAt
+  await new Promise((r) => setTimeout(r, 5))
+
+  tm.applyHubPatch({ taskId: id, state: 'processing' })          // already processing
+  assert.equal(tm.get(id)!.updatedAt, before, 'same state, no text ⇒ nothing moved')
+
+  // …but a reply at the SAME state is still news: a streamed message arriving
+  // while the task stays processing has to reach the card.
+  tm.applyHubPatch({ taskId: id, state: 'processing', assistantText: 'halfway' })
+  assert.ok(tm.get(id)!.updatedAt > before, 'new text must move the task')
+
+  // And a real state change always lands.
+  tm.applyHubPatch({ taskId: id, state: 'done' })
+  assert.equal(tm.get(id)!.state, 'done')
+})

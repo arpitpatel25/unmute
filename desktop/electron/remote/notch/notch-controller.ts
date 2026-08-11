@@ -1590,10 +1590,12 @@ export class NotchController {
       // stage can show the message AND the terminal. `terminal` above still
       // says whether there is a PTY to draw underneath it.
       conversation: t.conversation ?? [],
-      ...(external ? {
-        backend: t.agent,
-        ...(t.codexProject ? { project: t.codexProject } : {}),
-      } : {}),
+      // ALWAYS SENT — the same fix toCard needed, in the payload one surface
+      // over. Driver-only meant a Codex CLI task's expansion arrived with no
+      // backend at all, so the mark fell back to Claude: the pocket showed
+      // Codex and opening the very same task showed Claude.
+      backend: t.agent ?? 'claude',
+      ...(external && t.codexProject ? { project: t.codexProject } : {}),
       status: t.state,
       kind: t.kind ?? 'oneoff',
       alive: external ? true : (t.alive ?? false),   // see toCard: never dead
