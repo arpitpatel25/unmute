@@ -1904,3 +1904,29 @@ test('INVARIANT: every slot resolves to a task the voice can actually reach', ()
     assert.ok(!t!.shelved, `slot ${sl.id} is shelved`)
   }
 })
+
+test('closing the pocket AFTER expanding a task still releases the voice', () => {
+  // THE PATH THE EXISTING TEST MISSES. `applyVoiceTarget` early-returns while
+  // `engaged === 'task'`, so closing the pocket cleared the aim only when you
+  // had opened the pocket directly. Arrive by expanding a task — which is how
+  // you get there when something demands you — and the aim survived the close.
+  //
+  // Focus is not a highlight: `orchestrateFocusId` sends the next utterance
+  // straight to that task and never consults the router. So a brand-new request
+  // spoken at a CLOSED pocket was delivered as a follow-up to whichever card
+  // had been on screen, with nothing to explain where the words went.
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'needs-user', kind: 'session', question: { text: 'ok?' } }))
+  h.flush()
+
+  h.client.fire({ type: 'pocketOpen' })
+  h.flush()
+  h.client.fire({ type: 'pocketExpand' })      // engaged becomes 'task'
+  h.flush()
+  assert.deepEqual(h.calls.focus?.at(-1), ['a'], 'expanded → aimed at that task')
+
+  h.client.fire({ type: 'pocketRelease' })
+  h.flush()
+  assert.deepEqual(h.calls.focus?.at(-1), [null],
+    'a closed pocket must hand the voice back to the router')
+})

@@ -448,6 +448,25 @@ export class NotchController {
       // does NOT come through here and deliberately keeps the order, so Escape
       // puts you back exactly where you were standing.
       this.frozenOrder = null
+      // AND IT RELEASES THE VOICE TOO. Focus is not a highlight — it is a
+      // deterministic short-circuit: `orchestrateFocusId` sends the next
+      // utterance straight to that task and never consults the router. Leaving
+      // it set behind a CLOSED pocket meant speaking a brand-new request into
+      // whichever card you happened to be looking at when you shut it, with
+      // nothing on screen to explain where the words went.
+      //
+      // Every other way out of the pocket already cleared it (see leavePocket).
+      // This one could not: it clears the aim through setPocketMode ->
+      // applyVoiceTarget, which EARLY-RETURNS while `engaged === 'task'`. Reach
+      // the pocket by expanding a task and that guard holds, so the close left
+      // the aim exactly where it was — which is why it happened only sometimes
+      // and why the existing test (which opens the pocket directly) passed.
+      //
+      // Closing the pocket also ends the engagement. Leaving it set does not
+      // just strand the aim: `engaged !== 'none'` is the guard on auto-expand,
+      // so the next task that needed you would have opened nothing either.
+      this.engaged = 'none'
+      this.setFocus(null)
       this.setPocketMode('closed')
       this.reconcile()
     })
