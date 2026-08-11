@@ -168,6 +168,29 @@ export async function listImportableCodexSessions(
   return out
 }
 
+/**
+ * Where a Codex thread actually ran, read from its own rollout.
+ *
+ * The Codex half of the resume repair. `resolveSessionCwd` heals a task whose
+ * cwd is wrong or stale — the repo moved, the folder was renamed — by asking
+ * the session's own record where it ran. That resolver searched Claude's
+ * transcripts only, so an imported CODEX session with a stale path had no
+ * recovery at all: the id was looked up among Claude's transcripts, found
+ * nowhere, and resume returned false.
+ *
+ * `session_meta.cwd` is authoritative here and needs no reconstruction —
+ * unlike Claude's directory names, which encode the path lossily.
+ */
+export async function findCodexSessionCwd(sessionId: string, home?: string): Promise<string | null> {
+  const path = await findRollout(sessionId, home)
+  if (!path) return null
+  const events = await readRolloutEvents(path)
+  const meta = events.find((e) => e.type === 'session_meta')?.payload as { cwd?: string } | undefined
+  const cwd = meta?.cwd
+  if (!cwd) return null
+  try { await fs.access(cwd); return cwd } catch { return null }   // a path that is gone heals nothing
+}
+
 export async function discoverSessionId(
   cwd: string, sinceMs: number, home?: string, graceMs = 5_000,
 ): Promise<string | null> {

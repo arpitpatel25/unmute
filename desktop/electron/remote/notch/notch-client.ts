@@ -201,6 +201,10 @@ export interface ImportableP {
   project: string
   /** Relative age of the last interaction, pre-rendered ("2h", "3d"). */
   age: string
+  /** WHICH CLI this session belongs to ('claude' | 'codex'). The rail groups by
+   *  it and marks each group; without it two backends' sessions sat in one list
+   *  under a heading that named only Claude. */
+  agent?: string
 }
 
 export interface ShelfItemP { id: string; name: string }

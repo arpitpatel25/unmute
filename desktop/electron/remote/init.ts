@@ -70,7 +70,7 @@ import { runAppleScript } from './cua/lanes/applescript'
 import { type RouterCtx } from './cua/router'
 import { Presence } from './presence'
 import { listImportableSessions, findSessionCwd } from './claude-cli-sessions'
-import { listImportableCodexSessions } from './codex/cli-session'
+import { listImportableCodexSessions, findCodexSessionCwd } from './codex/cli-session'
 import { applyAxRegistration } from './ax/register'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
@@ -2830,7 +2830,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // private socket (app crashed before killAll). Per-session kill, never the
     // server (would hit live ones).
     // Recovery for a task whose cwd is wrong or stale — see TaskManager.resume.
-    resolveSessionCwd: (sessionId) => findSessionCwd(sessionId),
+    // BOTH CLIs, or the repair is Claude-only. A Codex thread id looked up
+    // among Claude's transcripts is found nowhere, so an imported Codex session
+    // whose folder had moved could not be resumed and said nothing about why.
+    // Claude first because it is the common case; Codex answers from its
+    // rollout, where the cwd is recorded verbatim.
+    resolveSessionCwd: async (sessionId) =>
+      (await findSessionCwd(sessionId)) ?? (await findCodexSessionCwd(sessionId).catch(() => null)),
     reapSession: (id) => {
       if (!tmuxBin) return
       try { execFile(tmuxBin, tmuxKillSessionArgs(sessionNameFor(id)), () => {}) } catch { /* best-effort */ }

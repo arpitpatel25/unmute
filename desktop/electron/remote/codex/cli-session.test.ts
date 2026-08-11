@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { findRollout, readRolloutEvents, discoverSessionId, listImportableCodexSessions } from './cli-session'
+import { findRollout, readRolloutEvents, discoverSessionId, listImportableCodexSessions, findCodexSessionCwd } from './cli-session'
 
 const UUID_A = '019fccd9-d64b-7142-bf79-f721387b9e97'
 const UUID_B = '019fccd9-aaaa-7142-bf79-f721387b9e98'
@@ -108,4 +108,37 @@ test('already-imported, still-live, and vanished-project sessions are not offere
 
   const ids = (await listImportableCodexSessions(new Set([UUID_A]), { home: h })).map((r) => r.sessionId)
   assert.deepEqual(ids, [], 'known, live and cwd-less are all excluded')
+})
+
+test('a Codex session says where it ran, so a moved folder can be repaired', async () => {
+  // THE GAP THIS CLOSES. `resolveSessionCwd` heals a task whose cwd is wrong or
+  // stale — imported before the real path was known, or the repo moved — by
+  // asking the session's own record where it ran. That resolver searched
+  // CLAUDE's transcripts only, so an imported Codex session with a stale path
+  // had no recovery: its id was looked for among Claude's transcripts, found
+  // nowhere, and resume returned false with nothing on the card.
+  const h = await home()
+  const real = join(h, 'work')
+  await fs.mkdir(real, { recursive: true })
+  const dir = join(h, '.codex/sessions/2026/08/09')
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(join(dir, `rollout-x-${UUID_A}.jsonl`),
+    meta(real, UUID_A, '2026-08-09T10:00:00.000Z') + '\n')
+
+  assert.equal(await findCodexSessionCwd(UUID_A, h), real)
+})
+
+test('a directory that no longer exists heals nothing', async () => {
+  // Returning a path that is gone would swap one broken cwd for another and
+  // report success doing it — the resume would fail one step later, further
+  // from the cause.
+  const h = await home()
+  const dir = join(h, '.codex/sessions/2026/08/09')
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(join(dir, `rollout-x-${UUID_B}.jsonl`),
+    meta(join(h, 'deleted-repo'), UUID_B, '2026-08-09T10:00:00.000Z') + '\n')
+
+  assert.equal(await findCodexSessionCwd(UUID_B, h), null)
+  // …and an unknown id is simply not ours to repair.
+  assert.equal(await findCodexSessionCwd('019fccd9-9999-7142-bf79-f721387b9e99', h), null)
 })

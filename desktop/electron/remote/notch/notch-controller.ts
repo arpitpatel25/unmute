@@ -318,7 +318,7 @@ export class NotchController {
   private proposals: ProposalLite[] = []
   /** The import rail. Cached like the other rails: it hits the filesystem, and
    *  reconcile runs on every task event. */
-  private importable: Array<{ sessionId: string; title: string; project: string; lastActivityAt: number }> = []
+  private importable: Array<{ sessionId: string; title: string; project: string; lastActivityAt: number; agent?: string }> = []
   private railsTimer: ReturnType<typeof setInterval> | null = null
   /** (surface, task) → last payload sent, so an unchanged detail is not resent. */
   private lastDetailJson = new Map<string, { id: string; json: string }>()
@@ -1810,6 +1810,10 @@ export class NotchController {
         title: s.title,
         project: s.project,
         age: relativeAge(s.lastActivityAt, now),
+        // Carried through at last. The engine has always known which CLI a
+        // session belongs to; the rail dropped it here and then listed two
+        // backends under a heading naming one.
+        agent: s.agent ?? 'claude',
       })),
       digest: this.digestText,
       doorbell: this.deps.getDoorbell(),

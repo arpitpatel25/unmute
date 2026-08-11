@@ -16,6 +16,12 @@ struct WallView: View {
     /// that was not there a moment ago, so a stray click in a scrolling list
     /// must not do it.
     @State private var confirmImport: ImportableP? = nil
+    /// The import rail is open by default — it is how you discover the feature —
+    /// but collapsible, because once you have brought in what you wanted it is
+    /// the longest thing on the rail and the least useful.
+    @State private var importOpen = true
+    /// Backends whose full list the user asked for.
+    @State private var importExpanded: Set<String> = []
 
     private var data: CockpitData {
         model.cockpit ?? CockpitData(groups: [], hiddenTotal: 0, showingAll: false, todayOnly: false,
@@ -337,43 +343,26 @@ struct WallView: View {
                         }
                     }
                 }
-                // OTHER CLAUDE CODE SESSIONS — the import rail.
+                // IMPORT A CLI SESSION — the rail.
                 //
-                // Threads the user already has running in a terminal somewhere.
-                // Sole purpose: adopt one. A row that is already a task never
-                // appears, so an empty rail means there is nothing to import
-                // and it draws nothing at all.
+                // Sessions this machine already has and unmute does not: threads
+                // you started in your own terminal, in either CLI. Adopting one
+                // puts it on the wall with its history and starts nothing.
+                //
+                // GROUPED BY BACKEND, which reverses the original call. The rail
+                // interleaved both CLIs by recency on the reasoning that "you do
+                // not think of it per-backend" — but it did that under a heading
+                // that said "Other Claude Code sessions", so Codex threads were
+                // listed under Claude's name. Once each row has to say which CLI
+                // it is anyway, a group header carries that once instead of every
+                // row repeating it.
+                //
+                // CAPPED, because this list is long. Forty sessions pushed the
+                // shelf and everything under it off the bottom of the rail; three
+                // per backend answers "is there anything to bring in" and the rest
+                // is one tap away.
                 if let rows = data.importable, !rows.isEmpty {
-                    railSection("Other Claude Code sessions · \(rows.count)") {
-                        ForEach(rows, id: \.sessionId) { r in
-                            HStack(spacing: 8) {
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(r.title).font(Theme.fBody)
-                                        .foregroundColor(Theme.text).lineLimit(1)
-                                    Text("\(r.project) · \(r.age)")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(Theme.textFaint).lineLimit(1)
-                                }
-                                Spacer(minLength: 0)
-                                // Confirms before adopting. Import is cheap and
-                                // reversible, but it puts a card on the wall
-                                // that was not there a second ago, and a list
-                                // you scroll should not act on a stray click.
-                                Button(action: { confirmImport = r }) {
-                                    Text("Import")
-                                        .font(.system(size: 10.5, weight: .medium))
-                                        .foregroundColor(Theme.textDim)
-                                        .padding(.horizontal, 8).padding(.vertical, 3)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.raised))
-                                        .overlay(RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Theme.hairline, lineWidth: 0.5))
-                                }
-                                .buttonStyle(.plain)
-                                .help("Bring this session onto the wall — it keeps its history and starts nothing")
-                            }
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                        }
-                    }
+                    importRail(rows)
                 }
                 // Shelf.
                 if !data.shelf.isEmpty {
@@ -436,6 +425,98 @@ struct WallView: View {
         case "create": return Theme.cWorking
         default:       return Theme.cNeeds
         }
+    }
+
+
+    /// How many rows of each backend show before the expander.
+    private static let importPreview = 3
+
+    /// The import rail: one heading, a group per CLI, each capped until asked.
+    @ViewBuilder private func importRail(_ rows: [ImportableP]) -> some View {
+        let groups: [(String, [ImportableP])] = [
+            ("claude", rows.filter { ($0.agent ?? "claude") == "claude" }),
+            ("codex",  rows.filter { $0.agent == "codex" }),
+        ].filter { !$0.1.isEmpty }
+
+        VStack(alignment: .leading, spacing: 4) {
+            // THE WHOLE HEADING IS THE TOGGLE. A caret alone is a small target
+            // on a dense rail, and this section is the one a user collapses
+            // permanently once they have imported what they wanted.
+            Button(action: { importOpen.toggle() }) {
+                HStack(spacing: 6) {
+                    SectionLabel(text: "Import a CLI session · \(rows.count)")
+                    Image(systemName: importOpen ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(Theme.textFaint)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Sessions already on this Mac that unmute doesn't know about — started in Claude Code or Codex in your own terminal. Importing brings one onto the wall with its history; nothing is started.")
+            .padding(.bottom, 3)
+
+            if importOpen {
+                ForEach(groups, id: \.0) { backend, all in
+                    let expanded = importExpanded.contains(backend)
+                    let shown = expanded ? all : Array(all.prefix(Self.importPreview))
+                    // The backend's own mark, so the group says which CLI without
+                    // spending a word on it.
+                    HStack(spacing: 6) {
+                        ProviderMark(backend: backend, terminal: true)
+                        Text(backend == "codex" ? "Codex CLI" : "Claude Code CLI")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(Theme.textFaint)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8).padding(.top, 4)
+
+                    ForEach(shown, id: \.sessionId) { r in importRow(r) }
+
+                    if all.count > Self.importPreview {
+                        Button(action: {
+                            if expanded { importExpanded.remove(backend) } else { importExpanded.insert(backend) }
+                        }) {
+                            Text(expanded
+                                 ? "Show fewer"
+                                 : "\(all.count - Self.importPreview) more")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundColor(Theme.textDim)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 8).padding(.bottom, 2)
+                    }
+                }
+            }
+        }
+    }
+
+    private func importRow(_ r: ImportableP) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(r.title).font(Theme.fBody)
+                    .foregroundColor(Theme.text).lineLimit(1)
+                Text("\(r.project) · \(r.age)")
+                    .font(.system(size: 10))
+                    .foregroundColor(Theme.textFaint).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            // Confirms before adopting. Import is cheap and reversible, but it
+            // puts a card on the wall that was not there a second ago, and a
+            // list you scroll should not act on a stray click.
+            Button(action: { confirmImport = r }) {
+                Text("Import")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundColor(Theme.textDim)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Theme.raised))
+                    .overlay(RoundedRectangle(cornerRadius: 6)
+                        .stroke(Theme.hairline, lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .help("Bring this session onto the wall — it keeps its history and starts nothing")
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
     }
 
     private func railSection<Content: View>(_ title: String,

@@ -247,6 +247,10 @@ struct ImportableP: Codable, Equatable {
     let title: String
     let project: String
     let age: String
+    /// WHICH CLI this session belongs to. The engine has always sent it; the
+    /// rail simply never read it, so two backends' sessions sat in one
+    /// undifferentiated list under a heading that named only Claude.
+    let agent: String?
 }
 struct RouteOfferP: Codable { let newTaskId: String; let altTaskId: String; let altName: String }
 
