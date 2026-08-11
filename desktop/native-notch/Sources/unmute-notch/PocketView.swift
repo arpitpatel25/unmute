@@ -196,14 +196,28 @@ struct PocketCard: View {
 
     // ── where the words go ────────────────────────────────────────────────
     private var route: some View {
-        HStack(spacing: 5) {
-            if listening { Circle().fill(Theme.cError).frame(width: 6, height: 6) }
-            Text(listening
-                 ? "listening → \(slot?.title ?? "nothing")"
-                 : "\(pocket.routeKeyLabel) goes to \(slot?.title ?? "nothing")")
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundColor(listening ? Theme.text : Theme.textFaint)
-                .lineLimit(1).truncationMode(.tail)
+        HStack(spacing: 6) {
+            if listening {
+                // SHOW IT, DO NOT ANNOUNCE IT.
+                //
+                // This said "listening → <title>" — the card's own title, read
+                // back at the user, on the card they are looking at. The fact
+                // worth carrying is not WHICH card (they can see that) but that
+                // the mic is live and pointed here, which a mic and a moving
+                // waveform say without a sentence. Aim at another card and the
+                // pair moves with it, because this line belongs to whichever
+                // slot is current.
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(Theme.cError)
+                Waveform(level: model.captureLevel, bars: 14, height: 10,
+                         barWidth: 1.5, spacing: 1.5, color: Theme.text)
+            } else {
+                Text("\(pocket.routeKeyLabel) goes to \(slot?.title ?? "nothing")")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundColor(Theme.textFaint)
+                    .lineLimit(1).truncationMode(.tail)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.top, 5)

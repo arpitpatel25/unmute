@@ -318,7 +318,7 @@ struct RichText: View {
                 case let .heading(s, level):
                     inline(s, weight: .semibold, scale: level == 1 ? 1.25 : 1.1)
                         .fixedSize(horizontal: false, vertical: true)
-                case let .bullet(marker, s):
+                case let .bullet(marker, s, depth):
                     HStack(alignment: .top, spacing: 8) {
                         Text(marker)
                             .font(.system(size: size))
@@ -326,6 +326,40 @@ struct RichText: View {
                             .frame(minWidth: 14, alignment: .trailing)
                         inline(s).fixedSize(horizontal: false, vertical: true)
                     }
+                    // NESTING SURVIVES. Leading spaces were trimmed before the
+                    // line was classified, so a sub-point sat level with its
+                    // parent and a structured answer read as one flat list.
+                    .padding(.leading, CGFloat(depth) * 16)
+                case let .code(lines, lang):
+                    // FENCED BLOCKS ARE THE COMMON CASE IN AGENT OUTPUT and they
+                    // fell through to `paragraph`: the ``` printed literally, the
+                    // code lost its font, and every line was joined into one
+                    // run-on paragraph because blank-line handling flushed on
+                    // emptiness. Verbatim, monospaced, on its own ground.
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let lang, !lang.isEmpty {
+                            Text(lang)
+                                .font(.system(size: size * 0.72, weight: .semibold))
+                                .foregroundColor(Theme.textFaint)
+                        }
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, cl in
+                            Text(cl.isEmpty ? " " : cl)
+                                .font(.system(size: size * 0.88, design: .monospaced))
+                                .foregroundColor(color)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .padding(.horizontal, 9).padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.sunken))
+                case let .quote(s):
+                    inline(s)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 9)
+                        .overlay(Rectangle().fill(Theme.hairline).frame(width: 2), alignment: .leading)
+                case .rule:
+                    Rectangle().fill(Theme.hairlineSoft).frame(height: 1)
                 }
             }
         }
@@ -345,7 +379,12 @@ struct RichText: View {
     private enum Line {
         case paragraph(String)
         case heading(String, Int)
-        case bullet(String, String)
+        /// marker, text, indent depth (0 = top level)
+        case bullet(String, String, Int)
+        /// A fenced block: the lines verbatim, and the language if it was given.
+        case code([String], String?)
+        case quote(String)
+        case rule
     }
 
     private var lines: [Line] {
@@ -354,24 +393,49 @@ struct RichText: View {
         func flush() {
             if !paragraph.isEmpty { out.append(.paragraph(paragraph.joined(separator: " "))); paragraph = [] }
         }
+        var fence: [String]? = nil       // lines collected inside ``` … ```
+        var fenceLang: String? = nil
         for raw in text.components(separatedBy: "\n") {
             let t = raw.trimmingCharacters(in: .whitespaces)
+            // A FENCE SWALLOWS EVERYTHING until it closes — including blank
+            // lines and text that looks like a bullet or a heading, which is the
+            // point: inside a code block those are code, not markup.
+            if t.hasPrefix("```") || t.hasPrefix("~~~") {
+                if let body = fence {
+                    out.append(.code(body, fenceLang)); fence = nil; fenceLang = nil
+                } else {
+                    flush()
+                    fence = []
+                    let lang = String(t.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                    fenceLang = lang.isEmpty ? nil : lang
+                }
+                continue
+            }
+            if fence != nil { fence?.append(raw); continue }   // raw: indentation is content
             if t.isEmpty { flush(); continue }
+            // Depth from the ORIGINAL line, before trimming loses it.
+            let indent = raw.prefix(while: { $0 == " " || $0 == "\t" }).count
+            let depth = min(3, indent / 2)
+            if t == "---" || t == "***" || t == "___" { flush(); out.append(.rule); continue }
+            if t.hasPrefix("> ") { flush(); out.append(.quote(String(t.dropFirst(2)))); continue }
             if t.hasPrefix("#") {
                 flush()
                 let level = t.prefix(while: { $0 == "#" }).count
                 out.append(.heading(String(t.drop(while: { $0 == "#" })).trimmingCharacters(in: .whitespaces), level))
             } else if t.hasPrefix("- ") || t.hasPrefix("* ") || t.hasPrefix("• ") {
                 flush()
-                out.append(.bullet("•", String(t.dropFirst(2))))
+                out.append(.bullet(depth > 0 ? "◦" : "•", String(t.dropFirst(2)), depth))
             } else if let dot = t.firstIndex(of: "."), t[t.startIndex..<dot].allSatisfy(\.isNumber),
                       t.index(after: dot) < t.endIndex, t[t.index(after: dot)] == " " {
                 flush()
-                out.append(.bullet(String(t[t.startIndex...dot]), String(t[t.index(dot, offsetBy: 2)...])))
+                out.append(.bullet(String(t[t.startIndex...dot]), String(t[t.index(dot, offsetBy: 2)...]), depth))
             } else {
                 paragraph.append(t)
             }
         }
+        // An unterminated fence still renders as code — a truncated stream is
+        // exactly when you most want to read what it managed to write.
+        if let body = fence, !body.isEmpty { out.append(.code(body, fenceLang)) }
         flush()
         return out
     }

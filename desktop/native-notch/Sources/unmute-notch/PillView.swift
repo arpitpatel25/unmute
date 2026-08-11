@@ -442,7 +442,23 @@ struct PillView: View {
                 } else {
                     RecordDot()
                 }
-                TimerText(elapsed: s.elapsed, max: s.maxSeconds)
+                // WHAT IT IS HEARING, not how long you have been at it.
+                //
+                // A timer answers a question nobody asks. Mid-sentence the
+                // question is "is it picking me up", and a count of seconds
+                // ticks up identically whether the mic is live or dead. The
+                // waveform is flat when the level is zero, so it answers that
+                // one honestly.
+                //
+                // The countdown is kept for the last stretch before the cap:
+                // there, seconds remaining IS the information, and losing it
+                // would make the cut-off arrive unannounced.
+                if s.maxSeconds - s.elapsed <= 15 {
+                    TimerText(elapsed: s.elapsed, max: s.maxSeconds)
+                } else {
+                    Waveform(level: s.level, color: Theme.text)
+                        .frame(width: 70)
+                }
                 StopButton { model.emit(.stop) }
             }
             .padding(.leading, 15).padding(.trailing, 7)

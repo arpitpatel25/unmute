@@ -294,6 +294,11 @@ final class AppController: NSObject, NotchResizing {
                 NotchLog.log("CMD pill phase=\(state.phase.rawValue) kind=\(state.kind.rawValue)")
             }
             pillModel.state = state
+            // THE POCKET NEEDS THE SAME SIGNAL. Both surfaces live in this
+            // process but in different models, and the capture level only ever
+            // reached the pill's. The pocket card shows where your voice is
+            // going, so it has to know whether anything is being heard.
+            model.captureLevel = state.phase == .recording ? state.level : 0
             reconcileSurfaces()
 
         case let .scratchpad(payload):

@@ -68,6 +68,10 @@ final class NotchModel: ObservableObject {
 
     // Terminal visibility (task surface toggle; Stage shows it by default when alive).
     @Published var taskTerminalOpen: Bool = false
+    /// Live mic level, 0…1, mirrored from the pill's stream while a capture is
+    /// running and zero otherwise. The pocket draws it so the card you are
+    /// aiming at shows that it is being heard.
+    @Published var captureLevel: Double = 0
     /// Does opening a CLI task show its terminal immediately?
     ///
     /// OFF by default, which is the behaviour that shipped: the panel opens on
