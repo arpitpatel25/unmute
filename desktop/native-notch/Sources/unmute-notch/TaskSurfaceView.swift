@@ -112,6 +112,20 @@ struct TaskSurfaceView: View {
             // either — it was inferred from whether a terminal happened to be
             // offered.
             ProviderMark(backend: t.backend, terminal: t.hasTerminal)
+            // WHERE YOUR VOICE IS GOING, while it is going there.
+            //
+            // Only for a REMOTE capture — `capturePhase == "listening"` is set
+            // by the right-Option key alone (broadcastCapturePhase fires from
+            // the remote-start handler and nowhere else), so ordinary dictation
+            // never lights this. That is the point: text typed by dictation
+            // goes wherever your cursor is, and a mic on this card would claim
+            // it was coming here.
+            //
+            // Its ABSENCE is the useful half. Speak with no chip showing and
+            // the words are going to the router to become a new task.
+            if model.capturePhase == "listening" {
+                AimedChip(level: model.captureLevel, compact: true)
+            }
             Text(t.title).font(Theme.fTitle).foregroundColor(Theme.text).lineLimit(1)
             StatusLabel(status: t.status)
             if let e = t.elapsed { NumText(text: e) }

@@ -207,11 +207,7 @@ struct PocketCard: View {
                 // waveform say without a sentence. Aim at another card and the
                 // pair moves with it, because this line belongs to whichever
                 // slot is current.
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(Theme.cError)
-                Waveform(level: model.captureLevel, bars: 14, height: 10,
-                         barWidth: 1.5, spacing: 1.5, color: Theme.text)
+                AimedChip(level: model.captureLevel, compact: true)
             } else {
                 Text("\(pocket.routeKeyLabel) goes to \(slot?.title ?? "nothing")")
                     .font(.system(size: 10.5, design: .monospaced))

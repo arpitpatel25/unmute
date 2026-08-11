@@ -65,3 +65,47 @@ struct Waveform: View {
         history = h
     }
 }
+
+/// "YOUR VOICE IS GOING HERE" — the live-aim chip.
+///
+/// Shown on the pocket card and on an expanded task while a REMOTE capture is
+/// running. It is deliberately not shown for ordinary dictation: that text goes
+/// to whatever you were typing in, not to a task, and a mic on the card would
+/// claim otherwise.
+///
+/// The distinction it buys is the one worth having — when this is absent while
+/// you speak, the words are going to the router to become a NEW task. Present,
+/// and they are going to the card you can see.
+///
+/// One chip rather than a loose mic and a loose waveform: the two together are
+/// a single statement, and drawn separately they read as two unrelated
+/// ornaments in a row that already has several.
+struct AimedChip: View {
+    let level: Double
+    var compact: Bool = false
+
+    var body: some View {
+        HStack(spacing: compact ? 5 : 6) {
+            Image(systemName: "mic.fill")
+                .font(.system(size: compact ? 8.5 : 9.5, weight: .semibold))
+                .foregroundColor(Theme.cError)
+            Waveform(level: level,
+                     bars: compact ? 12 : 16,
+                     height: compact ? 9 : 11,
+                     barWidth: 1.5, spacing: 1.5,
+                     color: Theme.text)
+        }
+        .padding(.horizontal, compact ? 7 : 8)
+        .padding(.vertical, compact ? 3 : 4)
+        .background(
+            Capsule().fill(Theme.cError.opacity(0.12))
+        )
+        .overlay(
+            // A hairline in the same hue, so the chip reads as lit rather than
+            // as a grey pill that happens to contain a red glyph.
+            Capsule().stroke(Theme.cError.opacity(0.35), lineWidth: 0.5)
+        )
+        .accessibilityElement()
+        .accessibilityLabel("Listening — your voice goes to this task")
+    }
+}
