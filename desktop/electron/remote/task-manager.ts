@@ -2742,7 +2742,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation'] }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation'] }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       // EXTERNAL BACKEND: a Codex thread lives in Codex, so an Unmute restart
@@ -2856,6 +2856,12 @@ export class TaskManager extends EventEmitter {
         // Pre-sessionId receipts won't carry one; fall back to the task id so the
         // field is always present (older tasks simply aren't session-pinned).
         sessionId: meta.sessionId ?? id,
+        // THE RECEIPT IS THE PROVIDER TRUTH. Dropping this field made a Codex
+        // CLI task indistinguishable from a legacy untagged Claude task after
+        // relaunch: every inactive surface drew Claude, and resume constructed
+        // Claude. Only genuinely old receipts take the compatibility default.
+        agent: meta.agent ?? 'claude',
+        ...(meta.codexRolloutId ? { codexRolloutId: meta.codexRolloutId } : {}),
         ...(meta.model ? { model: meta.model } : {}),
         kind: meta.kind ?? 'oneoff',
         // A non-terminal task whose session died with the app is, to the user,

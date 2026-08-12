@@ -7,7 +7,9 @@ import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { TaskManager } from './task-manager.ts'
 import { writeRecipe } from './recipe-store.ts'
+import { providerOf } from './providers.ts'
 import type { AgentExecutor, SpawnOpts } from './executor.ts'
+import type { AgentKind } from './codex-executor.ts'
 
 // A fake executor that records what's written and lets the test play "Claude"
 // by writing the status file directly (atomic temp-then-rename, like the contract).
@@ -195,6 +197,60 @@ test('rehydrate recovers sessionId from meta.json, falling back to the task id f
   await tm.rehydrate()
   assert.equal(tm.get(withSid)!.sessionId, 'sess-abc')   // recovered as written
   assert.equal(tm.get(oldNoSid)!.sessionId, oldNoSid)    // fallback to task id
+})
+
+test('rehydrate preserves each CLI provider for inactive cards and resume', async () => {
+  // THE BUG: dispatch persisted agent:'codex', but the generic CLI rehydrate
+  // branch did not copy it onto the Task. Before anything was opened, every
+  // surface therefore resolved the inactive card through providerOf(undefined)
+  // and drew Claude; opening it then resumed through Claude too.
+  const baseDir = await tmpBase()
+  const root = path.join(baseDir, 'local')
+  const codexId = randomUUID()
+  const claudeId = randomUUID()
+  const legacyId = randomUUID()
+  const fixtures = [
+    { id: codexId, agent: 'codex', sessionId: 'codex-session', codexRolloutId: 'codex-session' },
+    { id: claudeId, agent: 'claude', sessionId: 'claude-session' },
+    // Receipts from before provider identity was persisted remain Claude.
+    { id: legacyId, sessionId: 'legacy-session' },
+  ] as const
+
+  for (const receipt of fixtures) {
+    const dir = path.join(root, receipt.id)
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({
+      ...receipt,
+      intent: `continue ${receipt.id}`,
+      kind: 'session',
+      createdAt: Date.now(),
+      cwd: dir,
+    }))
+    await claudeWrites(path.join(dir, 'status.json'), { state: 'done' })
+  }
+
+  const requested: AgentKind[] = []
+  const tm = new TaskManager({
+    executorFactory: (_resume, agent) => {
+      requested.push(agent ?? 'claude')
+      return makeFakeExecutor()
+    },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+
+  await tm.rehydrate()
+
+  const codex = tm.get(codexId)!
+  assert.equal(codex.agent, 'codex', 'inactive task keeps its persisted provider')
+  assert.equal(codex.codexRolloutId, 'codex-session', 'Codex continuation handle survives too')
+  assert.equal(providerOf(codex.agent).label, 'Codex CLI', 'all card/notch serializers resolve the Codex presentation')
+  assert.equal(tm.get(claudeId)!.agent, 'claude')
+  assert.equal(tm.get(legacyId)!.agent, 'claude', 'legacy absent provider keeps the compatibility default')
+
+  assert.equal(await tm.resume(codexId), true)
+  assert.deepEqual(requested, ['codex'], 'resume constructs the original provider, not Claude')
+  tm.killAll()
+  tm.stopMaintenance()
 })
 
 test('done status transition emits done with inline result (PRD §13.4 #3, §13.6)', { timeout: 5000 }, async () => {
