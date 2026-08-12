@@ -209,6 +209,24 @@ export class CodexCdp {
     return (await this.evaluate<string>(`(() => { const ce = document.querySelector('[contenteditable=true]'); return ce ? (ce.textContent || '') : ''; })()`)) ?? ''
   }
 
+  /** Attach local files through Codex Desktop's own composer control. This is
+   * intentionally a file-input operation, never a pasted filesystem path. */
+  async attachFiles(paths: readonly string[]): Promise<boolean> {
+    if (!paths.length) return true
+    if (!(await this.clickAriaLabel('Attach files or connect apps'))) return false
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    if (!(await this.clickText('Attach files or folders'))) return false
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const doc = await this.send('DOM.getDocument', { depth: -1 })
+    const nodeId = (await this.send('DOM.querySelector', {
+      nodeId: doc?.root?.nodeId,
+      selector: 'input[type="file"]',
+    }))?.nodeId
+    if (!nodeId) return false
+    await this.send('DOM.setFileInputFiles', { files: [...paths], nodeId })
+    return true
+  }
+
   /** Move the pointer without pressing — submenus open on hover, not click. */
   async hover(x: number, y: number): Promise<void> {
     await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })

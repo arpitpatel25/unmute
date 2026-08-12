@@ -811,7 +811,7 @@ test('project-bound dispatch falls back to scratch when the dir is unusable', as
 
 // ─── Multimodal attachments: the voice-era screenshot paste ───────────────────
 
-test('attachFile saves under home/attachments and TYPES the path unsubmitted (no Enter)', async () => {
+test('attachFile saves under home/attachments without mutating the terminal draft', async () => {
   const baseDir = await tmpBase()
   const fake = makeFakeExecutor()
   const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
@@ -821,10 +821,9 @@ test('attachFile saves under home/attachments and TYPES the path unsubmitted (no
   assert.ok(saved, 'returns the saved path')
   assert.ok(saved!.startsWith(path.join(tm.get(id)!.home, 'attachments')), 'stored in OUR dir, never the project')
   assert.ok((await fs.stat(saved!)).isFile())
-  // Typed into the input box via raw keystrokes, space-padded, and NOT submitted.
+  // Saving an attachment must not inject an invisible path into a terminal.
   const typed = fake.raw.slice(beforeRaw).join('')
-  assert.ok(typed.includes(` ${saved} `), 'path typed with separating spaces')
-  assert.ok(!typed.includes('\r'), 'no Enter — submission belongs to the next utterance')
+  assert.equal(typed, '')
   // Dead session → null, no throw.
   tm.kill(id)
   assert.equal(await tm.attachFile(id, new Uint8Array([1]), 'png'), null)

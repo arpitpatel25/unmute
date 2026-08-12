@@ -87,6 +87,8 @@ struct PocketP: Codable, Equatable {
 struct ResultP: Codable { let summary: String; let detail: String?; let artifacts: [ArtifactP]? }
 struct ErrorP: Codable { let reason: String; let detail: String? }
 struct McpGapP: Codable { let message: String; let fixCommand: String }
+struct DraftAttachmentP: Codable { let id: String; let path: String; let mimeType: String; let name: String }
+struct TaskDraftP: Codable { let text: String; let attachments: [DraftAttachmentP] }
 
 /// Full detail for the fronted task (task surface) or the focused Stage.
 struct TaskDetail: Codable {
@@ -120,6 +122,7 @@ struct TaskDetail: Codable {
     let conversation: [TurnP]?
     /// Codex project name, for the header.
     let project: String?
+    let draft: TaskDraftP?
 
     /// Does this task have a live terminal? SENT by the engine, which resolves it
     /// from the one provider registry (electron/remote/providers.ts). This is
@@ -445,6 +448,10 @@ enum Event {
     case pocketExpand
     case chooseOption(id: String, index: Int)
     case answerText(id: String, text: String)      // free-text / confirm answer
+    case setDraftText(id: String, text: String)
+    case addDraftImage(id: String, path: String, mimeType: String, name: String)
+    case removeDraftAttachment(id: String, attachmentId: String)
+    case sendDraft(id: String)
     case mute(id: String)                          // drop from attention/crank this episode
     case kill(id: String)
     case resume(id: String)
@@ -508,6 +515,10 @@ enum Event {
         case .pocketExpand: return ["type": "pocketExpand"]
         case .chooseOption(let id, let index): return ["type": "chooseOption", "id": id, "index": index]
         case .answerText(let id, let text): return ["type": "answerText", "id": id, "text": text]
+        case .setDraftText(let id, let text): return ["type": "setDraftText", "id": id, "text": text]
+        case .addDraftImage(let id, let path, let mimeType, let name): return ["type": "addDraftImage", "id": id, "path": path, "mimeType": mimeType, "name": name]
+        case .removeDraftAttachment(let id, let attachmentId): return ["type": "removeDraftAttachment", "id": id, "attachmentId": attachmentId]
+        case .sendDraft(let id): return ["type": "sendDraft", "id": id]
         case .mute(let id): return ["type": "mute", "id": id]
         case .kill(let id): return ["type": "kill", "id": id]
         case .resume(let id): return ["type": "resume", "id": id]

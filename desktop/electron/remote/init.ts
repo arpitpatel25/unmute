@@ -26,6 +26,7 @@ import { homedir } from 'node:os'
 import { existsSync, writeFileSync, mkdirSync, statSync, watch, promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
+import { TaskDraftStore } from './task-draft'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor'
@@ -418,6 +419,36 @@ async function getSetupStatus() {
 }
 
 let manager: TaskManager | null = null
+/** Unsent replies are task-scoped, not owned by any one expanded surface. */
+const taskDrafts = new TaskDraftStore()
+
+function draftDeliveryText(text: string, paths: string[]): string {
+  return paths.length ? `${text}${text ? '\n\n' : ''}${paths.map((path) => `[image: ${path}]`).join('\n')}` : text
+}
+
+async function addDraftImageFromPath(id: string, sourcePath: string, mimeType: string, name: string): Promise<void> {
+  if (!manager || !manager.get(id)) return
+  const data = await fs.readFile(sourcePath)
+  const ext = (basename(name).split('.').pop() || mimeType.split('/').pop() || 'png').replace(/[^a-z0-9]/gi, '')
+  const path = await manager.attachFile(id, data, ext)
+  if (path) taskDrafts.addAttachment(id, { id: randomUUID(), path, mimeType, name: name || basename(path) })
+}
+
+async function sendTaskDraft(id: string): Promise<boolean> {
+  const draft = taskDrafts.snapshot(id)
+  if (!draft || !manager) return false
+  const task = manager.get(id)
+  if (!task) return false
+  const text = draftDeliveryText(draft.text, isExternalAgent(task.agent) ? [] : draft.attachments.map((attachment) => attachment.path))
+  if (!text.trim()) return false
+  const accepted = draft.attachments.length
+    ? await manager.deliverDraft(id, text, draft.attachments.map((attachment) => attachment.path))
+    : manager.tasksAwaitingUser().some((entry) => entry.id === id)
+    ? manager.answer(id, text)
+    : manager.followUp(id, text)
+  if (accepted) taskDrafts.clearIfUnchanged(id, draft)
+  return accepted
+}
 /** The Codex CLI App Server. One per app; started lazily by the hub itself. */
 let codexHub: CodexHub | null = null
 /** Codex desktop backend — inert until a task targets it (see codex/driver.ts). */
@@ -2247,7 +2278,7 @@ async function listClaudeSkillNames(): Promise<string[]> {
   return names
 }
 
-export async function dispatchFromCapture(rawTranscript: string): Promise<string | null> {
+export async function dispatchFromCapture(rawTranscript: string, attachments: readonly string[] = []): Promise<string | null> {
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
   // surface always returns to idle, whatever path the dispatch takes.
@@ -2255,7 +2286,7 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
   pendingBeat = null
   let landed: string | null = null
   try {
-    landed = await dispatchFromCaptureInner(rawTranscript)
+    landed = await dispatchFromCaptureInner(rawTranscript, attachments)
     return landed
   } finally {
     broadcastCapturePhase('idle', landed)
@@ -2267,7 +2298,7 @@ export async function dispatchFromCapture(rawTranscript: string): Promise<string
   }
 }
 
-async function dispatchFromCaptureInner(rawTranscript: string): Promise<string | null> {
+async function dispatchFromCaptureInner(rawTranscript: string, attachments: readonly string[] = []): Promise<string | null> {
   if (!manager) {
     log.error('dispatchFromCapture before initRemote')
     return null
@@ -2287,19 +2318,15 @@ async function dispatchFromCaptureInner(rawTranscript: string): Promise<string |
     // Best-effort: without a wired completeFn the raw transcript passes through
     // (status quo); delivery stays deterministic either way.
     const text = completeFn ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
-    const awaiting = manager.tasksAwaitingUser().some((t) => t.id === fid)
-    if (awaiting) {
-      manager.answer(fid, text)
-      log.event('routed-to-focus', { taskId: fid, kind: 'answer' })
-      pendingBeat = '' // the stage is on screen — the beat would be noise
-      return fid
-    }
-    if (manager.followUp(fid, text)) {
-      log.event('routed-to-focus', { taskId: fid, kind: 'continue' })
-      pendingBeat = ''
-      return fid
-    }
-    // Focused task couldn't take it (terminal/gone) → fall through to normal routing.
+    // Right-Option capture and the visible composer are one draft. Captured
+    // images stay as attachments rather than being rendered as filesystem paths.
+    taskDrafts.appendText(fid, (taskDrafts.get(fid).text ? '\n' : '') + text)
+    for (const path of attachments) taskDrafts.addAttachment(fid, {
+      id: randomUUID(), path, mimeType: 'image/png', name: basename(path),
+    })
+    log.event('capture-appended-to-draft', { taskId: fid, attachments: attachments.length })
+    pendingBeat = '' // the target surface is visible; its draft is the acknowledgement
+    return fid
   }
 
   // 1. ALL routing goes through the warm router — including answering a task that
@@ -2982,6 +3009,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         listTasks: () => mgr.list().map(serializeTask),
         getTask: (id) => { const t = mgr.get(id); return t ? serializeTask(t) : undefined },
         answer: (id, text) => mgr.answer(id, text),
+        getDraft: (id) => taskDrafts.get(id),
+        setDraftText: (id, text) => { taskDrafts.setText(id, text) },
+        addDraftImage: (id, path, mimeType, name) => addDraftImageFromPath(id, path, mimeType, name),
+        removeDraftAttachment: async (id, attachmentId) => {
+          const attachment = taskDrafts.removeAttachment(id, attachmentId)
+          if (attachment) await fs.unlink(attachment.path).catch(() => {})
+        },
+        sendDraft: (id) => sendTaskDraft(id),
         kill: (id) => mgr.kill(id),
         remove: (id) => mgr.remove(id),
         killAll: () => mgr.killAll(),
@@ -4012,12 +4047,15 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     manager.setNote(id, typeof note === 'string' ? note : '')
     return true
   })
-  // Attach an image to a session (voice-era screenshot paste/drag). Bytes arrive
-  // as an ArrayBuffer from the renderer; saved under the task's own dir and the
-  // path is TYPED (unsubmitted) into the session — see TaskManager.attachFile.
+  // Attachment bytes become a task draft item. They are never typed into a PTY
+  // merely because the user pasted or dropped an image.
   ipcMain.handle('remote:attach-image', async (_e, taskId: string, data: ArrayBuffer, ext: string) => {
     if (!manager) return null
-    try { return await manager.attachFile(taskId, new Uint8Array(data), ext) } catch (e) {
+    try {
+      const path = await manager.attachFile(taskId, new Uint8Array(data), ext)
+      if (path) taskDrafts.addAttachment(taskId, { id: randomUUID(), path, mimeType: `image/${ext || 'png'}`, name: basename(path) })
+      return path
+    } catch (e) {
       log.warn('attach-image failed', { taskId, error: (e as Error).message })
       return null
     }

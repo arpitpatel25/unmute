@@ -542,6 +542,24 @@ export class CodexDesktopDriver {
     return { ok: false, reason: 'send-failed' }
   }
 
+  async sendWithAttachments(threadId: string, text: string, attachments: readonly string[]): Promise<{ ok: boolean; reason?: string }> {
+    const cdp = await this.connect()
+    if (!cdp) return { ok: false, reason: 'not-armed' }
+    if (!(await this.openThread(threadId, cdp, { background: true }))) return { ok: false, reason: 'thread-not-found' }
+    await this.sleep(500)
+    if (!(await cdp.focusComposer())) return { ok: false, reason: 'no-composer' }
+    if (!(await cdp.attachFiles(attachments))) return { ok: false, reason: 'attach-failed' }
+    await this.sleep(180)
+    if (text) {
+      await cdp.focusComposer()
+      await cdp.typeText(text)
+      await this.sleep(180)
+      if ((await cdp.composerText()) !== text) return { ok: false, reason: 'text-mismatch' }
+    }
+    await cdp.pressEnter()
+    return { ok: true }
+  }
+
   /**
    * Switch the app to a thread. Used both before a send and by the cockpit's
    * tap-through — the Codex analogue of "show me the terminal", except we hand

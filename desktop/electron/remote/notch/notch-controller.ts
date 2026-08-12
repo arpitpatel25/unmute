@@ -15,6 +15,7 @@ import type {
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
   ScratchpadPayloadP, PocketP, PocketSlotP, PocketMode,
 } from './notch-client'
+import type { TaskDraft } from '../task-draft'
 import { providerOf, type ProviderId } from '../providers'
 import { ALWAYS_PRESENT, type PresenceLike } from '../presence'
 import { createLogger } from '../log'
@@ -87,6 +88,11 @@ export interface NotchControllerDeps {
   /** False when the answer was REFUSED — an open picker Unmute will not drive.
    *  The task is still blocked, so the crank must not move off it. */
   answer(id: string, text: string): boolean
+  getDraft?(id: string): TaskDraft
+  setDraftText?(id: string, text: string): void
+  addDraftImage?(id: string, path: string, mimeType: string, name: string): Promise<void> | void
+  removeDraftAttachment?(id: string, attachmentId: string): Promise<void> | void
+  sendDraft?(id: string): Promise<boolean> | boolean
   kill(id: string): void
   remove(id: string): Promise<void> | void
   killAll(): void
@@ -492,6 +498,23 @@ export class NotchController {
       const landed = this.deps.answer(id, text)
       if (wasBlocking && landed) this.advanceAfterAnswer(id)
       else this.scheduleReconcile()
+    })
+    on('setDraftText', (e) => {
+      const { id, text } = e as { id: string; text: string }
+      this.deps.setDraftText?.(id, text)
+      this.scheduleReconcile()
+    })
+    on('addDraftImage', (e) => {
+      const { id, path, mimeType, name } = e as { id: string; path: string; mimeType: string; name: string }
+      void Promise.resolve(this.deps.addDraftImage?.(id, path, mimeType, name)).then(() => this.scheduleReconcile())
+    })
+    on('removeDraftAttachment', (e) => {
+      const { id, attachmentId } = e as { id: string; attachmentId: string }
+      void Promise.resolve(this.deps.removeDraftAttachment?.(id, attachmentId)).then(() => this.scheduleReconcile())
+    })
+    on('sendDraft', (e) => {
+      const { id } = e as { id: string }
+      void Promise.resolve(this.deps.sendDraft?.(id)).then(() => this.scheduleReconcile())
     })
     on('kill', (e) => this.deps.kill((e as { id: string }).id))
     // A RESUME THAT FAILS MUST SAY SO.
@@ -1657,6 +1680,7 @@ export class NotchController {
       result: t.result ?? undefined,
       error: t.error ?? undefined,
       mcpGap: t.mcpGap ? { message: t.mcpGap.message, fixCommand: t.mcpGap.fixCommand } : undefined,
+      draft: this.deps.getDraft?.(t.id),
     }
   }
 

@@ -135,7 +135,8 @@ struct StageView: View {
             StageComposer(placeholder: "Reply — or hold right ⌥ and speak",
                           model: model, taskId: t.id,
                           deliveryError: t.deliveryError,
-                          modelLabel: t.modelLabel, sending: t.sending ?? false)
+                          modelLabel: t.modelLabel, sending: t.sending ?? false,
+                          draft: t.draft)
                 .padding(.top, 9)
         }
     }
@@ -300,7 +301,6 @@ struct QuestionBlock: View {
     /// own one, and a terminal-only ask has to be able to open whichever it is
     /// sitting in. Without it the card can name the terminal but not reach it.
     @Binding var terminalOpen: Bool
-    @State private var answerText = ""
 
     private var terminalOnly: Bool { question.kind == "terminal_only" }
 
@@ -335,21 +335,9 @@ struct QuestionBlock: View {
                     model.emit(.chooseOption(id: taskId, index: idx))
                 }
             } else {
-                HStack(spacing: 8) {
-                    TextField(question.kind == "confirm" ? "Type to confirm…" : "Type your answer…",
-                              text: $answerText, onCommit: send)
-                        .textFieldStyle(.plain)
-                        .font(Theme.fBody).foregroundColor(Theme.text)
-                        .padding(.horizontal, 11).padding(.vertical, 7)
-                        .background(RoundedRectangle(cornerRadius: Theme.controlRadius)
-                            .fill(Theme.sunken))
-                        .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius)
-                            .stroke(Theme.hairline, lineWidth: 0.5))
-                    ActButton(label: "Send", go: true, action: send)
-                }
                 HStack(spacing: 5) {
                     Image(systemName: "mic").font(.system(size: 9.5))
-                    Text("or hold the Remote key and speak your answer").font(.system(size: 11))
+                    Text("Reply below, or hold the Remote key to add your answer").font(.system(size: 11))
                 }
                 .foregroundColor(Theme.textFaint)
             }
@@ -381,12 +369,6 @@ struct QuestionBlock: View {
         .foregroundColor(Theme.textFaint)
     }
 
-    private func send() {
-        let v = answerText.trimmingCharacters(in: .whitespaces)
-        guard !v.isEmpty else { return }
-        model.emit(.answerText(id: taskId, text: v))
-        answerText = ""
-    }
 }
 
 /// Numbered choice chips (1..N — also answerable by number keys).

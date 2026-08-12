@@ -1135,7 +1135,7 @@ class SessionManager {
       // Nothing about the dispatch itself changes: same work, same order (see
       // the queue below), only the UI stops blocking on it.
       remoteDispatchQueue = remoteDispatchQueue
-        .then(() => dispatchFromCapture(cmd))
+        .then(() => dispatchFromCapture(cmd, session.captureAttachments))
         .catch((e) => {
           console.error('[session] 🛰  REMOTE dispatch failed:', e instanceof Error ? e.message : e)
         })

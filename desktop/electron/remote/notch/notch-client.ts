@@ -88,6 +88,8 @@ export interface QuestionP { text: string; kind?: string; choices?: string[]; ir
 export interface ResultP { summary: string; detail?: string; artifacts?: ArtifactP[] }
 export interface ErrorP { reason: string; detail?: string }
 export interface McpGapP { message: string; fixCommand: string }
+export interface DraftAttachmentP { id: string; path: string; mimeType: string; name: string }
+export interface TaskDraftP { text: string; attachments: DraftAttachmentP[] }
 
 /** One turn of a GUI-agent conversation — this backend's answer to the terminal. */
 /** One entry of a Codex thread; see codex/rollout.ts CodexTurn for the shapes. */
@@ -143,6 +145,8 @@ export interface TaskDetailP {
   conversation?: TurnP[]
   /** Codex project name, for the header. */
   project?: string
+  /** One task-scoped unsent draft, shared by every expanded native surface. */
+  draft?: TaskDraftP
 }
 
 export interface CardP {
@@ -352,6 +356,10 @@ export type NotchEvent =
   | { type: 'pocketExpand' }
   | { type: 'chooseOption'; id: string; index: number }
   | { type: 'answerText'; id: string; text: string }
+  | { type: 'setDraftText'; id: string; text: string }
+  | { type: 'addDraftImage'; id: string; path: string; mimeType: string; name: string }
+  | { type: 'removeDraftAttachment'; id: string; attachmentId: string }
+  | { type: 'sendDraft'; id: string }
   | { type: 'mute'; id: string }
   | { type: 'kill'; id: string }
   | { type: 'resume'; id: string }

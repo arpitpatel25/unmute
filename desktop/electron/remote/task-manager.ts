@@ -3552,6 +3552,22 @@ export class TaskManager extends EventEmitter {
     return true
   }
 
+  /** Deliver an attachment-bearing draft. Desktop Codex gets real composer
+   * attachments; PTY providers receive their supported local references in the
+   * same submitted turn. */
+  async deliverDraft(id: string, text: string, attachments: readonly string[]): Promise<boolean> {
+    const task = this.tasks.get(id)
+    if (!task) return false
+    if (task.agent === 'codex-desktop') {
+      const driver = this.opts.codexDriver
+      if (!driver || !task.codexThreadId) return false
+      const result = await driver.sendWithAttachments(task.codexThreadId, text, attachments)
+      if (!result.ok) { task.deliveryError = `Could not send to Codex (${result.reason})`; this.emit('updated', task); return false }
+      return true
+    }
+    return this.followUp(id, text)
+  }
+
   /**
    * Resume a finished/reaped task: respawn its session with `--continue` in the
    * SAME cwd. Claude resume is cwd-scoped and each task owns one session, so this
@@ -3802,14 +3818,8 @@ export class TaskManager extends EventEmitter {
       .slice(0, limit)
   }
 
-  /** Attach an image (or any file) to a session — the voice-era equivalent of
-   *  dragging a screenshot into the terminal. Saves the bytes under the task's
-   *  OWN dir (home/attachments — never the user's project), then TYPES the path
-   *  into the session's input box WITHOUT submitting: the user can keep speaking
-   *  and their next utterance submits together with the image as one message
-   *  (exactly the drag-a-file-into-a-terminal contract). Claude Code reads the
-   *  image from the path. Returns the saved path, or null if the session is gone.
-   */
+  /** Persist an attachment in the task's owned storage. Delivery is owned by the
+   * task draft, so adding an image cannot mutate or submit a live terminal. */
   async attachFile(id: string, data: Uint8Array, ext: string): Promise<string | null> {
     const tlog = log.child({ taskId: id })
     const task = this.tasks.get(id)
@@ -3823,9 +3833,6 @@ export class TaskManager extends EventEmitter {
     await fs.mkdir(dir, { recursive: true })
     const file = join(dir, `attachment-${this.clock()}.${safeExt}`)
     await fs.writeFile(file, data)
-    // Space-padded so the path never fuses with text already in the input box;
-    // NO carriage return — submission belongs to the user's next utterance/keys.
-    this.sendInput(id, ` ${file} `)
     tlog.event('file-attached', { file, bytes: data.byteLength })
     return file
   }

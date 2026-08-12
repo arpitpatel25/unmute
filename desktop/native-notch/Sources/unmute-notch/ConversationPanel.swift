@@ -317,10 +317,11 @@ struct StageComposer: View {
     var modelLabel: String? = nil
     /// True while a send is in flight.
     var sending: Bool = false
+    var draft: TaskDraftP? = nil
     @State private var text = ""
     @FocusState private var focused: Bool
 
-    private var canSend: Bool { !text.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var canSend: Bool { !text.trimmingCharacters(in: .whitespaces).isEmpty || !(draft?.attachments.isEmpty ?? true) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -336,10 +337,27 @@ struct StageComposer: View {
             // beneath the text, not a one-line field with a button beside it.
             // The shape is most of what makes it read as a place to write.
             VStack(alignment: .leading, spacing: 10) {
-                TextField(placeholder, text: $text, onCommit: send)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13.5))
-                    .foregroundColor(Theme.text)
+                if let attachments = draft?.attachments, !attachments.isEmpty {
+                    HStack(spacing: 7) {
+                        ForEach(attachments, id: \.id) { attachment in
+                            HStack(spacing: 5) {
+                                if let image = NSImage(contentsOfFile: attachment.path) {
+                                    Image(nsImage: image).resizable().scaledToFill().frame(width: 22, height: 22).clipShape(RoundedRectangle(cornerRadius: 4))
+                                } else {
+                                    Image(systemName: "photo").font(.system(size: 11))
+                                }
+                                Text(attachment.name).lineLimit(1).font(.system(size: 11.5))
+                                Button(action: { model.emit(.removeDraftAttachment(id: taskId, attachmentId: attachment.id)) }) {
+                                    Image(systemName: "xmark.circle.fill").font(.system(size: 12))
+                                }.buttonStyle(.plain)
+                            }
+                            .padding(.horizontal, 7).padding(.vertical, 5)
+                            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.raised))
+                        }
+                    }
+                }
+                SubmitTextEditor(text: $text, placeholder: placeholder, onSubmit: send, onImagePaste: attachImage)
+                    .frame(minHeight: 48, maxHeight: 120)
                     .focused($focused)
                 HStack(spacing: 10) {
                     if let m = modelLabel, !m.isEmpty {
@@ -373,13 +391,84 @@ struct StageComposer: View {
                 .stroke(focused ? Theme.accent.opacity(0.55) : Theme.hairline, lineWidth: focused ? 1 : 0.5))
             .animation(Theme.hover, value: focused)
         }
+        .onAppear { text = draft?.text ?? "" }
+        .onChange(of: draft?.text ?? "") { remote in
+            if remote != text { text = remote }
+        }
+        .onChange(of: text) { value in model.emit(.setDraftText(id: taskId, text: value)) }
     }
 
     private func send() {
-        let v = text.trimmingCharacters(in: .whitespaces)
-        guard !v.isEmpty else { return }
-        model.emit(.answerText(id: taskId, text: v))
-        text = ""
+        guard canSend else { return }
+        model.emit(.sendDraft(id: taskId))
+    }
+
+    private func attachImage(_ path: String, _ mimeType: String, _ name: String) {
+        model.emit(.addDraftImage(id: taskId, path: path, mimeType: mimeType, name: name))
+    }
+}
+
+/// AppKit supplies the key semantics SwiftUI's TextField cannot: Enter sends,
+/// while Shift-Enter remains a real newline in the task draft.
+private struct SubmitTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let onSubmit: () -> Void
+    let onImagePaste: (String, String, String) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text, onSubmit: onSubmit, onImagePaste: onImagePaste) }
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = false
+        let view = AttachmentTextView()
+        view.drawsBackground = false
+        view.font = .systemFont(ofSize: 13.5)
+        view.textColor = .labelColor
+        view.isRichText = false
+        view.isAutomaticQuoteSubstitutionEnabled = false
+        view.delegate = context.coordinator
+        view.onImagePaste = context.coordinator.onImagePaste
+        view.string = text
+        scroll.documentView = view
+        return scroll
+    }
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let view = scroll.documentView as? NSTextView, view.string != text else { return }
+        view.string = text
+    }
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        let text: Binding<String>
+        let onSubmit: () -> Void
+        let onImagePaste: (String, String, String) -> Void
+        init(text: Binding<String>, onSubmit: @escaping () -> Void, onImagePaste: @escaping (String, String, String) -> Void) { self.text = text; self.onSubmit = onSubmit; self.onImagePaste = onImagePaste }
+        func textDidChange(_ notification: Notification) {
+            text.wrappedValue = (notification.object as? NSTextView)?.string ?? ""
+        }
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
+            if NSEvent.modifierFlags.contains(.shift) { return false }
+            onSubmit()
+            return true
+        }
+    }
+}
+
+private final class AttachmentTextView: NSTextView {
+    var onImagePaste: ((String, String, String) -> Void)?
+    override func paste(_ sender: Any?) {
+        if let image = NSPasteboard.general.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage,
+           let data = image.tiffRepresentation,
+           let bitmap = NSBitmapImageRep(data: data),
+           let png = bitmap.representation(using: .png, properties: [:]) {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("unmute-draft-\(UUID().uuidString).png")
+            do {
+                try png.write(to: url)
+                onImagePaste?(url.path, "image/png", url.lastPathComponent)
+                return
+            } catch { }
+        }
+        super.paste(sender)
     }
 }
 
@@ -391,10 +480,11 @@ struct CodexComposer: View {
     var deliveryError: String? = nil
     var modelLabel: String? = nil
     var sending: Bool = false
+    var draft: TaskDraftP? = nil
 
     var body: some View {
         StageComposer(placeholder: "Reply to Codex — or hold right ⌥ and speak",
                       model: model, taskId: taskId, deliveryError: deliveryError,
-                      modelLabel: modelLabel, sending: sending)
+                      modelLabel: modelLabel, sending: sending, draft: draft)
     }
 }
