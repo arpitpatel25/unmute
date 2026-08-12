@@ -785,6 +785,9 @@ export interface DeliveryOutcome {
   /** A delivery was already running, so this call did nothing at all. Distinct
    *  from an empty pad, which is also `landed: null` but means the opposite. */
   busy?: boolean
+  /** Immutable delivery snapshot. Present only after the destination accepted
+   *  the pad, so callers can archive it without racing the live buffer. */
+  delivered?: { pad: Pad; text: string; attachments: string[] }
 }
 
 /** THE DELIVERY: take the pad, format it for the target, hand it to the
@@ -833,8 +836,11 @@ export async function runDelivery(
     error = err
   }
   if (landed) {
+    const delivered = inFlight
     commitDelivery()
-    return { landed, restaged: null }
+    return delivered
+      ? { landed, restaged: null, delivered: { pad: delivered, text: ready.text, attachments: [...ready.attachments] } }
+      : { landed, restaged: null }
   }
   const restaged = restageDelivery()
   announce(onChanged)

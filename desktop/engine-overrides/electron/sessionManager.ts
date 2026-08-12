@@ -18,7 +18,7 @@ import { hasApiKey } from './keyStore'
 import { tryManagedSTT, tryManagedLLM } from './paywall/paywall-route'
 import { warmNow, ensureFreshToken } from './paywall/paywall-glue'
 // Unmute Remote: dispatch a captured command to Claude Code (ADDITIVE).
-import { dispatchFromCapture, hideNativePill } from './paywall/remote/init'
+import { dispatchFromCapture, hideNativePill, recordCapturedDictation } from './paywall/remote/init'
 import {
   attachTranscript, beginOwnClipboardSequence, beginSegment, cancelOpenSegment,
   composeWithInserts, endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed,
@@ -1024,6 +1024,13 @@ class SessionManager {
       const composed = composeWithInserts(session.captureSegmentId, output, dest, captured)
       if (composed == null) return output
       session.captureAttachments = captured.attachments
+      recordCapturedDictation({
+        id: session.sessionId,
+        createdAt: session.createdAt,
+        text: composed,
+        destination: dest,
+        attachments: captured.attachments,
+      })
       return composed
     } catch (e) {
       console.warn('[session] capture compose failed — delivering speech alone:', e)

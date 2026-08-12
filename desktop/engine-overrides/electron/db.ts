@@ -11,6 +11,7 @@
 import Database from 'better-sqlite3'
 import { app } from 'electron'
 import path from 'path'
+import fs from 'fs'
 // popLastEngine is the handoff point: sessionManager (or paywall-route on
 // the managed path) calls setLastEngine(...) when transcription returns,
 // and saveSession reads + clears it here. Single-flight assumption holds
@@ -18,6 +19,7 @@ import path from 'path'
 import { popLastEngine } from './paywall/main-extensions'
 
 let db: Database.Database
+let cleanupTimer: ReturnType<typeof setInterval> | null = null
 
 export type EngineTag = 'cloud' | 'byok' | 'local'
 
@@ -86,6 +88,11 @@ export function initDB(): void {
   `)
 
   cleanupSessions()
+  // A write-triggered cleanup is not a hard retention guarantee for someone
+  // who leaves the app open overnight. Reap on a short, unref'd cadence too.
+  if (cleanupTimer) clearInterval(cleanupTimer)
+  cleanupTimer = setInterval(() => cleanupSessions(), 60 * 60 * 1000)
+  cleanupTimer.unref?.()
 }
 
 export interface UsageRow {
@@ -170,6 +177,7 @@ export function saveSession(session: {
 }
 
 export function getSessions(limit = 50): Record<string, unknown>[] {
+  cleanupSessions()
   const rows = db.prepare(
     'SELECT * FROM sessions ORDER BY created_at DESC LIMIT ?'
   ).all(limit) as DBSession[]
@@ -238,6 +246,16 @@ export function deleteSession(id: string): void {
 function cleanupSessions(): void {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000
   db.prepare('DELETE FROM sessions WHERE created_at < ?').run(cutoff)
+  // Audio is part of a dictation, not an exception to its retention policy.
+  // The engine's five-session cap is still useful under 24h, but cannot retain
+  // a quiet user's recording for days.
+  const audioDir = path.join(app.getPath('userData'), 'audio')
+  try {
+    for (const name of fs.readdirSync(audioDir)) {
+      const file = path.join(audioDir, name)
+      if (fs.statSync(file).isFile() && fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file)
+    }
+  } catch { /* audio has not been created yet, or is being cleared */ }
 
   const count = (db.prepare('SELECT COUNT(*) as c FROM sessions').get() as { c: number }).c
   if (count > 100) {
@@ -255,5 +273,7 @@ export function clearAllSessions(): void {
 }
 
 export function closeDB(): void {
+  if (cleanupTimer) clearInterval(cleanupTimer)
+  cleanupTimer = null
   if (db) db.close()
 }

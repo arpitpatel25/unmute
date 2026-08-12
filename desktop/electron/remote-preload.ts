@@ -41,6 +41,18 @@ export interface RemoteSettingsSnapshot {
   logFile: string | null
 }
 
+export interface CaptureHistorySnapshot {
+  id: string
+  kind: 'dictation' | 'scratchpad'
+  createdAt: number
+  finalizedAt: number
+  text: string
+  destination: 'cursor' | 'task'
+  taskId?: string
+  attachments: string[]
+  saved: boolean
+}
+
 export interface RemoteSetupStep {
   key: string
   title: string
@@ -56,6 +68,14 @@ export interface RemoteSetupStatus {
 }
 
 export const remotePreloadExtensions = {
+  // ── Capture history ──
+  remoteListCaptureHistory: (kind?: 'dictation' | 'scratchpad'): Promise<CaptureHistorySnapshot[]> =>
+    ipcRenderer.invoke('remote:capture-history-list', kind),
+  remoteSetCaptureHistorySaved: (id: string, saved: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:capture-history-save', id, saved),
+  remoteDeleteCaptureHistory: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:capture-history-delete', id),
+
   // ── Computer Use (ax-mcp) ──
   /** Read the current Computer Use policy (enabled / allowAll / allowed / screenshots). */
   remoteGetComputerUse: (): Promise<{ enabled: boolean; screenshotEnabled: boolean; allowAll: boolean; allowed: string[] }> =>

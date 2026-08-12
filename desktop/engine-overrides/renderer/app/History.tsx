@@ -1,6 +1,26 @@
 import { useState, useEffect } from 'react'
 import type { Session } from '../shared/types'
 
+interface CaptureHistoryEntry {
+  id: string
+  kind: 'dictation' | 'scratchpad'
+  createdAt: number
+  finalizedAt: number
+  text: string
+  destination: 'cursor' | 'task'
+  taskId?: string
+  attachments: string[]
+  saved: boolean
+}
+
+function captureHistoryApi() {
+  return window.electronAPI as unknown as {
+    remoteListCaptureHistory?: (kind?: 'dictation' | 'scratchpad') => Promise<CaptureHistoryEntry[]>
+    remoteSetCaptureHistorySaved?: (id: string, saved: boolean) => Promise<boolean>
+    remoteDeleteCaptureHistory?: (id: string) => Promise<boolean>
+  }
+}
+
 const FLOW_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   dictation: { label: 'Dictation', color: 'text-ink', bg: 'bg-ink-07' },
   transform: { label: 'Instruction', color: 'text-accent', bg: 'bg-accent/[0.08]' },
@@ -23,9 +43,14 @@ export default function History() {
   const [loading, setLoading] = useState(true)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set())
+  const [scratchpads, setScratchpads] = useState<CaptureHistoryEntry[]>([])
+  const [dictationCaptures, setDictationCaptures] = useState<CaptureHistoryEntry[]>([])
+  const [tab, setTab] = useState<'dictations' | 'scratchpads'>('dictations')
 
   useEffect(() => {
     loadSessions()
+    loadScratchpads()
+    loadDictationCaptures()
 
     // Listen for retry status updates from main process
     window.electronAPI.onRetryStatus((sessionId, status, data) => {
@@ -64,6 +89,34 @@ export default function History() {
     }
   }
 
+  async function loadScratchpads() {
+    try {
+      const data = await captureHistoryApi().remoteListCaptureHistory?.('scratchpad')
+      if (data) setScratchpads(data)
+    } catch (err) {
+      console.error('Failed to load scratchpad history:', err)
+    }
+  }
+
+  async function loadDictationCaptures() {
+    try {
+      const data = await captureHistoryApi().remoteListCaptureHistory?.('dictation')
+      if (data) setDictationCaptures(data)
+    } catch (err) {
+      console.error('Failed to load dictation capture history:', err)
+    }
+  }
+
+  async function setScratchpadSaved(entry: CaptureHistoryEntry, saved: boolean) {
+    const ok = await captureHistoryApi().remoteSetCaptureHistorySaved?.(entry.id, saved)
+    if (ok) setScratchpads(prev => prev.map(item => item.id === entry.id ? { ...item, saved } : item))
+  }
+
+  async function deleteScratchpad(entry: CaptureHistoryEntry) {
+    const ok = await captureHistoryApi().remoteDeleteCaptureHistory?.(entry.id)
+    if (ok) setScratchpads(prev => prev.filter(item => item.id !== entry.id))
+  }
+
   function formatTime(timestamp: number): string {
     const date = new Date(timestamp)
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -92,7 +145,7 @@ export default function History() {
     )
   }
 
-  if (sessions.length === 0) {
+  if (sessions.length === 0 && scratchpads.length === 0) {
     return (
       <div>
         <h2 className="font-display text-[22px] font-bold text-ink tracking-tight mb-6">History</h2>
@@ -135,16 +188,22 @@ export default function History() {
       <div className="mb-4">
         <h2 className="font-display text-[22px] font-bold text-ink tracking-tight">History</h2>
         <p className="text-[11px] text-ink-35 mt-1">
-          Sessions from the last 24 hours. Audio is kept for the 5 most recent dictations.
+          Unsaved captures are removed after 24 hours. Saved scratchpads stay until you delete them.
         </p>
       </div>
 
-      <div className="flex flex-col gap-2.5">
+      <div className="flex gap-1 mb-4 rounded-xl bg-ink-07 p-1 w-fit">
+        <button onClick={() => setTab('dictations')} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === 'dictations' ? 'bg-surface-2 text-ink shadow-sm' : 'text-ink-35'}`}>Dictations</button>
+        <button onClick={() => setTab('scratchpads')} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === 'scratchpads' ? 'bg-surface-2 text-ink shadow-sm' : 'text-ink-35'}`}>Scratchpads</button>
+      </div>
+
+      {tab === 'dictations' && <div className="flex flex-col gap-2.5">
         {sessions.map((session, index) => {
           const flow = FLOW_CONFIG[session.flowType] || FLOW_CONFIG.dictation
           const isCopied = copiedId === session.id
           const isRetrying = retryingIds.has(session.id)
           const hasAudio = !!session.audioFilePath
+          const capture = dictationCaptures.find(entry => entry.id === session.id)
           // Copy whatever text is actually shown (line-clamped below). A recovered
           // dictation has no `output` — its text lives in `dictationTranscript` — so
           // gating copy on `output` alone hid the button for recovered rows.
@@ -187,6 +246,7 @@ export default function History() {
                         Failed
                       </span>
                     ) : null}
+                    {capture?.attachments.length ? <span className="text-[10px] text-ink-35">{capture.attachments.length} image{capture.attachments.length === 1 ? '' : 's'}</span> : null}
                   </div>
 
                   {/* Output text or retrying animation */}
@@ -204,9 +264,12 @@ export default function History() {
                       <span className="text-[13px] text-accent font-medium">Re-processing audio...</span>
                     </div>
                   ) : (
-                    <p className="text-[13px] text-ink leading-relaxed line-clamp-2">
-                      {session.output || session.dictationTranscript || session.errorMessage || 'No output'}
-                    </p>
+                    <>
+                      <p className="text-[13px] text-ink leading-relaxed line-clamp-2">
+                        {session.output || session.dictationTranscript || session.errorMessage || 'No output'}
+                      </p>
+                      {capture?.attachments.length ? <div className="flex gap-1.5 mt-2 overflow-hidden">{capture.attachments.slice(0, 4).map((attachment) => <img key={attachment} src={`file://${attachment}`} className="w-10 h-10 object-cover rounded-lg border border-border" />)}</div> : null}
+                    </>
                   )}
                 </div>
 
@@ -266,7 +329,36 @@ export default function History() {
             </div>
           )
         })}
-      </div>
+      </div>}
+
+      {tab === 'scratchpads' && <div className="flex flex-col gap-2.5">
+        {scratchpads.length === 0 ? (
+          <p className="py-12 text-center text-sm text-ink-35">No delivered scratchpads in the last 24 hours.</p>
+        ) : scratchpads.map((entry, index) => (
+          <div key={entry.id} className="group relative p-4 rounded-2xl border border-border bg-surface-2 hover:border-border-md transition-all" style={{ animationDelay: `${index * 0.05}s` }}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-[11px] text-ink-35 font-medium">{formatTime(entry.finalizedAt)}</span>
+                  <span className="text-[10px] font-semibold text-accent bg-accent/[0.08] px-2 py-0.5 rounded-full">Scratchpad</span>
+                  <span className="text-[10px] font-semibold text-ink-35 bg-ink-07 px-2 py-0.5 rounded-full">{entry.destination === 'cursor' ? 'Pasted' : 'Sent to task'}</span>
+                  {entry.attachments.length > 0 && <span className="text-[10px] text-ink-35">{entry.attachments.length} image{entry.attachments.length === 1 ? '' : 's'}</span>}
+                </div>
+                <p className="text-[13px] text-ink leading-relaxed line-clamp-3">{entry.text}</p>
+                {entry.attachments.length > 0 && <div className="flex gap-1.5 mt-2 overflow-hidden">{entry.attachments.slice(0, 4).map((attachment) => <img key={attachment} src={`file://${attachment}`} className="w-10 h-10 object-cover rounded-lg border border-border" />)}</div>}
+              </div>
+              <div className="flex gap-1.5 shrink-0">
+                <button onClick={() => void setScratchpadSaved(entry, !entry.saved)} className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${entry.saved ? 'bg-accent/10 text-accent' : 'bg-ink-07 text-ink-35 hover:bg-accent/10 hover:text-accent'}`} title={entry.saved ? 'Saved permanently' : 'Save permanently'}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill={entry.saved ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
+                </button>
+                <button onClick={() => void deleteScratchpad(entry)} className="w-8 h-8 rounded-xl flex items-center justify-center bg-ink-07 text-ink-35 hover:bg-error/10 hover:text-error transition-colors" title="Delete scratchpad">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 15H6L5 6" /></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>}
     </div>
   )
 }

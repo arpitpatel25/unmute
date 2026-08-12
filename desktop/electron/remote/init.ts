@@ -97,6 +97,7 @@ import {
 } from './capture/index'
 import { SETTLE_IDLE_MS } from './capture/scratchpadStore'
 import type { Entry, InsertKind } from './capture/types'
+import { CaptureHistoryStore, type CaptureHistoryKind } from './capture/history-store'
 import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
@@ -115,6 +116,29 @@ export interface RemoteInitDeps {
 }
 
 const log = createLogger('init')
+const captureHistory = new CaptureHistoryStore(join(homedir(), '.unmute', 'remote', 'capture-history'))
+
+/** Called by the ordinary dictation path after its capture composition has
+ * landed. Plain speech remains in the engine session history; this companion
+ * record adds copied content and images without coupling Remote to engine DB. */
+export function recordCapturedDictation(input: {
+  id: string
+  createdAt: number
+  text: string
+  destination: 'cursor' | 'task'
+  attachments: readonly string[]
+}): void {
+  if (!input.text.trim()) return
+  captureHistory.archive({
+    id: input.id,
+    kind: 'dictation',
+    createdAt: input.createdAt,
+    finalizedAt: Date.now(),
+    text: input.text,
+    destination: input.destination,
+    attachments: input.attachments,
+  })
+}
 
 // PRD §10.1: auto-approve OFF by default (the safe default). ON ⇒ launch claude
 // with --dangerously-skip-permissions so routine tool use doesn't pause.
@@ -1856,6 +1880,18 @@ async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promi
 
   const r = await runDelivery(target, send, broadcastScratchpad)
   if (r.landed) {
+    if (r.delivered) {
+      captureHistory.archive({
+        id: r.delivered.pad.id,
+        kind: 'scratchpad',
+        createdAt: r.delivered.pad.createdAt,
+        finalizedAt: Date.now(),
+        text: r.delivered.text,
+        destination: target === 'cursor' ? 'cursor' : 'task',
+        taskId: target === 'cursor' ? undefined : r.landed,
+        attachments: r.delivered.attachments,
+      })
+    }
     log.event('scratchpad-delivered', { to: target, landed: r.landed })
     return r.landed
   }
@@ -2695,6 +2731,7 @@ const LIBRARIAN_PARKED = true
 const CURATOR_PARKED = true
 
 export function initRemote(deps: RemoteInitDeps): TaskManager {
+  captureHistory.cleanup()
   if (manager) return manager
 
   // DEV-ONLY curator diagnostics gate — set VERY EARLY, before the Curator is
@@ -3676,6 +3713,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // Current terminal owner — lets a freshly-mounted overlay card learn it owns
   // nothing (or that the wall already owns its session) without waiting for an event.
   ipcMain.handle('remote:get-orchestrate-owner', async () => orchestrateFocusId)
+
+  // Capture history is intentionally a small, filtered IPC surface. The
+  // renderer receives only completed records, never a live scratchpad.
+  ipcMain.handle('remote:capture-history-list', async (_e, kind?: CaptureHistoryKind) => captureHistory.list(kind))
+  ipcMain.handle('remote:capture-history-save', async (_e, id: string, saved: boolean) => captureHistory.setSaved(id, saved))
+  ipcMain.handle('remote:capture-history-delete', async (_e, id: string) => captureHistory.delete(id))
 
   // ── The scratchpad has NO IPC surface, deliberately ──
   //
