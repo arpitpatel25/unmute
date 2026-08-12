@@ -219,6 +219,14 @@ wire_paywall() {
     // re-clone wipes the dep and the whisper.ts→parakeet override's
     // require('sherpa-onnx-node') fails at runtime.
     pkg.dependencies['sherpa-onnx-node'] = '^1.13.3'
+    // Agent answers arrive as ordinary markdown, and the dashboard used to
+    // render it with a hand-rolled classifier that printed \`\`\` fences
+    // literally. react-markdown + remark-gfm is the same class of engine the
+    // notch now parses with (cmark-gfm), so the two surfaces agree on what the
+    // text MEANS and differ only in how they paint it. Renderer deps, bundled
+    // by vite — not native.
+    pkg.dependencies['react-markdown'] = '^9.0.1'
+    pkg.dependencies['remark-gfm'] = '^4.0.0'
     pkg.build = pkg.build || {}
     pkg.build.asarUnpack = pkg.build.asarUnpack || []
     if (!pkg.build.asarUnpack.includes('**/node_modules/node-pty/**')) {
@@ -780,9 +788,12 @@ case "$MODE" in
     [[ -d "$WORK/oss-engine" ]] || sync_engine
     wire_paywall
     cd "$WORK/oss-engine"
-    # node-pty (PTY backend) + xterm (live-terminal renderer dep) so the
-    # integrated build resolves them without a full install.
-    npm install node-pty @xterm/xterm @xterm/addon-fit --no-save >/dev/null 2>&1 || true
+    # node-pty (PTY backend) + xterm (live-terminal renderer dep) + the markdown
+    # renderer's engine so the integrated build resolves them without a full
+    # install. These mirror the deps wire_paywall adds to package.json; a name
+    # missing here fails ONLY in compile mode, which is the mode whose whole job
+    # is catching that class of mistake.
+    npm install node-pty @xterm/xterm @xterm/addon-fit react-markdown remark-gfm --no-save >/dev/null 2>&1 || true
     fix_node_pty_helper "$WORK/oss-engine"
     log "Compiling (electron-vite build)…"
     npx electron-vite build

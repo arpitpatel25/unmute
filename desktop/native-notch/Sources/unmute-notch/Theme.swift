@@ -50,6 +50,13 @@ enum Theme {
     /// formatter".
     static let cInstruction = Color(nsColor: .systemIndigo)
 
+    /// A LINK IN AN AGENT'S PROSE — not a status either, but it has to be
+    /// distinguishable from body text at a glance or nobody discovers it is
+    /// clickable. `.linkColor` is the system's own answer, so it tracks the
+    /// user's accent and their accessibility settings rather than freezing one
+    /// blue that may fail contrast for someone.
+    static let cLink = Color(nsColor: .linkColor)
+
     static func status(_ s: TaskStatus) -> Color {
         switch s {
         case .processing: return cWorking
