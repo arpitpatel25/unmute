@@ -15,8 +15,9 @@ struct TaskSurfaceView: View {
     private var t: TaskDetail? { model.task }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let t {
+        ZStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 0) {
+                if let t {
                 header(t)
 
                 // THE ASK MOVED BELOW THE REASONING (see the strip further
@@ -78,14 +79,20 @@ struct TaskSurfaceView: View {
 
                 actions(t)
                 footer(t)
-            } else {
-                allClear
+                } else {
+                    allClear
+                }
+            }
+            .padding(.horizontal, Theme.gutter)
+            .padding(.top, topInset + 4)
+            .padding(.bottom, 14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            if model.captureAimed {
+                AimedChip(level: model.captureLevel)
+                    .padding(.bottom, 16)
+                    .allowsHitTesting(false)
             }
         }
-        .padding(.horizontal, Theme.gutter)
-        .padding(.top, topInset + 4)
-        .padding(.bottom, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// The honest end state — the moment you're free.
@@ -123,9 +130,6 @@ struct TaskSurfaceView: View {
             //
             // Its ABSENCE is the useful half. Speak with no chip showing and
             // the words are going to the router to become a new task.
-            if model.captureAimed {
-                AimedChip(level: model.captureLevel, compact: true)
-            }
             Text(t.title).font(Theme.fTitle).foregroundColor(Theme.text).lineLimit(1)
             StatusLabel(status: t.status)
             if let e = t.elapsed { NumText(text: e) }
@@ -216,6 +220,7 @@ struct TaskSurfaceView: View {
             }
             .help("Don't show again — returns when it changes or you open it")
             Spacer(minLength: 0)
+            SurfaceSizeControls(model: model)
             KeyButton(label: "Prev", symbol: "arrow.left") { model.emit(.prev) }
             // THE ONE TINTED PRIMARY — the crank.
             ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }

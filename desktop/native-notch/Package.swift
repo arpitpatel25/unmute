@@ -28,6 +28,15 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-markdown.git", from: "0.8.0")
     ],
     targets: [
+        .target(
+            name: "SurfaceSizeSupport",
+            path: "Sources/SurfaceSizeSupport"
+        ),
+        .testTarget(
+            name: "SurfaceSizeSupportTests",
+            dependencies: ["SurfaceSizeSupport"],
+            path: "Tests/SurfaceSizeSupportTests"
+        ),
         // The Theme-free half of markdown rendering, split out ONLY so it can be
         // tested: the executable target imports SwiftUI and cannot be imported
         // by a test target. Anything that needs `Theme` stays in the executable,
@@ -46,7 +55,8 @@ let package = Package(
             dependencies: [
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "Markdown", package: "swift-markdown"),
-                "MarkdownSupport"
+                "MarkdownSupport",
+                "SurfaceSizeSupport"
             ],
             path: "Sources/unmute-notch"
         )

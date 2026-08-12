@@ -120,6 +120,13 @@ final class NotchModel: ObservableObject {
     /// everywhere else on the platform.
     var onBack: () -> Void = {}
 
+    /// Temporary, expanded-surface-only size controls. The controller owns the
+    /// selected fill and clears it when the expansion closes.
+    @Published var canShrinkSurface = false
+    @Published var canEnlargeSurface = false
+    var shrinkSurface: () -> Void = {}
+    var enlargeSurface: () -> Void = {}
+
     /// Is there somewhere to go back TO? False on the bare wall, where the only
     /// move left is closing — and a back arrow that just closes is a lie about
     /// where you are.

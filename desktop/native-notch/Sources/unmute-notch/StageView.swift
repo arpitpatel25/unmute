@@ -23,9 +23,20 @@ struct StageView: View {
     private var t: TaskDetail? { model.stageTask }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            stage
-            if !model.stageFull { miniRail }
+        ZStack(alignment: .bottomTrailing) {
+            HStack(alignment: .top, spacing: 0) {
+                stage
+                if !model.stageFull { miniRail }
+            }
+            if model.captureAimed {
+                AimedChip(level: model.captureLevel)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.bottom, 16)
+                    .allowsHitTesting(false)
+            }
+            SurfaceSizeControls(model: model)
+                .padding(.trailing, Theme.gutter)
+                .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -154,9 +165,6 @@ struct StageView: View {
             //
             // Its ABSENCE is the useful half. Speak with no chip showing and
             // the words are going to the router to become a new task.
-            if model.captureAimed {
-                AimedChip(level: model.captureLevel, compact: true)
-            }
             if renaming {
                 TextField("Name", text: $renameText, onCommit: {
                     let v = renameText.trimmingCharacters(in: .whitespaces)

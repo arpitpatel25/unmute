@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SwiftTerm
+import SurfaceSizeSupport
 
 // Owns the ONE panel + view model; translates commands into observable state,
 // user gestures into events, and keeps the surface on the PRIMARY display.
@@ -56,6 +57,8 @@ final class AppController: NSObject, NotchResizing {
         }
         model.onHover = { [weak self] entering in self?.handleHover(entering) }
         model.onBack = { [weak self] in self?.stepDown() }
+        model.shrinkSurface = { [weak self] in self?.stepSurface(.smaller) }
+        model.enlargeSurface = { [weak self] in self?.stepSurface(.larger) }
         installPill()
         let start = resolve(.dormant)
         model.bar = start.placement
@@ -289,6 +292,7 @@ final class AppController: NSObject, NotchResizing {
             let v = min(max(fill, 0.5), 0.95)
             NotchLog.log("CMD surfaceFill \(v)")
             NotchGeometry.SurfaceFill.user = v
+            refreshSurfaceControlAvailability()
             // Re-fit only if something expanded is on screen; at bar level the
             // mass is sized by its content, not by this.
             if isExpanded(model.state) { refit(animated: true) }
@@ -360,7 +364,10 @@ final class AppController: NSObject, NotchResizing {
         // Each visit starts at the hard-coded size. A size dragged out for one
         // look at a task is not a preference — carrying it across would make the
         // surface's size a hidden setting the user never chose to persist.
-        if state != .task && state != .cockpit { userScale = 1 }
+        if state != .task && state != .cockpit {
+            userScale = 1
+            temporarySurfaceFill = nil
+        }
         let up = rung(state) >= rung(model.state)
         if state != .cockpit { model.focusedId = nil; model.stageTask = nil }
         // TERMINAL CLOSED BY DEFAULT when a task is pulled to attention.
@@ -406,6 +413,7 @@ final class AppController: NSObject, NotchResizing {
             model.bar = r.placement
             model.content = r.content
         }
+        refreshSurfaceControlAvailability()
         let engaged = (state == .task || state == .cockpit)
         window.allowsKey = engaged
         // ESC MUST NOT LEAK TO THE APP UNDERNEATH.
@@ -497,15 +505,17 @@ final class AppController: NSObject, NotchResizing {
             // makes the whole surface bigger rather than stretching it one way.
             // Only the expanded surfaces are resizable; the resting states are
             // fixed.
-            if userScale != 1 {
-                var w = size.width * userScale
-                var h = size.height * userScale
-                // The cockpit NEVER goes below its own default. Carrying a
-                // smaller task-view scale into it would shrink the wall, and the
-                // wall's default is deliberately the larger of the two.
+            let fillScale = activeSurfaceFill / NotchGeometry.SurfaceFill.user
+            if fillScale != 1 || userScale != 1 {
+                var w = size.width * fillScale * userScale
+                var h = size.height * fillScale * userScale
+                // The cockpit never goes below the fill selected for this visit.
+                // Carrying a smaller task-view drag scale into it must not
+                // shrink the wall beneath the person's chosen rung.
                 if state == .cockpit {
-                    w = max(w, geometry.cockpitSize.width)
-                    h = max(h, geometry.cockpitSize.height)
+                    let minimum = geometry.expandedSize(fill: activeSurfaceFill)
+                    w = max(w, minimum.width)
+                    h = max(h, minimum.height)
                 }
                 size = NSSize(width: round(w), height: round(h))
             }
@@ -572,6 +582,9 @@ final class AppController: NSObject, NotchResizing {
     /// every collapse, so each visit opens at the hard-coded size and growing it
     /// again is a fresh, deliberate choice.
     private var userScale: CGFloat = 1
+    /// The selected 70/80/90 fill for this expanded visit only. Nil means the
+    /// saved Appearance setting is still in effect.
+    private var temporarySurfaceFill: CGFloat?
     private var dragAnchor: (mouse: NSPoint, scale: CGFloat)?
 
     /// A drag anywhere on the resize border scales BOTH axes together — there is
@@ -596,6 +609,29 @@ final class AppController: NSObject, NotchResizing {
     }
 
     func endResize() { dragAnchor = nil }
+
+    private var activeSurfaceFill: CGFloat {
+        temporarySurfaceFill ?? NotchGeometry.SurfaceFill.user
+    }
+
+    private func stepSurface(_ direction: SurfaceSizeStep.Direction) {
+        guard isExpanded(model.state),
+              let next = SurfaceSizeStep.next(after: activeSurfaceFill, direction: direction)
+        else { return }
+        temporarySurfaceFill = next
+        refreshSurfaceControlAvailability()
+        refit(animated: true)
+    }
+
+    private func refreshSurfaceControlAvailability() {
+        guard isExpanded(model.state) else {
+            model.canShrinkSurface = false
+            model.canEnlargeSurface = false
+            return
+        }
+        model.canShrinkSurface = SurfaceSizeStep.next(after: activeSurfaceFill, direction: .smaller) != nil
+        model.canEnlargeSurface = SurfaceSizeStep.next(after: activeSurfaceFill, direction: .larger) != nil
+    }
 
     /// Never larger than the screen it lives on.
     ///

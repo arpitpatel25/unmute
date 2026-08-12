@@ -619,6 +619,7 @@ struct WallView: View {
 
     private var bottomRightChrome: some View {
         HStack(spacing: 8) {
+            SurfaceSizeControls(model: model)
             if let offer = data.routeOffer {
                 Button(action: { model.emit(.offerAccept(newTaskId: offer.newTaskId)) }) {
                     Text("Started new — send to “\(offer.altName)” instead?")
