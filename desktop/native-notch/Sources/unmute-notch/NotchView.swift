@@ -26,10 +26,6 @@ struct NotchView: View {
     /// surfaces (display safety: no control ever renders under the housing).
     let topInset: CGFloat
 
-    /// System Settings → Accessibility → Display → Reduce motion. When it is on
-    /// the surface still changes; it simply stops springing.
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         ZStack {
             surface
@@ -89,15 +85,8 @@ struct NotchView: View {
             model.onHover(hovering)
             if hovering && !expanded { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
-        // NO `.animation(_:value: model.state)` HERE.
-        //
-        // An explicit .animation modifier OVERRIDES the ambient transaction for
-        // its whole subtree, so it silently beat the withAnimation in
-        // AppController.applyState — the frame moved on one curve while the
-        // content was still governed by another. AppController is the single
-        // timing authority: every mutation of model.state carries its own
-        // animation, matched to the window's by construction (Theme.morph and
-        // Theme.springSolver are the same two numbers).
+        // No value-scoped animation lives here: AppController owns the one
+        // state transaction that changes both this hierarchy and the NSPanel.
     }
 
     private var expanded: Bool { model.state == .task || model.state == .cockpit }
@@ -251,12 +240,9 @@ struct NotchView: View {
             }
             else { barRow }
         }
-        // The pocket opening is a content swap the state alone cannot express,
-        // so it has to take part in the identity or the transition never runs.
-        .id("\(model.state.rawValue)-\(model.pocket.isOpen)")
-        .transition(.asymmetric(
-            insertion: .opacity.animation(reduceMotion ? Theme.reducedFade : Theme.contentIn),
-            removal:   .opacity.animation(reduceMotion ? Theme.reducedFade : Theme.contentOut)))
+        // Keep the root hierarchy stable across every state. Keying this group
+        // by state/pocket previously destroyed and rebuilt the whole surface on
+        // each transition, independently of the window resize.
     }
 
     /// The bar row: left half · the cutout (or a gap) · right half.

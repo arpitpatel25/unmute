@@ -368,7 +368,6 @@ final class AppController: NSObject, NotchResizing {
             userScale = 1
             temporarySurfaceFill = nil
         }
-        let up = rung(state) >= rung(model.state)
         if state != .cockpit { model.focusedId = nil; model.stageTask = nil }
         // TERMINAL CLOSED BY DEFAULT when a task is pulled to attention.
         //
@@ -398,15 +397,10 @@ final class AppController: NSObject, NotchResizing {
             NotchLog.log("proposal cleared — the surface left the expanded state")
             model.proposal = nil; model.proposalLoadingId = nil; model.convLog = ""
         }
-        // ONE SPRING, BOTH SIDES.
-        //
-        // The state, the shape numbers and the two halves' widths all move
-        // inside a single transaction on Motion.resize; the window frame that
-        // holds them is sampled from the same spring by FrameSpring. There is no
-        // second curve for the frame to arrive on, which is what used to leave
-        // the OLD content sitting inside the NEW frame — the "1 running" strip
-        // floating in a full-size task panel on the way up, and task chrome
-        // squeezed into the bar on the way down.
+        // One surface transition: resolve the final visual state first, update
+        // SwiftUI in one transaction, then ask AppKit to move the panel frame.
+        // NotchWindow suppresses repeated in-flight frame targets, so follow-up
+        // content messages cannot restart this physical transition.
         let r = resolve(state)
         withAnimation(Motion.resize) {
             model.state = state
@@ -435,9 +429,7 @@ final class AppController: NSObject, NotchResizing {
         if engaged {
             if !window.isKeyWindow { window.makeKey() }
         }
-        // EXPAND UNFURLS, COLLAPSE FOLDS — the axis order is the only thing
-        // `up` decides. See NotchWindow.applyFrame.
-        window.applyFrame(r.frame, animated: true, expanding: up)
+        window.applyFrame(r.frame, animated: true)
         NotchLog.log("state -> \(state.rawValue)\(state == commanded ? "" : " (commanded \(commanded.rawValue))") window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] fillet=\(Int(r.placement.fillet))")
     }
 
@@ -532,15 +524,14 @@ final class AppController: NSObject, NotchResizing {
     /// Used whenever something the mass says changes without the rung changing:
     /// a task detail arriving, the pointer entering or leaving, a display being
     /// plugged in. The width follows the message, so this is a size change like
-    /// any other and it travels on the same spring.
+    /// any other and it travels through the same native frame coordinator.
     private func refreshBar(animated: Bool = true) {
         let r = resolve(model.state)
-        let grew = r.frame.width >= window.frame.width
         withAnimation(animated && !Motion.reduceMotion ? Motion.resize : nil) {
             model.bar = r.placement
             model.content = r.content
         }
-        window.applyFrame(r.frame, animated: animated, expanding: grew)
+        window.applyFrame(r.frame, animated: animated)
         NotchLog.log("bar \(model.state.rawValue) window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] left=\(r.content.left ?? "—") right=\(r.content.right ?? "—")")
     }
 

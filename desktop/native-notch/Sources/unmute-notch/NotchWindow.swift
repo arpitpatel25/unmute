@@ -1,5 +1,5 @@
 import AppKit
-import QuartzCore
+import SurfaceTransitionSupport
 
 /// What a resizable notch surface needs from its controller. One gesture, both
 /// axes — see AppController.continueResize.
@@ -112,115 +112,27 @@ final class NotchWindow: NSPanel {
 
     func present() { orderFrontRegardless() }
 
-    /// Resize + reposition to an explicit top-pinned frame, on THE spring.
-    ///
-    /// `expanding` decides the axis order and nothing else:
-    ///   * expanding — WIDTH LEADS, height follows `Theme.axisLag` behind, so
-    ///     the surface unfurls
-    ///   * collapsing — strictly the reverse, height first, so it folds
-    ///
-    /// Asymmetry here makes a surface feel unreliable even when nobody can say
-    /// why, which is why the two orders are the same list read backwards.
-    ///
-    /// Both axes travel on Theme.springSolver — the same response and damping
-    /// the SwiftUI animation inside the window is using. There is no second
-    /// curve anywhere in the resize path: NSAnimationContext only offers bezier
-    /// timing, so the frame is sampled by hand rather than given a curve of its
-    /// own.
-    func applyFrame(_ frame: NSRect, animated: Bool, expanding: Bool = true) {
-        frameSpring?.cancel()
-        frameSpring = nil
-        // Reduce Motion: no spring, no stagger, nothing to track. The surface
-        // still changes — it simply arrives.
-        guard animated, !Motion.reduceMotion else { setFrame(frame, display: true); return }
-        guard self.frame != frame else { return }
-        let s = FrameSpring(window: self, from: self.frame, to: frame,
-                            widthDelay: expanding ? 0 : Theme.axisLag,
-                            heightDelay: expanding ? Theme.axisLag : 0)
-        frameSpring = s
-        s.start()
-    }
-
-    private var frameSpring: FrameSpring?
-}
-
-/// One resize, sampled from Theme.springSolver, with an independent start time
-/// per axis.
-///
-/// A window frame cannot be animated by SwiftUI and NSAnimationContext has no
-/// spring, so this is what keeps the container on the same curve as everything
-/// drawn inside it. x travels with the width and y with the height, which
-/// preserves the top-pinned, cutout-anchored placement at both ends of the
-/// journey and everywhere in between.
-final class FrameSpring: NSObject {
-    private weak var window: NSWindow?
-    private let from: NSRect
-    private let to: NSRect
-    private let widthDelay: Double
-    private let heightDelay: Double
-    private let solver = Theme.springSolver
-    private var timer: Timer?
-    private var link: AnyObject?
-    private var start0: CFTimeInterval = 0
-
-    init(window: NSWindow, from: NSRect, to: NSRect, widthDelay: Double, heightDelay: Double) {
-        self.window = window
-        self.from = from
-        self.to = to
-        self.widthDelay = widthDelay
-        self.heightDelay = heightDelay
-    }
-
-    func start() {
-        start0 = CACurrentMediaTime()
-        // DRIVEN BY THE DISPLAY, not by a clock, wherever macOS offers it: this
-        // moves a window frame, and a timer that drifts against the refresh
-        // shows up as stutter the SwiftUI side of the same spring does not
-        // share. Both paths run in .common mode so a menu tracking loop or a
-        // drag elsewhere cannot freeze the surface mid-morph.
-        // DO NOT MAKE `link` WEAK, AND DO NOT WEAKEN THE TARGET. The run loop
-        // owns the display link and the link owns its target, which is what
-        // keeps this object alive for the half-second it is animating; the
-        // window's `frameSpring` reference is the other half. `cancel()` breaks
-        // both, and every path out of here calls it. A "fix" that weakens either
-        // side deallocates the animator mid-morph and the surface freezes
-        // part-way to its new size.
-        if #available(macOS 14.0, *), let w = window {
-            let dl = w.displayLink(target: self, selector: #selector(step))
-            dl.add(to: .main, forMode: .common)
-            link = dl
+    /// AppKit owns window movement. SwiftUI receives the matching state change
+    /// in AppController's single transaction; this method only changes geometry.
+    /// Repeating an in-flight target is intentionally a no-op, so a pocket or
+    /// content update cannot restart an otherwise healthy resize.
+    func applyFrame(_ frame: NSRect, animated: Bool) {
+        switch frameTransition.request(frame, from: self.frame, animated: animated && !Motion.reduceMotion) {
+        case .none:
             return
-        }
-        let t = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in self?.tick() }
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
-    }
-
-    func cancel() {
-        timer?.invalidate()
-        timer = nil
-        if #available(macOS 14.0, *), let dl = link as? CADisplayLink { dl.invalidate() }
-        link = nil
-    }
-
-    @objc private func step() { tick() }
-
-    private func tick() {
-        guard let window else { cancel(); return }
-        let t = CACurrentMediaTime() - start0
-        let wp = solver.value(at: t - widthDelay)
-        let hp = solver.value(at: t - heightDelay)
-        let w = from.width + (to.width - from.width) * wp
-        let h = from.height + (to.height - from.height) * hp
-        let x = from.origin.x + (to.origin.x - from.origin.x) * wp
-        let y = from.origin.y + (to.origin.y - from.origin.y) * hp
-        window.setFrame(NSRect(x: round(x), y: round(y), width: round(w), height: round(h)),
-                        display: true)
-        if t >= solver.settle + max(widthDelay, heightDelay) {
-            window.setFrame(to, display: true)
-            cancel()
+        case let .setImmediately(target):
+            setFrame(target, display: true)
+        case let .animate(target):
+            setFrame(target, display: true, animate: true)
         }
     }
+
+    /// `setFrame(_:display:animate:)` asks AppKit for this duration.
+    override func animationResizeTime(_ newFrame: NSRect) -> TimeInterval {
+        Theme.surfaceTransitionDuration
+    }
+
+    private var frameTransition = SurfaceFrameTransition()
 }
 
 

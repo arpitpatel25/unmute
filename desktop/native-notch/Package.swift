@@ -29,6 +29,15 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "SurfaceTransitionSupport",
+            path: "Sources/SurfaceTransitionSupport"
+        ),
+        .testTarget(
+            name: "SurfaceTransitionSupportTests",
+            dependencies: ["SurfaceTransitionSupport"],
+            path: "Tests/SurfaceTransitionSupportTests"
+        ),
+        .target(
             name: "SurfaceSizeSupport",
             path: "Sources/SurfaceSizeSupport"
         ),
@@ -56,7 +65,8 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "Markdown", package: "swift-markdown"),
                 "MarkdownSupport",
-                "SurfaceSizeSupport"
+                "SurfaceSizeSupport",
+                "SurfaceTransitionSupport"
             ],
             path: "Sources/unmute-notch"
         )
