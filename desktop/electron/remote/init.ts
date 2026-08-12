@@ -104,7 +104,7 @@ import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
 // don't entangle with engine internals. main.ts passes its real instances.
 interface SessionManagerLike {
-  startRemoteCapture(): void
+  startRemoteCapture(targetTaskId?: string | null): void
   stopRemoteCapture(): Promise<void>
 }
 interface KeyboardManagerLike {
@@ -2314,7 +2314,7 @@ async function listClaudeSkillNames(): Promise<string[]> {
   return names
 }
 
-export async function dispatchFromCapture(rawTranscript: string, attachments: readonly string[] = []): Promise<string | null> {
+export async function dispatchFromCapture(rawTranscript: string, attachments: readonly string[] = [], targetTaskId?: string | null): Promise<string | null> {
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
   // surface always returns to idle, whatever path the dispatch takes.
@@ -2322,7 +2322,7 @@ export async function dispatchFromCapture(rawTranscript: string, attachments: re
   pendingBeat = null
   let landed: string | null = null
   try {
-    landed = await dispatchFromCaptureInner(rawTranscript, attachments)
+    landed = await dispatchFromCaptureInner(rawTranscript, attachments, targetTaskId)
     return landed
   } finally {
     broadcastCapturePhase('idle', landed)
@@ -2334,7 +2334,7 @@ export async function dispatchFromCapture(rawTranscript: string, attachments: re
   }
 }
 
-async function dispatchFromCaptureInner(rawTranscript: string, attachments: readonly string[] = []): Promise<string | null> {
+async function dispatchFromCaptureInner(rawTranscript: string, attachments: readonly string[] = [], targetTaskId?: string | null): Promise<string | null> {
   if (!manager) {
     log.error('dispatchFromCapture before initRemote')
     return null
@@ -2347,8 +2347,9 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
   //    PURELY ADDITIVE: with nothing focused (orchestrateFocusId === null) the block
   //    is skipped and routing below is exactly as before. We reuse the SAME paths
   //    the router uses (answer a blocked task / followUp to continue) — no new send.
-  if (orchestrateFocusId && manager.list().some((t) => t.id === orchestrateFocusId)) {
-    const fid = orchestrateFocusId
+  const addressedTaskId = targetTaskId ?? orchestrateFocusId
+  if (addressedTaskId && manager.list().some((t) => t.id === addressedTaskId)) {
+    const fid = addressedTaskId
     // Hygiene: the deterministic path skips the router, so it must not skip
     // CLEANUP — an STT misfire ("Happy Rates!") would land verbatim otherwise.
     // Best-effort: without a wired completeFn the raw transcript passes through
@@ -3509,8 +3510,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       log.event('remote-key', { phase: 'start' })
       void router?.warm() // ensure the classifier is ready before the utterance lands (re-warms if it died)
       pauseOverlayEscape() // capture owns Escape (cancel) while recording
-      deps.sessionManager.startRemoteCapture()
-      broadcastCapturePhase('listening') // ADDITIVE observer — the capture itself is untouched
+      // Snapshot the visible address now. Transcription completes later, during
+      // which task lifecycle events may legitimately change the live focus.
+      // A capture is an intent addressed at key-down, not at delivery time.
+      const targetTaskId = orchestrateFocusId && manager?.get(orchestrateFocusId)
+        ? orchestrateFocusId
+        : null
+      deps.sessionManager.startRemoteCapture(targetTaskId)
+      broadcastCapturePhase('listening', targetTaskId) // ADDITIVE observer — the capture itself is untouched
     } else if (e.type === 'remote-stop') {
       log.event('remote-key', { phase: 'stop' })
       resumeOverlayEscape() // give Escape back to a still-visible overlay

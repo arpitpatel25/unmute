@@ -143,6 +143,9 @@ interface SessionState {
   // Remote capture can never leak its mode into the next dictation. Default-safe:
   // a fresh session is always 'dictation' unless explicitly started as remote.
   kind: 'dictation' | 'remote'
+  /** The task visible at Right Option key-down. It is immutable for this
+   * capture: a task update while transcription runs must not retarget speech. */
+  remoteTargetId: string | null
   // The capture-buffer segment this recording opened, so the transcript can be
   // attached to the RIGHT segment when it lands 30-45s later. Null when the
   // capture seam never opened one (it is fail-open — a capture failure must
@@ -799,7 +802,7 @@ class SessionManager {
     return this.usePipeline
   }
 
-  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation'): void {
+  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation', remoteTargetId: string | null = null): void {
     console.log('[session] startSession called, mode:', mode, '| kind:', kind, '| isProcessing:', this.isProcessing, '| currentSession:', this.currentSession?.sessionId || 'null')
     if (!this.telemetryReady) {
       this.telemetryReady = true
@@ -860,6 +863,7 @@ class SessionManager {
         errorMessage: null,
         createdAt: Date.now(),
         kind, // stamped at birth; default 'dictation' (default-safe → paste)
+        remoteTargetId: kind === 'remote' ? remoteTargetId : null,
         captureSegmentId: null,
         captureAttachments: [],
       }
@@ -936,7 +940,7 @@ class SessionManager {
   //
   // Set by the keyboard 'remote-start'/'remote-stop' events (main.ts).
 
-  startRemoteCapture(): void {
+  startRemoteCapture(targetTaskId: string | null = null): void {
     if (this.isProcessing) {
       console.log('[session] ⛔ Remote capture blocked — still processing')
       this.onSessionRejected?.()
@@ -946,7 +950,7 @@ class SessionManager {
     // Reuse the dictation capture machinery wholesale, but stamp the session as
     // 'remote' at birth so delivery dispatches instead of pasting. The kind lives
     // on the session, so it can't leak if this capture is later cancelled.
-    this.startSession('dictation', 'remote')
+    this.startSession('dictation', 'remote', targetTaskId)
   }
 
   async stopRemoteCapture(): Promise<void> {
@@ -1142,7 +1146,7 @@ class SessionManager {
       // Nothing about the dispatch itself changes: same work, same order (see
       // the queue below), only the UI stops blocking on it.
       remoteDispatchQueue = remoteDispatchQueue
-        .then(() => dispatchFromCapture(cmd, session.captureAttachments))
+        .then(() => dispatchFromCapture(cmd, session.captureAttachments, session.remoteTargetId))
         .catch((e) => {
           console.error('[session] 🛰  REMOTE dispatch failed:', e instanceof Error ? e.message : e)
         })

@@ -851,7 +851,9 @@ export class NotchController {
       // It also gives the user's ✕ the behaviour they expect: closing sets
       // engaged back to 'none', so the surface stays shut for the task they
       // dismissed, and the NEXT thing that needs them opens it again.
-      if (this.autoExpand && this.engaged === 'none') {
+      // An open pocket is an explicit voice address. New attention can join its
+      // rail, but must not replace the card (or the address) under the user.
+      if (this.autoExpand && this.engaged === 'none' && this.pocketMode !== 'open') {
         // WHY THE SURFACE OPENED, on the record.
         //
         // Four clauses can make a task demanding, and from the outside they are

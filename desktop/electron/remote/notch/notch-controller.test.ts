@@ -1102,6 +1102,20 @@ test('auto-expand NEVER interrupts something already open', () => {
   assert.equal(h.client.last('setState')!.state, 'cockpit')
 })
 
+test('a newly demanding task cannot replace the open pocket voice address', () => {
+  const h = setup()
+  h.controller.setAutoExpand(true)
+  put(h, makeTask({ id: 'a', state: 'processing', kind: 'session', name: 'Reply here' }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.flush()
+  assert.deepEqual(h.calls.focus?.at(-1), ['a'])
+
+  put(h, makeTask({ id: 'b', state: 'needs-user', kind: 'session', name: 'New attention', question: { text: 'Which option?' } }))
+
+  assert.deepEqual(h.calls.focus?.at(-1), ['a'], 'the explicit pocket address stays pinned')
+  assert.equal(h.client.last('pocket')!.data.mode, 'open')
+})
+
 test('with auto-expand off the bar still only reaches attention', () => {
   const h = setup()
   h.controller.setAutoExpand(false)
