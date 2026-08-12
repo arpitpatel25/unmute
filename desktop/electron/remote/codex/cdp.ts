@@ -172,12 +172,15 @@ export class CodexCdp {
     return true
   }
 
-  /** Type via real key events (the composer is a contenteditable React surface). */
+  /**
+   * Insert a complete message as one editing operation.  A dictated follow-up
+   * can be thousands of characters; replaying it as synthetic key events lets
+   * the React composer re-render between characters and corrupt the message.
+   * `Input.insertText` is CDP's IME/emoji-style text insertion primitive, so it
+   * does not pass the message through a physical keyboard layout.
+   */
   async typeText(text: string): Promise<void> {
-    for (const ch of text) {
-      await this.send('Input.dispatchKeyEvent', { type: 'keyDown', text: ch, key: ch })
-      await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch })
-    }
+    await this.send('Input.insertText', { text })
   }
 
   async pressEnter(): Promise<void> {

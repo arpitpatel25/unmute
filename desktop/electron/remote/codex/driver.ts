@@ -414,7 +414,10 @@ export class CodexDesktopDriver {
     await cdp.typeText(intent)
     await this.sleep(180)
     const typed = await cdp.composerText()
-    if (!typed.trim()) { log.warn('codex-create-type-failed', { intentLen: intent.length }); return { ok: false, reason: 'no-composer' } }
+    if (typed !== intent) {
+      log.warn('codex-create-text-mismatch', { intentLen: intent.length, typedLen: typed.length })
+      return { ok: false, reason: 'send-failed' }
+    }
     log.event('codex-create-typed', { chars: typed.length })
     await cdp.pressEnter()
 
@@ -526,6 +529,11 @@ export class CodexDesktopDriver {
     await this.sleep(120)
     await cdp.typeText(text)
     await this.sleep(180)
+    const typed = await cdp.composerText()
+    if (typed !== text) {
+      log.warn('codex-followup-text-mismatch', { textLen: text.length, typedLen: typed.length })
+      return { ok: false, reason: 'text-mismatch' }
+    }
     await cdp.pressEnter()
     for (let i = 0; i < 20; i++) {
       await this.sleep(200)
