@@ -336,7 +336,7 @@ struct PillView: View {
     /// The chips were 32pt beside a 44pt pill, which is what made the row read
     /// as mismatched parts rather than one instrument. The original sets
     /// `height: 44, borderRadius: 9999` on the pill, the model badge, the agent,
-    /// the raw toggle, the mic chip and the scratchpad chip alike — one height,
+    /// the mic chip and the scratchpad chip alike — one height,
     /// one radius, no exceptions. Restored.
     private var cluster: some View {
         HStack(spacing: 8) {
@@ -352,10 +352,6 @@ struct PillView: View {
                 // reads evenly. And there are no icons on either half: the dot
                 // is the connection indicator, the chevron belongs to the model.
                 AgentModelControl(state: s, model: model, open: $selectorOpen)
-                // Absent ⇒ not applicable on this backend (Codex), so no chip.
-                if let raw = s.raw {
-                    RawChip(on: raw) { model.emit(.toggleRaw(!raw)) }.pillGlass(Capsule())
-                }
             }
 
             pill.pillGlass(Capsule(), tint: pillTint)
@@ -943,22 +939,6 @@ private struct SelectorRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(Theme.hover, value: hovering)
-    }
-}
-
-private struct RawChip: View {
-    let on: Bool
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            ChipBody {
-                Text("RAW")
-                    .font(.system(size: 10.5, weight: .semibold)).tracking(0.6)
-                    .foregroundColor(on ? Theme.cNeeds : Theme.textFaint)
-            }
-        }
-        .buttonStyle(.plain)
-        .help(on ? "Raw — no unmute memory injected" : "Unmute memory is injected")
     }
 }
 

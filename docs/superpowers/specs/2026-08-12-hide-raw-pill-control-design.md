@@ -27,10 +27,12 @@ control, not the underlying configuration surface.
 
 ## Verification
 
-A source-level regression check will assert that neither pill implementation
-contains a rendered RAW control while the backend raw-mode types and handlers
-remain present. Existing Swift and renderer compilation checks will verify that
-removing the private components leaves both implementations valid.
+The exact render-tree diff will show that neither pill implementation invokes a
+RAW control, and both Swift and renderer compilation checks will verify that
+removing the private components leaves valid builds. Existing backend raw-mode
+tests remain unchanged and continue proving that the capability was not
+deleted. A source-text assertion would only freeze an implementation decision,
+so this presentation-only deletion does not add one.
 
 ## Screenshot Issue
 

@@ -345,7 +345,7 @@ function RemoteBadge({ picker, onPickAgent }: {
         <div style={{ width: 1, height: 44, background: 'rgba(255,255,255,0.28)', flex: 'none' }} />
       )}
       {/* Collapsed: a single pill showing the active model. Same family as the
-          RAW toggle / mic chip — dark fill, whitish border, NO shadow. */}
+          mic chip — dark fill, whitish border, NO shadow. */}
       <div
         style={{
           height: 44,
@@ -458,66 +458,14 @@ function RemoteBadge({ picker, onPickAgent }: {
   )
 }
 
-// Per-SESSION raw toggle, shown next to the model badge during a Remote capture.
-// RAW = no Unmute memory injection (a clean Claude Code session). Reflects the
-// effective state (session override over the saved default); clicking sets a
-// session-only override that resets on relaunch.
+// The native pill still consumes the session's raw state over this bridge even
+// though neither pill currently exposes a RAW control. Keep the transport API
+// intact so hiding presentation does not change backend behavior.
 function rawApi() {
   return window.electronAPI as unknown as {
     remoteGetRawState?: () => Promise<{ effectiveRaw: boolean }>
     remoteSetSessionRaw?: (on: boolean | null) => Promise<boolean>
   }
-}
-
-function RawToggle() {
-  const [raw, setRaw] = useState(false)
-  useEffect(() => {
-    void rawApi().remoteGetRawState?.().then((s) => { if (s) setRaw(!!s.effectiveRaw) })
-  }, [])
-  const toggle = () => {
-    const next = !raw
-    setRaw(next) // optimistic
-    void rawApi().remoteSetSessionRaw?.(next)
-  }
-  return (
-    <div style={{ flex: 'none', height: 44, display: 'flex', alignItems: 'center' }}>
-      <button
-        onClick={toggle}
-        title={raw
-          ? 'Raw mode ON — this Remote session runs with NO Unmute memory injection. Click to turn off.'
-          : 'Raw mode OFF — Unmute injects relevant memory. Click for a clean Claude Code session.'}
-        style={{
-          height: 44,
-          borderRadius: 9999,
-          background: '#000',
-          border: '1px solid rgba(255, 255, 255, 0.55)',
-          // Match the shadowless pill (see RemoteBadge note above).
-          boxShadow: 'none',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 12px',
-          gap: 6,
-          cursor: 'pointer',
-          fontSize: 12.5,
-          fontWeight: 700,
-          letterSpacing: 0.3,
-          whiteSpace: 'nowrap',
-          color: raw ? CLAUDE_ORANGE : 'rgba(255,255,255,0.45)',
-          transition: 'color 140ms ease',
-        }}
-      >
-        <span
-          style={{
-            width: 7, height: 7, borderRadius: 9999,
-            background: raw ? CLAUDE_ORANGE : 'rgba(255,255,255,0.28)',
-            boxShadow: raw ? `0 0 8px ${CLAUDE_ORANGE}` : 'none',
-            transition: 'background 140ms ease, box-shadow 140ms ease',
-          }}
-        />
-        RAW
-      </button>
-    </div>
-  )
 }
 
 // ── Mic source: iPhone tap-to-switch ─────────────────────────────────────
@@ -691,7 +639,7 @@ function HintChip({ accent, label, detail, icon }: { accent: string; label: stri
   )
 }
 
-// The source glyph chip. Same family as the model badge / RAW toggle: dark
+// The source glyph chip. Same family as the model badge: dark
 // fill, whitish border, no shadow. Laptop = MacBook mic, phone = iPhone mic
 // (orange, like other "non-default state" accents). A tap toggles — and in
 // session mode the toggle IS connect/disconnect: while the warm pipe is
@@ -1264,7 +1212,6 @@ export default function WidgetApp() {
           Dictation → pill only. */}
       <div className="flex items-center justify-center" style={{ gap: '16px' }}>
         {isRemote && pillShowing && <RemoteBadge picker={agentPicker} onPickAgent={handlePickAgent} />}
-        {isRemote && pillShowing && <RawToggle />}
         {/* the screenshot ledger shows for BOTH capture kinds — dictation pastes
             the images into the target app after the text; Remote attaches them
             to the task. Self-hides at zero. */}
