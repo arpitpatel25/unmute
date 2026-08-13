@@ -120,10 +120,29 @@ interface SettingsApi {
   paywallOpenExternal?: (url: string) => Promise<boolean>
   paywallCheckForUpdates?: () => Promise<
     | { status: 'available'; version: string }
+    | { status: 'downloaded'; version: string }
     | { status: 'current'; version?: string }
     | { status: 'unsupported'; message: string }
     | { status: 'error'; message: string }
   >
+  paywallOnUpdateStatus?: (cb: (s: UpdateStatus) => void) => () => void
+  paywallInstallUpdate?: () => Promise<boolean>
+}
+
+/** Mirror of `UpdateStatus` in electron/paywall-glue.ts — the live phases the
+ *  main process pushes while an update is being found and fetched. */
+type UpdateStatus =
+  | { phase: 'checking' }
+  | { phase: 'available'; version: string }
+  | { phase: 'current'; version?: string }
+  | { phase: 'downloading'; percent: number; transferred: number; total: number; bytesPerSecond: number }
+  | { phase: 'downloaded'; version: string }
+  | { phase: 'error'; message: string }
+
+/** MB with one decimal — the unit an app download lives in. Bytes are noise at
+ *  this size and GB rounds a 170 MB update to "0.2". */
+function mb(bytes: number): string {
+  return `${(bytes / 1_000_000).toFixed(1)} MB`
 }
 const api = (): SettingsApi =>
   (window as unknown as { electronAPI?: SettingsApi }).electronAPI ?? {}
@@ -195,19 +214,61 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // from here — restarting stays the user's decision either way.
   const [updateBusy, setUpdateBusy] = useState(false)
   const [updateNote, setUpdateNote] = useState<string | null>(null)
+  // The live phase from main. Separate from `updateNote` because the two answer
+  // different questions: the note is the last SENTENCE we told the user, the
+  // status is where the download is RIGHT NOW — and the second one keeps moving
+  // long after the check call that started it has resolved.
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const [installing, setInstalling] = useState(false)
+  const downloading = updateStatus?.phase === 'downloading' ? updateStatus : null
+  const readyVersion = updateStatus?.phase === 'downloaded' ? updateStatus.version : null
+
+  // Subscribe once, for the life of the pane. This also catches BACKGROUND
+  // downloads the user never asked for, which is the honest thing to show: if
+  // the app is pulling 170 MB, the About row should say so whether or not the
+  // button is what started it.
+  useEffect(() => {
+    const off = api().paywallOnUpdateStatus?.((s) => {
+      setUpdateStatus(s)
+      if (s.phase === 'downloaded') setUpdateNote(`Version ${s.version} is ready. Restart to finish updating.`)
+      else if (s.phase === 'error') setUpdateNote(s.message)
+    })
+    return () => { off?.() }
+  }, [])
+
   async function runUpdateCheck(): Promise<void> {
     setUpdateBusy(true)
     setUpdateNote(null)
     try {
       const r = await api().paywallCheckForUpdates?.()
-      if (!r) { setUpdateNote('Could not check right now. Try again in a moment.'); return }
-      if (r.status === 'available') setUpdateNote(`Version ${r.version} is downloading. You will be offered a restart when it is ready.`)
+      // No bridge method at all — the preload extension did not make it into
+      // this build. That is a packaging fault, not a network one, and saying
+      // "check your connection" for it sends the user hunting in the wrong place.
+      if (!r) { setUpdateNote('This build cannot check for updates (updater bridge missing).'); return }
+      if (r.status === 'available') setUpdateNote(`Version ${r.version} found — downloading now.`)
+      else if (r.status === 'downloaded') {
+        setUpdateNote(`Version ${r.version} is ready. Restart to finish updating.`)
+        setUpdateStatus({ phase: 'downloaded', version: r.version })
+      }
       else if (r.status === 'current') setUpdateNote('You are up to date.')
       else if (r.status === 'unsupported') setUpdateNote(r.message)
-      else setUpdateNote('Could not reach the update server. Check your connection and try again.')
+      // The real reason, classified in main. The old code reported EVERY
+      // failure as a connection problem — including the TypeError that used to
+      // fire on every single click. See paywall-glue.ts's electron-updater import.
+      else setUpdateNote(r.message)
+    } catch (e) {
+      setUpdateNote(`Update check failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setUpdateBusy(false)
     }
+  }
+
+  async function runInstallUpdate(): Promise<void> {
+    setInstalling(true)
+    const ok = await api().paywallInstallUpdate?.()
+    // On success the app is already quitting, so this only ever runs when the
+    // restart did NOT take — leave the button usable rather than stuck.
+    if (!ok) { setInstalling(false); setUpdateNote('Nothing is staged to install yet.') }
   }
   // 'system' is the default and the only value that respects an accessibility
   // preference — macOS already owns this setting (Accessibility → Reduce
@@ -760,18 +821,65 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
 
           <SectionHeader icon={<ShieldIcon />} title="About" />
           <Card>
-            <SettingRow
-              label={`unmute ${appVersion ? `v${appVersion}` : ''}`.trim()}
-              description={updateNote ?? 'unmute updates itself in the background. Check now if you would rather not wait.'}
-            >
-              <button
-                disabled={updateBusy}
-                onClick={() => { void runUpdateCheck() }}
-                className="px-4 py-2 rounded-full border border-border text-[12.5px] font-semibold text-ink-60 hover:bg-cream-mid hover:border-border-md transition-all duration-200 disabled:opacity-50"
-              >
-                {updateBusy ? 'Checking…' : 'Check for updates'}
-              </button>
-            </SettingRow>
+            {/* Written out rather than using SettingRow because the progress
+                bar needs the FULL width of the row, and SettingRow's children
+                slot is the narrow right-hand column. Same padding and divider
+                classes, so it sits in the card identically. */}
+            <div className="px-5 py-4 border-b border-border last:border-b-0">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[13px] font-medium text-ink">
+                    {`unmute ${appVersion ? `v${appVersion}` : ''}`.trim()}
+                  </p>
+                  <p className="text-[11px] text-ink-35 mt-0.5">
+                    {updateNote ?? 'unmute updates itself in the background. Check now if you would rather not wait.'}
+                  </p>
+                </div>
+                {/* One slot, three jobs. Once bytes are on disk the only useful
+                    action is the restart that applies them, so the check button
+                    steps aside rather than sitting next to a finished download. */}
+                {readyVersion ? (
+                  <button
+                    disabled={installing}
+                    onClick={() => { void runInstallUpdate() }}
+                    className="px-4 py-2 rounded-full bg-ink text-white text-[12.5px] font-semibold hover:opacity-90 transition-all duration-200 disabled:opacity-50 shrink-0"
+                  >
+                    {installing ? 'Restarting…' : 'Restart to update'}
+                  </button>
+                ) : (
+                  <button
+                    disabled={updateBusy || !!downloading}
+                    onClick={() => { void runUpdateCheck() }}
+                    className="px-4 py-2 rounded-full border border-border text-[12.5px] font-semibold text-ink-60 hover:bg-cream-mid hover:border-border-md transition-all duration-200 disabled:opacity-50 shrink-0"
+                  >
+                    {downloading ? 'Downloading…' : updateBusy ? 'Checking…' : 'Check for updates'}
+                  </button>
+                )}
+              </div>
+
+              {downloading && (
+                <div className="mt-3">
+                  <div
+                    role="progressbar"
+                    aria-label="Downloading update"
+                    aria-valuenow={Math.round(downloading.percent)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    className="h-1.5 w-full rounded-full bg-ink-07 overflow-hidden"
+                  >
+                    <div
+                      className="h-full rounded-full bg-ink transition-[width] duration-200 ease-out"
+                      style={{ width: `${downloading.percent}%` }}
+                    />
+                  </div>
+                  <p className="text-[11px] text-ink-35 mt-1.5 tabular-nums">
+                    {Math.round(downloading.percent)}%
+                    {downloading.total > 0 && ` · ${mb(downloading.transferred)} of ${mb(downloading.total)}`}
+                    {downloading.bytesPerSecond > 0 && ` · ${mb(downloading.bytesPerSecond)}/s`}
+                  </p>
+                </div>
+              )}
+            </div>
             <SettingRow label="Replay onboarding" description="Walk through the welcome and setup steps again">
               <button
                 onClick={() => {

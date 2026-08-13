@@ -21,6 +21,22 @@ import {
   resetRemoteTriggerUserPref,
   getRemoteTriggerState,
 } from '../remoteTriggerGate'
+// STATIC, and it MUST stay static — same lesson as the two imports above, but
+// this one bit us in a way worth spelling out because the failure looked like
+// a network fault rather than a code fault.
+//
+// This was `await import('electron-updater')` inside the check handler. The
+// engine's main is bundled to CommonJS, and Vite leaves a dynamic `import()`
+// untransformed — so at runtime it went through Node's ESM loader instead of
+// `require`. electron-updater publishes `autoUpdater` as a lazy accessor
+// (`Object.defineProperty(exports, 'autoUpdater', { get })`, out/main.js:78),
+// and cjs-module-lexer cannot see a defineProperty getter, so the ESM namespace
+// it synthesises has NO `autoUpdater` key. The destructure yielded undefined and
+// the next line threw a TypeError, which the catch below turned into a generic
+// "check your connection" — for a machine that was online the whole time. The
+// button could therefore NEVER report anything but a network error, on any
+// build, while the background updater (a plain `require`) worked fine.
+import { autoUpdater } from 'electron-updater'
 
 type EngineMode = 'auto' | 'managed' | 'local'
 interface PaywallSettings {
@@ -209,12 +225,106 @@ export async function refreshRemoteTriggerEntitlement(): Promise<void> {
 
 
 /** What an on-demand update check found. `available` means it is downloading
- *  now and the existing "ready to install" banner will appear when it lands. */
+ *  now — follow `paywall:update-status` for the progress of that download and
+ *  for the `downloaded` phase that ends it. `downloaded` as a CHECK result means
+ *  a previous check already finished the download and the app is only waiting
+ *  for a restart, so there is nothing to show progress for. */
 export type UpdateCheckResult =
   | { status: 'available'; version: string }
+  | { status: 'downloaded'; version: string }
   | { status: 'current'; version?: string }
   | { status: 'unsupported'; message: string }
   | { status: 'error'; message: string }
+
+/** Live updater phases pushed to every renderer on `paywall:update-status`.
+ *  One channel with a discriminated `phase` rather than six channels: the UI
+ *  renders one row whose contents depend on where in the sequence we are, so
+ *  a single ordered stream is what it actually wants to consume. */
+export type UpdateStatus =
+  | { phase: 'checking' }
+  | { phase: 'available'; version: string }
+  | { phase: 'current'; version?: string }
+  | { phase: 'downloading'; percent: number; transferred: number; total: number; bytesPerSecond: number }
+  | { phase: 'downloaded'; version: string }
+  | { phase: 'error'; message: string }
+
+/** Turn an updater failure into something a person can act on. The old code
+ *  reported EVERY failure as "check your connection", which is wrong for most
+ *  of them and actively misleading for the one that used to fire every time
+ *  (see the electron-updater import note at the top of this file). We only
+ *  claim a network fault when the error actually looks like one. */
+function describeUpdateError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e)
+  if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|getaddrinfo/i.test(raw)) {
+    return 'Could not reach the update server. Check your connection and try again.'
+  }
+  if (/HttpError:\s*404|status code 404|Cannot find channel|latest-mac\.yml/i.test(raw)) {
+    return 'The update server has no published release for this build yet.'
+  }
+  if (/403|401|rate limit/i.test(raw)) {
+    return 'The update server refused the request. Try again in a few minutes.'
+  }
+  // Anything else is a real defect, and hiding it behind a friendly sentence is
+  // how the import bug survived. Show it.
+  return `Update check failed: ${raw}`
+}
+
+/** The version sitting on disk waiting for a restart, or null. Set by the
+ *  `update-downloaded` listener below, so it is true for a background download
+ *  the user never watched as well as for one they started from Settings. */
+let downloadedVersion: string | null = null
+/** autoUpdater is a process-wide singleton and registerPaywallIPC is only meant
+ *  to run once, but a second run would silently double every progress event. */
+let updaterEventsWired = false
+
+function broadcastUpdateStatus(status: UpdateStatus): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (w.isDestroyed()) continue
+    w.webContents.send('paywall:update-status', status)
+  }
+}
+
+/** Mirror the updater's own event stream onto `paywall:update-status`.
+ *
+ *  These are LISTENERS on the singleton the engine already drives, not a second
+ *  updater: a background download that started on its own reports progress here
+ *  too, which is the point — the Settings row shows what is happening whether or
+ *  not the user is the one who asked for it. */
+function wireUpdaterEvents(): void {
+  if (updaterEventsWired || !app.isPackaged) return
+  updaterEventsWired = true
+  try {
+    autoUpdater.on('checking-for-update', () => broadcastUpdateStatus({ phase: 'checking' }))
+    autoUpdater.on('update-available', (info: { version: string }) =>
+      broadcastUpdateStatus({ phase: 'available', version: info?.version }))
+    autoUpdater.on('update-not-available', (info: { version?: string }) =>
+      broadcastUpdateStatus({ phase: 'current', version: info?.version }))
+    autoUpdater.on('download-progress', (p: {
+      percent: number; transferred: number; total: number; bytesPerSecond: number
+    }) => broadcastUpdateStatus({
+      phase: 'downloading',
+      // Clamp: electron-updater's percent can overshoot slightly on the last
+      // chunk, and a progress bar wider than its track looks broken.
+      percent: Math.max(0, Math.min(100, p?.percent ?? 0)),
+      transferred: p?.transferred ?? 0,
+      total: p?.total ?? 0,
+      bytesPerSecond: p?.bytesPerSecond ?? 0,
+    }))
+    autoUpdater.on('update-downloaded', (info: { version: string }) => {
+      downloadedVersion = info?.version ?? null
+      broadcastUpdateStatus({ phase: 'downloaded', version: info?.version })
+    })
+    // electron-updater emits 'error' for failures that happen AFTER the check
+    // resolves — most importantly a download that dies halfway. Without this
+    // the progress bar would sit at whatever percent it reached, forever.
+    autoUpdater.on('error', (e: Error) => {
+      console.warn('[paywall-glue] updater error:', e?.message ?? e)
+      broadcastUpdateStatus({ phase: 'error', message: describeUpdateError(e) })
+    })
+  } catch (e) {
+    console.warn('[paywall-glue] could not wire updater events:', e instanceof Error ? e.message : e)
+  }
+}
 
 // Substituted by build script
 declare const __SUPABASE_URL__: string
@@ -900,25 +1010,55 @@ function registerSessionBridge() {
   // This reuses the SAME autoUpdater singleton the engine configured, so the
   // behaviour is identical to the automatic path: a found update downloads by
   // itself (`autoDownload = true`) and surfaces through the existing banner.
-  // We deliberately do NOT install here — the user chooses when to restart,
-  // exactly as they do for a background update.
+  // Installing is still never automatic — `paywall:install-update` below only
+  // ever runs because the user pressed Restart, exactly as the banner works.
+  wireUpdaterEvents()
   ipcMain.handle('paywall:check-for-updates', async (): Promise<UpdateCheckResult> => {
     // electron-updater needs the packaged app-update.yml; in dev it throws.
     if (!app.isPackaged) return { status: 'unsupported', message: 'Updates only run in an installed build.' }
+    // A finished download that is only waiting for a restart is not a thing to
+    // check for again — re-checking would re-report "downloading" for bytes
+    // that are already on disk, and the honest answer is "restart to get it".
+    if (downloadedVersion) return { status: 'downloaded', version: downloadedVersion }
     try {
-      const { autoUpdater } = await import('electron-updater')
       const res = await autoUpdater.checkForUpdates()
       const latest = res?.updateInfo?.version
       if (!latest) return { status: 'current' }
-      // checkForUpdates resolves for both outcomes; compare to decide which.
-      const current = app.getVersion()
-      if (latest === current) return { status: 'current', version: current }
+      // checkForUpdates resolves for BOTH outcomes, and `isUpdateAvailable` is
+      // the verdict it already reached — a real semver comparison that also
+      // honours allowDowngrade and the channel rules. Ask it rather than
+      // re-deciding here.
+      //
+      // This used to be `latest === current`, which is wrong in the one case it
+      // matters: when no update exists the result STILL carries updateInfo for
+      // the published version, so any build whose version merely DIFFERS from
+      // the latest release — every `-dev.N` test build, and any build ahead of
+      // the channel — read as "available" and told the user a downgrade was
+      // "downloading now" while nothing downloaded.
+      if (!res.isUpdateAvailable) return { status: 'current', version: app.getVersion() }
       return { status: 'available', version: latest }
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      console.warn('[paywall-glue] update check failed:', message)
-      return { status: 'error', message }
+      console.warn('[paywall-glue] update check failed:', e instanceof Error ? e.message : e)
+      return { status: 'error', message: describeUpdateError(e) }
     }
+  })
+
+  // Restart into the update the user just watched download. The engine's own
+  // banner offers this too; Settings needs its own entry point because the
+  // progress bar ends HERE — a bar that fills to 100% and then tells you to go
+  // look somewhere else is a bar that did not finish its job.
+  ipcMain.handle('paywall:install-update', (): boolean => {
+    if (!app.isPackaged || !downloadedVersion) return false
+    // setImmediate so the IPC reply reaches the renderer before the app starts
+    // tearing itself down; quitAndInstall does not wait for anything.
+    setImmediate(() => {
+      try {
+        autoUpdater.quitAndInstall()
+      } catch (e) {
+        console.warn('[paywall-glue] quitAndInstall failed:', e instanceof Error ? e.message : e)
+      }
+    })
+    return true
   })
 
   ipcMain.handle('paywall:get-launch-at-login', () => {
