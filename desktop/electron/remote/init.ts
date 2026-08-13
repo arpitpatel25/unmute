@@ -27,6 +27,7 @@ import { existsSync, writeFileSync, mkdirSync, statSync, watch, promises as fs }
 import { execFile } from 'node:child_process'
 import { TaskManager, type Task } from './task-manager'
 import { TaskDraftStore } from './task-draft'
+import { deliverAddressedCapture } from './addressed-capture'
 import { Librarian } from './librarian'
 import { ClaudeCodeExecutor } from './pty-session'
 import { CodexExecutor, isExternalAgent, type AgentKind } from './codex-executor'
@@ -97,7 +98,7 @@ import {
 } from './capture/index'
 import { SETTLE_IDLE_MS } from './capture/scratchpadStore'
 import type { Entry, InsertKind } from './capture/types'
-import { CaptureHistoryStore, type CaptureHistoryKind } from './capture/history-store'
+import { CaptureHistoryStore, clipboardPayload, type CaptureHistoryKind } from './capture/history-store'
 import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
@@ -458,9 +459,8 @@ async function addDraftImageFromPath(id: string, sourcePath: string, mimeType: s
   if (path) taskDrafts.addAttachment(id, { id: randomUUID(), path, mimeType, name: name || basename(path) })
 }
 
-async function sendTaskDraft(id: string): Promise<boolean> {
-  const draft = taskDrafts.snapshot(id)
-  if (!draft || !manager) return false
+async function deliverTaskDraftSnapshot(id: string, draft: import('./task-draft').TaskDraft): Promise<boolean> {
+  if (!manager) return false
   const task = manager.get(id)
   if (!task) return false
   const text = draftDeliveryText(draft.text, isExternalAgent(task.agent) ? [] : draft.attachments.map((attachment) => attachment.path))
@@ -470,6 +470,13 @@ async function sendTaskDraft(id: string): Promise<boolean> {
     : manager.tasksAwaitingUser().some((entry) => entry.id === id)
     ? manager.answer(id, text)
     : manager.followUp(id, text)
+  return accepted
+}
+
+async function sendTaskDraft(id: string): Promise<boolean> {
+  const draft = taskDrafts.snapshot(id)
+  if (!draft) return false
+  const accepted = await deliverTaskDraftSnapshot(id, draft)
   if (accepted) taskDrafts.clearIfUnchanged(id, draft)
   return accepted
 }
@@ -2365,13 +2372,18 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
     const text = completeFn ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
     // Right-Option capture and the visible composer are one draft. Captured
     // images stay as attachments rather than being rendered as filesystem paths.
-    taskDrafts.appendText(fid, (taskDrafts.get(fid).text ? '\n' : '') + text)
-    for (const path of attachments) taskDrafts.addAttachment(fid, {
-      id: randomUUID(), path, mimeType: 'image/png', name: basename(path),
+    const accepted = await deliverAddressedCapture({
+      taskId: fid,
+      text,
+      attachments,
+      drafts: taskDrafts,
+      onStaged: () => notchController?.refresh(),
+      deliver: deliverTaskDraftSnapshot,
     })
-    log.event('capture-appended-to-draft', { taskId: fid, attachments: attachments.length })
-    pendingBeat = '' // the target surface is visible; its draft is the acknowledgement
-    return fid
+    notchController?.refresh()
+    log.event('capture-addressed-delivery', { taskId: fid, attachments: attachments.length, accepted })
+    pendingBeat = accepted ? '' : 'That didn\u2019t land. Your reply is still in the task.'
+    return accepted ? fid : null
   }
 
   // 1. ALL routing goes through the warm router — including answering a task that
@@ -3766,6 +3778,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:capture-history-list', async (_e, kind?: CaptureHistoryKind) => captureHistory.list(kind))
   ipcMain.handle('remote:capture-history-save', async (_e, id: string, saved: boolean) => captureHistory.setSaved(id, saved))
   ipcMain.handle('remote:capture-history-delete', async (_e, id: string) => captureHistory.delete(id))
+  ipcMain.handle('remote:capture-history-copy', async (_e, id: string) => {
+    const entry = captureHistory.list().find((candidate) => candidate.id === id)
+    if (!entry) return false
+    const payload = clipboardPayload(entry)
+    // Text is the fail-soft baseline if the helper exited between this check
+    // and the send. The native command replaces it with the full multi-item
+    // pasteboard when available.
+    clipboard.writeText(payload.text)
+    notchClient?.send({ type: 'copyCapture', ...payload })
+    return true
+  })
 
   // ── The scratchpad has NO IPC surface, deliberately ──
   //

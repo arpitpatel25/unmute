@@ -1629,7 +1629,7 @@ describe('an unarmed stop delivers what was captured, not the speech alone', () 
     endSegment(3000)
 
     assert.equal(delivered(id, 'fix this'), 'fix this', 'a text field cannot hold an image')
-    assert.equal(delivered(id, 'fix this', 'task'), 'fix this [image: /tmp/Screenshot 14.22.png]')
+    assert.equal(delivered(id, 'fix this', 'task'), 'fix this', 'the real image travels through the attachment channel, never as a leaked path')
   })
 
   test('it does not run while ARMED — that stop holds, it does not deliver', () => {

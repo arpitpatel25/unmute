@@ -1153,10 +1153,13 @@ export class NotchController {
     this.cameFromPocket = this.pocketMode === 'open'
     this.muted.delete(id)          // opening it IS asking to hear about it again
     this.engaged = 'task'
-    this.setPocketMode('closed')
     this.setFocus(id)
     log.event('pocket-expanded', { taskId: id })
+    // Present the destination first. Sending `pocket: closed` before `task`
+    // gave the native process a real intermediate target — the 22pt bar — so
+    // the card visibly vanished and reopened instead of morphing in place.
     this.reconcile()
+    this.setPocketMode('closed')
   }
 
   private onPocketMove(e: { delta?: number; to?: number }): void {
@@ -1301,6 +1304,10 @@ export class NotchController {
     this.autoExpand = on
     log.info('auto-expand', { on })
   }
+
+  /** Re-publish the currently visible detail after main-owned draft state
+   * changes outside a native UI event (for example, Right Option capture). */
+  refresh(): void { this.reconcile() }
 
   private setFocus(id: string | null): void {
     this.focusedId = id

@@ -9,4 +9,26 @@ final class SurfaceSizeStepTests: XCTestCase {
         XCTAssertNil(SurfaceSizeStep.next(after: 0.7, direction: .smaller))
         XCTAssertNil(SurfaceSizeStep.next(after: 0.9, direction: .larger))
     }
+
+    func testTemporarySelectionUsesTheExactScreenFractionInsteadOfScalingProviderGeometry() {
+        let screen = CGSize(width: 1440, height: 900)
+        let providerBase = CGSize(width: 1008, height: 630)
+
+        XCTAssertEqual(
+            SurfaceSizeStep.resolvedSize(
+                screen: screen,
+                providerDefault: providerBase,
+                temporaryFill: 0.8
+            ),
+            CGSize(width: 1152, height: 720)
+        )
+        XCTAssertEqual(
+            SurfaceSizeStep.resolvedSize(
+                screen: screen,
+                providerDefault: providerBase,
+                temporaryFill: nil
+            ),
+            providerBase
+        )
+    }
 }

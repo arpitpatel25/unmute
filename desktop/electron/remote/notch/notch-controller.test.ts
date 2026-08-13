@@ -1297,6 +1297,20 @@ test('the pocket is a GLANCE — you can always get the full task back', () => {
   assert.ok(pocketOf(h)!.slots.some((sl) => sl.id === 'a'))
 })
 
+test('pocket expansion presents the task before closing the pocket', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'a', state: 'needs-user', alive: true, question: { text: 'q' } }))
+  h.client.fire({ type: 'pocketOpen' })
+  h.client.sent = []
+
+  h.client.fire({ type: 'pocketExpand' })
+
+  const taskAt = h.client.sent.findIndex((command) => command.type === 'setState' && command.state === 'task')
+  const closedAt = h.client.sent.findIndex((command) => command.type === 'pocket' && command.data.mode === 'closed')
+  assert.ok(taskAt >= 0, 'the task presentation is emitted')
+  assert.ok(closedAt < 0 || taskAt < closedAt, 'the native surface never receives a closed-bar target first')
+})
+
 
 test('THE RULE: open is aimed, closed is the router', () => {
   // One concept, two sizes. A task expanded and the pocket open are the same

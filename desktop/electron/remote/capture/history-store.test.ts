@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CaptureHistoryStore } from './history-store'
+import { CaptureHistoryStore, clipboardPayload } from './history-store'
 
 test('unsaved capture history expires with its owned attachments after 24 hours', () => {
   const root = mkdtempSync(join(tmpdir(), 'unmute-history-'))
@@ -44,4 +44,14 @@ test('archiving snapshots an image and never deletes the source screenshot', () 
 
   assert.equal(existsSync(source), true)
   assert.equal(existsSync(entry.attachments[0]), false)
+})
+
+test('copy all preserves text and every archived image in order', () => {
+  assert.deepEqual(clipboardPayload({
+    id: 'copy', kind: 'scratchpad', createdAt: 1, finalizedAt: 2,
+    text: 'whole scratchpad', destination: 'cursor',
+    attachments: ['/archive/one.png', '/archive/two.png'], saved: false,
+  }), {
+    text: 'whole scratchpad', attachments: ['/archive/one.png', '/archive/two.png'],
+  })
 })

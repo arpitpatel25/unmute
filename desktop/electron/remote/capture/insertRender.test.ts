@@ -72,12 +72,12 @@ describe('fenceFor escapes content containing backticks', () => {
 })
 
 describe('images', () => {
-  test('a task gets a real reference and the path as an attachment', () => {
+  test('a task gets the real attachment without leaking its path into the prompt', () => {
     let p = emptyPad('p', 'task', 0)
     p = addSegment(p, { id: 's1', text: 'look at this', startMs: 0, endMs: 1 })
     p = addInsert(p, { id: 'i1', kind: 'image', content: '/tmp/shot.png', atMs: 2 })
     const r = render(p, 'task')
-    assert.match(r.text, /\/tmp\/shot\.png/)
+    assert.equal(r.text, 'look at this')
     assert.deepEqual(r.attachments, ['/tmp/shot.png'])
   })
   test('the cursor keeps an image OUT OF THE TEXT but still delivers it', () => {

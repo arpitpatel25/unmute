@@ -17,6 +17,10 @@ export interface CaptureHistoryEntry {
   saved?: boolean
 }
 
+export function clipboardPayload(entry: CaptureHistoryEntry): { text: string; attachments: string[] } {
+  return { text: entry.text, attachments: [...entry.attachments] }
+}
+
 const RETENTION_MS = 24 * 60 * 60 * 1000
 const INDEX = 'history.json'
 

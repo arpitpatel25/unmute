@@ -29,6 +29,7 @@ final class AppController: NSObject, NotchResizing {
     /// actually asked for before it puts the surface back to sleep.
     private var commandedState: NotchState = .dormant
     private var hoverTimer: Timer?
+    private var pocketHoverTimer: Timer?
     private var toastTimer: Timer?
 
     override init() {
@@ -58,8 +59,7 @@ final class AppController: NSObject, NotchResizing {
         model.onHover = { [weak self] entering in self?.handleHover(entering) }
         model.onPocketDetails = { [weak self] visible in self?.setPocketDetails(visible) }
         model.onBack = { [weak self] in self?.stepDown() }
-        model.shrinkSurface = { [weak self] in self?.stepSurface(.smaller) }
-        model.enlargeSurface = { [weak self] in self?.stepSurface(.larger) }
+        model.selectSurfaceFill = { [weak self] fill in self?.selectSurface(fill) }
         installPill()
         let start = resolve(.dormant)
         model.bar = start.placement
@@ -307,6 +307,17 @@ final class AppController: NSObject, NotchResizing {
             // mass is sized by its content, not by this.
             if isExpanded(model.state) { refit(animated: true) }
 
+        case let .copyCapture(text, attachments):
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            var objects: [NSPasteboardWriting] = []
+            if !text.isEmpty { objects.append(text as NSString) }
+            for path in attachments where FileManager.default.fileExists(atPath: path) {
+                objects.append(URL(fileURLWithPath: path) as NSURL)
+            }
+            if !objects.isEmpty { pasteboard.writeObjects(objects) }
+            NotchLog.log("CMD copyCapture text=\(!text.isEmpty) attachments=\(objects.count - (text.isEmpty ? 0 : 1))")
+
         case let .pill(state):
             // Logged at phase granularity only — the level field changes every
             // frame during a capture and would drown the log.
@@ -502,22 +513,23 @@ final class AppController: NSObject, NotchResizing {
             return (geometry.barFrame(m), m, c)
 
         case .task, .cockpit:
-            // SIZED BY WHAT THE PANEL CARRIES, not by the state alone. A live
-            // terminal gets 80% of the screen; a desktop-app backend's
-            // conversation gets 60% (NotchGeometry.SurfaceFill).
-            var size = state == .task ? geometry.taskSize(terminal: taskHasTerminal)
-                                      : geometry.cockpitSize
+            // The saved Appearance choice is the default for every expanded
+            // surface. A visit-scoped choice uses that same absolute geometry.
+            let providerDefault = state == .task ? geometry.taskSize(terminal: taskHasTerminal)
+                                                 : geometry.cockpitSize
+            var size = SurfaceSizeStep.resolvedSize(
+                screen: geometry.screenFrame.size,
+                providerDefault: providerDefault,
+                temporaryFill: temporarySurfaceFill
+            )
             // USER SCALE — one factor on BOTH axes, so any drag from any edge
             // makes the whole surface bigger rather than stretching it one way.
             // Only the expanded surfaces are resizable; the resting states are
             // fixed.
-            let fillScale = activeSurfaceFill / NotchGeometry.SurfaceFill.user
-            if fillScale != 1 || userScale != 1 {
-                var w = size.width * fillScale * userScale
-                var h = size.height * fillScale * userScale
+            if userScale != 1 {
+                var w = size.width * userScale
+                var h = size.height * userScale
                 // The cockpit never goes below the fill selected for this visit.
-                // Carrying a smaller task-view drag scale into it must not
-                // shrink the wall beneath the person's chosen rung.
                 if state == .cockpit {
                     let minimum = geometry.expandedSize(fill: activeSurfaceFill)
                     w = max(w, minimum.width)
@@ -554,10 +566,27 @@ final class AppController: NSObject, NotchResizing {
     /// other pocket resize.
     private func setPocketDetails(_ hovering: Bool) {
         model.pocketHovered = hovering
-        let next = hovering || model.captureAimed
-        guard model.pocket.isOpen, model.pocketDetailsVisible != next else { return }
-        model.pocketDetailsVisible = next
-        refit(animated: true)
+        pocketHoverTimer?.invalidate()
+        if hovering || model.captureAimed {
+            guard model.pocket.isOpen, !model.pocketDetailsVisible else { return }
+            model.pocketDetailsVisible = true
+            refit(animated: true)
+            return
+        }
+        // SwiftUI rebuilds its tracking region while the panel animates. That
+        // can emit a synthetic exit even though the pointer is still inside the
+        // same surface, creating a 64↔146pt resize loop. Defer only collapse and
+        // confirm against the physical window frame before accepting the exit.
+        pocketHoverTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { [weak self] _ in
+            guard let self, self.model.pocket.isOpen, !self.model.captureAimed else { return }
+            if self.window.frame.contains(NSEvent.mouseLocation) {
+                self.model.pocketHovered = true
+                return
+            }
+            guard self.model.pocketDetailsVisible else { return }
+            self.model.pocketDetailsVisible = false
+            self.refit(animated: true)
+        }
     }
 
     // MARK: - Auto-present (default ON)
@@ -630,31 +659,24 @@ final class AppController: NSObject, NotchResizing {
         temporarySurfaceFill ?? NotchGeometry.SurfaceFill.user
     }
 
-    private func stepSurface(_ direction: SurfaceSizeStep.Direction) {
-        guard isExpanded(model.state),
-              let next = SurfaceSizeStep.next(after: activeSurfaceFill, direction: direction)
-        else { return }
-        temporarySurfaceFill = next
+    private func selectSurface(_ fill: CGFloat) {
+        guard isExpanded(model.state), SurfaceSizeStep.values.contains(where: { abs($0 - fill) < 0.001 }) else { return }
+        userScale = 1
+        temporarySurfaceFill = fill
         refreshSurfaceControlAvailability()
         refit(animated: true)
     }
 
     private func refreshSurfaceControlAvailability() {
         guard isExpanded(model.state) else {
-            model.canShrinkSurface = false
-            model.canEnlargeSurface = false
             return
         }
-        model.canShrinkSurface = SurfaceSizeStep.next(after: activeSurfaceFill, direction: .smaller) != nil
-        model.canEnlargeSurface = SurfaceSizeStep.next(after: activeSurfaceFill, direction: .larger) != nil
+        model.selectedSurfaceFill = activeSurfaceFill
     }
 
     /// Never larger than the screen it lives on.
     ///
-    /// Measured from the SAME base the frame uses, so the headroom shrinks as the
-    /// default grows: at 80% of the screen a drag can still add ~22% before
-    /// hitting the edge, and 0.6 in the other direction is still available. The
-    /// default being large does not take the choice away.
+    /// Measured from the same base the frame uses, so it never exceeds screen.
     private func maxScale() -> CGFloat {
         let base = model.state == .cockpit ? geometry.cockpitSize
                                            : geometry.taskSize(terminal: taskHasTerminal)

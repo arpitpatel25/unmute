@@ -333,10 +333,7 @@ struct StageComposer: View {
                 }
                 .foregroundColor(Theme.cError)
             }
-            // Codex's composer is a TALL rounded box with its controls on a row
-            // beneath the text, not a one-line field with a button beside it.
-            // The shape is most of what makes it read as a place to write.
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
                 if let attachments = draft?.attachments, !attachments.isEmpty {
                     HStack(spacing: 7) {
                         ForEach(attachments, id: \.id) { attachment in
@@ -356,14 +353,13 @@ struct StageComposer: View {
                         }
                     }
                 }
-                SubmitTextEditor(text: $text, placeholder: placeholder, onSubmit: send, onImagePaste: attachImage)
-                    .frame(minHeight: 48, maxHeight: 120)
-                    .focused($focused)
-                HStack(spacing: 10) {
+                HStack(alignment: .bottom, spacing: 8) {
+                    SubmitTextEditor(text: $text, placeholder: placeholder, onSubmit: send, onImagePaste: attachImage)
+                        .frame(minHeight: 30, maxHeight: 76)
+                        .focused($focused)
                     if let m = modelLabel, !m.isEmpty {
                         Text(m).font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
                     }
-                    Spacer(minLength: 0)
                     if sending {
                         // Sending is a round-trip through another app's window;
                         // silence for a second reads as "nothing happened".
@@ -383,9 +379,8 @@ struct StageComposer: View {
                     .animation(Theme.hover, value: canSend)
                 }
             }
-            .padding(.horizontal, 13)
-            .padding(.top, 11)
-            .padding(.bottom, 9)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
             .background(RoundedRectangle(cornerRadius: 14).fill(Theme.sunken))
             .overlay(RoundedRectangle(cornerRadius: 14)
                 .stroke(focused ? Theme.accent.opacity(0.55) : Theme.hairline, lineWidth: focused ? 1 : 0.5))

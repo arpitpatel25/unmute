@@ -46,19 +46,15 @@ export function render(pad: Pad, dest: Destination): RenderResult {
     if (e.kind === 'image') {
       // AN IMAGE IS ALWAYS DELIVERED — the destinations differ only in HOW.
       //
-      // A task takes a path, because whatever reads it can open the file. The
-      // cursor cannot: a text field holds no path the user asked for, and
-      // pasting one is noise. But dropping the image entirely — which is what
-      // this did — silently threw away something the user deliberately
-      // captured, and it was a REGRESSION besides: the pre-branch delivery
-      // staged screenshots and pasted them after the text.
+      // Paths never belong in the visible text. Every destination receives the
+      // real file through its attachment channel; PTY delivery may render a
+      // reference later, at the transport boundary where that is required.
       //
       // So the cursor gets the image out of the TEXT and into the attachment
       // list, and delivery hands the real bytes over through the pasteboard
       // (see clipboard.ts's injectOutput). Every destination sees the same
       // list, in the same order, from this one walk of the pad.
       attachments.push(e.content)
-      if (dest !== 'cursor') pieces.push({ text: `[image: ${e.content}]`, block: false })
       continue
     }
     if (INLINE.has(e.kind)) {

@@ -75,6 +75,8 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:capture-history-save', id, saved),
   remoteDeleteCaptureHistory: (id: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:capture-history-delete', id),
+  remoteCopyCaptureHistory: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:capture-history-copy', id),
 
   // ── Computer Use (ax-mcp) ──
   /** Read the current Computer Use policy (enabled / allowAll / allowed / screenshots). */

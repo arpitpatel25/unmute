@@ -18,6 +18,7 @@ function captureHistoryApi() {
     remoteListCaptureHistory?: (kind?: 'dictation' | 'scratchpad') => Promise<CaptureHistoryEntry[]>
     remoteSetCaptureHistorySaved?: (id: string, saved: boolean) => Promise<boolean>
     remoteDeleteCaptureHistory?: (id: string) => Promise<boolean>
+    remoteCopyCaptureHistory?: (id: string) => Promise<boolean>
   }
 }
 
@@ -122,8 +123,11 @@ export default function History() {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
-  function copyOutput(text: string, sessionId: string) {
-    navigator.clipboard.writeText(text)
+  async function copyOutput(text: string, sessionId: string, capture?: CaptureHistoryEntry) {
+    const copied = capture
+      ? await captureHistoryApi().remoteCopyCaptureHistory?.(capture.id)
+      : false
+    if (!copied) await navigator.clipboard.writeText(text)
     setCopiedId(sessionId)
     setTimeout(() => setCopiedId(null), 1500)
   }
@@ -287,7 +291,7 @@ export default function History() {
                   <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-200 shrink-0 translate-y-1 group-hover:translate-y-0">
                     {copyText && (
                       <button
-                        onClick={() => copyOutput(copyText, session.id)}
+                        onClick={() => void copyOutput(copyText, session.id, capture)}
                         className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all duration-200 ${
                           isCopied
                             ? 'bg-success/10 text-success'
@@ -348,6 +352,9 @@ export default function History() {
                 {entry.attachments.length > 0 && <div className="flex gap-1.5 mt-2 overflow-hidden">{entry.attachments.slice(0, 4).map((attachment) => <img key={attachment} src={`file://${attachment}`} className="w-10 h-10 object-cover rounded-lg border border-border" />)}</div>}
               </div>
               <div className="flex gap-1.5 shrink-0">
+                <button onClick={() => void copyOutput(entry.text, entry.id, entry)} className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${copiedId === entry.id ? 'bg-success/10 text-success' : 'bg-ink-07 text-ink-35 hover:bg-accent/10 hover:text-accent'}`} title="Copy text and images">
+                  {copiedId === entry.id ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>}
+                </button>
                 <button onClick={() => void setScratchpadSaved(entry, !entry.saved)} className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${entry.saved ? 'bg-accent/10 text-accent' : 'bg-ink-07 text-ink-35 hover:bg-accent/10 hover:text-accent'}`} title={entry.saved ? 'Saved permanently' : 'Save permanently'}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill={entry.saved ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
                 </button>
