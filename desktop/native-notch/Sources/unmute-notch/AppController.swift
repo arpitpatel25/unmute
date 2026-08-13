@@ -56,6 +56,7 @@ final class AppController: NSObject, NotchResizing {
             self?.afterEmit(ev)
         }
         model.onHover = { [weak self] entering in self?.handleHover(entering) }
+        model.onPocketDetails = { [weak self] visible in self?.setPocketDetails(visible) }
         model.onBack = { [weak self] in self?.stepDown() }
         model.shrinkSurface = { [weak self] in self?.stepSurface(.smaller) }
         model.enlargeSurface = { [weak self] in self?.stepSurface(.larger) }
@@ -260,6 +261,15 @@ final class AppController: NSObject, NotchResizing {
             // and a card announcing a second would be two answers to one question.
             let wasOpen = model.pocket.isOpen
             model.pocket = p
+            if !p.isOpen {
+                model.pocketHovered = false
+                model.pocketDetailsVisible = false
+            } else {
+                // A pocket may be opened while an addressed capture is already
+                // live. Size it for the controls on its first frame, not after
+                // the view has been mounted and clipped them.
+                model.pocketDetailsVisible = model.pocketHovered || model.captureAimed
+            }
             NotchLog.log("CMD pocket mode=\(p.mode) at=\(p.at) slots=\(p.slots.count)")
             if !isExpanded(model.state) || model.state == .attention {
                 if wasOpen != p.isOpen { refit(animated: true) } else { refreshBar() }
@@ -317,6 +327,7 @@ final class AppController: NSObject, NotchResizing {
             model.captureAimed = state.phase == .recording
                 && state.kind == .remote
                 && model.capturePhase == "listening"
+            if model.pocket.isOpen { setPocketDetails(model.pocketHovered) }
             reconcileSurfaces()
 
         case let .scratchpad(payload):
@@ -467,7 +478,10 @@ final class AppController: NSObject, NotchResizing {
                 // MINUS the padding it replaced — not the whole inset. And zero
                 // on a notchless display, where the plane is unchanged.
                 let clearance = geometry.hasNotch ? max(0, topInset - Theme.panelPadding) : 0
-                return (geometry.topPinnedFrame(width: 348, height: (model.pocket.slots.count > 1 ? 146 : 120) + clearance),
+                let cardHeight: CGFloat = model.pocketDetailsVisible
+                    ? (model.pocket.slots.count > 1 ? 146 : 120)
+                    : 64
+                return (geometry.topPinnedFrame(width: 348, height: cardHeight + clearance),
                         geometry.panelPlacement,
                         BarContent())
             }
@@ -533,6 +547,17 @@ final class AppController: NSObject, NotchResizing {
         }
         window.applyFrame(r.frame, animated: animated)
         NotchLog.log("bar \(model.state.rawValue) window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] left=\(r.content.left ?? "—") right=\(r.content.right ?? "—")")
+    }
+
+    /// Secondary pocket controls are a presentation detail, not a route. Their
+    /// frame change is coordinated through the same native transition as every
+    /// other pocket resize.
+    private func setPocketDetails(_ hovering: Bool) {
+        model.pocketHovered = hovering
+        let next = hovering || model.captureAimed
+        guard model.pocket.isOpen, model.pocketDetailsVisible != next else { return }
+        model.pocketDetailsVisible = next
+        refit(animated: true)
     }
 
     // MARK: - Auto-present (default ON)

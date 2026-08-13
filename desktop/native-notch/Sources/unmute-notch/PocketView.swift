@@ -48,17 +48,21 @@ struct PocketCard: View {
     /// True while the mic is actually hot — the route line then says
     /// "listening", because one is happening and the other is a promise.
     let listening: Bool
+    @State private var hovering = false
 
     private var pocket: PocketP { model.pocket }
     private var slot: PocketSlotP? { pocket.current }
+    private var detailsVisible: Bool { hovering || listening }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             VStack(alignment: .leading, spacing: 7) {
                 taskFace
-                if pocket.slots.count > 1 { rail }
-                Spacer(minLength: 0)
-                route
+                if detailsVisible {
+                    if pocket.slots.count > 1 { rail }
+                    Spacer(minLength: 0)
+                    route
+                }
             }
             .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 9)
             // THE WHOLE CARD IS THE BUTTON. Expanding used to require hitting a
@@ -70,7 +74,8 @@ struct PocketCard: View {
 
             // TOP-RIGHT, AND THE STANDARD CONTROL. It sat mid-card beside the
             // arrows, which is nowhere anyone looks for a close.
-            HStack(spacing: 6) {
+            if detailsVisible {
+                HStack(spacing: 6) {
                 // A WAY OUT TO THE WALL, from the card. There was none: from
                 // the pocket the only forward motion was INTO a task, so seeing
                 // everything meant closing, tapping the empty notch, and hoping
@@ -96,24 +101,36 @@ struct PocketCard: View {
                 }
                 .buttonStyle(.plain)
                 .help("Close — your voice goes back to normal routing")
+                }
+                .padding(9)
             }
-            .padding(9)
+        }
+        .onHover { inside in
+            hovering = inside
+            model.onPocketDetails(inside)
+        }
+        .onChange(of: listening) { active in
+            model.onPocketDetails(active || hovering)
         }
     }
 
     @ViewBuilder private var taskFace: some View {
         header
-        // TWO LINES OF ROOM, ALWAYS — reserved whether or not they are used.
-        //
-        // This sized itself to its content, so a one-line ask and a two-line
-        // ask produced cards of different heights and the rail beneath them sat
-        // in two different places. Cranking through, the ‹ › you were aiming at
-        // moved under the pointer between cards. Controls have to be somewhere
-        // you can learn; a little unused space is a cheap price for that.
-        Text(slot?.ask ?? "Waiting on you.")
-            .font(.system(size: 12)).foregroundColor(Theme.textDim)
-            .lineLimit(2).truncationMode(.tail)
-            .frame(maxWidth: .infinity, minHeight: 31, maxHeight: 31, alignment: .topLeading)
+        if detailsVisible {
+            // TWO LINES OF ROOM, ALWAYS — reserved whether or not they are used.
+            // This keeps the rail in one learnable place while browsing cards.
+            Text(slot?.ask ?? "Waiting on you.")
+                .font(.system(size: 12)).foregroundColor(Theme.textDim)
+                .lineLimit(2).truncationMode(.tail)
+                .frame(maxWidth: .infinity, minHeight: 31, maxHeight: 31, alignment: .topLeading)
+        } else {
+            HStack(spacing: 5) {
+                Text(statusText)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundColor(Theme.textDim)
+                Spacer(minLength: 0)
+            }
+        }
     }
 
     // THE SEAM CARD LIVED HERE and it is gone. It marked where "waiting on
@@ -148,22 +165,20 @@ struct PocketCard: View {
                 .foregroundColor(slot?.demanding == false ? Theme.textDim : Theme.text)
                 .lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
-            if slot != nil {
-                Button { model.emit(.pocketExpand) } label: {
-                    Text("Open")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundColor(Theme.textDim)
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(Theme.raised))
-                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.hairline, lineWidth: 0.5))
-                }
-                .buttonStyle(.plain)
-                .help("Back to the full task")
-            }
         }
-        .padding(.trailing, 46)          // the two corner buttons own that space
+        .padding(.trailing, detailsVisible ? 46 : 0) // corner buttons own this space
         .contentShape(Rectangle())
         .onTapGesture { if slot != nil { model.emit(.pocketExpand) } }
+    }
+
+    private var statusText: String {
+        guard let status = slot?.status, !status.isEmpty else {
+            return slot?.demanding == true ? "Needs your attention" : "Ready"
+        }
+        return status
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .capitalized
     }
 
     /// Only drawn when there is more than one — a carousel over a single task
