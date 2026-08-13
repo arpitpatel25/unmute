@@ -1024,9 +1024,18 @@ function registerSessionBridge() {
       const res = await autoUpdater.checkForUpdates()
       const latest = res?.updateInfo?.version
       if (!latest) return { status: 'current' }
-      // checkForUpdates resolves for both outcomes; compare to decide which.
-      const current = app.getVersion()
-      if (latest === current) return { status: 'current', version: current }
+      // checkForUpdates resolves for BOTH outcomes, and `isUpdateAvailable` is
+      // the verdict it already reached — a real semver comparison that also
+      // honours allowDowngrade and the channel rules. Ask it rather than
+      // re-deciding here.
+      //
+      // This used to be `latest === current`, which is wrong in the one case it
+      // matters: when no update exists the result STILL carries updateInfo for
+      // the published version, so any build whose version merely DIFFERS from
+      // the latest release — every `-dev.N` test build, and any build ahead of
+      // the channel — read as "available" and told the user a downgrade was
+      // "downloading now" while nothing downloaded.
+      if (!res.isUpdateAvailable) return { status: 'current', version: app.getVersion() }
       return { status: 'available', version: latest }
     } catch (e) {
       console.warn('[paywall-glue] update check failed:', e instanceof Error ? e.message : e)
