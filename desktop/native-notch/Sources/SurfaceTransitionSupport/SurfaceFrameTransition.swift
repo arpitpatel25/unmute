@@ -179,3 +179,18 @@ public enum SurfacePresentationIntent {
         }
     }
 }
+
+/// Decides whether an expanded command may open the large surface.
+///
+/// `autoPresent` controls new compact-to-expanded presentations. Once the
+/// surface is already expanded, repeated task/cockpit commands are content
+/// refreshes and must remain expanded regardless of that preference.
+public enum SurfacePresentationPolicy {
+    public static func allowsExpandedRequest(
+        autoPresent: Bool,
+        surfaceIsAlreadyExpanded: Bool,
+        hasRecentGesture: Bool
+    ) -> Bool {
+        autoPresent || surfaceIsAlreadyExpanded || hasRecentGesture
+    }
+}

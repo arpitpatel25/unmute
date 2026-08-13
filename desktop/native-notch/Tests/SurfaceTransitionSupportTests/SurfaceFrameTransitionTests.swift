@@ -127,6 +127,22 @@ final class SurfaceFrameTransitionTests: XCTestCase {
         XCTAssertTrue(SurfacePresentationIntent.isExplicitGesture(.pocketExpand))
     }
 
+    func testExistingExpandedSurfaceAcceptsRoutineExpandedRefreshWhenAutoPresentIsOff() {
+        XCTAssertTrue(SurfacePresentationPolicy.allowsExpandedRequest(
+            autoPresent: false,
+            surfaceIsAlreadyExpanded: true,
+            hasRecentGesture: false
+        ))
+    }
+
+    func testCompactSurfaceStillRejectsAutomaticExpandedRequestWhenAutoPresentIsOff() {
+        XCTAssertFalse(SurfacePresentationPolicy.allowsExpandedRequest(
+            autoPresent: false,
+            surfaceIsAlreadyExpanded: false,
+            hasRecentGesture: false
+        ))
+    }
+
     func testLeavingExpandedStateDoesNotPreserveThePocketHandoff() {
         XCTAssertFalse(SurfaceContentHandoff.shouldPreserve(
             wasExpanded: true,

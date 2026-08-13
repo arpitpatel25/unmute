@@ -800,8 +800,15 @@ final class AppController: NSObject, NotchResizing {
     /// at bar level instead, and the content still updates in place: the user
     /// asked not to be interrupted, not to be left uninformed.
     private func presentableState(_ s: NotchState) -> NotchState {
-        guard !autoPresent, isExpanded(s) else { return s }
-        if let g = lastGestureAt, Date().timeIntervalSince(g) < Self.gestureWindow { return s }
+        guard isExpanded(s) else { return s }
+        let hasRecentGesture = lastGestureAt.map {
+            Date().timeIntervalSince($0) < Self.gestureWindow
+        } ?? false
+        guard !SurfacePresentationPolicy.allowsExpandedRequest(
+            autoPresent: autoPresent,
+            surfaceIsAlreadyExpanded: isExpanded(model.state),
+            hasRecentGesture: hasRecentGesture
+        ) else { return s }
         let held: NotchState = model.attention > 0 ? .attention : (model.working > 0 ? .active : .idle)
         NotchLog.log("auto-present OFF: \(s.rawValue) held at \(held.rawValue)")
         return held
