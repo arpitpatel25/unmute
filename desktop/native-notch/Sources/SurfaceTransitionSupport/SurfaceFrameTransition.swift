@@ -137,6 +137,16 @@ public enum SurfaceDepartureAbandonAction: Equatable {
 /// Keeps a pocket-to-expanded content handoff alive when duplicate IPC state
 /// updates arrive before the delayed expanded content has mounted.
 public enum SurfaceContentHandoff {
+    /// Prepared content participates in the same live resize as its container.
+    /// Withholding it until the frame completes creates a blank large panel and
+    /// forces its first layout onto the end of the transition.
+    public static func shouldDelayExpandedContent(
+        expandingFromPocket: Bool,
+        contentPrepared: Bool
+    ) -> Bool {
+        expandingFromPocket && !contentPrepared
+    }
+
     public static func shouldPreserve(
         wasExpanded: Bool,
         destinationExpanded: Bool,

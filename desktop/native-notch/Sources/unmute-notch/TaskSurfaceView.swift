@@ -58,7 +58,7 @@ struct TaskSurfaceView: View {
                     // ConversationPanel for driver backends and ExchangeStrip for
                     // the rest, two components showing the same thing where only
                     // one of them filled the space it was given.
-                    ConversationPanel(turns: t.conversation ?? [], id: t.id)
+                    ConversationPanel(rows: model.taskConversationRows, id: t.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 10)
                     if t.status == .needsUser, let q = t.question {

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import ComposerSupport
+import ConversationSupport
 
 /// Scroll anchor: a zero-height marker at the end of the transcript.
 private let BOTTOM = "conversation-bottom"
@@ -20,12 +21,12 @@ private let BOTTOM = "conversation-bottom"
 ///   * the answer: left-aligned, full width, no label, no avatar, real markdown
 ///   * an action row under the answer (copy)
 struct ConversationPanel: View {
-    let turns: [TurnP]
+    let rows: [ConversationRow]
     /// The task this transcript belongs to — switching tasks re-anchors.
     var id: String = ""
 
     var body: some View {
-        if turns.isEmpty {
+        if rows.isEmpty {
             Text("no messages yet")
                 .font(.system(size: 13))
                 .foregroundColor(Theme.textFaint)
@@ -38,12 +39,12 @@ struct ConversationPanel: View {
             // the item count changes.
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 26) {
-                        ForEach(Array(blocks.enumerated()), id: \.offset) { _, b in
-                            switch b {
-                            case let .user(text):     UserBubble(text: text)
-                            case let .answer(text):   AnswerBlock(text: text)
-                            case let .work(ms, body): WorkBlock(durationMs: ms, items: body)
+                    LazyVStack(alignment: .leading, spacing: 26) {
+                        ForEach(rows) { row in
+                            switch row.kind {
+                            case .user:   UserBubble(text: row.text)
+                            case .answer: AnswerBlock(text: row.text)
+                            case .work:   WorkBlock(durationMs: row.durationMs, items: row.workItems)
                             }
                         }
                         // Anchor: scrolling to a zero-height marker puts the
@@ -66,7 +67,7 @@ struct ConversationPanel: View {
                 // each task opens at its own latest message rather than
                 // inheriting the previous one's scroll position.
                 .onChange(of: id) { _ in jump(proxy, animated: false) }
-                .onChange(of: turns.count) { _ in jump(proxy, animated: true) }
+                .onChange(of: rows.count) { _ in jump(proxy, animated: true) }
             }
         }
     }
@@ -78,43 +79,6 @@ struct ConversationPanel: View {
         }
     }
 
-    private enum Block {
-        case user(String)
-        case answer(String)
-        case work(Int?, [TurnP])
-    }
-
-    /// Fold the flat item stream into Codex's three visual units. The parser
-    /// already marks where each work run begins (`role == "work"`).
-    private var blocks: [Block] {
-        var out: [Block] = []
-        var i = 0
-        while i < turns.count {
-            let t = turns[i]
-            switch t.role {
-            case "user":
-                out.append(.user(t.text)); i += 1
-            case "work":
-                var body: [TurnP] = []
-                var j = i + 1
-                while j < turns.count, turns[j].role == "tool" || turns[j].role == "commentary" {
-                    body.append(turns[j]); j += 1
-                }
-                out.append(.work(t.durationMs, body)); i = j
-            case "tool", "commentary":
-                // A run with no marker (older snapshot) — still group it.
-                var body: [TurnP] = []
-                var j = i
-                while j < turns.count, turns[j].role == "tool" || turns[j].role == "commentary" {
-                    body.append(turns[j]); j += 1
-                }
-                out.append(.work(nil, body)); i = j
-            default:
-                out.append(.answer(t.text)); i += 1
-            }
-        }
-        return out
-    }
 }
 
 // MARK: - The three units
@@ -187,7 +151,7 @@ private struct AnswerBlock: View {
 /// "Worked for 2m 46s ›" — everything the agent did, behind one line.
 private struct WorkBlock: View {
     let durationMs: Int?
-    let items: [TurnP]
+    let items: [ConversationTurn]
     @State private var open = false
 
     var body: some View {
@@ -241,7 +205,7 @@ private struct WorkBlock: View {
 
 /// One step inside the work block: its title, expandable to code and output.
 private struct StepRow: View {
-    let turn: TurnP
+    let turn: ConversationTurn
     @State private var open = false
 
     private var hasBody: Bool { !(turn.code ?? "").isEmpty || !(turn.output ?? "").isEmpty }

@@ -10,6 +10,32 @@ import MarkdownSupport
 private typealias Text = SwiftUI.Text
 private typealias Image = SwiftUI.Image
 
+private final class ParsedMarkdownDocument {
+    let value: Document
+    init(_ value: Document) { self.value = value }
+}
+
+/// Markdown is a content concern, not a geometry concern. SwiftUI asks a view
+/// for its body at every display-linked width step; caching by source text keeps
+/// those steps to layout only instead of reparsing the answer each time.
+private final class MarkdownDocumentCache {
+    static let shared = MarkdownDocumentCache()
+    private let values = NSCache<NSString, ParsedMarkdownDocument>()
+
+    private init() {
+        values.countLimit = 160
+        values.totalCostLimit = 12 * 1024 * 1024
+    }
+
+    func document(for text: String) -> Document {
+        let key = text as NSString
+        if let cached = values.object(forKey: key) { return cached.value }
+        let parsed = ParsedMarkdownDocument(Document(parsing: text))
+        values.setObject(parsed, forKey: key, cost: text.utf8.count)
+        return parsed.value
+    }
+}
+
 // MARK: - Agent markdown, parsed by a real engine
 
 /// WHAT AN AGENT WROTE, rendered the way it was written.
@@ -58,9 +84,9 @@ struct RichText: View {
         })
     }
 
-    /// Parsing is cheap (cmark on a few KB is microseconds) but body runs often
-    /// while an answer streams, so it is worth not re-parsing per subview.
-    private var document: Document { Document(parsing: text) }
+    /// Body runs at every live width step. Parsing once per distinct answer
+    /// keeps resizing proportional to visible layout rather than transcript size.
+    private var document: Document { MarkdownDocumentCache.shared.document(for: text) }
 
     // MARK: Blocks
 

@@ -86,12 +86,22 @@ let package = Package(
             dependencies: ["MarkdownSupport"],
             path: "Tests/MarkdownSupportTests"
         ),
+        .target(
+            name: "ConversationSupport",
+            path: "Sources/ConversationSupport"
+        ),
+        .testTarget(
+            name: "ConversationSupportTests",
+            dependencies: ["ConversationSupport"],
+            path: "Tests/ConversationSupportTests"
+        ),
         .executableTarget(
             name: "unmute-notch",
             dependencies: [
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "Markdown", package: "swift-markdown"),
                 "MarkdownSupport",
+                "ConversationSupport",
                 "HoverStateSupport",
                 "ComposerSupport",
                 "SurfaceSizeSupport",

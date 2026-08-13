@@ -1,4 +1,5 @@
 import Foundation
+import ConversationSupport
 
 // The v2 wire protocol between Electron main and this helper.
 // Line-delimited JSON, one object per line, UTF-8.
@@ -197,6 +198,14 @@ struct TurnP: Codable {
     let durationMs: Int?
     /// tool: false when the step reported an error.
     let ok: Bool?
+}
+
+extension ConversationTurn {
+    init(_ turn: TurnP) {
+        self.init(role: turn.role, text: turn.text, title: turn.title,
+                  code: turn.code, output: turn.output,
+                  durationMs: turn.durationMs, ok: turn.ok)
+    }
 }
 
 /// A resting card on the wall.

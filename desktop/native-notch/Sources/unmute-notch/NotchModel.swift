@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import ConversationSupport
 
 // Observable state the SwiftUI surface renders. AppController mutates it in
 // response to commands; views emit user intents through `emit`.
@@ -39,6 +40,7 @@ final class NotchModel: ObservableObject {
 
     // The fronted task (attention strip + task surface).
     @Published var task: TaskDetail? = nil
+    @Published private(set) var taskConversationRows: [ConversationRow] = []
 
     // The wall.
     @Published var cockpit: CockpitData? = nil
@@ -47,7 +49,37 @@ final class NotchModel: ObservableObject {
     // snappiness; main is told via focusTask/closeStage so voice routing tracks).
     @Published var focusedId: String? = nil
     @Published var stageTask: TaskDetail? = nil
+    @Published private(set) var stageConversationRows: [ConversationRow] = []
     @Published var stageFull: Bool = false
+
+    private var taskConversationSource: [ConversationTurn]?
+    private var stageConversationSource: [ConversationTurn]?
+
+    /// Prepare the stable transcript model when IPC data changes, not while
+    /// SwiftUI is repeatedly laying the same transcript out during a resize.
+    func prepareTaskConversation(_ task: TaskDetail) {
+        let turns = (task.conversation ?? []).map(ConversationTurn.init)
+        guard turns != taskConversationSource else { return }
+        taskConversationRows = ConversationPresentation.build(turns)
+        taskConversationSource = turns
+    }
+
+    func prepareStageConversation(_ task: TaskDetail) {
+        let turns = (task.conversation ?? []).map(ConversationTurn.init)
+        guard turns != stageConversationSource else { return }
+        stageConversationRows = ConversationPresentation.build(turns)
+        stageConversationSource = turns
+    }
+
+    func clearTaskConversation() {
+        taskConversationRows = []
+        taskConversationSource = nil
+    }
+
+    func clearStageConversation() {
+        stageConversationRows = []
+        stageConversationSource = nil
+    }
 
     // Skills UI state.
     @Published var skillsExpanded: Bool = false
@@ -69,9 +101,9 @@ final class NotchModel: ObservableObject {
     /// its secondary controls are tucked away. Hover and an aimed Remote
     /// capture reveal them without creating another navigation state.
     @Published var pocketDetailsVisible: Bool = false
-    /// During pocket → task geometry travel, keep the lightweight origin card
-    /// mounted until the large container is already moving. This prevents the
-    /// transcript/terminal hierarchy from competing with the first frame.
+    /// Fallback for the rare pocket → expanded transition where its destination
+    /// data has not arrived yet. Prepared content participates in the resize;
+    /// withholding it is what previously produced a large blank panel.
     @Published var transitionPocket: PocketP? = nil
     @Published var expandedContentReady: Bool = true
 

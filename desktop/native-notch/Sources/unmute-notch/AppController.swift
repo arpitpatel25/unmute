@@ -212,6 +212,7 @@ final class AppController: NSObject, NotchResizing {
             // state unchanged. Without this the frame would keep the previous
             // task's proportions until the next state change.
             let fillChanged = model.task?.hasTerminal != task.hasTerminal
+            model.prepareTaskConversation(task)
             model.task = task
             // A PREFERENCE IS A DEFAULT, NOT A CORRECTION.
             //
@@ -241,6 +242,7 @@ final class AppController: NSObject, NotchResizing {
             // Only meaningful while this task is (still) the focused one.
             if model.focusedId == nil || model.focusedId == task.id {
                 model.focusedId = task.id
+                model.prepareStageConversation(task)
                 model.stageTask = task
                 if needsTerminalToAnswer(task) { model.stageTerminalOpen = true }
                 refit()
@@ -254,6 +256,7 @@ final class AppController: NSObject, NotchResizing {
             if let f = model.focusedId, !data.groups.flatMap(\.cards).contains(where: { $0.id == f }) {
                 model.focusedId = nil
                 model.stageTask = nil
+                model.clearStageConversation()
                 reconcileTerminalSubscription()
             }
 
@@ -455,7 +458,13 @@ final class AppController: NSObject, NotchResizing {
         )
         if !preserveContentHandoff {
             expandedContentGeneration &+= 1
-            if expandingFromPocket && !Motion.reduceMotion {
+            let contentPrepared = state == .task ? model.task != nil
+                : state == .cockpit ? model.cockpit != nil
+                : true
+            if SurfaceContentHandoff.shouldDelayExpandedContent(
+                expandingFromPocket: expandingFromPocket,
+                contentPrepared: contentPrepared
+            ) && !Motion.reduceMotion {
                 model.transitionPocket = model.pocket
                 model.expandedContentReady = false
             } else {
@@ -541,7 +550,8 @@ final class AppController: NSObject, NotchResizing {
             if !window.isKeyWindow { window.makeKey() }
         }
         let contentGeneration = expandedContentGeneration
-        let revealExpandedContent: (() -> Void)? = expandingFromPocket && !Motion.reduceMotion && !preserveContentHandoff
+        let revealExpandedContent: (() -> Void)? = expandingFromPocket && !Motion.reduceMotion
+            && !preserveContentHandoff && !model.expandedContentReady
             ? { [weak self] in
                 guard let self, self.expandedContentGeneration == contentGeneration,
                       isExpanded(self.model.state) else { return }

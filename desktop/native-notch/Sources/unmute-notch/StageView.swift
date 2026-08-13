@@ -127,7 +127,7 @@ struct StageView: View {
         // desktop and ExchangeStrip for everything else — two components showing
         // the same thing, and only one of them scrolled or filled the space it
         // was given, which is the other half of the empty-band problem.
-        ConversationPanel(turns: t.conversation ?? [], id: t.id)
+        ConversationPanel(rows: model.stageConversationRows, id: t.id)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.top, 10)
         if t.status == .needsUser, let q = t.question {

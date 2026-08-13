@@ -116,6 +116,13 @@ final class SurfaceFrameTransitionTests: XCTestCase {
         ))
     }
 
+    func testPocketExpansionDoesNotWithholdPreparedExpandedContent() {
+        XCTAssertFalse(SurfaceContentHandoff.shouldDelayExpandedContent(
+            expandingFromPocket: true,
+            contentPrepared: true
+        ))
+    }
+
     func testLeavingExpandedStateDoesNotPreserveThePocketHandoff() {
         XCTAssertFalse(SurfaceContentHandoff.shouldPreserve(
             wasExpanded: true,
