@@ -183,7 +183,18 @@ struct NotchView: View {
     // offset — an offset is itself motion.
     @ViewBuilder private var content: some View {
         Group {
-            if expanded { expandedContent }
+            if expanded {
+                ZStack {
+                    if let pocket = model.transitionPocket {
+                        pocketPlane { PocketCard(model: model, pocketOverride: pocket, listening: model.captureAimed) }
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                    if model.expandedContentReady {
+                        expandedContent.transition(.opacity)
+                    }
+                }
+            }
             // THE POCKET, OPEN. Not a rung of its own — it lives between the bar
             // and the panel, so it borrows the bar's states and changes only
             // what is drawn. An expanded task outranks it: you are already

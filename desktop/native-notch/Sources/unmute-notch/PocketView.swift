@@ -45,12 +45,13 @@ struct PocketNub: View {
 /// The open card: which task you are addressing, and one keypress to change it.
 struct PocketCard: View {
     @ObservedObject var model: NotchModel
+    var pocketOverride: PocketP? = nil
     /// True while the mic is actually hot — the route line then says
     /// "listening", because one is happening and the other is a promise.
     let listening: Bool
     @State private var hovering = false
 
-    private var pocket: PocketP { model.pocket }
+    private var pocket: PocketP { pocketOverride ?? model.pocket }
     private var slot: PocketSlotP? { pocket.current }
     private var detailsVisible: Bool { hovering || listening }
 

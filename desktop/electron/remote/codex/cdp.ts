@@ -67,6 +67,11 @@ export class CodexCdp {
   private ws: any = null
   private nextId = 1
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>()
+  private eventWaiters = new Map<string, Array<{
+    resolve: (v: any) => void
+    reject: (e: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }>>()
 
   constructor(private readonly port: number, private readonly fetchImpl: typeof fetch = fetch) {}
 
@@ -86,7 +91,18 @@ export class CodexCdp {
     ws.addEventListener('message', (ev: any) => {
       let msg: any
       try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data)) } catch { return }
-      if (msg.id === undefined) return
+      if (msg.id === undefined) {
+        if (typeof msg.method === 'string') {
+          const waiters = this.eventWaiters.get(msg.method)
+          const waiter = waiters?.shift()
+          if (waiter) {
+            clearTimeout(waiter.timer)
+            waiter.resolve(msg.params ?? {})
+            if (!waiters?.length) this.eventWaiters.delete(msg.method)
+          }
+        }
+        return
+      }
       const p = this.pending.get(msg.id)
       if (!p) return
       this.pending.delete(msg.id)
@@ -107,6 +123,13 @@ export class CodexCdp {
     this.ws = null
     for (const [, p] of this.pending) p.reject(new Error('CDP closed'))
     this.pending.clear()
+    for (const waiters of this.eventWaiters.values()) {
+      for (const waiter of waiters) {
+        clearTimeout(waiter.timer)
+        waiter.reject(new Error('CDP closed'))
+      }
+    }
+    this.eventWaiters.clear()
   }
 
   send(method: string, params: Record<string, unknown> = {}): Promise<any> {
@@ -119,6 +142,21 @@ export class CodexCdp {
         reject: (e) => { clearTimeout(timer); reject(e) },
       })
       this.ws.send(JSON.stringify({ id, method, params }))
+    })
+  }
+
+  waitForEvent(method: string, timeoutMs = 5_000): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const waiters = this.eventWaiters.get(method) ?? []
+        const remaining = waiters.filter((entry) => entry.timer !== timer)
+        if (remaining.length) this.eventWaiters.set(method, remaining)
+        else this.eventWaiters.delete(method)
+        reject(new Error(`CDP event timeout: ${method}`))
+      }, timeoutMs)
+      const waiters = this.eventWaiters.get(method) ?? []
+      waiters.push({ resolve, reject, timer })
+      this.eventWaiters.set(method, waiters)
     })
   }
 
@@ -213,18 +251,52 @@ export class CodexCdp {
    * intentionally a file-input operation, never a pasted filesystem path. */
   async attachFiles(paths: readonly string[]): Promise<boolean> {
     if (!paths.length) return true
-    if (!(await this.clickAriaLabel('Attach files or connect apps'))) return false
-    await new Promise((resolve) => setTimeout(resolve, 120))
-    if (!(await this.clickText('Attach files or folders'))) return false
-    await new Promise((resolve) => setTimeout(resolve, 120))
-    const doc = await this.send('DOM.getDocument', { depth: -1 })
-    const nodeId = (await this.send('DOM.querySelector', {
-      nodeId: doc?.root?.nodeId,
-      selector: 'input[type="file"]',
-    }))?.nodeId
-    if (!nodeId) return false
-    await this.send('DOM.setFileInputFiles', { files: [...paths], nodeId })
-    return true
+    await this.send('Page.setInterceptFileChooserDialog', { enabled: true })
+    try {
+      if (!(await this.clickAriaLabel('Attach files or connect apps'))) return false
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      const chooser = this.waitForEvent('Page.fileChooserOpened')
+      if (!(await this.clickText('Attach files or folders'))) {
+        // No command means no chooser event is coming. Settle the waiter now so
+        // it cannot reject five seconds after this delivery already returned.
+        this.rejectEventWaiters('Page.fileChooserOpened', new Error('Codex attach command unavailable'))
+        await chooser.catch(() => {})
+        return false
+      }
+      const opened = await chooser
+      await this.send('Page.handleFileChooser', {
+        action: 'accept', files: [...paths],
+        ...(opened?.backendNodeId ? { backendNodeId: opened.backendNodeId } : {}),
+      })
+      return await this.waitForAttachedFiles(paths)
+    } finally {
+      await this.send('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {})
+    }
+  }
+
+  async waitForAttachedFiles(paths: readonly string[]): Promise<boolean> {
+    const names = paths.map((path) => path.split('/').pop() ?? path)
+    for (let i = 0; i < 25; i++) {
+      const count = await this.evaluate<number>(`(() => {
+        const inputs = [...document.querySelectorAll('input[type="file"]')];
+        const inputCount = inputs.reduce((n, el) => n + (el.files?.length || 0), 0);
+        if (inputCount >= ${paths.length}) return inputCount;
+        const text = document.body?.innerText || '';
+        return ${JSON.stringify(names)}.filter(name => text.includes(name)).length;
+      })()`)
+      if ((count ?? 0) >= paths.length) return true
+      await new Promise((resolve) => setTimeout(resolve, 80))
+    }
+    return false
+  }
+
+  private rejectEventWaiters(method: string, error: Error): void {
+    const waiters = this.eventWaiters.get(method) ?? []
+    this.eventWaiters.delete(method)
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer)
+      waiter.reject(error)
+    }
   }
 
   /** Move the pointer without pressing — submenus open on hover, not click. */

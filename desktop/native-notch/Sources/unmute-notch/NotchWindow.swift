@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SurfaceTransitionSupport
 
 /// What a resizable notch surface needs from its controller. One gesture, both
@@ -121,18 +122,89 @@ final class NotchWindow: NSPanel {
         case .none:
             return
         case let .setImmediately(target):
+            frameAnimator?.cancel()
+            frameAnimator = nil
             setFrame(target, display: true)
         case let .animate(target):
-            setFrame(target, display: true, animate: true)
+            animateFrame(from: self.frame, to: target)
+        case let .animateFrom(current, to: target):
+            animateFrame(from: current, to: target)
         }
     }
 
-    /// `setFrame(_:display:animate:)` asks AppKit for this duration.
-    override func animationResizeTime(_ newFrame: NSRect) -> TimeInterval {
-        Theme.surfaceTransitionDuration
+    private func animateFrame(from: NSRect, to: NSRect) {
+        frameAnimator?.cancel()
+        let animator = DisplayLinkedFrameAnimator(window: self, from: from, to: to,
+                                                  duration: Theme.surfaceTransitionDuration)
+        frameAnimator = animator
+        animator.start { [weak self, weak animator] in
+            guard self?.frameAnimator === animator else { return }
+            self?.frameAnimator = nil
+        }
     }
 
     private var frameTransition = SurfaceFrameTransition()
+    private var frameAnimator: DisplayLinkedFrameAnimator?
+}
+
+/// Moves panel geometry one display sample at a time and returns immediately.
+/// AppKit's `setFrame(... animate: true)` runs a synchronous animation context;
+/// mounting the expanded SwiftUI tree inside it made the IPC handler block for
+/// seconds. This coordinator owns only geometry and can be retargeted safely.
+private final class DisplayLinkedFrameAnimator: NSObject {
+    private weak var window: NSWindow?
+    private let from: NSRect
+    private let to: NSRect
+    private let duration: CFTimeInterval
+    private var startedAt: CFTimeInterval = 0
+    private var link: AnyObject?
+    private var timer: Timer?
+    private var completion: (() -> Void)?
+
+    init(window: NSWindow, from: NSRect, to: NSRect, duration: TimeInterval) {
+        self.window = window
+        self.from = from
+        self.to = to
+        self.duration = max(duration, 0.001)
+    }
+
+    func start(completion: @escaping () -> Void) {
+        self.completion = completion
+        startedAt = CACurrentMediaTime()
+        if #available(macOS 14.0, *), let window {
+            let displayLink = window.displayLink(target: self, selector: #selector(step))
+            displayLink.add(to: .main, forMode: .common)
+            link = displayLink
+        } else {
+            let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in self?.tick() }
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        }
+    }
+
+    func cancel() {
+        timer?.invalidate()
+        timer = nil
+        if #available(macOS 14.0, *), let displayLink = link as? CADisplayLink { displayLink.invalidate() }
+        link = nil
+        completion = nil
+    }
+
+    @objc private func step() { tick() }
+
+    private func tick() {
+        guard let window else { cancel(); return }
+        let raw = min(max((CACurrentMediaTime() - startedAt) / duration, 0), 1)
+        // Smoothstep: zero velocity at both ends, with no overshoot or bounce.
+        let eased = raw * raw * (3 - 2 * raw)
+        let frame = SurfaceFrameTransition.sample(from: from, to: to, progress: CGFloat(eased))
+        window.setFrame(frame.integral, display: true)
+        guard raw >= 1 else { return }
+        window.setFrame(to, display: true)
+        let done = completion
+        cancel()
+        done?()
+    }
 }
 
 

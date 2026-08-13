@@ -557,7 +557,13 @@ export class CodexDesktopDriver {
       if ((await cdp.composerText()) !== text) return { ok: false, reason: 'text-mismatch' }
     }
     await cdp.pressEnter()
-    return { ok: true }
+    // Pressing Enter is only an attempt. Codex can ignore it while its upload
+    // preview is still settling; success means the submitted composer cleared.
+    for (let i = 0; i < 20; i++) {
+      await this.sleep(200)
+      if (!(await cdp.composerText()).trim()) return { ok: true }
+    }
+    return { ok: false, reason: 'send-failed' }
   }
 
   /**

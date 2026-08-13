@@ -3,6 +3,7 @@ import SwiftUI
 import SwiftTerm
 import HoverStateSupport
 import SurfaceSizeSupport
+import SurfaceTransitionSupport
 
 // Owns the ONE panel + view model; translates commands into observable state,
 // user gestures into events, and keeps the surface on the PRIMARY display.
@@ -32,6 +33,7 @@ final class AppController: NSObject, NotchResizing {
     private var hoverTimer: Timer?
     private var hoverExitTimer: Timer?
     private var pocketHoverTimer: Timer?
+    private var expandedContentWorkItem: DispatchWorkItem?
     private var toastTimer: Timer?
 
     override init() {
@@ -385,6 +387,25 @@ final class AppController: NSObject, NotchResizing {
         // control may not. So off-notch, dormant collapses into idle: quiet,
         // small, never glowing, but always there and always a target.
         if state == .dormant && !geometry.hasNotch { state = .idle }
+        let wasExpanded = isExpanded(model.state)
+        let expandingFromPocket = !wasExpanded && isExpanded(state) && model.pocket.isOpen
+        let preserveContentHandoff = SurfaceContentHandoff.shouldPreserve(
+            wasExpanded: wasExpanded,
+            destinationExpanded: isExpanded(state),
+            contentReady: model.expandedContentReady,
+            hasPocketSnapshot: model.transitionPocket != nil
+        )
+        if !preserveContentHandoff {
+            expandedContentWorkItem?.cancel()
+            expandedContentWorkItem = nil
+            if expandingFromPocket && !Motion.reduceMotion {
+                model.transitionPocket = model.pocket
+                model.expandedContentReady = false
+            } else {
+                model.transitionPocket = nil
+                model.expandedContentReady = true
+            }
+        }
         // Each visit starts at the hard-coded size. A size dragged out for one
         // look at a task is not a preference — carrying it across would make the
         // surface's size a hidden setting the user never chose to persist.
@@ -454,6 +475,17 @@ final class AppController: NSObject, NotchResizing {
             if !window.isKeyWindow { window.makeKey() }
         }
         window.applyFrame(r.frame, animated: true)
+        if expandingFromPocket && !Motion.reduceMotion && !preserveContentHandoff {
+            let item = DispatchWorkItem { [weak self] in
+                guard let self, isExpanded(self.model.state) else { return }
+                withAnimation(Theme.contentIn) {
+                    self.model.expandedContentReady = true
+                    self.model.transitionPocket = nil
+                }
+            }
+            expandedContentWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + Theme.contentInDelay, execute: item)
+        }
         NotchLog.log("state -> \(state.rawValue)\(state == commanded ? "" : " (commanded \(commanded.rawValue))") window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] fillet=\(Int(r.placement.fillet))")
     }
 

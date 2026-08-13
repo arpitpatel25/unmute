@@ -1,0 +1,65 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { CodexCdp } from './cdp'
+import { CodexDesktopDriver } from './driver'
+
+test('attachments are accepted through an intercepted CDP chooser without opening a native picker', async () => {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+  const clicks: string[] = []
+  const cdp = Object.create(CodexCdp.prototype) as any
+  cdp.send = async (method: string, params: Record<string, unknown> = {}) => {
+    calls.push({ method, params })
+  }
+  cdp.clickAriaLabel = async (label: string) => { clicks.push(label); return true }
+  cdp.clickText = async (label: string) => { clicks.push(label); return true }
+  cdp.waitForEvent = async (method: string) => {
+    assert.equal(method, 'Page.fileChooserOpened')
+    return { backendNodeId: 42, mode: 'selectMultiple' }
+  }
+  cdp.waitForAttachedFiles = async (paths: readonly string[]) => paths.length === 2
+
+  assert.equal(await cdp.attachFiles(['/tmp/one.png', '/tmp/two.png']), true)
+  assert.deepEqual(clicks, ['Attach files or connect apps', 'Attach files or folders'])
+  assert.deepEqual(calls, [
+    { method: 'Page.setInterceptFileChooserDialog', params: { enabled: true } },
+    { method: 'Page.handleFileChooser', params: { action: 'accept', files: ['/tmp/one.png', '/tmp/two.png'], backendNodeId: 42 } },
+    { method: 'Page.setInterceptFileChooserDialog', params: { enabled: false } },
+  ])
+})
+
+test('attachment delivery is not accepted until Codex clears the submitted composer', async () => {
+  let composerReads = 0
+  const driver = new CodexDesktopDriver({ sleep: async () => {} }) as any
+  driver.cdp = {
+    connected: true,
+    focusComposer: async () => true,
+    attachFiles: async () => true,
+    typeText: async () => {},
+    composerText: async () => (++composerReads === 1 ? 'send this' : 'send this'),
+    pressEnter: async () => {},
+  }
+  driver.openThread = async () => true
+
+  assert.deepEqual(
+    await driver.sendWithAttachments('thread-1', 'send this', ['/tmp/one.png']),
+    { ok: false, reason: 'send-failed' },
+  )
+})
+
+test('closing CDP rejects an outstanding file chooser wait instead of leaving delivery hung', async () => {
+  const cdp = Object.create(CodexCdp.prototype) as any
+  cdp.ws = { close() {} }
+  cdp.pending = new Map()
+  cdp.eventWaiters = new Map()
+
+  const outcome = Promise.race([
+    cdp.waitForEvent('Page.fileChooserOpened', 5_000).then(
+      () => 'resolved',
+      (error: Error) => error.message,
+    ),
+    new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 30)),
+  ])
+  cdp.close()
+
+  assert.equal(await outcome, 'CDP closed')
+})

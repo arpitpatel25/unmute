@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ComposerSupport
 
 /// Scroll anchor: a zero-height marker at the end of the transcript.
 private let BOTTOM = "conversation-bottom"
@@ -319,6 +320,7 @@ struct StageComposer: View {
     var sending: Bool = false
     var draft: TaskDraftP? = nil
     @State private var text = ""
+    @State private var editorHeight: CGFloat = 30
     @FocusState private var focused: Bool
 
     private var canSend: Bool { !text.trimmingCharacters(in: .whitespaces).isEmpty || !(draft?.attachments.isEmpty ?? true) }
@@ -354,8 +356,9 @@ struct StageComposer: View {
                     }
                 }
                 HStack(alignment: .bottom, spacing: 8) {
-                    SubmitTextEditor(text: $text, placeholder: placeholder, onSubmit: send, onImagePaste: attachImage)
-                        .frame(minHeight: 30, maxHeight: 76)
+                    SubmitTextEditor(text: $text, measuredHeight: $editorHeight,
+                                     placeholder: placeholder, onSubmit: send, onImagePaste: attachImage)
+                        .frame(height: ComposerHeight.resolve(measured: editorHeight))
                         .focused($focused)
                     if let m = modelLabel, !m.isEmpty {
                         Text(m).font(.system(size: 11.5)).foregroundColor(Theme.textFaint)
@@ -407,11 +410,15 @@ struct StageComposer: View {
 /// while Shift-Enter remains a real newline in the task draft.
 private struct SubmitTextEditor: NSViewRepresentable {
     @Binding var text: String
+    @Binding var measuredHeight: CGFloat
     let placeholder: String
     let onSubmit: () -> Void
     let onImagePaste: (String, String, String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text, onSubmit: onSubmit, onImagePaste: onImagePaste) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, measuredHeight: $measuredHeight,
+                    onSubmit: onSubmit, onImagePaste: onImagePaste)
+    }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -421,24 +428,49 @@ private struct SubmitTextEditor: NSViewRepresentable {
         view.font = .systemFont(ofSize: 13.5)
         view.textColor = .labelColor
         view.isRichText = false
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.textContainer?.widthTracksTextView = true
+        view.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         view.isAutomaticQuoteSubstitutionEnabled = false
         view.delegate = context.coordinator
         view.onImagePaste = context.coordinator.onImagePaste
         view.string = text
         scroll.documentView = view
+        context.coordinator.measure(view)
         return scroll
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let view = scroll.documentView as? NSTextView, view.string != text else { return }
-        view.string = text
+        guard let view = scroll.documentView as? NSTextView else { return }
+        let width = max(scroll.contentSize.width, 1)
+        view.textContainer?.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        if view.string != text { view.string = text }
+        context.coordinator.measure(view)
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
         let text: Binding<String>
+        let measuredHeight: Binding<CGFloat>
         let onSubmit: () -> Void
         let onImagePaste: (String, String, String) -> Void
-        init(text: Binding<String>, onSubmit: @escaping () -> Void, onImagePaste: @escaping (String, String, String) -> Void) { self.text = text; self.onSubmit = onSubmit; self.onImagePaste = onImagePaste }
+        init(text: Binding<String>, measuredHeight: Binding<CGFloat>, onSubmit: @escaping () -> Void, onImagePaste: @escaping (String, String, String) -> Void) {
+            self.text = text
+            self.measuredHeight = measuredHeight
+            self.onSubmit = onSubmit
+            self.onImagePaste = onImagePaste
+        }
         func textDidChange(_ notification: Notification) {
-            text.wrappedValue = (notification.object as? NSTextView)?.string ?? ""
+            guard let view = notification.object as? NSTextView else { return }
+            text.wrappedValue = view.string
+            measure(view)
+        }
+        func measure(_ view: NSTextView) {
+            DispatchQueue.main.async {
+                view.layoutManager?.ensureLayout(for: view.textContainer!)
+                let height = view.layoutManager?.usedRect(for: view.textContainer!).height ?? 0
+                if abs(self.measuredHeight.wrappedValue - height) > 0.5 {
+                    self.measuredHeight.wrappedValue = height
+                }
+            }
         }
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }

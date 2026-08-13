@@ -72,7 +72,8 @@ struct TaskSurfaceView: View {
                     // ask before falling through to an empty Spacer.
                     if !ended(t) {
                         CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
-                                      modelLabel: t.modelLabel, sending: t.sending ?? false)
+                                      modelLabel: t.modelLabel, sending: t.sending ?? false,
+                                      draft: t.draft)
                             .padding(.top, 9)
                     }
                 }

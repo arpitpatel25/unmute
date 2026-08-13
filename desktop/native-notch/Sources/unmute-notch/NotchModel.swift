@@ -72,6 +72,11 @@ final class NotchModel: ObservableObject {
     /// The view owns the pointer event; the controller combines it with the
     /// capture state to decide whether the secondary controls are presented.
     @Published var pocketHovered: Bool = false
+    /// During pocket → task geometry travel, keep the lightweight origin card
+    /// mounted until the large container is already moving. This prevents the
+    /// transcript/terminal hierarchy from competing with the first frame.
+    @Published var transitionPocket: PocketP? = nil
+    @Published var expandedContentReady: Bool = true
 
     // Terminal visibility (task surface toggle; Stage shows it by default when alive).
     @Published var taskTerminalOpen: Bool = false

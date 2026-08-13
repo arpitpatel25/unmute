@@ -47,6 +47,15 @@ let package = Package(
             path: "Tests/SurfaceSizeSupportTests"
         ),
         .target(
+            name: "ComposerSupport",
+            path: "Sources/ComposerSupport"
+        ),
+        .testTarget(
+            name: "ComposerSupportTests",
+            dependencies: ["ComposerSupport"],
+            path: "Tests/ComposerSupportTests"
+        ),
+        .target(
             name: "HoverStateSupport",
             path: "Sources/HoverStateSupport"
         ),
@@ -75,6 +84,7 @@ let package = Package(
                 .product(name: "Markdown", package: "swift-markdown"),
                 "MarkdownSupport",
                 "HoverStateSupport",
+                "ComposerSupport",
                 "SurfaceSizeSupport",
                 "SurfaceTransitionSupport"
             ],
