@@ -59,6 +59,7 @@ import type { ClaudeActuator } from './claude-desktop/actuate'
 import type { ClaudeConsent as ClaudeConsentLite } from './claude-desktop/ax'
 import { beat, pendingApprovals, expireStaleApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
 import { devEvent } from './curator-devlog'
+import { pasteTaskImages } from './task-attachment-paste'
 
 const log = createLogger('task-manager')
 
@@ -608,7 +609,8 @@ export class TaskManager extends EventEmitter {
     ((intent: string, opts: Parameters<TaskManager['dispatch']>[1]) => Promise<string>) | null {
     switch (agent) {
       case 'claude-code-desktop':
-        return async (intent) => {
+        return async (intent, opts) => {
+          if (opts?.attachments?.length) throw new Error('ATTACHMENT_DELIVERY_UNAVAILABLE: claude-desktop')
           const res = await this.createClaudeDesktop(intent)
           if (!res.ok) throw new Error(`CLAUDE_DESKTOP_UNAVAILABLE: ${res.reason ?? 'unknown'}`)
           if (res.id) return res.id
@@ -636,7 +638,7 @@ export class TaskManager extends EventEmitter {
     }
   }
 
-  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string } = {}): Promise<string> {
+  async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[] } = {}): Promise<string> {
     const route = this.dispatchRoute(opts.agent)
     if (route) return route(intent, opts)
     // EXTERNAL BACKEND FORK (codex-desktop). Everything below this point — the
@@ -782,6 +784,15 @@ export class TaskManager extends EventEmitter {
       }
       tlog.event('folder-trust-accepted', {})
 
+      if (opts.attachments?.length) {
+        task.conversation = [{ role: 'user', text: intent }]
+        if (!(await this.deliverDraft(id, intent, opts.attachments))) {
+          throw new Error('ATTACHMENT_DELIVERY_FAILED: cli')
+        }
+        tlog.event('task-dispatched-with-attachments', { count: opts.attachments.length })
+        return id
+      }
+
       // The payload is the user's words. Nothing else — no status path, no
       // recipe path, no contract, no "act now". See dispatch-prompt.ts.
       const payload = buildDispatch({ intent })
@@ -820,6 +831,7 @@ export class TaskManager extends EventEmitter {
     } catch (e) {
       tlog.error('dispatch failed before polling', { error: (e as Error).message })
       this.transition(id, 'failed', { error: { reason: 'Could not start the task', detail: (e as Error).message } })
+      if ((e as Error).message.startsWith('ATTACHMENT_DELIVERY_')) throw e
     }
     return id
   }
@@ -1037,7 +1049,7 @@ export class TaskManager extends EventEmitter {
 
   private async dispatchCodexDesktop(
     intent: string,
-    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; project?: string | null; agent?: AgentKind; model?: string },
+    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; project?: string | null; agent?: AgentKind; model?: string; attachments?: readonly string[] },
   ): Promise<string> {
     const driver = this.opts.codexDriver
     if (!driver) throw new Error('CODEX_UNAVAILABLE: not-configured')
@@ -1086,6 +1098,7 @@ export class TaskManager extends EventEmitter {
         [...this.tasks.values()].map((t) => t.codexThreadId).filter((x): x is string => !!x),
       ),
       ...reasoning,
+      attachments: opts.attachments,
     })
 
     // ONE-WAY DOOR. Whatever happens from here the task stays a Codex task. It
@@ -1167,7 +1180,7 @@ export class TaskManager extends EventEmitter {
    */
   private async dispatchCodexCli(
     intent: string,
-    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; cwd?: string; project?: string | null; model?: string; effort?: string },
+    opts: { kind?: 'oneoff' | 'session'; surface?: string; spawnedBy?: string; cwd?: string; project?: string | null; model?: string; effort?: string; attachments?: readonly string[] },
   ): Promise<string> {
     const hub = this.opts.codexHub
     if (!hub) throw new Error('CODEX_CLI_UNAVAILABLE: no app-server hub')
@@ -1262,10 +1275,11 @@ export class TaskManager extends EventEmitter {
     // EFFORT RIDES ON THE TURN, not the thread — `thread/start` has no effort
     // parameter, `turn/start` does. Omitted here, the Effort axis would move a
     // setting that never reached Codex: a picker that appears to work.
-    const sent = await hub.send(id, intent, { effort: wire.effort })
+    const sent = await hub.send(id, intent, { effort: wire.effort, attachments: opts.attachments })
     if (!sent) {
       tlog.warn('codex-cli turn/start refused', {})
       this.transition(id, 'failed', { state: 'failed', error: { reason: 'Codex would not start the turn' } })
+      if (opts.attachments?.length) throw new Error('ATTACHMENT_DELIVERY_FAILED: codex-cli')
     }
     tlog.event('codex-cli-dispatched', {
       threadId, cwd: runCwd, model: wire.model ?? null, effort: wire.effort ?? null,
@@ -3570,12 +3584,19 @@ export class TaskManager extends EventEmitter {
     return true
   }
 
-  /** Deliver an attachment-bearing draft. Desktop Codex gets real composer
-   * attachments; PTY providers receive their supported local references in the
-   * same submitted turn. */
+  /** Deliver an attachment-bearing draft through the provider's native image
+   * channel. Filesystem paths are never rendered into the user's message. */
   async deliverDraft(id: string, text: string, attachments: readonly string[]): Promise<boolean> {
     const task = this.tasks.get(id)
     if (!task) return false
+    // An attachment is content, not an answer to a permission/question picker.
+    // Refuse the whole draft so neither the text nor image can accidentally
+    // activate the highlighted choice; the visible draft remains retryable.
+    if (attachments.length && (task.state === 'needs-user' || task.openAsk)) {
+      task.deliveryError = 'Answer the pending question before sending attachments'
+      this.emit('updated', task)
+      return false
+    }
     if (task.agent === 'codex-desktop') {
       const driver = this.opts.codexDriver
       if (!driver || !task.codexThreadId) return false
@@ -3583,7 +3604,80 @@ export class TaskManager extends EventEmitter {
       if (!result.ok) { task.deliveryError = `Could not send to Codex (${result.reason})`; this.emit('updated', task); return false }
       return true
     }
-    return this.followUp(id, text)
+    if (task.agent === 'claude-code-desktop') {
+      // Claude Desktop does not yet expose a background-safe attachment API.
+      // Refuse explicitly so the draft remains visible instead of degrading an
+      // image into text or silently sending only half the user's message.
+      task.deliveryError = 'Claude Desktop attachment delivery is unavailable'
+      this.emit('updated', task)
+      return false
+    }
+    if (!attachments.length) return this.followUp(id, text)
+
+    // Codex app-server has a first-class localImage input. This is the native
+    // structured transport and does not involve the PTY view at all.
+    if (task.agent === 'codex' && this.opts.codexHub?.threadIdFor(id)) {
+      const ok = await this.opts.codexHub.send(id, text, {
+        effort: this.opts.codexCliChoice?.().effort,
+        attachments,
+      })
+      if (!ok) {
+        task.deliveryError = 'Could not deliver Codex attachments'
+        this.emit('updated', task)
+      }
+      return ok
+    }
+
+    if (task.agent === 'codex') {
+      task.deliveryError = 'This Codex CLI version has no verified attachment transport'
+      this.emit('updated', task)
+      return false
+    }
+
+    const ex = this.executors.get(id)
+    if (!ex?.alive || !ex.writeDraftText || !ex.pasteImage || !ex.submitDraft) {
+      task.deliveryError = 'This CLI session cannot accept image attachments'
+      this.emit('updated', task)
+      return false
+    }
+    await ex.isReady()
+    if (!ex.alive) {
+      task.deliveryError = 'The CLI session closed before delivery'
+      this.emit('updated', task)
+      return false
+    }
+    ex.writeDraftText(text)
+    const accepted = await pasteTaskImages(text, attachments, () => ex.pasteImage!())
+    if (!accepted) {
+      ex.clearDraft?.()
+      task.deliveryError = 'The CLI did not accept every image attachment'
+      this.emit('updated', task)
+      return false
+    }
+    const submittedBefore = task.promptSubmittedAt ?? 0
+    ex.submitDraft()
+    // A single Enter is occasionally ignored by both TUIs. Confirm once, then
+    // require the same UserPromptSubmit hook used by ordinary follow-ups before
+    // allowing TaskDraftStore to clear its retry copy.
+    await new Promise((resolve) => setTimeout(resolve, this.opts.submitConfirmMs))
+    if (ex.alive && (task.promptSubmittedAt ?? 0) <= submittedBefore) ex.submitDraft()
+    const deadline = Date.now() + this.opts.verifyAfterMs
+    while (ex.alive && Date.now() < deadline && (task.promptSubmittedAt ?? 0) <= submittedBefore) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    if ((task.promptSubmittedAt ?? 0) <= submittedBefore) {
+      task.deliveryError = 'The CLI did not confirm that the attachment reply was submitted'
+      this.emit('updated', task)
+      return false
+    }
+    delete task.deliveryError
+    task.lastUserInputAt = this.clock()
+    task.state = 'processing'
+    task.updatedAt = this.clock()
+    task.conversation = [{ role: 'user', text }]
+    this.emit('updated', task)
+    this.startPolling(id)
+    return true
   }
 
   /**

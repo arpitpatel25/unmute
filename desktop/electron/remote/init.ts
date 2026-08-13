@@ -451,10 +451,6 @@ let manager: TaskManager | null = null
 /** Unsent replies are task-scoped, not owned by any one expanded surface. */
 const taskDrafts = new TaskDraftStore()
 
-function draftDeliveryText(text: string, paths: string[]): string {
-  return paths.length ? `${text}${text ? '\n\n' : ''}${paths.map((path) => `[image: ${path}]`).join('\n')}` : text
-}
-
 async function addDraftImageFromPath(id: string, sourcePath: string, mimeType: string, name: string): Promise<void> {
   if (!manager || !manager.get(id)) return
   const data = await fs.readFile(sourcePath)
@@ -467,8 +463,8 @@ async function deliverTaskDraftSnapshot(id: string, draft: import('./task-draft'
   if (!manager) return false
   const task = manager.get(id)
   if (!task) return false
-  const text = draftDeliveryText(draft.text, isExternalAgent(task.agent) ? [] : draft.attachments.map((attachment) => attachment.path))
-  if (!text.trim()) return false
+  const text = draft.text
+  if (!text.trim() && !draft.attachments.length) return false
   const accepted = draft.attachments.length
     ? await manager.deliverDraft(id, text, draft.attachments.map((attachment) => attachment.path))
     : manager.tasksAwaitingUser().some((entry) => entry.id === id)
@@ -1885,16 +1881,16 @@ async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promi
     // A task needs nothing extra — its rendering already names each file.
     ? async (text: string, attachments: readonly string[]): Promise<string | null> =>
       ((await pasteAtCursor(text, attachments)) ? 'cursor' : null)
-    : async (text: string): Promise<string | null> => {
+    : async (text: string, attachments: readonly string[]): Promise<string | null> => {
       const mgr = manager
       if (target === 'openTask' && orchestrateFocusId && mgr?.get(orchestrateFocusId)) {
         const fid = orchestrateFocusId
-        if (mgr.followUp(fid, text)) return fid
+        if (await mgr.deliverDraft(fid, text, attachments)) return fid
         // It couldn't take it (terminal/gone) — route it as a new task rather
         // than dropping work the user already committed.
         log.warn('focused task refused the pad — routing it as a new task', { taskId: fid })
       }
-      return dispatchFromCapture(text)
+      return dispatchFromCapture(text, attachments)
     }
 
   const r = await runDelivery(target, send, broadcastScratchpad)
@@ -2359,7 +2355,6 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
     return null
   }
   const raw = (rawTranscript || '').trim()
-  if (!raw) { log.warn('empty transcript — not dispatching', {}); return null }
 
   // 0. ORCHESTRATE FOCUS short-circuit (§6.2). If the wall is focused on a session,
   //    the utterance goes THERE — deterministically, bypassing the router. This is
@@ -2388,6 +2383,11 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
     log.event('capture-addressed-delivery', { taskId: fid, attachments: attachments.length, accepted })
     pendingBeat = accepted ? '' : 'That didn\u2019t land. Your reply is still in the task.'
     return accepted ? fid : null
+  }
+
+  if (!raw) {
+    log.warn('empty transcript without an addressed task — not dispatching', { attachments: attachments.length })
+    return null
   }
 
   // 1. ALL routing goes through the warm router — including answering a task that
@@ -2675,6 +2675,7 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
         surface: decision.surface, mode, kind: decision.kind, cwd: decision.dir,
         agent: chosenAgent,
         ...(chosenAgent === 'codex-desktop' ? { project: decision.codexProject ?? null } : {}),
+        attachments,
       })
       // The router minted the display name in the same turn — instant, no extra
       // call. (The completeFn-based nameIntent below stays as the non-router path.)
@@ -2721,6 +2722,7 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
         return null
       }
       log.warn('router error — dispatching new', { error: msg })
+      if (attachments.length) return null
       return manager.dispatch(raw, { mode: injectionDisabled() ? 'raw' : undefined })
     }
   }
@@ -2729,7 +2731,7 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
   //    executor tolerates raw); use the managed LLM only if it's wired.
   const cleaned = completeFn ? (await cleanIntent(raw, completeFn)).intent : raw
   if (!cleaned) { log.warn('empty intent after cleanup — not dispatching', {}); return null }
-  return manager.dispatch(cleaned, { mode: injectionDisabled() ? 'raw' : undefined })
+  return manager.dispatch(cleaned, { mode: injectionDisabled() ? 'raw' : undefined, attachments })
 }
 
 /** Read the current Remote trigger key (derived from the dictation key, §2.4.4). */

@@ -413,6 +413,7 @@ export class CodexDesktopDriver {
       model?: string
       effort?: string
       speed?: string
+      attachments?: readonly string[]
     } = {},
   ): Promise<CreateTaskResult> {
     const avail = await this.availability()
@@ -445,8 +446,11 @@ export class CodexDesktopDriver {
     const restoreReasoning = await this.applyReasoning(cdp, opts)
 
     if (!(await cdp.focusComposer())) { log.warn('codex-create-no-composer', {}); return { ok: false, reason: 'no-composer' } }
+    if (opts.attachments?.length && !(await cdp.attachFiles(opts.attachments))) {
+      return { ok: false, reason: 'send-failed' }
+    }
     await this.sleep(120)
-    await cdp.typeText(intent)
+    if (intent) await cdp.typeText(intent)
     await this.sleep(180)
     const typed = await cdp.composerText()
     if (typed !== intent) {
@@ -581,6 +585,7 @@ export class CodexDesktopDriver {
     const cdp = await this.connect()
     if (!cdp) return { ok: false, reason: 'not-armed' }
     if (!(await this.openThread(threadId, cdp, { background: true }))) return { ok: false, reason: 'thread-not-found' }
+    const before = await this.snapshot(threadId)
     await this.sleep(500)
     if (!(await cdp.focusComposer())) return { ok: false, reason: 'no-composer' }
     if (!(await cdp.attachFiles(attachments))) return { ok: false, reason: 'attach-failed' }
@@ -592,11 +597,13 @@ export class CodexDesktopDriver {
       if ((await cdp.composerText()) !== text) return { ok: false, reason: 'text-mismatch' }
     }
     await cdp.pressEnter()
-    // Pressing Enter is only an attempt. Codex can ignore it while its upload
-    // preview is still settling; success means the submitted composer cleared.
+    // Pressing Enter is only an attempt. The rollout is the durable authority:
+    // a new task_started event proves Codex accepted this turn, including an
+    // image-only turn whose text composer was empty before submission.
     for (let i = 0; i < 20; i++) {
       await this.sleep(200)
-      if (!(await cdp.composerText()).trim()) return { ok: true }
+      const after = await this.snapshot(threadId)
+      if (after.turnsStarted > before.turnsStarted) return { ok: true }
     }
     return { ok: false, reason: 'send-failed' }
   }

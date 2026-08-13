@@ -73,6 +73,8 @@ export class CliAgentExecutor implements AgentExecutor {
   private pty: IPtyProcess | null = null
   private dataCbs: Array<(chunk: string) => void> = []
   private lastDataAt = 0
+  private outputSerial = 0
+  private recentOutput: Array<{ serial: number; text: string }> = []
   private sawData = false
   private exited = false
   private taskId = ''
@@ -148,6 +150,9 @@ export class CliAgentExecutor implements AgentExecutor {
     pty.onData((data) => {
       this.sawData = true
       this.lastDataAt = Date.now()
+      this.outputSerial++
+      this.recentOutput.push({ serial: this.outputSerial, text: data })
+      if (this.recentOutput.length > 80) this.recentOutput.splice(0, this.recentOutput.length - 80)
       for (const cb of this.dataCbs) {
         try { cb(data) } catch (e) { slog.error('onData callback threw', { error: (e as Error).message }) }
       }
@@ -189,6 +194,40 @@ export class CliAgentExecutor implements AgentExecutor {
     this.pty.write(text)
     this.pty.write('\r') // REPL submits on carriage return
     slog.event('stdin-written', { bytes: text.length, preview: text.slice(0, 120) })
+  }
+
+  writeDraftText(text: string): void {
+    if (!this.pty || this.exited) return
+    this.pty.write(text)
+  }
+
+  async pasteImage(): Promise<boolean> {
+    if (!this.pty || this.exited) return false
+    const before = this.outputSerial
+    this.pty.write('\x16')
+    // Both supported TUIs render an explicit image/attachment token after
+    // ingesting the pasteboard. A generic redraw is not acceptance: status
+    // output and spinners may arrive at any time while a task is alive.
+    const deadline = Date.now() + 1_500
+    while (!this.exited && Date.now() < deadline) {
+      if (this.outputSerial > before) {
+        const delta = this.recentOutput.filter((entry) => entry.serial > before).map((entry) => entry.text).join('')
+        const visible = delta.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+        if (/\b(image|attachment|screenshot)\b/i.test(visible)) return true
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    return false
+  }
+
+  submitDraft(): void {
+    if (!this.pty || this.exited) return
+    this.pty.write('\r')
+  }
+
+  clearDraft(): void {
+    if (!this.pty || this.exited) return
+    this.pty.write('\x15')
   }
 
   write(data: string): void {

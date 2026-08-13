@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { pipelineTranscribe, pipelineDualTranscribe, pipelineProcess, pipelineTransform, localTransformText, getCachedConfig, QuotaExceededError, type ServerConfig, type TransformResult, type PipelineResult } from './api'
 import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
-import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste } from './clipboard'
+import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste, injectImagesIntoTask } from './clipboard'
 import { saveAudioFile, saveAudioChunk } from './audio'
 import { initTelemetry, logTelemetry, DEV_BUILD, installMainConsoleTee, attachRendererConsoleTee } from './dictationTelemetry'
 import { app } from 'electron'
@@ -24,6 +24,7 @@ import {
   composeWithInserts, endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed,
   registerFormat, registerHistoryCopy, registerPaste, removeFromPad,
 } from './paywall/remote/capture/index'
+import { registerTaskImagePaste } from './paywall/remote/task-attachment-paste'
 import { canObserve } from './paywall/remote/capture/captureGate'
 import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
 import { buildCorrectionMessages, shouldAttemptCleanup, CORRECTION_TIMEOUT_MS, CLEANUP_MODEL } from './cleanupPass'
@@ -183,6 +184,16 @@ let remoteDispatchQueue: Promise<void> = Promise.resolve()
 // already lives here, so hand it over rather than importing it there.
 registerPaste(async (text: string, images?: readonly string[]) => { await injectOutput(text, images) })
 registerHistoryCopy((text: string, images: readonly string[]) => { stageHistoryPaste(text, images) })
+let taskPasteChain: Promise<unknown> = Promise.resolve()
+registerTaskImagePaste((text, images, paste) => {
+  const run = taskPasteChain.then(async () => {
+    beginOwnClipboardSequence()
+    try { return await injectImagesIntoTask(text, images, paste) }
+    finally { try { endOwnClipboardSequence(Date.now()) } catch { /* watcher not armed */ } }
+  })
+  taskPasteChain = run.catch(() => {})
+  return run
+})
 
 // FORMATTING BELONGS TO DELIVERY, NOT TO CAPTURE. The pad holds the CLEANED
 // transcript, because a held capture has no destination yet — the user picks

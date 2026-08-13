@@ -64,6 +64,7 @@ declare module 'electron' {
     readImage(): NativeImage
     readText(): string
     writeText(text: string): void
+    write(data: { text?: string; image?: NativeImage }): void
     availableFormats(): string[]
     clear(): void
   }

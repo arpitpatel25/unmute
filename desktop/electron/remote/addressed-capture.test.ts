@@ -41,3 +41,17 @@ test('a rejected addressed capture stays visible for manual retry', async () => 
   assert.equal(drafts.get('task-1').text, 'Do not lose me')
   assert.equal(drafts.get('task-1').attachments.length, 1)
 })
+
+test('an image-only addressed capture is a deliverable draft', async () => {
+  const drafts = new TaskDraftStore()
+  let delivered = false
+  const accepted = await deliverAddressedCapture({
+    taskId: 'task-1', text: '', attachments: ['/tmp/one.png'], drafts,
+    deliver: async (_id, draft) => {
+      delivered = draft.text === '' && draft.attachments.length === 1
+      return delivered
+    },
+  })
+  assert.equal(accepted, true)
+  assert.equal(delivered, true)
+})

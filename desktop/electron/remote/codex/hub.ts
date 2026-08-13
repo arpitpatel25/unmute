@@ -136,17 +136,25 @@ export class CodexHub {
   }
 
   /** Send a message — the first prompt or a reply. Starts a turn. */
-  async send(taskId: string, text: string, opts: { effort?: string } = {}): Promise<boolean> {
+  async send(taskId: string, text: string, opts: { effort?: string; attachments?: readonly string[] } = {}): Promise<boolean> {
     const st = this.byTask.get(taskId)
     if (!st) { log.warn('send: no thread for task', { taskId }); return false }
     // AN OUTSTANDING APPROVAL IS ANSWERED, NOT TALKED OVER. Typing "yes" as a
     // new turn would leave Codex blocked on the original request and add a
     // stray message to the thread.
-    if (st.pending) return this.answer(taskId, text)
+    if (st.pending) {
+      // Attachments can never be approval answers. Refuse the complete draft
+      // instead of consuming its text and silently dropping its files.
+      if (opts.attachments?.length) return false
+      return this.answer(taskId, text)
+    }
     try {
       await this.server!.request('turn/start', {
         threadId: st.threadId,
-        input: [{ type: 'text', text }],
+        input: [
+          ...(text ? [{ type: 'text', text }] : []),
+          ...(opts.attachments ?? []).map((path) => ({ type: 'localImage', path })),
+        ],
         ...(opts.effort ? { effort: opts.effort } : {}),
       })
       return true

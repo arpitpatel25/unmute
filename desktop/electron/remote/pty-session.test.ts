@@ -65,6 +65,38 @@ test('writeStdin sends the text followed by a carriage return', async () => {
   assert.deepEqual(fake.writes, ['do the thing', '\r'])
 })
 
+test('writeDraft keeps text and Ctrl-V image ingestion in one unsubmitted PTY turn', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader })
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 't1' })
+
+  ex.writeDraftText('compare these')
+  const accepted = ex.pasteImage()
+  fake.emitData('\u001b[32m[Image #1]\u001b[0m')
+  assert.equal(await accepted, true)
+  ex.submitDraft()
+
+  assert.deepEqual(fake.writes, ['compare these', '\x16', '\r'])
+})
+
+test('an unrelated PTY redraw is not image acceptance', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader })
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 't1' })
+  const accepted = ex.pasteImage()
+  fake.emitData('Working… 42%')
+  assert.equal(await accepted, false)
+})
+
+test('clearDraft removes a partial attachment turn without submitting it', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader })
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 't1' })
+  ex.writeDraftText('keep me')
+  ex.clearDraft()
+  assert.deepEqual(fake.writes, ['keep me', '\x15'])
+})
+
 test('model + chrome flags are passed (--model opus, --chrome)', async () => {
   const fake = makeFakePty()
   const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader, model: 'opus', chrome: true })

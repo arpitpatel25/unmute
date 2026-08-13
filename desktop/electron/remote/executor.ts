@@ -43,6 +43,15 @@ export interface AgentExecutor {
   /** Type text into the REPL's stdin (used for dispatch + answering needs-user).
    *  Appends a carriage return — i.e. types the line AND submits it. */
   writeStdin(text: string): void
+  /** Start an interactive composer draft without submitting it. Optional for
+   * executors that are not backed by a TUI. */
+  writeDraftText?(text: string): void
+  /** Ask the TUI to ingest the image currently on the macOS pasteboard. */
+  pasteImage?(): Promise<boolean>
+  /** Submit a draft previously built with writeDraftText/pasteImage. */
+  submitDraft?(): void
+  /** Clear a partially composed TUI draft (Ctrl-U) after attachment failure. */
+  clearDraft?(): void
   /** Write RAW bytes to the PTY with NO carriage return appended. Used by the
    *  live terminal so a user can type interactively (keystrokes, control codes,
    *  arrow keys) straight through to the REPL (PRD §4.3 typeable terminal). */

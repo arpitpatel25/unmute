@@ -247,10 +247,33 @@ export class CodexCdp {
     return (await this.evaluate<string>(`(() => { const ce = document.querySelector('[contenteditable=true]'); return ce ? (ce.textContent || '') : ''; })()`)) ?? ''
   }
 
+  async attachedFileCount(): Promise<number> {
+    return (await this.evaluate<number>(`(() => {
+      const inputs = [...document.querySelectorAll('input[type="file"]')];
+      return inputs.reduce((n, el) => n + (el.files?.length || 0), 0);
+    })()`)) ?? 0
+  }
+
   /** Attach local files through Codex Desktop's own composer control. This is
    * intentionally a file-input operation, never a pasted filesystem path. */
   async attachFiles(paths: readonly string[]): Promise<boolean> {
     if (!paths.length) return true
+    // Codex keeps a hidden file input mounted with the composer. CDP can set it
+    // directly, which is both the browser-native automation primitive and
+    // independent of menu labels / native chooser timing.
+    const doc = await this.send('DOM.getDocument', { depth: 0 }).catch(() => null)
+    const rootNodeId = doc?.root?.nodeId
+    if (rootNodeId) {
+      const found = await this.send('DOM.querySelector', {
+        nodeId: rootNodeId, selector: 'input[type="file"]',
+      }).catch(() => null)
+      if (found?.nodeId) {
+        await this.send('DOM.setFileInputFiles', { nodeId: found.nodeId, files: [...paths] })
+        if (await this.waitForAttachedFiles(paths)) return true
+      }
+    }
+
+    // Compatibility fallback for a Codex build that mounts the input lazily.
     await this.send('Page.setInterceptFileChooserDialog', { enabled: true })
     try {
       if (!(await this.clickAriaLabel('Attach files or connect apps'))) return false

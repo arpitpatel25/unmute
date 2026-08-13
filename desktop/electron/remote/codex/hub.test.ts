@@ -99,6 +99,23 @@ test('effort rides on the turn, not the thread', async () => {
   assert.equal(turn.effort, 'xhigh')
 })
 
+test('attachments are native localImage inputs, never filesystem paths in text', async () => {
+  const { hub, calls } = makeHub()
+  await hub.startThread('task-a', { cwd: '/tmp/a', approvalPolicy: 'never', sandbox: 'workspace-write' })
+
+  assert.equal(await hub.send('task-a', 'compare these', {
+    effort: 'high', attachments: ['/tmp/one.png', '/tmp/two.png'],
+  }), true)
+
+  const turn = calls.find((c) => c.method === 'turn/start')!.params as Record<string, any>
+  assert.deepEqual(turn.input, [
+    { type: 'text', text: 'compare these' },
+    { type: 'localImage', path: '/tmp/one.png' },
+    { type: 'localImage', path: '/tmp/two.png' },
+  ])
+  assert.doesNotMatch(JSON.stringify(turn.input[0]), /\/tmp\/one\.png/)
+})
+
 test('events reach the task that owns the thread, and only that task', async () => {
   const { hub, patches, emit } = makeHub()
   await hub.startThread('task-a', { cwd: '/tmp/a', approvalPolicy: 'never', sandbox: 'workspace-write' })

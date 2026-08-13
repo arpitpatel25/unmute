@@ -474,6 +474,7 @@ function verifyPasteboardServesPNG(expectedBytes: number, timeoutMs: number): Pr
  *  change counter at call time and anything suspended in between lets the
  *  watcher read our own write as a user copy. */
 async function deliverImagesAfterText(images: readonly string[], padded: string): Promise<void> {
+  return serializeImageHandoff(async () => {
   const t0 = Date.now()
   const pasted = await handOffImages<Electron.NativeImage>({
     // ONE DECODE PER IMAGE, and it happens here — before the pre-clear, and
@@ -499,6 +500,52 @@ async function deliverImagesAfterText(images: readonly string[], padded: string)
     warn: (m: string, err?: unknown) => console.warn(m, err instanceof Error ? err.message : err ?? ''),
   }, images, padded)
   console.log(`[clipboard] pasted ${pasted}/${images.length} captured image(s) in ${Date.now() - t0}ms`)
+  })
+}
+
+let imageHandoffChain: Promise<unknown> = Promise.resolve()
+function serializeImageHandoff<T>(runEffect: () => Promise<T>): Promise<T> {
+  const run = imageHandoffChain.then(runEffect)
+  imageHandoffChain = run.catch(() => {})
+  return run
+}
+
+/** Hand real pasteboard images to an owned task rather than the frontmost app.
+ * The callback writes Ctrl-V into the exact PTY selected at capture start, so
+ * focus changes cannot redirect an addressed reply. */
+export async function injectImagesIntoTask(
+  _text: string,
+  images: readonly string[],
+  paste: () => Promise<boolean>,
+): Promise<boolean> {
+  if (!images.length) return true
+  return serializeImageHandoff(async () => {
+    const restoreText = clipboard.readText()
+    const restoreImage = clipboard.readImage()
+    const restoreHasImage = !restoreImage.isEmpty()
+    const pasted = await handOffImages<Electron.NativeImage>({
+    prepareImage: (p: string) => {
+      const img = nativeImage.createFromPath(p)
+      if (img.isEmpty()) return null
+      return { image: img, bytes: img.toPNG().length }
+    },
+    clearAndRecord: () => { clipboard.clear(); noteOurWrite() },
+    writeImageAndRecord: (img: Electron.NativeImage) => { clipboard.writeImage(img); noteOurWrite() },
+    writeTextAndRecord: (t: string) => { clipboard.writeText(t); noteOurWrite() },
+    verifyServesPNG: (bytes: number) => verifyPasteboardServesPNG(bytes, VERIFY_TIMEOUT_MS),
+    frontmostBundleId: () => null,
+    paste: async () => {
+      if (!(await paste())) throw new Error('target did not accept clipboard image')
+    },
+    settle: sleep,
+    warn: (m: string, err?: unknown) => console.warn(m, err instanceof Error ? err.message : err ?? ''),
+    }, images, restoreText)
+    if (restoreHasImage) {
+      clipboard.write({ text: restoreText, image: restoreImage })
+      noteOurWrite()
+    }
+    return pasted === images.length
+  })
 }
 
 const historyPasteStage = new HistoryPasteStage()
