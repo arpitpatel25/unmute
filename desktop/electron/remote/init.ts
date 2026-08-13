@@ -92,7 +92,7 @@ import { createClipboardWatch } from './capture/clipboardWatch'
 import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
   adoptPersistedPad, armScratchpad, claimShared, deliveryInFlight, discard as discardPad,
-  gateDelivery, heldForSurface, initWatchers, padDirOf, pasteAtCursor, recordInsert,
+  copyHistoryToClipboard, gateDelivery, heldForSurface, initWatchers, padDirOf, pasteAtCursor, recordInsert,
   registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot,
   type DeliveryTarget,
 } from './capture/index'
@@ -3782,12 +3782,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const entry = captureHistory.list().find((candidate) => candidate.id === id)
     if (!entry) return false
     const payload = clipboardPayload(entry)
-    // Text is the fail-soft baseline if the helper exited between this check
-    // and the send. The native command replaces it with the full multi-item
-    // pasteboard when available.
-    clipboard.writeText(payload.text)
-    notchClient?.send({ type: 'copyCapture', ...payload })
-    return true
+    return copyHistoryToClipboard(payload.text, payload.attachments)
   })
 
   // ── The scratchpad has NO IPC surface, deliberately ──

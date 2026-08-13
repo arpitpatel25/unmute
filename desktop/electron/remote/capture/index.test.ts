@@ -7,9 +7,9 @@ import {
   PERSIST_DEBOUNCE_MS, _resetForTest, adoptPersistedPad, armScratchpad, attachTranscript,
   beginOwnClipboardSequence, beginSegment, cancelOpenSegment, composeWithInserts, deliver,
   discard, endOwnClipboardSequence, endSegment, formatForDelivery, getCaptureSettings,
-  initWatchers, isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerFormat,
+  copyHistoryToClipboard, initWatchers, isArmed, noteOwnClipboardWrite, pasteAtCursor, recordInsert, registerFormat,
   deliveryInFlight, heldForSurface, promoteSettledPad, registerPadObserver, registerPaste,
-  commitDelivery, gateDelivery, registerSettings, removeFromPad, restageDelivery, runDelivery,
+  commitDelivery, gateDelivery, registerHistoryCopy, registerSettings, removeFromPad, restageDelivery, runDelivery,
   segmentOpen, setOwnSequenceCeiling, setScratchpadRoot, snapshot, takeForDelivery,
   writePadNow,
 } from './index'
@@ -624,6 +624,14 @@ describe('registered effects — no import edge', () => {
     registerPaste(async (t) => { seen.push(t) })
     assert.equal(await pasteAtCursor('hi'), true)
     assert.deepEqual(seen, ['hi'])
+  })
+
+  test('copyHistoryToClipboard stages text and ordered images through the registered effect', () => {
+    const seen: Array<{ text: string; images: readonly string[] }> = []
+    registerHistoryCopy((text, images) => { seen.push({ text, images: [...images] }) })
+
+    assert.equal(copyHistoryToClipboard('words', ['/one.png', '/two.png']), true)
+    assert.deepEqual(seen, [{ text: 'words', images: ['/one.png', '/two.png'] }])
   })
 
   test('settings default to ON when nothing is registered', () => {

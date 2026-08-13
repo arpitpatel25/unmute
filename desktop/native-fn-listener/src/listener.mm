@@ -18,7 +18,7 @@
 //   const fn = require('unmute-native-fn-listener')
 //   fn.start((event) => { … })   // event = 'fn-down' | 'fn-up' | 'caps-down'
 //                                //        | 'caps-up' | 'right-option-down'
-//                                //        | 'right-option-up'
+//                                //        | 'right-option-up' | 'command-v'
 //   fn.stop()
 
 #import <napi.h>
@@ -79,6 +79,21 @@ static void handle_flags_changed(NSEvent* event) {
   g_previousFlags = mods;
 }
 
+static void handle_key_down(NSEvent* event) {
+  NSEventModifierFlags mods =
+    event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+  // V is keyCode 9 on the macOS hardware-independent key map. Observe only;
+  // returning the event from the local monitor (and global monitors being
+  // observation-only by definition) lets the destination paste text normally.
+  NSEventModifierFlags otherChordModifiers =
+    NSEventModifierFlagShift | NSEventModifierFlagControl | NSEventModifierFlagOption;
+  if (event.keyCode == 9 &&
+      (mods & NSEventModifierFlagCommand) != 0 &&
+      (mods & otherChordModifiers) == 0) {
+    emit_event("command-v");
+  }
+}
+
 // ─── start(callback) — install global + local NSEvent monitors ─────
 
 Napi::Value Start(const Napi::CallbackInfo& info) {
@@ -106,18 +121,21 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
 
   // Global monitor — fires for events from OTHER apps (when our app
   // isn't focused). Standard Cocoa pattern.
+  NSEventMask mask = NSEventMaskFlagsChanged | NSEventMaskKeyDown;
   g_globalMonitor = [NSEvent
-    addGlobalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
+    addGlobalMonitorForEventsMatchingMask:mask
     handler:^(NSEvent* event) {
-      handle_flags_changed(event);
+      if (event.type == NSEventTypeFlagsChanged) handle_flags_changed(event);
+      else if (event.type == NSEventTypeKeyDown) handle_key_down(event);
     }];
 
   // Local monitor — fires when OUR app is focused. Different code path
   // in AppKit; we need both to cover all cases.
   g_localMonitor = [NSEvent
-    addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
+    addLocalMonitorForEventsMatchingMask:mask
     handler:^NSEvent*(NSEvent* event) {
-      handle_flags_changed(event);
+      if (event.type == NSEventTypeFlagsChanged) handle_flags_changed(event);
+      else if (event.type == NSEventTypeKeyDown) handle_key_down(event);
       return event;
     }];
 

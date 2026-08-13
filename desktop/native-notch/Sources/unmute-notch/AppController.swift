@@ -311,17 +311,6 @@ final class AppController: NSObject, NotchResizing {
             // mass is sized by its content, not by this.
             if isExpanded(model.state) { refit(animated: true) }
 
-        case let .copyCapture(text, attachments):
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            var objects: [NSPasteboardWriting] = []
-            if !text.isEmpty { objects.append(text as NSString) }
-            for path in attachments where FileManager.default.fileExists(atPath: path) {
-                objects.append(URL(fileURLWithPath: path) as NSURL)
-            }
-            if !objects.isEmpty { pasteboard.writeObjects(objects) }
-            NotchLog.log("CMD copyCapture text=\(!text.isEmpty) attachments=\(objects.count - (text.isEmpty ? 0 : 1))")
-
         case let .pill(state):
             // Logged at phase granularity only — the level field changes every
             // frame during a capture and would drown the log.

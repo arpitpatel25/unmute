@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { pipelineTranscribe, pipelineDualTranscribe, pipelineProcess, pipelineTransform, localTransformText, getCachedConfig, QuotaExceededError, type ServerConfig, type TransformResult, type PipelineResult } from './api'
 import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
-import { captureSelectedText, injectOutput, copyToClipboard } from './clipboard'
+import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste } from './clipboard'
 import { saveAudioFile, saveAudioChunk } from './audio'
 import { initTelemetry, logTelemetry, DEV_BUILD, installMainConsoleTee, attachRendererConsoleTee } from './dictationTelemetry'
 import { app } from 'electron'
@@ -22,7 +22,7 @@ import { dispatchFromCapture, hideNativePill, recordCapturedDictation } from './
 import {
   attachTranscript, beginOwnClipboardSequence, beginSegment, cancelOpenSegment,
   composeWithInserts, endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed,
-  registerFormat, registerPaste, removeFromPad,
+  registerFormat, registerHistoryCopy, registerPaste, removeFromPad,
 } from './paywall/remote/capture/index'
 import { canObserve } from './paywall/remote/capture/captureGate'
 import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
@@ -182,6 +182,7 @@ let remoteDispatchQueue: Promise<void> = Promise.resolve()
 // remote/init from clipboard.ts fails inside the bundled main). injectOutput
 // already lives here, so hand it over rather than importing it there.
 registerPaste(async (text: string, images?: readonly string[]) => { await injectOutput(text, images) })
+registerHistoryCopy((text: string, images: readonly string[]) => { stageHistoryPaste(text, images) })
 
 // FORMATTING BELONGS TO DELIVERY, NOT TO CAPTURE. The pad holds the CLEANED
 // transcript, because a held capture has no destination yet — the user picks

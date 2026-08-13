@@ -322,9 +322,6 @@ enum Command {
     /// an expanded surface fills. An engine too old to send it leaves the
     /// built-in 0.8, so this is safe to ignore.
     case surfaceFill(CGFloat)
-    /// Put one complete historical capture on the macOS pasteboard as ordered
-    /// items: its text followed by every archived image/file.
-    case copyCapture(text: String, attachments: [String])
     /// `{"type":"terminalAutoExpand","on":true}` — see NotchModel.
     case terminalAutoExpand(Bool)
     /// Full state of the bottom-centre input surface. Pushed on every change,
@@ -390,9 +387,6 @@ enum Command {
             // command — same rule as `appearance` above. AppController clamps
             // it again before anything is resized.
             return .surfaceFill(CGFloat(obj["fill"] as? Double ?? 0.8))
-        case "copyCapture":
-            return .copyCapture(text: obj["text"] as? String ?? "",
-                                attachments: obj["attachments"] as? [String] ?? [])
         case "autoPresent":
             // A MISSING OR MALFORMED `on` MEANS ON. The setting's default is on
             // (engine: overlayAutoPresent), and a surface that silently stopped

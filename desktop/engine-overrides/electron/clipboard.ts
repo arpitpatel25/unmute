@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import path from 'path'
 import { keyListener } from './keyListener'
 import { handOffImages, VERIFY_TIMEOUT_MS, type PasteModifier } from './pasteboardHandoff'
+import { HistoryPasteStage } from './historyPasteStage'
 // Static import (a lazy require of this path can't resolve inside the bundled
 // main — proven live: 'Cannot find module' swallowed by the fail-open catch).
 // NO CYCLE, AND IT HAS TO STAY THAT WAY: remote/capture imports nothing from
@@ -74,6 +75,9 @@ interface NativePasteAddon {
   processInfo(): { pid: number; executablePath?: string; bundleIdentifier?: string; bundlePath?: string }
   /** Bundle id of the frontmost app, or null. Optional for the same reason. */
   frontmostBundleId?(): string | null
+  /** NSPasteboard.changeCount, used to invalidate a staged History paste when
+   *  anything else was copied before Cmd+V. */
+  clipboardChangeCount?(): number
 }
 
 let nativePaste: NativePasteAddon | null = null
@@ -496,6 +500,47 @@ async function deliverImagesAfterText(images: readonly string[], padded: string)
   }, images, padded)
   console.log(`[clipboard] pasted ${pasted}/${images.length} captured image(s) in ${Date.now() - t0}ms`)
 }
+
+const historyPasteStage = new HistoryPasteStage()
+
+function currentClipboardIdentity(): { changeCount: number | null; text: string } {
+  let changeCount: number | null = null
+  try {
+    const value = getNativePaste()?.clipboardChangeCount?.()
+    if (typeof value === 'number' && value >= 0) changeCount = value
+  } catch { /* the text comparison remains as a safe fallback */ }
+  let text = ''
+  try { text = clipboard.readText() } catch { /* an unreadable board cannot match */ }
+  return { changeCount, text }
+}
+
+/** Stage a History record for the user's next physical Cmd+V.
+ *
+ * Text stays on the real pasteboard and is pasted by macOS. The key listener
+ * merely observes that keystroke; after the target has consumed the text, the
+ * exact same image sequencer used by live dictation appends each image. */
+export function stageHistoryPaste(text: string, images: readonly string[]): void {
+  clipboard.writeText(text)
+  noteOurWrite()
+  if (!images.length) {
+    historyPasteStage.clear()
+    return
+  }
+  historyPasteStage.set({ text, images }, currentClipboardIdentity())
+  console.log(`[clipboard] staged History paste (${text.length} chars, ${images.length} image(s))`)
+}
+
+keyListener.on('key', (event) => {
+  if (event !== 'command-v') return
+  const composition = historyPasteStage.take(currentClipboardIdentity())
+  if (!composition?.images.length) return
+  // The physical Cmd+V is not intercepted: macOS is already delivering the
+  // text. handOffImages begins with its own settle interval, then appends the
+  // archived images and restores the text to the clipboard when finished.
+  void deliverImagesAfterText(composition.images, composition.text).catch((err) => {
+    console.warn('[clipboard] History image handoff skipped:', err instanceof Error ? err.message : err)
+  })
+})
 
 export async function injectOutput(text: string, images?: readonly string[]): Promise<void> {
   const tStart = Date.now()

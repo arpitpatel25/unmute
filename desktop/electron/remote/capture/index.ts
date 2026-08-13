@@ -96,6 +96,19 @@ export async function pasteAtCursor(text: string, images?: readonly string[]): P
   return true
 }
 
+/** History copy is staged by clipboard.ts for the next user-initiated Cmd+V.
+ * Registered here for the same acyclic dependency-inversion reason as pasteFn. */
+type HistoryCopyFn = (text: string, images: readonly string[]) => void
+let historyCopyFn: HistoryCopyFn | null = null
+
+export function registerHistoryCopy(fn: HistoryCopyFn): void { historyCopyFn = fn }
+
+export function copyHistoryToClipboard(text: string, images: readonly string[]): boolean {
+  if (!historyCopyFn) return false
+  historyCopyFn(text, images)
+  return true
+}
+
 /** The output formatter, registered by the module that owns it (sessionManager,
  *  which already applies it at every ordinary delivery site).
  *
@@ -1256,6 +1269,7 @@ export function _resetForTest(): void {
   armed = false
   openSegmentId = null
   pasteFn = null
+  historyCopyFn = null
   formatFn = null
   settingsFn = null
   padObserver = null
