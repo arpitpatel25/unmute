@@ -156,3 +156,26 @@ public enum SurfaceContentHandoff {
         wasExpanded && destinationExpanded && !contentReady && hasPocketSnapshot
     }
 }
+
+/// User-originated commands that may legitimately open a large surface even
+/// when automatic presentation is disabled.
+public enum SurfacePresentationGesture: Equatable {
+    case tap
+    case openDashboard
+    case next
+    case previous
+    case focusTask
+    case pocketExpand
+    case other
+}
+
+public enum SurfacePresentationIntent {
+    public static func isExplicitGesture(_ gesture: SurfacePresentationGesture) -> Bool {
+        switch gesture {
+        case .tap, .openDashboard, .next, .previous, .focusTask, .pocketExpand:
+            return true
+        case .other:
+            return false
+        }
+    }
+}

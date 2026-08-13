@@ -123,6 +123,10 @@ final class SurfaceFrameTransitionTests: XCTestCase {
         ))
     }
 
+    func testPocketExpansionCountsAsAnExplicitPresentationGesture() {
+        XCTAssertTrue(SurfacePresentationIntent.isExplicitGesture(.pocketExpand))
+    }
+
     func testLeavingExpandedStateDoesNotPreserveThePocketHandoff() {
         XCTAssertFalse(SurfaceContentHandoff.shouldPreserve(
             wasExpanded: true,

@@ -930,10 +930,8 @@ final class AppController: NSObject, NotchResizing {
         // THE USER JUST ASKED FOR SOMETHING ON THIS SURFACE. Recorded so that an
         // expansion arriving from main a moment later can be told apart from one
         // the app decided on by itself — see presentableState.
-        switch ev {
-        case .tap, .openDashboard, .next, .prev, .focusTask:
+        if SurfacePresentationIntent.isExplicitGesture(presentationGesture(for: ev)) {
             lastGestureAt = Date()
-        default: break
         }
         switch ev {
         case .focusTask(let id):
@@ -946,6 +944,18 @@ final class AppController: NSObject, NotchResizing {
             model.proposal = nil
             model.convLog = ""
         default: break
+        }
+    }
+
+    private func presentationGesture(for event: Event) -> SurfacePresentationGesture {
+        switch event {
+        case .tap: return .tap
+        case .openDashboard: return .openDashboard
+        case .next: return .next
+        case .prev: return .previous
+        case .focusTask: return .focusTask
+        case .pocketExpand: return .pocketExpand
+        default: return .other
         }
     }
 
