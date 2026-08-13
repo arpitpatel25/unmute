@@ -6,6 +6,17 @@
 
 import { ipcRenderer } from 'electron'
 
+/** Mirror of `UpdateStatus` in paywall-glue.ts. Declared rather than imported:
+ *  preload is its own bundle, and importing from paywall-glue would pull
+ *  main-process modules (electron-store, electron-updater, net) into it. */
+export type PaywallUpdateStatus =
+  | { phase: 'checking' }
+  | { phase: 'available'; version: string }
+  | { phase: 'current'; version?: string }
+  | { phase: 'downloading'; percent: number; transferred: number; total: number; bytesPerSecond: number }
+  | { phase: 'downloaded'; version: string }
+  | { phase: 'error'; message: string }
+
 export const paywallPreloadExtensions = {
   // App version (for the Settings footer build-number display)
   paywallAppVersion: (): Promise<string> =>
@@ -17,10 +28,28 @@ export const paywallPreloadExtensions = {
    *  identical path, it does not run a second one. */
   paywallCheckForUpdates: (): Promise<
     | { status: 'available'; version: string }
+    | { status: 'downloaded'; version: string }
     | { status: 'current'; version?: string }
     | { status: 'unsupported'; message: string }
     | { status: 'error'; message: string }
   > => ipcRenderer.invoke('paywall:check-for-updates'),
+
+  /** Live updater phases — checking → available → downloading (repeatedly) →
+   *  downloaded, or error. `available` only tells you a download STARTED; the
+   *  bytes arrive through the `downloading` phase, which is what the progress
+   *  bar in Settings reads. Fires for background downloads too. */
+  paywallOnUpdateStatus: (
+    cb: (s: PaywallUpdateStatus) => void,
+  ): (() => void) => {
+    const handler = (_e: unknown, s: PaywallUpdateStatus) => cb(s)
+    ipcRenderer.on('paywall:update-status', handler)
+    return () => { ipcRenderer.removeListener('paywall:update-status', handler) }
+  },
+
+  /** Restart into a downloaded update. Returns false when nothing is staged,
+   *  so the caller can tell "not ready" apart from "quitting now". */
+  paywallInstallUpdate: (): Promise<boolean> =>
+    ipcRenderer.invoke('paywall:install-update'),
 
   // Keychain bridge (used by supabase-js storage adapter)
   paywallKeychainGet: (key: string): Promise<string | null> =>
