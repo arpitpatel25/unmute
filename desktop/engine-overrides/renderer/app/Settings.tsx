@@ -102,6 +102,7 @@ interface SettingsApi {
     notchTerminalAutoExpand?: boolean
     voiceFeedback?: boolean
     surfaceFill?: number
+    showInScreenCapture?: boolean
     librarianWriteEnabled?: boolean
     curatorEnabled?: boolean
   }>
@@ -110,6 +111,7 @@ interface SettingsApi {
   remoteSetTerminalAutoExpand?: (on: boolean) => Promise<boolean>
   remoteSetVoiceFeedback?: (on: boolean) => Promise<boolean>
   remoteSetSurfaceFill?: (fill: number) => Promise<number>
+  remoteSetShowInScreenCapture?: (on: boolean) => Promise<boolean>
   /** Handled in main (remote/init.ts:3444) but NOT exposed by the preload —
    *  an orphaned handler. Optional-chained, so calling it is a no-op until
    *  `electron/remote-preload.ts` carries it. See KILL_SWITCHES_WIRED. */
@@ -307,6 +309,9 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // 0.8 matches the compiled-in default on the Swift side, so the control shows
   // the truth on the first frame rather than flicking once the snapshot lands.
   const [surfaceFill, setSurfaceFill] = useState<number>(0.8)
+  // DEFAULT ON: captures should show what the user can see unless they
+  // explicitly choose privacy. Main and Swift share the same default.
+  const [showInScreenCapture, setShowInScreenCapture] = useState<boolean>(true)
   // The two kill-switches. DEFAULT OFF, both — D7 retires the curator and the
   // librarian for launch, and `librarianWriteEnabled` defaults to false in main
   // too (remote/init.ts:200). Neither can be WRITTEN from here; see
@@ -377,6 +382,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
       setTerminalAutoExpand(s.notchTerminalAutoExpand === true)
       setVoiceFeedback(s.voiceFeedback === true)
       setSurfaceFill(typeof s.surfaceFill === 'number' ? s.surfaceFill : 0.8)
+      setShowInScreenCapture(s.showInScreenCapture !== false)
       setLibrarianEnabled(s.librarianWriteEnabled === true)
       setCuratorEnabled(s.curatorEnabled === true)
     }).catch(() => {})
@@ -452,6 +458,10 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
     // Main clamps to the three offered values and returns what it stored, so a
     // rejected value corrects the control rather than leaving it lying.
     void api().remoteSetSurfaceFill?.(v)?.then((stored) => { if (stored) setSurfaceFill(stored) })
+  }
+  function handleShowInScreenCaptureChange(next: boolean): void {
+    setShowInScreenCapture(next)
+    void api().remoteSetShowInScreenCapture?.(next)
   }
   function handleNotchAutoPresentChange(on: boolean) {
     setNotchAutoPresent(on)
@@ -751,6 +761,12 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                 value={String(surfaceFill)}
                 onChange={handleSurfaceFillChange}
               />
+            </SettingRow>
+            <SettingRow
+              label="Show in screen sharing and screenshots"
+              description="Include the notch and recording pill when you share or capture your screen. Turn this off to keep them private."
+            >
+              <Toggle checked={showInScreenCapture} onChange={handleShowInScreenCaptureChange} />
             </SettingRow>
             {/* D5: this governs the expanded panel and the recording pill ONLY.
                 The bar-level mass is always opaque black, because it is

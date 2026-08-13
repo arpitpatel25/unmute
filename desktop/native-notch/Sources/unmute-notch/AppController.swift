@@ -311,6 +311,12 @@ final class AppController: NSObject, NotchResizing {
             // mass is sized by its content, not by this.
             if isExpanded(model.state) { refit(animated: true) }
 
+        case let .screenCaptureVisibility(show):
+            let sharing: NSWindow.SharingType = show ? .readOnly : .none
+            window.sharingType = sharing
+            pillWindow.sharingType = sharing
+            NotchLog.log("CMD screenCaptureVisibility show=\(show)")
+
         case let .pill(state):
             // Logged at phase granularity only — the level field changes every
             // frame during a capture and would drown the log.

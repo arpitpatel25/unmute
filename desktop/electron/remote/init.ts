@@ -99,6 +99,7 @@ import {
 import { SETTLE_IDLE_MS } from './capture/scratchpadStore'
 import type { Entry, InsertKind } from './capture/types'
 import { CaptureHistoryStore, clipboardPayload, type CaptureHistoryKind } from './capture/history-store'
+import { screenCaptureVisibility } from './screen-capture-visibility'
 import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
 
 // ─── Loose interfaces for the OSS engine singletons we wire into ───
@@ -208,6 +209,8 @@ interface RemoteSettings {
   voiceFeedback: boolean
   /** Share of the screen an expanded surface fills: 0.7 | 0.8 | 0.9. */
   surfaceFill: number
+  /** Whether the notch and recording pill appear in screenshots and sharing. */
+  showInScreenCapture: boolean
   // DECIDED: docked mode — a compact bottom-right pill (running/stuck counts)
   // that expands into the full panel on a notify-state event or click, and
   // collapses back on Esc. ON by default; OFF reverts to the legacy pop-the-
@@ -282,6 +285,7 @@ const settings = new Store<RemoteSettings>({
     notchTerminalAutoExpand: false,
     voiceFeedback: false,
     surfaceFill: 0.8,
+    showInScreenCapture: true,
     overlayDocked: true,
     librarianWriteEnabled: false,
     forceRawMode: false,
@@ -3431,6 +3435,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // Same reason: the helper compiles its own defaults (0.8 fill, auto-present
       // on), so a user who chose otherwise would get one wrong frame per launch.
       notchClient.send({ type: 'surfaceFill', fill: settings.get('surfaceFill') ?? 0.8 })
+      notchClient.send(screenCaptureVisibility(settings.get('showInScreenCapture')).command)
       notchClient.send({ type: 'terminalAutoExpand', on: settings.get('notchTerminalAutoExpand') === true })
       notchClient.send({ type: 'autoPresent', on: settings.get('overlayAutoPresent') !== false } as never)
 
@@ -4260,6 +4265,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     log.event('surface-fill-set', { fill: v })
     return v
   })
+  ipcMain.handle('remote:set-show-in-screen-capture', async (_e, on: boolean) => {
+    const visibility = screenCaptureVisibility(!!on)
+    settings.set('showInScreenCapture', visibility.show)
+    notchClient?.send(visibility.command)
+    log.event('screen-capture-visibility-set', { show: visibility.show })
+    return visibility.show
+  })
   // Doer model selector (Remote only). Validated to the three supported tiers;
   // applies to the NEXT dispatched task (each task reads the setting at spawn).
   // Broadcast so both surfaces — Remote settings + the capture-widget badge —
@@ -4382,6 +4394,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     notchTerminalAutoExpand: settings.get('notchTerminalAutoExpand') === true,
     voiceFeedback: settings.get('voiceFeedback') === true,
     surfaceFill: settings.get('surfaceFill') ?? 0.8,
+    showInScreenCapture: screenCaptureVisibility(settings.get('showInScreenCapture')).show,
     overlayDocked: settings.get('overlayDocked') !== false,
     osNotifications: settings.get('osNotifications') === true,
     librarianWriteEnabled: settings.get('librarianWriteEnabled') === true,

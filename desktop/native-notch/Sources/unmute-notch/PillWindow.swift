@@ -51,6 +51,9 @@ final class PillWindow: NSPanel {
         // trade, and it was taken deliberately: correct glass everywhere beats
         // a pinned position during the half-second of a transition.
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        // Same capture policy as the notch. AppController updates both windows
+        // from one command so the setting cannot produce a half-visible UI.
+        sharingType = .readOnly
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false            // the material draws its own

@@ -34,6 +34,7 @@ export interface RemoteSettingsSnapshot {
   model: string
   browserEnabled: boolean
   overlayAutoPresent: boolean
+  showInScreenCapture: boolean
   overlayDocked: boolean
   osNotifications: boolean
   /** Persistent default: force RAW (no Unmute injection/librarian) for all tasks. */
@@ -246,6 +247,9 @@ export const remotePreloadExtensions = {
   /** Share of the screen an expanded surface fills: 0.7 | 0.8 | 0.9. */
   remoteSetSurfaceFill: (fill: number): Promise<number> =>
     ipcRenderer.invoke('remote:set-surface-fill', fill),
+  /** Whether native Unmute surfaces appear in screenshots and screen sharing. */
+  remoteSetShowInScreenCapture: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-show-in-screen-capture', on),
   /** Toggle docked mode (compact bottom-right pill that expands on demand). */
   remoteSetOverlayDocked: (on: boolean): Promise<boolean> =>
     ipcRenderer.invoke('remote:set-overlay-docked', on),
