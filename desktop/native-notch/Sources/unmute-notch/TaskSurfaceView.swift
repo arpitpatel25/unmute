@@ -35,7 +35,7 @@ struct TaskSurfaceView: View {
                     // question and no way to reply. A demand outranks the layout.
                     if t.status == .needsUser, let q = t.question {
                         QuestionBlock(model: model, taskId: t.id, question: q,
-                                      terminalOpen: $model.taskTerminalOpen).padding(.top, 10)
+                                      terminalOpen: taskTerminalBinding).padding(.top, 10)
                     }
                     // TERMINAL MODE — THE TERMINAL IS THE PANEL.
                     //
@@ -63,7 +63,7 @@ struct TaskSurfaceView: View {
                         .padding(.top, 10)
                     if t.status == .needsUser, let q = t.question {
                         QuestionBlock(model: model, taskId: t.id, question: q,
-                                      terminalOpen: $model.taskTerminalOpen).padding(.top, 12)
+                                      terminalOpen: taskTerminalBinding).padding(.top, 12)
                     }
                     // ALWAYS OFFERED, unless this is an errand that has genuinely
                     // finished. A session that completed a step is waiting for your
@@ -152,6 +152,11 @@ struct TaskSurfaceView: View {
     /// to show and no toggle to offer.
     private func terminalMode(_ t: TaskDetail) -> Bool { t.hasTerminal && model.taskTerminalOpen }
 
+    private var taskTerminalBinding: Binding<Bool> {
+        Binding(get: { model.taskTerminalOpen },
+                set: { model.setTaskTerminalVisible($0) })
+    }
+
     /// Has this task actually finished for good? STATE, not `alive`. Same rule
     /// as StageView.ended — a session finishing a step is what a session does
     /// between your messages; only an errand is over.
@@ -185,8 +190,7 @@ struct TaskSurfaceView: View {
                 if t.hasTerminal {
                     KeyButton(label: model.taskTerminalOpen ? "Hide terminal" : "Terminal",
                               symbol: "terminal") {
-                        model.taskTerminalOpen.toggle()
-                        model.emit(model.taskTerminalOpen ? .termOpen(id: t.id) : .termClose(id: t.id))
+                        model.setTaskTerminalVisible(!model.taskTerminalOpen)
                     }
                 }
                 // Re-run and Resume belong to a task that has STOPPED, which is a

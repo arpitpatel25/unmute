@@ -69,9 +69,6 @@ final class NotchModel: ObservableObject {
     /// its secondary controls are tucked away. Hover and an aimed Remote
     /// capture reveal them without creating another navigation state.
     @Published var pocketDetailsVisible: Bool = false
-    /// The view owns the pointer event; the controller combines it with the
-    /// capture state to decide whether the secondary controls are presented.
-    @Published var pocketHovered: Bool = false
     /// During pocket → task geometry travel, keep the lightweight origin card
     /// mounted until the large container is already moving. This prevents the
     /// transcript/terminal hierarchy from competing with the first frame.
@@ -80,6 +77,9 @@ final class NotchModel: ObservableObject {
 
     // Terminal visibility (task surface toggle; Stage shows it by default when alive).
     @Published var taskTerminalOpen: Bool = false
+    /// User intent enters the controller's reducer through this closure. Views
+    /// never mutate a second terminal-visibility authority directly.
+    var setTaskTerminalVisible: (Bool) -> Void = { _ in }
     /// Live mic level, 0…1, mirrored from the pill's stream while a capture is
     /// running and zero otherwise. The pocket draws it so the card you are
     /// aiming at shows that it is being heard.
@@ -110,6 +110,11 @@ final class NotchModel: ObservableObject {
     /// said (closed); a stage you opened deliberately should show the work
     /// (open). One flag for both would force one answer on both.
     @Published var stageTerminalOpen: Bool = true
+    var setStageTerminalVisible: (Bool) -> Void = { _ in }
+    /// A terminal view reports mount state; AppController remains the sole
+    /// owner of the termOpen/termClose effect. This prevents replay bytes from
+    /// racing ahead of SwiftTerm during a surface transition.
+    var setTerminalMounted: (String, Bool) -> Void = { _, _ in }
 
     // Capture / voice chip: "listening → X", "routing…", "landed → X".
     @Published var capturePhase: String? = nil

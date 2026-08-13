@@ -4,6 +4,7 @@ import SwiftTerm
 import HoverStateSupport
 import SurfaceSizeSupport
 import SurfaceTransitionSupport
+import SurfaceStateSupport
 
 // Owns the ONE panel + view model; translates commands into observable state,
 // user gestures into events, and keeps the surface on the PRIMARY display.
@@ -33,8 +34,17 @@ final class AppController: NSObject, NotchResizing {
     private var hoverTimer: Timer?
     private var hoverExitTimer: Timer?
     private var pocketHoverTimer: Timer?
-    private var expandedContentWorkItem: DispatchWorkItem?
+    private var expandedContentGeneration: UInt64 = 0
     private var toastTimer: Timer?
+    /// Sole authority for visit-scoped interaction. Domain data remains in the
+    /// model; controls, geometry and user choices are projected from this value.
+    private var interaction = SurfaceInteractionState()
+    /// The effect reconciler's applied value. Rendering a terminal never opens
+    /// a stream itself; changing the desired value performs one diffed effect.
+    private var subscribedTerminalID: String?
+    /// SwiftTerm must exist before the controller requests replay bytes. Mount
+    /// state is an input to the effect reconciler, never an effect from a view.
+    private var mountedTerminalCounts: [String: Int] = [:]
 
     override init() {
         geometry = NotchGeometry.current()
@@ -64,12 +74,32 @@ final class AppController: NSObject, NotchResizing {
         model.onPocketDetails = { [weak self] visible in self?.setPocketDetails(visible) }
         model.onBack = { [weak self] in self?.stepDown() }
         model.selectSurfaceFill = { [weak self] fill in self?.selectSurface(fill) }
+        model.setTaskTerminalVisible = { [weak self] visible in
+            guard let self else { return }
+            self.interaction.reduce(.terminalVisibilityChanged(visible))
+            self.projectInteraction()
+            self.reconcileTerminalSubscription()
+        }
+        model.setStageTerminalVisible = { [weak self] visible in
+            guard let self else { return }
+            self.model.stageTerminalOpen = visible
+            self.reconcileTerminalSubscription()
+        }
+        model.setTerminalMounted = { [weak self] id, mounted in
+            guard let self else { return }
+            if mounted { self.mountedTerminalCounts[id, default: 0] += 1 }
+            else {
+                let remaining = max(0, self.mountedTerminalCounts[id, default: 0] - 1)
+                if remaining == 0 { self.mountedTerminalCounts.removeValue(forKey: id) }
+                else { self.mountedTerminalCounts[id] = remaining }
+            }
+            self.reconcileTerminalSubscription()
+        }
         installPill()
         let start = resolve(.dormant)
         model.bar = start.placement
         model.content = start.content
         window.applyFrame(start.frame, animated: false)
-        window.present()
         installTracking()
         installKeyMonitors()
         installOutsideClickMonitor()
@@ -140,6 +170,20 @@ final class AppController: NSObject, NotchResizing {
 
     func handle(_ command: Command) {
         switch command {
+        case let .bootstrap(appearance, fill, show, terminalAutoExpand, present):
+            Appearance.shared.preference = appearance
+            NotchGeometry.SurfaceFill.user = min(max(fill, 0.5), 0.95)
+            let sharing: NSWindow.SharingType = show ? .readOnly : .none
+            window.sharingType = sharing
+            pillWindow.sharingType = sharing
+            model.terminalAutoExpand = terminalAutoExpand
+            autoPresent = present
+            NotchLog.log("CMD bootstrap appearance=\(appearance.rawValue) fill=\(fill) capture=\(show) terminal=\(terminalAutoExpand) present=\(present)")
+
+        case .present:
+            if !window.isVisible { window.present() }
+            NotchLog.log("CMD present — bootstrap and replay complete")
+
         case let .setState(state, attention, working):
             NotchLog.log("CMD setState \(state.rawValue) attention=\(attention) working=\(working)")
             model.attention = attention
@@ -155,9 +199,6 @@ final class AppController: NSObject, NotchResizing {
             // state unchanged. Without this the frame would keep the previous
             // task's proportions until the next state change.
             let fillChanged = model.task?.hasTerminal != task.hasTerminal
-            // Read BEFORE the assignment below — after it, every payload looks
-            // like the same task and the default would never apply at all.
-            let switchedTask = model.task?.id != task.id
             model.task = task
             // A PREFERENCE IS A DEFAULT, NOT A CORRECTION.
             //
@@ -169,11 +210,14 @@ final class AppController: NSObject, NotchResizing {
             //
             // The default now applies when the task CHANGES — which is the
             // moment there is no choice of the user's to override.
-            if switchedTask && model.terminalAutoExpand { model.taskTerminalOpen = true }
-            // The one thing that still overrides a live choice, and only
-            // upward: an ask that can ONLY be answered in the terminal. Leaving
-            // that hidden is the dead end the rule exists to prevent.
-            if needsTerminalToAnswer(task) { model.taskTerminalOpen = true }
+            if model.state == .task {
+                interaction.reduce(.taskEntered(
+                    id: task.id,
+                    terminalDefaultOpen: model.terminalAutoExpand,
+                    requiresTerminal: needsTerminalToAnswer(task)))
+                projectInteraction()
+            }
+            reconcileTerminalSubscription()
             if model.state == .task && fillChanged { refit(animated: true) }
             // At bar level the fronted task IS the message — the right half
             // carries its activity, and the mass is as wide as what it says.
@@ -187,6 +231,7 @@ final class AppController: NSObject, NotchResizing {
                 model.stageTask = task
                 if needsTerminalToAnswer(task) { model.stageTerminalOpen = true }
                 refit()
+                reconcileTerminalSubscription()
             }
 
         case let .setCockpit(data):
@@ -196,6 +241,7 @@ final class AppController: NSObject, NotchResizing {
             if let f = model.focusedId, !data.groups.flatMap(\.cards).contains(where: { $0.id == f }) {
                 model.focusedId = nil
                 model.stageTask = nil
+                reconcileTerminalSubscription()
             }
 
         case let .termData(id, b64):
@@ -265,15 +311,8 @@ final class AppController: NSObject, NotchResizing {
             // and a card announcing a second would be two answers to one question.
             let wasOpen = model.pocket.isOpen
             model.pocket = p
-            if !p.isOpen {
-                model.pocketHovered = false
-                model.pocketDetailsVisible = false
-            } else {
-                // A pocket may be opened while an addressed capture is already
-                // live. Size it for the controls on its first frame, not after
-                // the view has been mounted and clipped them.
-                model.pocketDetailsVisible = model.pocketHovered || model.captureAimed
-            }
+            interaction.reduce(.pocketAvailability(open: p.isOpen, itemCount: p.slots.count))
+            projectInteraction()
             NotchLog.log("CMD pocket mode=\(p.mode) at=\(p.at) slots=\(p.slots.count)")
             if !isExpanded(model.state) || model.state == .attention {
                 if wasOpen != p.isOpen { refit(animated: true) } else { refreshBar() }
@@ -337,7 +376,14 @@ final class AppController: NSObject, NotchResizing {
             model.captureAimed = state.phase == .recording
                 && state.kind == .remote
                 && model.capturePhase == "listening"
-            if model.pocket.isOpen { setPocketDetails(model.pocketHovered) }
+            let priorPresentation = interaction.presentation
+            interaction.reduce(.captureAimed(model.captureAimed))
+            projectInteraction()
+            // `pill` arrives for every microphone-level sample. Geometry only
+            // changes when capture aim changes, not 60 times per second.
+            if model.pocket.isOpen, priorPresentation != interaction.presentation {
+                refit(animated: true)
+            }
             reconcileSurfaces()
 
         case let .scratchpad(payload):
@@ -391,8 +437,7 @@ final class AppController: NSObject, NotchResizing {
             hasPocketSnapshot: model.transitionPocket != nil
         )
         if !preserveContentHandoff {
-            expandedContentWorkItem?.cancel()
-            expandedContentWorkItem = nil
+            expandedContentGeneration &+= 1
             if expandingFromPocket && !Motion.reduceMotion {
                 model.transitionPocket = model.pocket
                 model.expandedContentReady = false
@@ -427,7 +472,15 @@ final class AppController: NSObject, NotchResizing {
         // The preference decides the default; a terminal-only ask overrides it
         // upward and never downward. Turning auto-expand OFF must not strand
         // someone on "answer in the terminal" with no terminal.
-        model.taskTerminalOpen = model.task.map { needsTerminalToAnswer($0) || model.terminalAutoExpand } ?? false
+        if state == .task, let task = model.task {
+            interaction.reduce(.taskEntered(
+                id: task.id,
+                terminalDefaultOpen: model.terminalAutoExpand,
+                requiresTerminal: needsTerminalToAnswer(task)))
+        } else if model.state == .task && state != .task {
+            interaction.reduce(.taskLeft)
+        }
+        projectInteraction()
         // THE REVIEW POPUP CANNOT SURVIVE A COLLAPSE. It is drawn only on the
         // expanded surface, and a popup nobody can see still eats the next
         // Escape in stepDown. Leaving the expanded state ends it, exactly as
@@ -447,6 +500,7 @@ final class AppController: NSObject, NotchResizing {
             model.bar = r.placement
             model.content = r.content
         }
+        reconcileTerminalSubscription()
         refreshSurfaceControlAvailability()
         let engaged = (state == .task || state == .cockpit)
         window.allowsKey = engaged
@@ -469,18 +523,18 @@ final class AppController: NSObject, NotchResizing {
         if engaged {
             if !window.isKeyWindow { window.makeKey() }
         }
-        window.applyFrame(r.frame, animated: true)
-        if expandingFromPocket && !Motion.reduceMotion && !preserveContentHandoff {
-            let item = DispatchWorkItem { [weak self] in
-                guard let self, isExpanded(self.model.state) else { return }
+        let contentGeneration = expandedContentGeneration
+        let revealExpandedContent: (() -> Void)? = expandingFromPocket && !Motion.reduceMotion && !preserveContentHandoff
+            ? { [weak self] in
+                guard let self, self.expandedContentGeneration == contentGeneration,
+                      isExpanded(self.model.state) else { return }
                 withAnimation(Theme.contentIn) {
                     self.model.expandedContentReady = true
                     self.model.transitionPocket = nil
                 }
             }
-            expandedContentWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + Theme.contentInDelay, execute: item)
-        }
+            : nil
+        window.applyFrame(r.frame, animated: true, completion: revealExpandedContent)
         NotchLog.log("state -> \(state.rawValue)\(state == commanded ? "" : " (commanded \(commanded.rawValue))") window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] fillet=\(Int(r.placement.fillet))")
     }
 
@@ -518,9 +572,7 @@ final class AppController: NSObject, NotchResizing {
                 // MINUS the padding it replaced — not the whole inset. And zero
                 // on a notchless display, where the plane is unchanged.
                 let clearance = geometry.hasNotch ? max(0, topInset - Theme.panelPadding) : 0
-                let cardHeight: CGFloat = model.pocketDetailsVisible
-                    ? (model.pocket.slots.count > 1 ? 146 : 120)
-                    : 64
+                let cardHeight = CGFloat(interaction.presentation.pocketHeight ?? 64)
                 return (geometry.topPinnedFrame(width: 348, height: cardHeight + clearance),
                         geometry.panelPlacement,
                         BarContent())
@@ -594,11 +646,12 @@ final class AppController: NSObject, NotchResizing {
     /// frame change is coordinated through the same native transition as every
     /// other pocket resize.
     private func setPocketDetails(_ hovering: Bool) {
-        model.pocketHovered = hovering
         pocketHoverTimer?.invalidate()
-        if hovering || model.captureAimed {
-            guard model.pocket.isOpen, !model.pocketDetailsVisible else { return }
-            model.pocketDetailsVisible = true
+        if hovering {
+            let before = interaction.presentation
+            interaction.reduce(.pointerEntered(.pocket))
+            projectInteraction()
+            guard model.pocket.isOpen, before != interaction.presentation else { return }
             refit(animated: true)
             return
         }
@@ -608,13 +661,51 @@ final class AppController: NSObject, NotchResizing {
         // confirm against the physical window frame before accepting the exit.
         pocketHoverTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { [weak self] _ in
             guard let self, self.model.pocket.isOpen, !self.model.captureAimed else { return }
-            if self.window.frame.contains(NSEvent.mouseLocation) {
-                self.model.pocketHovered = true
-                return
-            }
-            guard self.model.pocketDetailsVisible else { return }
-            self.model.pocketDetailsVisible = false
+            if self.stableHitFrame(for: .pocket).contains(NSEvent.mouseLocation) { return }
+            let before = self.interaction.presentation
+            self.interaction.reduce(.pointerExited(.pocket))
+            self.projectInteraction()
+            guard before != self.interaction.presentation else { return }
             self.refit(animated: true)
+        }
+    }
+
+    private func projectInteraction() {
+        let p = interaction.presentation
+        model.hovering = p.barHovered
+        model.pocketDetailsVisible = p.pocketDetailsVisible
+        model.taskTerminalOpen = interaction.terminalVisible
+    }
+
+    private func reconcileTerminalSubscription() {
+        let desired: String? = {
+            if model.state == .task, model.taskTerminalOpen,
+               let task = model.task, task.hasTerminal,
+               mountedTerminalCounts[task.id, default: 0] > 0 { return task.id }
+            if model.state == .cockpit, model.stageTerminalOpen,
+               let task = model.stageTask, task.hasTerminal,
+               mountedTerminalCounts[task.id, default: 0] > 0 { return task.id }
+            return nil
+        }()
+        guard desired != subscribedTerminalID else { return }
+        if let old = subscribedTerminalID { model.emit(.termClose(id: old)) }
+        subscribedTerminalID = desired
+        if let next = desired { model.emit(.termOpen(id: next)) }
+    }
+
+    /// The pointer contract is derived from the stable presentation, never the
+    /// currently animated NSWindow frame. Expanded pixels cannot keep themselves
+    /// expanded merely because they still exist during collapse.
+    private func stableHitFrame(for region: SurfaceRegion) -> CGRect {
+        switch region {
+        case .pocket:
+            let clearance = geometry.hasNotch ? max(0, topInset - Theme.panelPadding) : 0
+            return geometry.topPinnedFrame(width: 348, height: 64 + clearance)
+        case .bar:
+            var content = BarContent.make(for: model, state: model.state, hovering: false)
+            let mass = geometry.mass(left: content.leftWidth, right: content.wantsRightWidth)
+            if mass.right == 0 { content.right = nil }
+            return geometry.barFrame(mass)
         }
     }
 
@@ -750,11 +841,16 @@ final class AppController: NSObject, NotchResizing {
         // height and nothing may hang below it. Logged rather than lost without
         // trace; the engine sends these from user actions ("finish the recording
         // first"), so a toast landing here is worth knowing about.
-        if !isExpanded(model.state) { NotchLog.log("toast while collapsed — NOT SHOWN: \(text)") }
+        if !isExpanded(model.state) { NotchLog.log("toast while collapsed — showing in bar: \(text)") }
         model.toast = text
+        if model.pocket.isOpen { refit(animated: false) }
+        else if !isExpanded(model.state) { refreshBar() }
         toastTimer?.invalidate()
         toastTimer = Timer.scheduledTimer(withTimeInterval: 1.8, repeats: false) { [weak self] _ in
-            self?.model.toast = nil
+            guard let self else { return }
+            self.model.toast = nil
+            if self.model.pocket.isOpen { self.refit(animated: false) }
+            else if !self.isExpanded(self.model.state) { self.refreshBar() }
         }
     }
 
@@ -823,8 +919,9 @@ final class AppController: NSObject, NotchResizing {
         if entering {
             hoverExitTimer?.invalidate()
             hoverTimer?.invalidate()
-            if !model.hovering {
-                model.hovering = true
+            if !interaction.presentation.barHovered {
+                interaction.reduce(.pointerEntered(.bar))
+                projectInteraction()
                 if !isExpanded(model.state), model.state != .dormant { refreshBar() }
             }
             if model.state == .dormant && commandedState == .dormant {
@@ -843,7 +940,7 @@ final class AppController: NSObject, NotchResizing {
             hoverExitTimer?.invalidate()
             hoverExitTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { [weak self] _ in
                 guard let self else { return }
-                switch HoverExitDecision.resolve(pointerInsideSurface: self.window.frame.contains(NSEvent.mouseLocation)) {
+                switch HoverExitDecision.resolve(pointerInsideSurface: self.stableHitFrame(for: .bar).contains(NSEvent.mouseLocation)) {
                 case .keepRevealed:
                     return
                 case .acceptExit:
@@ -853,8 +950,9 @@ final class AppController: NSObject, NotchResizing {
                 let willSleep = self.model.state == .idle
                     && self.commandedState == .dormant
                     && self.geometry.hasNotch
-                if self.model.hovering {
-                    self.model.hovering = false
+                if self.interaction.presentation.barHovered {
+                    self.interaction.reduce(.pointerExited(.bar))
+                    self.projectInteraction()
                     if !self.isExpanded(self.model.state), self.model.state != .dormant, !willSleep {
                         self.refreshBar()
                     }

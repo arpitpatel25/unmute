@@ -8,8 +8,8 @@ import SwiftTerm
 //   in : `termData` chunks (base64) fan out via model.termBytes → feed()
 //   out: keystrokes → termInput (base64) → manager.sendInput (PTY stdin)
 //   size: cols/rows → termResize → manager.resize (SIGWINCH)
-// Opening emits termOpen (main replays the buffered scrollback, then streams);
-// closing emits termClose (main unsubscribes).
+// AppController reconciles the one desired terminal subscription. This view
+// renders bytes and emits input/size only; mount lifecycle is not authority.
 struct TerminalPanel: View {
     @ObservedObject var model: NotchModel
     let taskId: String
@@ -64,8 +64,6 @@ struct TerminalPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius))
         .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius)
             .stroke(Theme.hairline, lineWidth: 0.5))
-        .onAppear { model.emit(.termOpen(id: taskId)) }
-        .onDisappear { model.emit(.termClose(id: taskId)) }
     }
 }
 
@@ -82,14 +80,20 @@ struct TerminalHost: NSViewRepresentable {
         tv.nativeForegroundColor = NSColor(calibratedWhite: 0.88, alpha: 1)
         tv.font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
         context.coordinator.attach(tv)
+        model.setTerminalMounted(taskId, true)
         return tv
     }
 
     func updateNSView(_ nsView: TerminalView, context: Context) {
+        if context.coordinator.taskId != taskId {
+            model.setTerminalMounted(context.coordinator.taskId, false)
+            model.setTerminalMounted(taskId, true)
+        }
         context.coordinator.taskId = taskId
     }
 
     static func dismantleNSView(_ nsView: TerminalView, coordinator: Coordinator) {
+        coordinator.model.setTerminalMounted(coordinator.taskId, false)
         coordinator.detach()
     }
 

@@ -294,6 +294,13 @@ struct ProposalDetail: Codable {
 // MARK: - Commands (main → helper)
 
 enum Command {
+    /// Complete preferences applied atomically before the helper presents any
+    /// window. Also replayed after a supervised restart.
+    case bootstrap(appearance: SurfaceAppearance, surfaceFill: CGFloat,
+                   screenCaptureVisibility: Bool, terminalAutoExpand: Bool,
+                   autoPresent: Bool)
+    /// Sent after bootstrap plus replay so no stale/default frame flashes.
+    case present
     case setState(state: NotchState, attention: Int, working: Int)
     case showTask(TaskDetail)                  // fronted task (attention/task surface)
     case stageDetail(TaskDetail)               // focused Stage detail (cockpit)
@@ -351,6 +358,16 @@ enum Command {
         }
 
         switch type {
+        case "bootstrap":
+            let appearance = SurfaceAppearance(rawValue: obj["appearance"] as? String ?? "system") ?? .system
+            return .bootstrap(
+                appearance: appearance,
+                surfaceFill: CGFloat(obj["surfaceFill"] as? Double ?? 0.8),
+                screenCaptureVisibility: obj["showInScreenCapture"] as? Bool ?? true,
+                terminalAutoExpand: obj["terminalAutoExpand"] as? Bool ?? false,
+                autoPresent: obj["autoPresent"] as? Bool ?? true)
+        case "present":
+            return .present
         case "setState":
             let state = NotchState(rawValue: obj["state"] as? String ?? "dormant") ?? .dormant
             return .setState(state: state,

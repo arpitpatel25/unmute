@@ -54,7 +54,7 @@ struct StageView: View {
                     // stalled at a prompt with no visible question.
                     if t.status == .needsUser, let q = t.question {
                         QuestionBlock(model: model, taskId: t.id, question: q,
-                                      terminalOpen: $model.stageTerminalOpen).padding(.top, 10)
+                                      terminalOpen: stageTerminalBinding).padding(.top, 10)
                     }
                     // TERMINAL MODE — THE TERMINAL IS THE PANEL.
                     //
@@ -111,6 +111,11 @@ struct StageView: View {
         (t.status == .done || t.status == .failed) && t.kind != "session"
     }
 
+    private var stageTerminalBinding: Binding<Bool> {
+        Binding(get: { model.stageTerminalOpen },
+                set: { model.setStageTerminalVisible($0) })
+    }
+
     /// The message view: what was said, and the way to say the next thing.
     @ViewBuilder private func messagesMode(_ t: TaskDetail) -> some View {
         if t.hasTerminal, let warm = t.warmup, !warm.isEmpty,
@@ -127,7 +132,7 @@ struct StageView: View {
             .padding(.top, 10)
         if t.status == .needsUser, let q = t.question {
             QuestionBlock(model: model, taskId: t.id, question: q,
-                          terminalOpen: $model.stageTerminalOpen).padding(.top, 10)
+                          terminalOpen: stageTerminalBinding).padding(.top, 10)
         }
         if ended(t) {
             DeadPanel(model: model, t: t).padding(.top, 10)

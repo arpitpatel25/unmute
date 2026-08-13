@@ -105,17 +105,26 @@ final class NotchWindow: NSPanel {
     /// in AppController's single transaction; this method only changes geometry.
     /// Repeating an in-flight target is intentionally a no-op, so a pocket or
     /// content update cannot restart an otherwise healthy resize.
-    func applyFrame(_ frame: NSRect, animated: Bool) {
+    func applyFrame(_ frame: NSRect, animated: Bool, completion: (() -> Void)? = nil) {
         switch frameTransition.request(frame, from: self.frame, animated: animated && !Motion.reduceMotion) {
         case .none:
+            // The same target is already in flight. Preserve the original
+            // completion unless this caller supplies a newer content handoff.
+            if let completion { frameCompletion = completion }
             return
         case let .setImmediately(target):
             frameAnimator?.cancel()
             frameAnimator = nil
+            let done = completion ?? frameCompletion
+            frameCompletion = nil
             setFrame(target, display: true)
+            frameTransition.complete(target)
+            done?()
         case let .animate(target):
+            if let completion { frameCompletion = completion }
             animateFrame(from: self.frame, to: target)
         case let .animateFrom(current, to: target):
+            if let completion { frameCompletion = completion }
             animateFrame(from: current, to: target)
         }
     }
@@ -128,11 +137,16 @@ final class NotchWindow: NSPanel {
         animator.start { [weak self, weak animator] in
             guard self?.frameAnimator === animator else { return }
             self?.frameAnimator = nil
+            self?.frameTransition.complete(to)
+            let done = self?.frameCompletion
+            self?.frameCompletion = nil
+            done?()
         }
     }
 
     private var frameTransition = SurfaceFrameTransition()
     private var frameAnimator: DisplayLinkedFrameAnimator?
+    private var frameCompletion: (() -> Void)?
 }
 
 /// Moves panel geometry one display sample at a time and returns immediately.

@@ -10,6 +10,7 @@ import type { ProviderId } from '../providers'
 import { createInterface, type Interface } from 'node:readline'
 import { EventEmitter } from 'node:events'
 import { createLogger } from '../log'
+import type { PillStateP } from './pill-controller'
 
 const log = createLogger('notch-client')
 
@@ -94,7 +95,7 @@ export interface TaskDraftP { text: string; attachments: DraftAttachmentP[] }
 /** One turn of a GUI-agent conversation — this backend's answer to the terminal. */
 /** One entry of a Codex thread; see codex/rollout.ts CodexTurn for the shapes. */
 export interface TurnP {
-  role: 'user' | 'assistant' | 'commentary' | 'tool'
+  role: 'user' | 'assistant' | 'commentary' | 'tool' | 'work'
   text: string
   title?: string
   code?: string
@@ -307,6 +308,8 @@ export interface ScratchpadPayloadP {
 // ── Commands (main → helper) ────────────────────────────────────────────────
 
 export type NotchCommand =
+  | { type: 'bootstrap'; appearance: 'system' | 'glass' | 'solid'; surfaceFill: number; showInScreenCapture: boolean; terminalAutoExpand: boolean; autoPresent: boolean }
+  | { type: 'present' }
   | { type: 'setState'; state: NotchStateName; attention: number; working: number }
   | { type: 'showTask'; task: TaskDetailP }
   | { type: 'stageDetail'; task: TaskDetailP }
@@ -316,6 +319,7 @@ export type NotchCommand =
   | { type: 'convData'; id: string; text: string }
   | { type: 'capturePhase'; phase: string; target?: string }
   | { type: 'pocket'; data: PocketP }
+  | { type: 'pill'; state: PillStateP }
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
@@ -405,38 +409,65 @@ export interface NotchClientOpts {
   /** Override for tests: run a fake helper via `node <script>`. */
   binArgs?: string[]
   onExit?: (code: number | null) => void
+  /** Complete preference snapshot applied before any replayed visual state. */
+  bootstrap?: () => Extract<NotchCommand, { type: 'bootstrap' }>
+  /** Unexpected exits restart after this delay. Omit to disable supervision. */
+  restartDelayMs?: number
 }
 
 /**
  * Emits: 'event' (NotchEvent), plus the raw event `type` as its own channel.
  */
 export class NotchClient extends EventEmitter {
-  private child: ChildProcessWithoutNullStreams
-  private rl: Interface
+  private child!: ChildProcessWithoutNullStreams
+  private rl!: Interface
   private dead = false
+  private generationReady = false
+  private disposed = false
+  private generation = 0
+  private replay = new Map<NotchCommand['type'], NotchCommand>()
+  private static readonly replayOrder: NotchCommand['type'][] = [
+    'showTask', 'setCockpit', 'stageDetail', 'pocket', 'scratchpad', 'pill', 'capturePhase', 'setState',
+  ]
 
   constructor(private opts: NotchClientOpts) {
     super()
-    this.child = spawn(opts.binPath, opts.binArgs ?? [], { stdio: ['pipe', 'pipe', 'pipe'] })
+    this.spawn()
+  }
+
+  private spawn(): void {
+    const generation = ++this.generation
+    this.dead = false
+    this.generationReady = false
+    this.child = spawn(this.opts.binPath, this.opts.binArgs ?? [], { stdio: ['pipe', 'pipe', 'pipe'] })
     this.rl = createInterface({ input: this.child.stdout })
-    this.rl.on('line', (line) => this.onLine(line))
+    this.rl.on('line', (line) => this.onLine(line, generation))
     this.child.stderr.on('data', (d: Buffer) =>
       log.warn('notch stderr', { text: d.toString().slice(0, 400) }))
     this.child.on('exit', (code) => {
+      if (generation != this.generation) return
       this.dead = true
       this.opts.onExit?.(code)
+      if (!this.disposed && this.opts.restartDelayMs != null) {
+        setTimeout(() => { if (!this.disposed && generation == this.generation) this.spawn() }, this.opts.restartDelayMs).unref?.()
+      }
     })
     this.child.on('error', (e) => {
+      if (generation != this.generation) return
       this.dead = true
       log.warn('notch spawn error', { error: e.message })
       this.opts.onExit?.(null)
+      if (!this.disposed && this.opts.restartDelayMs != null) {
+        setTimeout(() => { if (!this.disposed && generation == this.generation) this.spawn() }, this.opts.restartDelayMs).unref?.()
+      }
     })
     this.child.stdin.on('error', (e) => log.warn('notch stdin error', { error: e.message }))
   }
 
   get alive(): boolean { return !this.dead }
 
-  private onLine(line: string): void {
+  private onLine(line: string, generation: number): void {
+    if (generation != this.generation) return
     const trimmed = line.trim()
     if (!trimmed) return
     let evt: NotchEvent
@@ -447,13 +478,31 @@ export class NotchClient extends EventEmitter {
       return
     }
     if (!evt || typeof (evt as { type?: unknown }).type !== 'string') return
+    if (evt.type === 'ready') {
+      const bootstrap = this.opts.bootstrap?.()
+      if (bootstrap) this.write(bootstrap)
+      // Domain payloads must exist before the visual state that renders them.
+      // Map insertion order depends on runtime history, so use a fixed replay
+      // order on every helper generation.
+      for (const type of NotchClient.replayOrder) {
+        const command = this.replay.get(type)
+        if (command) this.write(command)
+      }
+      if (bootstrap) this.write({ type: 'present' })
+      this.generationReady = true
+    }
     this.emit('event', evt)
     this.emit(evt.type, evt)
   }
 
   /** Push a command to the helper. No-op once the child is gone. */
   send(cmd: NotchCommand): void {
-    if (this.dead) return
+    if (this.isReplayable(cmd)) this.replay.set(cmd.type, cmd)
+    if (this.disposed || this.dead || !this.generationReady) return
+    this.write(cmd)
+  }
+
+  private write(cmd: NotchCommand): void {
     try {
       this.child.stdin.write(JSON.stringify(cmd) + '\n')
     } catch (e) {
@@ -461,10 +510,18 @@ export class NotchClient extends EventEmitter {
     }
   }
 
+  private isReplayable(cmd: NotchCommand): boolean {
+    return cmd.type === 'setState' || cmd.type === 'showTask' || cmd.type === 'setCockpit'
+      || cmd.type === 'stageDetail'
+      || cmd.type === 'pocket' || cmd.type === 'pill' || cmd.type === 'scratchpad'
+      || cmd.type === 'capturePhase'
+  }
+
   /** Ask the helper to quit, then hard-kill after a grace period. */
   dispose(): void {
+    this.disposed = true
     if (this.dead) return
-    this.send({ type: 'quit' })
+    this.write({ type: 'quit' })
     const child = this.child
     setTimeout(() => { if (!this.dead) child.kill('SIGTERM') }, 500).unref?.()
   }

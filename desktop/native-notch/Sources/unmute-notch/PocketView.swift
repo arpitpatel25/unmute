@@ -49,11 +49,10 @@ struct PocketCard: View {
     /// True while the mic is actually hot — the route line then says
     /// "listening", because one is happening and the other is a promise.
     let listening: Bool
-    @State private var hovering = false
 
     private var pocket: PocketP { pocketOverride ?? model.pocket }
     private var slot: PocketSlotP? { pocket.current }
-    private var detailsVisible: Bool { hovering || listening }
+    private var detailsVisible: Bool { model.pocketDetailsVisible }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -107,11 +106,10 @@ struct PocketCard: View {
             }
         }
         .onHover { inside in
-            hovering = inside
             model.onPocketDetails(inside)
         }
         .onChange(of: listening) { active in
-            model.onPocketDetails(active || hovering)
+            if !active { model.onPocketDetails(false) }
         }
     }
 
@@ -120,15 +118,15 @@ struct PocketCard: View {
         if detailsVisible {
             // TWO LINES OF ROOM, ALWAYS — reserved whether or not they are used.
             // This keeps the rail in one learnable place while browsing cards.
-            Text(slot?.ask ?? "Waiting on you.")
+            Text(model.toast ?? slot?.ask ?? "Waiting on you.")
                 .font(.system(size: 12)).foregroundColor(Theme.textDim)
                 .lineLimit(2).truncationMode(.tail)
                 .frame(maxWidth: .infinity, minHeight: 31, maxHeight: 31, alignment: .topLeading)
         } else {
             HStack(spacing: 5) {
-                Text(statusText)
+                Text(model.toast ?? statusText)
                     .font(.system(size: 11.5, weight: .medium))
-                    .foregroundColor(Theme.textDim)
+                    .foregroundColor(model.toast == nil ? Theme.textDim : Theme.cError)
                 Spacer(minLength: 0)
             }
         }

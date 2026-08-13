@@ -25,6 +25,7 @@ rl.on('line', (line) => {
   try { msg = JSON.parse(trimmed) } catch { return }
   if (msg.type === '__emit') { emit(msg.event); return }
   if (msg.type === '__dump') { emit({ type: '__calls', commands: received }); return }
+  if (msg.type === '__crash') { process.exit(23) }
   if (msg.type === 'quit') { process.exit(0) }
   received.push(msg)
 })

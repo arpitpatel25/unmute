@@ -3,6 +3,16 @@ import XCTest
 @testable import SurfaceTransitionSupport
 
 final class SurfaceFrameTransitionTests: XCTestCase {
+    func testCompletedRequestDoesNotSuppressCorrectionAfterFrameDrifts() {
+        var transition = SurfaceFrameTransition()
+        let target = CGRect(x: 10, y: 20, width: 300, height: 120)
+        XCTAssertEqual(transition.request(target, from: .zero, animated: true), .animate(target))
+        transition.complete(target)
+
+        let drifted = CGRect(x: 10, y: 20, width: 300, height: 64)
+        XCTAssertEqual(transition.request(target, from: drifted, animated: false), .setImmediately(target))
+    }
+
     func testSameInFlightTargetDoesNotRestartTheTransition() {
         var transition = SurfaceFrameTransition()
         let current = CGRect(x: 0, y: 0, width: 100, height: 30)

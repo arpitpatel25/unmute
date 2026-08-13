@@ -13,7 +13,7 @@ import { describeActivity, type Activity } from '../activity'
 import type {
   NotchCommand, NotchEvent, NotchStateName, TaskStatusName,
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
-  ScratchpadPayloadP, PocketP, PocketSlotP, PocketMode,
+  ScratchpadPayloadP, PocketP, PocketSlotP, PocketMode, TurnP,
 } from './notch-client'
 import type { TaskDraft } from '../task-draft'
 import { providerOf, type ProviderId } from '../providers'

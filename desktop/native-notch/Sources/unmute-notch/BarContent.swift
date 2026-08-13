@@ -116,6 +116,11 @@ struct BarContent: Equatable {
     /// resolves the content for the state it is about to move TO, and the model
     /// still holds the one it is leaving.
     static func make(for m: NotchModel, state: NotchState, hovering: Bool) -> BarContent {
+        // Feedback must remain visible at the surface where the action began.
+        // Previously collapsed errors were logged and otherwise disappeared.
+        if let toast = m.toast, !toast.isEmpty, !isExpandedState(state) {
+            return BarContent(dot: .failed, left: "Couldn't complete", right: toast, alarm: .failed)
+        }
         // ROUTING OUTRANKS EVERY RESTING STATE.
         //
         // Between the recording pill vanishing and the task appearing, the

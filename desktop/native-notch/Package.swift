@@ -32,6 +32,15 @@ let package = Package(
             name: "SurfaceTransitionSupport",
             path: "Sources/SurfaceTransitionSupport"
         ),
+        .target(
+            name: "SurfaceStateSupport",
+            path: "Sources/SurfaceStateSupport"
+        ),
+        .testTarget(
+            name: "SurfaceStateSupportTests",
+            dependencies: ["SurfaceStateSupport"],
+            path: "Tests/SurfaceStateSupportTests"
+        ),
         .testTarget(
             name: "SurfaceTransitionSupportTests",
             dependencies: ["SurfaceTransitionSupport"],
@@ -86,7 +95,8 @@ let package = Package(
                 "HoverStateSupport",
                 "ComposerSupport",
                 "SurfaceSizeSupport",
-                "SurfaceTransitionSupport"
+                "SurfaceTransitionSupport",
+                "SurfaceStateSupport"
             ],
             path: "Sources/unmute-notch"
         )

@@ -3062,6 +3062,15 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       notchClient = new NotchClient({
         binPath: notchBin,
         onExit: (code) => log.warn('notch helper exited', { code }),
+        restartDelayMs: 500,
+        bootstrap: () => ({
+          type: 'bootstrap',
+          appearance: settings.get('surfaceAppearance') || 'solid',
+          surfaceFill: settings.get('surfaceFill') ?? 0.8,
+          showInScreenCapture: screenCaptureVisibility(settings.get('showInScreenCapture')).show,
+          terminalAutoExpand: settings.get('notchTerminalAutoExpand') === true,
+          autoPresent: settings.get('overlayAutoPresent') !== false,
+        }),
       })
       // Auto-expand is controller state, not a helper command — the decision to
       // open the task surface is made here, before anything is sent.
@@ -3427,17 +3436,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           void pushPillChips()   // see pickModel — the label must follow the setting
         },
       })
-
-      // Push the stored preference immediately: the helper starts on 'system',
-      // so without this a user who chose Solid would see one glassy frame on
-      // every launch.
-      notchClient.send({ type: 'appearance', value: settings.get('surfaceAppearance') || 'solid' } as never)
-      // Same reason: the helper compiles its own defaults (0.8 fill, auto-present
-      // on), so a user who chose otherwise would get one wrong frame per launch.
-      notchClient.send({ type: 'surfaceFill', fill: settings.get('surfaceFill') ?? 0.8 })
-      notchClient.send(screenCaptureVisibility(settings.get('showInScreenCapture')).command)
-      notchClient.send({ type: 'terminalAutoExpand', on: settings.get('notchTerminalAutoExpand') === true })
-      notchClient.send({ type: 'autoPresent', on: settings.get('overlayAutoPresent') !== false } as never)
 
       log.info('notch shell started', { bin: notchBin })
     } catch (e) {

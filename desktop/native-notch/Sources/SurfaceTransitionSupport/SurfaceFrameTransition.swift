@@ -11,6 +11,13 @@ public struct SurfaceFrameTransition: Equatable {
 
     public init() {}
 
+    /// Marks the matching request as settled. Duplicate suppression is useful
+    /// only while geometry is travelling; keeping the target forever prevents
+    /// the controller from correcting later WindowServer drift.
+    public mutating func complete(_ frame: CGRect) {
+        if requestedFrame == frame { requestedFrame = nil }
+    }
+
     public mutating func request(
         _ target: CGRect,
         from current: CGRect,

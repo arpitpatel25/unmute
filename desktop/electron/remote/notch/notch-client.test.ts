@@ -10,6 +10,18 @@ function makeClient(): NotchClient {
   return new NotchClient({ binPath: process.execPath, binArgs: [FAKE] })
 }
 
+function makeSupervisedClient(): NotchClient {
+  return new NotchClient({
+    binPath: process.execPath,
+    binArgs: [FAKE],
+    bootstrap: () => ({
+      type: 'bootstrap', appearance: 'solid', surfaceFill: 0.8,
+      showInScreenCapture: false, terminalAutoExpand: false, autoPresent: true,
+    }),
+    restartDelayMs: 10,
+  })
+}
+
 /** Resolve on the first event of `type`, or reject after `ms`. */
 function waitFor(client: NotchClient, type: NotchEvent['type'], ms = 2000): Promise<NotchEvent> {
   return new Promise((resolve, reject) => {
@@ -44,6 +56,19 @@ test('send() delivers commands to the helper in order', async () => {
   client.dispose()
 })
 
+test('commands sent before ready are restored only after helper bootstrap', async () => {
+  const client = makeSupervisedClient()
+  client.send({ type: 'setState', state: 'active', attention: 0, working: 1 })
+  await waitFor(client, 'ready')
+  const dump = waitFor(client, '__calls' as NotchEvent['type'])
+  client.send({ type: '__dump' } as unknown as NotchCommand)
+  const commands = ((await dump) as unknown as { commands: NotchCommand[] }).commands
+  assert.equal(commands[0]?.type, 'bootstrap')
+  assert.deepEqual(commands[1], { type: 'setState', state: 'active', attention: 0, working: 1 })
+  assert.equal(commands[2]?.type, 'present')
+  client.dispose()
+})
+
 test('surfaces helper→main events (tap, next, chooseOption)', async () => {
   const client = makeClient()
   await waitFor(client, 'ready')
@@ -68,4 +93,56 @@ test('send() is a no-op after dispose (no throw)', async () => {
   // Give the child a tick to exit; send must not throw.
   await new Promise((r) => setTimeout(r, 50))
   assert.doesNotThrow(() => client.send({ type: 'collapse' }))
+  assert.doesNotThrow(() => client.send({ type: 'setState', state: 'active', attention: 0, working: 1 }))
+})
+
+test('bootstraps before replaying state after an unexpected helper exit', async () => {
+  const client = makeSupervisedClient()
+  await waitFor(client, 'ready')
+  client.send({ type: 'setState', state: 'attention', attention: 2, working: 1 })
+  client.send({ type: 'showTask', task: { id: 't1', title: 'RCA', status: 'needs-user', kind: 'oneoff', alive: true } })
+
+  const restarted = waitFor(client, 'ready')
+  client.send({ type: '__crash' } as unknown as NotchCommand)
+  await restarted
+
+  const dump = waitFor(client, '__calls' as NotchEvent['type'])
+  client.send({ type: '__dump' } as unknown as NotchCommand)
+  const commands = ((await dump) as unknown as { commands: NotchCommand[] }).commands
+  assert.equal(commands[0]?.type, 'bootstrap')
+  assert.equal(commands[1]?.type, 'showTask')
+  assert.deepEqual(commands[2], { type: 'setState', state: 'attention', attention: 2, working: 1 })
+  assert.equal(commands[3]?.type, 'present')
+  client.dispose()
+})
+
+test('dispose does not restart the helper', async () => {
+  let exits = 0
+  const client = new NotchClient({
+    binPath: process.execPath, binArgs: [FAKE], restartDelayMs: 10,
+    onExit: () => { exits += 1 },
+  })
+  await waitFor(client, 'ready')
+  client.dispose()
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(exits, 1)
+  assert.equal(client.alive, false)
+})
+
+test('dispose during a pending restart cancels the restart', async () => {
+  let readyCount = 0
+  let exited!: () => void
+  const exit = new Promise<void>((resolve) => { exited = resolve })
+  const client = new NotchClient({
+    binPath: process.execPath, binArgs: [FAKE], restartDelayMs: 80,
+    onExit: () => exited(),
+  })
+  client.on('ready', () => { readyCount += 1 })
+  await waitFor(client, 'ready')
+  client.send({ type: '__crash' } as unknown as NotchCommand)
+  await exit
+  client.dispose()
+  await new Promise((resolve) => setTimeout(resolve, 130))
+  assert.equal(readyCount, 1)
+  assert.equal(client.alive, false)
 })
