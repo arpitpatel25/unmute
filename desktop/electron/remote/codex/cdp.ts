@@ -559,6 +559,72 @@ export async function expandSidebarSections(cdp: CodexCdp, sleep: (ms: number) =
   return opened
 }
 
+/** Put the virtualized sidebar at its first page before a bounded search. */
+export async function resetSidebarScroll(cdp: CodexCdp): Promise<void> {
+  await cdp.evaluate(`(() => {
+    const el = document.querySelector('[data-app-action-sidebar-scroll]');
+    if (!el) return false;
+    el.scrollTop = 0;
+    el.dispatchEvent(new Event('scroll', { bubbles: true }));
+    return true;
+  })()`)
+}
+
+/** Expand one collapsed top-level section or project currently rendered. */
+export async function expandNextSidebarGroup(cdp: CodexCdp): Promise<boolean> {
+  const box = await cdp.evaluate<string>(`(() => {
+    const section = [...document.querySelectorAll('[data-app-action-sidebar-section]')]
+      .find(e => e.getAttribute('data-app-action-sidebar-section-collapsed') === 'true');
+    const project = [...document.querySelectorAll('[data-app-action-sidebar-project-row]')]
+      .find(e => e.getAttribute('data-app-action-sidebar-project-collapsed') === 'true');
+    const el = section
+      ? (section.querySelector('[data-app-action-sidebar-section-toggle]') || section)
+      : project;
+    if (!el) return '';
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return '';
+    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+  })()`)
+  if (!box) return false
+  const { x, y } = JSON.parse(box) as { x: number; y: number }
+  await cdp.click(x, y)
+  return true
+}
+
+/** Reveal the next truncated group through Codex's own Show more control. */
+export async function clickNextSidebarShowMore(cdp: CodexCdp): Promise<boolean> {
+  const box = await cdp.evaluate<string>(`(() => {
+    const scope = document.querySelector('[data-app-action-sidebar-scroll]') || document;
+    const el = [...scope.querySelectorAll('button,[role=button]')]
+      .find(e => (e.textContent || '').trim() === 'Show more');
+    if (!el) return '';
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return '';
+    return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+  })()`)
+  if (!box) return false
+  const { x, y } = JSON.parse(box) as { x: number; y: number }
+  await cdp.click(x, y)
+  return true
+}
+
+/** Advance one viewport in the sidebar. False means the end was reached. */
+export async function advanceSidebarScroll(cdp: CodexCdp): Promise<boolean> {
+  return (await cdp.evaluate<boolean>(`(() => {
+    const el = document.querySelector('[data-app-action-sidebar-scroll]');
+    if (!el) return false;
+    const before = el.scrollTop;
+    const end = Math.max(0, el.scrollHeight - el.clientHeight);
+    const next = Math.min(end, before + Math.max(160, el.clientHeight * 0.8));
+    if (next <= before + 1) return false;
+    el.scrollTop = next;
+    el.dispatchEvent(new Event('scroll', { bubbles: true }));
+    return true;
+  })()`)) ?? false
+}
+
 // ─── Model / effort / speed (the composer's reasoning control) ──────────
 //
 // Codex puts these behind one control that reads "5.6 Terra High". Its menu has

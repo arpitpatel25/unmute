@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, expandSidebarSections, readReasoning, readReasoningLabel, setReasoning, readPendingConsent, answerConsent, readThreadChips, type CodexConsent, type CodexThreadChip, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, resetSidebarScroll, expandNextSidebarGroup, clickNextSidebarShowMore, advanceSidebarScroll, readReasoning, readReasoningLabel, setReasoning, readPendingConsent, answerConsent, readThreadChips, type CodexConsent, type CodexThreadChip, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, watchThread, type CodexSnapshot } from './rollout'
 
@@ -72,9 +72,40 @@ export interface CodexDriverDeps {
   sessionsDir?: string
   now?: () => number
   sleep?: (ms: number) => Promise<void>
+  /** Explicit user-facing navigation only; background sends never call it. */
+  openDeepLink?: (url: string) => Promise<void>
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+export interface SidebarSearchPort {
+  resetScroll(): Promise<void>
+  clickTarget(): Promise<boolean>
+  expandOne(): Promise<boolean>
+  clickShowMore(): Promise<boolean>
+  advanceScroll(): Promise<boolean>
+}
+
+/** Search Codex's virtualized sidebar without activating its native window. */
+export async function searchSidebarThread(
+  port: SidebarSearchPort,
+  sleep: (ms: number) => Promise<void>,
+  maxSteps = 80,
+): Promise<boolean> {
+  await port.resetScroll()
+  for (let step = 0; step < maxSteps; step++) {
+    if (await port.clickTarget()) return true
+    if (await port.expandOne()) { await sleep(160); continue }
+    if (await port.clickShowMore()) { await sleep(160); continue }
+    if (await port.advanceScroll()) { await sleep(100); continue }
+    return false
+  }
+  return false
+}
+
+export function threadNavigationFallback(background: boolean): 'fail' | 'deeplink' {
+  return background ? 'fail' : 'deeplink'
+}
 
 /**
  * Relaunch Codex with the debug port WITHOUT stealing focus.
@@ -101,12 +132,16 @@ export class CodexDesktopDriver {
   private readonly appPath: string
   private readonly sessionsDir: string | undefined
   private readonly sleep: (ms: number) => Promise<void>
+  private readonly openDeepLink: (url: string) => Promise<void>
 
   constructor(private readonly deps: CodexDriverDeps = {}) {
     this.port = deps.port ?? CODEX_CDP_PORT
     this.appPath = deps.appPath ?? CODEX_APP_PATH
     this.sessionsDir = deps.sessionsDir
     this.sleep = deps.sleep ?? defaultSleep
+    this.openDeepLink = deps.openDeepLink ?? ((url) => new Promise<void>((resolve, reject) => {
+      execFile('open', [url], (err) => (err ? reject(err) : resolve()))
+    }))
   }
 
   /** Is the Codex desktop app installed at all? Drives the picker's enabled state. */
@@ -601,12 +636,11 @@ export class CodexDesktopDriver {
     // would yank the user out of whatever they were doing, which is the one
     // thing this whole lane exists to avoid.
     //
-    // So the deep link is the LAST rung, not the first. The ladder:
+    // So the deep link is reserved for an EXPLICIT user-facing open. The
+    // background send ladder never activates another app:
     //   0. already there            — nothing to do (the common repeat-send case)
-    //   1. click the sidebar row    — CDP input never steals focus
-    //   2. expand collapsed sections and retry — still focus-free (8 rows → 16)
-    //   3. deep link                — always correct, and for a background
-    //      switch we put the user's app back in front afterwards
+    //   1. bounded sidebar search   — expand, paginate, scroll, click via CDP
+    //   2. fail safely              — preserve the draft; never steal focus
     const cdp = existing ?? (await this.connect())
     if (!cdp) return false
 
@@ -623,29 +657,28 @@ export class CodexDesktopDriver {
     }
 
     if (await isThere()) { log.event('codex-thread-already-open', { threadId: bare }); return true }
-    if (await clickThreadRow(cdp, threadId) && await settle('sidebar-row')) return true
-    if (await expandSidebarSections(cdp, (ms) => this.sleep(ms))) {
-      if (await clickThreadRow(cdp, threadId) && await settle('sidebar-row-expanded')) return true
+    if (threadNavigationFallback(!!opts.background) === 'deeplink') {
+      try {
+        await this.openDeepLink(`codex://threads/${bare}`)
+      } catch (e) {
+        log.warn('codex-deeplink-failed', { threadId: bare, error: (e as Error).message })
+        return false
+      }
+      const landed = await settle('deeplink')
+      if (!landed) log.warn('codex-thread-open-unconfirmed', { threadId: bare })
+      return landed
     }
 
-    const restore = opts.background ? await frontmostApp() : null
-    try {
-      await new Promise<void>((resolve, reject) => {
-        execFile('open', ['-g', `codex://threads/${bare}`], (err) => (err ? reject(err) : resolve()))
-      })
-    } catch (e) {
-      log.warn('codex-deeplink-failed', { threadId: bare, error: (e as Error).message })
-      return false
-    }
-    const landed = await settle('deeplink')
-    if (restore) {
-      // Hand focus straight back. Not cosmetic: without it every voice
-      // follow-up to an off-screen thread steals the user's window.
-      await activateApp(restore)
-      log.event('codex-focus-restored', { app: restore })
-    }
-    if (!landed) log.warn('codex-thread-open-unconfirmed', { threadId: bare })
-    return landed
+    const found = await searchSidebarThread({
+      resetScroll: () => resetSidebarScroll(cdp),
+      clickTarget: () => clickThreadRow(cdp, threadId),
+      expandOne: () => expandNextSidebarGroup(cdp),
+      clickShowMore: () => clickNextSidebarShowMore(cdp),
+      advanceScroll: () => advanceSidebarScroll(cdp),
+    }, (ms) => this.sleep(ms))
+    if (found && await settle('sidebar-search')) return true
+    log.warn('codex-thread-background-unreachable', { threadId: bare })
+    return false
   }
 
   /** Read a thread's state + recent turns from disk. Never touches the renderer. */
@@ -728,18 +761,3 @@ export async function resolveCodexCli(which: (bin: string) => Promise<string | n
 }
 
 export const codexHome = () => join(homedir(), '.codex')
-
-
-/** The app the user is actually looking at, so we can hand focus back. */
-async function frontmostApp(): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile('osascript', ['-e', 'tell application "System Events" to get name of first application process whose frontmost is true'],
-      (err, stdout) => resolve(err ? null : stdout.trim() || null))
-  })
-}
-
-async function activateApp(name: string): Promise<void> {
-  return new Promise((resolve) => {
-    execFile('osascript', ['-e', `tell application "${name.replace(/"/g, '')}" to activate`], () => resolve())
-  })
-}
