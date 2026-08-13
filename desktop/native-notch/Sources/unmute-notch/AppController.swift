@@ -34,6 +34,9 @@ final class AppController: NSObject, NotchResizing {
     private var hoverTimer: Timer?
     private var hoverExitTimer: Timer?
     private var pocketHoverTimer: Timer?
+    private var pocketContentTimer: Timer?
+    private var departureTransition = SurfaceDepartureTransition()
+    private var departureReturnTimer: Timer?
     private var expandedContentGeneration: UInt64 = 0
     private var toastTimer: Timer?
     /// Sole authority for visit-scoped interaction. Domain data remains in the
@@ -189,7 +192,17 @@ final class AppController: NSObject, NotchResizing {
             model.attention = attention
             model.working = working
             commandedState = state
-            applyState(state)
+            switch departureTransition.receive(isExpanded: isExpanded(state)) {
+            case .applyNormally:
+                applyState(state)
+            case .applyHidden:
+                applyState(state, animated: false)
+            case .applyImmediatelyAndShow:
+                departureReturnTimer?.invalidate()
+                applyState(state, animated: false)
+                window.present()
+                NotchLog.log("automatic departure settled compact — showing without destination-space collapse")
+            }
 
         case let .showTask(task):
             NotchLog.log("CMD showTask id=\(task.id) status=\(task.status.rawValue)")
@@ -311,11 +324,19 @@ final class AppController: NSObject, NotchResizing {
             // and a card announcing a second would be two answers to one question.
             let wasOpen = model.pocket.isOpen
             model.pocket = p
-            interaction.reduce(.pocketAvailability(open: p.isOpen, itemCount: p.slots.count))
-            projectInteraction()
+            let pocketIsVisible = !isExpanded(model.state) || model.state == .attention
+            if pocketIsVisible {
+                reducePocketInteraction(.pocketAvailability(open: p.isOpen, itemCount: p.slots.count))
+            } else {
+                interaction.reduce(.pocketAvailability(open: p.isOpen, itemCount: p.slots.count))
+                projectInteraction()
+            }
             NotchLog.log("CMD pocket mode=\(p.mode) at=\(p.at) slots=\(p.slots.count)")
-            if !isExpanded(model.state) || model.state == .attention {
-                if wasOpen != p.isOpen { refit(animated: true) } else { refreshBar() }
+            if pocketIsVisible {
+                // reducePocketInteraction already owns every open/close frame
+                // transition. Data-only updates need only redraw the current
+                // card; sending a second frame request would retarget the morph.
+                if wasOpen == p.isOpen { refreshBar() }
             }
 
         case let .toast(text):
@@ -376,14 +397,10 @@ final class AppController: NSObject, NotchResizing {
             model.captureAimed = state.phase == .recording
                 && state.kind == .remote
                 && model.capturePhase == "listening"
-            let priorPresentation = interaction.presentation
-            interaction.reduce(.captureAimed(model.captureAimed))
-            projectInteraction()
-            // `pill` arrives for every microphone-level sample. Geometry only
-            // changes when capture aim changes, not 60 times per second.
-            if model.pocket.isOpen, priorPresentation != interaction.presentation {
-                refit(animated: true)
-            }
+            // `pill` arrives for every microphone-level sample. The reducer is
+            // idempotent, so geometry changes only when capture aim changes,
+            // not 60 times per second.
+            reducePocketInteraction(.captureAimed(model.captureAimed))
             reconcileSurfaces()
 
         case let .scratchpad(payload):
@@ -408,7 +425,7 @@ final class AppController: NSObject, NotchResizing {
 
     // MARK: - State / frames
 
-    private func applyState(_ commanded: NotchState) {
+    private func applyState(_ commanded: NotchState, animated: Bool = true) {
         // AUTO-PRESENT decides whether an expanded rung is honoured at all.
         var state = presentableState(commanded)
         syncGeometry("state")
@@ -495,7 +512,7 @@ final class AppController: NSObject, NotchResizing {
         // NotchWindow suppresses repeated in-flight frame targets, so follow-up
         // content messages cannot restart this physical transition.
         let r = resolve(state)
-        withAnimation(Motion.resize) {
+        withAnimation(animated && !Motion.reduceMotion ? Motion.resize : nil) {
             model.state = state
             model.bar = r.placement
             model.content = r.content
@@ -534,7 +551,7 @@ final class AppController: NSObject, NotchResizing {
                 }
             }
             : nil
-        window.applyFrame(r.frame, animated: true, completion: revealExpandedContent)
+        window.applyFrame(r.frame, animated: animated, completion: revealExpandedContent)
         NotchLog.log("state -> \(state.rawValue)\(state == commanded ? "" : " (commanded \(commanded.rawValue))") window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] fillet=\(Int(r.placement.fillet))")
     }
 
@@ -632,13 +649,13 @@ final class AppController: NSObject, NotchResizing {
     /// a task detail arriving, the pointer entering or leaving, a display being
     /// plugged in. The width follows the message, so this is a size change like
     /// any other and it travels through the same native frame coordinator.
-    private func refreshBar(animated: Bool = true) {
+    private func refreshBar(animated: Bool = true, completion: (() -> Void)? = nil) {
         let r = resolve(model.state)
         withAnimation(animated && !Motion.reduceMotion ? Motion.resize : nil) {
             model.bar = r.placement
             model.content = r.content
         }
-        window.applyFrame(r.frame, animated: animated)
+        window.applyFrame(r.frame, animated: animated, completion: completion)
         NotchLog.log("bar \(model.state.rawValue) window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] left=\(r.content.left ?? "—") right=\(r.content.right ?? "—")")
     }
 
@@ -648,11 +665,7 @@ final class AppController: NSObject, NotchResizing {
     private func setPocketDetails(_ hovering: Bool) {
         pocketHoverTimer?.invalidate()
         if hovering {
-            let before = interaction.presentation
-            interaction.reduce(.pointerEntered(.pocket))
-            projectInteraction()
-            guard model.pocket.isOpen, before != interaction.presentation else { return }
-            refit(animated: true)
+            reducePocketInteraction(.pointerEntered(.pocket))
             return
         }
         // SwiftUI rebuilds its tracking region while the panel animates. That
@@ -661,13 +674,50 @@ final class AppController: NSObject, NotchResizing {
         // confirm against the physical window frame before accepting the exit.
         pocketHoverTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { [weak self] _ in
             guard let self, self.model.pocket.isOpen, !self.model.captureAimed else { return }
-            if self.stableHitFrame(for: .pocket).contains(NSEvent.mouseLocation) { return }
-            let before = self.interaction.presentation
-            self.interaction.reduce(.pointerExited(.pocket))
-            self.projectInteraction()
-            guard before != self.interaction.presentation else { return }
-            self.refit(animated: true)
+            if self.pocketTargetFrame().contains(NSEvent.mouseLocation) { return }
+            self.reducePocketInteraction(.pointerExited(.pocket))
         }
+    }
+
+    /// One ordered pocket morph. Geometry grows first and details appear only
+    /// after it settles; on exit details leave first and geometry follows.
+    /// Pointer intent may change in flight, but the current leg never reverses.
+    private func reducePocketInteraction(_ action: SurfaceInteractionAction) {
+        let before = interaction.presentation
+        interaction.reduce(action)
+        let after = interaction.presentation
+        guard before != after else { return }
+
+        if before.pocketDetailsVisible != after.pocketDetailsVisible {
+            withAnimation(after.pocketDetailsVisible ? Theme.contentIn : Theme.contentOut) {
+                projectInteraction()
+            }
+        } else {
+            projectInteraction()
+        }
+
+        if before.pocketHeight != after.pocketHeight {
+            let growing = (after.pocketHeight ?? 0) > (before.pocketHeight ?? 0)
+            refit(animated: true, completion: growing ? { [weak self] in
+                self?.settlePocketGeometry()
+            } : nil)
+        } else if before.pocketDetailsVisible && !after.pocketDetailsVisible {
+            pocketContentTimer?.invalidate()
+            pocketContentTimer = Timer.scheduledTimer(
+                withTimeInterval: Theme.contentOutDuration,
+                repeats: false
+            ) { [weak self] _ in
+                self?.finishPocketContentExit()
+            }
+        }
+    }
+
+    private func settlePocketGeometry() {
+        reducePocketInteraction(.pocketGeometrySettled)
+    }
+
+    private func finishPocketContentExit() {
+        reducePocketInteraction(.pocketContentHidden)
     }
 
     private func projectInteraction() {
@@ -707,6 +757,17 @@ final class AppController: NSObject, NotchResizing {
             if mass.right == 0 { content.right = nil }
             return geometry.barFrame(mass)
         }
+    }
+
+    /// The frame this pocket leg is travelling toward, not the transient
+    /// WindowServer frame and not always the 64pt compact frame. Tracking-area
+    /// rebuilds during growth must not manufacture an exit from this target.
+    private func pocketTargetFrame() -> CGRect {
+        let clearance = geometry.hasNotch ? max(0, topInset - Theme.panelPadding) : 0
+        return geometry.topPinnedFrame(
+            width: 348,
+            height: CGFloat(interaction.presentation.pocketHeight ?? 64) + clearance
+        )
     }
 
     // MARK: - Auto-present (default ON)
@@ -822,8 +883,8 @@ final class AppController: NSObject, NotchResizing {
     /// Re-apply the current state's frame after something the frame depends on
     /// changed (the fronted task's backend, a stage detail arriving, a message
     /// the bar now has to carry).
-    private func refit(animated: Bool = false) {
-        refreshBar(animated: animated)
+    private func refit(animated: Bool = false, completion: (() -> Void)? = nil) {
+        refreshBar(animated: animated, completion: completion)
         // Logged like a state change, because to the user it IS one: the surface
         // visibly resizes without the rung changing.
         NotchLog.log("refit \(model.state.rawValue) window=\(NotchLog.rect(window.frame))")
@@ -1173,10 +1234,20 @@ final class AppController: NSObject, NotchResizing {
             if mine {
                 // Straight back = you did not mean to leave. Main owns the grace
                 // window; we only report the return.
+                if self.departureTransition.cancel() == .keepHidden {
+                    NotchLog.log("automatic departure returning — hidden pending restored expanded state")
+                    self.scheduleDepartureReturnFallback()
+                } else if self.departureTransition.returnToExpanded(
+                    isExpanded: self.isExpanded(self.model.state)
+                ) == .hideUntilExpanded {
+                    self.window.orderOut(nil)
+                    NotchLog.log("automatic departure returning from compact — hidden pending restored expanded state")
+                    self.scheduleDepartureReturnFallback()
+                }
                 self.model.emit(.userReturned)
             } else if self.isExpanded(self.model.state) {
                 NotchLog.log("user left for \(app?.bundleIdentifier ?? "?") — collapsing")
-                self.model.emit(.userLeft(reason: "blur"))
+                self.beginAutomaticDeparture(reason: "blur")
             }
         }
 
@@ -1193,7 +1264,27 @@ final class AppController: NSObject, NotchResizing {
         ) { [weak self] _ in
             guard let self, self.isExpanded(self.model.state) else { return }
             NotchLog.log("space changed — collapsing")
-            self.model.emit(.userLeft(reason: "space"))
+            self.beginAutomaticDeparture(reason: "space")
+        }
+    }
+
+    private func beginAutomaticDeparture(reason: String) {
+        departureReturnTimer?.invalidate()
+        guard departureTransition.begin(isExpanded: isExpanded(model.state)) == .hide else { return }
+        // The notification is delivered on the destination Space. Hide before
+        // the IPC round-trip so no frame of the large surface can shrink there.
+        window.orderOut(nil)
+        NotchLog.log("automatic departure \(reason) — hidden pending compact state")
+        model.emit(.userLeft(reason: reason))
+    }
+
+    private func scheduleDepartureReturnFallback() {
+        departureReturnTimer?.invalidate()
+        departureReturnTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
+            guard let self,
+                  self.departureTransition.abandonReturn() == .showCompact else { return }
+            self.window.present()
+            NotchLog.log("automatic departure return not restored — showing compact fallback")
         }
     }
 

@@ -3,6 +3,53 @@ import XCTest
 @testable import SurfaceTransitionSupport
 
 final class SurfaceFrameTransitionTests: XCTestCase {
+    func testAutomaticDepartureStaysHiddenUntilACompactStateArrives() {
+        var departure = SurfaceDepartureTransition()
+
+        XCTAssertEqual(departure.begin(isExpanded: true), .hide)
+        XCTAssertEqual(departure.receive(isExpanded: true), .applyHidden)
+        XCTAssertEqual(departure.receive(isExpanded: false), .applyImmediatelyAndShow)
+        XCTAssertEqual(departure.receive(isExpanded: false), .applyNormally)
+    }
+
+    func testAutomaticDepartureDoesNothingOutsideALargeSurface() {
+        var departure = SurfaceDepartureTransition()
+
+        XCTAssertEqual(departure.begin(isExpanded: false), .none)
+        XCTAssertEqual(departure.receive(isExpanded: false), .applyNormally)
+    }
+
+    func testReturningBeforeTheCompactReplyRestoresTheLargeSurface() {
+        var departure = SurfaceDepartureTransition()
+        XCTAssertEqual(departure.begin(isExpanded: true), .hide)
+
+        XCTAssertEqual(departure.cancel(), .keepHidden)
+        XCTAssertEqual(departure.receive(isExpanded: false), .applyHidden,
+                       "the already queued compact reply must not flash on return")
+        XCTAssertEqual(departure.receive(isExpanded: true), .applyImmediatelyAndShow)
+        XCTAssertEqual(departure.receive(isExpanded: true), .applyNormally)
+    }
+
+    func testReturningAfterCompactSettledHidesUntilLargeSurfaceIsRestored() {
+        var departure = SurfaceDepartureTransition()
+        XCTAssertEqual(departure.begin(isExpanded: true), .hide)
+        XCTAssertEqual(departure.receive(isExpanded: false), .applyImmediatelyAndShow)
+
+        XCTAssertEqual(departure.returnToExpanded(isExpanded: false), .hideUntilExpanded)
+        XCTAssertEqual(departure.receive(isExpanded: false), .applyHidden)
+        XCTAssertEqual(departure.receive(isExpanded: true), .applyImmediatelyAndShow)
+    }
+
+    func testUnfulfilledReturnFallsBackToTheCompactSurface() {
+        var departure = SurfaceDepartureTransition()
+        XCTAssertEqual(departure.begin(isExpanded: true), .hide)
+        XCTAssertEqual(departure.receive(isExpanded: false), .applyImmediatelyAndShow)
+        XCTAssertEqual(departure.returnToExpanded(isExpanded: false), .hideUntilExpanded)
+
+        XCTAssertEqual(departure.abandonReturn(), .showCompact)
+        XCTAssertEqual(departure.receive(isExpanded: false), .applyNormally)
+    }
+
     func testCompletedRequestDoesNotSuppressCorrectionAfterFrameDrifts() {
         var transition = SurfaceFrameTransition()
         let target = CGRect(x: 10, y: 20, width: 300, height: 120)
