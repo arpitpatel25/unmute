@@ -130,6 +130,9 @@ struct PillCoaching: Codable, Equatable {
 struct PillState: Codable, Equatable {
     var phase: PillPhase = .hidden
     var kind: PillKind = .dictation
+    /// The task this Remote capture was addressed to at key-down. Nil means a
+    /// new task may be created, so chips describe the global default instead.
+    var taskId: String? = nil
     /// 0…1 amplitude for the waveform. One float per frame is the ONLY new
     /// traffic on the capture path.
     var level: Double = 0
@@ -203,6 +206,7 @@ struct PillState: Codable, Equatable {
         }
         phase        = (try? c.decodeIfPresent(PillPhase.self, forKey: .phase)) as? PillPhase ?? .hidden
         kind         = (try? c.decodeIfPresent(PillKind.self, forKey: .kind)) as? PillKind ?? .dictation
+        taskId       = try? c.decodeIfPresent(String.self, forKey: .taskId)
         level        = v(.level, 0)
         elapsed      = v(.elapsed, 0)
         maxSeconds   = v(.maxSeconds, 300)

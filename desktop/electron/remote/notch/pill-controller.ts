@@ -51,6 +51,9 @@ export interface PillCoachingP {
 export interface PillStateP {
   phase?: PillPhase
   kind?: PillKind
+  /** Immutable address captured at Right Option key-down. When present, model
+   * picks modify this task rather than the default for future tasks. */
+  taskId?: string | null
   level?: number
   elapsed?: number
   maxSeconds?: number
@@ -99,13 +102,13 @@ export interface PillControllerDeps {
   /** Insert the offered draft. */
   acceptDraft(): void
   /** Switch the doer model for the NEXT task. */
-  pickModel(id: string): void
+  pickModel(id: string, taskId?: string): void
   /** Switch the backend the next task runs on. */
   pickAgent(id: string): void
   /** Tap the agent half — there are only ever two, so it cycles. */
   cycleAgent(): void | Promise<void>
   /** Codex only: set one reasoning axis (Model / Effort / Speed). */
-  pickAxis(axis: string, value: string): void
+  pickAxis(axis: string, value: string, taskId?: string): void
   /** Switch capture source. */
   pickMic(id: string): void
   /** Session-scoped raw override. */
@@ -178,7 +181,7 @@ export class PillController {
       case 'pillCancel':      this.deps.cancel(); break
       case 'pillUndo':        this.deps.undo(); break
       case 'pillAcceptDraft': this.deps.acceptDraft(); break
-      case 'pillPickModel':   if (value) this.deps.pickModel(value); break
+      case 'pillPickModel':   if (value) this.deps.pickModel(value, this.last.taskId ?? undefined); break
       // NO VALUE MEANS CYCLE. The chip is a tap-to-cycle control and sends a
       // bare event; the list sends the id you chose. This handled only the
       // second, so every tap on the chip was swallowed — no selection, no
@@ -196,7 +199,7 @@ export class PillController {
       case 'pillCycleAgent':  void this.deps.cycleAgent(); break
       case 'pillPickAxis': {
         const axis = typeof e.axis === 'string' ? e.axis : ''
-        if (axis && value) this.deps.pickAxis(axis, value)
+        if (axis && value) this.deps.pickAxis(axis, value, this.last.taskId ?? undefined)
         break
       }
       case 'pillPickMic':     if (value) this.deps.pickMic(value); break

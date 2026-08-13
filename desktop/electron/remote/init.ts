@@ -1409,7 +1409,7 @@ function broadcastCapturePhase(phase: CapturePhase, taskId?: string | null): voi
   // renderer could only ever disagree. Resolved once as the capture opens —
   // availability changes rarely (Codex opened or closed), and the answer is only
   // needed at the moment the chips appear.
-  if (phase === 'listening') void pushPillChips()
+  if (phase === 'listening') void pushPillChips(taskId ?? null)
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remote:capture-phase', { phase, taskId: taskId ?? null })
   }
@@ -1466,10 +1466,13 @@ async function refreshCodexReasoningForPill(): Promise<void> {
  *
  *  Best-effort by design: a chip that cannot be resolved simply does not
  *  render, and a failure here must never surface on the capture path. */
-async function pushPillChips(): Promise<void> {
+async function pushPillChips(taskId: string | null = null): Promise<void> {
   if (!pillController) return
   try {
-    const agent = (settings.get('agent') as AgentKind) ?? 'claude'
+    const addressed = taskId ? manager?.get(taskId) : undefined
+    // An addressed capture is a reply to an existing thread. Its provider is
+    // immutable here; only an unaddressed capture reads the new-task default.
+    const agent = addressed?.agent ?? (settings.get('agent') as AgentKind) ?? 'claude'
     const isCodex = agent === 'codex-desktop'
     const codexOk = codexDriver
       ? await codexDriver.availability().then((a) => a.ok).catch(() => false)
@@ -1493,6 +1496,7 @@ async function pushPillChips(): Promise<void> {
     }))
     const selected = agentOptions.find((o) => o.id === agent)
     const chips: PillStateP = {
+      taskId: addressed?.id ?? null,
       // The LABEL comes from the registry rather than a ternary, so a new
       // backend names itself instead of falling through to "Claude Code".
       agent: selected?.label ?? providerOf(agent).label,
@@ -1641,7 +1645,7 @@ async function pushPillChips(): Promise<void> {
       chips.raw = injectionDisabled()
     } else {
       const catalog = getModelCatalog()
-      const current = currentModelFor('claude')
+      const current = addressed?.model || currentModelFor('claude')
       chips.model = catalog.find((c) => c.id === current)?.label ?? current
       chips.modelOptions = catalog.map((c) => ({
         id: c.id, label: c.label, detail: c.description ?? '',
@@ -1650,6 +1654,10 @@ async function pushPillChips(): Promise<void> {
       chips.modelEmpty = 'No models available'
       chips.raw = injectionDisabled()
     }
+
+    // An addressed task's persisted receipt is the truth while replying;
+    // settings describe only a future, unaddressed task.
+    if (addressed?.model) chips.model = addressed.model
 
     // WHAT WAS ACTUALLY HANDED TO THE PILL. Added after an empty Model column
     // could only be diagnosed by reading Swift: the engine logged the models it
@@ -3245,7 +3253,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         },
         dismissOffline:    () => toWidget('dismissOffline'),
         openBillingPortal: () => toWidget('openBillingPortal'),
-        pickModel: (m) => {
+        pickModel: (m, taskId) => {
+          const addressed = taskId ? manager?.get(taskId) : undefined
+          const agent = addressed?.agent ?? (settings.get('agent') as AgentKind)
           // CLAUDE DESKTOP HAS NO WRITE PATH. Its model lives in a popup that
           // is not reachable over accessibility (pressing it yields zero new
           // nodes, backgrounded AND frontmost — measured). So a tap cannot take
@@ -3255,8 +3265,20 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // isSelectableModel() rejects a Claude Desktop id and quietly writes
           // the CLAUDE CODE model setting instead — changing the model your CLI
           // tasks run on, from a menu that was showing a different backend.
-          if ((settings.get('agent') as AgentKind) === 'claude-code-desktop') {
-            void setClaudeDesktopModel(m)
+          if (agent === 'claude-code-desktop') {
+            void setClaudeDesktopModel(m).then(() => {
+              if (addressed) manager?.setModel(addressed.id, m)
+              void pushPillChips(addressed?.id ?? null)
+            })
+            return
+          }
+          // An addressed task is never silently converted into a new-task
+          // default. The receipt changes only after the provider-specific path
+          // above has accepted it; CLI providers retain their live session's
+          // model until their next provider-supported reconfiguration.
+          if (addressed) {
+            manager?.setModel(addressed.id, m)
+            void pushPillChips(addressed.id)
             return
           }
           // EVERY OTHER BACKEND WRITES ITS OWN KEY, chosen by the registry.
@@ -3264,7 +3286,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // fell into the Claude branch, where `isSelectableModel` rejected the
           // Codex id and silently substituted the Claude default — changing the
           // model your CLAUDE tasks run on, from a menu showing Codex's.
-          setModelFor(settings.get('agent') as AgentKind, m)
+          setModelFor(agent, m)
           // RE-PUSH, or the chip keeps its old label for the rest of the
           // capture. The setting changed correctly and the surface said
           // otherwise, which reads exactly like a dead control.
@@ -3297,7 +3319,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
             void pushPillChips()
           }
         },
-        pickAxis: (axis, value) => {
+        pickAxis: (axis, value, taskId) => {
+          const addressed = taskId ? manager?.get(taskId) : undefined
+          const agent = addressed?.agent ?? (settings.get('agent') as AgentKind)
           // Speed IS a real axis (the menu offers Standard / Fast); it was
           // dropped only because the old reader could not see it.
           if (axis !== 'Model' && axis !== 'Effort' && axis !== 'Speed') return
@@ -3308,7 +3332,22 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           // driver — so without this, picking a Codex CLI model logged
           // 'no-driver' and did nothing, which is the same dead control the
           // agent chip had.
-          if ((settings.get('agent') as AgentKind) === 'codex') { void pickCodexCliAxis(axis, value); return }
+          if (agent === 'codex' && addressed) {
+            void listCodexCliModels().then((models) => {
+              const current = models.find((m) => addressed.model?.startsWith(m.uiLabel)) ?? models[0]
+              const selected = axis === 'Model' ? models.find((m) => m.uiLabel === value) ?? current : current
+              const effort = axis === 'Effort' ? selected?.efforts.find((e) => effortLabelOf(selected, e) === value) : undefined
+              if (selected) manager?.setModel(addressed.id, codexCliChoiceLabel(selected, effort ?? selected.defaultEffort))
+              void pushPillChips(addressed.id)
+            }).catch(() => {})
+            return
+          }
+          if (agent === 'codex') {
+            void pickCodexCliAxis(axis, value).then(() => {
+              void pushPillChips(addressed?.id ?? null)
+            })
+            return
+          }
           log.event('codex-pick-start', { axis, value, from: 'pill', hasDriver: !!codexDriver })
           if (!codexDriver) {
             // Say so. This returned silently, and a pick that never left the
@@ -3351,7 +3390,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
                     : cached.options,
                 } as never)
               }
-              void pushPillChips()
+              if (addressed && trace.ok && trace.labelAfter) manager?.setModel(addressed.id, trace.labelAfter)
+              void pushPillChips(addressed?.id ?? null)
             })
             .catch((e) => log.warn('codex-pick-done', { axis, value, ok: false, stage: 'threw', error: (e as Error).message }))
         },

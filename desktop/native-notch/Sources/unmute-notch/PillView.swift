@@ -819,7 +819,9 @@ private struct SelectorPanel: View {
                 // this column could never show a third backend however ready it
                 // was — the engine had been offering three for a whole build
                 // and this drew two. Same shape as the Model column below.
-                agentColumn(state.agentOptions ?? [])
+                if state.taskId == nil {
+                    agentColumn(state.agentOptions ?? [])
+                }
 
                 switch chooser {
                 case .axes:

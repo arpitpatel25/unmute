@@ -3269,6 +3269,24 @@ export class TaskManager extends EventEmitter {
     this.mergeMeta(task, { name: n }, 'setName')
   }
 
+  /** Records the configuration last successfully selected for this task.
+   *
+   * This deliberately does not change `agent`: a task's provider is its thread
+   * identity. The model receipt is both the UI truth for an addressed capture
+   * and the value restored after a relaunch. Provider adapters perform their
+   * actual native write before calling this method. */
+  setModel(id: string, model: string): boolean {
+    const task = this.tasks.get(id)
+    const value = model.trim()
+    if (!task || !value) return false
+    task.model = value
+    if (task.agent === 'codex-desktop') task.codexModelLabel = value
+    task.updatedAt = this.clock()
+    this.mergeMeta(task, { model: value, ...(task.codexModelLabel ? { codexModelLabel: task.codexModelLabel } : {}) }, 'set-model')
+    this.emit('updated', task)
+    return true
+  }
+
   /** Change a task's species. Promotion (oneoff → session) CANCELS any armed
    *  warm-kill timer — the whole point is that the session now outlives idle
    *  windows. Demotion re-arms lifecycle on the next park. Persists to meta so

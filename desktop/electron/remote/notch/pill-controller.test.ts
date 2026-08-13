@@ -15,10 +15,10 @@ function harness() {
     cancel: () => calls.push('cancel'),
     undo: () => calls.push('undo'),
     acceptDraft: () => calls.push('acceptDraft'),
-    pickModel: (id: string) => calls.push(`pickModel:${id}`),
+    pickModel: (id: string, taskId?: string) => calls.push(`pickModel:${id}${taskId ? `@${taskId}` : ''}`),
     pickAgent: (id: string) => calls.push(`pickAgent:${id}`),
     cycleAgent: () => calls.push('cycleAgent'),
-    pickAxis: (axis: string, value: string) => calls.push(`pickAxis:${axis}=${value}`),
+    pickAxis: (axis: string, value: string, taskId?: string) => calls.push(`pickAxis:${axis}=${value}${taskId ? `@${taskId}` : ''}`),
     pickMic: (id: string) => calls.push(`pickMic:${id}`),
     toggleRaw: (on: boolean) => calls.push(`toggleRaw:${on}`),
     openBillingPortal: () => calls.push('openBillingPortal'),
@@ -85,6 +85,13 @@ describe('PillController.level', () => {
 })
 
 describe('PillController events', () => {
+  test('a task-scoped pill preserves its addressed task when selecting a model', () => {
+    const h = harness()
+    h.c.push({ phase: 'recording', kind: 'remote', taskId: 'codex-task-7' })
+    h.fire({ type: 'pillPickModel', value: '5.6 Terra' })
+    assert.deepEqual(h.calls, ['pickModel:5.6 Terra@codex-task-7'])
+  })
+
   test('every gesture reaches its handler', () => {
     const h = harness()
     h.fire({ type: 'pillStop' })
