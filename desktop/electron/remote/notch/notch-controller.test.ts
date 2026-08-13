@@ -448,15 +448,15 @@ test('interacting with a muted task (focus) ends its mute episode', () => {
   assert.equal(h.client.last('setState')!.state, 'dormant')
 })
 
-test('opening then closing a BLOCKED task leaves it in attention — it still needs you', () => {
-  // Seen-is-enough must not silently drop a task that is genuinely waiting on
-  // an answer; only an explicit mute does that.
+test('opening then closing a BLOCKED task acknowledges the episode without resolving it', () => {
   const h = setup()
   put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
   h.client.fire({ type: 'focusTask', id: 'b1' })
   h.flush()
   h.client.fire({ type: 'collapsed' })
-  assert.equal(h.client.last('setState')!.state, 'attention')
+  assert.equal(h.client.last('setState')!.state, 'dormant')
+  h.client.fire({ type: 'pocketOpen' })
+  assert.ok(pocketOf(h)!.slots.some((sl) => sl.id === 'b1'), 'acknowledged is still reachable')
 })
 
 test('a blocked task CAN still be hidden, but only by asking for it', () => {
@@ -1257,14 +1257,14 @@ test('a dead pocketed task cannot stay as an address', () => {
   assert.equal(pocketOf(h)!.slots.length, 0, 'the carousel drops it')
 })
 
-test('closing a blocked task pockets it; closing a READY one still quiets it', () => {
+test('closing a blocked task pockets and acknowledges it; closing a READY one also quiets it', () => {
   const h = setup()
   put(h, makeTask({ id: 'a', state: 'needs-user', alive: true, question: { text: 'q' } }))
   h.client.fire({ type: 'tap' })
   h.client.fire({ type: 'closeStage' })
   h.flush()
   assert.equal(pocketOf(h)!.slots.length, 1, 'blocked → pocketed')
-  assert.equal(h.client.last('setState')!.attention, 1, 'and still demanding')
+  assert.equal(h.client.last('setState')!.attention, 0, 'the unchanged attention episode is acknowledged')
 
   const h2 = setup()
   put(h2, makeTask({ id: 'r', state: 'done', kind: 'session', alive: true }))
@@ -1432,7 +1432,7 @@ test('the pocket keeps what you worked in, and marks what wants you', () => {
   assert.equal(h.client.last('setState')!.attention, 1)
 })
 
-test('closing quiets a checkpoint you have seen, but never a live question', () => {
+test('closing quiets the current attention episode without removing its task', () => {
   const h = setup()
   put(h, makeTask({ id: 'c', state: 'done', kind: 'session', alive: true, name: 'Checkpoint' }))
   assert.equal(h.client.last('setState')!.attention, 1)
@@ -1448,7 +1448,9 @@ test('closing quiets a checkpoint you have seen, but never a live question', () 
   h2.client.fire({ type: 'tap' })
   h2.client.fire({ type: 'closeStage' })
   h2.flush()
-  assert.equal(h2.client.last('setState')!.attention, 1, 'looking at a question is not answering it')
+  assert.equal(h2.client.last('setState')!.attention, 0, 'looking then dismissing acknowledges this question episode')
+  h2.client.fire({ type: 'pocketOpen' })
+  assert.ok(pocketOf(h2)!.slots.some((sl) => sl.id === 'q'), 'the unresolved question stays reachable')
 })
 
 
@@ -1590,7 +1592,7 @@ test('work finishing while you are AT the machine never takes your screen', () =
     'the pocket must not open itself')
 })
 
-test('coming back opens the surface on what is yours', () => {
+test('coming back with a backlog stays compact and does not open a task', () => {
   const h = setup()
   h.presence.away()
   put(h, makeTask({ id: 'thread', state: 'done', kind: 'session', name: 'the refactor', updatedAt: Date.now() - 90_000 }))
@@ -1598,6 +1600,35 @@ test('coming back opens the surface on what is yours', () => {
   h.presence.wake()
   h.flush()
   assert.equal(h.client.last('showTask')!.task.id, 'q', 'newest touch first')
+  assert.equal(h.client.last('setState')!.state, 'attention', 'returning may refresh attention but must not interrupt')
+})
+
+test('closing an expanded blocked task acknowledges only its current attention episode', () => {
+  const h = setup()
+  h.controller.setAutoExpand(true)
+  const task = makeTask({ id: 'q', state: 'needs-user', name: 'Blocked', question: { text: 'which?' } })
+  put(h, task)
+  assert.equal(h.client.last('setState')!.state, 'task')
+
+  h.client.fire({ type: 'collapsed' })
+  h.flush()
+  assert.equal(h.client.last('setState')!.attention, 0, 'dismissed unchanged demand stays quiet')
+
+  h.events.emit('updated', task)
+  h.flush()
+  assert.equal(h.client.last('setState')!.attention, 0, 'polling the same state must not resurrect it')
+  h.presence.away()
+  h.presence.wake()
+  h.flush()
+  assert.equal(h.client.last('setState')!.attention, 0, 'returning to the Mac must not resurrect it either')
+
+  task.state = 'processing'
+  h.events.emit('updated', task)
+  h.flush()
+  task.state = 'needs-user'
+  h.events.emit('updated', task)
+  h.flush()
+  assert.equal(h.client.last('setState')!.attention, 1, 'a genuine new blocking episode demands attention again')
 })
 
 test('coming back to a clean desk shows a clean desk', () => {

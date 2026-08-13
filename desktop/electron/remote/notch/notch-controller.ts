@@ -313,11 +313,10 @@ export class NotchController {
   private promotedUntil = new Map<string, number>()
   private kindSeen = new Map<string, string>()
   private routeOffer: { newTaskId: string; altTaskId: string; altName: string } | null = null
-  /** Episode-mute: id → the state it was muted IN. Cleared when the user
-   *  interacts with the task again or its state changes (a fresh transition
-   *  re-enters the regular flow). Muted tasks stay cockpit cards; they just
-   *  never front the attention strip or the crank. */
-  private muted = new Map<string, TaskStatusName>()
+  /** Attention acknowledgment: id → the state the user dismissed. The task
+   *  remains unresolved and reachable; only this unchanged attention episode
+   *  is quiet. Interaction or a real state change clears it. */
+  private attentionAcknowledged = new Map<string, TaskStatusName>()
   // Rails cache (skills/projects/proposals) — refreshed on cockpit open + 5min.
   private skills: SkillItemP[] = []
   private projects: Array<{ name: string; path: string }> = []
@@ -387,12 +386,10 @@ export class NotchController {
      *  always-present so tests and any headless path need no power monitor. */
     private presence: PresenceLike = ALWAYS_PRESENT,
   ) {
-    // THE ONLY THING THAT OPENS THE SURFACE BY ITSELF.
-    //
-    // Not "work finished" — you may be sitting right here, and taking the
-    // screen from someone who is already looking at it is the rudest thing the
-    // product can do. Coming back is the one moment where an interruption is
-    // free, because you were not mid-anything.
+    // Returning is a refresh point, never permission to take the screen.
+    // Presence still protects demand windows while the user is away, but the
+    // presentation policy is independent: a backlog may light the compact
+    // attention surface and waits for an explicit tap before expanding.
     presence.on('wake', () => this.onWake())
 
     // THE PREDICATE NEEDS A CLOCK TO TICK AGAINST.
@@ -494,7 +491,7 @@ export class NotchController {
       // open, `answer` sends nothing and the task stays blocked — cranking to
       // the next task there would carry the user away from the very question
       // they still have to go answer, and away from the card explaining why.
-      this.muted.delete(id)   // speaking to it ends any mute episode
+      this.attentionAcknowledged.delete(id) // speaking starts a fresh episode
       const landed = this.deps.answer(id, text)
       if (wasBlocking && landed) this.advanceAfterAnswer(id)
       else this.scheduleReconcile()
@@ -636,7 +633,7 @@ export class NotchController {
    */
   private demanding(t: TaskLite): boolean {
     if (t.shelved) return false
-    if (this.muted.get(t.id) === t.state) return false
+    if (this.attentionAcknowledged.get(t.id) === t.state) return false
     if (t.state === 'needs-user' || t.state === 'stuck') return true
     const fresh = this.presence.awakeMs() - this.demandSince(t) < DEMAND_WINDOW_MS
     if (t.state === 'failed') return fresh
@@ -819,9 +816,9 @@ export class NotchController {
   private onTransition(t: TaskLite): void {
     if (!t || !t.id) return
     this.trackKind(t)
-    // A state CHANGE ends a mute episode — the task re-enters the regular flow.
-    const mutedIn = this.muted.get(t.id)
-    if (mutedIn !== undefined && mutedIn !== t.state) this.muted.delete(t.id)
+    // A state CHANGE ends the acknowledgment episode — new state, new signal.
+    const acknowledgedIn = this.attentionAcknowledged.get(t.id)
+    if (acknowledgedIn !== undefined && acknowledgedIn !== t.state) this.attentionAcknowledged.delete(t.id)
     // A CHANGE RESTARTS THE DEMAND WINDOW. Answering a blocked task and letting
     // it finish again is a NEW checkpoint, and it deserves the full window; it
     // must not inherit the clock of the state it just left. Stamped before the
@@ -1151,7 +1148,7 @@ export class NotchController {
     // and re-find your place. The pocket is where you were; it is where you
     // return. Index deliberately kept, not reset.
     this.cameFromPocket = this.pocketMode === 'open'
-    this.muted.delete(id)          // opening it IS asking to hear about it again
+    this.attentionAcknowledged.delete(id) // opening it asks to hear about it again
     this.engaged = 'task'
     this.setFocus(id)
     log.event('pocket-expanded', { taskId: id })
@@ -1179,11 +1176,10 @@ export class NotchController {
   /**
    * IDLE → ACTIVE. You touched the machine after a stretch of not touching it.
    *
-   * The one moment the surface is allowed to open itself, and it is allowed
-   * because it is the one moment you are not mid-anything. Everything that
-   * happened while you were gone is still demanding — the window that would
-   * have aged it out was frozen along with you (see Presence) — so this shows
-   * you the real backlog rather than whatever survived a wall clock.
+   * Everything that happened while you were gone is still demanding — the
+   * window that would have aged it out was frozen along with you (see Presence)
+   * — so refresh the real backlog rather than whatever survived a wall clock.
+   * The surface stays compact: returning is not consent to interrupt.
    *
    * Silent when nothing wants you: coming back to a clean desk should look like
    * a clean desk, not like a surface with an opinion.
@@ -1194,9 +1190,6 @@ export class NotchController {
     if (this.engaged !== 'none') return   // you left something open; that wins
     this.frozenOrder = null               // fresh visit, fresh order
     this.pocketAt = 0
-    this.engaged = 'task'
-    const front = this.front()
-    if (front) this.setFocus(front.id)
     log.event('woke-into-backlog', { waiting: this.queue.length })
     this.reconcile()
   }
@@ -1313,13 +1306,13 @@ export class NotchController {
     this.focusedId = id
     this.deps.focus(id) // focus IS the voice address (consent model)
     if (id) {
-      // MUTE IS NOT CLEARED HERE, and that was the bug behind "I closed them and
-      // the bar still says three". Closing a finished thread mutes it, then the
-      // return to the pocket called applyVoiceTarget → setFocus → and this line
-      // un-muted the very task you had just dismissed, so it went straight back
-      // to demanding. Aiming the carousel at something is not asking to hear
-      // about it again. A mute now ends where it should: when you open the task
-      // or send it something, or when its state changes.
+      // ACKNOWLEDGMENT IS NOT CLEARED HERE, and that was the bug behind "I
+      // closed them and the bar still says three". Closing a finished thread
+      // acknowledges it, then the return to the pocket called applyVoiceTarget
+      // → setFocus → and this line reactivated the very task you had just
+      // dismissed, so it went straight back to demanding. Aiming the carousel
+      // at something is not asking to hear about it again. Acknowledgment ends
+      // when you explicitly open or message the task, or its state changes.
       // DELIBERATELY DOES NOT COUNT AS ENGAGEMENT. Every route into a task
       // passes through here, including the carousel, so recording it made
       // browsing re-rank the list you were browsing — and the slot under your
@@ -1336,25 +1329,24 @@ export class NotchController {
    * that most obviously means "I've seen this" was the only one that didn't
    * quiet the notch — a finished one-off held the surface indefinitely.
    *
-   * Only a CHECKPOINT is quieted: a thread whose turn ended, which you have now
-   * looked at. Blocked states (needs-user/stuck) are stuck ON the user — looking
-   * at an approval prompt is not answering it — so they keep demanding until
-   * acted on or explicitly muted, as does a failure. Muting is still the
-   * deliberate "I don't care about this one" gesture and works on ANY state.
+   * Closing acknowledges the attention EPISODE, not the underlying task. A
+   * blocked task remains blocked and reachable in the pocket/dashboard, but an
+   * unchanged poll cannot repeatedly demand the screen after the user has
+   * dismissed it. A real state change clears the acknowledgment in
+   * onTransition(), so a new question or failure can demand attention again.
    *
-   * This reuses the episode-mute, so "comes back the moment its state changes"
-   * is inherited rather than reimplemented. And quieting is never removal: the
-   * task drops out of the demanding group and lands in reach, one press away.
+   * Both explicit mute and dismissal write the same acknowledgment primitive,
+   * so "comes back the moment its state changes" has one implementation.
+   * Quieting is never removal: the task drops out of the demanding group and
+   * lands in reach, one press away.
    */
   private seenThenClose(opts: { collapse?: boolean } = {}): void {
     const id = this.focusedId
     const t = id ? this.deps.getTask(id) : undefined
-    if (t) {
-      if (t.state === 'done') {
-        this.muted.set(t.id, t.state)
-        this.queue = this.queue.filter((x) => x !== t.id)
-        log.event('seen-on-close', { taskId: t.id, state: t.state })
-      }
+    if (t && this.demanding(t)) {
+      this.attentionAcknowledged.set(t.id, t.state)
+      this.queue = this.queue.filter((x) => x !== t.id)
+      log.event('seen-on-close', { taskId: t.id, state: t.state })
     }
     if (opts.collapse) this.engaged = 'none'
     // BACK TO WHERE YOU CAME FROM. If this task was expanded out of an open
@@ -1384,7 +1376,7 @@ export class NotchController {
   private onMute(id: string): void {
     const t = this.deps.getTask(id)
     if (!t) return
-    this.muted.set(id, t.state)
+    this.attentionAcknowledged.set(id, t.state)
     this.queue = this.queue.filter((x) => x !== id)
     if (this.focusedId === id) { this.focusedId = null; this.deps.focus(null) }
     if (this.queue.length === 0 && this.engaged === 'task') this.engaged = 'none'
