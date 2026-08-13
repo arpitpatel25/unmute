@@ -46,6 +46,15 @@ let package = Package(
             dependencies: ["SurfaceSizeSupport"],
             path: "Tests/SurfaceSizeSupportTests"
         ),
+        .target(
+            name: "HoverStateSupport",
+            path: "Sources/HoverStateSupport"
+        ),
+        .testTarget(
+            name: "HoverStateSupportTests",
+            dependencies: ["HoverStateSupport"],
+            path: "Tests/HoverStateSupportTests"
+        ),
         // The Theme-free half of markdown rendering, split out ONLY so it can be
         // tested: the executable target imports SwiftUI and cannot be imported
         // by a test target. Anything that needs `Theme` stays in the executable,
@@ -65,6 +74,7 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "Markdown", package: "swift-markdown"),
                 "MarkdownSupport",
+                "HoverStateSupport",
                 "SurfaceSizeSupport",
                 "SurfaceTransitionSupport"
             ],

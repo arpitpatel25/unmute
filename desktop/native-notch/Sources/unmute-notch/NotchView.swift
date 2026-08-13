@@ -141,21 +141,6 @@ struct NotchView: View {
             // D5: opaque, always. Pure black, because the hardware it continues
             // is pure black and any other value shows up as a seam at the join.
             shape.fill(Color.black)
-                .overlay(alarmGlow)
-                // THE POCKET IS A PANEL AND NEEDS A PANEL'S EDGE. The expanded
-                // branch above gained a hairline when the material was unified;
-                // this branch kept only `alarmGlow`, which draws at all only in
-                // attention-with-an-alarm and is clipped to the path — so half
-                // the line is thrown away and it thins to nothing on the tight
-                // curves. On the bar that absence is right; on a 350pt card
-                // floating over a desktop it is a missing edge.
-                .overlay(pocketEdge)
-        }
-    }
-
-    @ViewBuilder private var pocketEdge: some View {
-        if model.pocket.isOpen {
-            shape.stroke(Theme.hairlineSoft, lineWidth: 0.5).allowsHitTesting(false)
         }
     }
 
@@ -183,37 +168,6 @@ struct NotchView: View {
     static let restHeight: CGFloat = 7
     static let restRadius: CGFloat = 4
     static let restFillet: CGFloat = 3
-
-    /// THE ONLY GLOW IN THE APP.
-    ///
-    /// Attention is the one state that gets it: if everything glows, nothing
-    /// does. It is an INNER glow, drawn along the inside of the path, because a
-    /// drop shadow would have to hang below the menu bar — and nothing hangs
-    /// below the bar unless the surface is expanded. The mass itself stays
-    /// black (D5); the amber arrives as the dot, the words and this rim.
-    ///
-    /// GATED ON THE RENDERED STATE ONLY. It used to be gated on the commanded
-    /// one as well, to stop attention's colour surviving into a task frame
-    /// mid-morph. That guard is now structural — this whole branch is only
-    /// reached when the surface is at bar level, and an expanded surface draws
-    /// glass instead — and keeping it did real harm: with auto-present off,
-    /// `commandedState` holds the expanded rung the engine asked for while the
-    /// surface is deliberately held at attention, so the one state that must
-    /// glow was the one state that did not.
-    @ViewBuilder private var alarmGlow: some View {
-        // A BORDER, NOT A GLOW.
-        //
-        // This was a 2.5pt status-coloured stroke blurred to 3.5 and laid under
-        // a second coloured stroke — on a 26pt bar that is a wash of orange
-        // across the whole surface, not an accent on it. The state is already
-        // said by the dot and by the words; the edge only has to agree with
-        // them, quietly.
-        if model.state == .attention, let status = model.content.alarm {
-            shape.stroke(Theme.status(status).opacity(0.7), lineWidth: 1)
-                .clipShape(shape)
-                .allowsHitTesting(false)
-        }
-    }
 
     // MARK: - Content
 

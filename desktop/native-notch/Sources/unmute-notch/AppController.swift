@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SwiftTerm
+import HoverStateSupport
 import SurfaceSizeSupport
 
 // Owns the ONE panel + view model; translates commands into observable state,
@@ -29,6 +30,7 @@ final class AppController: NSObject, NotchResizing {
     /// actually asked for before it puts the surface back to sleep.
     private var commandedState: NotchState = .dormant
     private var hoverTimer: Timer?
+    private var hoverExitTimer: Timer?
     private var pocketHoverTimer: Timer?
     private var toastTimer: Timer?
 
@@ -791,28 +793,57 @@ final class AppController: NSObject, NotchResizing {
         // single motion. The delay still exists — it is what stops a pointer
         // crossing the bar from making it flicker — it just no longer spends
         // that time showing a half-dismantled bar.
-        let willSleep = !entering && model.state == .idle && commandedState == .dormant && geometry.hasNotch
-        if model.hovering != entering {
-            model.hovering = entering
-            if !isExpanded(model.state), model.state != .dormant, !willSleep { refreshBar() }
-        }
         if entering {
+            hoverExitTimer?.invalidate()
             hoverTimer?.invalidate()
+            if !model.hovering {
+                model.hovering = true
+                if !isExpanded(model.state), model.state != .dormant { refreshBar() }
+            }
             if model.state == .dormant && commandedState == .dormant {
                 NotchLog.log("hover-reveal: dormant → idle")
                 applyState(.idle)
             }
         } else {
-            guard model.state == .idle, commandedState == .dormant else { return }
-            // Off-notch there is no dormant to fall back to (applyState maps it
-            // to idle), so arming this timer would log a transition that never
-            // happens and then do nothing. Idle IS the resting state here.
-            guard geometry.hasNotch else { return }
-            hoverTimer?.invalidate()
-            hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
-                guard let self, self.model.state == .idle, self.commandedState == .dormant else { return }
-                NotchLog.log("hover-sleep: idle → dormant")
-                self.applyState(.dormant)
+            // Resizing the bar rebuilds both SwiftUI and AppKit tracking
+            // regions. Either layer can report a momentary exit even though
+            // the pointer is still over the same physical surface. Accepting
+            // that event immediately shrinks the bar, which reports an enter,
+            // which grows it again: the visible horizontal oscillation.
+            //
+            // Defer exits and ask the window where the pointer actually is.
+            // Enter remains immediate, so genuine hover still feels direct.
+            hoverExitTimer?.invalidate()
+            hoverExitTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { [weak self] _ in
+                guard let self else { return }
+                switch HoverExitDecision.resolve(pointerInsideSurface: self.window.frame.contains(NSEvent.mouseLocation)) {
+                case .keepRevealed:
+                    return
+                case .acceptExit:
+                    break
+                }
+
+                let willSleep = self.model.state == .idle
+                    && self.commandedState == .dormant
+                    && self.geometry.hasNotch
+                if self.model.hovering {
+                    self.model.hovering = false
+                    if !self.isExpanded(self.model.state), self.model.state != .dormant, !willSleep {
+                        self.refreshBar()
+                    }
+                }
+                guard self.model.state == .idle, self.commandedState == .dormant else { return }
+                // Off-notch there is no dormant to fall back to (applyState
+                // maps it to idle). Idle IS the resting state there.
+                guard self.geometry.hasNotch else { return }
+                self.hoverTimer?.invalidate()
+                self.hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+                    guard let self, self.model.state == .idle,
+                          self.commandedState == .dormant,
+                          !self.model.hovering else { return }
+                    NotchLog.log("hover-sleep: idle → dormant")
+                    self.applyState(.dormant)
+                }
             }
         }
     }
