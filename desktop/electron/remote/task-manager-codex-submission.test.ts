@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TaskManager } from './task-manager'
 import type { AgentExecutor } from './executor'
+import { registerTaskImagePaste } from './task-attachment-paste'
 
 async function codexTask(onSubmit: () => void) {
   const trace: string[] = []
@@ -62,5 +63,53 @@ test('a Codex CLI reply that never reaches the rollout is reported failed and ke
 
   assert.equal(await manager.deliverDraft(id, 'summarize recent commits', []), false)
   assert.ok(manager.get(id)!.deliveryError, 'an unproven send must stay visible as a failure')
+  manager.kill(id)
+})
+
+// Images to a Codex CLI task were refused outright — "This Codex CLI version
+// has no verified attachment transport" — and the draft was kept, 2ms in,
+// without the terminal ever being touched. The refusal was about the transport
+// being unverified, not impossible: the executor reports canPasteImage, the
+// Codex TUI renders pasted images as "[Image #N]", and this is the same
+// composer path Claude Code CLI already uses.
+//
+// NOT adopted into the app-server hub instead: a PTY-hosted session is already
+// being written by its terminal, and a second writer on one thread is the
+// failure cdp.ts documents — the turn lands in storage and the running UI never
+// shows it.
+test('a Codex CLI task accepts a screenshot through the same composer Claude CLI uses', async () => {
+  const trace: string[] = []
+  const ex: AgentExecutor = {
+    alive: true,
+    async spawn() {}, async isReady() {},
+    writeStdin() {},
+    writeDraftText(text) { trace.push(`text:${text}`) },
+    async pasteImage() { trace.push('paste-image'); return true },
+    submitDraft() { trace.push('submit'); userTurns += 1 },
+    write() {}, resize() {}, onData() {}, kill() {},
+  }
+  let userTurns = 1
+  registerTaskImagePaste(async (_text, paths, paste) => {
+    for (const p of paths) { trace.push(`clipboard:${p}`); if (!(await paste())) return false }
+    return true
+  })
+  const baseDir = await mkdtemp(join(tmpdir(), 'unmute-codex-image-'))
+  const manager = new TaskManager({
+    executorFactory: () => ex, baseDir,
+    trustAcceptMs: 0, submitConfirmMs: 0, verifyAfterMs: 300, pollMs: 99_999,
+  })
+  const id = await manager.dispatch('initial')
+  const task = manager.get(id)!
+  task.agent = 'codex'
+  task.codexRolloutId = 'rollout-under-test'
+  ;(manager as any).codexUserTurns = async () => userTurns
+  trace.length = 0
+
+  assert.equal(await manager.deliverDraft(id, 'what is wrong here', ['/tmp/shot.png']), true)
+  assert.deepEqual(trace, [
+    'text:what is wrong here',
+    'clipboard:/tmp/shot.png', 'paste-image',
+    'submit',
+  ])
   manager.kill(id)
 })

@@ -3728,13 +3728,22 @@ export class TaskManager extends EventEmitter {
       return outcome(ok, ok ? 'codex-app-server-accepted-turn' : 'codex-app-server-refused-turn', { draftRetained: !ok })
     }
 
-    if (task.agent === 'codex' && attachments.length) {
-      selected('legacy-codex-cli-unsupported')
-      task.deliveryError = 'This Codex CLI version has no verified attachment transport'
-      this.emit('updated', task)
-      return outcome(false, 'no-verified-codex-cli-image-transport', { draftRetained: true })
-    }
-
+    // A PTY-HOSTED CODEX SESSION USES THE COMPOSER, NOT THE APP SERVER.
+    //
+    // Images here used to be refused outright, 2ms in, without the terminal
+    // ever being touched: the app-server route above needs a hub thread, and a
+    // session Unmute did not start through the hub — an import, a session the
+    // user opened themselves, anything after a restart — never has one. The
+    // draft was kept and the user saw nothing arrive.
+    //
+    // Adopting such a session into the hub is the wrong repair. Its terminal is
+    // already writing that thread, and a second writer on one thread is the
+    // failure codex/cdp.ts documents: the turn lands in storage while the
+    // running UI never shows it. The one writer stays the terminal, so the
+    // images go where the text goes — through the verified composer, exactly as
+    // Claude Code CLI delivers them. `pasteImage` below still gates it, so a
+    // session that genuinely cannot take an image still refuses, by capability
+    // rather than by provider name.
     const ex = this.executors.get(id)
     selected('verified-cli-composer', {
       executorAlive: !!ex?.alive,
