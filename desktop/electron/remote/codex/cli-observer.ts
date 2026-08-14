@@ -73,6 +73,34 @@ function messageText(e: RolloutEvent): string {
   return raw.trim()
 }
 
+/**
+ * The exchange, as Codex itself recorded it.
+ *
+ * A Codex CLI task's chat view is fed from `task.conversation`, and the only
+ * thing that ever filled that array was Claude Code's `Stop` hook. Codex ships
+ * no such hook, so the view stayed empty for the task's whole life while the
+ * terminal beside it showed the real conversation. The rollout has it — this
+ * poller already reads that file for status — so read the turns from there and
+ * stop depending on another agent's hooks.
+ *
+ * Only user/agent messages are conversation: reasoning, tool traffic and
+ * bookkeeping records are not something the user said or was told.
+ */
+export function conversationFromCodexEvents(
+  events: readonly RolloutEvent[],
+): Array<{ role: 'user' | 'assistant'; text: string }> {
+  const turns: Array<{ role: 'user' | 'assistant'; text: string }> = []
+  for (const e of events) {
+    if (e.type !== 'event_msg') continue
+    const kind = e.payload?.type
+    if (kind !== 'user_message' && kind !== 'agent_message') continue
+    const text = messageText(e)
+    if (!text) continue
+    turns.push({ role: kind === 'user_message' ? 'user' : 'assistant', text })
+  }
+  return turns
+}
+
 export interface CodexRollupContext {
   /** ISO timestamp to stamp. Injected — this module owns no clock. */
   now: string

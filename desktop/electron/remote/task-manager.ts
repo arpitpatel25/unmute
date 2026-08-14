@@ -40,7 +40,7 @@ import { readTranscript, hadSideEffects, readLatestExchange } from './transcript
 import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import { resolveTranscriptById } from './trace-reducer'
-import { rollupCodexEvents } from './codex/cli-observer'
+import { rollupCodexEvents, conversationFromCodexEvents } from './codex/cli-observer'
 import { discoverSessionId, findRollout, readRolloutEvents } from './codex/cli-session'
 import { projectSlug } from './projects'
 import type { Librarian } from './librarian'
@@ -1976,6 +1976,19 @@ export class TaskManager extends EventEmitter {
       kind: (task.kind ?? 'oneoff') === 'session' ? 'session' : 'oneoff',
     })
     if (lastActivityAt) task.lastHeartbeatMs = lastActivityAt
+    // The chat view is fed from here, not from a hook Codex never fires. This
+    // is also what makes a rehydrated session readable: the rollout outlives
+    // the app, so a task resumed after a restart shows its history immediately.
+    const turns = conversationFromCodexEvents(events)
+    if (turns.length) {
+      const changed = turns.length !== (task.conversation?.length ?? 0)
+        || turns[turns.length - 1].text !== task.conversation?.[task.conversation.length - 1]?.text
+      if (changed) {
+        task.conversation = turns
+        this.emit('updated', task)
+        void this.persistState(task).catch(() => {})
+      }
+    }
     if (!status) return
     // Unchanged state with no new text is not news — transitioning on every
     // poll would rewrite updatedAt once a second and shove the task to the top
