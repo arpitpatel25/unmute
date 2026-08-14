@@ -3,7 +3,7 @@ import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import path from 'path'
 import { keyListener } from './keyListener'
-import { handOffImages, VERIFY_TIMEOUT_MS, type PasteModifier } from './pasteboardHandoff'
+import { handOffImages, pasteboardServesReadablePNG, VERIFY_TIMEOUT_MS, type PasteModifier } from './pasteboardHandoff'
 import { HistoryPasteStage } from './historyPasteStage'
 // Static import (a lazy require of this path can't resolve inside the bundled
 // main — proven live: 'Cannot find module' swallowed by the fail-open catch).
@@ -428,25 +428,45 @@ export function getOutputMode(): 'paste' | 'clipboard' {
   return outputMode
 }
 
-/** Ask a SEPARATE process whether the system pasteboard serves a PNG of the
- *  expected byte size (`clipboard info` is a tiny metadata listing — no image
- *  data crosses). Resolves true on confirmation, false on timeout (the caller
- *  pastes anyway — bounded, never hangs).
+/** Ask a SEPARATE process whether the system pasteboard serves a non-empty PNG
+ *  (`clipboard info` is a tiny metadata listing — no image data crosses).
+ *  macOS may re-encode the image, so byte equality is not a valid readiness
+ *  check. Resolves true on semantic confirmation and false on timeout.
  *
  *  IT HAS TO BE ANOTHER PROCESS. An own-process `clipboard.readImage()`
  *  reflects our own write the instant it happens and proves nothing about what
  *  the app receiving ⌘V can see; polling it was tried and proven useless. */
-function verifyPasteboardServesPNG(expectedBytes: number, timeoutMs: number): Promise<boolean> {
+function verifyPasteboardServesPNG(
+  timeoutMs: number,
+  observe?: (fields: Record<string, unknown>) => void,
+): Promise<boolean> {
+  const startedAt = Date.now()
   const deadline = Date.now() + timeoutMs
+  let attempts = 0
   return new Promise((resolve) => {
     const attempt = () => {
-      execFile('osascript', ['-e', 'clipboard info'], { timeout: 2000 }, (err, stdout) => {
+      attempts++
+      // Keep each child comfortably inside the overall readiness deadline.
+      // A wedged osascript must not turn the nominal 900 ms verifier into a
+      // multi-second delivery stall.
+      execFile('osascript', ['-e', 'clipboard info'], { timeout: Math.max(1, Math.min(timeoutMs, 400)) }, (err, stdout) => {
         if (!err && stdout) {
           // e.g. "«class PNGf», 2189440, TIFF picture, 9640988"
-          const m = /«class PNGf», (\d+)/.exec(stdout)
-          if (m && Number(m[1]) === expectedBytes) { resolve(true); return }
+          if (pasteboardServesReadablePNG(stdout)) {
+            const systemPNGBytes = Number(/«class PNGf»,\s*(\d+)/.exec(stdout)?.[1] ?? 0)
+            observe?.({ ok: true, attempts, elapsedMs: Date.now() - startedAt, systemPNGBytes })
+            resolve(true)
+            return
+          }
         }
-        if (Date.now() >= deadline) { resolve(false); return }
+        if (Date.now() >= deadline) {
+          observe?.({
+            ok: false, attempts, elapsedMs: Date.now() - startedAt,
+            error: err ? err.message : 'png-representation-missing-or-empty',
+          })
+          resolve(false)
+          return
+        }
         setTimeout(attempt, 60)
       })
     }
@@ -479,12 +499,10 @@ async function deliverImagesAfterText(images: readonly string[], padded: string)
   const pasted = await handOffImages<Electron.NativeImage>({
     // ONE DECODE PER IMAGE, and it happens here — before the pre-clear, and
     // outside the clear→write window. The SAME NativeImage is measured and
-    // written, exactly as adb845f did it, so the byte count handed to the
-    // verifier and the bytes handed to the pasteboard cannot disagree. A second
+    // written, exactly as adb845f did it. The byte count is diagnostic only;
+    // macOS may re-encode the system pasteboard representation. A second
     // createFromPath between the clear and the write would leave the system
-    // pasteboard empty for the length of a Retina decode, and any encoding
-    // difference between the two decodes would make the verify unmatchable —
-    // every image burning the full timeout before pasting anyway.
+    // pasteboard empty for the length of a Retina decode.
     prepareImage: (p: string) => {
       const img = nativeImage.createFromPath(p)
       if (img.isEmpty()) return null
@@ -493,7 +511,9 @@ async function deliverImagesAfterText(images: readonly string[], padded: string)
     clearAndRecord: () => { clipboard.clear(); noteOurWrite() },
     writeImageAndRecord: (img: Electron.NativeImage) => { clipboard.writeImage(img); noteOurWrite() },
     writeTextAndRecord: (t: string) => { clipboard.writeText(t); noteOurWrite() },
-    verifyServesPNG: (bytes: number) => verifyPasteboardServesPNG(bytes, VERIFY_TIMEOUT_MS),
+    verifyServesPNG: () => verifyPasteboardServesPNG(VERIFY_TIMEOUT_MS, (fields) => {
+      if (process.env.UNMUTE_CURATOR_DEVLOG === '1') console.log('[clipboard] pasteboard-system-read', fields)
+    }),
     frontmostBundleId: readFrontmostBundleId,
     paste: (modifier: PasteModifier) => simulateKeyCombo('v', modifier),
     settle: sleep,
@@ -533,7 +553,9 @@ export async function injectImagesIntoTask(
     clearAndRecord: () => { clipboard.clear(); noteOurWrite() },
     writeImageAndRecord: (img: Electron.NativeImage) => { clipboard.writeImage(img); noteOurWrite() },
     writeTextAndRecord: (t: string) => { clipboard.writeText(t); noteOurWrite() },
-    verifyServesPNG: (bytes: number) => verifyPasteboardServesPNG(bytes, VERIFY_TIMEOUT_MS),
+    verifyServesPNG: () => verifyPasteboardServesPNG(VERIFY_TIMEOUT_MS, (fields) => {
+      try { observe?.('pasteboard-system-read', fields) } catch { /* diagnostics never alter delivery */ }
+    }),
     frontmostBundleId: () => null,
     paste: async () => {
       if (!(await paste())) throw new Error('target did not accept clipboard image')

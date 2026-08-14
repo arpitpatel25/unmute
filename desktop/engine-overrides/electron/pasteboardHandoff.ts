@@ -24,15 +24,15 @@
 //      has served it; nothing may overwrite the text inside that gap. [adb845f]
 //   2. PRE-CLEAR before each image. NEW HERE — adb845f had no clear in its
 //      image loop, and that left a real hole: it wrote image B straight over
-//      image A and then asked the child whether the pasteboard served a PNG of
-//      B's byte size. Two screenshots of the SAME byte size (trivially
-//      possible — same display, same window, near-identical content) verify
-//      instantly against A, and A is pasted twice. Emptying the slot first
-//      makes a PNG of the right size necessarily ours.
+//      image A and then asked the child whether the pasteboard served a PNG.
+//      Without the clear, A could satisfy B's readiness check and be pasted
+//      twice. Emptying the slot first makes the next non-empty PNG necessarily
+//      the representation produced by our B write.
 //   3. VERIFY FROM ANOTHER PROCESS. An own-process read reflects our own write
 //      immediately and proves nothing about what the target app can see. A
 //      child asks the SYSTEM pasteboard. Bounded, never a hang: on timeout we
-//      paste anyway, because a late image beats no image. [adb845f]
+//      fail closed and retain the draft instead of posting a paste event whose
+//      payload has not been proven readable. [adb845f]
 //   4. PASTE, then settle again before the next one. [adb845f]
 //   5. RESTORE THE TEXT at the end, so the user's clipboard holds what they
 //      dictated rather than the last screenshot — and so the next dictation
@@ -123,9 +123,10 @@ export interface HandoffDeps<Prepared = unknown> {
   writeImageAndRecord: (image: Prepared) => void
   /** Write the text AND record that the change was ours, likewise. */
   writeTextAndRecord: (text: string) => void
-  /** Ask ANOTHER process whether the system pasteboard serves a PNG of exactly
-   *  this size. Resolves false on timeout; the caller pastes regardless. */
-  verifyServesPNG: (bytes: number) => Promise<boolean>
+  /** Ask ANOTHER process whether the system pasteboard serves a non-empty PNG.
+   *  No source bytes are accepted here by design: macOS may legitimately
+   *  transcode the representation, so byte equality is not its contract. */
+  verifyServesPNG: () => Promise<boolean>
   /** Bundle identifier of the app about to receive the paste, or null when it
    *  cannot be read. Read ONCE per hand-off, and only when there are images —
    *  see `imagePasteModifier`. */
@@ -148,8 +149,18 @@ export interface HandoffDeps<Prepared = unknown> {
 export const SETTLE_MS = 180
 
 /** The verify is a poll against a child process. Bounded so a wedged osascript
- *  can never hold a dictation open — on expiry we paste anyway. */
+ *  can never hold a dictation open. */
 export const VERIFY_TIMEOUT_MS = 900
+
+/** True when macOS exposes a non-empty PNG representation to other processes.
+ *
+ * NSPasteboard is allowed to transcode an image after `writeImage`, so the PNG
+ * bytes served here need not match `NativeImage.toPNG()`. The pre-clear/write
+ * sequence proves ownership of the slot; this boundary proves readability. */
+export function pasteboardServesReadablePNG(info: string): boolean {
+  const match = /«class PNGf»,\s*(\d+)/.exec(info)
+  return !!match && Number(match[1]) > 0
+}
 
 /** Deliver `images` at the cursor, in order, after the text has been pasted.
  *
@@ -212,8 +223,12 @@ export async function handOffImages<Prepared>(
       deps.clearAndRecord()
       deps.writeImageAndRecord(prepared.image)
       observe('pasteboard-written', { index, path, bytes: prepared.bytes })
-      const verified = await deps.verifyServesPNG(prepared.bytes)
+      const verified = await deps.verifyServesPNG()
       observe('pasteboard-verified', { index, path, bytes: prepared.bytes, verified })
+      if (!verified) {
+        deps.warn(`[clipboard] system pasteboard did not expose a readable image: ${path}`)
+        continue
+      }
       await deps.paste(modifier)
       observe('paste-posted', { index, path, modifier })
       pasted++

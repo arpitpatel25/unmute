@@ -122,6 +122,92 @@ test('attachment delivery is not accepted until Codex clears the submitted compo
   )
 })
 
+test('a retry reuses the matching Codex draft and attachment preview without duplicating either', async () => {
+  let typed = 0
+  let pasted = 0
+  let enterCount = 0
+  let snapshotReads = 0
+  const driver = new CodexDesktopDriver({
+    sleep: async () => {}, frontmost: async () => 'com.openai.codex', activate: async () => true,
+    pasteImages: async () => { pasted++; return true },
+  }) as any
+  driver.snapshot = async () => ({ turnsStarted: ++snapshotReads < 3 ? 4 : 5 })
+  driver.cdp = {
+    connected: true,
+    evaluate: async () => 'local:thread-1',
+    focusComposer: async () => true,
+    composerAttachmentCount: async () => 1,
+    typeText: async () => { typed++ },
+    composerText: async () => 'send this',
+    pressEnter: async () => { enterCount++ },
+  }
+  driver.openThread = async () => true
+
+  assert.deepEqual(
+    await driver.sendWithAttachments('thread-1', 'send this', ['/tmp/one.png']),
+    { ok: true },
+  )
+  assert.equal(typed, 0, 'matching retained text must not be appended again')
+  assert.equal(pasted, 0, 'matching retained previews must not be attached again')
+  assert.equal(enterCount, 1)
+})
+
+test('Codex delivery refuses to overwrite unrelated content already in the composer', async () => {
+  let typed = 0
+  let pasted = 0
+  let enterCount = 0
+  const driver = new CodexDesktopDriver({
+    sleep: async () => {}, frontmost: async () => 'com.openai.codex', activate: async () => true,
+    pasteImages: async () => { pasted++; return true },
+  }) as any
+  driver.snapshot = async () => ({ turnsStarted: 4 })
+  driver.cdp = {
+    connected: true,
+    evaluate: async () => 'local:thread-1',
+    focusComposer: async () => true,
+    composerAttachmentCount: async () => 0,
+    typeText: async () => { typed++ },
+    composerText: async () => 'a draft the user typed directly in Codex',
+    pressEnter: async () => { enterCount++ },
+  }
+  driver.openThread = async () => true
+
+  assert.deepEqual(
+    await driver.sendWithAttachments('thread-1', 'send this', ['/tmp/one.png']),
+    { ok: false, reason: 'composer-not-empty' },
+  )
+  assert.equal(typed, 0)
+  assert.equal(pasted, 0)
+  assert.equal(enterCount, 0)
+})
+
+test('attachment-only delivery refuses an existing preview it cannot identify as its own', async () => {
+  let pasted = 0
+  let enterCount = 0
+  const driver = new CodexDesktopDriver({
+    sleep: async () => {}, frontmost: async () => 'com.openai.codex', activate: async () => true,
+    pasteImages: async () => { pasted++; return true },
+  }) as any
+  driver.snapshot = async () => ({ turnsStarted: 4 })
+  driver.cdp = {
+    connected: true,
+    evaluate: async () => 'local:thread-1',
+    focusComposer: async () => true,
+    composerAttachmentCount: async () => 1,
+    typeText: async () => {},
+    composerText: async () => '',
+    pressEnter: async () => { enterCount++ },
+  }
+  driver.openThread = async () => true
+
+  assert.deepEqual(
+    await driver.sendWithAttachments('thread-1', '', ['/tmp/one.png']),
+    { ok: false, reason: 'composer-not-empty' },
+  )
+  assert.equal(pasted, 0)
+  assert.equal(enterCount, 0, 'an unidentified user-owned preview must never be submitted')
+})
+
 test('attachment-only delivery waits for the attachment preview to clear', async () => {
   let snapshotReads = 0
   let attachmentCount = 0
@@ -152,6 +238,7 @@ test('Codex attachment delivery reports every CDP boundary to the correlated obs
   const stages: string[] = []
   let snapshotReads = 0
   let attachmentCount = 0
+  let composerText = ''
   const driver = new CodexDesktopDriver({
     sleep: async () => {}, frontmost: async () => 'com.openai.codex', activate: async () => true,
     pasteImages: async () => { attachmentCount = 1; return true },
@@ -162,8 +249,8 @@ test('Codex attachment delivery reports every CDP boundary to the correlated obs
     evaluate: async () => 'local:thread-1',
     focusComposer: async () => true,
     composerAttachmentCount: async () => attachmentCount,
-    typeText: async () => {},
-    composerText: async () => 'send this',
+    typeText: async (text: string) => { composerText += text },
+    composerText: async () => composerText,
     pressEnter: async () => {},
   }
   driver.openThread = async () => true
@@ -175,7 +262,7 @@ test('Codex attachment delivery reports every CDP boundary to the correlated obs
   assert.deepEqual(result, { ok: true })
   assert.deepEqual(stages, [
     'cdp-connect', 'focus-snapshot', 'thread-open', 'target-activated', 'baseline-read',
-    'thread-identity-before-compose', 'composer-focused', 'text-typed', 'text-verified',
+    'thread-identity-before-compose', 'composer-focused', 'composer-baseline', 'text-typed', 'text-verified',
     'attachment-preview-baseline', 'attachment-paste-started', 'attachment-paste-completed',
     'attachment-preview-sample', 'attachment-preview-verified',
     'thread-identity-before-submit', 'submit-key', 'focus-restored', 'rollout-confirmed',

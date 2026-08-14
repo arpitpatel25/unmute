@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   handOffImages,
   imagePasteModifier,
+  pasteboardServesReadablePNG,
   SETTLE_MS,
   TERMINAL_BUNDLE_IDS,
   type HandoffDeps,
@@ -30,7 +31,7 @@ function recorder(overrides: Partial<HandoffDeps<FakeImage>> = {}) {
     clearAndRecord: () => { trace.push('clear+record') },
     writeImageAndRecord: (img) => { trace.push(`writeImage(${img.from})+record`) },
     writeTextAndRecord: (t) => { trace.push(`writeText(${t})+record`) },
-    verifyServesPNG: async (b) => { trace.push(`verify(${b})`); return true },
+    verifyServesPNG: async () => { trace.push('verify'); return true },
     frontmostBundleId: () => 'com.tinyspeck.slackmacgap',
     paste: async (mod) => { trace.push('paste'); modifiers.push(mod) },
     settle: async (ms) => { trace.push(`settle(${ms})`) },
@@ -49,6 +50,22 @@ describe('nothing to hand over costs nothing', () => {
 })
 
 describe('the pasteboard race is closed by ORDER, not by hope', () => {
+  test('macOS re-encoding does not invalidate a readable clipboard PNG', () => {
+    // The source image in the live spike encoded to 71,696 bytes, while the
+    // system pasteboard served a valid 87,251-byte PNG representation. Byte
+    // identity is not part of the pasteboard contract; readability is.
+    assert.equal(
+      pasteboardServesReadablePNG('«class PNGf», 87251, TIFF picture, 2179556'),
+      true,
+    )
+  })
+
+  test('an empty or non-image pasteboard is not treated as ready', () => {
+    assert.equal(pasteboardServesReadablePNG('string, 42'), false)
+    assert.equal(pasteboardServesReadablePNG('«class PNGf», 0'), false)
+    assert.equal(pasteboardServesReadablePNG(''), false)
+  })
+
   test('diagnostics report every image boundary including verification and paste result', async () => {
     const events: Array<{ stage: string; fields: Record<string, unknown> }> = []
     const { deps } = recorder({
@@ -58,11 +75,11 @@ describe('the pasteboard race is closed by ORDER, not by hope', () => {
     await handOffImages(deps, ['/pad/a.png'], 'x')
     assert.deepEqual(events.map((event) => event.stage), [
       'handoff-started', 'image-prepare-started', 'image-prepared',
-      'pasteboard-written', 'pasteboard-verified', 'paste-posted',
-      'image-settled', 'clipboard-restored', 'handoff-finished',
+      'pasteboard-written', 'pasteboard-verified',
+      'clipboard-restored', 'handoff-finished',
     ])
     assert.equal(events.find((event) => event.stage === 'pasteboard-verified')?.fields.verified, false)
-    assert.equal(events.at(-1)?.fields.pasted, 1)
+    assert.equal(events.at(-1)?.fields.pasted, 0)
   })
 
   test('one image: settle, decode, pre-clear, write, child-verify, paste, settle, restore', async () => {
@@ -78,8 +95,8 @@ describe('the pasteboard race is closed by ORDER, not by hope', () => {
       // Pre-clear is what makes the verify sound: a PNG in an emptied slot is ours.
       'clear+record',
       'writeImage(/pad/a.png)+record',
-      // ANOTHER process confirms the system pasteboard serves our exact payload.
-      `verify(${'/pad/a.png'.length * 100})`,
+      // ANOTHER process confirms the system pasteboard serves a readable PNG.
+      'verify',
       'paste',
       `settle(${SETTLE_MS})`,
       // The clipboard ends up holding what was dictated, not the screenshot.
@@ -107,18 +124,16 @@ describe('the pasteboard race is closed by ORDER, not by hope', () => {
     }
   })
 
-  test('the bytes VERIFIED are the bytes WRITTEN — one decode measured both', async () => {
-    // Two decodes could disagree by a byte and make the verify unmatchable.
-    // Same handle, same measurement, by construction.
-    const seen: { wrote: string | null; verified: number | null } = { wrote: null, verified: null }
+  test('the prepared image handle is the image written to the pasteboard', async () => {
+    const seen: { wrote: string | null; verified: boolean } = { wrote: null, verified: false }
     const { deps } = recorder({
       prepareImage: (p) => ({ image: { from: p }, bytes: 4242 }),
       writeImageAndRecord: (img) => { seen.wrote = img.from },
-      verifyServesPNG: async (b) => { seen.verified = b; return true },
+      verifyServesPNG: async () => { seen.verified = true; return true },
     })
     await handOffImages(deps, ['/pad/a.png'], 'x')
     assert.equal(seen.wrote, '/pad/a.png')
-    assert.equal(seen.verified, 4242)
+    assert.equal(seen.verified, true)
   })
 
   test('the FIRST thing that happens is the settle — never a write', async () => {
@@ -147,15 +162,16 @@ describe('the pasteboard race is closed by ORDER, not by hope', () => {
     await handOffImages(deps, ['/pad/a.png', '/pad/b.png'], 'x')
     for (let i = 0; i < trace.length; i++) {
       if (trace[i] === 'paste') {
-        assert.ok(trace[i - 1].startsWith('verify('), 'a paste is only ever posted on a verified slot')
+        assert.equal(trace[i - 1], 'verify', 'a paste is only ever posted on a verified slot')
       }
     }
   })
 
-  test('a verify that TIMES OUT still pastes — a late image beats no image', async () => {
+  test('a verify that times out never posts an unproven paste', async () => {
     const { trace, deps } = recorder({ verifyServesPNG: async () => { trace.push('verify(timeout)'); return false } })
-    assert.equal(await handOffImages(deps, ['/pad/a.png'], 'x'), 1)
-    assert.ok(trace.includes('paste'))
+    assert.equal(await handOffImages(deps, ['/pad/a.png'], 'x'), 0)
+    assert.equal(trace.includes('paste'), false)
+    assert.equal(trace.at(-1), 'writeText(x)+record', 'the caller clipboard is still restored')
   })
 })
 
@@ -174,8 +190,8 @@ describe('several images go in order, each one isolated from the last', () => {
     assert.equal(trace.filter((s) => s === 'writeText(x)+record').length, 1, 'the text is restored once, at the end')
   })
 
-  test('two images of IDENTICAL size cannot verify against each other', async () => {
-    // Without the pre-clear the second verify would pass instantly against the
+  test('a stale image cannot satisfy the next image readiness check', async () => {
+    // Without the pre-clear the second verify could pass instantly against the
     // FIRST image — and the first would be pasted twice. The clear between them
     // is the whole defence, so it is asserted positionally.
     const { trace, deps } = recorder({ prepareImage: (p) => ({ image: { from: p }, bytes: 4096 }) })

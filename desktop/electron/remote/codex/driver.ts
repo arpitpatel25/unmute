@@ -705,35 +705,74 @@ export class CodexDesktopDriver {
         const focused = await cdp.focusComposer()
         observe('composer-focused', { ok: focused })
         if (!focused) return { ok: false as const, reason: 'no-composer' }
+        const composerTextBefore = await cdp.composerText()
+        const previewBefore = attachments.length ? await cdp.composerAttachmentCount() : 0
+        observe('composer-baseline', {
+          textChars: composerTextBefore.length,
+          attachments: previewBefore,
+          requestedTextChars: text.length,
+          requestedAttachments: attachments.length,
+        })
+        // A failed, retained Unmute draft may still be staged in Codex. Reuse
+        // an exact text match; never append to content the user typed directly
+        // in Codex, because that is indistinguishable from user-owned work.
+        if (composerTextBefore && composerTextBefore !== text) {
+          observe('composer-conflict', {
+            ok: false, existingTextChars: composerTextBefore.length,
+            requestedTextChars: text.length, existingAttachments: previewBefore,
+          })
+          return { ok: false as const, reason: 'composer-not-empty' }
+        }
         if (text) {
-          await cdp.focusComposer()
-          await cdp.typeText(text)
-          observe('text-typed', { chars: text.length })
-          await this.sleep(180)
-          const typed = await cdp.composerText()
-          observe('text-verified', { ok: typed === text, expectedChars: text.length, actualChars: typed.length })
-          if (typed !== text) return { ok: false as const, reason: 'text-mismatch' }
+          if (composerTextBefore === text) {
+            observe('text-reused', { chars: text.length })
+          } else {
+            await cdp.focusComposer()
+            await cdp.typeText(text)
+            observe('text-typed', { chars: text.length })
+            await this.sleep(180)
+            const typed = await cdp.composerText()
+            observe('text-verified', { ok: typed === text, expectedChars: text.length, actualChars: typed.length })
+            if (typed !== text) return { ok: false as const, reason: 'text-mismatch' }
+          }
         }
         if (attachments.length) {
-          const previewBefore = await cdp.composerAttachmentCount()
           observe('attachment-preview-baseline', { count: previewBefore })
-          observe('attachment-paste-started', { count: attachments.length, transport: 'native-command-v' })
-          const pasted = await this.pasteImages(text, attachments, (stage, fields) => {
-            observe(`clipboard-${stage}`, fields)
-          })
-          observe('attachment-paste-completed', { ok: pasted, count: attachments.length })
-          if (!pasted) return { ok: false as const, reason: 'attach-failed' }
-          const expected = previewBefore + attachments.length
-          let actual = previewBefore
-          for (let poll = 1; poll <= 25; poll++) {
-            actual = await cdp.composerAttachmentCount()
-            observe('attachment-preview-sample', { poll, expected, actual })
-            if (actual >= expected) break
-            await this.sleep(80)
+          // Text gives us a delivery-specific fingerprint for a retained
+          // Unmute draft. An image-only preview has no identity exposed by
+          // Codex, so treating it as ours could submit a file the user pasted
+          // directly. Fail closed in that ambiguous case.
+          const canReusePreviews = text.length > 0
+            && composerTextBefore === text
+            && previewBefore >= attachments.length
+          if (canReusePreviews) {
+            observe('attachment-preview-reused', { count: previewBefore, requested: attachments.length })
+          } else {
+            if (previewBefore > 0) {
+              observe('composer-conflict', {
+                ok: false, existingTextChars: composerTextBefore.length,
+                requestedTextChars: text.length, existingAttachments: previewBefore,
+              })
+              return { ok: false as const, reason: 'composer-not-empty' }
+            }
+            observe('attachment-paste-started', { count: attachments.length, transport: 'native-command-v' })
+            const pasted = await this.pasteImages(text, attachments, (stage, fields) => {
+              observe(`clipboard-${stage}`, fields)
+            })
+            observe('attachment-paste-completed', { ok: pasted, count: attachments.length })
+            if (!pasted) return { ok: false as const, reason: 'attach-failed' }
+            const expected = attachments.length
+            let actual = 0
+            for (let poll = 1; poll <= 25; poll++) {
+              actual = await cdp.composerAttachmentCount()
+              observe('attachment-preview-sample', { poll, expected, actual })
+              if (actual >= expected) break
+              await this.sleep(80)
+            }
+            const verified = actual >= expected
+            observe('attachment-preview-verified', { ok: verified, before: previewBefore, expected, actual })
+            if (!verified) return { ok: false as const, reason: 'attach-failed' }
           }
-          const verified = actual >= expected
-          observe('attachment-preview-verified', { ok: verified, before: previewBefore, expected, actual })
-          if (!verified) return { ok: false as const, reason: 'attach-failed' }
         } else {
           observe('attachment-paste-completed', { ok: true, count: 0, skipped: true })
         }
