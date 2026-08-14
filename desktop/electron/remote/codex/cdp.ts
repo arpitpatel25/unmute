@@ -641,6 +641,49 @@ export async function clickThreadRow(cdp: CodexCdp, threadId: string): Promise<b
 }
 
 /**
+ * Reach a thread through Codex's OWN chat search, in the background.
+ *
+ * The scroll/expand ladder can only click what Codex has rendered, so a thread
+ * outside its virtualised sidebar was unreachable and fell through to the
+ * codex:// deep link — and that raises Codex, because the app activates itself
+ * when handling its own URL (`open -g` does not stop it; measured). Search is
+ * driveable entirely over CDP with no activation, and — verified live — its
+ * results carry the DURABLE id in `data-app-action-sidebar-thread-id`, so the
+ * exact thread is clicked rather than matched by title.
+ *
+ * `query` narrows the result list; Codex filters as you type. The dialog is
+ * dismissed on every path, including failure, so a miss never leaves the user's
+ * Codex sitting open on a search box.
+ */
+export async function clickThreadRowViaSearch(
+  cdp: CodexCdp,
+  threadId: string,
+  query: string,
+  sleep: (ms: number) => Promise<void>,
+): Promise<boolean> {
+  if (!(await cdp.clickAriaLabel('Search'))) return false
+  try {
+    await sleep(400)
+    const focused = await cdp.evaluate<boolean>(`(() => {
+      const input = [...document.querySelectorAll('input')].find(i => i.offsetParent !== null);
+      if (!input) return false;
+      input.focus();
+      return true;
+    })()`)
+    if (!focused) return false
+    if (query) {
+      await cdp.typeText(query)
+      // Codex filters as you type; give the list a moment to settle.
+      await sleep(700)
+    }
+    return await clickThreadRow(cdp, threadId)
+  } finally {
+    // Escape whatever happened — a left-open dialog is worse than a miss.
+    await cdp.pressEscape().catch(() => {})
+  }
+}
+
+/**
  * Expand every collapsed sidebar section, so more rows become reachable.
  *
  * Measured: expanding a collapsed Recents took the DOM from 8 rows to 16, with

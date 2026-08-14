@@ -1985,6 +1985,12 @@ export class TaskManager extends EventEmitter {
         || turns[turns.length - 1].text !== task.conversation?.[task.conversation.length - 1]?.text
       if (changed) {
         task.conversation = turns
+        // Diagnosable on purpose: this path emitted nothing, so the only way to
+        // tell whether a card's chat view was being fed was to read meta.json
+        // off disk. That blind spot is part of why the empty view went unseen.
+        tlog.event('codex-cli-conversation-refreshed', {
+          turns: turns.length, rolloutId: task.codexRolloutId,
+        })
         this.emit('updated', task)
         void this.persistState(task).catch(() => {})
       }

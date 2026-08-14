@@ -23,7 +23,7 @@ import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
 import { getAxBridge } from '../ax/ax-bridge'
-import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, resetSidebarScroll, expandNextSidebarGroup, clickNextSidebarShowMore, advanceSidebarScroll, readReasoning, readReasoningLabel, setReasoning, readPendingConsent, answerConsent, readThreadChips, type CodexConsent, type CodexThreadChip, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
+import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, clickThreadRowViaSearch, resetSidebarScroll, expandNextSidebarGroup, clickNextSidebarShowMore, advanceSidebarScroll, readReasoning, readReasoningLabel, setReasoning, readPendingConsent, answerConsent, readThreadChips, type CodexConsent, type CodexThreadChip, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, watchThread, type CodexSnapshot } from './rollout'
 import { pasteDesktopTaskImages, type DesktopTaskImagePaste } from '../desktop-task-attachment-paste'
@@ -121,9 +121,19 @@ export interface SidebarSearchPort {
   expandOne(): Promise<boolean>
   clickShowMore(): Promise<boolean>
   advanceScroll(): Promise<boolean>
+  /** Codex's own chat search. Reaches threads the rendered sidebar does not. */
+  clickTargetViaSearch(): Promise<boolean>
 }
 
-/** Search Codex's virtualized sidebar without activating its native window. */
+/** Search Codex's virtualized sidebar without activating its native window.
+ *
+ * Scrolling and expanding can only find what Codex has RENDERED, so a thread
+ * outside its virtualised window was unreachable and fell through to the
+ * codex:// deep link — which raises Codex, because the app activates itself
+ * when handling its own URL scheme (`open -g` does not prevent that; measured).
+ * Codex's chat search reaches the rest, over CDP, with no activation. It runs
+ * last because it opens a dialog over the user's window, and the cheap
+ * in-place steps usually win. */
 export async function searchSidebarThread(
   port: SidebarSearchPort,
   sleep: (ms: number) => Promise<void>,
@@ -135,9 +145,9 @@ export async function searchSidebarThread(
     if (await port.expandOne()) { await sleep(160); continue }
     if (await port.clickShowMore()) { await sleep(160); continue }
     if (await port.advanceScroll()) { await sleep(100); continue }
-    return false
+    break
   }
-  return false
+  return port.clickTargetViaSearch()
 }
 
 export function threadNavigationFallback(background: boolean): 'fail' | 'deeplink' {
@@ -851,7 +861,10 @@ export class CodexDesktopDriver {
   async openThread(
     threadId: string,
     existing?: CodexCdp,
-    opts: { background?: boolean } = {},
+    /** `title` narrows Codex's chat search. Without it the search still runs,
+     *  but only over the list Codex shows by default, so a title makes an
+     *  off-screen thread far more likely to be reachable in the background. */
+    opts: { background?: boolean; title?: string } = {},
   ): Promise<boolean> {
     const bare = bareThreadId(threadId)
 
@@ -916,6 +929,7 @@ export class CodexDesktopDriver {
       expandOne: () => expandNextSidebarGroup(cdp),
       clickShowMore: () => clickNextSidebarShowMore(cdp),
       advanceScroll: () => advanceSidebarScroll(cdp),
+      clickTargetViaSearch: () => clickThreadRowViaSearch(cdp, threadId, opts.title ?? '', (ms) => this.sleep(ms)),
     }, (ms) => this.sleep(ms))
     if (found && await settle('sidebar-search')) return true
     log.warn('codex-thread-background-unreachable', { threadId: bare })

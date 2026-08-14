@@ -21,6 +21,10 @@ test('the real background open path never invokes the deep-link boundary', async
   const cdp = {
     evaluate: async (expression: string) => expression.includes('advanceSidebarScroll') ? false : '',
     click: async () => {},
+    // Codex search is the last background rung; a build with no Search control
+    // must still fail safely rather than reach for the deep link.
+    clickAriaLabel: async () => false,
+    pressEscape: async () => {},
   } as any
 
   assert.equal(await driver.openThread('unreachable-thread', cdp, { background: true }), false)
@@ -95,8 +99,50 @@ test('sidebar search is bounded and returns false when Codex cannot render the t
     expandOne: async () => false,
     clickShowMore: async () => false,
     advanceScroll: async () => false,
+    clickTargetViaSearch: async () => false,
   }
 
   assert.equal(await searchSidebarThread(port, async () => {}), false)
   assert.equal(attempts, 1)
+})
+
+// The scroll-and-expand ladder can only find a thread Codex has RENDERED. A
+// thread outside its virtualised window is invisible to it, and the fallback
+// for that is the codex:// deep link — which raises Codex, because the app
+// activates itself when it handles its own URL scheme (`open -g` does not
+// prevent it; measured).
+//
+// Codex has its own chat search, and it is reachable over CDP with no
+// activation: its results carry the durable id in
+// `data-app-action-sidebar-thread-id`, so the exact thread can be clicked
+// rather than guessed at by title.
+test('the ladder asks Codex search before giving up on background navigation', async () => {
+  const calls: string[] = []
+  const found = await searchSidebarThread({
+    resetScroll: async () => { calls.push('resetScroll') },
+    clickTarget: async () => { calls.push('clickTarget'); return false },
+    expandOne: async () => { calls.push('expandOne'); return false },
+    clickShowMore: async () => { calls.push('clickShowMore'); return false },
+    advanceScroll: async () => { calls.push('advanceScroll'); return false },
+    clickTargetViaSearch: async () => { calls.push('clickTargetViaSearch'); return true },
+  }, async () => {})
+
+  assert.equal(found, true, 'a thread only reachable through search must still be found')
+  assert.ok(
+    calls.indexOf('clickTargetViaSearch') > calls.indexOf('advanceScroll'),
+    'search is the last resort before the deep link, not the first move',
+  )
+})
+
+test('background navigation fails without a deep link when even search cannot find the thread', async () => {
+  const found = await searchSidebarThread({
+    resetScroll: async () => {},
+    clickTarget: async () => false,
+    expandOne: async () => false,
+    clickShowMore: async () => false,
+    advanceScroll: async () => false,
+    clickTargetViaSearch: async () => false,
+  }, async () => {})
+
+  assert.equal(found, false)
 })
