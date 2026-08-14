@@ -137,6 +137,9 @@ export interface HandoffDeps<Prepared = unknown> {
   settle: (ms: number) => Promise<void>
   /** Never throws out of the hand-off; a failed image must not cost the text. */
   warn: (message: string, err?: unknown) => void
+  /** Optional dev diagnostics. It is observational only: a broken logger must
+   * never interfere with clipboard delivery. */
+  observe?: (stage: string, fields: Record<string, unknown>) => void
 }
 
 /** Long enough for a target app to have served a posted ⌘V. The pre-branch
@@ -163,6 +166,9 @@ export async function handOffImages<Prepared>(
   restoreText: string,
 ): Promise<number> {
   if (!images.length) return 0
+  const observe = (stage: string, fields: Record<string, unknown> = {}) => {
+    try { deps.observe?.(stage, fields) } catch { /* diagnostics never alter delivery */ }
+  }
 
   // WHO IS RECEIVING THIS — read once, here, and never on a path that has no
   // images to hand over (the early return above is above this line on purpose).
@@ -176,35 +182,45 @@ export async function handOffImages<Prepared>(
   } catch (err) {
     deps.warn('[clipboard] could not read the frontmost app — pasting images with ⌘V', err)
   }
+  observe('handoff-started', { images: images.length, modifier })
 
   // The text's ⌘V has been POSTED, not necessarily served. Nothing may touch
   // the pasteboard until the target app has had it.
   await deps.settle(SETTLE_MS)
 
   let pasted = 0
-  for (const path of images) {
+  for (const [index, path] of images.entries()) {
     // OUTSIDE the try that touches the pasteboard, and outside the clear→write
     // window by construction: the decode happens here, once, and the write
     // below is handed the result.
     let prepared: { image: Prepared; bytes: number } | null = null
+    observe('image-prepare-started', { index, path })
     try {
       prepared = deps.prepareImage(path)
     } catch (err) {
+      observe('image-prepare-failed', { index, path, error: err instanceof Error ? err.message : String(err) })
       deps.warn(`[clipboard] image unreadable, skipped: ${path}`, err)
       continue
     }
     if (!prepared || !prepared.bytes) {
+      observe('image-prepare-failed', { index, path, error: 'unreadable-or-empty' })
       deps.warn(`[clipboard] image unreadable, skipped: ${path}`)
       continue
     }
+    observe('image-prepared', { index, path, bytes: prepared.bytes })
     try {
       deps.clearAndRecord()
       deps.writeImageAndRecord(prepared.image)
-      await deps.verifyServesPNG(prepared.bytes)
+      observe('pasteboard-written', { index, path, bytes: prepared.bytes })
+      const verified = await deps.verifyServesPNG(prepared.bytes)
+      observe('pasteboard-verified', { index, path, bytes: prepared.bytes, verified })
       await deps.paste(modifier)
+      observe('paste-posted', { index, path, modifier })
       pasted++
       await deps.settle(SETTLE_MS)
+      observe('image-settled', { index, path, settleMs: SETTLE_MS })
     } catch (err) {
+      observe('image-paste-failed', { index, path, error: err instanceof Error ? err.message : String(err) })
       // One image failing must not abandon the rest, and must never reach the
       // dictation path. The text is already delivered.
       deps.warn(`[clipboard] image paste failed: ${path}`, err)
@@ -216,8 +232,11 @@ export async function handOffImages<Prepared>(
   // one to re-discover.
   try {
     deps.writeTextAndRecord(restoreText)
+    observe('clipboard-restored', { textChars: restoreText.length })
   } catch (err) {
+    observe('clipboard-restore-failed', { error: err instanceof Error ? err.message : String(err) })
     deps.warn('[clipboard] restoring the delivered text failed', err)
   }
+  observe('handoff-finished', { requested: images.length, pasted })
   return pasted
 }

@@ -581,30 +581,54 @@ export class CodexDesktopDriver {
     return { ok: false, reason: 'send-failed' }
   }
 
-  async sendWithAttachments(threadId: string, text: string, attachments: readonly string[]): Promise<{ ok: boolean; reason?: string }> {
+  async sendWithAttachments(
+    threadId: string,
+    text: string,
+    attachments: readonly string[],
+    observer?: (stage: string, fields: Record<string, unknown>) => void,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const observe = (stage: string, fields: Record<string, unknown> = {}) => {
+      try { observer?.(stage, fields) } catch { /* diagnostics never alter delivery */ }
+    }
     const cdp = await this.connect()
+    observe('cdp-connect', { ok: !!cdp })
     if (!cdp) return { ok: false, reason: 'not-armed' }
-    if (!(await this.openThread(threadId, cdp, { background: true }))) return { ok: false, reason: 'thread-not-found' }
+    const opened = await this.openThread(threadId, cdp, { background: true })
+    observe('thread-open', { ok: opened, threadId, background: true })
+    if (!opened) return { ok: false, reason: 'thread-not-found' }
     const before = await this.snapshot(threadId)
+    observe('baseline-read', { turnsStarted: before.turnsStarted })
     await this.sleep(500)
-    if (!(await cdp.focusComposer())) return { ok: false, reason: 'no-composer' }
-    if (!(await cdp.attachFiles(attachments))) return { ok: false, reason: 'attach-failed' }
+    const focused = await cdp.focusComposer()
+    observe('composer-focused', { ok: focused })
+    if (!focused) return { ok: false, reason: 'no-composer' }
+    const attached = await cdp.attachFiles(attachments)
+    observe('files-attached', { ok: attached, count: attachments.length })
+    if (!attached) return { ok: false, reason: 'attach-failed' }
     await this.sleep(180)
     if (text) {
       await cdp.focusComposer()
       await cdp.typeText(text)
+      observe('text-typed', { chars: text.length })
       await this.sleep(180)
-      if ((await cdp.composerText()) !== text) return { ok: false, reason: 'text-mismatch' }
+      const typed = await cdp.composerText()
+      observe('text-verified', { ok: typed === text, expectedChars: text.length, actualChars: typed.length })
+      if (typed !== text) return { ok: false, reason: 'text-mismatch' }
     }
     await cdp.pressEnter()
+    observe('submit-key', { key: 'Enter' })
     // Pressing Enter is only an attempt. The rollout is the durable authority:
     // a new task_started event proves Codex accepted this turn, including an
     // image-only turn whose text composer was empty before submission.
     for (let i = 0; i < 20; i++) {
       await this.sleep(200)
       const after = await this.snapshot(threadId)
-      if (after.turnsStarted > before.turnsStarted) return { ok: true }
+      if (after.turnsStarted > before.turnsStarted) {
+        observe('rollout-confirmed', { poll: i + 1, before: before.turnsStarted, after: after.turnsStarted })
+        return { ok: true }
+      }
     }
+    observe('rollout-timeout', { polls: 20, turnsStarted: before.turnsStarted })
     return { ok: false, reason: 'send-failed' }
   }
 

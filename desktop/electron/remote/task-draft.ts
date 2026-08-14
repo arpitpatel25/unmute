@@ -24,6 +24,7 @@ const copyDraft = (draft: TaskDraft): TaskDraft => ({
  */
 export class TaskDraftStore {
   private drafts = new Map<string, TaskDraft>()
+  private traceIds = new Map<string, string>()
   /** Image paste crosses AppKit → IPC → disk before it can enter a draft.
    * Keep that work task-scoped so a subsequent Enter cannot overtake it. */
   private attachmentStages = new Map<string, Promise<void>>()
@@ -31,6 +32,16 @@ export class TaskDraftStore {
 
   get(taskId: string): TaskDraft {
     return copyDraft(this.drafts.get(taskId) ?? emptyDraft())
+  }
+
+  /** Stable only for the lifetime of the current unsent draft. It correlates
+   * input events that happen before a delivery attempt has its own id. */
+  traceId(taskId: string): string {
+    const existing = this.traceIds.get(taskId)
+    if (existing) return existing
+    const id = randomUUID()
+    this.traceIds.set(taskId, id)
+    return id
   }
 
   setText(taskId: string, text: string): TaskDraft {
@@ -108,6 +119,8 @@ export class TaskDraftStore {
     const current = this.get(taskId)
     if (JSON.stringify(current) !== JSON.stringify(snapshot)) return false
     this.drafts.set(taskId, emptyDraft())
+    this.traceIds.delete(taskId)
     return true
   }
 }
+import { randomUUID } from 'node:crypto'

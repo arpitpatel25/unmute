@@ -186,19 +186,19 @@ let remoteDispatchQueue: Promise<void> = Promise.resolve()
 registerPaste(async (text: string, images?: readonly string[]) => { await injectOutput(text, images) })
 registerHistoryCopy((text: string, images: readonly string[]) => { stageHistoryPaste(text, images) })
 let taskPasteChain: Promise<unknown> = Promise.resolve()
-registerTaskImagePaste((text, images, paste) => {
+registerTaskImagePaste((text, images, paste, observe) => {
   const run = taskPasteChain.then(async () => {
     beginOwnClipboardSequence()
-    try { return await injectImagesIntoTask(text, images, paste) }
+    try { return await injectImagesIntoTask(text, images, paste, observe) }
     finally { try { endOwnClipboardSequence(Date.now()) } catch { /* watcher not armed */ } }
   })
   taskPasteChain = run.catch(() => {})
   return run
 })
-registerDesktopTaskImagePaste((text, images) => {
+registerDesktopTaskImagePaste((text, images, observe) => {
   const run = taskPasteChain.then(async () => {
     beginOwnClipboardSequence()
-    try { return await injectImagesIntoDesktopTask(text, images) }
+    try { return await injectImagesIntoDesktopTask(text, images, observe) }
     finally { try { endOwnClipboardSequence(Date.now()) } catch { /* watcher not armed */ } }
   })
   taskPasteChain = run.catch(() => {})

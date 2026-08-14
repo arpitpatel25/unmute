@@ -49,6 +49,22 @@ describe('nothing to hand over costs nothing', () => {
 })
 
 describe('the pasteboard race is closed by ORDER, not by hope', () => {
+  test('diagnostics report every image boundary including verification and paste result', async () => {
+    const events: Array<{ stage: string; fields: Record<string, unknown> }> = []
+    const { deps } = recorder({
+      observe: (stage, fields) => { events.push({ stage, fields }) },
+      verifyServesPNG: async () => false,
+    })
+    await handOffImages(deps, ['/pad/a.png'], 'x')
+    assert.deepEqual(events.map((event) => event.stage), [
+      'handoff-started', 'image-prepare-started', 'image-prepared',
+      'pasteboard-written', 'pasteboard-verified', 'paste-posted',
+      'image-settled', 'clipboard-restored', 'handoff-finished',
+    ])
+    assert.equal(events.find((event) => event.stage === 'pasteboard-verified')?.fields.verified, false)
+    assert.equal(events.at(-1)?.fields.pasted, 1)
+  })
+
   test('one image: settle, decode, pre-clear, write, child-verify, paste, settle, restore', async () => {
     const { trace, deps } = recorder()
     const pasted = await handOffImages(deps, ['/pad/a.png'], ' the words ')

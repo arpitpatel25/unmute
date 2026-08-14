@@ -517,6 +517,7 @@ export async function injectImagesIntoTask(
   _text: string,
   images: readonly string[],
   paste: () => Promise<boolean>,
+  observe?: (stage: string, fields: Record<string, unknown>) => void,
 ): Promise<boolean> {
   if (!images.length) return true
   return serializeImageHandoff(async () => {
@@ -539,6 +540,7 @@ export async function injectImagesIntoTask(
     },
     settle: sleep,
     warn: (m: string, err?: unknown) => console.warn(m, err instanceof Error ? err.message : err ?? ''),
+    observe,
     }, images, restoreText)
     if (restoreHasImage) {
       clipboard.write({ text: restoreText, image: restoreImage })
@@ -550,11 +552,15 @@ export async function injectImagesIntoTask(
 
 /** Hand images to the currently activated desktop composer with Command-V.
  * The caller owns addressing and focus for the full operation. */
-export async function injectImagesIntoDesktopTask(text: string, images: readonly string[]): Promise<boolean> {
+export async function injectImagesIntoDesktopTask(
+  text: string,
+  images: readonly string[],
+  observe?: (stage: string, fields: Record<string, unknown>) => void,
+): Promise<boolean> {
   return injectImagesIntoTask(text, images, async () => {
     await simulateKeyCombo('v', 'command')
     return true
-  })
+  }, observe)
 }
 
 const historyPasteStage = new HistoryPasteStage()

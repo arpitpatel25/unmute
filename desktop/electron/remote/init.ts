@@ -88,6 +88,14 @@ import {
 } from './curator-store'
 import { writeSkill } from './curator-writer'
 import { devlog, devEvent } from './curator-devlog'
+import {
+  beginTaskReplyTrace,
+  emitTaskReplyInput,
+  emitTaskReplyStep,
+  finishTaskReplyTrace,
+  type TaskReplySource,
+  type TaskReplyTrace,
+} from './task-reply-trace'
 import { createClipboardWatch } from './capture/clipboardWatch'
 import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
@@ -453,13 +461,25 @@ const taskDrafts = new TaskDraftStore()
 
 async function addDraftImageFromPath(id: string, sourcePath: string, mimeType: string, name: string): Promise<void> {
   if (!manager || !manager.get(id)) return
+  const draftId = taskDrafts.traceId(id)
+  const startedAt = Date.now()
+  emitTaskReplyInput(log, {
+    taskId: id, draftId, source: 'task-composer', action: 'attachment-stage-started',
+    sourcePath, mimeType, name,
+  })
   try {
     await taskDrafts.stageAttachment(id, async () => {
       try {
         const data = await fs.readFile(sourcePath)
         const ext = (basename(name).split('.').pop() || mimeType.split('/').pop() || 'png').replace(/[^a-z0-9]/gi, '')
         const path = await manager?.attachFile(id, data, ext)
-        return path ? { id: randomUUID(), path, mimeType, name: name || basename(path) } : null
+        const attachment = path ? { id: randomUUID(), path, mimeType, name: name || basename(path) } : null
+        emitTaskReplyInput(log, {
+          taskId: id, draftId, source: 'task-composer', action: attachment ? 'attachment-stage-succeeded' : 'attachment-stage-refused',
+          sourcePath, ownedPath: attachment?.path ?? null, attachmentId: attachment?.id ?? null,
+          mimeType, name, bytes: data.byteLength, elapsedMs: Date.now() - startedAt,
+        })
+        return attachment
       } finally {
         // AppKit creates this solely as an IPC handoff. Once copied into the
         // task-owned directory it must not accumulate in the system temp folder.
@@ -467,36 +487,88 @@ async function addDraftImageFromPath(id: string, sourcePath: string, mimeType: s
       }
     })
   } catch (error) {
+    emitTaskReplyInput(log, {
+      taskId: id, draftId, source: 'task-composer', action: 'attachment-stage-failed',
+      sourcePath, mimeType, name, elapsedMs: Date.now() - startedAt, error: (error as Error).message,
+    })
     log.warn('draft image staging failed', { taskId: id, error: (error as Error).message })
     notchController?.toast('That image could not be attached. Paste it again to retry.')
   }
 }
 
-async function deliverTaskDraftSnapshot(id: string, draft: import('./task-draft').TaskDraft): Promise<boolean> {
-  if (!manager) return false
+async function deliverTaskDraftSnapshot(
+  id: string,
+  draft: import('./task-draft').TaskDraft,
+  trace?: TaskReplyTrace,
+): Promise<boolean> {
+  if (!manager) {
+    if (trace) emitTaskReplyStep(log, trace, 'delivery-preflight', 'failed', { reason: 'task-manager-unavailable' })
+    return false
+  }
   const task = manager.get(id)
-  if (!task) return false
+  if (!task) {
+    if (trace) emitTaskReplyStep(log, trace, 'delivery-preflight', 'failed', { reason: 'task-no-longer-exists' })
+    return false
+  }
   const text = draft.text
-  if (!text.trim() && !draft.attachments.length) return false
-  const accepted = !draft.attachments.length && manager.tasksAwaitingUser().some((entry) => entry.id === id)
+  if (!text.trim() && !draft.attachments.length) {
+    if (trace) emitTaskReplyStep(log, trace, 'delivery-preflight', 'refused', { reason: 'empty-draft' })
+    return false
+  }
+  const isPendingAnswer = !draft.attachments.length && manager.tasksAwaitingUser().some((entry) => entry.id === id)
+  if (isPendingAnswer && trace) {
+    emitTaskReplyStep(log, trace, 'provider-selected', 'succeeded', {
+      agent: task.agent ?? 'claude', model: task.model ?? null, taskState: task.state,
+      transport: 'pending-question-answer-handler', hasOpenAsk: !!task.openAsk,
+    })
+  }
+  const accepted = isPendingAnswer
     ? manager.answer(id, text)
-    : await manager.deliverDraft(id, text, draft.attachments.map((attachment) => attachment.path))
+    : await manager.deliverDraft(id, text, draft.attachments.map((attachment) => attachment.path), trace)
+  if (isPendingAnswer && trace) {
+    emitTaskReplyStep(log, trace, 'transport-result', accepted ? 'succeeded' : 'failed', {
+      reason: accepted ? 'answer-handler-accepted' : 'answer-handler-refused', draftRetained: !accepted,
+    })
+  }
   return accepted
 }
 
-async function sendTaskDraft(id: string): Promise<boolean> {
+async function sendTaskDraft(id: string, source: TaskReplySource = 'task-composer'): Promise<boolean> {
+  const before = taskDrafts.get(id)
+  const draftId = taskDrafts.traceId(id)
+  const trace = beginTaskReplyTrace(log, {
+    taskId: id, draftId, source, textChars: before.text.length, attachments: before.attachments.length,
+  })
   // A fast Enter after Command-V must include the image whose disk handoff is
   // still in flight; otherwise the text is sent alone and the image appears in
   // a now-empty composer a moment later.
+  emitTaskReplyStep(log, trace, 'attachment-staging-barrier', 'started')
   if (!(await taskDrafts.whenSettled(id))) {
+    emitTaskReplyStep(log, trace, 'attachment-staging-barrier', 'failed', { draftRetained: true })
+    finishTaskReplyTrace(log, trace, 'failed', { reason: 'attachment-staging-failed', draftDisposition: 'retained' })
     log.warn('draft send refused after image staging failure', { taskId: id })
     notchController?.toast('The image is not attached yet. Paste it again before sending.')
     return false
   }
+  emitTaskReplyStep(log, trace, 'attachment-staging-barrier', 'succeeded')
   const draft = taskDrafts.snapshot(id)
-  if (!draft) return false
-  const accepted = await deliverTaskDraftSnapshot(id, draft)
-  if (accepted) taskDrafts.clearIfUnchanged(id, draft)
+  if (!draft) {
+    finishTaskReplyTrace(log, trace, 'refused', { reason: 'empty-draft', draftDisposition: 'empty' })
+    return false
+  }
+  emitTaskReplyStep(log, trace, 'draft-snapshot', 'succeeded', {
+    textChars: draft.text.length,
+    attachments: draft.attachments.map((attachment, index) => ({
+      index, id: attachment.id, path: attachment.path, mimeType: attachment.mimeType, name: attachment.name,
+    })),
+  })
+  const accepted = await deliverTaskDraftSnapshot(id, draft, trace)
+  const cleared = accepted && taskDrafts.clearIfUnchanged(id, draft)
+  finishTaskReplyTrace(log, trace, accepted ? 'succeeded' : 'failed', {
+    reason: accepted ? 'provider-accepted' : 'provider-refused',
+    draftDisposition: cleared ? 'cleared' : 'retained',
+    draftChangedDuringSend: accepted && !cleared,
+  })
   return accepted
 }
 /** The Codex CLI App Server. One per app; started lazily by the hub itself. */
@@ -1904,7 +1976,15 @@ async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promi
       const mgr = manager
       if (target === 'openTask' && orchestrateFocusId && mgr?.get(orchestrateFocusId)) {
         const fid = orchestrateFocusId
-        if (await mgr.deliverDraft(fid, text, attachments)) return fid
+        const trace = beginTaskReplyTrace(log, {
+          taskId: fid, source: 'scratchpad-open-task', textChars: text.length, attachments: attachments.length,
+        })
+        const accepted = await mgr.deliverDraft(fid, text, attachments, trace)
+        finishTaskReplyTrace(log, trace, accepted ? 'succeeded' : 'failed', {
+          reason: accepted ? 'provider-accepted' : 'provider-refused',
+          draftDisposition: accepted ? 'scratchpad-delivery-committed' : 'scratchpad-retained',
+        })
+        if (accepted) return fid
         // It couldn't take it (terminal/gone) — route it as a new task rather
         // than dropping work the user already committed.
         log.warn('focused task refused the pad — routing it as a new task', { taskId: fid })
@@ -2390,14 +2470,35 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
     const text = completeFn ? ((await cleanIntent(raw, completeFn)).intent || raw) : raw
     // Right-Option capture and the visible composer are one draft. Captured
     // images stay as attachments rather than being rendered as filesystem paths.
+    let trace: TaskReplyTrace | null = null
     const accepted = await deliverAddressedCapture({
       taskId: fid,
       text,
       attachments,
       drafts: taskDrafts,
-      onStaged: () => notchController?.refresh(),
-      deliver: deliverTaskDraftSnapshot,
+      onStaged: (_taskId, snapshot) => {
+        const draftId = taskDrafts.traceId(fid)
+        emitTaskReplyInput(log, {
+          taskId: fid, draftId, source: 'right-option', action: 'capture-staged',
+          rawTextChars: raw.length, cleanedTextChars: text.length,
+          attachments: snapshot.attachments.map((attachment, index) => ({
+            index, id: attachment.id, path: attachment.path, mimeType: attachment.mimeType, name: attachment.name,
+          })),
+        })
+        trace = beginTaskReplyTrace(log, {
+          taskId: fid, draftId, source: 'right-option',
+          textChars: snapshot.text.length, attachments: snapshot.attachments.length,
+        })
+        notchController?.refresh()
+      },
+      deliver: (taskId, snapshot) => deliverTaskDraftSnapshot(taskId, snapshot, trace ?? undefined),
     })
+    if (trace) {
+      finishTaskReplyTrace(log, trace, accepted ? 'succeeded' : 'failed', {
+        reason: accepted ? 'provider-accepted' : 'provider-refused',
+        draftDisposition: accepted ? 'cleared-if-unchanged' : 'retained',
+      })
+    }
     notchController?.refresh()
     log.event('capture-addressed-delivery', { taskId: fid, attachments: attachments.length, accepted })
     pendingBeat = accepted ? '' : 'That didn\u2019t land. Your reply is still in the task.'
@@ -3102,10 +3203,24 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         getTask: (id) => { const t = mgr.get(id); return t ? serializeTask(t) : undefined },
         answer: (id, text) => mgr.answer(id, text),
         getDraft: (id) => taskDrafts.get(id),
-        setDraftText: (id, text) => { taskDrafts.setText(id, text) },
+        setDraftText: (id, text) => {
+          const before = taskDrafts.get(id)
+          const draftId = taskDrafts.traceId(id)
+          taskDrafts.setText(id, text)
+          emitTaskReplyInput(log, {
+            taskId: id, draftId, source: 'task-composer', action: 'text-edited',
+            beforeChars: before.text.length, afterChars: text.length,
+            deltaChars: text.length - before.text.length, attachments: before.attachments.length,
+          })
+        },
         addDraftImage: (id, path, mimeType, name) => addDraftImageFromPath(id, path, mimeType, name),
         removeDraftAttachment: async (id, attachmentId) => {
+          const draftId = taskDrafts.traceId(id)
           const attachment = taskDrafts.removeAttachment(id, attachmentId)
+          emitTaskReplyInput(log, {
+            taskId: id, draftId, source: 'task-composer', action: attachment ? 'attachment-removed' : 'attachment-remove-missed',
+            attachmentId, path: attachment?.path ?? null, remainingAttachments: taskDrafts.get(id).attachments.length,
+          })
           if (attachment) await fs.unlink(attachment.path).catch(() => {})
         },
         sendDraft: (id) => sendTaskDraft(id),

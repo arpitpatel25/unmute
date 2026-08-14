@@ -88,6 +88,32 @@ test('attachment-only delivery waits for the attachment preview to clear', async
   assert.equal(snapshotReads, 4, 'an already-empty text box is not submission proof')
 })
 
+test('Codex attachment delivery reports every CDP boundary to the correlated observer', async () => {
+  const stages: string[] = []
+  let snapshotReads = 0
+  const driver = new CodexDesktopDriver({ sleep: async () => {} }) as any
+  driver.snapshot = async () => ({ turnsStarted: ++snapshotReads < 3 ? 4 : 5 })
+  driver.cdp = {
+    connected: true,
+    focusComposer: async () => true,
+    attachFiles: async () => true,
+    typeText: async () => {},
+    composerText: async () => 'send this',
+    pressEnter: async () => {},
+  }
+  driver.openThread = async () => true
+
+  const result = await driver.sendWithAttachments(
+    'thread-1', 'send this', ['/tmp/one.png'],
+    (stage: string) => { stages.push(stage) },
+  )
+  assert.deepEqual(result, { ok: true })
+  assert.deepEqual(stages, [
+    'cdp-connect', 'thread-open', 'baseline-read', 'composer-focused',
+    'files-attached', 'text-typed', 'text-verified', 'submit-key', 'rollout-confirmed',
+  ])
+})
+
 test('closing CDP rejects an outstanding file chooser wait instead of leaving delivery hung', async () => {
   const cdp = Object.create(CodexCdp.prototype) as any
   cdp.ws = { close() {} }

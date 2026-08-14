@@ -17,7 +17,7 @@
 // Everything user-observable is logged via log.ui() and every state change via
 // log.event() so the session logs alone reconstruct the experience.
 
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
@@ -61,6 +61,11 @@ import { beat, pendingApprovals, expireStaleApprovals, decideApproval, clearAppr
 import { devEvent } from './curator-devlog'
 import { pasteTaskImages } from './task-attachment-paste'
 import { pasteDesktopTaskImages } from './desktop-task-attachment-paste'
+import {
+  beginTaskReplyTrace,
+  emitTaskReplyStep,
+  type TaskReplyTrace,
+} from './task-reply-trace'
 
 const log = createLogger('task-manager')
 
@@ -3587,49 +3592,104 @@ export class TaskManager extends EventEmitter {
 
   /** Deliver an attachment-bearing draft through the provider's native image
    * channel. Filesystem paths are never rendered into the user's message. */
-  async deliverDraft(id: string, text: string, attachments: readonly string[]): Promise<boolean> {
+  async deliverDraft(id: string, text: string, attachments: readonly string[], inputTrace?: TaskReplyTrace): Promise<boolean> {
     const task = this.tasks.get(id)
-    if (!task) return false
+    if (!task) {
+      if (inputTrace) emitTaskReplyStep(log, inputTrace, 'delivery-preflight', 'failed', { reason: 'task-no-longer-exists' })
+      return false
+    }
+    const tlog = log.child({ taskId: id })
+    const trace = inputTrace ?? beginTaskReplyTrace(tlog, {
+      taskId: id, source: 'internal', textChars: text.length, attachments: attachments.length,
+    })
+    const attachmentDetails = await Promise.all(attachments.map(async (path, index) => ({
+      index,
+      path,
+      name: basename(path),
+      bytes: await fs.stat(path).then((entry) => entry.size).catch(() => null),
+    })))
+    const common = {
+      agent: task.agent ?? 'claude',
+      model: task.model ?? null,
+      taskState: task.state,
+      taskKind: task.kind ?? 'oneoff',
+      sessionId: task.sessionId,
+      codexThreadId: task.codexThreadId ?? null,
+      claudeDesktopSessionId: task.claudeDesktopSessionId ?? null,
+      permissionMode: this.opts.permissionMode?.() ?? 'ask',
+      codexModel: this.opts.codexCliChoice?.().model ?? null,
+      codexEffort: this.opts.codexCliChoice?.().effort ?? null,
+      codexFullAccess: this.opts.codexFullAccess?.() ?? false,
+      textChars: text.length,
+      attachments: attachmentDetails,
+      hasOpenAsk: !!task.openAsk,
+      hasExecutor: !!this.executors.get(id)?.alive,
+    }
+    const selected = (transport: string, fields: Record<string, unknown> = {}) => {
+      emitTaskReplyStep(tlog, trace, 'provider-selected', 'succeeded', { ...common, transport, ...fields })
+    }
+    const outcome = (ok: boolean, reason: string, fields: Record<string, unknown> = {}): boolean => {
+      emitTaskReplyStep(tlog, trace, 'transport-result', ok ? 'succeeded' : 'failed', { reason, ...fields })
+      return ok
+    }
     // An attachment is content, not an answer to a permission/question picker.
     // Refuse the whole draft so neither the text nor image can accidentally
     // activate the highlighted choice; the visible draft remains retryable.
     if (attachments.length && (task.state === 'needs-user' || task.openAsk)) {
+      selected('blocked-state-refusal')
       task.deliveryError = 'Answer the pending question before sending attachments'
       this.emit('updated', task)
-      return false
+      return outcome(false, 'pending-question-does-not-accept-attachments', { draftRetained: true })
     }
     if (task.agent === 'codex-desktop') {
+      selected('codex-desktop-cdp', { driverAvailable: !!this.opts.codexDriver, threadAddressable: !!task.codexThreadId })
       const driver = this.opts.codexDriver
-      if (!driver || !task.codexThreadId) return false
-      const result = await driver.sendWithAttachments(task.codexThreadId, text, attachments)
-      if (!result.ok) { task.deliveryError = `Could not send to Codex (${result.reason})`; this.emit('updated', task); return false }
-      return true
+      if (!driver || !task.codexThreadId) return outcome(false, 'codex-desktop-driver-or-thread-unavailable', { draftRetained: true })
+      emitTaskReplyStep(tlog, trace, 'provider-call', 'started', { operation: 'sendWithAttachments' })
+      const result = await driver.sendWithAttachments(task.codexThreadId, text, attachments, (stage, fields) => {
+        const ok = fields.ok
+        emitTaskReplyStep(tlog, trace, `codex-desktop-${stage}`, ok === false || stage.includes('timeout') ? 'failed' : 'succeeded', fields)
+      })
+      if (!result.ok) {
+        task.deliveryError = `Could not send to Codex (${result.reason})`
+        this.emit('updated', task)
+        return outcome(false, result.reason ?? 'codex-desktop-send-failed', { draftRetained: true })
+      }
+      return outcome(true, 'codex-rollout-confirmed')
     }
     if (task.agent === 'claude-code-desktop') {
       if (attachments.length) {
+        selected('claude-desktop-native-composer', { actuatorAvailable: !!this.opts.claudeActuator, conversationAddressable: !!task.name })
         const actuator = this.opts.claudeActuator
-        if (!actuator || !task.name) return false
+        if (!actuator || !task.name) return outcome(false, 'claude-actuator-or-conversation-unavailable', { draftRetained: true })
+        emitTaskReplyStep(tlog, trace, 'provider-call', 'started', { operation: 'sendWithAttachmentsTo' })
         const result = await actuator.sendWithAttachmentsTo(
           task.name,
           text,
-          () => pasteDesktopTaskImages(text, attachments),
+          () => pasteDesktopTaskImages(text, attachments, (stage, fields) => {
+            emitTaskReplyStep(tlog, trace, `pasteboard-${stage}`, stage.includes('failed') ? 'failed' : 'succeeded', fields)
+          }),
         )
         if (!result.ok) {
           task.deliveryError = `Could not send attachments to Claude (${result.reason ?? 'failed'})`
           this.emit('updated', task)
-          return false
+          return outcome(false, result.reason ?? 'claude-desktop-send-failed', { draftRetained: true })
         }
         delete task.deliveryError
         this.transition(id, 'processing')
-        return true
+        return outcome(true, 'claude-desktop-submit-key-posted')
       }
+      selected('claude-desktop-native-composer', { actuatorAvailable: !!this.opts.claudeActuator, conversationAddressable: !!task.name })
+      emitTaskReplyStep(tlog, trace, 'provider-call', 'started', { operation: 'sendClaudeDesktop' })
       const result = await this.sendClaudeDesktop(id, text)
-      return result.ok
+      return outcome(result.ok, result.ok ? 'claude-desktop-send-completed' : (result.reason ?? 'claude-desktop-send-failed'), { draftRetained: !result.ok })
     }
 
     // Codex app-server has a first-class localImage input. This is the native
     // structured transport and does not involve the PTY view at all.
     if (task.agent === 'codex' && this.opts.codexHub?.threadIdFor(id)) {
+      selected('codex-app-server', { hubThreadId: this.opts.codexHub.threadIdFor(id) })
+      emitTaskReplyStep(tlog, trace, 'provider-call', 'started', { operation: 'turn/start', localImages: attachments.length })
       const ok = await this.opts.codexHub.send(id, text, {
         effort: this.opts.codexCliChoice?.().effort,
         attachments,
@@ -3638,46 +3698,66 @@ export class TaskManager extends EventEmitter {
         task.deliveryError = 'Could not deliver Codex attachments'
         this.emit('updated', task)
       }
-      return ok
+      return outcome(ok, ok ? 'codex-app-server-accepted-turn' : 'codex-app-server-refused-turn', { draftRetained: !ok })
     }
 
     if (task.agent === 'codex' && attachments.length) {
+      selected('legacy-codex-cli-unsupported')
       task.deliveryError = 'This Codex CLI version has no verified attachment transport'
       this.emit('updated', task)
-      return false
+      return outcome(false, 'no-verified-codex-cli-image-transport', { draftRetained: true })
     }
 
     const ex = this.executors.get(id)
+    selected('verified-cli-composer', {
+      executorAlive: !!ex?.alive,
+      canWriteDraftText: !!ex?.writeDraftText,
+      canSubmitDraft: !!ex?.submitDraft,
+      canPasteImage: !!ex?.pasteImage,
+      canClearDraft: !!ex?.clearDraft,
+    })
     if (!ex?.alive || !ex.writeDraftText || !ex.submitDraft || (attachments.length > 0 && !ex.pasteImage)) {
       task.deliveryError = attachments.length
         ? 'This CLI session cannot accept image attachments'
         : 'This CLI session cannot verify task draft submission'
       this.emit('updated', task)
-      return false
+      return outcome(false, 'cli-composer-capability-missing', { draftRetained: true })
     }
+    emitTaskReplyStep(tlog, trace, 'executor-ready', 'started')
     await ex.isReady()
     if (!ex.alive) {
       task.deliveryError = 'The CLI session closed before delivery'
       this.emit('updated', task)
-      return false
+      return outcome(false, 'cli-session-closed-before-delivery', { draftRetained: true })
     }
+    emitTaskReplyStep(tlog, trace, 'executor-ready', 'succeeded')
     ex.writeDraftText(text)
+    emitTaskReplyStep(tlog, trace, 'text-composed', 'succeeded', { chars: text.length })
     if (attachments.length) {
-      const accepted = await pasteTaskImages(text, attachments, () => ex.pasteImage!())
+      emitTaskReplyStep(tlog, trace, 'attachment-paste', 'started', { count: attachments.length })
+      const accepted = await pasteTaskImages(text, attachments, () => ex.pasteImage!(), (stage, fields) => {
+        emitTaskReplyStep(tlog, trace, `pasteboard-${stage}`, stage.includes('failed') ? 'failed' : 'succeeded', fields)
+      })
       if (!accepted) {
         ex.clearDraft?.()
         task.deliveryError = 'The CLI did not accept every image attachment'
         this.emit('updated', task)
-        return false
+        emitTaskReplyStep(tlog, trace, 'attachment-paste', 'failed', { count: attachments.length, composerCleared: !!ex.clearDraft })
+        return outcome(false, 'cli-image-paste-not-accepted', { draftRetained: true })
       }
+      emitTaskReplyStep(tlog, trace, 'attachment-paste', 'succeeded', { count: attachments.length })
     }
     const submittedBefore = task.promptSubmittedAt ?? 0
     ex.submitDraft()
+    emitTaskReplyStep(tlog, trace, 'submit-key', 'succeeded', { attempt: 1, submittedBefore })
     // A single Enter is occasionally ignored by both TUIs. Confirm once, then
     // require the same UserPromptSubmit hook used by ordinary follow-ups before
     // allowing TaskDraftStore to clear its retry copy.
     await new Promise((resolve) => setTimeout(resolve, this.opts.submitConfirmMs))
-    if (ex.alive && (task.promptSubmittedAt ?? 0) <= submittedBefore) ex.submitDraft()
+    if (ex.alive && (task.promptSubmittedAt ?? 0) <= submittedBefore) {
+      ex.submitDraft()
+      emitTaskReplyStep(tlog, trace, 'submit-key', 'succeeded', { attempt: 2, reason: 'first-enter-unconfirmed' })
+    }
     const deadline = Date.now() + this.opts.verifyAfterMs
     while (ex.alive && Date.now() < deadline && (task.promptSubmittedAt ?? 0) <= submittedBefore) {
       await new Promise((resolve) => setTimeout(resolve, 50))
@@ -3685,8 +3765,10 @@ export class TaskManager extends EventEmitter {
     if ((task.promptSubmittedAt ?? 0) <= submittedBefore) {
       task.deliveryError = 'The CLI did not confirm that the attachment reply was submitted'
       this.emit('updated', task)
-      return false
+      emitTaskReplyStep(tlog, trace, 'submission-proof', 'timed-out', { verifyAfterMs: this.opts.verifyAfterMs, draftRetained: true })
+      return outcome(false, 'prompt-submitted-hook-timeout', { draftRetained: true })
     }
+    emitTaskReplyStep(tlog, trace, 'submission-proof', 'succeeded', { promptSubmittedAt: task.promptSubmittedAt })
     delete task.deliveryError
     task.lastUserInputAt = this.clock()
     task.state = 'processing'
@@ -3694,7 +3776,7 @@ export class TaskManager extends EventEmitter {
     task.conversation = [{ role: 'user', text }]
     this.emit('updated', task)
     this.startPolling(id)
-    return true
+    return outcome(true, 'prompt-submitted-hook-confirmed')
   }
 
   /**

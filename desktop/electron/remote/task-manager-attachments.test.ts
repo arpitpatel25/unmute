@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { TaskManager } from './task-manager'
 import { registerTaskImagePaste } from './task-attachment-paste'
 import type { AgentExecutor } from './executor'
+import type { TaskReplyTrace } from './task-reply-trace'
+import { setConsoleMirror } from './log'
 
 test('a CLI draft is composed with real Ctrl-V images before one submit', async () => {
   const trace: string[] = []
@@ -156,4 +158,52 @@ test('a Codex app-server text draft uses the structured turn transport, not its 
   assert.deepEqual(sends, [{ text: 'next prompt', attachments: [] }])
   assert.deepEqual(terminalWrites, [])
   manager.killAll()
+})
+
+test('provider delivery logs the exact correlated transport and task configuration in dev builds', async () => {
+  const previousFlag = process.env.UNMUTE_CURATOR_DEVLOG
+  const previousLog = console.log
+  const lines: string[] = []
+  process.env.UNMUTE_CURATOR_DEVLOG = '1'
+  setConsoleMirror(true)
+  console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')) }
+  const hub = {
+    async startThread() { return { threadId: 'codex-thread', url: 'ws://test' } },
+    threadIdFor() { return 'codex-thread' },
+    async send() { return true },
+  }
+  const ex: AgentExecutor = {
+    alive: true, async spawn() {}, async isReady() {}, writeStdin() {},
+    write() {}, resize() {}, onData() {}, kill() {},
+  }
+  const baseDir = await mkdtemp(join(tmpdir(), 'unmute-attachments-'))
+  const manager = new TaskManager({
+    executorFactory: () => ex, codexHub: hub as never, baseDir,
+    codexCliChoice: () => ({ model: 'gpt-5.6-sol', effort: 'high' }),
+    permissionMode: () => 'auto-approve', codexFullAccess: () => true,
+    trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 99_999,
+  })
+  try {
+    const id = await manager.dispatch('initial', { agent: 'codex', model: 'gpt-5.6-sol high' })
+    lines.length = 0
+    const trace: TaskReplyTrace = {
+      attemptId: 'attempt-correlated', taskId: id, draftId: 'draft-correlated',
+      source: 'right-option', startedAt: Date.now(), now: Date.now,
+    }
+    assert.equal(await manager.deliverDraft(id, 'next prompt', [], trace), true)
+    const joined = lines.join('\n')
+    assert.match(joined, /task-reply-trace/)
+    assert.match(joined, /attempt-correlated/)
+    assert.match(joined, /provider-selected/)
+    assert.match(joined, /codex-app-server/)
+    assert.match(joined, /gpt-5\.6-sol high/)
+    assert.match(joined, /auto-approve/)
+    assert.match(joined, /transport-result/)
+  } finally {
+    manager.killAll()
+    setConsoleMirror(false)
+    console.log = previousLog
+    if (previousFlag === undefined) delete process.env.UNMUTE_CURATOR_DEVLOG
+    else process.env.UNMUTE_CURATOR_DEVLOG = previousFlag
+  }
 })

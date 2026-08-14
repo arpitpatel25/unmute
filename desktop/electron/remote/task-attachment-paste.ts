@@ -7,6 +7,7 @@ export type TaskImagePaste = (
   text: string,
   paths: readonly string[],
   paste: () => Promise<boolean>,
+  observe?: (stage: string, fields: Record<string, unknown>) => void,
 ) => Promise<boolean>
 
 let effect: TaskImagePaste | null = null
@@ -17,6 +18,7 @@ export async function pasteTaskImages(
   text: string,
   paths: readonly string[],
   paste: () => Promise<boolean>,
+  observe?: (stage: string, fields: Record<string, unknown>) => void,
 ): Promise<boolean> {
-  return effect ? effect(text, paths, paste) : false
+  return effect ? effect(text, paths, paste, observe) : false
 }

@@ -6,6 +6,7 @@ test('task drafts retain text and ordered attachments until a successful clear',
   const drafts = new TaskDraftStore()
 
   drafts.appendText('task-1', 'Look at this')
+  const draftId = drafts.traceId('task-1')
   drafts.addAttachment('task-1', { id: 'image-1', path: '/tmp/one.png', mimeType: 'image/png', name: 'one.png' })
   drafts.appendText('task-1', '\nand compare it')
 
@@ -18,6 +19,7 @@ test('task drafts retain text and ordered attachments until a successful clear',
   assert.deepEqual(sending, drafts.get('task-1'), 'a send snapshot does not clear the visible draft')
   assert.equal(drafts.clearIfUnchanged('task-1', sending!), true)
   assert.deepEqual(drafts.get('task-1'), { text: '', attachments: [] })
+  assert.notEqual(drafts.traceId('task-1'), draftId, 'the next draft gets a new diagnostic identity')
 })
 
 test('task draft survives a failed send and later edits prevent clearing an old snapshot', () => {

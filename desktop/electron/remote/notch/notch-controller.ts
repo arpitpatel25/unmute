@@ -19,6 +19,7 @@ import type { TaskDraft } from '../task-draft'
 import { providerOf, type ProviderId } from '../providers'
 import { ALWAYS_PRESENT, type PresenceLike } from '../presence'
 import { createLogger } from '../log'
+import { devEvent } from '../curator-devlog'
 
 const log = createLogger('notch-controller')
 
@@ -498,20 +499,27 @@ export class NotchController {
     })
     on('setDraftText', (e) => {
       const { id, text } = e as { id: string; text: string }
+      devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'setDraftText', textChars: text.length })
       this.deps.setDraftText?.(id, text)
       this.scheduleReconcile()
     })
     on('addDraftImage', (e) => {
       const { id, path, mimeType, name } = e as { id: string; path: string; mimeType: string; name: string }
+      devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'addDraftImage', path, mimeType, name })
       void Promise.resolve(this.deps.addDraftImage?.(id, path, mimeType, name)).then(() => this.scheduleReconcile())
     })
     on('removeDraftAttachment', (e) => {
       const { id, attachmentId } = e as { id: string; attachmentId: string }
+      devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'removeDraftAttachment', attachmentId })
       void Promise.resolve(this.deps.removeDraftAttachment?.(id, attachmentId)).then(() => this.scheduleReconcile())
     })
     on('sendDraft', (e) => {
       const { id } = e as { id: string }
-      void Promise.resolve(this.deps.sendDraft?.(id)).then(() => this.scheduleReconcile())
+      devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'sendDraft' })
+      void Promise.resolve(this.deps.sendDraft?.(id)).then((accepted) => {
+        devEvent(log, 'task-reply-ui-event-result', { taskId: id, event: 'sendDraft', accepted: accepted === true })
+        this.scheduleReconcile()
+      })
     })
     on('kill', (e) => this.deps.kill((e as { id: string }).id))
     // A RESUME THAT FAILS MUST SAY SO.
@@ -572,7 +580,23 @@ export class NotchController {
     on('openInTerminal', (e) => this.deps.openInTerminal((e as { id: string }).id))
     on('termOpen', (e) => this.onTermOpen((e as { id: string }).id))
     on('termClose', (e) => this.openTerms.delete((e as { id: string }).id))
-    on('termInput', (e) => { const { id, data } = e as { id: string; data: string }; this.deps.sendInput(id, Buffer.from(data, 'base64').toString('utf8')) })
+    on('termInput', (e) => {
+      const { id, data } = e as { id: string; data: string }
+      const decoded = Buffer.from(data, 'base64').toString('utf8')
+      const task = this.deps.getTask(id)
+      devEvent(log, 'task-reply-terminal-input', {
+        taskId: id,
+        agent: task?.agent ?? null,
+        model: task?.model ?? null,
+        taskState: task?.state ?? null,
+        bytes: Buffer.byteLength(decoded),
+        chars: decoded.length,
+        containsEnter: decoded.includes('\r') || decoded.includes('\n'),
+        containsCtrlV: decoded.includes('\u0016'),
+        transport: 'direct-pty-input',
+      })
+      this.deps.sendInput(id, decoded)
+    })
     on('termResize', (e) => { const { id, cols, rows } = e as { id: string; cols: number; rows: number }; this.deps.resizeTerm(id, cols, rows) })
     on('suggestionOpen', (e) => void this.onSuggestionOpen((e as { id: string }).id))
     on('suggestionAccept', (e) => void this.onSuggestionAccept((e as { id: string }).id))
