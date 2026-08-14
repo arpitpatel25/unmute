@@ -157,6 +157,25 @@ export const VERIFY_TIMEOUT_MS = 900
  * NSPasteboard is allowed to transcode an image after `writeImage`, so the PNG
  * bytes served here need not match `NativeImage.toPNG()`. The pre-clear/write
  * sequence proves ownership of the slot; this boundary proves readability. */
+/**
+ * ASK FOR ONE REPRESENTATION, NOT ALL OF THEM.
+ *
+ * The readiness check used a bare `clipboard info`, on the assumption that it
+ * was "a tiny metadata listing". It is not: it enumerates every representation
+ * and makes macOS GENERATE them — PNG, AVIF, 8BPS, GIF, JP2, JPEG, TIFF, BMP,
+ * TPIC — and on a 1920x1080 screenshot that measures ~900ms. Each attempt is
+ * capped at 400ms, so the child was killed every single time, the pasteboard
+ * was declared unreadable, and the paste was skipped: a screenshot reply failed
+ * with `cli-image-paste-not-accepted` while the image sat correctly on the
+ * pasteboard the whole time. (The stray "Error creating a JP2 color space"
+ * in those logs is macOS materialising a representation nobody asked for.)
+ *
+ * Scoping the query to the one representation this module parses measures
+ * ~90ms — an order of magnitude inside the budget — and returns exactly the
+ * same `«class PNGf», <bytes>` line.
+ */
+export const CLIPBOARD_PNG_INFO_SCRIPT = 'clipboard info for «class PNGf»'
+
 export function pasteboardServesReadablePNG(info: string): boolean {
   const match = /«class PNGf»,\s*(\d+)/.exec(info)
   return !!match && Number(match[1]) > 0

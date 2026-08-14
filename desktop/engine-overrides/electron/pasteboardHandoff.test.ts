@@ -4,6 +4,7 @@ import {
   handOffImages,
   imagePasteModifier,
   pasteboardServesReadablePNG,
+  CLIPBOARD_PNG_INFO_SCRIPT,
   SETTLE_MS,
   TERMINAL_BUNDLE_IDS,
   type HandoffDeps,
@@ -353,5 +354,31 @@ describe('a failing image never costs the text or the others', () => {
     const { warnings, deps } = recorder({ writeTextAndRecord: () => { throw new Error('pasteboard gone') } })
     assert.equal(await handOffImages(deps, ['/pad/a.png'], 'x'), 1)
     assert.equal(warnings.length, 1)
+  })
+})
+
+// The readiness check asked macOS for `clipboard info`, which lists EVERY
+// representation and therefore makes the system generate them: PNG, AVIF,
+// 8BPS, GIF, JP2, JPEG, TIFF, BMP, TPIC. Measured on a 1920x1080 screenshot
+// that takes ~900ms, but each attempt is capped at 400ms, so the child was
+// killed every time and the image was never pasted — a screenshot reply failed
+// `cli-image-paste-not-accepted` with the pasteboard perfectly well populated.
+// Asking for the one representation we actually check takes ~90ms.
+describe('pasteboard readiness query', () => {
+  test('asks for the PNG representation only, not every representation', () => {
+    assert.match(CLIPBOARD_PNG_INFO_SCRIPT, /^clipboard info for /)
+    assert.ok(
+      CLIPBOARD_PNG_INFO_SCRIPT.includes('PNGf'),
+      'the query must name the representation the readiness check parses',
+    )
+  })
+
+  test('the real output of that query is accepted as readable', () => {
+    // Verbatim from `osascript -e 'clipboard info for «class PNGf»'`.
+    assert.equal(pasteboardServesReadablePNG('«class PNGf», 1756572'), true)
+  })
+
+  test('an empty PNG representation is still not readable', () => {
+    assert.equal(pasteboardServesReadablePNG('«class PNGf», 0'), false)
   })
 })

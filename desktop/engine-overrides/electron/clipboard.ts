@@ -3,7 +3,7 @@ import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import path from 'path'
 import { keyListener } from './keyListener'
-import { handOffImages, pasteboardServesReadablePNG, VERIFY_TIMEOUT_MS, type PasteModifier } from './pasteboardHandoff'
+import { handOffImages, pasteboardServesReadablePNG, CLIPBOARD_PNG_INFO_SCRIPT, VERIFY_TIMEOUT_MS, type PasteModifier } from './pasteboardHandoff'
 import { HistoryPasteStage } from './historyPasteStage'
 // Static import (a lazy require of this path can't resolve inside the bundled
 // main — proven live: 'Cannot find module' swallowed by the fail-open catch).
@@ -429,7 +429,8 @@ export function getOutputMode(): 'paste' | 'clipboard' {
 }
 
 /** Ask a SEPARATE process whether the system pasteboard serves a non-empty PNG
- *  (`clipboard info` is a tiny metadata listing — no image data crosses).
+ *  (the query names ONE representation, so macOS returns metadata for it
+ *  instead of generating the whole set — see CLIPBOARD_PNG_INFO_SCRIPT).
  *  macOS may re-encode the image, so byte equality is not a valid readiness
  *  check. Resolves true on semantic confirmation and false on timeout.
  *
@@ -449,7 +450,7 @@ function verifyPasteboardServesPNG(
       // Keep each child comfortably inside the overall readiness deadline.
       // A wedged osascript must not turn the nominal 900 ms verifier into a
       // multi-second delivery stall.
-      execFile('osascript', ['-e', 'clipboard info'], { timeout: Math.max(1, Math.min(timeoutMs, 400)) }, (err, stdout) => {
+      execFile('osascript', ['-e', CLIPBOARD_PNG_INFO_SCRIPT], { timeout: Math.max(1, Math.min(timeoutMs, 400)) }, (err, stdout) => {
         if (!err && stdout) {
           // e.g. "«class PNGf», 2189440, TIFF picture, 9640988"
           if (pasteboardServesReadablePNG(stdout)) {

@@ -3831,7 +3831,10 @@ export class TaskManager extends EventEmitter {
     task.conversation = [{ role: 'user', text }]
     this.emit('updated', task)
     this.startPolling(id)
-    return outcome(true, 'prompt-submitted-hook-confirmed')
+    // Name the proof that actually ran. A Codex success reported as
+    // "hook-confirmed" sends the next reader looking for a hook Codex has not
+    // got, which is the trail this whole lane already cost once.
+    return outcome(true, rolloutTurnsBefore === null ? 'prompt-submitted-hook-confirmed' : 'codex-rollout-turn-confirmed')
   }
 
   /**
