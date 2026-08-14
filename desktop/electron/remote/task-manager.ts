@@ -60,6 +60,7 @@ import type { ClaudeConsent as ClaudeConsentLite } from './claude-desktop/ax'
 import { beat, pendingApprovals, expireStaleApprovals, decideApproval, clearApproval, describeApproval, ensureApprovalHook } from './codex/hooks'
 import { devEvent } from './curator-devlog'
 import { pasteTaskImages } from './task-attachment-paste'
+import { pasteDesktopTaskImages } from './desktop-task-attachment-paste'
 
 const log = createLogger('task-manager')
 
@@ -3605,14 +3606,26 @@ export class TaskManager extends EventEmitter {
       return true
     }
     if (task.agent === 'claude-code-desktop') {
-      // Claude Desktop does not yet expose a background-safe attachment API.
-      // Refuse explicitly so the draft remains visible instead of degrading an
-      // image into text or silently sending only half the user's message.
-      task.deliveryError = 'Claude Desktop attachment delivery is unavailable'
-      this.emit('updated', task)
-      return false
+      if (attachments.length) {
+        const actuator = this.opts.claudeActuator
+        if (!actuator || !task.name) return false
+        const result = await actuator.sendWithAttachmentsTo(
+          task.name,
+          text,
+          () => pasteDesktopTaskImages(text, attachments),
+        )
+        if (!result.ok) {
+          task.deliveryError = `Could not send attachments to Claude (${result.reason ?? 'failed'})`
+          this.emit('updated', task)
+          return false
+        }
+        delete task.deliveryError
+        this.transition(id, 'processing')
+        return true
+      }
+      const result = await this.sendClaudeDesktop(id, text)
+      return result.ok
     }
-    if (!attachments.length) return this.followUp(id, text)
 
     // Codex app-server has a first-class localImage input. This is the native
     // structured transport and does not involve the PTY view at all.
@@ -3628,15 +3641,17 @@ export class TaskManager extends EventEmitter {
       return ok
     }
 
-    if (task.agent === 'codex') {
+    if (task.agent === 'codex' && attachments.length) {
       task.deliveryError = 'This Codex CLI version has no verified attachment transport'
       this.emit('updated', task)
       return false
     }
 
     const ex = this.executors.get(id)
-    if (!ex?.alive || !ex.writeDraftText || !ex.pasteImage || !ex.submitDraft) {
-      task.deliveryError = 'This CLI session cannot accept image attachments'
+    if (!ex?.alive || !ex.writeDraftText || !ex.submitDraft || (attachments.length > 0 && !ex.pasteImage)) {
+      task.deliveryError = attachments.length
+        ? 'This CLI session cannot accept image attachments'
+        : 'This CLI session cannot verify task draft submission'
       this.emit('updated', task)
       return false
     }
@@ -3647,12 +3662,14 @@ export class TaskManager extends EventEmitter {
       return false
     }
     ex.writeDraftText(text)
-    const accepted = await pasteTaskImages(text, attachments, () => ex.pasteImage!())
-    if (!accepted) {
-      ex.clearDraft?.()
-      task.deliveryError = 'The CLI did not accept every image attachment'
-      this.emit('updated', task)
-      return false
+    if (attachments.length) {
+      const accepted = await pasteTaskImages(text, attachments, () => ex.pasteImage!())
+      if (!accepted) {
+        ex.clearDraft?.()
+        task.deliveryError = 'The CLI did not accept every image attachment'
+        this.emit('updated', task)
+        return false
+      }
     }
     const submittedBefore = task.promptSubmittedAt ?? 0
     ex.submitDraft()
@@ -3935,9 +3952,8 @@ export class TaskManager extends EventEmitter {
   async attachFile(id: string, data: Uint8Array, ext: string): Promise<string | null> {
     const tlog = log.child({ taskId: id })
     const task = this.tasks.get(id)
-    const ex = this.executors.get(id)
-    if (!task || !ex?.alive) {
-      tlog.warn('attachFile: no live session to attach to', {})
+    if (!task) {
+      tlog.warn('attachFile: no task owns this draft', {})
       return null
     }
     const safeExt = (ext || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'

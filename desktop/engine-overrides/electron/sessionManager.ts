@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { pipelineTranscribe, pipelineDualTranscribe, pipelineProcess, pipelineTransform, localTransformText, getCachedConfig, QuotaExceededError, type ServerConfig, type TransformResult, type PipelineResult } from './api'
 import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
-import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste, injectImagesIntoTask } from './clipboard'
+import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste, injectImagesIntoTask, injectImagesIntoDesktopTask } from './clipboard'
 import { saveAudioFile, saveAudioChunk } from './audio'
 import { initTelemetry, logTelemetry, DEV_BUILD, installMainConsoleTee, attachRendererConsoleTee } from './dictationTelemetry'
 import { app } from 'electron'
@@ -25,6 +25,7 @@ import {
   registerFormat, registerHistoryCopy, registerPaste, removeFromPad,
 } from './paywall/remote/capture/index'
 import { registerTaskImagePaste } from './paywall/remote/task-attachment-paste'
+import { registerDesktopTaskImagePaste } from './paywall/remote/desktop-task-attachment-paste'
 import { canObserve } from './paywall/remote/capture/captureGate'
 import { getPaywallEngineMode, formatOutputForUser, getDictationCleanupEnabled } from './paywall/paywall-glue'
 import { buildCorrectionMessages, shouldAttemptCleanup, CORRECTION_TIMEOUT_MS, CLEANUP_MODEL } from './cleanupPass'
@@ -189,6 +190,15 @@ registerTaskImagePaste((text, images, paste) => {
   const run = taskPasteChain.then(async () => {
     beginOwnClipboardSequence()
     try { return await injectImagesIntoTask(text, images, paste) }
+    finally { try { endOwnClipboardSequence(Date.now()) } catch { /* watcher not armed */ } }
+  })
+  taskPasteChain = run.catch(() => {})
+  return run
+})
+registerDesktopTaskImagePaste((text, images) => {
+  const run = taskPasteChain.then(async () => {
+    beginOwnClipboardSequence()
+    try { return await injectImagesIntoDesktopTask(text, images) }
     finally { try { endOwnClipboardSequence(Date.now()) } catch { /* watcher not armed */ } }
   })
   taskPasteChain = run.catch(() => {})

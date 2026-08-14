@@ -24,6 +24,10 @@ const copyDraft = (draft: TaskDraft): TaskDraft => ({
  */
 export class TaskDraftStore {
   private drafts = new Map<string, TaskDraft>()
+  /** Image paste crosses AppKit → IPC → disk before it can enter a draft.
+   * Keep that work task-scoped so a subsequent Enter cannot overtake it. */
+  private attachmentStages = new Map<string, Promise<void>>()
+  private attachmentStageFailures = new Set<string>()
 
   get(taskId: string): TaskDraft {
     return copyDraft(this.drafts.get(taskId) ?? emptyDraft())
@@ -47,6 +51,43 @@ export class TaskDraftStore {
     current.attachments.push({ ...attachment })
     this.drafts.set(taskId, current)
     return this.get(taskId)
+  }
+
+  async stageAttachment(
+    taskId: string,
+    persist: () => Promise<DraftAttachment | null>,
+  ): Promise<void> {
+    // A new user paste is an explicit retry of a previous failed handoff.
+    if (!this.attachmentStages.has(taskId)) this.attachmentStageFailures.delete(taskId)
+    const previous = this.attachmentStages.get(taskId) ?? Promise.resolve()
+    const current = previous.catch(() => {}).then(async () => {
+      try {
+        const attachment = await persist()
+        if (!attachment) {
+          this.attachmentStageFailures.add(taskId)
+          return
+        }
+        this.addAttachment(taskId, attachment)
+      } catch (error) {
+        this.attachmentStageFailures.add(taskId)
+        throw error
+      }
+    })
+    this.attachmentStages.set(taskId, current)
+    try {
+      await current
+    } finally {
+      if (this.attachmentStages.get(taskId) === current) this.attachmentStages.delete(taskId)
+    }
+  }
+
+  async whenSettled(taskId: string): Promise<boolean> {
+    // A stage may be queued while an earlier stage resolves. Follow the current
+    // tail until no task-scoped persistence remains.
+    while (this.attachmentStages.has(taskId)) {
+      await this.attachmentStages.get(taskId)?.catch(() => {})
+    }
+    return !this.attachmentStageFailures.has(taskId)
   }
 
   removeAttachment(taskId: string, attachmentId: string): DraftAttachment | undefined {

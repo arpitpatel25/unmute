@@ -212,51 +212,46 @@ export class ClaudeActuator {
    */
   async openConversation(title: string): Promise<ActuateResult> {
     if (!title.trim()) return { ok: false, reason: 'row-not-found' }
-    return this.run<ActuateResult>('openConversation', async () => {
-      const bridge = this.bridge()
-      const read = async (): Promise<AxNode[]> => {
-        const out = await bridge.call('getTree', [this.bundleId, 0, '', ACTUATE_DEPTH, true])
-        if (!out || out.error) return []
-        return (out.nodes ?? []) as AxNode[]
-      }
+    return this.run<ActuateResult>('openConversation', () => this.openConversationActive(title), { ok: false, reason: 'activate-failed' })
+  }
 
-      const first = await read()
-      if (!isTreeAlive(first)) return { ok: false, reason: 'tree-dead' }
-      const row = readSidebarRows(first, [title]).find((r) => r.title === title)
-      if (!row) {
-        // The sidebar is windowed — a conversation can be real and simply not
-        // listed. Saying so beats pressing something adjacent.
-        log.warn('open-row-not-found', { title: title.slice(0, 60) })
-        return { ok: false, reason: 'row-not-found' }
-      }
+  /** Same operation as openConversation, but assumes run() already owns focus.
+   * Composite sends use this so address + content + submit are one queue item. */
+  private async openConversationActive(title: string): Promise<ActuateResult> {
+    const bridge = this.bridge()
+    const read = async (): Promise<AxNode[]> => {
+      const out = await bridge.call('getTree', [this.bundleId, 0, '', ACTUATE_DEPTH, true])
+      if (!out || out.error) return []
+      return (out.nodes ?? []) as AxNode[]
+    }
 
-      // Re-read and confirm the id still means the same row.
-      const second = await read()
-      const stillThere = second.find((n) => n.id === row.id)
-      if (!stillThere || !stillThere.label.endsWith(title)) {
-        log.warn('open-row-moved', { title: title.slice(0, 60) })
-        return { ok: false, reason: 'row-moved' }
-      }
+    const first = await read()
+    if (!isTreeAlive(first)) return { ok: false, reason: 'tree-dead' }
+    const row = readSidebarRows(first, [title]).find((r) => r.title === title)
+    if (!row) {
+      log.warn('open-row-not-found', { title: title.slice(0, 60) })
+      return { ok: false, reason: 'row-not-found' }
+    }
 
-      const out = await bridge.call('press', [this.bundleId, row.id, ACTUATE_DEPTH])
-      if (out?.error || out?.ok === false) {
-        log.warn('open-press-failed', { error: out?.error ?? 'press reported false' })
-        return { ok: false, reason: 'bridge-failed' }
-      }
-      // press() echoes the label of what it ACTUALLY actuated (verified live:
-      // {"ok":true,"role":"AXButton","label":"Idle Season preference questions"}).
-      // That is authoritative in a way no pre-check can be — the pre-check says
-      // what we intended, this says what happened. If they disagree the tree
-      // moved between the two reads and we pressed the wrong row, which the
-      // caller must know rather than proceed to type into it.
-      const pressedLabel = typeof out?.label === 'string' ? out.label : null
-      if (pressedLabel !== null && !pressedLabel.endsWith(title)) {
-        log.warn('open-pressed-wrong-row', { wanted: title.slice(0, 40), got: pressedLabel.slice(0, 40) })
-        return { ok: false, reason: 'row-moved' }
-      }
-      log.event('claude-desktop-opened', { title: title.slice(0, 60) })
-      return { ok: true }
-    }, { ok: false, reason: 'activate-failed' })
+    const second = await read()
+    const stillThere = second.find((n) => n.id === row.id)
+    if (!stillThere || !stillThere.label.endsWith(title)) {
+      log.warn('open-row-moved', { title: title.slice(0, 60) })
+      return { ok: false, reason: 'row-moved' }
+    }
+
+    const out = await bridge.call('press', [this.bundleId, row.id, ACTUATE_DEPTH])
+    if (out?.error || out?.ok === false) {
+      log.warn('open-press-failed', { error: out?.error ?? 'press reported false' })
+      return { ok: false, reason: 'bridge-failed' }
+    }
+    const pressedLabel = typeof out?.label === 'string' ? out.label : null
+    if (pressedLabel !== null && !pressedLabel.endsWith(title)) {
+      log.warn('open-pressed-wrong-row', { wanted: title.slice(0, 40), got: pressedLabel.slice(0, 40) })
+      return { ok: false, reason: 'row-moved' }
+    }
+    log.event('claude-desktop-opened', { title: title.slice(0, 60) })
+    return { ok: true }
   }
 
   /**
@@ -408,9 +403,35 @@ export class ClaudeActuator {
    */
   async sendTo(title: string, text: string): Promise<ActuateResult> {
     if (!text.trim()) return { ok: false, reason: 'no-shortcut' }
-    const opened = await this.openConversation(title)
-    if (!opened.ok) return opened
-    return this.send(text)
+    return this.run<ActuateResult>('sendTo', async () => {
+      const opened = await this.openConversationActive(title)
+      if (!opened.ok) return opened
+      const out = await this.bridge().call('typeText', [this.bundleId, text, false, true])
+      return out?.error ? { ok: false, reason: 'bridge-failed' } : { ok: true }
+    }, { ok: false, reason: 'activate-failed' })
+  }
+
+  /** Address, compose text, paste ordered images and submit as one focus-owned
+   * operation. `pasteImages` owns pasteboard staging and Command-V. */
+  async sendWithAttachmentsTo(
+    title: string,
+    text: string,
+    pasteImages: () => Promise<boolean>,
+  ): Promise<ActuateResult> {
+    return this.run<ActuateResult>('sendWithAttachmentsTo', async () => {
+      const opened = await this.openConversationActive(title)
+      if (!opened.ok) return opened
+      const bridge = this.bridge()
+      if (text) {
+        const typed = await bridge.call('typeText', [this.bundleId, text, false, false])
+        if (typed?.error) return { ok: false, reason: 'bridge-failed' }
+      }
+      if (!(await pasteImages())) return { ok: false, reason: 'bridge-failed' }
+      const submitted = await bridge.call('typeText', [this.bundleId, '', false, true])
+      if (submitted?.error) return { ok: false, reason: 'bridge-failed' }
+      log.event('claude-desktop-sent-with-attachments', { chars: text.length })
+      return { ok: true }
+    }, { ok: false, reason: 'activate-failed' })
   }
 
   /**

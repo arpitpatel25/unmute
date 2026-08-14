@@ -548,6 +548,15 @@ export async function injectImagesIntoTask(
   })
 }
 
+/** Hand images to the currently activated desktop composer with Command-V.
+ * The caller owns addressing and focus for the full operation. */
+export async function injectImagesIntoDesktopTask(text: string, images: readonly string[]): Promise<boolean> {
+  return injectImagesIntoTask(text, images, async () => {
+    await simulateKeyCombo('v', 'command')
+    return true
+  })
+}
+
 const historyPasteStage = new HistoryPasteStage()
 
 function currentClipboardIdentity(): { changeCount: number | null; text: string } {

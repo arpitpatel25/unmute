@@ -824,9 +824,28 @@ test('attachFile saves under home/attachments without mutating the terminal draf
   // Saving an attachment must not inject an invisible path into a terminal.
   const typed = fake.raw.slice(beforeRaw).join('')
   assert.equal(typed, '')
-  // Dead session → null, no throw.
+  // Storage belongs to the task draft, not to a process. A cold task remains a
+  // valid draft destination and provider delivery decides whether it can send.
   tm.kill(id)
-  assert.equal(await tm.attachFile(id, new Uint8Array([1]), 'png'), null)
+  const coldSaved = await tm.attachFile(id, new Uint8Array([1]), 'png')
+  assert.ok(coldSaved)
+  assert.ok((await fs.stat(coldSaved!)).isFile())
+})
+
+test('attachFile persists a Codex Desktop image although that task never has a PTY', async () => {
+  const baseDir = await tmpBase()
+  const id = await seedInterrupted(baseDir, 'session', { agent: 'codex-desktop', codexThreadId: 'thread-1' })
+  const tm = new TaskManager({
+    executorFactory: () => { throw new Error('desktop tasks must not create an executor') },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  await tm.rehydrate()
+
+  const saved = await tm.attachFile(id, new Uint8Array([137, 80, 78, 71]), 'png')
+  assert.ok(saved)
+  assert.ok(saved!.startsWith(path.join(tm.get(id)!.home, 'attachments')))
+  assert.ok((await fs.stat(saved!)).isFile())
+  tm.killAll()
 })
 
 // ─── Graduation + pin (§5): errands that become threads become sessions ───────

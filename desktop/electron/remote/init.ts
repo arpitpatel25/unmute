@@ -453,10 +453,23 @@ const taskDrafts = new TaskDraftStore()
 
 async function addDraftImageFromPath(id: string, sourcePath: string, mimeType: string, name: string): Promise<void> {
   if (!manager || !manager.get(id)) return
-  const data = await fs.readFile(sourcePath)
-  const ext = (basename(name).split('.').pop() || mimeType.split('/').pop() || 'png').replace(/[^a-z0-9]/gi, '')
-  const path = await manager.attachFile(id, data, ext)
-  if (path) taskDrafts.addAttachment(id, { id: randomUUID(), path, mimeType, name: name || basename(path) })
+  try {
+    await taskDrafts.stageAttachment(id, async () => {
+      try {
+        const data = await fs.readFile(sourcePath)
+        const ext = (basename(name).split('.').pop() || mimeType.split('/').pop() || 'png').replace(/[^a-z0-9]/gi, '')
+        const path = await manager?.attachFile(id, data, ext)
+        return path ? { id: randomUUID(), path, mimeType, name: name || basename(path) } : null
+      } finally {
+        // AppKit creates this solely as an IPC handoff. Once copied into the
+        // task-owned directory it must not accumulate in the system temp folder.
+        await fs.unlink(sourcePath).catch(() => {})
+      }
+    })
+  } catch (error) {
+    log.warn('draft image staging failed', { taskId: id, error: (error as Error).message })
+    notchController?.toast('That image could not be attached. Paste it again to retry.')
+  }
 }
 
 async function deliverTaskDraftSnapshot(id: string, draft: import('./task-draft').TaskDraft): Promise<boolean> {
@@ -465,15 +478,21 @@ async function deliverTaskDraftSnapshot(id: string, draft: import('./task-draft'
   if (!task) return false
   const text = draft.text
   if (!text.trim() && !draft.attachments.length) return false
-  const accepted = draft.attachments.length
-    ? await manager.deliverDraft(id, text, draft.attachments.map((attachment) => attachment.path))
-    : manager.tasksAwaitingUser().some((entry) => entry.id === id)
+  const accepted = !draft.attachments.length && manager.tasksAwaitingUser().some((entry) => entry.id === id)
     ? manager.answer(id, text)
-    : manager.followUp(id, text)
+    : await manager.deliverDraft(id, text, draft.attachments.map((attachment) => attachment.path))
   return accepted
 }
 
 async function sendTaskDraft(id: string): Promise<boolean> {
+  // A fast Enter after Command-V must include the image whose disk handoff is
+  // still in flight; otherwise the text is sent alone and the image appears in
+  // a now-empty composer a moment later.
+  if (!(await taskDrafts.whenSettled(id))) {
+    log.warn('draft send refused after image staging failure', { taskId: id })
+    notchController?.toast('The image is not attached yet. Paste it again before sending.')
+    return false
+  }
   const draft = taskDrafts.snapshot(id)
   if (!draft) return false
   const accepted = await deliverTaskDraftSnapshot(id, draft)

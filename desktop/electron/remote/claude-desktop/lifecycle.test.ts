@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { TaskManager } from '../task-manager'
+import { registerDesktopTaskImagePaste } from '../desktop-task-attachment-paste'
 import type { ClaudeDesktopTask, ClaudeSnapshot, ClaudeTaskView } from './driver'
 
 // A fake Claude Desktop backend. Unlike the Codex fake this one has no
@@ -483,10 +484,16 @@ test('with no actuator the prompt is visible but honestly unanswerable', async (
 
 function fakeActuatorFull(res: { ok: boolean; reason?: string } = { ok: true }) {
   const sent: Array<{ title: string; text: string }> = []
+  const sentWithAttachments: Array<{ title: string; text: string }> = []
   return {
     sent,
+    sentWithAttachments,
     answerConsent: async () => ({ ok: true }),
     sendTo: async (title: string, text: string) => { sent.push({ title, text }); return res },
+    sendWithAttachmentsTo: async (title: string, text: string, paste: () => Promise<boolean>) => {
+      sentWithAttachments.push({ title, text })
+      return (await paste()) ? res : { ok: false, reason: 'bridge-failed' }
+    },
     send: async () => res,
     openConversation: async () => ({ ok: true }),
   }
@@ -763,6 +770,33 @@ test('a Claude desktop reply never reaches the Codex path', async () => {
   m.answer(id, 'hello')
   await new Promise((r) => setTimeout(r, 30))
   assert.equal(act.sent.length, 1, 'went to the Claude actuator')
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a Claude Desktop text draft waits for its own verified actuator result', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login' }], snapshots: [{ updatedAt: 5000 }] })
+  const act = fakeActuatorFull()
+  const m = await managerFull(d, fakeAx(), act, base)
+  const [id] = await m.adoptClaudeDesktop()
+
+  assert.equal(await m.deliverDraft(id, 'try the other branch', []), true)
+  assert.deepEqual(act.sent, [{ title: 'Fix login', text: 'try the other branch' }])
+  m.killAll(); m.stopMaintenance()
+})
+
+test('a Claude Desktop attachment draft uses its addressed native paste actuation', async () => {
+  const base = await tmp()
+  const d = fakeDriver({ tasks: [{ title: 'Fix login' }], snapshots: [{ updatedAt: 5000 }] })
+  const act = fakeActuatorFull()
+  const pasted: string[][] = []
+  registerDesktopTaskImagePaste(async (_text, paths) => { pasted.push([...paths]); return true })
+  const m = await managerFull(d, fakeAx(), act, base)
+  const [id] = await m.adoptClaudeDesktop()
+
+  assert.equal(await m.deliverDraft(id, 'compare these', ['/tmp/one.png']), true)
+  assert.deepEqual(act.sentWithAttachments, [{ title: 'Fix login', text: 'compare these' }])
+  assert.deepEqual(pasted, [['/tmp/one.png']])
   m.killAll(); m.stopMaintenance()
 })
 

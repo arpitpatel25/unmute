@@ -164,6 +164,27 @@ test('empty text is refused before any focus is stolen', async () => {
   assert.deepEqual(h.focus, [], 'must not front the app to send nothing')
 })
 
+test('text and images are composed in one addressed Claude Desktop actuation before submit', async () => {
+  const t = live([{ id: 7, label: 'Idle Fix login' }])
+  const h = treeBridge([t, t])
+  const a = actuatorWith(h.bridge)
+  const trace: string[] = []
+
+  const result = await a.sendWithAttachmentsTo('Fix login', 'compare these', async () => {
+    trace.push('images')
+    return true
+  })
+
+  assert.equal(result.ok, true)
+  const calls = h.calls.filter((call) => call.fn === 'typeText')
+  assert.deepEqual(calls.map((call) => call.args.slice(1, 4)), [
+    ['compare these', false, false],
+    ['', false, true],
+  ])
+  assert.deepEqual(trace, ['images'])
+  assert.equal(h.calls.filter((call) => call.fn === 'press').length, 1, 'the target is opened once inside the same serialized action')
+})
+
 // ── opening the right conversation ────────────────────────────────────────
 
 /** A bridge whose getTree returns scripted trees, one per successive call. */
