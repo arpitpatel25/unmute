@@ -4,6 +4,8 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TaskManager } from './task-manager'
+import { deliverAddressedCapture } from './addressed-capture'
+import { TaskDraftStore } from './task-draft'
 import { registerTaskImagePaste } from './task-attachment-paste'
 import type { AgentExecutor } from './executor'
 import type { TaskReplyTrace } from './task-reply-trace'
@@ -157,6 +159,54 @@ test('a Codex app-server text draft uses the structured turn transport, not its 
   assert.equal(await manager.deliverDraft(id, 'next prompt', []), true)
   assert.deepEqual(sends, [{ text: 'next prompt', attachments: [] }])
   assert.deepEqual(terminalWrites, [])
+  manager.killAll()
+})
+
+test('a Right Option capture reaches Codex CLI as one structured text-and-image turn', async () => {
+  const sends: Array<{ text: string; attachments: readonly string[] | undefined }> = []
+  const hub = {
+    async startThread() { return { threadId: 'codex-thread', url: 'ws://test' } },
+    threadIdFor() { return 'codex-thread' },
+    async send(_id: string, text: string, opts: { attachments?: readonly string[] } = {}) {
+      sends.push({ text, attachments: opts.attachments })
+      return true
+    },
+  }
+  const ex: AgentExecutor = {
+    alive: true, async spawn() {}, async isReady() {}, writeStdin() {},
+    write() {}, resize() {}, onData() {}, kill() {},
+  }
+  const baseDir = await mkdtemp(join(tmpdir(), 'unmute-attachments-'))
+  const manager = new TaskManager({
+    executorFactory: () => ex, codexHub: hub as never, baseDir,
+    trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 99_999,
+  })
+  const id = await manager.dispatch('initial', { agent: 'codex' })
+  sends.length = 0
+  const drafts = new TaskDraftStore()
+
+  assert.equal(await deliverAddressedCapture({
+    taskId: id,
+    text: 'compare this screenshot',
+    attachments: ['/scratchpad/capture.png'],
+    drafts,
+    persistAttachment: async () => ({
+      id: 'owned-image',
+      path: '/task/attachments/capture.png',
+      mimeType: 'image/png',
+      name: 'capture.png',
+    }),
+    deliver: (taskId, draft) => manager.deliverDraft(
+      taskId,
+      draft.text,
+      draft.attachments.map((attachment) => attachment.path),
+    ),
+  }), true)
+  assert.deepEqual(sends, [{
+    text: 'compare this screenshot',
+    attachments: ['/task/attachments/capture.png'],
+  }])
+  assert.deepEqual(drafts.get(id), { text: '', attachments: [] })
   manager.killAll()
 })
 

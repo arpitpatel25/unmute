@@ -459,6 +459,23 @@ let manager: TaskManager | null = null
 /** Unsent replies are task-scoped, not owned by any one expanded surface. */
 const taskDrafts = new TaskDraftStore()
 
+async function persistTaskDraftImage(
+  id: string,
+  sourcePath: string,
+  mimeType: string,
+  name: string,
+): Promise<{ attachment: import('./task-draft').DraftAttachment; bytes: number } | null> {
+  if (!manager || !manager.get(id)) return null
+  const data = await fs.readFile(sourcePath)
+  const ext = (basename(name).split('.').pop() || mimeType.split('/').pop() || 'png').replace(/[^a-z0-9]/gi, '')
+  const ownedPath = await manager.attachFile(id, data, ext)
+  if (!ownedPath) return null
+  return {
+    attachment: { id: randomUUID(), path: ownedPath, mimeType, name: name || basename(ownedPath) },
+    bytes: data.byteLength,
+  }
+}
+
 async function addDraftImageFromPath(id: string, sourcePath: string, mimeType: string, name: string): Promise<void> {
   if (!manager || !manager.get(id)) return
   const draftId = taskDrafts.traceId(id)
@@ -470,14 +487,12 @@ async function addDraftImageFromPath(id: string, sourcePath: string, mimeType: s
   try {
     await taskDrafts.stageAttachment(id, async () => {
       try {
-        const data = await fs.readFile(sourcePath)
-        const ext = (basename(name).split('.').pop() || mimeType.split('/').pop() || 'png').replace(/[^a-z0-9]/gi, '')
-        const path = await manager?.attachFile(id, data, ext)
-        const attachment = path ? { id: randomUUID(), path, mimeType, name: name || basename(path) } : null
+        const persisted = await persistTaskDraftImage(id, sourcePath, mimeType, name)
+        const attachment = persisted?.attachment ?? null
         emitTaskReplyInput(log, {
           taskId: id, draftId, source: 'task-composer', action: attachment ? 'attachment-stage-succeeded' : 'attachment-stage-refused',
           sourcePath, ownedPath: attachment?.path ?? null, attachmentId: attachment?.id ?? null,
-          mimeType, name, bytes: data.byteLength, elapsedMs: Date.now() - startedAt,
+          mimeType, name, bytes: persisted?.bytes ?? null, elapsedMs: Date.now() - startedAt,
         })
         return attachment
       } finally {
@@ -2476,6 +2491,25 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
       text,
       attachments,
       drafts: taskDrafts,
+      persistAttachment: async (taskId, sourcePath) => {
+        const persisted = await persistTaskDraftImage(taskId, sourcePath, 'image/png', basename(sourcePath))
+        if (persisted) {
+          emitTaskReplyInput(log, {
+            taskId, draftId: taskDrafts.traceId(taskId), source: 'right-option', action: 'attachment-stage-succeeded',
+            sourcePath, ownedPath: persisted.attachment.path, attachmentId: persisted.attachment.id,
+            mimeType: persisted.attachment.mimeType, name: persisted.attachment.name, bytes: persisted.bytes,
+          })
+        }
+        return persisted?.attachment ?? null
+      },
+      onAttachmentStageFailed: (taskId, sourcePath, error) => {
+        emitTaskReplyInput(log, {
+          taskId, draftId: taskDrafts.traceId(taskId), source: 'right-option', action: 'attachment-stage-failed',
+          sourcePath, mimeType: 'image/png', name: basename(sourcePath), error: error.message,
+        })
+        log.warn('addressed capture image staging failed', { taskId, sourcePath, error: error.message })
+        notchController?.toast('That screenshot could not be attached. Your reply is still in the task.')
+      },
       onStaged: (_taskId, snapshot) => {
         const draftId = taskDrafts.traceId(fid)
         emitTaskReplyInput(log, {

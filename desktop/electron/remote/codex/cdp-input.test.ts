@@ -18,7 +18,7 @@ test('typeText inserts an entire dictated message atomically', async () => {
   }])
 })
 
-test('follow-up refuses to submit when Codex does not contain the exact text', async () => {
+test('follow-up refuses to overwrite an existing Codex composer draft', async () => {
   let enterCount = 0
   const driver = new CodexDesktopDriver({ sleep: async () => {} }) as any
   driver.cdp = {
@@ -33,6 +33,6 @@ test('follow-up refuses to submit when Codex does not contain the exact text', a
 
   const result = await driver.send('thread-1', 'the exact dictated message')
 
-  assert.deepEqual(result, { ok: false, reason: 'text-mismatch' })
+  assert.deepEqual(result, { ok: false, reason: 'composer-not-empty' })
   assert.equal(enterCount, 0)
 })
