@@ -861,10 +861,7 @@ export class CodexDesktopDriver {
   async openThread(
     threadId: string,
     existing?: CodexCdp,
-    /** `title` narrows Codex's chat search. Without it the search still runs,
-     *  but only over the list Codex shows by default, so a title makes an
-     *  off-screen thread far more likely to be reachable in the background. */
-    opts: { background?: boolean; title?: string } = {},
+    opts: { background?: boolean } = {},
   ): Promise<boolean> {
     const bare = bareThreadId(threadId)
 
@@ -929,7 +926,7 @@ export class CodexDesktopDriver {
       expandOne: () => expandNextSidebarGroup(cdp),
       clickShowMore: () => clickNextSidebarShowMore(cdp),
       advanceScroll: () => advanceSidebarScroll(cdp),
-      clickTargetViaSearch: () => clickThreadRowViaSearch(cdp, threadId, opts.title ?? '', (ms) => this.sleep(ms)),
+      clickTargetViaSearch: () => clickThreadRowViaSearch(cdp, threadId, (ms) => this.sleep(ms)),
     }, (ms) => this.sleep(ms))
     if (found && await settle('sidebar-search')) return true
     log.warn('codex-thread-background-unreachable', { threadId: bare })

@@ -658,9 +658,9 @@ export async function clickThreadRow(cdp: CodexCdp, threadId: string): Promise<b
 export async function clickThreadRowViaSearch(
   cdp: CodexCdp,
   threadId: string,
-  query: string,
   sleep: (ms: number) => Promise<void>,
 ): Promise<boolean> {
+  const bare = bareThreadId(threadId)
   if (!(await cdp.clickAriaLabel('Search'))) return false
   try {
     await sleep(400)
@@ -671,12 +671,36 @@ export async function clickThreadRowViaSearch(
       return true;
     })()`)
     if (!focused) return false
-    if (query) {
-      await cdp.typeText(query)
-      // Codex filters as you type; give the list a moment to settle.
-      await sleep(700)
-    }
-    return await clickThreadRow(cdp, threadId)
+    // THE QUERY IS THE ID, NEVER A TITLE.
+    //
+    // Codex's menu matches the query against a thread's id as well as its name
+    // — measured live: "019ff6b4" returned exactly one row. A title would be the
+    // wrong key twice over: Unmute's name for a task and Codex's name for the
+    // thread are routinely different ("AI Marketing Research" against "Research
+    // AI social marketing agents"), and the user can rename theirs whenever they
+    // like. An id cannot drift.
+    await cdp.typeText(bare)
+    // The menu filters as you type; let the list settle before reading it.
+    await sleep(900)
+    // Its rows carry no thread-id attribute, so the id in the QUERY is what
+    // makes the first row the right one. Identity is verified after navigation
+    // (mountedThreadMatches) before a single character is composed, so a wrong
+    // row costs a refused delivery rather than a message in the wrong thread.
+    const box = await cdp.evaluate<string>(`(() => {
+      const dialog = document.querySelector('[role=dialog]');
+      if (!dialog) return '';
+      const row = [...dialog.querySelectorAll('[role=option],[role=menuitem],li')]
+        .find(e => (e.textContent || '').trim().length > 3);
+      if (!row) return '';
+      row.scrollIntoView({ block: 'center' });
+      const r = row.getBoundingClientRect();
+      if (!r.width || !r.height) return '';
+      return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+    })()`)
+    if (!box) return false
+    const { x, y } = JSON.parse(box) as { x: number; y: number }
+    await cdp.click(x, y)
+    return true
   } finally {
     // Escape whatever happened — a left-open dialog is worse than a miss.
     await cdp.pressEscape().catch(() => {})

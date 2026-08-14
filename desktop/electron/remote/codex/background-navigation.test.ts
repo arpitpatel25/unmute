@@ -1,3 +1,4 @@
+import { clickThreadRowViaSearch } from './cdp'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
@@ -145,4 +146,38 @@ test('background navigation fails without a deep link when even search cannot fi
   }, async () => {})
 
   assert.equal(found, false)
+})
+
+// Codex's search is a COMMAND MENU, and its rows carry no thread id — so a
+// result cannot be matched by attribute the way a sidebar row can. But the menu
+// matches the query against the thread's ID as well as its title, measured
+// live: typing "019ff6b4" returned exactly one row, "Research AI social
+// marketing agents".
+//
+// That is what makes this safe to click: we search by the durable id we already
+// store, never by a title. Unmute's name for a task and Codex's name for the
+// thread are routinely different — "AI Marketing Research" vs "Research AI
+// social marketing agents" — and the user can rename theirs at any time. The id
+// cannot drift, and the mounted-thread check still verifies identity before a
+// single character is typed.
+test('search addresses a thread by its durable id, never by a title', async () => {
+  const typed: string[] = []
+  const clicks: string[] = []
+  const cdp = {
+    clickAriaLabel: async (label: string) => { clicks.push(label); return true },
+    evaluate: async (expression: string) => {
+      if (expression.includes('input')) return true      // focus the search field
+      return JSON.stringify({ x: 10, y: 20 })            // a result to click
+    },
+    typeText: async (t: string) => { typed.push(t) },
+    click: async () => { clicks.push('result') },
+    pressEscape: async () => { clicks.push('escape') },
+  } as any
+
+  assert.equal(
+    await clickThreadRowViaSearch(cdp, 'local:019ff6b4-b76a-7641-8b00-95ce86de8403', async () => {}),
+    true,
+  )
+  assert.deepEqual(typed, ['019ff6b4-b76a-7641-8b00-95ce86de8403'], 'the query is the bare thread id')
+  assert.ok(clicks.includes('escape'), 'the dialog is always dismissed')
 })
