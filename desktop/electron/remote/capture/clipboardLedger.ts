@@ -55,7 +55,8 @@ export const TEXT_DEDUP_WINDOW_MS = 500
  *  reads as a second, silently-empty skip set. A caller that only dedups takes
  *  this instead. */
 export interface Claims {
-  claims: Map<string, number>
+  /** When this content was claimed, and by which detector — see claimContent. */
+  claims: Map<string, { atMs: number; detector?: string }>
   dedupWindowMs: number
 }
 
@@ -91,11 +92,38 @@ export function shouldObserve(l: Ledger, changeCount: number): boolean {
  *  DEDUP_WINDOW_MS and TEXT_DEDUP_WINDOW_MS). The map stays one map: it is
  *  keyed on content, and the window is a property of the question being asked,
  *  not of the storage. */
-export function claimContent(l: Claims, hash: string, atMs: number, windowMs?: number): boolean {
+export function claimContent(
+  l: Claims,
+  hash: string,
+  atMs: number,
+  windowMs?: number,
+  /**
+   * WHICH DETECTOR SAW IT — the only thing that separates one action from two.
+   *
+   * Keyed on content alone, this could not tell a screenshot tool's file-write
+   * and pasteboard-write apart from the user capturing the same thing twice.
+   * Screenshot an unchanged region twice and the PNG bytes are identical, so
+   * the second capture was silently dropped — reported from the field as
+   * "I tried attaching multiple images but it did not do that", with exactly
+   * one image in the buffer.
+   *
+   * Two detectors on one action is a duplicate. One detector twice is two
+   * captures, and every capture the user made has to arrive: an extra
+   * thumbnail they can remove beats a silent loss, which is the same rule this
+   * module already applies to an unreadable image.
+   *
+   * Omitted, the claim behaves exactly as before.
+   */
+  detector?: string,
+): boolean {
   const within = windowMs ?? l.dedupWindowMs
   const prev = l.claims.get(hash)
-  if (prev !== undefined && atMs - prev <= within) return false
-  l.claims.set(hash, atMs)
+  if (prev !== undefined && atMs - prev.atMs <= within) {
+    // Same detector twice = the user did it twice. Refresh the claim so the
+    // window keeps tracking the latest capture, and let it through.
+    if (!(detector && prev.detector === detector)) return false
+  }
+  l.claims.set(hash, { atMs, detector })
   return true
 }
 

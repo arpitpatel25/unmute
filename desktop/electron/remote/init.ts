@@ -2102,8 +2102,11 @@ function rescueClipboardImageViaChild(padDir: string): Promise<string | null> {
  *  screenshotWatch is synchronous and is NOT suspended during our own
  *  pasteboard sequences, so a refusal here is a reachable path, not a
  *  theoretical one. */
-function onInsertRecorded(i: { kind: InsertKind; content: string; atMs: number }): void {
-  if (!recordInsert(i, Date.now())) return
+function onInsertRecorded(
+  i: { kind: InsertKind; content: string; atMs: number },
+  detector: 'clipboard' | 'screenshot',
+): void {
+  if (!recordInsert({ ...i, detector }, Date.now())) return
   broadcastScratchpad()
 }
 
@@ -2120,7 +2123,7 @@ function initCaptureWatchers(): void {
     rescueImage: (padDir) => rescueClipboardImageViaChild(padDir),
     exists: (p) => { try { return existsSync(p.replace(/^~/, homedir())) } catch { return false } },
     now: () => Date.now(),
-    onInsert: (i) => onInsertRecorded(i),
+    onInsert: (i) => onInsertRecorded(i, 'clipboard'),
   })
 
   const sw = createScreenshotWatch({
@@ -2149,7 +2152,7 @@ function initCaptureWatchers(): void {
     // SAME file firing twice from fs.watch, which macOS does emit (a write and
     // a rename for one screenshot).
     claim: (hash, atMs) => claimShared(hash, atMs),
-    onInsert: (i) => onInsertRecorded(i),
+    onInsert: (i) => onInsertRecorded(i, 'screenshot'),
   })
 
   initWatchers(cw, sw)

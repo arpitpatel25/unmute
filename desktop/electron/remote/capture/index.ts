@@ -65,8 +65,8 @@ const sharedClaims = createClaims()
  *  `windowMs` lets the TEXT claim below ask the same map a tighter question —
  *  the two races have different timescales. Defaulted, so the screenshot
  *  watcher's call site is unchanged. */
-export function claimShared(hash: string, atMs: number, windowMs?: number): boolean {
-  return claimContent(sharedClaims, hash, atMs, windowMs)
+export function claimShared(hash: string, atMs: number, windowMs?: number, detector?: string): boolean {
+  return claimContent(sharedClaims, hash, atMs, windowMs, detector)
 }
 
 // ── Injected effects ────────────────────────────────────────────────────
@@ -499,10 +499,10 @@ export function attachTranscript(segmentId: string | null, text: string, now: nu
  *  be gated on the answer, or the pad and the screen disagree about what
  *  happened. */
 export function recordInsert(
-  i: { kind: InsertKind; content: string; atMs: number },
+  i: { kind: InsertKind; content: string; atMs: number; detector?: string },
   now: number,
 ): boolean {
-  if (!pad) return false
+  if (!pad) { insertDecision('rejected', i, 'no-pad'); return false }
   // Anything SEEN while Unmute owned the pasteboard is Unmute's, not the
   // user's — see beginOwnClipboardSequence. Checked on the detection instant,
   // not on arrival, so a rescue that outlives the sequence is refused too.
@@ -513,14 +513,20 @@ export function recordInsert(
   // watcher's `now()` returned and `suppressDetectedUpTo` is a `Date.now()`.
   // The conversion to the pad's clock happens strictly BELOW this comparison —
   // moving it above would silently change the units under the floor.
-  if (ownSequenceDepth > 0 || i.atMs <= suppressDetectedUpTo) return false
+  if (ownSequenceDepth > 0 || i.atMs <= suppressDetectedUpTo) {
+    insertDecision('rejected', i, ownSequenceDepth > 0 ? 'own-clipboard-sequence' : 'suppressed-window')
+    return false
+  }
   if (i.kind === 'image') {
     const sig = imageSignature(i.content)
     // An unreadable file yields no signature. Insert it rather than dropping
     // it — a missed dedup shows the user one extra thumbnail they can remove,
     // while a wrong drop loses something they captured on purpose.
-    if (sig && !claimShared(sig, i.atMs)) return false
-  } else if (!claimShared(`text:${i.content}`, i.atMs, TEXT_DEDUP_WINDOW_MS)) {
+    if (sig && !claimShared(sig, i.atMs, undefined, i.detector)) {
+      insertDecision('rejected', i, 'duplicate-of-same-action')
+      return false
+    }
+  } else if (!claimShared(`text:${i.content}`, i.atMs, TEXT_DEDUP_WINDOW_MS, i.detector)) {
     // ONE COPY IS ONE INSERT — even when the pasteboard was written three
     // times. A browser writes several flavours for a single ⌘C (plain text,
     // HTML, a public.url), and EACH write bumps changeCount, so the watcher
@@ -544,8 +550,34 @@ export function recordInsert(
     id: randomUUID(), kind: i.kind, content: i.content,
     atMs: i.atMs - pad.createdAt, now,
   })
+  insertDecision('accepted', i, null, pad.entries.filter((e) => e.type === 'insert').length)
   schedulePersist()
   return true
+}
+
+/**
+ * EVERY INSERT DECISION IS VISIBLE.
+ *
+ * This path recorded nothing, so when a user reported captured images going
+ * missing there was no way to tell whether a detector never saw them or saw
+ * them and refused them — the difference between two completely different
+ * bugs. A capture that does not arrive must at least say why it did not.
+ */
+function insertDecision(
+  outcome: 'accepted' | 'rejected',
+  i: { kind: InsertKind; content: string; atMs: number; detector?: string },
+  reason: string | null,
+  padInserts?: number,
+): void {
+  try {
+    console.log('[capture] insert', JSON.stringify({
+      outcome, reason, kind: i.kind, detector: i.detector ?? null,
+      // The content is a path for an image and the user's own words for text;
+      // only its shape is diagnostic, so text is never echoed to the log.
+      content: i.kind === 'image' ? i.content : `${i.content.length} chars`,
+      atMs: i.atMs, padInserts: padInserts ?? null,
+    }))
+  } catch { /* diagnostics never alter capture */ }
 }
 
 /** size:md5(first 4KB). Cheap by construction — see recordInsert. */

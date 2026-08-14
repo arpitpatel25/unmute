@@ -2,7 +2,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert'
 import {
-  createLedger, noteOwnWrite, shouldObserve, claimContent, resetLedger, DEDUP_WINDOW_MS,
+  createLedger, noteOwnWrite, shouldObserve, claimContent, resetLedger, DEDUP_WINDOW_MS, createClaims,
 } from './clipboardLedger'
 
 describe('our own writes are unobservable BY CONSTRUCTION', () => {
@@ -74,5 +74,43 @@ describe('resetLedger', () => {
     resetLedger(l)
     assert.equal(shouldObserve(l, 1), true)
     assert.equal(claimContent(l, 'h', 100), true)
+  })
+})
+
+// DEDUP EXISTS FOR ONE ACTION SEEN TWICE, NOT FOR TWO DELIBERATE ACTIONS.
+//
+// The window collapses identical content so a screenshot tool that writes a
+// file AND copies to the pasteboard yields one insert. But keyed on content
+// alone it cannot tell that apart from the user capturing the same thing
+// twice: screenshot an unchanged region twice and the PNG bytes are identical,
+// so the second capture vanished silently. Field report: "I tried attaching
+// multiple images but it did not do that", with one image in the buffer.
+//
+// The distinguishing signal is WHICH detector saw it. Two detectors on one
+// action is a duplicate; one detector twice is two actions, and every capture
+// the user made must arrive.
+describe('claims distinguish one action from two', () => {
+  test('the same content from a DIFFERENT detector is one action, claimed once', () => {
+    const claims = createClaims(2000)
+    assert.equal(claimContent(claims, 'img-sig', 1000, undefined, 'clipboard'), true)
+    assert.equal(
+      claimContent(claims, 'img-sig', 1200, undefined, 'screenshot'), false,
+      'a file write and its pasteboard copy are one screenshot',
+    )
+  })
+
+  test('the same content from the SAME detector twice is two captures, both kept', () => {
+    const claims = createClaims(2000)
+    assert.equal(claimContent(claims, 'img-sig', 1000, undefined, 'clipboard'), true)
+    assert.equal(
+      claimContent(claims, 'img-sig', 1200, undefined, 'clipboard'), true,
+      'capturing the same region twice is two deliberate captures',
+    )
+  })
+
+  test('an unlabelled claim keeps the old content-only behaviour', () => {
+    const claims = createClaims(2000)
+    assert.equal(claimContent(claims, 'text:hello', 1000), true)
+    assert.equal(claimContent(claims, 'text:hello', 1100), false)
   })
 })
