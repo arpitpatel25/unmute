@@ -1999,6 +1999,20 @@ export class TaskManager extends EventEmitter {
     this.transition(id, status.state, status, lastActivityAt ?? undefined)
   }
 
+  /** How many user turns Codex has recorded for this task on disk.
+   *
+   * Zero when there is no rollout yet, which is the honest answer: nothing has
+   * been proven. A count rather than a boolean so a reply can be told apart
+   * from whatever was already in the thread. */
+  private async codexUserTurns(task: Task): Promise<number> {
+    const rolloutId = task.codexRolloutId ?? task.sessionId
+    if (!rolloutId) return 0
+    const path = await findRollout(rolloutId)
+    if (!path) return 0
+    const events = await readRolloutEvents(path)
+    return conversationFromCodexEvents(events).filter((turn) => turn.role === 'user').length
+  }
+
   private async pollCodexDesktop(id: string): Promise<void> {
     const task = this.tasks.get(id)
     // NOTE: `ready` is deliberately NOT terminal for this backend — the Codex
@@ -3760,28 +3774,47 @@ export class TaskManager extends EventEmitter {
       }
       emitTaskReplyStep(tlog, trace, 'attachment-paste', 'succeeded', { count: attachments.length })
     }
+    // PROVE SUBMISSION WITH A SIGNAL THIS AGENT ACTUALLY EMITS.
+    //
+    // The proof used to be a `UserPromptSubmit` hook event for every CLI. That
+    // hook is Claude Code's; ~/.codex/hooks.json carries PermissionRequest and
+    // nothing else, so a Codex reply could never be confirmed — it was typed,
+    // Codex answered it, and Unmute still timed out, kept the draft, and fired
+    // a SECOND Enter because the first looked unconfirmed. That duplicate is
+    // visible in real sessions as the same message asked twice.
+    //
+    // Codex records each user turn in its rollout without being asked, which is
+    // the same durable authority the desktop lane already trusts.
     const submittedBefore = task.promptSubmittedAt ?? 0
+    const rolloutTurnsBefore = task.agent === 'codex' ? await this.codexUserTurns(task) : null
+    const landed = async (): Promise<boolean> => {
+      if (rolloutTurnsBefore === null) return (task.promptSubmittedAt ?? 0) > submittedBefore
+      return (await this.codexUserTurns(task)) > rolloutTurnsBefore
+    }
     ex.submitDraft()
-    emitTaskReplyStep(tlog, trace, 'submit-key', 'succeeded', { attempt: 1, submittedBefore })
-    // A single Enter is occasionally ignored by both TUIs. Confirm once, then
-    // require the same UserPromptSubmit hook used by ordinary follow-ups before
-    // allowing TaskDraftStore to clear its retry copy.
+    emitTaskReplyStep(tlog, trace, 'submit-key', 'succeeded', { attempt: 1, submittedBefore, rolloutTurnsBefore })
+    // A single Enter is occasionally ignored by both TUIs, so confirm once
+    // before repeating it — a retry against a transport that cannot confirm is
+    // how one dictated message became two turns.
     await new Promise((resolve) => setTimeout(resolve, this.opts.submitConfirmMs))
-    if (ex.alive && (task.promptSubmittedAt ?? 0) <= submittedBefore) {
+    if (ex.alive && !(await landed())) {
       ex.submitDraft()
       emitTaskReplyStep(tlog, trace, 'submit-key', 'succeeded', { attempt: 2, reason: 'first-enter-unconfirmed' })
     }
     const deadline = Date.now() + this.opts.verifyAfterMs
-    while (ex.alive && Date.now() < deadline && (task.promptSubmittedAt ?? 0) <= submittedBefore) {
+    while (ex.alive && Date.now() < deadline && !(await landed())) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
-    if ((task.promptSubmittedAt ?? 0) <= submittedBefore) {
+    if (!(await landed())) {
       task.deliveryError = 'The CLI did not confirm that the attachment reply was submitted'
       this.emit('updated', task)
       emitTaskReplyStep(tlog, trace, 'submission-proof', 'timed-out', { verifyAfterMs: this.opts.verifyAfterMs, draftRetained: true })
-      return outcome(false, 'prompt-submitted-hook-timeout', { draftRetained: true })
+      return outcome(false, rolloutTurnsBefore === null ? 'prompt-submitted-hook-timeout' : 'codex-rollout-turn-timeout', { draftRetained: true })
     }
-    emitTaskReplyStep(tlog, trace, 'submission-proof', 'succeeded', { promptSubmittedAt: task.promptSubmittedAt })
+    emitTaskReplyStep(tlog, trace, 'submission-proof', 'succeeded', {
+      promptSubmittedAt: task.promptSubmittedAt,
+      provenBy: rolloutTurnsBefore === null ? 'prompt-submitted-hook' : 'codex-rollout',
+    })
     delete task.deliveryError
     task.lastUserInputAt = this.clock()
     task.state = 'processing'
