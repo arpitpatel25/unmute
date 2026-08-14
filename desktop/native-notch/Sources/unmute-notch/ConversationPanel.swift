@@ -445,20 +445,50 @@ private struct SubmitTextEditor: NSViewRepresentable {
     }
 }
 
-private final class AttachmentTextView: NSTextView {
+final class AttachmentTextView: NSTextView {
     var onImagePaste: ((String, String, String) -> Void)?
-    override func paste(_ sender: Any?) {
-        if let image = NSPasteboard.general.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage,
-           let data = image.tiffRepresentation,
-           let bitmap = NSBitmapImageRep(data: data),
-           let png = bitmap.representation(using: .png, properties: [:]) {
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("unmute-draft-\(UUID().uuidString).png")
-            do {
-                try png.write(to: url)
-                onImagePaste?(url.path, "image/png", url.lastPathComponent)
-                return
-            } catch { }
+
+    /// Stage whatever image the pasteboard is carrying. Returns false when
+    /// there is none, or when it could not be written — the caller then falls
+    /// back to an ordinary text paste.
+    ///
+    /// SEPARATE FROM `paste(_:)` ON PURPOSE. This app is `.accessory` and
+    /// builds no menu, so ⌘V is delivered by AppController's key monitor via
+    /// `sendAction(paste:)` rather than by AppKit's menu machinery. That walk
+    /// reaches this view only when the responder chain cooperates, and when it
+    /// did not the paste vanished in silence: no attachment, no text, nothing
+    /// logged. Exposing the staging step lets the ⌘V path call it directly, so
+    /// the composer no longer depends on a menu this app does not have.
+    @discardableResult
+    func stagePasteboardImage() -> Bool {
+        let board = NSPasteboard.general
+        let hasImage = board.canReadObject(forClasses: [NSImage.self], options: nil)
+        let hasText = board.string(forType: .string) != nil
+        guard composerPasteAction(hasImage: hasImage, hasText: hasText) == .stageImage else {
+            NotchLog.log("composer paste: no image on the pasteboard (text=\(hasText))")
+            return false
         }
+        guard let image = board.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage,
+              let data = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: data),
+              let png = bitmap.representation(using: .png, properties: [:]) else {
+            NotchLog.log("composer paste: pasteboard claimed an image it would not render")
+            return false
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("unmute-draft-\(UUID().uuidString).png")
+        do {
+            try png.write(to: url)
+        } catch {
+            NotchLog.log("composer paste: could not write the staged image — \(error)")
+            return false
+        }
+        NotchLog.log("composer paste: staged image \(url.lastPathComponent) (\(png.count) bytes)")
+        onImagePaste?(url.path, "image/png", url.lastPathComponent)
+        return true
+    }
+
+    override func paste(_ sender: Any?) {
+        if stagePasteboardImage() { return }
         super.paste(sender)
     }
 }

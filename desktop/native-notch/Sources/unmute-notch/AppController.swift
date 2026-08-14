@@ -1157,10 +1157,27 @@ final class AppController: NSObject, NotchResizing {
                     default:  return nil
                     }
                 }()
+                // AN IMAGE PASTE IS NOT A TEXT PASTE, AND MUST NOT DEPEND ON
+                // THE RESPONDER WALK FINDING THE RIGHT VIEW.
+                //
+                // ⌘V into the composer did nothing at all — text box focused,
+                // image on the pasteboard, no attachment and no text — while
+                // the same clipboard pasted fine into the terminal beside it.
+                // Typing worked, because raw characters go straight to the
+                // first responder; only the menu-borne commands were lost. So
+                // when the focused view is a composer and the board carries an
+                // image, stage it directly instead of hoping sendAction lands.
+                if ch == "v", !shift,
+                   let editor = self.window.firstResponder as? AttachmentTextView,
+                   editor.stagePasteboardImage() {
+                    NotchLog.log("edit command handled: ⌘V → composer attachment")
+                    return nil
+                }
                 if let action, NSApp.sendAction(action, to: nil, from: nil) {
                     NotchLog.log("edit command handled: ⌘\(ch)")
                     return nil
                 }
+                if ch == "v" { NotchLog.log("⌘V reached NO responder — paste dropped") }
             }
 
             if typing { return e }
