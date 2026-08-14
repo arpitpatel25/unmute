@@ -480,6 +480,10 @@ enum Event {
     case chooseOption(id: String, index: Int)
     case answerText(id: String, text: String)      // free-text / confirm answer
     case setDraftText(id: String, text: String)
+    /// The composer gained or lost first responder. Dictation uses this to hand
+    /// captured images straight to the focused text box instead of posting a
+    /// synthetic ⌘V that may not reach this app — see registerComposerImageSink.
+    case composerFocus(id: String, focused: Bool)
     case addDraftImage(id: String, path: String, mimeType: String, name: String)
     case removeDraftAttachment(id: String, attachmentId: String)
     case sendDraft(id: String)
@@ -547,6 +551,7 @@ enum Event {
         case .chooseOption(let id, let index): return ["type": "chooseOption", "id": id, "index": index]
         case .answerText(let id, let text): return ["type": "answerText", "id": id, "text": text]
         case .setDraftText(let id, let text): return ["type": "setDraftText", "id": id, "text": text]
+        case .composerFocus(let id, let focused): return ["type": "composerFocus", "id": id, "focused": focused]
         case .addDraftImage(let id, let path, let mimeType, let name): return ["type": "addDraftImage", "id": id, "path": path, "mimeType": mimeType, "name": name]
         case .removeDraftAttachment(let id, let attachmentId): return ["type": "removeDraftAttachment", "id": id, "attachmentId": attachmentId]
         case .sendDraft(let id): return ["type": "sendDraft", "id": id]

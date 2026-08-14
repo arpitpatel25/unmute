@@ -96,6 +96,36 @@ export async function pasteAtCursor(text: string, images?: readonly string[]): P
   return true
 }
 
+/**
+ * A KEYSTROKE IS THE WRONG INSTRUMENT FOR A DESTINATION UNMUTE OWNS.
+ *
+ * Dictating into a task's composer put the text in and lost the image. The
+ * timeline: the text ⌘V landed at t+8ms and the composer took it; 492ms later
+ * the image sequencer posted a SECOND synthetic ⌘V that never reached the notch
+ * at all — no paste decision logged, nothing staged — while the sequencer still
+ * reported "pasted 1/1", because all it knows is that it posted a key, not that
+ * anything accepted it.
+ *
+ * When the focused text box is Unmute's own, the images can simply be handed to
+ * it. Returns true when the composer took them, and the caller then skips the
+ * keystrokes entirely; false means no composer is focused and the ordinary
+ * cursor paste is still correct.
+ *
+ * Registered rather than imported, the same inversion as the paste effect —
+ * clipboard.ts must not import init.ts.
+ */
+type ComposerImageSink = (paths: readonly string[]) => boolean
+let composerImageSink: ComposerImageSink | null = null
+
+export function registerComposerImageSink(fn: ComposerImageSink | null): void {
+  composerImageSink = fn
+}
+
+export function stageImagesIntoFocusedComposer(paths: readonly string[]): boolean {
+  if (!composerImageSink || !paths.length) return false
+  try { return composerImageSink(paths) } catch { return false }
+}
+
 /** History copy is staged by clipboard.ts for the next user-initiated Cmd+V.
  * Registered here for the same acyclic dependency-inversion reason as pasteFn. */
 type HistoryCopyFn = (text: string, images: readonly string[]) => void

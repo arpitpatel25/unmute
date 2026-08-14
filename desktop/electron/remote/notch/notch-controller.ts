@@ -310,6 +310,13 @@ export class NotchController {
   private digestText: string | null = null
   /** Terminals the helper currently has open (stream targets). */
   private openTerms = new Set<string>()
+  /** The task whose composer currently holds first responder, or null. Set from
+   *  the notch's composerFocus event; read by the capture path so a dictated
+   *  image can be handed to that composer rather than posted at it as a ⌘V. */
+  private focusedComposerId: string | null = null
+
+  /** The composer Unmute's own dictation should deliver images into. */
+  focusedComposerTaskId(): string | null { return this.focusedComposerId }
   /** oneoff→session graduation narration (id → badge deadline). */
   private promotedUntil = new Map<string, number>()
   private kindSeen = new Map<string, string>()
@@ -507,6 +514,17 @@ export class NotchController {
       const { id, path, mimeType, name } = e as { id: string; path: string; mimeType: string; name: string }
       devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'addDraftImage', path, mimeType, name })
       void Promise.resolve(this.deps.addDraftImage?.(id, path, mimeType, name)).then(() => this.scheduleReconcile())
+    })
+    // WHICH TEXT BOX IS UNMUTE'S OWN, RIGHT NOW.
+    //
+    // Dictation delivers captured images by posting a synthetic ⌘V, and that
+    // keystroke did not reach the notch: the text landed and the image did not.
+    // Knowing the focused composer lets the capture path hand images straight
+    // over instead of aiming a keystroke at a window that may not receive it.
+    on('composerFocus', (e) => {
+      const { id, focused } = e as { id: string; focused: boolean }
+      this.focusedComposerId = focused ? id : (this.focusedComposerId === id ? null : this.focusedComposerId)
+      devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'composerFocus', focused })
     })
     on('removeDraftAttachment', (e) => {
       const { id, attachmentId } = e as { id: string; attachmentId: string }

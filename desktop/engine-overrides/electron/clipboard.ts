@@ -12,7 +12,7 @@ import { HistoryPasteStage } from './historyPasteStage'
 // sessionManager (registerPaste), never imported from here — see the façade's
 // header. Adding an import the other way closes the loop this comment exists
 // to prevent.
-import { noteOwnClipboardWrite } from './paywall/remote/capture/index'
+import { noteOwnClipboardWrite, stageImagesIntoFocusedComposer } from './paywall/remote/capture/index'
 
 /**
  * Announce a pasteboard write we caused.
@@ -495,6 +495,17 @@ function verifyPasteboardServesPNG(
  *  change counter at call time and anything suspended in between lets the
  *  watcher read our own write as a user copy. */
 async function deliverImagesAfterText(images: readonly string[], padded: string): Promise<void> {
+  // OUR OWN COMPOSER TAKES THE FILES, NOT A KEYSTROKE.
+  //
+  // This posts a synthetic ⌘V per image, which works for any app that has the
+  // caret. It did NOT work for Unmute's own task composer: the text ⌘V landed
+  // and the image ⌘V, posted ~half a second later, never reached the notch at
+  // all — yet this function still reported "pasted 1/1", because posting a key
+  // is all it can observe. When the focused box is ours, hand the paths over.
+  if (stageImagesIntoFocusedComposer(images)) {
+    console.log(`[clipboard] ${images.length} image(s) staged into the focused Unmute composer — no keystroke posted`)
+    return
+  }
   return serializeImageHandoff(async () => {
   const t0 = Date.now()
   const pasted = await handOffImages<Electron.NativeImage>({

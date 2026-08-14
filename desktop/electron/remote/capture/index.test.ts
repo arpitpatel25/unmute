@@ -12,6 +12,7 @@ import {
   commitDelivery, gateDelivery, registerHistoryCopy, registerSettings, removeFromPad, restageDelivery, runDelivery,
   segmentOpen, setOwnSequenceCeiling, setScratchpadRoot, snapshot, takeForDelivery,
   writePadNow,
+  registerComposerImageSink, stageImagesIntoFocusedComposer,
 } from './index'
 import { SETTLE_IDLE_MS, deserialize, padDirFor, serialize } from './scratchpadStore'
 import { TEXT_DEDUP_WINDOW_MS } from './clipboardLedger'
@@ -2330,5 +2331,33 @@ describe('a screenshot taken during a dictation actually reaches the cursor', ()
     assert.equal(r.landed, 'cursor')
     assert.equal(seen.length, 1)
     assert.deepEqual(seen[0].images, ['/tmp/one.png', '/tmp/two.png'])
+  })
+})
+
+describe('images delivered while Unmute\'s own composer is focused', () => {
+  // Dictating into a task's composer put the TEXT in but never the image.
+  // Measured: the text ⌘V landed at t+8ms, then 492ms later the image
+  // sequencer posted a second synthetic ⌘V that never reached the notch at
+  // all — no paste decision logged, no attachment staged — while the
+  // sequencer still reported "pasted 1/1" because it only knows it posted a
+  // keystroke, not that anything accepted it.
+  //
+  // A keystroke is the wrong instrument for a destination Unmute owns.
+  test('are handed to the composer instead of a second synthetic keystroke', () => {
+    const staged: string[][] = []
+    registerComposerImageSink((paths) => { staged.push([...paths]); return true })
+
+    assert.equal(stageImagesIntoFocusedComposer(['/tmp/a.png', '/tmp/b.png']), true)
+    assert.deepEqual(staged, [['/tmp/a.png', '/tmp/b.png']])
+  })
+
+  test('fall back to the keystroke when no composer is focused', () => {
+    registerComposerImageSink(() => false)
+    assert.equal(stageImagesIntoFocusedComposer(['/tmp/a.png']), false)
+  })
+
+  test('fall back to the keystroke when nothing registered a sink at all', () => {
+    registerComposerImageSink(null)
+    assert.equal(stageImagesIntoFocusedComposer(['/tmp/a.png']), false)
   })
 })

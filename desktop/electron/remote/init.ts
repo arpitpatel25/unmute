@@ -102,6 +102,7 @@ import {
   adoptPersistedPad, armScratchpad, claimShared, deliveryInFlight, discard as discardPad,
   copyHistoryToClipboard, gateDelivery, heldForSurface, initWatchers, padDirOf, pasteAtCursor, recordInsert,
   registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot,
+  registerComposerImageSink,
   type DeliveryTarget,
 } from './capture/index'
 import { SETTLE_IDLE_MS } from './capture/scratchpadStore'
@@ -2169,6 +2170,22 @@ function initCaptureWatchers(): void {
   // this the panel would appear at an armed stop holding a pad whose words had
   // not arrived yet, and never update.
   registerPadObserver(broadcastScratchpad)
+  // DELIVER INTO OUR OWN COMPOSER DIRECTLY, NOT BY POSTING A KEY AT IT.
+  //
+  // A dictation carrying an image put the text in the composer and lost the
+  // picture: the text ⌘V arrived, and the image's ⌘V — posted 492ms later —
+  // never reached this app at all, while the sequencer reported success because
+  // it only knows it pressed a key. When the focused text box is one of ours,
+  // stage the images as draft attachments instead.
+  registerComposerImageSink((paths) => {
+    const taskId = notchController?.focusedComposerTaskId()
+    if (!taskId || !manager?.get(taskId)) return false
+    log.event('composer-image-sink', { taskId, images: paths.length })
+    for (const path of paths) {
+      void addDraftImageFromPath(taskId, path, 'image/png', basename(path))
+    }
+    return true
+  })
 }
 
 /**

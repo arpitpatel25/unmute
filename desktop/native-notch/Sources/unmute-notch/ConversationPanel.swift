@@ -300,28 +300,57 @@ struct StageComposer: View {
                 .foregroundColor(Theme.cError)
             }
             VStack(alignment: .leading, spacing: 6) {
+                // SHOW THE PICTURE, NOT ITS FILENAME.
+                //
+                // The chip led with `unmute-draft-BAD18C81-D345-484D-….png` and
+                // a 22pt thumbnail beside it, so a staged image read as a row of
+                // UUID rather than as the thing you captured. You cannot tell
+                // WHICH screenshot is attached, or that three are, from a
+                // filename — and not being able to see that is what turned "the
+                // images went missing" into a night of log reading.
+                //
+                // So the preview IS the chip: a tile of the real image with its
+                // remove control on the corner, the way every composer that
+                // takes images does it. A file we cannot render still falls back
+                // to a name, because then the name is all there is.
                 if let attachments = draft?.attachments, !attachments.isEmpty {
-                    HStack(spacing: 7) {
+                    HStack(spacing: 8) {
                         ForEach(attachments, id: \.id) { attachment in
-                            HStack(spacing: 5) {
-                                if let image = NSImage(contentsOfFile: attachment.path) {
-                                    Image(nsImage: image).resizable().scaledToFill().frame(width: 22, height: 22).clipShape(RoundedRectangle(cornerRadius: 4))
-                                } else {
-                                    Image(systemName: "photo").font(.system(size: 11))
+                            let preview = NSImage(contentsOfFile: attachment.path)
+                            ZStack(alignment: .topTrailing) {
+                                Group {
+                                    if let preview {
+                                        Image(nsImage: preview)
+                                            .resizable().scaledToFill()
+                                            .frame(width: 52, height: 52)
+                                    } else {
+                                        HStack(spacing: 5) {
+                                            Image(systemName: "doc").font(.system(size: 11))
+                                            Text(attachment.name).lineLimit(1).font(.system(size: 11.5))
+                                        }
+                                        .padding(.horizontal, 8).frame(height: 52)
+                                    }
                                 }
-                                Text(attachment.name).lineLimit(1).font(.system(size: 11.5))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline, lineWidth: 0.5))
                                 Button(action: { model.emit(.removeDraftAttachment(id: taskId, attachmentId: attachment.id)) }) {
-                                    Image(systemName: "xmark.circle.fill").font(.system(size: 12))
-                                }.buttonStyle(.plain)
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 13))
+                                        .symbolRenderingMode(.palette)
+                                        .foregroundStyle(Theme.text, Theme.sunken)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Remove \(attachment.name)")
+                                .offset(x: 5, y: -5)
                             }
-                            .padding(.horizontal, 7).padding(.vertical, 5)
-                            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.raised))
+                            .padding(.top, 5).padding(.trailing, 5)
                         }
                     }
                 }
                 HStack(alignment: .bottom, spacing: 8) {
                     SubmitTextEditor(text: $text, measuredHeight: $editorHeight,
-                                     placeholder: placeholder, onSubmit: send, onImagePaste: attachImage)
+                                     placeholder: placeholder, onSubmit: send, onImagePaste: attachImage,
+                                     onFocusChange: reportFocus)
                         .frame(height: ComposerHeight.resolve(measured: editorHeight))
                         .focused($focused)
                     if let m = modelLabel, !m.isEmpty {
@@ -368,6 +397,14 @@ struct StageComposer: View {
     private func attachImage(_ path: String, _ mimeType: String, _ name: String) {
         model.emit(.addDraftImage(id: taskId, path: path, mimeType: mimeType, name: name))
     }
+
+    /// Dictation delivers images by posting a synthetic ⌘V, and that keystroke
+    /// did not reach this app — the text arrived and the image did not. Telling
+    /// the engine which composer is focused lets it hand the image over
+    /// directly instead of aiming a keystroke at us.
+    private func reportFocus(_ focused: Bool) {
+        model.emit(.composerFocus(id: taskId, focused: focused))
+    }
 }
 
 /// AppKit supplies the key semantics SwiftUI's TextField cannot: Enter sends,
@@ -378,6 +415,7 @@ private struct SubmitTextEditor: NSViewRepresentable {
     let placeholder: String
     let onSubmit: () -> Void
     let onImagePaste: (String, String, String) -> Void
+    let onFocusChange: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, measuredHeight: $measuredHeight,
@@ -399,6 +437,7 @@ private struct SubmitTextEditor: NSViewRepresentable {
         view.isAutomaticQuoteSubstitutionEnabled = false
         view.delegate = context.coordinator
         view.onImagePaste = context.coordinator.onImagePaste
+        view.onFocusChange = onFocusChange
         view.string = text
         scroll.documentView = view
         context.coordinator.measure(view)
@@ -447,6 +486,21 @@ private struct SubmitTextEditor: NSViewRepresentable {
 
 final class AttachmentTextView: NSTextView {
     var onImagePaste: ((String, String, String) -> Void)?
+    /// Announced so dictation can hand images straight to this box rather than
+    /// posting a synthetic ⌘V at it — see registerComposerImageSink.
+    var onFocusChange: ((Bool) -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFocusChange?(true) }
+        return ok
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { onFocusChange?(false) }
+        return ok
+    }
 
     /// Stage whatever image the pasteboard is carrying. Returns false when
     /// there is none, or when it could not be written — the caller then falls
