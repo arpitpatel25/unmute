@@ -30,6 +30,66 @@ const log = createLogger('codex-cdp')
 const CONNECT_TIMEOUT_MS = 10_000
 const REQUEST_TIMEOUT_MS = 20_000
 
+/** Codex's composer, addressed by its own automation hook before the generic
+ * fallback — the page can mount other contenteditables (rename fields, cells)
+ * and the first one is not reliably the thing we are writing to. */
+export const COMPOSER_SELECTOR = '[data-codex-composer=true],[contenteditable=true]'
+
+/**
+ * READ THE COMPOSER AS BLOCKS, NOT AS `textContent`.
+ *
+ * Codex's composer is ProseMirror: every line is its own <p>, and `textContent`
+ * concatenates those with NO separator. So a two-line dictation read back one
+ * character shorter than it went in, the exact-match gate refused it, and the
+ * message was dropped — measured against the live app, only 1 of 8 realistic
+ * dictation shapes survived. Reconstructing the newline from the block
+ * structure round-trips all 8. An empty block carrying ProseMirror's trailing
+ * <br> is a blank line, not the literal string the <br> would otherwise read as.
+ */
+export const COMPOSER_TEXT_JS = `(() => {
+  const ce = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+  if (!ce) return '';
+  const blocks = [...ce.children].filter(el => /^(P|H[1-6]|LI|BLOCKQUOTE|DIV|PRE)$/.test(el.tagName));
+  const src = blocks.length ? blocks : [ce];
+  return src.map(b => (b.querySelector('br.ProseMirror-trailingBreak') && !b.textContent) ? '' : (b.textContent || '')).join('\\n');
+})()`
+
+/**
+ * COUNT THE IMAGES, NOT THE TRAY'S CHILDREN.
+ *
+ * Codex nests every preview under a single scrolling wrapper, so the tray has
+ * exactly one child whether one image is staged or five. Counting children
+ * therefore returned 1 for any non-empty tray: a one-image reply passed by
+ * coincidence and a two-image reply waited out its poll and failed
+ * `attach-failed` with both images correctly staged. Verified against the live
+ * composer with two screenshots attached: children.length 1, images 2.
+ */
+export const COMPOSER_ATTACHMENT_COUNT_JS = `(() => {
+  const tray = document.querySelector('[data-composer-attachments]');
+  return tray ? tray.querySelectorAll('img').length : 0;
+})()`
+
+/**
+ * PUT THE CARET AFTER WHAT IS ALREADY THERE.
+ *
+ * Focus is a trusted click at the composer's centre, and a click leaves the
+ * caret where it landed — in the middle of any retained draft. Live proof: a
+ * composer holding "AAAA\\nBBBB\\nCCCC\\nDDDD" took a centre click and an insert
+ * and produced "AAAA\\nBBBB\\nCCCC<<INSERTED>>\\nDDDD". Collapsing the selection
+ * to the end makes insertion an append, never a splice.
+ */
+export const COLLAPSE_TO_END_JS = `(() => {
+  const ce = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+  if (!ce) return null;
+  const range = document.createRange();
+  range.selectNodeContents(ce);
+  range.collapse(false);
+  const selection = getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return null;
+})()`
+
 // Packaged Electron may lack a global WebSocket; fall back to `ws` like the
 // computer-use lane does.
 async function getWebSocketImpl(): Promise<any> {
@@ -221,6 +281,21 @@ export class CodexCdp {
     await this.send('Input.insertText', { text })
   }
 
+  /**
+   * Paste the macOS pasteboard into the focused composer, in the background.
+   *
+   * `commands: ['paste']` is what makes this work: a bare synthetic Cmd+V is
+   * inert in the renderer, but the command list invokes the editor's real paste
+   * handler, which reads the SYSTEM pasteboard. That removes the only reason
+   * image delivery ever needed Codex frontmost — a native Command-V goes to
+   * whichever app has focus, a CDP paste goes to this renderer regardless.
+   */
+  async pasteClipboard(): Promise<void> {
+    const base = { key: 'v', code: 'KeyV', windowsVirtualKeyCode: 86, nativeVirtualKeyCode: 86, modifiers: 4 }
+    await this.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base, commands: ['paste'] })
+    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+  }
+
   async pressEnter(): Promise<void> {
     const base = { code: 'Enter', key: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
     await this.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
@@ -228,10 +303,11 @@ export class CodexCdp {
     await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
   }
 
-  /** Focus the composer with a trusted click. False when no composer is present. */
+  /** Focus the composer with a trusted click, caret after any existing content.
+   * False when no composer is present. */
   async focusComposer(): Promise<boolean> {
     const box = await this.evaluate<string>(`(() => {
-      const ce = document.querySelector('[contenteditable=true]');
+      const ce = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
       if (!ce) return '';
       ce.scrollIntoView({ block: 'center' });
       const r = ce.getBoundingClientRect();
@@ -240,11 +316,12 @@ export class CodexCdp {
     if (!box) return false
     const { x, y } = JSON.parse(box)
     await this.click(x, y)
+    await this.evaluate(COLLAPSE_TO_END_JS)
     return true
   }
 
   async composerText(): Promise<string> {
-    return (await this.evaluate<string>(`(() => { const ce = document.querySelector('[contenteditable=true]'); return ce ? (ce.textContent || '') : ''; })()`)) ?? ''
+    return (await this.evaluate<string>(COMPOSER_TEXT_JS)) ?? ''
   }
 
   async attachedFileCount(): Promise<number> {
@@ -257,10 +334,7 @@ export class CodexCdp {
   /** Number of attachment previews mounted in the active composer. Unlike the
    * hidden file input, this also observes images accepted through Command-V. */
   async composerAttachmentCount(): Promise<number> {
-    return (await this.evaluate<number>(`(() => {
-      const tray = document.querySelector('[data-composer-attachments]');
-      return tray ? tray.children.length : 0;
-    })()`)) ?? 0
+    return (await this.evaluate<number>(COMPOSER_ATTACHMENT_COUNT_JS)) ?? 0
   }
 
   /** Attach local files through Codex Desktop's own composer control. This is

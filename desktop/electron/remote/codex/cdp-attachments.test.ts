@@ -53,18 +53,26 @@ test('attachments are accepted through an intercepted CDP chooser without openin
   ])
 })
 
-test('existing-task attachments use native clipboard paste after activating the exact Codex composer', async () => {
+test('existing-task attachments are pasted into the exact Codex composer without activating Codex', async () => {
   const focus: string[] = []
   const stages: string[] = []
   let attachmentCount = 0
   let snapshotReads = 0
+  let clipboardPastes = 0
   const driver = new CodexDesktopDriver({
     sleep: async () => {},
     frontmost: async () => 'com.user.previousapp',
     activate: async (bundleId) => { focus.push(bundleId); return true },
-    pasteImages: async (_text: string, paths: readonly string[], observe: (stage: string) => void) => {
+    pasteImages: async (
+      _text: string,
+      paths: readonly string[],
+      observe: (stage: string) => void,
+      paste?: () => Promise<boolean>,
+    ) => {
       assert.deepEqual(paths, ['/tmp/one.png'])
       observe('pasteboard-written')
+      assert.ok(paste, 'the driver owns the paste so it can happen in the background')
+      await paste()
       observe('paste-posted')
       attachmentCount = 1
       return true
@@ -77,6 +85,7 @@ test('existing-task attachments use native clipboard paste after activating the 
     focusComposer: async () => true,
     attachFiles: async () => { throw new Error('file input and chooser must not be used') },
     composerAttachmentCount: async () => attachmentCount,
+    pasteClipboard: async () => { clipboardPastes++ },
     typeText: async () => {},
     composerText: async () => 'send this',
     pressEnter: async () => {},
@@ -90,7 +99,8 @@ test('existing-task attachments use native clipboard paste after activating the 
     ),
     { ok: true },
   )
-  assert.deepEqual(focus, ['com.openai.codex', 'com.user.previousapp'])
+  assert.equal(clipboardPastes, 1)
+  assert.deepEqual(focus, [], 'a reachable thread needs no app activation at all')
   assert.ok(stages.includes('clipboard-pasteboard-written'))
   assert.ok(stages.includes('clipboard-paste-posted'))
   assert.ok(stages.includes('attachment-preview-verified'))
@@ -260,12 +270,15 @@ test('Codex attachment delivery reports every CDP boundary to the correlated obs
     (stage: string) => { stages.push(stage) },
   )
   assert.deepEqual(result, { ok: true })
+  // No 'focus-snapshot' / 'target-activated' / 'focus-restored': a reachable
+  // thread is now delivered entirely in the background, so there is no focus to
+  // capture, steal or hand back.
   assert.deepEqual(stages, [
-    'cdp-connect', 'focus-snapshot', 'thread-open', 'target-activated', 'baseline-read',
+    'cdp-connect', 'thread-open', 'baseline-read',
     'thread-identity-before-compose', 'composer-focused', 'composer-baseline', 'text-typed', 'text-verified',
     'attachment-preview-baseline', 'attachment-paste-started', 'attachment-paste-completed',
     'attachment-preview-sample', 'attachment-preview-verified',
-    'thread-identity-before-submit', 'submit-key', 'focus-restored', 'rollout-confirmed',
+    'thread-identity-before-submit', 'submit-key', 'rollout-confirmed',
   ])
 })
 
@@ -304,7 +317,10 @@ test('an off-screen Codex thread is opened exactly for delivery and the previous
     { ok: true },
   )
   assert.deepEqual(opens, [true, undefined])
-  assert.deepEqual(focus, ['com.openai.codex', 'com.user.previousapp'])
+  assert.deepEqual(
+    focus, ['com.user.previousapp'],
+    'the deep link raises Codex itself; Unmute must only hand focus back, never take it',
+  )
   assert.ok(stages.includes('thread-open-background-miss'))
   assert.ok(stages.includes('thread-open-exact'))
   assert.ok(stages.includes('focus-restored'))

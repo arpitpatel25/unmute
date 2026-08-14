@@ -572,17 +572,23 @@ export async function injectImagesIntoTask(
   })
 }
 
-/** Hand images to the currently activated desktop composer with Command-V.
- * The caller owns addressing and focus for the full operation. */
+/** Hand images to a desktop composer through the pasteboard.
+ *
+ * `paste` is how the staged image is consumed. A driver that can reach its
+ * target's renderer supplies one — that paste needs no focus, so the caller
+ * owns addressing only. Without it we fall back to a native Command-V, which
+ * goes to whichever app is frontmost and therefore makes focus the caller's
+ * problem too. */
 export async function injectImagesIntoDesktopTask(
   text: string,
   images: readonly string[],
   observe?: (stage: string, fields: Record<string, unknown>) => void,
+  paste?: () => Promise<boolean>,
 ): Promise<boolean> {
-  return injectImagesIntoTask(text, images, async () => {
+  return injectImagesIntoTask(text, images, paste ?? (async () => {
     await simulateKeyCombo('v', 'command')
     return true
-  }, observe)
+  }), observe)
 }
 
 const historyPasteStage = new HistoryPasteStage()

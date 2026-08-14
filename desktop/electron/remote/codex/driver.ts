@@ -492,9 +492,6 @@ export class CodexDesktopDriver {
     const restoreReasoning = await this.applyReasoning(cdp, opts)
 
     if (!(await cdp.focusComposer())) { log.warn('codex-create-no-composer', {}); return { ok: false, reason: 'no-composer' } }
-    if (opts.attachments?.length && !(await cdp.attachFiles(opts.attachments))) {
-      return { ok: false, reason: 'send-failed' }
-    }
     await this.sleep(120)
     if (intent) await cdp.typeText(intent)
     await this.sleep(180)
@@ -504,6 +501,25 @@ export class CodexDesktopDriver {
       return { ok: false, reason: 'send-failed' }
     }
     log.event('codex-create-typed', { chars: typed.length })
+    // ATTACH AFTER THE TEXT, THROUGH THE PASTEBOARD.
+    //
+    // `attachFiles` drove a DOM file input, with a file-chooser click as its
+    // fallback. Neither exists in the shipped Codex build — the page mounts no
+    // <input> at all and the attach control raises a native dialog that emits
+    // no Page.fileChooserOpened — so creation with a screenshot always failed.
+    // This is the transport a follow-up reply already proves, in the order it
+    // proves: text first, then images, then submit.
+    if (opts.attachments?.length) {
+      const pasted = await this.pasteImages(intent, opts.attachments, undefined, async () => {
+        await cdp.pasteClipboard()
+        return true
+      })
+      if (!pasted) {
+        log.warn('codex-create-attach-failed', { count: opts.attachments.length })
+        return { ok: false, reason: 'send-failed' }
+      }
+      log.event('codex-create-attached', { count: opts.attachments.length })
+    }
     await cdp.pressEnter()
 
     // Submission is confirmed by the composer emptying — the same observable
@@ -755,10 +771,12 @@ export class CodexDesktopDriver {
               })
               return { ok: false as const, reason: 'composer-not-empty' }
             }
-            observe('attachment-paste-started', { count: attachments.length, transport: 'native-command-v' })
+            observe('attachment-paste-started', { count: attachments.length, transport: 'cdp-renderer-paste' })
+            // The engine stages the pasteboard; the RENDERER consumes it. A
+            // native Command-V would need Codex frontmost — this does not.
             const pasted = await this.pasteImages(text, attachments, (stage, fields) => {
               observe(`clipboard-${stage}`, fields)
-            })
+            }, async () => { await cdp.pasteClipboard(); return true })
             observe('attachment-paste-completed', { ok: pasted, count: attachments.length })
             if (!pasted) return { ok: false as const, reason: 'attach-failed' }
             const expected = attachments.length
@@ -782,7 +800,7 @@ export class CodexDesktopDriver {
         await cdp.pressEnter()
         observe('submit-key', { key: 'Enter' })
         return { ok: true as const, turnsStartedBefore: before.turnsStarted }
-      }, { foreground: attachments.length > 0 })
+      }, { foreground: false })
       if (!transaction.opened) return { ok: false, reason: 'thread-not-found' }
       if (transaction.reason === 'activate-failed') return { ok: false, reason: 'activate-failed' }
       const composed = transaction.value

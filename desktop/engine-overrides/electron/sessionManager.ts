@@ -195,10 +195,10 @@ registerTaskImagePaste((text, images, paste, observe) => {
   taskPasteChain = run.catch(() => {})
   return run
 })
-registerDesktopTaskImagePaste((text, images, observe) => {
+registerDesktopTaskImagePaste((text, images, observe, paste) => {
   const run = taskPasteChain.then(async () => {
     beginOwnClipboardSequence()
-    try { return await injectImagesIntoDesktopTask(text, images, observe) }
+    try { return await injectImagesIntoDesktopTask(text, images, observe, paste) }
     finally { try { endOwnClipboardSequence(Date.now()) } catch { /* watcher not armed */ } }
   })
   taskPasteChain = run.catch(() => {})
