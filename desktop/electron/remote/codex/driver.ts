@@ -22,6 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { createLogger } from '../log'
+import { getAxBridge } from '../ax/ax-bridge'
 import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, resetSidebarScroll, expandNextSidebarGroup, clickNextSidebarShowMore, advanceSidebarScroll, readReasoning, readReasoningLabel, setReasoning, readPendingConsent, answerConsent, readThreadChips, type CodexConsent, type CodexThreadChip, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, watchThread, type CodexSnapshot } from './rollout'
@@ -72,11 +73,30 @@ export interface CodexDriverDeps {
   sessionsDir?: string
   now?: () => number
   sleep?: (ms: number) => Promise<void>
-  /** Explicit user-facing navigation only; background sends never call it. */
+  /** Exact thread navigation. Explicit opens use it directly; submission uses
+   * it only after background navigation misses and restores focus afterward. */
   openDeepLink?: (url: string) => Promise<void>
+  /** Focus boundaries for the exact-thread delivery fallback. Injectable so
+   * tests never move the user's real windows. */
+  frontmost?: () => Promise<string | null>
+  activate?: (bundleId: string) => Promise<boolean>
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+function defaultActivate(bundleId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('open', ['-b', bundleId], (error) => resolve(!error))
+  })
+}
+
+async function defaultFrontmost(): Promise<string | null> {
+  try {
+    return (await getAxBridge().call('frontmostApp', []))?.bundleId ?? null
+  } catch {
+    return null
+  }
+}
 
 export interface SidebarSearchPort {
   resetScroll(): Promise<void>
@@ -133,6 +153,11 @@ export class CodexDesktopDriver {
   private readonly sessionsDir: string | undefined
   private readonly sleep: (ms: number) => Promise<void>
   private readonly openDeepLink: (url: string) => Promise<void>
+  private readonly frontmost: () => Promise<string | null>
+  private readonly activate: (bundleId: string) => Promise<boolean>
+  /** Codex has one visible composer. Serialize exact-thread deliveries so two
+   * task replies can never navigate or type across one another. */
+  private deliveryChain: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly deps: CodexDriverDeps = {}) {
     this.port = deps.port ?? CODEX_CDP_PORT
@@ -142,6 +167,8 @@ export class CodexDesktopDriver {
     this.openDeepLink = deps.openDeepLink ?? ((url) => new Promise<void>((resolve, reject) => {
       execFile('open', [url], (err) => (err ? reject(err) : resolve()))
     }))
+    this.frontmost = deps.frontmost ?? defaultFrontmost
+    this.activate = deps.activate ?? defaultActivate
   }
 
   /** Is the Codex desktop app installed at all? Drives the picker's enabled state. */
@@ -559,26 +586,55 @@ export class CodexDesktopDriver {
 
   /** Send a follow-up / unblock into an existing thread. */
   async send(threadId: string, text: string): Promise<{ ok: boolean; reason?: string }> {
-    const cdp = await this.connect()
-    if (!cdp) return { ok: false, reason: 'not-armed' }
-    // Background: sending must never yank the user's window to the front.
-    if (!(await this.openThread(threadId, cdp, { background: true }))) return { ok: false, reason: 'thread-not-found' }
-    await this.sleep(500)
-    if (!(await cdp.focusComposer())) return { ok: false, reason: 'no-composer' }
-    await this.sleep(120)
-    await cdp.typeText(text)
-    await this.sleep(180)
-    const typed = await cdp.composerText()
-    if (typed !== text) {
-      log.warn('codex-followup-text-mismatch', { textLen: text.length, typedLen: typed.length })
-      return { ok: false, reason: 'text-mismatch' }
-    }
-    await cdp.pressEnter()
-    for (let i = 0; i < 20; i++) {
-      await this.sleep(200)
-      if (!(await cdp.composerText()).trim()) return { ok: true }
-    }
-    return { ok: false, reason: 'send-failed' }
+    return this.sendWithAttachments(threadId, text, [])
+  }
+
+  /** Run one delivery against the exact Codex thread.
+   *
+   * The non-activating sidebar search remains the first choice. When Codex has
+   * virtualized the thread out of its sidebar, submission may use the app's
+   * exact deep link, but the whole navigation + compose + submit transaction is
+   * serialized and the previously frontmost app is restored in `finally`.
+   * Capture and manual paste never call this; only an explicit draft submit
+   * crosses this focus boundary. */
+  private deliverToExactThread<T>(
+    threadId: string,
+    cdp: CodexCdp,
+    observer: (stage: string, fields?: Record<string, unknown>) => void,
+    deliver: () => Promise<T>,
+  ): Promise<{ opened: boolean; value?: T }> {
+    return (async (): Promise<{ opened: boolean; value?: T }> => {
+      const backgroundOpened = await this.openThread(threadId, cdp, { background: true })
+      if (backgroundOpened) {
+        observer('thread-open', { ok: true, threadId, background: true, via: 'background' })
+        return { opened: true, value: await deliver() }
+      }
+
+      observer('thread-open-background-miss', { ok: false, threadId, draftRetainedUntilVerified: true })
+      let previousBundleId: string | null = null
+      try {
+        previousBundleId = await this.frontmost()
+        observer('focus-snapshot', { ok: !!previousBundleId, previousBundleId })
+      } catch (error) {
+        observer('focus-snapshot', { ok: false, error: (error as Error).message })
+      }
+
+      try {
+        const exactOpened = await this.openThread(threadId, cdp)
+        observer('thread-open-exact', { ok: exactOpened, threadId, via: 'deeplink' })
+        observer('thread-open', { ok: exactOpened, threadId, background: false, via: 'deeplink' })
+        if (!exactOpened) return { opened: false }
+        return { opened: true, value: await deliver() }
+      } finally {
+        if (previousBundleId) {
+          let restored = false
+          try { restored = await this.activate(previousBundleId) } catch { restored = false }
+          observer('focus-restored', { ok: restored, bundleId: previousBundleId })
+        } else {
+          observer('focus-restored', { ok: false, reason: 'frontmost-app-unknown' })
+        }
+      }
+    })()
   }
 
   async sendWithAttachments(
@@ -590,46 +646,96 @@ export class CodexDesktopDriver {
     const observe = (stage: string, fields: Record<string, unknown> = {}) => {
       try { observer?.(stage, fields) } catch { /* diagnostics never alter delivery */ }
     }
-    const cdp = await this.connect()
-    observe('cdp-connect', { ok: !!cdp })
-    if (!cdp) return { ok: false, reason: 'not-armed' }
-    const opened = await this.openThread(threadId, cdp, { background: true })
-    observe('thread-open', { ok: opened, threadId, background: true })
-    if (!opened) return { ok: false, reason: 'thread-not-found' }
-    const before = await this.snapshot(threadId)
-    observe('baseline-read', { turnsStarted: before.turnsStarted })
-    await this.sleep(500)
-    const focused = await cdp.focusComposer()
-    observe('composer-focused', { ok: focused })
-    if (!focused) return { ok: false, reason: 'no-composer' }
-    const attached = await cdp.attachFiles(attachments)
-    observe('files-attached', { ok: attached, count: attachments.length })
-    if (!attached) return { ok: false, reason: 'attach-failed' }
-    await this.sleep(180)
-    if (text) {
-      await cdp.focusComposer()
-      await cdp.typeText(text)
-      observe('text-typed', { chars: text.length })
-      await this.sleep(180)
-      const typed = await cdp.composerText()
-      observe('text-verified', { ok: typed === text, expectedChars: text.length, actualChars: typed.length })
-      if (typed !== text) return { ok: false, reason: 'text-mismatch' }
-    }
-    await cdp.pressEnter()
-    observe('submit-key', { key: 'Enter' })
-    // Pressing Enter is only an attempt. The rollout is the durable authority:
-    // a new task_started event proves Codex accepted this turn, including an
-    // image-only turn whose text composer was empty before submission.
-    for (let i = 0; i < 20; i++) {
-      await this.sleep(200)
-      const after = await this.snapshot(threadId)
-      if (after.turnsStarted > before.turnsStarted) {
-        observe('rollout-confirmed', { poll: i + 1, before: before.turnsStarted, after: after.turnsStarted })
-        return { ok: true }
+    // One Codex window has one mounted composer and one rollout counter. Keep
+    // the queue through durable proof so concurrent replies cannot share an
+    // acknowledgement or navigate away from a send still being confirmed.
+    const run = this.deliveryChain.then(() => this.sendWithAttachmentsNow(threadId, text, attachments, observe))
+    this.deliveryChain = run.catch(() => {})
+    return run
+  }
+
+  private async sendWithAttachmentsNow(
+    threadId: string,
+    text: string,
+    attachments: readonly string[],
+    observe: (stage: string, fields?: Record<string, unknown>) => void,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    try {
+      const cdp = await this.connect()
+      observe('cdp-connect', { ok: !!cdp })
+      if (!cdp) return { ok: false, reason: 'not-armed' }
+      const transaction = await this.deliverToExactThread(threadId, cdp, observe, async () => {
+        const before = await this.snapshot(threadId)
+        observe('baseline-read', { turnsStarted: before.turnsStarted })
+        await this.sleep(500)
+        if (!(await this.mountedThreadMatches(threadId, cdp, observe, 'thread-identity-before-compose'))) {
+          return { ok: false as const, reason: 'thread-drifted' }
+        }
+        const focused = await cdp.focusComposer()
+        observe('composer-focused', { ok: focused })
+        if (!focused) return { ok: false as const, reason: 'no-composer' }
+        if (attachments.length) {
+          const attached = await cdp.attachFiles(attachments)
+          observe('files-attached', { ok: attached, count: attachments.length })
+          if (!attached) return { ok: false as const, reason: 'attach-failed' }
+          await this.sleep(180)
+        } else {
+          observe('files-attached', { ok: true, count: 0, skipped: true })
+        }
+        if (text) {
+          await cdp.focusComposer()
+          await cdp.typeText(text)
+          observe('text-typed', { chars: text.length })
+          await this.sleep(180)
+          const typed = await cdp.composerText()
+          observe('text-verified', { ok: typed === text, expectedChars: text.length, actualChars: typed.length })
+          if (typed !== text) return { ok: false as const, reason: 'text-mismatch' }
+        }
+        if (!(await this.mountedThreadMatches(threadId, cdp, observe, 'thread-identity-before-submit'))) {
+          return { ok: false as const, reason: 'thread-drifted' }
+        }
+        await cdp.pressEnter()
+        observe('submit-key', { key: 'Enter' })
+        return { ok: true as const, turnsStartedBefore: before.turnsStarted }
+      })
+      if (!transaction.opened) return { ok: false, reason: 'thread-not-found' }
+      const composed = transaction.value
+      if (!composed?.ok) return composed ?? { ok: false, reason: 'send-failed' }
+
+      // Pressing Enter is only an attempt. The rollout is the durable authority:
+      // a new task_started event proves Codex accepted this turn, including an
+      // image-only turn whose text composer was empty before submission. Exact
+      // navigation has already restored the user's previous app at this point;
+      // proof is a renderer-free disk read and never needs Codex foregrounded.
+      for (let i = 0; i < 20; i++) {
+        await this.sleep(200)
+        const after = await this.snapshot(threadId)
+        if (after.turnsStarted > composed.turnsStartedBefore) {
+          observe('rollout-confirmed', { poll: i + 1, before: composed.turnsStartedBefore, after: after.turnsStarted })
+          return { ok: true }
+        }
       }
+      observe('rollout-timeout', { polls: 20, turnsStarted: composed.turnsStartedBefore })
+      return { ok: false, reason: 'send-failed' }
+    } catch (error) {
+      observe('delivery-exception', { ok: false, error: (error as Error).message, draftRetained: true })
+      log.warn('codex-delivery-exception', { threadId: bareThreadId(threadId), error: (error as Error).message })
+      return { ok: false, reason: 'delivery-exception' }
     }
-    observe('rollout-timeout', { polls: 20, turnsStarted: before.turnsStarted })
-    return { ok: false, reason: 'send-failed' }
+  }
+
+  private async mountedThreadMatches(
+    threadId: string,
+    cdp: CodexCdp,
+    observe: (stage: string, fields?: Record<string, unknown>) => void,
+    stage: string,
+  ): Promise<boolean> {
+    const expected = bareThreadId(threadId)
+    const current = await currentConversationId(cdp)
+    const actual = current ? bareThreadId(current) : null
+    const ok = actual === expected
+    observe(stage, { ok, expectedThreadId: expected, actualThreadId: actual })
+    return ok
   }
 
   /**

@@ -23,6 +23,7 @@ test('follow-up refuses to submit when Codex does not contain the exact text', a
   const driver = new CodexDesktopDriver({ sleep: async () => {} }) as any
   driver.cdp = {
     connected: true,
+    evaluate: async () => 'local:thread-1',
     focusComposer: async () => true,
     typeText: async () => {},
     composerText: async () => 'damaged composer text',
