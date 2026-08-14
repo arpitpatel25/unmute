@@ -1,7 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { CodexCdp } from './cdp'
-import { CodexDesktopDriver } from './driver'
+import { CodexDesktopDriver, parseLsappinfoBundleId } from './driver'
+
+test('frontmost-app fallback parses the bundle identifier reported by lsappinfo', () => {
+  assert.equal(parseLsappinfoBundleId('"CFBundleIdentifier"="com.google.Chrome"\n'), 'com.google.Chrome')
+  assert.equal(parseLsappinfoBundleId(''), null)
+})
 
 test('attachments use the existing DOM file input without opening a chooser', async () => {
   const calls: Array<{ method: string; params: Record<string, unknown> }> = []
@@ -48,14 +53,63 @@ test('attachments are accepted through an intercepted CDP chooser without openin
   ])
 })
 
+test('existing-task attachments use native clipboard paste after activating the exact Codex composer', async () => {
+  const focus: string[] = []
+  const stages: string[] = []
+  let attachmentCount = 0
+  let snapshotReads = 0
+  const driver = new CodexDesktopDriver({
+    sleep: async () => {},
+    frontmost: async () => 'com.user.previousapp',
+    activate: async (bundleId) => { focus.push(bundleId); return true },
+    pasteImages: async (_text: string, paths: readonly string[], observe: (stage: string) => void) => {
+      assert.deepEqual(paths, ['/tmp/one.png'])
+      observe('pasteboard-written')
+      observe('paste-posted')
+      attachmentCount = 1
+      return true
+    },
+  } as any) as any
+  driver.snapshot = async () => ({ turnsStarted: ++snapshotReads < 3 ? 4 : 5 })
+  driver.cdp = {
+    connected: true,
+    evaluate: async () => 'local:thread-1',
+    focusComposer: async () => true,
+    attachFiles: async () => { throw new Error('file input and chooser must not be used') },
+    composerAttachmentCount: async () => attachmentCount,
+    typeText: async () => {},
+    composerText: async () => 'send this',
+    pressEnter: async () => {},
+  }
+  driver.openThread = async () => true
+
+  assert.deepEqual(
+    await driver.sendWithAttachments(
+      'thread-1', 'send this', ['/tmp/one.png'],
+      (stage: string) => { stages.push(stage) },
+    ),
+    { ok: true },
+  )
+  assert.deepEqual(focus, ['com.openai.codex', 'com.user.previousapp'])
+  assert.ok(stages.includes('clipboard-pasteboard-written'))
+  assert.ok(stages.includes('clipboard-paste-posted'))
+  assert.ok(stages.includes('attachment-preview-verified'))
+  assert.ok(stages.indexOf('text-verified') < stages.indexOf('clipboard-paste-posted'))
+  assert.ok(stages.indexOf('attachment-preview-verified') < stages.indexOf('submit-key'))
+})
+
 test('attachment delivery is not accepted until Codex clears the submitted composer', async () => {
-  const driver = new CodexDesktopDriver({ sleep: async () => {} }) as any
+  let attachmentCount = 0
+  const driver = new CodexDesktopDriver({
+    sleep: async () => {}, frontmost: async () => 'com.openai.codex', activate: async () => true,
+    pasteImages: async () => { attachmentCount = 1; return true },
+  }) as any
   driver.snapshot = async () => ({ turnsStarted: 4 })
   driver.cdp = {
     connected: true,
     evaluate: async () => 'local:thread-1',
     focusComposer: async () => true,
-    attachFiles: async () => true,
+    composerAttachmentCount: async () => attachmentCount,
     typeText: async () => {},
     composerText: async () => 'send this',
     pressEnter: async () => {},
@@ -70,13 +124,17 @@ test('attachment delivery is not accepted until Codex clears the submitted compo
 
 test('attachment-only delivery waits for the attachment preview to clear', async () => {
   let snapshotReads = 0
-  const driver = new CodexDesktopDriver({ sleep: async () => {} }) as any
+  let attachmentCount = 0
+  const driver = new CodexDesktopDriver({
+    sleep: async () => {}, frontmost: async () => 'com.openai.codex', activate: async () => true,
+    pasteImages: async () => { attachmentCount = 1; return true },
+  }) as any
   driver.snapshot = async () => ({ turnsStarted: ++snapshotReads < 4 ? 4 : 5 })
   driver.cdp = {
     connected: true,
     evaluate: async () => 'local:thread-1',
     focusComposer: async () => true,
-    attachFiles: async () => true,
+    composerAttachmentCount: async () => attachmentCount,
     typeText: async () => {},
     composerText: async () => '',
     pressEnter: async () => {},
@@ -93,13 +151,17 @@ test('attachment-only delivery waits for the attachment preview to clear', async
 test('Codex attachment delivery reports every CDP boundary to the correlated observer', async () => {
   const stages: string[] = []
   let snapshotReads = 0
-  const driver = new CodexDesktopDriver({ sleep: async () => {} }) as any
+  let attachmentCount = 0
+  const driver = new CodexDesktopDriver({
+    sleep: async () => {}, frontmost: async () => 'com.openai.codex', activate: async () => true,
+    pasteImages: async () => { attachmentCount = 1; return true },
+  }) as any
   driver.snapshot = async () => ({ turnsStarted: ++snapshotReads < 3 ? 4 : 5 })
   driver.cdp = {
     connected: true,
     evaluate: async () => 'local:thread-1',
     focusComposer: async () => true,
-    attachFiles: async () => true,
+    composerAttachmentCount: async () => attachmentCount,
     typeText: async () => {},
     composerText: async () => 'send this',
     pressEnter: async () => {},
@@ -112,9 +174,11 @@ test('Codex attachment delivery reports every CDP boundary to the correlated obs
   )
   assert.deepEqual(result, { ok: true })
   assert.deepEqual(stages, [
-    'cdp-connect', 'thread-open', 'baseline-read', 'thread-identity-before-compose',
-    'composer-focused', 'files-attached', 'text-typed',
-    'text-verified', 'thread-identity-before-submit', 'submit-key', 'rollout-confirmed',
+    'cdp-connect', 'focus-snapshot', 'thread-open', 'target-activated', 'baseline-read',
+    'thread-identity-before-compose', 'composer-focused', 'text-typed', 'text-verified',
+    'attachment-preview-baseline', 'attachment-paste-started', 'attachment-paste-completed',
+    'attachment-preview-sample', 'attachment-preview-verified',
+    'thread-identity-before-submit', 'submit-key', 'focus-restored', 'rollout-confirmed',
   ])
 })
 
@@ -122,17 +186,19 @@ test('an off-screen Codex thread is opened exactly for delivery and the previous
   const focus: string[] = []
   const stages: string[] = []
   let snapshotReads = 0
+  let attachmentCount = 0
   const driver = new CodexDesktopDriver({
     sleep: async () => {},
     frontmost: async () => 'com.user.previousapp',
     activate: async (bundleId) => { focus.push(bundleId); return true },
+    pasteImages: async () => { attachmentCount = 1; return true },
   }) as any
   driver.snapshot = async () => ({ turnsStarted: ++snapshotReads < 3 ? 4 : 5 })
   driver.cdp = {
     connected: true,
     evaluate: async () => 'local:thread-1',
     focusComposer: async () => true,
-    attachFiles: async () => true,
+    composerAttachmentCount: async () => attachmentCount,
     typeText: async () => {},
     composerText: async () => 'send this',
     pressEnter: async () => {},
@@ -151,7 +217,7 @@ test('an off-screen Codex thread is opened exactly for delivery and the previous
     { ok: true },
   )
   assert.deepEqual(opens, [true, undefined])
-  assert.deepEqual(focus, ['com.user.previousapp'])
+  assert.deepEqual(focus, ['com.openai.codex', 'com.user.previousapp'])
   assert.ok(stages.includes('thread-open-background-miss'))
   assert.ok(stages.includes('thread-open-exact'))
   assert.ok(stages.includes('focus-restored'))
@@ -189,13 +255,17 @@ test('delivery refuses Enter when the mounted Codex thread drifts after composit
   let identityReads = 0
   let enterCount = 0
   let snapshotReads = 0
-  const driver = new CodexDesktopDriver({ sleep: async () => {} }) as any
+  let attachmentCount = 0
+  const driver = new CodexDesktopDriver({
+    sleep: async () => {}, frontmost: async () => 'com.openai.codex', activate: async () => true,
+    pasteImages: async () => { attachmentCount = 1; return true },
+  }) as any
   driver.snapshot = async () => ({ turnsStarted: ++snapshotReads < 2 ? 4 : 5 })
   driver.cdp = {
     connected: true,
     evaluate: async () => ++identityReads === 1 ? 'local:thread-1' : 'local:other-thread',
     focusComposer: async () => true,
-    attachFiles: async () => true,
+    composerAttachmentCount: async () => attachmentCount,
     typeText: async () => {},
     composerText: async () => 'send this',
     pressEnter: async () => { enterCount++ },

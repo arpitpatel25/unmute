@@ -254,6 +254,15 @@ export class CodexCdp {
     })()`)) ?? 0
   }
 
+  /** Number of attachment previews mounted in the active composer. Unlike the
+   * hidden file input, this also observes images accepted through Command-V. */
+  async composerAttachmentCount(): Promise<number> {
+    return (await this.evaluate<number>(`(() => {
+      const tray = document.querySelector('[data-composer-attachments]');
+      return tray ? tray.children.length : 0;
+    })()`)) ?? 0
+  }
+
   /** Attach local files through Codex Desktop's own composer control. This is
    * intentionally a file-input operation, never a pasted filesystem path. */
   async attachFiles(paths: readonly string[]): Promise<boolean> {

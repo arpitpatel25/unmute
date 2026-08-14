@@ -26,12 +26,14 @@ import { getAxBridge } from '../ax/ax-bridge'
 import { CodexCdp, isArmed, listProjects, listThreads, bareThreadId, isTransientThreadId, type CodexProject, readApprovalLabel, readApprovalMenu, selectApprovalLevel, currentConversationId, clickThreadRow, resetSidebarScroll, expandNextSidebarGroup, clickNextSidebarShowMore, advanceSidebarScroll, readReasoning, readReasoningLabel, setReasoning, readPendingConsent, answerConsent, readThreadChips, type CodexConsent, type CodexThreadChip, type ReasoningState, type ReasoningAxis, type SetReasoningTrace } from './cdp'
 import { choosePolicy, levelsFromMenu, levelFromLabel, LEVEL_LABEL, type CodexApprovalLevel, type UnmutePermissionMode } from './approval'
 import { readThread, newestThreadIdSince, watchThread, type CodexSnapshot } from './rollout'
+import { pasteDesktopTaskImages, type DesktopTaskImagePaste } from '../desktop-task-attachment-paste'
 
 const log = createLogger('codex-driver')
 
 /** Deterministic default port for the Codex desktop CDP endpoint. */
 export const CODEX_CDP_PORT = 9302
 export const CODEX_APP_PATH = '/Applications/ChatGPT.app'
+export const CODEX_BUNDLE_ID = 'com.openai.codex'
 /** The Codex desktop bundle ships the CLI — a desktop-only user still has one. */
 export const CODEX_BUNDLED_CLI = `${CODEX_APP_PATH}/Contents/Resources/codex`
 
@@ -80,6 +82,8 @@ export interface CodexDriverDeps {
    * tests never move the user's real windows. */
   frontmost?: () => Promise<string | null>
   activate?: (bundleId: string) => Promise<boolean>
+  /** Native pasteboard handoff used after the exact Codex composer is active. */
+  pasteImages?: DesktopTaskImagePaste
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -90,12 +94,25 @@ function defaultActivate(bundleId: string): Promise<boolean> {
   })
 }
 
+export function parseLsappinfoBundleId(output: string): string | null {
+  return output.match(/"CFBundleIdentifier"="([^"]+)"/)?.[1] ?? null
+}
+
+function execFileOutput(command: string, args: readonly string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(command, [...args], (error, stdout) => resolve(error ? null : stdout))
+  })
+}
+
 async function defaultFrontmost(): Promise<string | null> {
   try {
-    return (await getAxBridge().call('frontmostApp', []))?.bundleId ?? null
-  } catch {
-    return null
-  }
+    const bundleId = (await getAxBridge().call('frontmostApp', []))?.bundleId
+    if (bundleId) return bundleId
+  } catch { /* lsappinfo does not require Accessibility and is the fallback */ }
+  const asn = (await execFileOutput('lsappinfo', ['front']))?.trim()
+  if (!asn) return null
+  const info = await execFileOutput('lsappinfo', ['info', '-only', 'bundleid', asn])
+  return info ? parseLsappinfoBundleId(info) : null
 }
 
 export interface SidebarSearchPort {
@@ -155,6 +172,7 @@ export class CodexDesktopDriver {
   private readonly openDeepLink: (url: string) => Promise<void>
   private readonly frontmost: () => Promise<string | null>
   private readonly activate: (bundleId: string) => Promise<boolean>
+  private readonly pasteImages: DesktopTaskImagePaste
   /** Codex has one visible composer. Serialize exact-thread deliveries so two
    * task replies can never navigate or type across one another. */
   private deliveryChain: Promise<unknown> = Promise.resolve()
@@ -169,6 +187,7 @@ export class CodexDesktopDriver {
     }))
     this.frontmost = deps.frontmost ?? defaultFrontmost
     this.activate = deps.activate ?? defaultActivate
+    this.pasteImages = deps.pasteImages ?? pasteDesktopTaskImages
   }
 
   /** Is the Codex desktop app installed at all? Drives the picker's enabled state. */
@@ -602,35 +621,47 @@ export class CodexDesktopDriver {
     cdp: CodexCdp,
     observer: (stage: string, fields?: Record<string, unknown>) => void,
     deliver: () => Promise<T>,
-  ): Promise<{ opened: boolean; value?: T }> {
-    return (async (): Promise<{ opened: boolean; value?: T }> => {
-      const backgroundOpened = await this.openThread(threadId, cdp, { background: true })
-      if (backgroundOpened) {
-        observer('thread-open', { ok: true, threadId, background: true, via: 'background' })
-        return { opened: true, value: await deliver() }
-      }
-
-      observer('thread-open-background-miss', { ok: false, threadId, draftRetainedUntilVerified: true })
+    opts: { foreground?: boolean } = {},
+  ): Promise<{ opened: boolean; value?: T; reason?: 'activate-failed' }> {
+    return (async (): Promise<{ opened: boolean; value?: T; reason?: 'activate-failed' }> => {
       let previousBundleId: string | null = null
-      try {
-        previousBundleId = await this.frontmost()
-        observer('focus-snapshot', { ok: !!previousBundleId, previousBundleId })
-      } catch (error) {
-        observer('focus-snapshot', { ok: false, error: (error as Error).message })
+      let focusSnapshotTaken = false
+      const snapshotFocus = async () => {
+        if (focusSnapshotTaken) return
+        focusSnapshotTaken = true
+        try {
+          previousBundleId = await this.frontmost()
+          observer('focus-snapshot', { ok: !!previousBundleId, previousBundleId })
+        } catch (error) {
+          observer('focus-snapshot', { ok: false, error: (error as Error).message })
+        }
       }
 
       try {
-        const exactOpened = await this.openThread(threadId, cdp)
-        observer('thread-open-exact', { ok: exactOpened, threadId, via: 'deeplink' })
-        observer('thread-open', { ok: exactOpened, threadId, background: false, via: 'deeplink' })
-        if (!exactOpened) return { opened: false }
+        if (opts.foreground) await snapshotFocus()
+        const backgroundOpened = await this.openThread(threadId, cdp, { background: true })
+        if (backgroundOpened) {
+          observer('thread-open', { ok: true, threadId, background: true, via: 'background' })
+        } else {
+          observer('thread-open-background-miss', { ok: false, threadId, draftRetainedUntilVerified: true })
+          await snapshotFocus()
+          const exactOpened = await this.openThread(threadId, cdp)
+          observer('thread-open-exact', { ok: exactOpened, threadId, via: 'deeplink' })
+          observer('thread-open', { ok: exactOpened, threadId, background: false, via: 'deeplink' })
+          if (!exactOpened) return { opened: false }
+        }
+        if (opts.foreground) {
+          const activated = await this.activate(CODEX_BUNDLE_ID).catch(() => false)
+          observer('target-activated', { ok: activated, bundleId: CODEX_BUNDLE_ID, reason: 'native-clipboard-paste' })
+          if (!activated) return { opened: true, reason: 'activate-failed' }
+        }
         return { opened: true, value: await deliver() }
       } finally {
-        if (previousBundleId) {
+        if (focusSnapshotTaken && previousBundleId) {
           let restored = false
           try { restored = await this.activate(previousBundleId) } catch { restored = false }
           observer('focus-restored', { ok: restored, bundleId: previousBundleId })
-        } else {
+        } else if (focusSnapshotTaken) {
           observer('focus-restored', { ok: false, reason: 'frontmost-app-unknown' })
         }
       }
@@ -674,14 +705,6 @@ export class CodexDesktopDriver {
         const focused = await cdp.focusComposer()
         observe('composer-focused', { ok: focused })
         if (!focused) return { ok: false as const, reason: 'no-composer' }
-        if (attachments.length) {
-          const attached = await cdp.attachFiles(attachments)
-          observe('files-attached', { ok: attached, count: attachments.length })
-          if (!attached) return { ok: false as const, reason: 'attach-failed' }
-          await this.sleep(180)
-        } else {
-          observe('files-attached', { ok: true, count: 0, skipped: true })
-        }
         if (text) {
           await cdp.focusComposer()
           await cdp.typeText(text)
@@ -691,14 +714,38 @@ export class CodexDesktopDriver {
           observe('text-verified', { ok: typed === text, expectedChars: text.length, actualChars: typed.length })
           if (typed !== text) return { ok: false as const, reason: 'text-mismatch' }
         }
+        if (attachments.length) {
+          const previewBefore = await cdp.composerAttachmentCount()
+          observe('attachment-preview-baseline', { count: previewBefore })
+          observe('attachment-paste-started', { count: attachments.length, transport: 'native-command-v' })
+          const pasted = await this.pasteImages(text, attachments, (stage, fields) => {
+            observe(`clipboard-${stage}`, fields)
+          })
+          observe('attachment-paste-completed', { ok: pasted, count: attachments.length })
+          if (!pasted) return { ok: false as const, reason: 'attach-failed' }
+          const expected = previewBefore + attachments.length
+          let actual = previewBefore
+          for (let poll = 1; poll <= 25; poll++) {
+            actual = await cdp.composerAttachmentCount()
+            observe('attachment-preview-sample', { poll, expected, actual })
+            if (actual >= expected) break
+            await this.sleep(80)
+          }
+          const verified = actual >= expected
+          observe('attachment-preview-verified', { ok: verified, before: previewBefore, expected, actual })
+          if (!verified) return { ok: false as const, reason: 'attach-failed' }
+        } else {
+          observe('attachment-paste-completed', { ok: true, count: 0, skipped: true })
+        }
         if (!(await this.mountedThreadMatches(threadId, cdp, observe, 'thread-identity-before-submit'))) {
           return { ok: false as const, reason: 'thread-drifted' }
         }
         await cdp.pressEnter()
         observe('submit-key', { key: 'Enter' })
         return { ok: true as const, turnsStartedBefore: before.turnsStarted }
-      })
+      }, { foreground: attachments.length > 0 })
       if (!transaction.opened) return { ok: false, reason: 'thread-not-found' }
+      if (transaction.reason === 'activate-failed') return { ok: false, reason: 'activate-failed' }
       const composed = transaction.value
       if (!composed?.ok) return composed ?? { ok: false, reason: 'send-failed' }
 
