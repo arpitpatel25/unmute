@@ -2457,6 +2457,11 @@ class SessionManager {
   /** Cancel session — simple cancel without undo (used by widget cancel button) */
   cancelSession(): void {
     console.log('[session] Session CANCELLED:', this.currentSession?.sessionId, '| wasProcessing:', this.isProcessing)
+    // ESCAPE IS A WAY OUT OF A DICTATION, NOT A WAY TO LOSE YOUR MUSIC.
+    // Cancelling is at least as common as submitting — a mistimed capture is
+    // escaped, not sent — so every exit from a capture owes the resume, not
+    // just the happy one.
+    resumeAfterCapture()
     this.abortController?.abort()
     this.isProcessing = false
     this.abortController = null
@@ -2480,6 +2485,7 @@ class SessionManager {
     if (!this.currentSession) return
 
     console.log('[session] Session CANCELLED with undo window:', this.currentSession.sessionId)
+    resumeAfterCapture()
 
     // Abort any in-flight API calls
     this.abortController?.abort()

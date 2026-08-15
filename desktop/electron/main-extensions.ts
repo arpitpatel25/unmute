@@ -211,7 +211,7 @@ export function initPaywall(appHandle: App, oss: OSSAdapter): ProviderRouter {
   // Pause background media while dictating. OFF by default: it reaches into
   // other apps' playback, so it is something the user opts into rather than
   // discovers happening to them.
-  ipcMain.handle('settings:get-pause-media', () => settings.get('pauseMediaWhileDictating', false))
+  ipcMain.handle('settings:get-pause-media', () => settings.get('pauseMediaWhileDictating', true))
   ipcMain.handle('settings:set-pause-media', (_e, on: boolean) => {
     settings.set('pauseMediaWhileDictating', !!on)
     return true

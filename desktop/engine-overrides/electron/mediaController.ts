@@ -12,7 +12,7 @@
 // below is therefore fire-and-forget.
 
 import { app } from 'electron'
-import { execFile } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import Store from 'electron-store'
@@ -27,8 +27,31 @@ let wePaused = false
 const settings = new Store<{ pauseMediaWhileDictating?: boolean }>({ name: 'unmute-paywall-settings' })
 
 function pauseEnabled(): boolean {
-  try { return settings.get('pauseMediaWhileDictating', false) === true } catch { return false }
+  // Default ON. The whole point is that a dictation should not be talked over,
+  // and a user who has not thought about it wants the good behaviour, not the
+  // silence-corrupting one. It stays reversible in Settings.
+  try { return settings.get('pauseMediaWhileDictating', true) === true } catch { return true }
 }
+
+// NEVER LEAVE SOMEONE'S MUSIC PAUSED BECAUSE UNMUTE WENT AWAY.
+//
+// Nothing here holds a lock, a device, or any system state — a pause is one
+// command sent to the media app, and the perl child exits immediately. The only
+// thing Unmute keeps is the memory that it owes a resume, and the failure that
+// memory could cause is playback left paused. So the last thing the app does on
+// its way out is settle that debt, synchronously, because there is no event
+// loop left to await on.
+app.on('before-quit', () => {
+  if (!wePaused) return
+  wePaused = false
+  const paths = adapterPaths()
+  if (!paths) return
+  try {
+    execFileSync('/usr/bin/perl', [paths.perlScript, paths.framework, 'send', String(MR_PLAY)],
+      { timeout: 1500, stdio: 'ignore' })
+    console.log('[media] resumed on quit — Unmute never keeps your audio')
+  } catch { /* quitting anyway; nothing left to recover to */ }
+})
 
 function adapterPaths(): { perlScript: string; framework: string } | null {
   const base = app.isPackaged
