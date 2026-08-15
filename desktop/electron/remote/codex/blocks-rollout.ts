@@ -248,7 +248,12 @@ export function blocksFromRollout(text: string): RolloutBlocks {
 
       case 'token_count': {
         const info = obj(p.info)
-        const used = num(obj(info.total_token_usage).total_tokens)
+        // `last_token_usage`, NOT `total_token_usage` — see the note in
+        // blocks-app-server.ts. Measured on a real 72-turn thread: total reads
+        // 33,595,604 against a 258,400 window; last reads 167,452, which is the
+        // 65% a context meter is for.
+        const used = num(obj(info.last_token_usage).total_tokens)
+          ?? num(obj(info.total_token_usage).total_tokens)
         const window = num(info.model_context_window)
         const primary = obj(obj(p.rate_limits).primary)
         usage = {

@@ -292,8 +292,12 @@ export class CodexBlockStream {
       }
 
       case 'thread/tokenUsage/updated': {
-        const total = obj(obj(p.tokenUsage).total)
-        const used = num(total.totalTokens)
+        // `last`, NOT `total`. `total` is the thread's LIFETIME spend — on a
+        // real 72-turn thread it reads 33.5M against a 258k window, a meter at
+        // 13,000% full. What a context meter means is how much of the window
+        // the CURRENT context occupies, which is what `last` reports.
+        const usage = obj(p.tokenUsage)
+        const used = num(obj(usage.last).totalTokens) ?? num(obj(usage.total).totalTokens)
         if (used !== undefined) this.usage = { ...(this.usage ?? { window: 0 }), used, window: this.usage?.window ?? 0 }
         break
       }

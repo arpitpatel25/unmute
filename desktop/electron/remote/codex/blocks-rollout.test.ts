@@ -152,13 +152,34 @@ test('an error event becomes an error block', () => {
 test('token_count yields usage against the real context window', () => {
   const { usage } = run([
     ev('token_count', {
-      info: { total_token_usage: { total_tokens: 11240 }, model_context_window: 258400 },
+      info: {
+        total_token_usage: { total_tokens: 11240 },
+        last_token_usage: { total_tokens: 9100 },
+        model_context_window: 258400,
+      },
       rate_limits: { primary: { used_percent: 5, resets_at: 1785559411 } },
     }),
   ])
-  assert.equal(usage?.used, 11240)
+  assert.equal(usage?.used, 9100)
   assert.equal(usage?.window, 258400)
   assert.equal(usage?.rateLimitPercent, 5)
+})
+
+test('the meter reads CURRENT context, not the thread lifetime', () => {
+  // MEASURED ON A REAL 72-TURN THREAD: total_token_usage reaches 33,595,604
+  // against a 258,400 window — a meter 13,000% full — because it is cumulative
+  // spend. last_token_usage is what the window actually holds.
+  const { usage } = run([
+    ev('token_count', {
+      info: {
+        total_token_usage: { total_tokens: 33595604 },
+        last_token_usage: { total_tokens: 167452 },
+        model_context_window: 258400,
+      },
+    }),
+  ])
+  assert.equal(usage?.used, 167452)
+  assert.ok((usage!.used / usage!.window) < 1, 'the meter must not exceed full')
 })
 
 test('an interrupted turn is recorded, not silently dropped', () => {
