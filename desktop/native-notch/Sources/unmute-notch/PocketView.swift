@@ -74,8 +74,18 @@ struct PocketCard: View {
 
             // TOP-RIGHT, AND THE STANDARD CONTROL. It sat mid-card beside the
             // arrows, which is nowhere anyone looks for a close.
-            if detailsVisible {
-                HStack(spacing: 6) {
+            // THE WAY OUT IS ALWAYS THERE.
+            //
+            // Both buttons were inside `detailsVisible`, so a collapsed card
+            // could be dismissed only by opening it first. Closing is not an
+            // advanced action — it is the one thing you always want available,
+            // and hiding it behind an expand made the pocket feel like
+            // something that had to be dealt with rather than dismissed.
+            //
+            // The dashboard button stays expanded-only: it is a destination,
+            // and destinations can wait for the open state.
+            HStack(spacing: 6) {
+                if detailsVisible {
                 // A WAY OUT TO THE WALL, from the card. There was none: from
                 // the pocket the only forward motion was INTO a task, so seeing
                 // everything meant closing, tapping the empty notch, and hoping
@@ -90,6 +100,7 @@ struct PocketCard: View {
                 }
                 .buttonStyle(.plain)
                 .help("Open the dashboard")
+                }
 
                 Button { model.emit(.pocketRelease) } label: {
                     Image(systemName: "xmark")
@@ -101,7 +112,6 @@ struct PocketCard: View {
                 }
                 .buttonStyle(.plain)
                 .help("Close — your voice goes back to normal routing")
-                }
                 .padding(9)
             }
         }
@@ -116,19 +126,21 @@ struct PocketCard: View {
     @ViewBuilder private var taskFace: some View {
         header
         if detailsVisible {
-            // TWO LINES OF ROOM, ALWAYS — reserved whether or not they are used.
-            // This keeps the rail in one learnable place while browsing cards.
-            Text(model.toast ?? slot?.ask ?? "Waiting on you.")
+            // WHAT IT IS ASKING — and when it is not asking anything, WHAT IT IS.
+            //
+            // This read `ask ?? "Waiting on you."`, so a task with no pending
+            // question printed a hardcoded line that looks exactly like a
+            // status while saying something different from the real one: the
+            // pocket said "Stuck" and expanding the very same card said
+            // "Waiting on you.". Two lines, two sources, one of them invented.
+            //
+            // The ask still wins when there is one — it is the more specific
+            // truth. Falling back to the SAME status the collapsed card shows
+            // means the two can no longer disagree.
+            Text(model.toast ?? slot?.ask ?? statusText)
                 .font(.system(size: 12)).foregroundColor(Theme.textDim)
                 .lineLimit(2).truncationMode(.tail)
                 .frame(maxWidth: .infinity, minHeight: 31, maxHeight: 31, alignment: .topLeading)
-        } else {
-            HStack(spacing: 5) {
-                Text(model.toast ?? statusText)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundColor(model.toast == nil ? Theme.textDim : Theme.cError)
-                Spacer(minLength: 0)
-            }
         }
     }
 
@@ -163,11 +175,32 @@ struct PocketCard: View {
                 .font(.system(size: 13.5, weight: slot?.demanding == false ? .medium : .semibold))
                 .foregroundColor(slot?.demanding == false ? Theme.textDim : Theme.text)
                 .lineLimit(1).truncationMode(.tail)
+            // A STATUS IS NOT WORTH A LINE OF ITS OWN. Collapsed, it had one —
+            // a whole row under the title to carry a single word — which made
+            // the card taller than it needed to be and left the status sitting
+            // apart from the thing it describes. It belongs beside the title,
+            // where it reads as part of it.
+            if !detailsVisible, let text = model.toast ?? statusTextIfMeaningful {
+                Text(text)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundColor(model.toast == nil ? Theme.textDim : Theme.cError)
+                    .lineLimit(1)
+                    .layoutPriority(-1)
+            }
             Spacer(minLength: 0)
         }
-        .padding(.trailing, detailsVisible ? 46 : 0) // corner buttons own this space
+        // The close button owns this space in BOTH states now, not just when
+        // the card is open — see the buttons block.
+        .padding(.trailing, detailsVisible ? 46 : 24)
         .contentShape(Rectangle())
         .onTapGesture { if slot != nil { model.emit(.pocketExpand) } }
+    }
+
+    /// Nil when the status would be noise — an idle card does not need to say
+    /// "Ready" beside its own title.
+    private var statusTextIfMeaningful: String? {
+        guard let status = slot?.status, !status.isEmpty else { return nil }
+        return statusText
     }
 
     private var statusText: String {
