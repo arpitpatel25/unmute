@@ -2046,6 +2046,30 @@ export class TaskManager extends EventEmitter {
     this.transition(id, status.state, status, lastActivityAt ?? undefined)
   }
 
+  /**
+   * Load a task's chat view on demand, whatever its state.
+   *
+   * THE POLLERS ARE NOT ENOUGH FOR AN OLD THREAD. A finished one-off is not
+   * polled at all — `pollCodexDesktop` returns immediately for it — and a
+   * finished session polls at a tenth of the rate. Both are correct as watching
+   * policy and both are wrong as a way to fill a panel someone just opened.
+   *
+   * The source file outlives the card, and outlived the version of Unmute that
+   * could not read it, so a conversation from weeks ago fills in completely the
+   * first time it is looked at. Safe to call repeatedly: blocksChanged() makes a
+   * re-read with nothing new a no-op.
+   */
+  async loadBlocksFor(id: string): Promise<void> {
+    const task = this.tasks.get(id)
+    if (!task) return
+    if (task.agent === 'codex' || isExternalAgent(task.agent)) {
+      await this.refreshCodexBlocks(task)
+      return
+    }
+    const path = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
+    if (path) await this.refreshClaudeBlocks(task, path, log.child({ taskId: id }))
+  }
+
   /** Refresh a Claude Code task's chat blocks from its transcript. */
   private async refreshClaudeBlocks(task: Task, path: string, tlog: ReturnType<typeof log.child>): Promise<void> {
     let text: string

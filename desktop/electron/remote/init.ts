@@ -3413,6 +3413,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         scratchpadArm: (on) => { armScratchpadFrom(on) },
         scratchpadRemove: (id) => removeScratchpadEntry(id),
         scratchpadDeliver: (dest) => { void deliverScratchpad(dest) },
+        loadBlocks: async (taskId) => { await manager?.loadBlocksFor(taskId) },
         scratchpadDiscard: () => discardScratchpad(),
         // (pill deps are wired separately, below — see PillController)
       },

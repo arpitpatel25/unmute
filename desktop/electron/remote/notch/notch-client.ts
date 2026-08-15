@@ -12,6 +12,9 @@ import { EventEmitter } from 'node:events'
 import { createLogger } from '../log'
 import type { PillStateP } from './pill-controller'
 import type { Block } from '../blocks'
+// Re-exported so the controller can describe a task's chat view without
+// reaching past this module — the wire types live here.
+export type { Block } from '../blocks'
 
 const log = createLogger('notch-client')
 
