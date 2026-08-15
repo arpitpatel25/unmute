@@ -188,26 +188,54 @@ export interface FoldedThread {
 }
 
 /**
- * Fold a stream of notifications into the blocks for one thread.
+ * Streaming accumulator for one thread.
+ *
+ * STATEFUL ON PURPOSE. `item/agentMessage/delta` arrives once per CHARACTER, so
+ * re-folding the whole notification history on each one would be quadratic in
+ * the length of the reply — a long answer would slow down as it streamed, which
+ * is exactly when the user is watching. State is kept and each notification is
+ * applied once.
  *
  * EVERY ITEM ARRIVES TWICE — once started, once completed — so blocks are
  * upserted by item id. Appending both would double every command on the card.
  */
-export function foldAppServerBlocks(events: CodexNotification[]): FoldedThread {
-  const order: string[] = []
-  const byId = new Map<string, Block>()
-  const deltas = new Map<string, string>()
-  let usage: FoldedThread['usage']
-  let name: string | undefined
+export class CodexBlockStream {
+  private readonly order: string[] = []
+  private readonly byId = new Map<string, Block>()
+  private readonly deltas = new Map<string, string>()
+  private usage: FoldedThread['usage']
+  private name: string | undefined
 
-  const upsert = (id: string, block: Block | null) => {
+  private upsert(id: string, block: Block | null): void {
     if (!block) return
-    if (!byId.has(id)) order.push(id)
-    byId.set(id, block)
+    if (!this.byId.has(id)) this.order.push(id)
+    this.byId.set(id, block)
   }
 
-  for (const ev of events) {
+  /** Apply one notification. Returns true when the thread's blocks changed. */
+  push(ev: CodexNotification): boolean {
+    const before = this.byId.size + this.order.length
+    const snapshotBefore = this.order.length ? JSON.stringify(this.byId.get(this.order[this.order.length - 1])) : ''
+    this.applyOne(ev)
+    const after = this.byId.size + this.order.length
+    const snapshotAfter = this.order.length ? JSON.stringify(this.byId.get(this.order[this.order.length - 1])) : ''
+    return before !== after || snapshotBefore !== snapshotAfter
+  }
+
+  snapshot(): FoldedThread {
+    return {
+      blocks: this.order.map((id) => this.byId.get(id)!).filter(Boolean),
+      ...(this.usage ? { usage: this.usage } : {}),
+      ...(this.name ? { name: this.name } : {}),
+    }
+  }
+
+  private applyOne(ev: CodexNotification): void {
     const p = obj(ev.params)
+    const upsert = (id: string, b: Block | null) => this.upsert(id, b)
+    const order = this.order
+    const byId = this.byId
+    const deltas = this.deltas
     switch (ev.method) {
       case 'item/started':
       case 'item/completed': {
@@ -266,7 +294,7 @@ export function foldAppServerBlocks(events: CodexNotification[]): FoldedThread {
       case 'thread/tokenUsage/updated': {
         const total = obj(obj(p.tokenUsage).total)
         const used = num(total.totalTokens)
-        if (used !== undefined) usage = { ...(usage ?? { window: 0 }), used, window: usage?.window ?? 0 }
+        if (used !== undefined) this.usage = { ...(this.usage ?? { window: 0 }), used, window: this.usage?.window ?? 0 }
         break
       }
 
@@ -274,13 +302,13 @@ export function foldAppServerBlocks(events: CodexNotification[]): FoldedThread {
         const primary = obj(obj(p.rateLimits).primary)
         const pct = num(primary.usedPercent)
         if (pct !== undefined) {
-          usage = { used: usage?.used ?? 0, window: usage?.window ?? 0, rateLimitPercent: pct, ...(num(primary.resetsAt) !== undefined ? { resetsAt: num(primary.resetsAt)! } : {}) }
+          this.usage = { used: this.usage?.used ?? 0, window: this.usage?.window ?? 0, rateLimitPercent: pct, ...(num(primary.resetsAt) !== undefined ? { resetsAt: num(primary.resetsAt)! } : {}) }
         }
         break
       }
 
       case 'thread/name/updated':
-        name = str(p.name) ?? str(obj(p.thread).name)
+        this.name = str(p.name) ?? str(obj(p.thread).name)
         break
 
       case 'thread/contextCompacted':
@@ -298,10 +326,17 @@ export function foldAppServerBlocks(events: CodexNotification[]): FoldedThread {
         break
     }
   }
+}
 
-  return {
-    blocks: order.map((id) => byId.get(id)!).filter(Boolean),
-    ...(usage ? { usage } : {}),
-    ...(name ? { name } : {}),
-  }
+/**
+ * Fold a whole notification history at once.
+ *
+ * The batch form, for reading a captured stream or a test fixture. Live traffic
+ * uses CodexBlockStream directly so a per-character delta does not re-fold the
+ * conversation behind it.
+ */
+export function foldAppServerBlocks(events: CodexNotification[]): FoldedThread {
+  const stream = new CodexBlockStream()
+  for (const ev of events) stream.push(ev)
+  return stream.snapshot()
 }

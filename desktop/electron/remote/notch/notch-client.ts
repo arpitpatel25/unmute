@@ -11,6 +11,7 @@ import { createInterface, type Interface } from 'node:readline'
 import { EventEmitter } from 'node:events'
 import { createLogger } from '../log'
 import type { PillStateP } from './pill-controller'
+import type { Block } from '../blocks'
 
 const log = createLogger('notch-client')
 
@@ -142,8 +143,19 @@ export interface TaskDetailP {
   sending?: boolean
   /** Codex's label for the model/effort this thread runs on. */
   modelLabel?: string
-  /** Last few turns — rendered INSTEAD of the terminal for external backends. */
+  /** Last few turns — rendered INSTEAD of the terminal for external backends.
+   *
+   *  SUPERSEDED BY `blocks`, and kept for one reason: a task rehydrated from a
+   *  meta.json written before the upgrade has this and nothing else. The
+   *  surface prefers `blocks` whenever they are present. */
   conversation?: TurnP[]
+  /** The chat view proper — see electron/remote/blocks.ts and the spec at
+   *  docs/superpowers/specs/2026-08-16-chat-view-blocks.md. Every provider maps
+   *  its own source into this one vocabulary; the surface draws a view per kind
+   *  and degrades a kind it does not know to a plain row. */
+  blocks?: Block[]
+  /** Token usage for the panel footer, when the provider reports it. */
+  usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number }
   /** Codex project name, for the header. */
   project?: string
   /** One task-scoped unsent draft, shared by every expanded native surface. */

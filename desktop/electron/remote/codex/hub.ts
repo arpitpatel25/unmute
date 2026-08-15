@@ -23,6 +23,7 @@
  */
 
 import { CodexAppServer, type ServerRequest } from './app-server-client'
+import { CodexBlockStream } from './blocks-app-server'
 import {
   reduceAppServerEvent, questionFromApproval, approvalDecision,
   type CodexPatch,
@@ -54,6 +55,10 @@ interface ThreadState {
    *  against the wrong id leaves Codex blocked forever while the card reports
    *  itself unblocked. */
   pending: { id: number | string; method: string; resolve: (v: unknown) => void } | null
+  /** The chat view for this thread, built as the notifications arrive. This is
+   *  the RICHEST source any lane has — reasoning, commands with exit codes,
+   *  diffs and a live plan, streamed rather than read back off disk. */
+  blocks: CodexBlockStream
 }
 
 export interface CodexHubDeps {
@@ -128,7 +133,7 @@ export class CodexHub {
     })
     const threadId = String(res?.threadId ?? (res?.thread as { id?: string } | undefined)?.id ?? res?.id ?? '')
     if (!threadId) throw new Error('thread/start returned no thread id')
-    const st: ThreadState = { taskId, threadId, pending: null }
+    const st: ThreadState = { taskId, threadId, pending: null, blocks: new CodexBlockStream() }
     this.byThread.set(threadId, st)
     this.byTask.set(taskId, st)
     log.event('codex-thread-started', { taskId, threadId, cwd: o.cwd, model: o.model ?? null, effort: o.effort ?? null, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox })
@@ -256,16 +261,33 @@ export class CodexHub {
 
   private onNotification(m: { method: string; params?: Record<string, unknown> }): void {
     const threadId = typeof m.params?.threadId === 'string' ? m.params.threadId : undefined
-    const patch = reduceAppServerEvent({ method: m.method, params: m.params })
-    if (!patch) return
     // thread/started is the one notification that ARRIVES with the id we are
     // about to learn; every other one must already be routable.
     const st = threadId ? this.byThread.get(threadId) : undefined
+
+    // THE CHAT VIEW IS FED FIRST, AND FROM EVERY NOTIFICATION.
+    //
+    // reduceAppServerEvent handles fourteen methods and returns null for the
+    // rest, which is correct for TASK STATE — most of this protocol says
+    // nothing about whether a task is working. It is quite wrong for the chat:
+    // the reasoning, the commands, the diffs and the plan all live in those
+    // "ignored" notifications. So the block stream sees the whole feed, and the
+    // state reducer keeps its narrow view.
+    let blocksChanged = false
+    if (st) blocksChanged = st.blocks.push({ method: m.method, params: m.params })
+
+    const patch = reduceAppServerEvent({ method: m.method, params: m.params })
+    if (!patch && !blocksChanged) return
     if (!st) {
       if (threadId) log.debug('notification for an unknown thread', { method: m.method, threadId })
       return
     }
-    this.deps.onPatch({ taskId: st.taskId, ...patch })
+    const snap = blocksChanged ? st.blocks.snapshot() : null
+    this.deps.onPatch({
+      taskId: st.taskId,
+      ...(patch ?? {}),
+      ...(snap ? { blocks: snap.blocks, ...(snap.usage ? { usage: snap.usage } : {}) } : {}),
+    })
   }
 
   /**

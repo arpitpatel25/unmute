@@ -37,6 +37,24 @@ import { buildDispatch } from './dispatch-prompt'
 import { detectSurface } from './surface'
 import { deriveStatus, isAnswerable, type HookEvent, type AskQuestion } from './observer'
 import { readTranscript, hadSideEffects, readLatestExchange } from './transcript'
+import type { Block } from './blocks'
+import { blocksFromClaudeTranscript } from './blocks-claude'
+import { blocksFromRollout } from './codex/blocks-rollout'
+
+/**
+ * Has the chat actually changed?
+ *
+ * NOT NEWS IS NOT AN UPDATE. These readers run on every poll — once a second
+ * for a working task — and re-emitting an identical transcript would re-sort
+ * the wall and re-send the whole conversation over the notch pipe at that
+ * cadence. Comparing the last block's identity catches appends, which is what
+ * a growing conversation is; the length check catches everything else.
+ */
+function blocksChanged(prev: Block[] | undefined, next: Block[]): boolean {
+  if (!prev || prev.length !== next.length) return true
+  if (next.length === 0) return false
+  return JSON.stringify(prev[prev.length - 1]) !== JSON.stringify(next[next.length - 1])
+}
 import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import { resolveTranscriptById } from './trace-reducer'
@@ -220,6 +238,12 @@ export interface Task {
     /** tool: false when the step errored. */
     ok?: boolean
   }>
+  /** THE CHAT VIEW. Every provider maps its own source into this one
+   *  vocabulary — spec 2026-08-16-chat-view-blocks. `conversation` above stays
+   *  only for tasks rehydrated from a meta.json written before the upgrade. */
+  blocks?: Block[]
+  /** Token usage for the panel footer, when the provider reports it. */
+  usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number }
   /** Workspace group — "what is this work about" ("unmute", "launch video",
    *  "on-call"). Assigned ONCE by the router (user's own words win), mutated
    *  only by user curation. Live groups = distinct values across live tasks;
@@ -1011,6 +1035,11 @@ export class TaskManager extends EventEmitter {
         tlog.event('conversation-refreshed', { turns: turns.length, replyBytes: reply.length, askFrom: fromFile.length ? 'transcript' : 'dispatch' })
         void this.persistState(task)
       }
+      // THE CHAT VIEW, read from the same transcript. Independent of the two
+      // turns above on purpose: those exist to survive the flush race described
+      // in the comment, whereas blocks are the full record and are allowed to
+      // lag a beat behind the final message rather than be reconstructed from it.
+      if (path) await this.refreshClaudeBlocks(task, path, tlog)
     }
     const payload = deriveStatus(event, {
       kind: (task.kind ?? 'oneoff') as 'oneoff' | 'session',
@@ -1309,6 +1338,11 @@ export class TaskManager extends EventEmitter {
     if (p.assistantText) {
       task.conversation = [...(task.conversation ?? []), { role: 'assistant', text: p.assistantText }]
     }
+    // THE LIVE CHAT VIEW. Replaces wholesale rather than appending: the stream
+    // owns the whole thread and re-sends its current state, so appending would
+    // duplicate every block that arrived before this notification.
+    if (p.blocks) task.blocks = p.blocks
+    if (p.usage) task.usage = p.usage
     if ('activity' in p) task.codexActivity = p.activity ?? undefined
     if (p.clearQuestion) task.question = undefined
 
@@ -1343,6 +1377,11 @@ export class TaskManager extends EventEmitter {
       const sameQuestion = !p.question
       if (sameState && sameText && sameQuestion) {
         task.lastHeartbeatMs = this.clock()   // still alive, just not newsworthy
+        // NEW BLOCKS ARE NEWS TO THE PANEL, THOUGH — a command finishing or a
+        // diff landing changes nothing about the task's STATE, and everything
+        // about what an open chat view should be showing. Emit without
+        // transitioning, so the card updates and the wall does not re-sort.
+        if (p.blocks) this.emit('updated', task)
         return
       }
       this.transition(p.taskId, p.state, status, this.clock())
@@ -1979,6 +2018,8 @@ export class TaskManager extends EventEmitter {
     // The chat view is fed from here, not from a hook Codex never fires. This
     // is also what makes a rehydrated session readable: the rollout outlives
     // the app, so a task resumed after a restart shows its history immediately.
+    // Same file, richer reading — see refreshCodexBlocks.
+    await this.refreshCodexBlocks(task)
     const turns = conversationFromCodexEvents(events)
     if (turns.length) {
       const changed = turns.length !== (task.conversation?.length ?? 0)
@@ -2003,6 +2044,45 @@ export class TaskManager extends EventEmitter {
     const sameText = (task.result?.detail ?? '') === (status.result?.detail ?? '')
     if (sameState && sameText) return
     this.transition(id, status.state, status, lastActivityAt ?? undefined)
+  }
+
+  /** Refresh a Claude Code task's chat blocks from its transcript. */
+  private async refreshClaudeBlocks(task: Task, path: string, tlog: ReturnType<typeof log.child>): Promise<void> {
+    let text: string
+    try { text = await fs.readFile(path, 'utf8') } catch { return }
+    const { blocks, usage } = blocksFromClaudeTranscript(text)
+    if (!blocks.length) return
+    if (!blocksChanged(task.blocks, blocks)) return
+    task.blocks = blocks
+    if (usage) task.usage = usage
+    tlog.event('blocks-refreshed', { blocks: blocks.length, agent: task.agent })
+    this.emit('updated', task)
+    void this.persistState(task).catch(() => {})
+  }
+
+  /**
+   * Refresh a Codex task's chat blocks from its rollout file.
+   *
+   * SERVES BOTH CODEX LANES. Desktop has nothing else; CLI uses it for the
+   * tasks the hub does not own — a session rehydrated after a restart, an
+   * import the user started in their own terminal, or a Codex too old for
+   * app-server. When the hub DOES own the thread its pushed blocks are richer
+   * (streaming deltas, live plan) and win, so this never overwrites them.
+   */
+  private async refreshCodexBlocks(task: Task): Promise<void> {
+    const rolloutId = task.codexRolloutId ?? task.codexThreadId ?? task.sessionId
+    if (!rolloutId) return
+    const path = await findRollout(rolloutId)
+    if (!path) return
+    let text: string
+    try { text = await fs.readFile(path, 'utf8') } catch { return }
+    const { blocks, usage } = blocksFromRollout(text)
+    if (!blocks.length) return
+    if (!blocksChanged(task.blocks, blocks)) return
+    task.blocks = blocks
+    if (usage) task.usage = usage
+    this.emit('updated', task)
+    void this.persistState(task).catch(() => {})
   }
 
   /** How many user turns Codex has recorded for this task on disk.
@@ -2075,6 +2155,11 @@ export class TaskManager extends EventEmitter {
     }
     // The conversation IS this backend's terminal — keep it current every poll.
     if (snap.turns.length) task.conversation = snap.turns
+    // THE CHAT VIEW, from the same file the snapshot came from. Read separately
+    // rather than derived from `snap.turns`, because that projection has already
+    // thrown away exit codes, diffs, MCP identity and search results — the whole
+    // point of blocks is to keep what it dropped.
+    await this.refreshCodexBlocks(task)
 
     if (snap.state === 'failed') { this.transition(id, 'failed', { state: 'failed', error: { reason: 'Codex reported an error' } } as StatusPayload); return }
 

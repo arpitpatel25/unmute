@@ -22,6 +22,7 @@
 
 import type { TaskState, TaskQuestion } from '../status-file'
 import { activityFromCodexItem, clampLabel, type Activity } from '../activity'
+import type { Block } from '../blocks'
 
 /** What one event changes. Absent keys mean "unchanged" — this is a patch, not
  *  a state, so a stream of events can be applied in order without each one
@@ -46,6 +47,12 @@ export interface CodexPatch {
   /** Codex's own name for the thread — a real task title instead of the first
    *  sixty characters of what you said. */
   name?: string
+  /** The chat view for this thread. Built by CodexBlockStream from the WHOLE
+   *  notification feed, not from the fourteen methods this reducer handles —
+   *  see the note in hub.onNotification. */
+  blocks?: Block[]
+  /** Token usage for the panel footer. */
+  usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number }
 }
 
 /** The Codex thread lifecycle, as far as a task cares. */
