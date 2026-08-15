@@ -1,0 +1,307 @@
+/**
+ * CODEX → BLOCKS. One item mapping, serving both Codex lanes.
+ *
+ * Spec: docs/superpowers/specs/2026-08-16-chat-view-blocks.md §3.1, §5
+ *
+ * Codex describes what it did with the same item vocabulary in two places: the
+ * app-server pushes `item/started` and `item/completed` over JSON-RPC (Codex
+ * CLI), and the rollout file records the same items on disk (Codex Desktop).
+ * That shared vocabulary is what lets one mapping serve both lanes instead of
+ * two renderers drifting apart.
+ *
+ * THE CASING DIFFERS AND IT IS NOT COSMETIC. The wire says `commandExecution`
+ * and `exitCode`; the rollout says `CommandExecution` and `exit_code`. Matching
+ * only one of them would leave a whole lane silently empty, which is precisely
+ * how the rollout reader once ended up finding nothing under a full
+ * conversation. Both are normalised here, at the boundary, once.
+ *
+ * Fields verified against a real captured turn — see
+ * `__fixtures__/app-server-live-turn.jsonl` and the tool beside it.
+ */
+
+import type { Block, Source } from '../blocks'
+
+/** A notification as it arrives: a method and its params. */
+export interface CodexNotification { method: string; params?: unknown }
+
+const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? v as Record<string, unknown> : {})
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
+const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+
+/** Accept `exitCode` or `exit_code` — the wire and the rollout disagree. */
+const pick = (o: Record<string, unknown>, ...names: string[]): unknown => {
+  for (const n of names) if (o[n] !== undefined && o[n] !== null) return o[n]
+  return undefined
+}
+
+/** `{secs, nanos}` (rollout) or a plain millisecond number (wire). */
+function durationMs(v: unknown): number | undefined {
+  const direct = num(v)
+  if (direct !== undefined) return direct
+  const d = obj(v)
+  const secs = num(d.secs), nanos = num(d.nanos)
+  if (secs === undefined && nanos === undefined) return undefined
+  return Math.round((secs ?? 0) * 1000 + (nanos ?? 0) / 1e6)
+}
+
+/**
+ * Count a change by its +/- lines.
+ *
+ * A modify carries a unified diff. An ADD carries the file's CONTENT, not a
+ * diff — `{"kind":{"type":"add"},"diff":"ok\n"}` in the captured turn — so
+ * counting '+' prefixes there would report zero for every new file. Detect the
+ * unified form and fall back to counting lines.
+ */
+function countChange(diff: string, verb: 'Added' | 'Edited' | 'Deleted'): { added: number; removed: number } {
+  const unified = /^@@ |\n@@ /.test(diff) || /^[+-]{3} /m.test(diff)
+  if (unified) {
+    let added = 0, removed = 0
+    for (const line of diff.split('\n')) {
+      if (/^\+\+\+|^---/.test(line)) continue      // file headers are not content
+      if (line.startsWith('+')) added++
+      else if (line.startsWith('-')) removed++
+    }
+    return { added, removed }
+  }
+  const lines = diff.length ? diff.replace(/\n$/, '').split('\n').length : 0
+  return verb === 'Deleted' ? { added: 0, removed: lines } : { added: lines, removed: 0 }
+}
+
+function textOfContent(v: unknown): string {
+  if (typeof v === 'string') return v
+  if (!Array.isArray(v)) return ''
+  return v.map((part) => str(obj(part).text) ?? '').filter(Boolean).join('')
+}
+
+function sourcesOf(v: unknown): Source[] {
+  if (!Array.isArray(v)) return []
+  return v.map((r) => {
+    const o = obj(r)
+    const url = str(o.url)
+    if (!url) return null
+    return {
+      url,
+      title: str(o.title) ?? url,
+      domain: str(o.domain) ?? safeHost(url),
+      ...(str(o.snippet) ? { snippet: str(o.snippet)! } : {}),
+    } as Source
+  }).filter((s): s is Source => s !== null)
+}
+
+function safeHost(url: string): string {
+  try { return new URL(url).hostname } catch { return url }
+}
+
+/**
+ * One Codex item → one block.
+ *
+ * Returns `unknown` — never null — for an item type we do not recognise, so a
+ * new Codex item shows up as a quiet row instead of disappearing. Returns null
+ * only for items that are deliberately not rendered.
+ */
+export function blockFromCodexItem(raw: unknown): Block | null {
+  const item = obj(raw)
+  const type = str(item.type)
+  if (!type) return null
+  // Normalise the casing difference between the wire and the rollout.
+  switch (type.charAt(0).toLowerCase() + type.slice(1)) {
+    case 'userMessage':
+      return { kind: 'message', role: 'user', text: textOfContent(item.content) }
+
+    case 'agentMessage': {
+      const text = str(item.text) ?? textOfContent(item.content)
+      return { kind: 'message', role: 'assistant', text }
+    }
+
+    case 'reasoning': {
+      const text = textOfContent(pick(item, 'summary_text', 'summaryText', 'summary'))
+        || textOfContent(item.content)
+      // An empty reasoning item is a placeholder Codex fills in later; drawing
+      // a blank row for it would flicker an empty step into the panel.
+      return text ? { kind: 'reasoning', text } : null
+    }
+
+    case 'commandExecution': {
+      const command = Array.isArray(item.command) ? item.command.join(' ') : (str(item.command) ?? '')
+      const exitCode = num(pick(item, 'exitCode', 'exit_code'))
+      const status = str(item.status)
+      const running = status === 'inProgress' || status === 'running' || status === 'in_progress'
+      return {
+        kind: 'command',
+        label: running ? 'Running' : 'Ran command',
+        command,
+        ...(str(item.cwd) ? { cwd: str(item.cwd)! } : {}),
+        ...(exitCode !== undefined ? { exitCode } : {}),
+        ...(str(pick(item, 'aggregatedOutput', 'aggregated_output', 'stdout'))
+          ? { output: str(pick(item, 'aggregatedOutput', 'aggregated_output', 'stdout'))! } : {}),
+        ...(durationMs(pick(item, 'durationMs', 'duration')) !== undefined
+          ? { durationMs: durationMs(pick(item, 'durationMs', 'duration'))! } : {}),
+        status: running ? 'running' : exitCode !== undefined && exitCode !== 0 ? 'failed' : 'ok',
+      }
+    }
+
+    case 'fileChange': {
+      const changes = Array.isArray(item.changes) ? item.changes : []
+      const first = obj(changes[0])
+      const path = str(first.path) ?? ''
+      const kindType = str(obj(first.kind).type) ?? str(first.kind) ?? 'modify'
+      const verb = kindType === 'add' ? 'Added' : kindType === 'delete' ? 'Deleted' : 'Edited'
+      const { added, removed } = countChange(str(first.diff) ?? str(first.content) ?? '', verb)
+      return { kind: 'fileChange', path, verb, added, removed }
+    }
+
+    case 'mcpToolCall': {
+      const inv = obj(pick(item, 'invocation') ?? item)
+      const server = str(pick(inv, 'server')) ?? ''
+      const tool = str(pick(inv, 'tool')) ?? ''
+      const d = durationMs(pick(item, 'durationMs', 'duration'))
+      const readOnly = pick(item, 'readOnlyHint', 'read_only_hint')
+      return {
+        kind: 'mcpCall', server, tool,
+        ...(inv.arguments !== undefined ? { args: JSON.stringify(inv.arguments).slice(0, 300) } : {}),
+        ...(d !== undefined ? { durationMs: d } : {}),
+        ...(typeof readOnly === 'boolean' ? { readOnly } : {}),
+      }
+    }
+
+    case 'extension': {
+      // Codex's own wrapper for built-ins. `web.search` is the one with a UI.
+      const kindName = str(item.kind) ?? ''
+      if (!kindName.startsWith('web.search')) return { kind: 'unknown', raw: JSON.stringify(item).slice(0, 400) }
+      return { kind: 'search', query: str(item.query) ?? '', results: sourcesOf(item.results) }
+    }
+
+    case 'contextCompaction':
+      return { kind: 'compaction' }
+
+    default:
+      // A Codex item we have never seen. Draw it quietly rather than lose it.
+      return { kind: 'unknown', raw: JSON.stringify(item).slice(0, 400) }
+  }
+}
+
+export interface FoldedThread {
+  blocks: Block[]
+  usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number }
+  /** Codex's own name for the thread, when it has set one. */
+  name?: string
+}
+
+/**
+ * Fold a stream of notifications into the blocks for one thread.
+ *
+ * EVERY ITEM ARRIVES TWICE — once started, once completed — so blocks are
+ * upserted by item id. Appending both would double every command on the card.
+ */
+export function foldAppServerBlocks(events: CodexNotification[]): FoldedThread {
+  const order: string[] = []
+  const byId = new Map<string, Block>()
+  const deltas = new Map<string, string>()
+  let usage: FoldedThread['usage']
+  let name: string | undefined
+
+  const upsert = (id: string, block: Block | null) => {
+    if (!block) return
+    if (!byId.has(id)) order.push(id)
+    byId.set(id, block)
+  }
+
+  for (const ev of events) {
+    const p = obj(ev.params)
+    switch (ev.method) {
+      case 'item/started':
+      case 'item/completed': {
+        const item = obj(p.item)
+        const id = str(item.id) ?? `anon-${order.length}`
+        const block = blockFromCodexItem(item)
+        // A COMPLETED MESSAGE WINS OVER THE DELTAS THAT BUILT IT: the deltas are
+        // an approximation streamed for latency, the final text is the truth.
+        if (ev.method === 'item/completed') deltas.delete(id)
+        if (block?.kind === 'message' && deltas.has(id)) {
+          upsert(id, { ...block, text: deltas.get(id)! })
+        } else {
+          upsert(id, block)
+        }
+        break
+      }
+
+      case 'item/agentMessage/delta': {
+        const id = str(p.itemId) ?? ''
+        if (!id) break
+        const next = (deltas.get(id) ?? '') + (str(p.delta) ?? '')
+        deltas.set(id, next)
+        const existing = byId.get(id)
+        if (existing?.kind === 'message') upsert(id, { ...existing, text: next })
+        else upsert(id, { kind: 'message', role: 'assistant', text: next })
+        break
+      }
+
+      case 'item/reasoning/delta':
+      case 'item/reasoningSummary/delta': {
+        const id = str(p.itemId) ?? ''
+        if (!id) break
+        const next = (deltas.get('r:' + id) ?? '') + (str(p.delta) ?? '')
+        deltas.set('r:' + id, next)
+        upsert(id, { kind: 'reasoning', text: next, streaming: true })
+        break
+      }
+
+      case 'turn/plan/updated': {
+        const steps = Array.isArray(p.plan) ? p.plan : Array.isArray(obj(p.plan).steps) ? obj(p.plan).steps as unknown[] : []
+        if (!steps.length) break
+        upsert('plan', {
+          kind: 'plan',
+          steps: steps.map((s) => {
+            const o = obj(s)
+            const st = str(o.status) ?? 'todo'
+            return {
+              text: str(o.text) ?? str(o.step) ?? '',
+              status: st === 'completed' || st === 'done' ? 'done' : st === 'inProgress' || st === 'active' ? 'active' : 'todo',
+            }
+          }),
+        })
+        break
+      }
+
+      case 'thread/tokenUsage/updated': {
+        const total = obj(obj(p.tokenUsage).total)
+        const used = num(total.totalTokens)
+        if (used !== undefined) usage = { ...(usage ?? { window: 0 }), used, window: usage?.window ?? 0 }
+        break
+      }
+
+      case 'account/rateLimits/updated': {
+        const primary = obj(obj(p.rateLimits).primary)
+        const pct = num(primary.usedPercent)
+        if (pct !== undefined) {
+          usage = { used: usage?.used ?? 0, window: usage?.window ?? 0, rateLimitPercent: pct, ...(num(primary.resetsAt) !== undefined ? { resetsAt: num(primary.resetsAt)! } : {}) }
+        }
+        break
+      }
+
+      case 'thread/name/updated':
+        name = str(p.name) ?? str(obj(p.thread).name)
+        break
+
+      case 'thread/contextCompacted':
+        upsert(`compact-${order.length}`, { kind: 'compaction' })
+        break
+
+      case 'error':
+        upsert(`err-${order.length}`, { kind: 'error', message: str(p.message) ?? 'Codex reported an error' })
+        break
+
+      default:
+        // An unknown METHOD is noise with no meaning attached, and is ignored.
+        // That is not the same as an unknown ITEM TYPE, which is a future the
+        // surface must still draw — see blockFromCodexItem's default branch.
+        break
+    }
+  }
+
+  return {
+    blocks: order.map((id) => byId.get(id)!).filter(Boolean),
+    ...(usage ? { usage } : {}),
+    ...(name ? { name } : {}),
+  }
+}
