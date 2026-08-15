@@ -384,3 +384,47 @@ test('an unparseable filename falls back to mtime rather than vanishing', async 
   const id = await newestThreadIdSince(Date.now() - 5000, dir)
   assert.equal(id, '019fb777-1111-2222-3333-444455556666')
 })
+
+// ── interruption is an ENDING ─────────────────────────────────────────────
+//
+// Escape in Codex writes `turn_aborted` ("reason":"interrupted") and NO
+// `task_complete`. This reader counted only started-vs-completed, so every
+// interruption left the pair permanently unbalanced and the thread could never
+// read `ready` again — a real 3-day-old thread on this machine sat at 72
+// started / 66 complete / 6 aborted, still claiming `processing` with a
+// `task_complete` as its final line, which the 4-minute staleness backstop then
+// reported as `stuck`.
+//
+// The CLI and app-server lanes already treat an interrupted turn as an ordinary
+// ending; this is the third lane catching up.
+
+test('an interrupted turn is an ending — the thread is READY, not processing', () => {
+  const snap = parseRollout([
+    line('task_started', { turn_id: 't1' }),
+    line('user_message', { message: 'go' }),
+    line('turn_aborted', { turn_id: 't1', reason: 'interrupted' }),
+  ].join('\n'))
+  assert.equal(snap.state, 'ready')
+})
+
+test('an interruption does not poison the turns that follow it', () => {
+  // THE RATCHET. Under counter-comparison this stayed `processing` forever,
+  // however many turns completed cleanly afterwards.
+  const snap = parseRollout([
+    line('task_started', { turn_id: 't1' }),
+    line('turn_aborted', { turn_id: 't1', reason: 'interrupted' }),
+    line('task_started', { turn_id: 't2' }),
+    line('task_complete', { turn_id: 't2', last_agent_message: 'done' }),
+  ].join('\n'))
+  assert.equal(snap.state, 'ready')
+  assert.equal(snap.lastAgentMessage, 'done')
+})
+
+test('a turn started after an interruption is still processing', () => {
+  const snap = parseRollout([
+    line('task_started', { turn_id: 't1' }),
+    line('turn_aborted', { turn_id: 't1', reason: 'interrupted' }),
+    line('task_started', { turn_id: 't2' }),
+  ].join('\n'))
+  assert.equal(snap.state, 'processing')
+})

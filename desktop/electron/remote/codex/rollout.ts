@@ -146,6 +146,12 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
   }
   let started = 0
   let completed = 0
+  // The most recent turn-lifecycle event, which is what decides `state` — see
+  // the note at the end of the walk. `started` and `completed` remain running
+  // totals because callers depend on them for other things: `turnsStarted` is
+  // the submission proof (driver.ts watches it climb to confirm a prompt
+  // landed), and `everCompleted` gates the headline.
+  let lastLifecycle: 'started' | 'ended' | null = null
   // call_id → the step awaiting its output. Codex writes the call and its
   // result as separate lines, sometimes many lines apart.
   const pendingCalls = new Map<string, CodexTurn>()
@@ -171,10 +177,19 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
     switch (t) {
       case 'task_started':
         started++
+        lastLifecycle = 'started'
         turnStartedAt = stamp || turnStartedAt
+        break
+      case 'turn_aborted':
+        // Escape. The turn is OVER — it simply ended without an answer, so it
+        // is not counted as a completion (`everCompleted` still means "produced
+        // a result at least once") but it does end the turn.
+        lastLifecycle = 'ended'
+        turnStartedAt = 0
         break
       case 'task_complete':
         completed++
+        lastLifecycle = 'ended'
         // Codex's own header is the WALL time of the turn ("Worked for 2m 46s"),
         // which includes model thinking — always longer than the steps add up
         // to. `task_complete` reports it directly; measured 167s against the
@@ -264,17 +279,35 @@ export function parseRollout(text: string, turnLimit = 6): CodexSnapshot {
   snap.everCompleted = completed > 0
   snap.pendingToolCalls = pendingCalls.size
   snap.pendingToolName = pendingNames.size ? [...pendingNames.values()][0] : null
-  // A turn is in flight whenever more have started than completed. Otherwise the
-  // ball is with the user: that is Unmute's `ready` (ORCHESTRATE-VISION §3 —
-  // "the step is over but the ball is with you"), never `done`, because a Codex
-  // thread is always continuable.
+  // THE LAST LIFECYCLE EVENT DECIDES, not a running total.
+  //
+  // This compared cumulative counters — `started > completed` meant in flight.
+  // That is a RATCHET: `turn_aborted` (Escape, "reason":"interrupted") ends a
+  // turn without a `task_complete`, so every interruption widened the gap by one
+  // PERMANENTLY, and the thread could never read `ready` again however many
+  // turns finished cleanly afterwards. A real thread here sat at 72 started /
+  // 66 complete / 6 aborted with a `task_complete` as its final line, still
+  // claiming `processing` three days on — which the staleness backstop then
+  // reported as `stuck`. Counting aborts would fix these six; reading the last
+  // event fixes the whole class, because any future ending Codex invents lands
+  // after the `task_started` it ends rather than needing its own counter.
+  //
+  // An ended turn puts the ball with the user: that is Unmute's `ready`
+  // (ORCHESTRATE-VISION §3 — "the step is over but the ball is with you"), never
+  // `done`, because a Codex thread is always continuable. An interruption is an
+  // ORDINARY ending, exactly as the CLI and app-server lanes already treat it —
+  // stopping a turn you have seen enough of is not a failure.
   //
   // The zero-turn case must be `processing`, NOT `ready`: a just-dispatched
-  // thread whose rollout has not appeared yet has started<=completed trivially,
-  // and calling that `ready` would put the ball with the user before the agent
-  // had even begun — the card would claim a finished step that never ran.
+  // thread whose rollout has not appeared yet has seen no lifecycle event at
+  // all, and calling that `ready` would put the ball with the user before the
+  // agent had even begun — the card would claim a finished step that never ran.
+  //
+  // `failed` still wins outright and stays sticky: no rollout on this machine
+  // carries an `error`, so there is no evidence about what follows one, and
+  // guessing here could only ever hide a real failure.
   if (snap.state !== 'failed') {
-    snap.state = started === 0 || started > completed ? 'processing' : 'ready'
+    snap.state = lastLifecycle === null || lastLifecycle === 'started' ? 'processing' : 'ready'
   }
   snap.turns = withWorkBlocks(snap.turns, turnDurations)
   if (snap.turns.length > turnLimit) snap.turns = snap.turns.slice(-turnLimit)
