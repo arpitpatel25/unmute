@@ -4,8 +4,6 @@ import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
 import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste, injectImagesIntoTask, injectImagesIntoDesktopTask } from './clipboard'
 import { pauseForCapture, resumeAfterCapture } from './mediaController'
-import { setEscapeCapture } from './keyListener'
-import { keyboardManager } from './keyboard'
 import { saveAudioFile, saveAudioChunk } from './audio'
 import { initTelemetry, logTelemetry, DEV_BUILD, installMainConsoleTee, attachRendererConsoleTee } from './dictationTelemetry'
 import { app } from 'electron'
@@ -25,7 +23,7 @@ import { dispatchFromCapture, hideNativePill, recordCapturedDictation } from './
 import {
   attachTranscript, beginOwnClipboardSequence, beginSegment, cancelOpenSegment,
   composeWithInserts, endOwnClipboardSequence, endSegment, getCaptureSettings, isArmed,
-  registerFormat, registerHistoryCopy, registerPaste, registerEscapeCapture, notifyEscapePressed, removeFromPad,
+  registerFormat, registerHistoryCopy, registerPaste, removeFromPad,
 } from './paywall/remote/capture/index'
 import { registerTaskImagePaste } from './paywall/remote/task-attachment-paste'
 import { registerDesktopTaskImagePaste } from './paywall/remote/desktop-task-attachment-paste'
@@ -223,10 +221,6 @@ registerDesktopTaskImagePaste((text, images, observe, paste) => {
 // all of them, so there is no capture whose noise verdict could be applied to
 // held text. Registered here, not imported there: same inversion as the paste.
 registerFormat((text: string) => formatOutputForUser(text))
-// The engine owns the key listener, so it owns taking the key; remote/ only
-// decides WHEN. See notch-controller.applyEscapeOwnership.
-registerEscapeCapture((on: boolean) => setEscapeCapture(on))
-keyboardManager.onEscape = () => notifyEscapePressed()
 
 class SessionManager {
   private currentSession: SessionState | null = null

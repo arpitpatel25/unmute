@@ -15,12 +15,6 @@
   "include": [
     "typecheck/electron-stub.d.ts",
     "electron/remote/**/*.ts",
-    // engine-overrides/electron was in NEITHER typecheck config, so the main
-    // process the app actually runs — sessionManager, clipboard, keyboard,
-    // keyListener — was never checked. A missing import there passed a clean
-    // typecheck and would only have failed at runtime. It checks clean today,
-    // so there is no reason for it to be outside.
-    "engine-overrides/electron/**/*.ts",
     "electron/remote-preload.ts"
   ],
   "exclude": ["electron/remote/**/*.test.ts", "electron/remote/probe/**"]

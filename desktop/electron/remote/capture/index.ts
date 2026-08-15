@@ -90,27 +90,6 @@ let pasteFn: PasteFn | null = null
 
 export function registerPaste(fn: PasteFn): void { pasteFn = fn }
 
-/** Take or release the Escape key. Registered by the engine (which owns the
- *  key listener) so remote/ never imports engine-overrides — the same one-way
- *  dependency the paste effect keeps. Unregistered means Escape stays with the
- *  system, which is the correct thing to do when we cannot take it. */
-type EscapeFn = (on: boolean) => boolean
-let escapeFn: EscapeFn | null = null
-export function registerEscapeCapture(fn: EscapeFn): void { escapeFn = fn }
-export function takeEscape(on: boolean): boolean {
-  try { return escapeFn ? escapeFn(on) : false } catch { return false }
-}
-
-/** What to do when the tap swallowed an Escape on our behalf. Registered by
- *  remote/init (which owns the surface), called by the engine (which owns the
- *  keyboard). */
-type EscapePressedFn = () => void
-let escapePressedFn: EscapePressedFn | null = null
-export function registerEscapePressed(fn: EscapePressedFn): void { escapePressedFn = fn }
-export function notifyEscapePressed(): void {
-  try { escapePressedFn?.() } catch (e) { console.warn('[capture] escape handler failed:', e) }
-}
-
 export async function pasteAtCursor(text: string, images?: readonly string[]): Promise<boolean> {
   if (!pasteFn) return false
   await pasteFn(text, images)

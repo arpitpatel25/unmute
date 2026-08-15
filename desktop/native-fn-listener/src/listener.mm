@@ -143,72 +143,6 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
   return Napi::Boolean::New(env, true);
 }
 
-
-// ─── Escape capture — the ONE key we are allowed to swallow ────────
-//
-// WHY A TAP AND NOT A MONITOR. Escape while the notch is expanded went to
-// BOTH: the notch closed and the app underneath also acted — a fullscreen
-// video exited fullscreen because Escape reached it. A global NSEvent monitor
-// cannot prevent that; macOS makes them observe-only. A CGEventTap is the only
-// mechanism that can consume a key before the frontmost app sees it, which is
-// exactly the "esc: GLOBAL monitor while expanded — LEAKED to the app below"
-// line the notch has been logging.
-//
-// THE DANGER IS OBVIOUS, so the rules are narrow:
-//   * ONE keycode. 53, Escape. Everything else is returned untouched.
-//   * NO modifiers. Cmd-Escape and friends belong to the system, always.
-//   * ONLY while Unmute owns it — the caller enables capture for the states
-//     where Escape means "close the notch" or "cancel this dictation", and
-//     disables it the moment that stops being true.
-//   * FAIL OPEN. If the tap cannot be created, or macOS disables it for being
-//     slow, Escape keeps working everywhere and Unmute simply loses the
-//     interception. A broken tap must never cost the user their Escape key.
-static CFMachPortRef g_escTap = NULL;
-static CFRunLoopSourceRef g_escSource = NULL;
-static bool g_escCapture = false;
-
-static CGEventRef esc_tap_callback(CGEventTapProxy proxy, CGEventType type,
-                                   CGEventRef event, void* refcon) {
-  // macOS disables a tap that takes too long. Re-arm rather than silently
-  // losing interception for the rest of the session.
-  if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
-    if (g_escTap) CGEventTapEnable(g_escTap, true);
-    return event;
-  }
-  if (type != kCGEventKeyDown || !g_escCapture) return event;
-  int64_t code = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
-  if (code != 53) return event;
-  CGEventFlags flags = CGEventGetFlags(event);
-  // Any real modifier means this Escape is not ours.
-  if (flags & (kCGEventFlagMaskCommand | kCGEventFlagMaskControl |
-               kCGEventFlagMaskAlternate | kCGEventFlagMaskShift)) return event;
-  if (g_tsfn) {
-    g_tsfn.BlockingCall([](Napi::Env env, Napi::Function cb) {
-      cb.Call({ Napi::String::New(env, "escape") });
-    });
-  }
-  return NULL;  // swallowed — the app underneath never sees it
-}
-
-// Enable or disable swallowing. Creating the tap lazily means a user who never
-// opens the notch never has one at all.
-Napi::Value SetEscapeCapture(const Napi::CallbackInfo& info) {
-  Napi::Env env = info.Env();
-  bool want = info.Length() > 0 && info[0].ToBoolean().Value();
-  if (want && g_escTap == NULL) {
-    g_escTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap,
-                                kCGEventTapOptionDefault,
-                                CGEventMaskBit(kCGEventKeyDown),
-                                esc_tap_callback, NULL);
-    if (g_escTap == NULL) return Napi::Boolean::New(env, false);  // fail open
-    g_escSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, g_escTap, 0);
-    CFRunLoopAddSource(CFRunLoopGetMain(), g_escSource, kCFRunLoopCommonModes);
-  }
-  g_escCapture = want;
-  if (g_escTap) CGEventTapEnable(g_escTap, want);
-  return Napi::Boolean::New(env, true);
-}
-
 // ─── stop() — remove monitors, release TSFN ────────────────────────
 
 Napi::Value Stop(const Napi::CallbackInfo& info) {
@@ -223,17 +157,6 @@ Napi::Value Stop(const Napi::CallbackInfo& info) {
     [NSEvent removeMonitor:g_localMonitor];
     g_localMonitor = nil;
   }
-  if (g_escTap) {
-    CGEventTapEnable(g_escTap, false);
-    if (g_escSource) {
-      CFRunLoopRemoveSource(CFRunLoopGetMain(), g_escSource, kCFRunLoopCommonModes);
-      CFRelease(g_escSource);
-      g_escSource = NULL;
-    }
-    CFRelease(g_escTap);
-    g_escTap = NULL;
-  }
-  g_escCapture = false;
   g_tsfn.Release();
   g_started = false;
   return Napi::Boolean::New(env, true);
@@ -255,7 +178,6 @@ Napi::Value IsAccessibilityTrusted(const Napi::CallbackInfo& info) {
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("start", Napi::Function::New(env, Start));
   exports.Set("stop", Napi::Function::New(env, Stop));
-  exports.Set("setEscapeCapture", Napi::Function::New(env, SetEscapeCapture));
   exports.Set("isAccessibilityTrusted",
               Napi::Function::New(env, IsAccessibilityTrusted));
   return exports;

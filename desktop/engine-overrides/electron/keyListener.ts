@@ -5,9 +5,6 @@ import path from 'path'
 import fs from 'fs'
 
 export type KeyEvent = 'fn-down' | 'fn-up' | 'caps-down' | 'caps-up' | 'right-option-down' | 'right-option-up' | 'command-v'
-  // Emitted ONLY when the Escape tap swallowed the key, so a listener that
-  // hears this knows the app underneath did not. See setEscapeCapture.
-  | 'escape'
 
 // ─── AI format (instruction) enable/disable ─────────────────────
 //
@@ -59,9 +56,6 @@ interface FnAddon {
   start(cb: (event: KeyEvent) => void): boolean
   stop(): boolean
   isAccessibilityTrusted(): boolean
-  /** Swallow plain Escape before the frontmost app sees it. Optional so an
-   *  older .node binary degrades to today's leak rather than throwing. */
-  setEscapeCapture?(on: boolean): boolean
 }
 
 let cachedAddon: FnAddon | null | undefined = undefined
@@ -293,32 +287,3 @@ class KeyListener extends EventEmitter {
 }
 
 export const keyListener = new KeyListener()
-
-
-/**
- * OWN ESCAPE, BUT ONLY WHILE IT IS OURS.
- *
- * With the notch expanded, Escape reached BOTH the notch and the app beneath —
- * a fullscreen video would exit fullscreen as the surface closed. The notch's
- * global monitor sees that Escape but macOS makes global monitors observe-only,
- * so it can report the leak and not stop it. A CGEventTap can, and it is the
- * only thing that can.
- *
- * The whole safety of this is in WHEN it is on. Callers enable capture for the
- * states where Escape means "close this surface" or "cancel this dictation",
- * and disable it the instant that stops being true. Off, the tap is disabled
- * and Escape behaves exactly as macOS intends everywhere.
- *
- * Fail-open by construction: an addon too old to have the export, or a tap the
- * system refuses to create, simply returns false and leaves Escape alone.
- */
-export function setEscapeCapture(on: boolean): boolean {
-  const addon = getFnAddon()
-  if (!addon || typeof addon.setEscapeCapture !== 'function') return false
-  try {
-    return addon.setEscapeCapture(on)
-  } catch (e) {
-    console.warn('[keyListener] setEscapeCapture failed — Escape left to the system:', e instanceof Error ? e.message : e)
-    return false
-  }
-}
