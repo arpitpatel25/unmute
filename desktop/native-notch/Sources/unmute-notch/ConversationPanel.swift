@@ -24,9 +24,16 @@ struct ConversationPanel: View {
     let rows: [ConversationRow]
     /// The task this transcript belongs to — switching tasks re-anchors.
     var id: String = ""
+    /// THE CHAT VIEW. When present these win: they carry what `rows` threw away
+    /// — exit codes, diffs, MCP identity, sources, reasoning, the plan. `rows`
+    /// survives for tasks persisted before blocks shipped.
+    var blocks: [Block] = []
+    var usage: BlockUsage? = nil
 
     var body: some View {
-        if rows.isEmpty {
+        if !blocks.isEmpty {
+            BlockConversation(turns: BlockPresentation.build(blocks), id: id, usage: usage)
+        } else if rows.isEmpty {
             Text("no messages yet")
                 .font(.system(size: 13))
                 .foregroundColor(Theme.textFaint)

@@ -121,6 +121,11 @@ struct TaskDetail: Codable {
     /// Last few turns — the GUI-agent equivalent of the live terminal. A Codex
     /// thread has no PTY, so the conversation itself is what this panel shows.
     let conversation: [TurnP]?
+    /// THE CHAT VIEW. Preferred over `conversation` whenever present; the older
+    /// field remains only for tasks persisted before this shipped.
+    let blocks: [Block]?
+    /// Context usage for the footer, when the provider reports it.
+    let usage: BlockUsage?
     /// Codex project name, for the header.
     let project: String?
     let draft: TaskDraftP?
@@ -199,6 +204,11 @@ struct TurnP: Codable {
     /// tool: false when the step reported an error.
     let ok: Bool?
 }
+
+// `blocks` and `usage` on TaskDetailP are decoded straight into the
+// ConversationSupport types — see Blocks.swift. They are optional on the wire
+// so a task rehydrated from a meta.json written before the upgrade still
+// renders, through `conversation` below.
 
 extension ConversationTurn {
     init(_ turn: TurnP) {
