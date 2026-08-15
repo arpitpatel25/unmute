@@ -159,8 +159,18 @@ Record types: `assistant` 24,686 · `user` 13,669 · `attachment` 3,595 ·
 `agent-name` 591 · `file-history-delta` 247 · `worktree-state`/`relocated` 322 ·
 `started`/`result` 210.
 
-Content blocks: `tool_result` 11,819 · `tool_use` 11,799 · `thinking` 6,947 ·
+Content blocks: `tool_result` 11,819 · `tool_use` 11,799 · `thinking` 6,995 ·
 `text` 6,240 · `image` 135.
+
+> **Claude's thinking is not readable.** All 6,995 thinking blocks in the corpus
+> carry `thinking: ""`, with the content encrypted into `signature`. There is no
+> prose to render, so this lane has **no reasoning block** and the panel must not
+> draw a blank row implying otherwise. Codex is the opposite: `agent_reasoning.text`
+> carries real prose and 2,177 of them render. An earlier draft of this spec
+> listed Claude thinking as a gap we were failing to show; that was wrong.
+>
+> **284 of 400 transcripts are entirely sidechain** — a sub-agent's own file.
+> Yielding nothing from those is correct, not a parse failure.
 
 Tool distribution: Bash 6,101 · Read 1,407 · Edit 1,306 · Write 338 ·
 WebFetch 319 · ToolSearch 282 · Agent 212 · WebSearch 186.
@@ -258,7 +268,7 @@ before the surface learns to draw it, on any single lane, with no coordination.
 | Block | Codex CLI (app-server) | Codex Desktop (rollout) | Claude Code CLI |
 |---|---|---|---|
 | `message` | `item userMessage/agentMessage` + `item/agentMessage/delta` | `event_msg user_message` / `agent_message` | `content[] text` |
-| `reasoning` | `item reasoning` + reasoning deltas | `event_msg agent_reasoning.text` | `content[] thinking` |
+| `reasoning` | `item reasoning` + reasoning deltas | `event_msg agent_reasoning.text` | **none — redacted, see §3.3** |
 | `command` | `item commandExecution` (exitCode, durationMs, aggregatedOutput) | `custom_tool_call` + `_output`, `item CommandExecution` | `tool_use Bash` + `toolUseResult{stdout, stderr, interrupted}` |
 | `fileChange` | `item fileChange.changes[]` + `turn/diff/updated` | `patch_apply_end.changes` | `toolUseResult.structuredPatch` → ±lines |
 | `mcpCall` | `mcpToolCall/progress`, `item McpToolCall` | `mcp_tool_call_end{invocation, duration}` | `tool_use mcp__*` + `attributionMcpServer/Tool` |
