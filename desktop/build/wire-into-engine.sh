@@ -154,6 +154,22 @@ wire_paywall() {
     exit 1
   fi
 
+  # Vendor the mediaremote-adapter (pause background media while dictating).
+  # NOT fatal if absent: the feature is opt-in and degrades to doing nothing,
+  # which is far better than refusing to build. macOS 15.4+ put MediaRemote
+  # behind an entitlement, and this adapter reaches it through /usr/bin/perl —
+  # see vendor/mediaremote-adapter/fetch.sh for why the media key is not an
+  # acceptable substitute.
+  if [[ -d "$ROOT/vendor/mediaremote-adapter/MediaRemoteAdapter.framework" ]]; then
+    log "Copying mediaremote-adapter (background media pause)"
+    mkdir -p "$engine/vendor/mediaremote-adapter"
+    cp -R "$ROOT/vendor/mediaremote-adapter/MediaRemoteAdapter.framework" "$engine/vendor/mediaremote-adapter/"
+    cp "$ROOT/vendor/mediaremote-adapter/mediaremote-adapter.pl" "$engine/vendor/mediaremote-adapter/"
+    cp "$ROOT/vendor/mediaremote-adapter/LICENSE" "$engine/vendor/mediaremote-adapter/LICENSE"
+  else
+    log "WARN: vendor/mediaremote-adapter missing — pausing background media will no-op (run its fetch.sh)"
+  fi
+
   # Build + vendor the native notch shell (spec 2026-07-24). Like cua-driver it
   # is spawned as a DIRECT child of the signed .app, so its NSPanel carries the
   # app's identity and never steals focus. Built from source here (Swift toolchain
@@ -266,6 +282,11 @@ wire_paywall() {
     // cua-driver.
     if (!pkg.build.extraResources.some((r) => r && typeof r === 'object' && /unmute-notch/.test(String(r.from)))) {
       pkg.build.extraResources.push({ from: 'vendor/unmute-notch', to: 'unmute-notch' })
+    }
+    // Background-media pause: the adapter framework and its perl script are
+    // BUNDLED, never linked — the script loads the framework itself.
+    if (!pkg.build.extraResources.some((r) => r && typeof r === 'object' && /mediaremote-adapter/.test(String(r.from)))) {
+      pkg.build.extraResources.push({ from: 'vendor/mediaremote-adapter', to: 'mediaremote-adapter' })
     }
     if (process.env.PAYWALL_APP_ID) {
       pkg.build = pkg.build || {}

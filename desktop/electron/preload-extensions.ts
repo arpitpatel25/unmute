@@ -295,6 +295,8 @@ export const paywallPreloadExtensions = {
   /** iPhone-mic feature gate (Settings): chip + Continuity path hidden until enabled. */
   getIphoneMicEnabled: (): Promise<boolean> => ipcRenderer.invoke('settings:get-iphone-mic'),
   setIphoneMicEnabled: (on: boolean): Promise<boolean> => ipcRenderer.invoke('settings:set-iphone-mic', on),
+  getPauseMediaWhileDictating: (): Promise<boolean> => ipcRenderer.invoke('settings:get-pause-media'),
+  setPauseMediaWhileDictating: (on: boolean): Promise<boolean> => ipcRenderer.invoke('settings:set-pause-media', on),
   onIphoneMicChanged: (cb: (on: boolean) => void): void => {
     ipcRenderer.on('settings:iphone-mic-changed', (_e, on: boolean) => cb(on))
   },

@@ -28,7 +28,7 @@ export interface EnginePeekStatus {
   reason: OnDeviceReason | null
 }
 
-const settings = new Store<{ engineMode: EngineMode; iphoneMicEnabled?: boolean }>({ name: 'unmute-paywall-settings' })
+const settings = new Store<{ engineMode: EngineMode; iphoneMicEnabled?: boolean; pauseMediaWhileDictating?: boolean }>({ name: 'unmute-paywall-settings' })
 
 // The OSS engine provides these via its sessionManager. We accept them
 // as opaque interfaces so we don't entangle with the engine internals.
@@ -208,6 +208,15 @@ export function initPaywall(appHandle: App, oss: OSSAdapter): ProviderRouter {
   // iPhone-microphone feature gate: OFF by default — the mic-source chip and
   // the whole Continuity path stay invisible until the user enables it in
   // Settings. Broadcast on change so the widget applies it live.
+  // Pause background media while dictating. OFF by default: it reaches into
+  // other apps' playback, so it is something the user opts into rather than
+  // discovers happening to them.
+  ipcMain.handle('settings:get-pause-media', () => settings.get('pauseMediaWhileDictating', false))
+  ipcMain.handle('settings:set-pause-media', (_e, on: boolean) => {
+    settings.set('pauseMediaWhileDictating', !!on)
+    return true
+  })
+
   ipcMain.handle('settings:get-iphone-mic', () => settings.get('iphoneMicEnabled', false))
   ipcMain.handle('settings:set-iphone-mic', (_e, on: boolean) => {
     settings.set('iphoneMicEnabled', !!on)

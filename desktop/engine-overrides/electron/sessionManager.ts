@@ -3,6 +3,7 @@ import { pipelineTranscribe, pipelineDualTranscribe, pipelineProcess, pipelineTr
 import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
 import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste, injectImagesIntoTask, injectImagesIntoDesktopTask } from './clipboard'
+import { pauseForCapture, resumeAfterCapture } from './mediaController'
 import { saveAudioFile, saveAudioChunk } from './audio'
 import { initTelemetry, logTelemetry, DEV_BUILD, installMainConsoleTee, attachRendererConsoleTee } from './dictationTelemetry'
 import { app } from 'electron'
@@ -858,6 +859,15 @@ class SessionManager {
       return
     }
 
+    // PAUSE BACKGROUND MEDIA, IF THE USER ASKED FOR IT.
+    //
+    // Fired here, at the top of the capture, and deliberately NOT awaited: a
+    // dictation must never wait on a child process, and heavy main-process
+    // work while the microphone is hot corrupts the audio. Measured latency is
+    // ~67ms to dispatch against ~195ms to acquire the mic, so the pause lands
+    // before the user can speak.
+    pauseForCapture()
+
     console.log('╔══════════════════════════════════════════╗')
     console.log('║  SESSION START                           ║')
     console.log('╚══════════════════════════════════════════╝')
@@ -1238,6 +1248,10 @@ class SessionManager {
     }
 
     console.log('[session] STOP recording, mode:', mode)
+    // Give back exactly what we took — and only if we took it. See
+    // mediaController: if the user started something themselves mid-dictation,
+    // this leaves it alone rather than stacking a second player on top.
+    resumeAfterCapture()
     sendToWidget('recording:stop')
 
     // The mic is cold: close the capture window. Both watchers stop here, so

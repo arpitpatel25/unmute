@@ -1,0 +1,7 @@
+# Build output, same rule as vendor/cua-driver: fetch.sh is the source of
+# truth, the artefacts are not committed. Run it once per checkout.
+MediaRemoteAdapter.framework/
+MediaRemoteAdapterTestClient
+mediaremote-adapter.pl
+LICENSE
+.version

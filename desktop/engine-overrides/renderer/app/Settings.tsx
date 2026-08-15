@@ -84,6 +84,8 @@ interface SettingsApi {
   getSurfaceAppearance?: () => Promise<string>
   setSurfaceAppearance?: (v: string) => Promise<string>
   getIphoneMicEnabled?: () => Promise<boolean>
+  getPauseMediaWhileDictating?: () => Promise<boolean>
+  setPauseMediaWhileDictating?: (on: boolean) => Promise<boolean>
   setIphoneMicEnabled?: (v: boolean) => Promise<boolean>
   remoteGetScreenshotCapture?: () => Promise<boolean>
   remoteSetScreenshotCapture?: (v: boolean) => Promise<boolean>
@@ -195,6 +197,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   const [iphoneMic, setIphoneMic] = useState(false)
   const [screenshotCapture, setScreenshotCapture] = useState(true)
   const [scratchpadEnabled, setScratchpadEnabled] = useState(true)
+  const [pauseMedia, setPauseMedia] = useState(false)
   const [widgetPosition, setWidgetPosition] = useState<'center' | 'right'>('center')
   const [dictationKey, setDictationKey] = useState<'fn' | 'right-option'>('fn')
   const [activationMode, setActivationMode] = useState<'tap-toggle' | 'push-to-talk' | 'double-tap-push'>('tap-toggle')
@@ -347,6 +350,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
     // reads that silently never ran if that one promise rejected. Unnested; no
     // call, argument or key changed.
     api().getIphoneMicEnabled?.().then((on) => setIphoneMic(!!on)).catch(() => {})
+    api().getPauseMediaWhileDictating?.().then((on) => setPauseMedia(!!on)).catch(() => {})
     api().remoteGetScreenshotCapture?.().then((on) => setScreenshotCapture(!!on)).catch(() => {})
     api().remoteGetScratchpadEnabled?.().then((on) => setScratchpadEnabled(!!on)).catch(() => {})
     window.electronAPI.paywallGetOutputMode?.()
@@ -706,6 +710,15 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
                 void api().remoteSetScratchpadEnabled?.(on)
               }} />
             </LinkedRow>
+            <SettingRow
+              label="Pause media while dictating"
+              description="Pause whatever is playing when you start, and play it again when you submit"
+            >
+              <Toggle checked={pauseMedia} onChange={(on: boolean) => {
+                setPauseMedia(on)
+                void api().setPauseMediaWhileDictating?.(on)
+              }} />
+            </SettingRow>
             <SettingRow label="iPhone microphone" description="Dictate through your iPhone over Continuity — nothing to install">
               <Toggle checked={iphoneMic} onChange={(on: boolean) => {
                 setIphoneMic(on)
