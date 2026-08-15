@@ -340,7 +340,51 @@ Rather than eyeballing spacing, measure the real Codex window over CDP —
 computed line-height, block spacing, max line width, collapsed-row metrics — and
 match. Same measure-the-app method that resolved the delivery bugs on 2026-08-15.
 
-## 10. Non-goals
+## 10. Starting cold
+
+Everything needed to continue is in the repo. Nothing lives only in a chat log.
+
+**Evidence.** `electron/remote/codex/__fixtures__/app-server-live-turn.jsonl` is
+a real captured turn — 63 messages, 12 methods — and is the record behind §3.1.
+`capture-app-server.mjs` beside it re-runs the capture if the protocol moves:
+
+```bash
+node electron/remote/codex/__fixtures__/capture-app-server.mjs
+```
+
+It is bounded on every axis (90s, 8MB, server killed in a finally block).
+**Do not run `codex app-server --help`** — it starts a server and floods stdout;
+it filled this machine's disk on 2026-08-15.
+
+Re-derive the rollout and transcript inventories with plain aggregation over
+`~/.codex/sessions/**/rollout-*.jsonl` and `~/.claude/projects/**/*.jsonl`;
+counts in §3.2 and §3.3 are from those, and will differ on another machine while
+the field shapes will not.
+
+**Definition of done.** One delivery, not a staged rollout. All three readers,
+the wire, the Swift views, and the fidelity pass ship together. A provider is
+not "done" while its blocks are unimplemented, and the feature is not done while
+any lane still renders through the old flat row.
+
+**Decisions already made** — do not relitigate without a reason:
+
+| Decision | Why |
+|---|---|
+| Panel width **520pt** | 440 truncates file paths |
+| Source **monograms**, not favicons | no logo field exists; a favicon host would see the user's browsing |
+| Links open the **default browser** | `target=_blank`, `rel=noopener` |
+| Sources sit **inside** the work group | they are evidence for the work, not chat messages |
+| Progress is **per turn** | a panel strip is ambiguous in a multi-turn thread |
+| Codex Desktop shows **no plan** | zero plan payloads exist in any rollout |
+| One renderer, **views per kind** | per-provider renderers would drift and every new provider would start blank |
+
+**Regression guards.** These were expensive to get right and must not move:
+image paste into both terminal and non-terminal views, right-option and Fn
+capture, the pasteboard handoff, verified composer submission, and Codex
+attachment delivery. If a diff touches `sendTaskReply`, the executors, the CDP
+paste path or `pasteboardHandoff`, it has left this spec's scope.
+
+## 11. Non-goals
 
 - Rewriting the provider/transport abstraction. It is correct.
 - Per-provider renderers. One renderer, per-kind views; a new provider inherits a
