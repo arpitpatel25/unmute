@@ -117,8 +117,7 @@ struct NotchView: View {
             // Edge definition is the drop shadow's job now (GlassSurface's own
             // note says as much) plus the faintest hairline — enough to hold the
             // corner against a black wallpaper, far below reading as a border.
-            shape.fill(Color.black)
-                .overlay(shape.stroke(Theme.hairlineSoft, lineWidth: 0.5))
+            inked
         } else if model.content.resting {
             restingNub
         } else if model.state == .dormant {
@@ -136,12 +135,29 @@ struct NotchView: View {
             // travelling to its resting size. There was no shape left to
             // animate. Drawing it at zero opacity keeps one there for the whole
             // journey and still ends up showing nothing.
-            shape.fill(Color.black).opacity(model.hasNotch ? 1 : 0)
+            inked.opacity(model.hasNotch ? 1 : 0)
         } else {
             // D5: opaque, always. Pure black, because the hardware it continues
             // is pure black and any other value shows up as a seam at the join.
-            shape.fill(Color.black)
+            inked
         }
+    }
+
+    /// THE SURFACE, DRAWN ONE WAY.
+    ///
+    /// The hairline used to be applied only when `expanded`, so the pocket was
+    /// filled and never outlined. Its own justification is the case that broke:
+    /// the rim exists "to hold the corner against a black wallpaper", and a
+    /// pocket over a black page is exactly that — the rounded bottom dissolved
+    /// into whatever was behind it and read as a surface cut off flat. The
+    /// shape was always right; the edge simply was not drawn.
+    ///
+    /// So there is one treatment now rather than a branch that has to remember
+    /// to include it. Fill and rim travel together, and no state can be added
+    /// later that quietly gets one without the other.
+    private var inked: some View {
+        shape.fill(Color.black)
+            .overlay(shape.stroke(Theme.hairlineSoft, lineWidth: 0.5))
     }
 
     /// THE RESTING NUB — off-notch idle, pointer elsewhere.
