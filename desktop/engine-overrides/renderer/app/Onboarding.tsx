@@ -1,12 +1,30 @@
-// Managed-build Onboarding override — the nine-step flow, plus the
+// Managed-build Onboarding override — the twelve-step flow, plus the
 // three-screen "what's new" that existing users get instead (decision D4).
 //
-// WHAT CHANGED AND WHY. The old eight steps described a dictation tool: two
-// ways to use your voice, a pricing model the app no longer runs ("pay only for
-// what you use"), a skippable Accessibility step that leaves the app inert, and
-// a hardcoded key name in the sentences telling the user what to press — wrong
-// for everyone who moved dictation to Right Option. None of it mentioned the
-// notch, which is where handed-off work actually lives.
+// WHAT CHANGED IN THIS PASS, AND WHY.
+//
+// The flow described the notch and the orchestrator in prose and asked the user
+// to believe it. Three screens now SHOW the mechanism instead: the pocket
+// answering two different tasks with the same key, a link being copied
+// mid-sentence, and a screenshot being taken mid-sentence. Those three are the
+// features people do not discover on their own, and a paragraph has never once
+// taught them.
+//
+// THE SURFACE IS SELF-CONTAINED. Onboarding is the only screen a user sees
+// before they have any model of the app, so it does not borrow the settings
+// control vocabulary — it carries its own, scoped under `.ob`, in a single
+// <style> block. Nothing here leaks into the rest of the app and nothing in the
+// rest of the app can restyle it. `_shared.tsx` is deliberately NOT imported.
+//
+// COLOUR. Action is ink, because on cream every cool hue reads as a sticker
+// stuck on top. Exactly two status hues do real work: amber = waiting on you,
+// green = granted/done. The vendor marks (terracotta Claude, green Codex) are
+// the documented exception to "colour = status" — a mark names a maker.
+//
+// NOTHING IS FAKED. Every state on these screens is read from a real API. There
+// is no invented mic level meter and no invented agent-detection scan, because
+// `OnboardingAPI` cannot answer either question and a demo that lies during
+// setup is worse than a screen that says less.
 //
 // NO STEP TELLS THE USER TO PRESS A KEY IT HAS NOT LOOKED UP. `dictationKey`
 // comes from settings, and the orchestrator label is derived from it — those two
@@ -21,10 +39,9 @@
 //     Settings option rather than an unmute trigger, and is relevant either way
 //     round: unmute always holds the Fn key, as dictation or as orchestrate.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import unmuteLogo from '../assets/unmute-logo.png'
 import { useAuth } from '../paywall/AuthContext'
-import { SegmentedControl, PermissionRow } from './_shared'
 
 interface OnboardingProps {
   onComplete: () => void
@@ -40,9 +57,7 @@ type Plan = 'dictation' | 'unmute'
 
 /** The renderer types in this project do not declare `window.electronAPI`.
  *  Reaching for it through a cast window is the same runtime access with none
- *  of the type noise — the idiom the `renderer/remote/` override files use.
- *  (Several `renderer/app/` files still reach for it directly and pay the
- *  error; migrating them is not this pack's to do.) */
+ *  of the type noise — the idiom the `renderer/remote/` override files use. */
 type OnboardingAPI = {
   getMicPermissionStatus?: () => Promise<string>
   requestMicPermission?: () => Promise<boolean>
@@ -67,9 +82,7 @@ function api(): OnboardingAPI {
 }
 
 /** Human labels for the two triggers a user can choose between. Every *sentence*
- *  that names a trigger reads from here. The three literal key names elsewhere
- *  in the file — the picker's own option labels, Caps Lock, and the macOS Globe
- *  tip — all name things that cannot vary. See the header note. */
+ *  that names a trigger reads from here. */
 const KEY_LABELS: Record<DictationKey, string> = {
   fn: 'Fn',
   'right-option': 'Right Opt',
@@ -98,6 +111,644 @@ const PLANS: { plan: Plan; name: string; price: string; tagline: string; recomme
   },
 ]
 
+/* ─── Vendor marks ───────────────────────────────────────────────────────
+ *
+ * Colour means status everywhere else on these screens. These two are the
+ * documented exception, because a mark identifies a maker, not a state.
+ * They are hand-drawn stand-ins; dropping the official artwork in later
+ * means replacing these two components and nothing else.
+ */
+
+function ClaudeMark({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" stroke="#D97757" strokeWidth="2.5" strokeLinecap="round" style={{ flexShrink: 0 }}>
+      <path d="M12 2.8v18.4M2.8 12h18.4M5.5 5.5l13 13M18.5 5.5l-13 13" />
+    </svg>
+  )
+}
+function CodexMark({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#0f9d78" strokeWidth="1.9" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+      <path d="M12 2.6l8.1 4.7v9.4L12 21.4 3.9 16.7V7.3z" />
+      <path d="M12 7.1l4.2 2.45v4.9L12 16.9l-4.2-2.45v-4.9z" />
+    </svg>
+  )
+}
+
+/* ─── The scoped stylesheet ──────────────────────────────────────────────
+ *
+ * Every selector is a descendant of `.ob`. The wordmark's negative margins are
+ * not a fudge: unmute-logo.png is 1280×425 with the artwork at 98,88 → 1198,295,
+ * so sizing it by `height` alone renders it at 49% of the box and pushes it
+ * ~7px right of anything aligned beneath it. These collapse the box onto the
+ * ink, which makes `--wm` the image height and the visible mark 0.489 of it.
+ */
+const OB_CSS = `
+.ob{
+  --paper:#f0ede4; --paper-2:#e9e5da; --paper-3:#ded9cb; --card:#fdfcfa;
+  --ink:#181614; --ink-2:rgba(24,22,20,.64); --ink-3:rgba(24,22,20,.42);
+  --ink-4:rgba(24,22,20,.22); --line:rgba(24,22,20,.10); --line-2:rgba(24,22,20,.16);
+  --act:#181614; --act-2:#2f2a24; --act-soft:rgba(24,22,20,.06);
+  --flag:#e08a1e; --flag-soft:rgba(224,138,30,.13); --flag-ink:#9c5f0d;
+  --good:#1a7d52; --good-soft:rgba(26,125,82,.10);
+  --nt:#0d0d0e; --nt-2:#191a1c; --nt-line:rgba(255,255,255,.11);
+  --nt-raised:rgba(255,255,255,.08); --nt-text:rgba(255,255,255,.95);
+  --nt-dim:rgba(255,255,255,.55); --nt-faint:rgba(255,255,255,.34);
+  --display:-apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",sans-serif;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
+  --mono:"SF Mono",Menlo,Monaco,ui-monospace,monospace;
+  --r1:8px; --r2:12px; --r3:16px;
+  --expo:cubic-bezier(.16,1,.3,1); --calm:cubic-bezier(.32,.72,0,1);
+  height:100vh;display:flex;flex-direction:column;position:relative;
+  background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:13.5px;
+  -webkit-font-smoothing:antialiased;
+}
+.ob *{box-sizing:border-box}
+.ob .track{position:absolute;top:0;left:0;right:0;height:2px;background:rgba(24,22,20,.08);z-index:9}
+.ob .track span{display:block;height:100%;background:var(--act);width:8%;transition:width .72s var(--calm)}
+.ob .tbar{height:38px;flex-shrink:0;display:flex;align-items:center;justify-content:flex-end;padding:0 20px}
+.ob .stepno{font:600 10.5px var(--sans);letter-spacing:.11em;color:var(--ink-4)}
+.ob .stage{flex:1;position:relative;overflow:hidden}
+.ob .screen{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:safe center;
+  padding:14px 56px 10px;overflow-y:auto;animation:ob-in .6s var(--expo) both}
+.ob .screen > *{animation:ob-in .66s var(--expo) both;animation-delay:calc(var(--i,0) * 70ms)}
+@keyframes ob-in{from{opacity:0;transform:translateY(16px) scale(.99)}to{opacity:1;transform:none}}
+.ob .foot{flex-shrink:0;padding:16px 56px 22px;display:flex;align-items:center;gap:12px}
+.ob .foot .sp{flex:1}
+.ob #ob-back{margin-left:-20px}
+
+/* controls */
+.ob .btn{font:600 13.5px var(--sans);display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  height:40px;padding:0 20px;border-radius:var(--r2);border:1px solid transparent;cursor:pointer;white-space:nowrap;
+  transition:background .2s var(--calm),color .2s,border-color .2s,opacity .2s,transform .1s}
+.ob .btn:active{transform:scale(.985)}
+.ob .btn-primary{background:var(--act);color:#fff}
+.ob .btn-primary:hover{background:var(--act-2)}
+.ob .btn-secondary{background:var(--card);color:var(--ink);border-color:var(--line-2)}
+.ob .btn-secondary:hover{background:var(--paper-2)}
+.ob .btn-quiet{background:none;color:var(--ink-3)}
+.ob .btn-quiet:hover{background:rgba(24,22,20,.05);color:var(--ink)}
+.ob .btn-sm{height:30px;padding:0 13px;font-size:11.5px;border-radius:var(--r1)}
+.ob .btn:disabled{opacity:.35;cursor:not-allowed}
+.ob .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r3)}
+.ob .rows > .row{display:grid;grid-template-columns:var(--lead,1fr) auto;align-items:center;gap:16px;
+  padding:15px 18px;border-bottom:1px solid var(--line)}
+.ob .rows > .row:last-child{border-bottom:0}
+.ob .rows.lead-key > .row{grid-template-columns:118px 1fr auto}
+.ob .rows.lead-tile > .row{grid-template-columns:34px 1fr auto}
+.ob .rtitle{font-size:13.5px;font-weight:600}
+.ob .rsub{font-size:12px;color:var(--ink-3);margin-top:3px;line-height:1.5}
+.ob .key{font:700 12px var(--mono);color:rgba(255,255,255,.94);display:inline-flex;align-items:center;
+  justify-content:center;height:32px;padding:0 11px;border-radius:var(--r1);white-space:nowrap;
+  background:linear-gradient(180deg,#37332d,#1c1a17);border:1px solid rgba(0,0,0,.5);
+  box-shadow:0 2px 0 rgba(0,0,0,.5),0 2px 5px rgba(0,0,0,.2);
+  transition:transform .13s var(--calm),box-shadow .13s var(--calm)}
+.ob .rows.lead-key .key{justify-self:start;min-width:64px}
+.ob .key.down{transform:translateY(2px);box-shadow:0 0 0 rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.3)}
+.ob .seg{display:inline-flex;background:var(--paper-3);border-radius:var(--r2);padding:3px;gap:3px}
+.ob .seg button{font:500 12.5px var(--sans);padding:7px 15px;border:0;border-radius:var(--r1);background:none;
+  color:var(--ink-2);cursor:pointer;transition:background .22s var(--calm),color .2s}
+.ob .seg button[aria-pressed="true"]{background:var(--card);color:var(--ink);font-weight:600;
+  box-shadow:0 1px 3px rgba(24,22,20,.12)}
+.ob .badge{display:inline-flex;align-items:center;gap:5px;font:700 10px var(--sans);letter-spacing:.07em;
+  text-transform:uppercase;padding:4px 9px;border-radius:99px;white-space:nowrap}
+.ob .badge i{width:5px;height:5px;border-radius:50%;background:currentColor}
+.ob .badge-good{background:var(--good-soft);color:var(--good)}
+.ob .badge-flag{background:var(--flag-soft);color:var(--flag-ink)}
+.ob .badge-mute{background:rgba(24,22,20,.07);color:var(--ink-3)}
+.ob .tile{width:34px;height:34px;border-radius:var(--r2);display:grid;place-items:center;flex-shrink:0}
+.ob .tile-mute{background:rgba(24,22,20,.06);color:var(--ink-3)}
+.ob .tile-good{background:var(--good-soft);color:var(--good)}
+
+/* type */
+.ob .d1{font:700 38px var(--display);letter-spacing:-.032em;line-height:1.1}
+.ob .d2{font:700 28px var(--display);letter-spacing:-.026em;line-height:1.16}
+.ob .lead{font-size:15px;color:var(--ink-2);line-height:1.6}
+.ob .p{font-size:13px;color:var(--ink-2);line-height:1.6}
+.ob .meta{font-size:11.5px;color:var(--ink-3);line-height:1.5}
+.ob .eyebrow{font:700 10.5px var(--sans);letter-spacing:.16em;text-transform:uppercase;color:var(--ink-4)}
+.ob .mono{font-family:var(--mono)}
+.ob .stack{display:flex;flex-direction:column}
+.ob .rowf{display:flex;align-items:center}
+.ob .wordmark{display:block;height:var(--wm,40px);width:auto;
+  margin-left:calc(var(--wm,40px) * -0.2307);margin-right:calc(var(--wm,40px) * -0.1906);
+  margin-top:calc(var(--wm,40px) * -0.2071);margin-bottom:calc(var(--wm,40px) * -0.3035)}
+
+/* the cover is the one centred screen */
+.ob .welcome{width:100%;max-width:520px;margin:0 auto;display:flex;flex-direction:column;
+  align-items:center;text-align:center}
+.ob .welcome .rule{width:40px;height:2px;background:var(--ink-4);border-radius:2px;margin:24px 0}
+.ob .wsteps{display:flex;align-items:center;gap:12px;margin-top:28px;padding-top:18px;
+  border-top:1px solid var(--line);width:100%;justify-content:center}
+.ob .wsteps i{width:3px;height:3px;border-radius:50%;background:var(--ink-4);display:block}
+
+/* ── the Mac ── */
+.ob .mac{width:560px;user-select:none}
+.ob .macwrap{width:420px;height:222px}
+.ob .macwrap .mac{transform:scale(.75);transform-origin:top left}
+.ob .lid{background:#0e0d0c;border-radius:15px;padding:8px 8px 12px;
+  box-shadow:0 22px 44px -18px rgba(24,22,20,.5),inset 0 1px 0 rgba(255,255,255,.1)}
+.ob .scr{position:relative;height:262px;border-radius:8px;overflow:hidden;
+  background:linear-gradient(165deg,#d8cfbd,#bcb09a 50%,#9e9078)}
+.ob .base{height:8px;width:106%;margin-left:-3%;border-radius:0 0 10px 10px;
+  background:linear-gradient(180deg,#cdc7ba,#8d877c)}
+.ob .mbar{position:absolute;top:0;left:0;right:0;height:20px;background:var(--nt);display:flex;
+  align-items:center;padding:0 10px;gap:11px;z-index:3}
+.ob .mbar b{font:600 9px var(--sans);color:rgba(255,255,255,.9)}
+.ob .mbar span{font:400 9px var(--sans);color:rgba(255,255,255,.55)}
+.ob .mbar .r{margin-left:auto;display:flex;gap:9px}
+.ob .nlab{font:600 9.5px var(--sans);color:var(--nt-dim);white-space:nowrap}
+.ob .fdot{width:6px;height:6px;border-radius:50%;background:var(--flag);flex-shrink:0}
+.ob .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);z-index:6;min-width:130px;height:25px;
+  padding:0 12px;border-radius:0 0 12px 12px;background:var(--nt);display:flex;align-items:center;
+  justify-content:center;gap:7px}
+.ob .wave{display:flex;align-items:flex-end;gap:2px;height:11px}
+.ob .wave b{width:2px;border-radius:1px;background:var(--flag);height:3px;
+  animation:ob-wv .55s ease-in-out infinite alternate}
+.ob .wave b:nth-child(2){animation-duration:.42s;--h:10px}
+.ob .wave b:nth-child(3){animation-duration:.66s;--h:5px}
+.ob .wave b:nth-child(4){animation-duration:.48s;--h:11px}
+.ob .wave b:nth-child(5){animation-duration:.58s;--h:6px}
+@keyframes ob-wv{from{height:3px}to{height:var(--h,8px)}}
+.ob .notch .wave b{background:#fff}
+
+/* THE MASS. The pocket is not a card below the notch — it IS the notch, wider
+   and taller. One shape, one colour, one animation. */
+.ob .mass{position:absolute;top:0;left:50%;transform:translateX(-50%);z-index:7;background:var(--nt);
+  width:148px;border-radius:0 0 13px 13px;overflow:hidden;color:var(--nt-text);text-align:left;
+  transition:width .52s var(--expo),border-radius .52s var(--expo),box-shadow .45s var(--calm)}
+.ob .mass.open{width:290px;border-radius:0 0 18px 18px;box-shadow:0 24px 44px -14px rgba(0,0,0,.7)}
+.ob .massbar{height:25px;display:flex;align-items:center;justify-content:center;gap:7px;padding:0 12px}
+.ob .massbody{max-height:0;opacity:0;padding:0 12px;
+  transition:max-height .52s var(--expo),opacity .3s var(--calm),padding .4s var(--expo)}
+.ob .mass.open .massbody{max-height:160px;opacity:1;padding:2px 12px 9px}
+.ob .mass .ph{display:flex;align-items:center;gap:7px;padding-right:46px}
+.ob .pdot{width:8px;height:8px;border-radius:50%;background:var(--flag);flex-shrink:0}
+.ob .pdot.quiet{background:var(--nt-faint)}
+.ob .ptitle{font:600 12.5px var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ob .popen{margin-left:auto;font:500 9.5px var(--sans);color:var(--nt-dim);padding:3px 7px;border-radius:5px;
+  background:var(--nt-raised);border:.5px solid var(--nt-line)}
+.ob .pask{font:400 11px var(--sans);color:var(--nt-dim);line-height:1.42;margin-top:7px;height:31px;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.ob .prail{display:flex;align-items:center;gap:7px;margin-top:7px}
+.ob .parrow{width:26px;height:20px;border-radius:6px;background:var(--nt-raised);border:.5px solid var(--nt-line);
+  color:var(--nt-dim);display:grid;place-items:center;cursor:pointer;flex-shrink:0;
+  transition:background .2s,color .2s,transform .15s}
+.ob .parrow:hover{background:rgba(255,255,255,.16);color:#fff}
+.ob .parrow:active{transform:scale(.9)}
+.ob .pdots{flex:1;display:flex;justify-content:center;gap:5px}
+.ob .pdots i{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.2);
+  transition:background .3s var(--calm),width .3s var(--expo)}
+.ob .pdots i.at{background:var(--flag);width:13px;border-radius:99px}
+.ob .proute{margin-top:8px;font:400 9.5px var(--mono);color:var(--nt-faint);display:flex;align-items:center;
+  gap:6px;height:14px}
+.ob .pcorner{position:absolute;top:30px;right:9px;display:flex;gap:5px;opacity:0;transition:opacity .3s .1s}
+.ob .mass.open .pcorner{opacity:1}
+.ob .pcorner button{width:17px;height:17px;border-radius:50%;background:var(--nt-raised);
+  border:.5px solid var(--nt-line);color:var(--nt-dim);display:grid;place-items:center;cursor:pointer}
+.ob .face{animation:ob-swap .42s var(--expo)}
+@keyframes ob-swap{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:none}}
+
+/* terminals — real ones, that receive things */
+.ob .term{position:absolute;border-radius:8px;overflow:hidden;background:#fbf9f5;
+  border:1px solid rgba(0,0,0,.15);box-shadow:0 16px 32px -12px rgba(0,0,0,.4);
+  transition:box-shadow .5s var(--calm),transform .5s var(--expo),opacity .45s var(--calm),filter .45s}
+.ob .term .tt{height:19px;background:#eae7e0;border-bottom:1px solid rgba(0,0,0,.07);display:flex;
+  align-items:center;gap:4px;padding:0 8px}
+.ob .term .tt i{width:6px;height:6px;border-radius:50%;background:rgba(0,0,0,.15)}
+.ob .term .tt b{font:600 8px var(--sans);color:rgba(0,0,0,.44);margin-left:6px}
+.ob .term .tb{padding:7px 9px;font:400 8.5px var(--mono);color:#4b473f;line-height:1.9;overflow:hidden}
+.ob .term .tb div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;animation:ob-tin .45s var(--expo) both}
+@keyframes ob-tin{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:none}}
+.ob .term .ask{color:#b06d10}
+.ob .term .you{color:var(--ink);font-weight:700}
+.ob .term .go{color:#1a7d52}
+.ob .term.a{left:30px;top:44px;width:280px;height:144px;z-index:1}
+.ob .term.b{right:22px;top:104px;width:236px;height:132px;z-index:2}
+.ob .term.c{left:140px;top:160px;width:216px;height:86px;z-index:3}
+.ob .term.focus{box-shadow:0 22px 44px -12px rgba(0,0,0,.5),0 0 0 2px var(--ink);transform:translateY(-3px);z-index:4}
+.ob .term.dim{opacity:.42;filter:saturate(.55)}
+.ob .beam{position:absolute;inset:0;width:100%;height:100%;z-index:5;pointer-events:none;opacity:0;
+  transition:opacity .3s}
+.ob .beam.on{opacity:1}
+.ob .beam path{fill:none;stroke:var(--ink);stroke-width:1.7;stroke-dasharray:5 4;
+  animation:ob-march .65s linear infinite}
+@keyframes ob-march{to{stroke-dashoffset:-18}}
+
+/* a document on the fake screen, with text you watch get selected */
+.ob .docwin{position:absolute;left:48px;top:46px;right:48px;height:150px;border-radius:8px;background:#fbf9f5;
+  border:1px solid rgba(0,0,0,.15);box-shadow:0 16px 32px -12px rgba(0,0,0,.4);overflow:hidden}
+.ob .docwin .dh{height:19px;background:#eae7e0;border-bottom:1px solid rgba(0,0,0,.07);display:flex;
+  align-items:center;gap:4px;padding:0 8px}
+.ob .docwin .dh i{width:6px;height:6px;border-radius:50%;background:rgba(0,0,0,.15)}
+.ob .docwin .dh b{font:600 8px var(--sans);color:rgba(0,0,0,.44);margin-left:6px}
+.ob .docwin .dc{padding:10px 12px}
+.ob .docwin .ln{height:5px;border-radius:3px;background:rgba(0,0,0,.09);margin:8px 0}
+.ob .docwin .ln.s{width:56%}
+.ob .docwin .ln.m{width:84%}
+.ob .docwin .ln.err{background:rgba(224,138,30,.55);width:64%}
+.ob .hl{border-radius:2px;padding:1px 3px;font-family:var(--mono);font-size:8.5px;
+  transition:background .32s var(--calm),color .32s var(--calm)}
+.ob .hl.on{background:var(--ink);color:#fff}
+.ob .copychip{position:absolute;font:700 8px var(--sans);letter-spacing:.09em;background:var(--ink);color:#fff;
+  padding:3px 7px;border-radius:5px;z-index:7;opacity:0;transform:translateY(5px);
+  transition:opacity .28s,transform .38s var(--expo)}
+.ob .copychip.on{opacity:1;transform:none}
+.ob .sel{position:absolute;border:1.5px dashed var(--ink);background:rgba(24,22,20,.09);border-radius:4px;
+  opacity:0;z-index:6;transition:width .55s var(--expo),height .55s var(--expo),opacity .22s}
+.ob .sel.on{opacity:1}
+.ob .cross{position:absolute;width:15px;height:15px;opacity:0;z-index:7;pointer-events:none;
+  transition:transform .6s var(--expo),opacity .2s}
+.ob .cross.on{opacity:1}
+.ob .cross:before,.ob .cross:after{content:"";position:absolute;background:rgba(0,0,0,.8)}
+.ob .cross:before{left:6.75px;top:0;width:1.5px;height:15px}
+.ob .cross:after{top:6.75px;left:0;height:1.5px;width:15px}
+.ob .flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:8}
+.ob .flash.go{animation:ob-fl .45s ease-out}
+@keyframes ob-fl{0%{opacity:0}16%{opacity:.9}100%{opacity:0}}
+
+/* the delivered payload */
+.ob .pane{background:var(--card);border:1px solid var(--line);border-radius:var(--r3);overflow:hidden}
+.ob .pane .ph{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;
+  font:700 9.5px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2)}
+.ob .pane .pb{padding:12px 14px 13px}
+.ob .mic{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:99px;background:var(--ink);flex-shrink:0}
+.ob .mic .d{width:5px;height:5px;border-radius:50%;background:var(--flag);animation:ob-pl 1.3s ease-in-out infinite}
+@keyframes ob-pl{0%,100%{opacity:1}50%{opacity:.3}}
+.ob .mic .wave b{background:#fff}
+.ob .payload{font:400 12px var(--mono);line-height:1.75;min-height:30px}
+.ob .uchip{display:inline-flex;align-items:center;gap:5px;vertical-align:-3px;margin:0 3px;padding:2px 7px;
+  border-radius:6px;background:var(--act-soft);border:1px solid var(--line-2);color:var(--ink);
+  font:600 10.5px var(--mono);white-space:nowrap;animation:ob-in .4s var(--expo) both}
+.ob .attach{margin-top:10px;padding-top:9px;border-top:1px dashed var(--line-2)}
+.ob .attach .al{font:700 9.5px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4);
+  margin-bottom:8px}
+.ob .shotcard{display:flex;align-items:center;gap:10px;padding:8px;border-radius:var(--r2);
+  background:var(--paper-2);border:1px solid var(--line)}
+.ob .shotcard .sh{width:46px;height:30px;border-radius:5px;flex-shrink:0;position:relative;overflow:hidden;
+  background:linear-gradient(150deg,var(--paper),var(--paper-3) 55%,#c4bba6)}
+.ob .shotcard .sh:after{content:"";position:absolute;left:7px;right:7px;top:12px;height:4px;border-radius:3px;
+  background:rgba(224,138,30,.85)}
+.ob .shotcard .sn{font-size:11.5px;font-weight:600}
+.ob .shotcard .ss{font-size:10.5px;color:var(--ink-3);margin-top:1px}
+.ob .reveal{animation:ob-in .5s var(--expo) both}
+.ob .cap{display:flex;align-items:center;gap:10px;margin-top:14px}
+.ob .cap .txt{font-size:12px;color:var(--ink-3)}
+
+@media (prefers-reduced-motion:reduce){
+  .ob *,.ob *::before,.ob *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
+    transition-duration:.01ms!important}
+}
+`
+
+/* ─── Shared chrome ─────────────────────────────────────────────────────── */
+
+function Shell({ step, total, onBack, onNext, nextLabel, nextDisabled, children }: {
+  step: number
+  total: number
+  /** Absent on the first screen; otherwise steps one back. */
+  onBack?: () => void
+  onNext: () => void
+  nextLabel: string
+  /** Set on the permissions step, which is not passable until both are on. */
+  nextDisabled?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div className="ob">
+      <style>{OB_CSS}</style>
+      <div className="titlebar-drag" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 38, zIndex: 1 }} />
+      <div className="track"><span style={{ width: `${((step + 1) / total) * 100}%` }} /></div>
+      <div className="tbar">
+        <span className="stepno">{String(step + 1).padStart(2, '0')} / {total}</span>
+      </div>
+      <div className="stage">
+        <section className="screen" key={step}>{children}</section>
+      </div>
+      <div className="foot titlebar-no-drag">
+        {onBack
+          ? <button id="ob-back" className="btn btn-quiet" onClick={onBack}>Back</button>
+          : <span />}
+        <span className="sp" />
+        <button className="btn btn-primary" onClick={onNext} disabled={nextDisabled}>{nextLabel}</button>
+      </div>
+    </div>
+  )
+}
+
+/* ─── Demo 1: the pocket ─────────────────────────────────────────────────
+ *
+ * THE WHOLE POINT, TWICE. One task, speak, it lands. Move the card, speak the
+ * same way, and it lands somewhere else. Delivering once proves nothing — it is
+ * consistent with the voice always going to the same place. The second delivery
+ * is what shows the card is what decides.
+ */
+
+type Slot = { name: string; ask: string; vendor: 'claude' | 'codex'; demanding: boolean; reply: string; out: string[] }
+const SLOTS: Slot[] = [
+  { name: 'api-gateway', ask: 'Apply this patch to src/fetch.ts?', vendor: 'claude', demanding: true,
+    reply: 'yes, and run the tests', out: ['✓ patch applied', 'running 42 tests…'] },
+  { name: 'web-ui', ask: 'Which breakpoint should the sidebar collapse at?', vendor: 'codex', demanding: true,
+    reply: 'collapse at 1024, keep the icons', out: ['✓ set to 1024px', 'rebuilding…'] },
+  { name: 'docs-site', ask: 'Finished — rewrote the install page.', vendor: 'claude', demanding: false,
+    reply: 'ship it', out: ['✓ pushed to main'] },
+]
+const BASE_LINES: Record<string, { text: string; cls?: string }[]> = {
+  'api-gateway': [{ text: '› add retry with backoff' }, { text: 'writing src/fetch.ts…' }, { text: '? apply this patch (y/n)', cls: 'ask' }],
+  'web-ui': [{ text: '› collapse the sidebar' }, { text: '? which breakpoint', cls: 'ask' }],
+  'docs-site': [{ text: '› rewrite the install page' }, { text: '✓ done in 2m 14s', cls: 'go' }],
+}
+
+function PocketDemo({ orchestrateLabel }: { orchestrateLabel: string }) {
+  const [open, setOpen] = useState(false)
+  const [at, setAt] = useState(0)
+  const [hot, setHot] = useState(false)
+  const [caption, setCaption] = useState('Tap the notch to open it.')
+  const [lines, setLines] = useState(BASE_LINES)
+  const [beam, setBeam] = useState<string | null>(null)
+  const scrRef = useRef<HTMLDivElement | null>(null)
+  const massRef = useRef<HTMLDivElement | null>(null)
+  const timers = useRef<number[]>([])
+
+  const clear = () => { timers.current.forEach((t) => window.clearTimeout(t)); timers.current = [] }
+  const run = useCallback((steps: [number, () => void][]) => {
+    clear()
+    let t = 0
+    for (const [d, fn] of steps) { t += d; timers.current.push(window.setTimeout(fn, t)) }
+  }, [])
+
+  const push = (name: string, text: string, cls?: string) =>
+    setLines((prev) => ({ ...prev, [name]: [...prev[name], { text, cls }].slice(-5) }))
+
+  const play = useCallback(() => {
+    setLines(BASE_LINES); setOpen(false); setAt(0); setHot(false); setBeam(null)
+    setCaption('Tap the notch to open it.')
+    run([
+      [800, () => { setOpen(true); setCaption('The card is on api-gateway — everything else dims.') }],
+      [1200, () => { setAt(1); setCaption('Step the card to web-ui.') }],
+      [900, () => { setAt(0); setCaption(`Holding ${orchestrateLabel} — routing into api-gateway.`); setHot(true); setBeam('api-gateway') }],
+      [1400, () => push('api-gateway', '› yes, and run the tests', 'you')],
+      [520, () => { setHot(false); setBeam(null) }],
+      [600, () => { push('api-gateway', '✓ patch applied', 'go'); setCaption('It landed in api-gateway.') }],
+      [700, () => push('api-gateway', 'running 42 tests…')],
+      [1400, () => { setAt(1); setCaption('Now step the card to web-ui.') }],
+      [1100, () => { setCaption(`Holding ${orchestrateLabel} — routing into web-ui.`); setHot(true); setBeam('web-ui') }],
+      [1400, () => push('web-ui', '› collapse at 1024, keep the icons', 'you')],
+      [520, () => { setHot(false); setBeam(null) }],
+      [600, () => { push('web-ui', '✓ set to 1024px', 'go'); setCaption('Same key — it landed in web-ui instead.') }],
+      [1600, () => { setOpen(false); setCaption('Esc closes it — your voice goes back to normal routing.') }],
+    ])
+  }, [orchestrateLabel, run])
+
+  useEffect(() => { play(); return clear }, [play])
+
+  const slot = SLOTS[at]
+  const move = (d: number) => {
+    clear(); setAt((n) => (n + d + SLOTS.length) % SLOTS.length)
+    setCaption('That card is where your voice goes.')
+  }
+
+  // the beam is drawn in the screen's own coordinate space, which transforms
+  // cannot disturb because offsetLeft/offsetTop are pre-transform
+  let path = ''
+  const scr = scrRef.current
+  const mass = massRef.current
+  if (beam && scr && mass) {
+    const t = scr.querySelector<HTMLElement>(`[data-term="${beam}"]`)
+    if (t) {
+      const x1 = scr.clientWidth / 2, y1 = mass.offsetTop + mass.offsetHeight
+      const x2 = t.offsetLeft + t.offsetWidth / 2, y2 = t.offsetTop
+      const my = (y1 + y2) / 2
+      path = `M${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`
+    }
+  }
+
+  return (
+    <div className="stack" style={{ alignItems: 'flex-start' }}>
+      <div className="mac">
+        <div className="lid"><div className="scr" ref={scrRef}>
+          <div className="mbar"><b>Terminal</b><span>File</span><span>Edit</span>
+            <div className="r"><span>Wi-Fi</span><span>9:41</span></div></div>
+
+          <div className={`mass${open ? ' open' : ''}`} ref={massRef} onClick={() => { clear(); setOpen(true) }}>
+            <div className="massbar"><span className="fdot" /><span className="nlab">2 waiting on you</span></div>
+            <div className="massbody">
+              <div className="pcorner">
+                <button title="Open the dashboard">
+                  <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1.5" /><rect x="9" y="1" width="6" height="6" rx="1.5" /><rect x="1" y="9" width="6" height="6" rx="1.5" /><rect x="9" y="9" width="6" height="6" rx="1.5" /></svg>
+                </button>
+                <button title="Close — your voice goes back to normal routing"
+                  onClick={(e) => { e.stopPropagation(); clear(); setOpen(false); setBeam(null); setHot(false); setCaption('Closed — your voice is back to normal routing.') }}>
+                  <svg width="8" height="8" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M3 3l10 10M13 3L3 13" /></svg>
+                </button>
+              </div>
+              <div className="face" key={at}>
+                <div className="ph">
+                  <span className={`pdot${slot.demanding ? '' : ' quiet'}`} />
+                  {slot.vendor === 'claude' ? <ClaudeMark size={11} /> : <CodexMark size={11} />}
+                  <span className="ptitle">{slot.name}</span>
+                  <button className="popen">Open</button>
+                </div>
+                <p className="pask">{slot.ask}</p>
+              </div>
+              <div className="prail">
+                <button className="parrow" onClick={(e) => { e.stopPropagation(); move(-1) }}>
+                  <svg width="7" height="7" viewBox="0 0 8 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6.5 1L1.5 6l5 5" /></svg>
+                </button>
+                <div className="pdots">{SLOTS.map((_, i) => <i key={i} className={i === at ? 'at' : ''} />)}</div>
+                <button className="parrow" onClick={(e) => { e.stopPropagation(); move(1) }}>
+                  <svg width="7" height="7" viewBox="0 0 8 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M1.5 1l5 5-5 5" /></svg>
+                </button>
+              </div>
+              <div className="proute">
+                {hot
+                  ? <><svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="rgba(255,255,255,.75)" strokeWidth="1.8" strokeLinecap="round"><path d="M8 2a2.5 2.5 0 0 1 0 5M8 7v6M5 13h6" /></svg>
+                      <span className="wave"><b /><b /><b /><b /><b /></span></>
+                  : <span>{orchestrateLabel} goes to {slot.name}</span>}
+              </div>
+            </div>
+          </div>
+
+          {(['docs-site', 'api-gateway', 'web-ui'] as const).map((name, i) => (
+            <div
+              key={name}
+              data-term={name}
+              className={`term ${['c', 'a', 'b'][i]}${open && slot.name === name ? ' focus' : ''}${open && slot.name !== name ? ' dim' : ''}`}
+            >
+              <div className="tt"><i /><i /><i /><b>{name} — {name === 'web-ui' ? 'codex' : 'claude'}</b></div>
+              <div className="tb">
+                {lines[name].map((l, n) => <div key={`${l.text}-${n}`} className={l.cls}>{l.text}</div>)}
+              </div>
+            </div>
+          ))}
+
+          <svg className={`beam${path ? ' on' : ''}`} viewBox={`0 0 ${scr?.clientWidth ?? 0} ${scr?.clientHeight ?? 0}`} preserveAspectRatio="none">
+            {path && <path d={path} />}
+          </svg>
+        </div></div>
+        <div className="base" />
+      </div>
+
+      <div className="cap" style={{ width: 560 }}>
+        <kbd className={`key${hot ? ' down' : ''}`} style={{ minWidth: 104 }}>{orchestrateLabel}</kbd>
+        <span className="txt">{caption}</span>
+        <button className="btn btn-quiet btn-sm" style={{ marginLeft: 'auto' }} onClick={play}>Replay</button>
+      </div>
+    </div>
+  )
+}
+
+/* ─── Demo 2 & 3: what rides along with your voice ───────────────────────
+ *
+ * The two screens are deliberately a matched pair, because the contrast is the
+ * lesson: a link BECOMES PART OF the sentence at the point you copied it, and
+ * an image never does — it is filed the instant it is taken and delivered after
+ * the text. Both are what `insertRender.ts` actually does.
+ */
+
+function LinkDemo() {
+  const [phase, setPhase] = useState(0)
+  const timers = useRef<number[]>([])
+  const play = useCallback(() => {
+    timers.current.forEach((t) => window.clearTimeout(t)); timers.current = []
+    setPhase(0)
+    const steps = [700, 900, 500, 700]
+    let t = 0
+    steps.forEach((d, i) => { t += d; timers.current.push(window.setTimeout(() => setPhase(i + 1), t)) })
+  }, [])
+  useEffect(() => { play(); return () => { timers.current.forEach((t) => window.clearTimeout(t)) } }, [play])
+
+  return (
+    <div className="stack" style={{ alignItems: 'flex-start', gap: 12 }}>
+      <div className="macwrap"><div className="mac"><div className="lid"><div className="scr">
+        <div className="mbar"><b>Linear</b><span>File</span><span>Edit</span>
+          <div className="r"><span>Wi-Fi</span><span>9:41</span></div></div>
+        <div className="notch"><span className="fdot" /><span className="wave"><b /><b /><b /><b /><b /></span></div>
+        <div className="docwin">
+          <div className="dh"><i /><i /><i /><b>UN-214 — sidebar collapse</b></div>
+          <div className="dc">
+            <div className="ln m" /><div className="ln s" />
+            <div style={{ margin: '10px 0' }}>
+              <span className={`hl${phase >= 2 && phase < 4 ? ' on' : ''}`}>linear.app/unmute/issue/UN-214</span>
+            </div>
+            <div className="ln m" /><div className="ln s" />
+          </div>
+        </div>
+        <div className={`copychip${phase === 3 ? ' on' : ''}`} style={{ left: 196, top: 128 }}>⌘C</div>
+      </div></div><div className="base" /></div></div>
+
+      <div className="pane" style={{ width: 420 }}>
+        <div className="ph">
+          <span className="mic"><span className="d" /><span className="wave"><b /><b /><b /><b /><b /></span></span>
+          What the task receives
+          <button className="btn btn-quiet btn-sm" style={{ marginLeft: 'auto', height: 22, padding: '0 9px', fontSize: 10.5 }} onClick={play}>Replay</button>
+        </div>
+        <div className="pb"><div className="payload">
+          {phase >= 1 && 'the spec is at'}
+          {phase >= 3 && <span className="uchip">linear.app/unmute/issue/UN-214</span>}
+          {phase >= 4 && ' — follow the acceptance criteria'}
+        </div></div>
+      </div>
+    </div>
+  )
+}
+
+function ShotDemo() {
+  const [phase, setPhase] = useState(0)
+  const timers = useRef<number[]>([])
+  const play = useCallback(() => {
+    timers.current.forEach((t) => window.clearTimeout(t)); timers.current = []
+    setPhase(0)
+    const steps = [700, 1100, 800, 400, 700]
+    let t = 0
+    steps.forEach((d, i) => { t += d; timers.current.push(window.setTimeout(() => setPhase(i + 1), t)) })
+  }, [])
+  useEffect(() => { play(); return () => { timers.current.forEach((t) => window.clearTimeout(t)) } }, [play])
+
+  const dragging = phase >= 2 && phase < 4
+  return (
+    <div className="stack" style={{ alignItems: 'flex-start', gap: 12 }}>
+      <div className="macwrap"><div className="mac"><div className="lid"><div className="scr">
+        <div className="mbar"><b>Safari</b><span>File</span><span>Edit</span>
+          <div className="r"><span>Wi-Fi</span><span>9:41</span></div></div>
+        <div className="notch"><span className="fdot" /><span className="wave"><b /><b /><b /><b /><b /></span></div>
+        <div className="docwin">
+          <div className="dh"><i /><i /><i /><b>checkout — error state</b></div>
+          <div className="dc"><div className="ln m" /><div className="ln s" /><div className="ln err" /><div className="ln m" /><div className="ln s" /></div>
+        </div>
+        <div className={`sel${dragging ? ' on' : ''}`}
+          style={{ left: 60, top: 96, width: dragging ? 200 : 0, height: dragging ? 60 : 0 }} />
+        <div className={`cross${dragging ? ' on' : ''}`}
+          style={{ transform: dragging ? 'translate(260px,156px)' : 'translate(60px,96px)' }} />
+        <div className={`flash${phase === 3 ? ' go' : ''}`} />
+      </div></div><div className="base" /></div></div>
+
+      <div className="pane" style={{ width: 420 }}>
+        <div className="ph">
+          <span className="mic"><span className="d" /><span className="wave"><b /><b /><b /><b /><b /></span></span>
+          What the task receives
+          <button className="btn btn-quiet btn-sm" style={{ marginLeft: 'auto', height: 22, padding: '0 9px', fontSize: 10.5 }} onClick={play}>Replay</button>
+        </div>
+        <div className="pb">
+          <div className="payload">
+            {phase >= 1 && 'the error state looks wrong here'}
+            {phase >= 5 && ' make the copy match the toast style'}
+          </div>
+          {phase >= 4 && (
+            <div className="attach reveal">
+              <div className="al">Attachments · 1</div>
+              <div className="shotcard"><span className="sh" />
+                <div><p className="sn">Screenshot 9.41.02.png</p>
+                  <p className="ss">delivered after the text, not inside it</p></div></div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ─── Small parts ───────────────────────────────────────────────────────── */
+
+function Check() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  )
+}
+
+function Fact({ lead, text }: { lead: string; text: string }) {
+  return (
+    <div className="row">
+      <div className="tile tile-good"><Check /></div>
+      <div><p className="rtitle">{lead}</p><p className="rsub">{text}</p></div>
+      <span />
+    </div>
+  )
+}
+
+function StaticMac() {
+  return (
+    <div className="mac">
+      <div className="lid"><div className="scr">
+        <div className="mbar"><b>Terminal</b><span>File</span><span>Edit</span>
+          <div className="r"><span>Wi-Fi</span><span>9:41</span></div></div>
+        <div className="notch"><span className="fdot" /><span className="nlab">2 waiting on you</span></div>
+        <div className="term c"><div className="tt"><i /><i /><i /><b>docs-site — claude</b></div>
+          <div className="tb"><div>› rewrite the install page</div><div className="go">✓ done in 2m 14s</div></div></div>
+        <div className="term a"><div className="tt"><i /><i /><i /><b>api-gateway — claude</b></div>
+          <div className="tb"><div>› add retry with backoff</div><div>writing src/fetch.ts…</div><div className="ask">? apply this patch (y/n)</div></div></div>
+        <div className="term b"><div className="tt"><i /><i /><i /><b>web-ui — codex</b></div>
+          <div className="tb"><div>› collapse the sidebar</div><div className="ask">? which breakpoint</div></div></div>
+      </div></div>
+      <div className="base" />
+    </div>
+  )
+}
+
+/* ─── The flow ──────────────────────────────────────────────────────────── */
+
 export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingProps) {
   const [step, setStep] = useState(0)
   const auth = useAuth()
@@ -109,10 +760,9 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
   const orchestrateLabel = KEY_LABELS[otherKey(dictationKey)]
   const instructLabel = 'Caps Lock'
 
-  function chooseDictationKey(value: string) {
-    const key: DictationKey = value === 'right-option' ? 'right-option' : 'fn'
-    setDictationKeyState(key)
-    api().setDictationKey?.(key)
+  function chooseDictationKey(value: DictationKey) {
+    setDictationKeyState(value)
+    api().setDictationKey?.(value)
   }
 
   // ─── Microphone permission ───
@@ -246,362 +896,447 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
     if (subscription?.active) setCheckoutPlan(null)
   }, [subscription])
 
-  function next() {
-    if (step < steps.length - 1) setStep(step + 1)
-    else onComplete()
-  }
-
   const bothPermissionsGranted = micGranted && accessibilityGranted
 
-  const steps = [
-    // ── Step 0: Welcome ──
-    <div key="welcome" className="flex flex-col items-center justify-center text-center animate-fade-up-in">
-      <img src={unmuteLogo} alt="unmute" className="w-56 mb-8" />
-      <h1 className="font-display text-[22px] font-bold text-ink mb-3 tracking-tight flex items-center justify-center gap-2">
-        Speak. It happens.
-        <span className="w-[8px] h-[8px] rounded-full bg-accent shrink-0" style={{ animation: 'brand-dot-breathe 3s ease-in-out infinite' }} />
-      </h1>
-      <p className="text-ink-60 text-[16px] mb-10 max-w-sm leading-relaxed">
-        Dictate anywhere on your Mac — and hand real work to a coding agent with
-        the same voice.
-      </p>
-      <button onClick={next} className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[16px] hover:bg-accent-hover transition-all duration-200 shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]">
-        Get started
-      </button>
-    </div>,
+  const screens: { key: string; node: React.ReactNode; nextLabel?: string; blocked?: boolean }[] = [
+    // ── 0: Welcome ──
+    {
+      key: 'welcome',
+      nextLabel: 'Get started',
+      node: (
+        <div className="welcome">
+          <img className="wordmark" src={unmuteLogo} alt="unmute" style={{ ['--wm' as string]: '74px', ['--i' as string]: 0 }} />
+          <p className="meta" style={{ marginTop: 14, ['--i' as string]: 0 }}>Typing sucks. Just unmute.</p>
+          <div className="rule" style={{ ['--i' as string]: 1 }} />
+          <h1 className="d1" style={{ ['--i' as string]: 2 }}>Stop typing.<br />Just talk.</h1>
+          <p className="lead" style={{ marginTop: 14, ['--i' as string]: 3 }}>
+            unmute turns your voice into text anywhere on your Mac — a message, a
+            document, a search box. Hold a key, say it, let go.
+          </p>
+          <div className="wsteps" style={{ ['--i' as string]: 4 }}>
+            <span className="meta">12 steps</span><i /><span className="meta">about two minutes</span>
+            <i /><span className="meta">we set it up together</span>
+          </div>
+        </div>
+      ),
+    },
 
-    // ── Step 1: What unmute does — three things, three keys ──
-    <div key="what" className="flex flex-col items-center justify-center text-center animate-fade-up-in">
-      <h2 className="font-display text-[22px] font-bold text-ink mb-2 tracking-tight">What unmute does</h2>
-      <p className="text-ink-60 text-[14px] mb-8 max-w-sm leading-relaxed">
-        Three things, each on its own key.
-      </p>
-      <div className="flex flex-col gap-3 mb-8 w-full max-w-[400px]">
-        <FeatureCard
-          keyLabel={dictateLabel}
-          title="Dictate"
-          description="Tap it, speak, tap again. Raw text lands exactly where your cursor is, in any app."
-        />
-        <FeatureCard
-          keyLabel={instructLabel}
-          title="Instruct"
-          description="Select text and say what to change — “make this formal”, “turn into bullets”, “translate to Hindi”. unmute rewrites it in place."
-          muted={!instructionEnabled}
-        />
-        <FeatureCard
-          keyLabel={orchestrateLabel}
-          title="Orchestrate"
-          description="Describe a job out loud. A coding agent runs it on your Mac and reports back when it is done."
-        />
-      </div>
-      <button onClick={next} className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[14px] hover:bg-accent-hover transition-all duration-200 shadow-sm hover:shadow-md">
-        Continue
-      </button>
-    </div>,
+    // ── 1: Three things, three keys ──
+    {
+      key: 'what',
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">The idea</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Three things, three keys</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 540 }}>
+              Hold a key. Talk. Let go. There is nothing to click and nothing to switch to.
+            </p>
+          </div>
+          <div className="card rows lead-key" style={{ marginTop: 20, width: 620, ['--i' as string]: 1 }}>
+            <div className="row"><kbd className="key">{dictateLabel}</kbd>
+              <div><p className="rtitle">Dictate</p>
+                <p className="rsub">Tap it, speak, tap again. Raw text lands exactly where your cursor is, in any app.</p></div>
+              <span /></div>
+            <div className="row" style={{ opacity: instructionEnabled ? 1 : 0.55 }}>
+              <kbd className="key">{instructionEnabled ? instructLabel : 'Off'}</kbd>
+              <div><p className="rtitle">Instruct</p>
+                <p className="rsub">Select text and say what to change — “make this formal”, “turn into bullets”, “translate to Hindi”. unmute rewrites it in place.</p></div>
+              <span /></div>
+            <div className="row"><kbd className="key">{orchestrateLabel}</kbd>
+              <div><p className="rtitle">Orchestrate</p>
+                <p className="rsub">Describe a job out loud. A coding agent runs it on your Mac and reports back when it is done.</p></div>
+              <span /></div>
+          </div>
+        </>
+      ),
+    },
 
-    // ── Step 2: The notch ──
-    <div key="notch" className="flex flex-col items-center justify-center text-center animate-fade-up-in">
-      <NotchDiagram />
-      <h2 className="font-display text-[22px] font-bold text-ink mb-2 tracking-tight">The notch is where work lives</h2>
-      <p className="text-ink-60 text-[14px] mb-8 max-w-md leading-relaxed">
-        Work you hand off does not live in this window. It lives in the notch —
-        the strip at the very top of your screen, around the camera.
-      </p>
-      <div className="flex flex-col gap-2.5 mb-8 w-full max-w-[420px] text-left">
-        <Bullet text="It shows what is running right now, without taking over your screen." />
-        <Bullet text="When an agent needs an answer, the notch asks — and you answer out loud." />
-        <Bullet text="Click it to expand the full detail; click away and it shrinks back." />
-        <Bullet text="While you are speaking, a pill appears at the bottom of the screen so you can see you are being heard." />
-      </div>
-      <button onClick={next} className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[14px] hover:bg-accent-hover transition-all duration-200 shadow-sm hover:shadow-md">
-        Continue
-      </button>
-    </div>,
+    // ── 2: The notch ──
+    {
+      key: 'notch',
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">The notch</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Work you hand off lives up there</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 600 }}>
+              Not in this window. It lives in the strip at the very top of your screen,
+              around the camera — and the notch widens the moment one of them needs you.
+            </p>
+          </div>
+          <div style={{ marginTop: 16, ['--i' as string]: 1 }}><StaticMac /></div>
+        </>
+      ),
+    },
 
-    // ── Step 3: What leaves your Mac ──
+    // ── 3: The pocket ──
+    {
+      key: 'pocket',
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">The pocket</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Tap the notch. Answer without leaving.</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 640 }}>
+              One task on the card at a time — step through with ‹ › until the one you
+              mean is showing, then hold {orchestrateLabel} and talk to it. Escape closes
+              the pocket and your voice goes back to normal routing.
+            </p>
+          </div>
+          <div style={{ marginTop: 14, ['--i' as string]: 1 }}><PocketDemo orchestrateLabel={orchestrateLabel} /></div>
+        </>
+      ),
+    },
+
+    // ── 4: A link, mid-sentence ──
+    {
+      key: 'link',
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">While you talk · 1 of 2</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Copy a link mid-sentence</h2>
+            <p className="lead" style={{ marginTop: 8, maxWidth: 580 }}>
+              A link or a file path reads as part of the sentence, so it is spliced in
+              exactly where you copied it.
+            </p>
+          </div>
+          <div style={{ marginTop: 12, ['--i' as string]: 1 }}><LinkDemo /></div>
+        </>
+      ),
+    },
+
+    // ── 5: A screenshot, mid-sentence ──
+    {
+      key: 'shot',
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">While you talk · 2 of 2</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Screenshot mid-sentence</h2>
+            <p className="lead" style={{ marginTop: 8, maxWidth: 580 }}>
+              An image never joins the sentence. It is filed the moment you take it, and
+              arrives <strong>after</strong> your text.
+            </p>
+          </div>
+          <div style={{ marginTop: 12, ['--i' as string]: 1 }}><ShotDemo /></div>
+        </>
+      ),
+    },
+
+    // ── 6: What leaves your Mac ──
     // Copy is fixed (spec §3, decision D3) and traced line by line through the
     // backend. Do not soften it, do not shorten it, do not improvise.
-    <div key="privacy" className="flex flex-col items-center justify-center text-center animate-fade-up-in">
-      <div className="w-20 h-20 rounded-2xl bg-success-soft flex items-center justify-center mb-6">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-success">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-          <polyline points="9 12 11 14 15 10" />
-        </svg>
-      </div>
-      <h2 className="font-display text-[22px] font-bold text-ink mb-2 tracking-tight">What leaves your Mac</h2>
-      <p className="text-ink-60 text-[14px] mb-8 max-w-sm leading-relaxed">
-        Written plainly, because the honest answer is not “nothing”.
-      </p>
-      <div className="flex flex-col gap-2.5 mb-8 w-full max-w-[440px] text-left">
-        <Bullet
-          lead="Dictation audio"
-          text=" goes to our transcription service and is discarded the moment the text comes back. We keep a timestamp, a duration and the model name so we can bill you — never the audio, never the text."
-        />
-        <Bullet
-          lead="Orchestrator tasks never reach us."
-          text=" The agent runs on your Mac, under your own account, with your own credentials. unmute passes it your words and reads its status back."
-        />
-        <Bullet
-          lead="On-device mode sends nothing at all."
-          text=" No account, no network."
-        />
-        <Bullet
-          lead="Diagnostics stay here."
-          text=" unmute keeps a local log of how each dictation was served — for seven days, on this Mac, never uploaded. It does not contain what you said."
-        />
-      </div>
-      <button onClick={next} className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[14px] hover:bg-accent-hover transition-all duration-200 shadow-sm hover:shadow-md">
-        Continue
-      </button>
-    </div>,
-
-    // ── Step 4: Pick a plan ──
-    <div key="plan" className="flex flex-col items-center justify-center text-center animate-fade-up-in">
-      <h2 className="font-display text-[22px] font-bold text-ink mb-2 tracking-tight">Pick a plan</h2>
-      {subscription?.active ? (
+    {
+      key: 'privacy',
+      node: (
         <>
-          <p className="text-ink-60 text-[14px] mb-6 max-w-sm leading-relaxed">
-            You are already subscribed. Nothing to do here.
-          </p>
-          <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-success-soft border border-success/15 mb-8">
-            <CheckDot />
-            <span className="text-success font-semibold text-[13px]">
-              {subscription.plan === 'unmute' ? 'On the Unmute plan' : 'On the Dictation plan'}
-            </span>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">Privacy</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>What leaves your Mac</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 540 }}>
+              Written plainly, because the honest answer is not “nothing”.
+            </p>
           </div>
-          <button onClick={next} className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[14px] hover:bg-accent-hover transition-all duration-200 shadow-sm hover:shadow-md">
-            Continue
-          </button>
+          <div className="card rows lead-tile" style={{ marginTop: 20, width: 640, ['--i' as string]: 1 }}>
+            <Fact lead="Dictation audio" text="goes to our transcription service and is discarded the moment the text comes back. We keep a timestamp, a duration and the model name so we can bill you — never the audio, never the text." />
+            <Fact lead="Orchestrator tasks never reach us." text="The agent runs on your Mac, under your own account, with your own credentials. unmute passes it your words and reads its status back." />
+            <Fact lead="On-device mode sends nothing at all." text="No account, no network." />
+            <Fact lead="Diagnostics stay here." text="unmute keeps a local log of how each dictation was served — for seven days, on this Mac, never uploaded. It does not contain what you said." />
+          </div>
+        </>
+      ),
+    },
+
+    // ── 7: Pick a plan ──
+    {
+      key: 'plan',
+      node: subscription?.active ? (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">Plan</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Pick a plan</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 540 }}>
+              You are already subscribed. Nothing to do here.
+            </p>
+          </div>
+          <div className="card rows" style={{ marginTop: 20, width: 640, ['--i' as string]: 1 }}>
+            <div className="row">
+              <div><p className="rtitle">{subscription.plan === 'unmute' ? 'On the Unmute plan' : 'On the Dictation plan'}</p>
+                <p className="rsub">Change or cancel it any time from Account.</p></div>
+              <span className="badge badge-good"><i />Active</span>
+            </div>
+          </div>
         </>
       ) : (
         <>
-          <p className="text-ink-60 text-[14px] mb-7 max-w-sm leading-relaxed">
-            Cloud transcription is a subscription. Cancel any time from Account.
-          </p>
-          <div className="flex flex-col gap-3 mb-6 w-full max-w-[420px]">
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">Plan</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Pick a plan</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 540 }}>
+              Cloud transcription is a subscription. Cancel any time from Account.
+            </p>
+          </div>
+          <div className="card rows" style={{ marginTop: 20, width: 640, ['--i' as string]: 1 }}>
             {PLANS.map((tier) => (
-              <PlanCard
-                key={tier.plan}
-                name={tier.name}
-                price={tier.price}
-                tagline={tier.tagline}
-                recommended={tier.recommended}
-                busy={checkoutPlan === tier.plan}
-                signedIn={auth.signedIn}
-                onChoose={() => startCheckout(tier.plan)}
-              />
+              <div className="row" key={tier.plan}>
+                <div><p className="rtitle">{tier.name}</p><p className="rsub">{tier.tagline}</p></div>
+                {tier.recommended
+                  ? <span className="badge badge-mute">Recommended</span>
+                  : <span />}
+                <div className="rowf" style={{ gap: 14 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700 }}>{tier.price}</span>
+                  <button
+                    className={tier.recommended ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                    disabled={checkoutPlan === tier.plan}
+                    onClick={() => startCheckout(tier.plan)}
+                  >
+                    {checkoutPlan === tier.plan ? 'Waiting…' : auth.signedIn ? 'Choose' : 'Sign in'}
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
           {checkoutPlan && (
-            <p className="text-ink-60 text-[12.5px] mb-4 max-w-[420px] leading-relaxed">
-              Finish checkout in your browser, then come back — this screen
-              updates itself.
+            <p className="meta" style={{ marginTop: 12, maxWidth: 460, ['--i' as string]: 2 }}>
+              Finish checkout in your browser, then come back — this screen updates itself.
             </p>
           )}
           {checkoutError && (
-            <p className="text-[12.5px] text-accent mb-4 max-w-[420px] leading-relaxed">{checkoutError}</p>
+            <p className="meta" style={{ marginTop: 12, maxWidth: 460, color: 'var(--flag-ink)', ['--i' as string]: 2 }}>{checkoutError}</p>
           )}
-          <button
-            onClick={next}
-            className="text-[12.5px] text-ink-35 font-medium hover:text-ink-60 transition-colors"
-          >
-            Continue free on the on-device model
-          </button>
-          <p className="text-[11px] text-ink-35 mt-2 max-w-[380px] leading-relaxed">
-            It runs entirely offline and sends nothing anywhere. It is slower and
-            less accurate, and it cannot run agents.
+          <p className="meta" style={{ marginTop: 14, maxWidth: 460, ['--i' as string]: 3 }}>
+            Continuing without a plan leaves you on the on-device model. It runs entirely
+            offline and sends nothing anywhere. It is slower and less accurate, and it
+            cannot run agents.
           </p>
         </>
-      )}
-    </div>,
+      ),
+    },
 
-    // ── Step 5: Two permissions ──
+    // ── 8: Two permissions ──
     // Neither is skippable. Without Accessibility the app is inert: it cannot
-    // see the trigger key and cannot type at the cursor, so the old escape
-    // hatch on this step only ever produced a silently broken install.
-    <div key="permissions" className="flex flex-col items-center justify-center text-center animate-fade-up-in w-full">
-      <h2 className="font-display text-[22px] font-bold text-ink mb-2 tracking-tight">Two permissions</h2>
-      <p className="text-ink-60 text-[14px] mb-7 max-w-sm leading-relaxed">
-        Both are required. Without them unmute cannot hear you and cannot type
-        for you — it does nothing at all.
-      </p>
-      <div className="w-full max-w-[460px] mb-7 rounded-2xl border border-border bg-surface-2 overflow-hidden text-left">
-        <PermissionRow
-          title="Microphone"
-          description={
-            micStatus === 'denied' || micStatus === 'restricted'
-              ? 'Turned off right now. Open System Settings, find unmute under Microphone, switch it on, then come back.'
-              : 'Required — unmute needs your microphone to hear what you say. Audio is transcribed and discarded, never recorded.'
-          }
-          granted={micGranted}
-          statusText={micGranted ? 'Granted' : 'Required'}
-          primary={micGranted ? null : { label: 'Grant access', onClick: () => { void requestMicPermission() } }}
-          secondary={micGranted ? null : { label: 'Open System Settings', onClick: () => api().openMicSettings?.() }}
-        />
-        <PermissionRow
-          title="Accessibility"
-          description={
-            accessibilityGranted
-              ? 'Required — this is how unmute sees your trigger key and pastes text at the cursor.'
-              : 'Required — this is how unmute sees your trigger key and pastes text at the cursor. Find unmute in the list and switch it on; you may need to unlock with your password first.'
-          }
-          granted={accessibilityGranted}
-          statusText={accessibilityGranted ? 'Granted' : 'Required'}
-          primary={accessibilityGranted ? null : { label: 'Open System Settings', onClick: () => { void requestAccessibility() } }}
-          secondary={accessibilityGranted ? null : { label: 'I have enabled it', onClick: () => { void refreshAccessibilityStatus() } }}
-          divider
-        />
-      </div>
-      <button
-        onClick={next}
-        disabled={!bothPermissionsGranted}
-        className={`px-10 py-3.5 rounded-full font-display font-semibold text-[14px] transition-all duration-200 ${
-          bothPermissionsGranted
-            ? 'bg-accent text-white hover:bg-accent-hover shadow-sm hover:shadow-md'
-            : 'bg-ink-07 text-ink-35 cursor-not-allowed'
-        }`}
-      >
-        Continue
-      </button>
-      {!bothPermissionsGranted && (
-        <p className="text-[11px] text-ink-35 mt-3">
-          This screen updates by itself once both are on.
-        </p>
-      )}
-    </div>,
+    // see the trigger key and cannot type at the cursor, so an escape hatch on
+    // this step only ever produced a silently broken install.
+    {
+      key: 'permissions',
+      blocked: !bothPermissionsGranted,
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">Setup</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Two permissions</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 560 }}>
+              Both are required. Without them unmute cannot hear you and cannot type for
+              you — it does nothing at all.
+            </p>
+          </div>
+          <div className="card rows lead-tile" style={{ marginTop: 20, width: 640, ['--i' as string]: 1 }}>
+            <div className="row">
+              <div className={micGranted ? 'tile tile-good' : 'tile tile-mute'}>
+                {micGranted ? <Check /> : (
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+                    <path d="M8 2a2.5 2.5 0 0 1 0 5M5.5 2a5 5 0 0 0 0 5M8 7v6M5 13h6" />
+                  </svg>
+                )}
+              </div>
+              <div>
+                <p className="rtitle">Microphone</p>
+                <p className="rsub">
+                  {micStatus === 'denied' || micStatus === 'restricted'
+                    ? 'Turned off right now. Open System Settings, find unmute under Microphone, switch it on, then come back.'
+                    : 'Required — unmute needs your microphone to hear what you say. Audio is transcribed and discarded, never recorded.'}
+                </p>
+              </div>
+              {micGranted
+                ? <span className="badge badge-good"><i />Granted</span>
+                : (
+                  <div className="rowf" style={{ gap: 8 }}>
+                    <button className="btn btn-secondary btn-sm" onClick={() => api().openMicSettings?.()}>System Settings</button>
+                    <button className="btn btn-primary btn-sm" onClick={() => { void requestMicPermission() }}>Grant access</button>
+                  </div>
+                )}
+            </div>
 
-    // ── Step 6: Your keys ──
-    <div key="keys" className="flex flex-col items-center justify-center text-center animate-fade-up-in w-full">
-      <h2 className="font-display text-[22px] font-bold text-ink mb-2 tracking-tight">Your keys</h2>
-      <p className="text-ink-60 text-[14px] mb-6 max-w-sm leading-relaxed">
-        Pick the key you want for dictation. Orchestrate takes the other one.
-      </p>
+            <div className="row">
+              <div className={accessibilityGranted ? 'tile tile-good' : 'tile tile-mute'}>
+                {accessibilityGranted ? <Check /> : (
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+                    <rect x="2.5" y="3" width="11" height="10" rx="2" /><path d="M5 6.5h1.5M5 9.5h6M8.5 6.5H11" />
+                  </svg>
+                )}
+              </div>
+              <div>
+                <p className="rtitle">Accessibility</p>
+                <p className="rsub">
+                  {accessibilityGranted
+                    ? 'Required — this is how unmute sees your trigger key and pastes text at the cursor.'
+                    : 'Required — this is how unmute sees your trigger key and pastes text at the cursor. Find unmute in the list and switch it on; you may need to unlock with your password first.'}
+                </p>
+              </div>
+              {accessibilityGranted
+                ? <span className="badge badge-good"><i />Granted</span>
+                : (
+                  <div className="rowf" style={{ gap: 8 }}>
+                    <button className="btn btn-secondary btn-sm" onClick={() => { void refreshAccessibilityStatus() }}>I have enabled it</button>
+                    <button className="btn btn-primary btn-sm" onClick={() => { void requestAccessibility() }}>Open System Settings</button>
+                  </div>
+                )}
+            </div>
+          </div>
+          {!bothPermissionsGranted && (
+            <p className="meta" style={{ marginTop: 14, ['--i' as string]: 2 }}>
+              This screen updates by itself once both are on.
+            </p>
+          )}
+        </>
+      ),
+    },
 
-      <div className="mb-6 flex flex-col items-center gap-2">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-ink-35">Dictation key</span>
-        <SegmentedControl
-          options={[
-            { value: 'fn', label: 'Fn (Globe)' },
-            { value: 'right-option', label: 'Right Option' },
-          ]}
-          value={dictationKey}
-          onChange={chooseDictationKey}
-        />
-      </div>
+    // ── 9: Your keys ──
+    {
+      key: 'keys',
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">Setup</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Choose your dictation key</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 540 }}>
+              Orchestrate takes whichever one you don’t. Caps Lock is always Instruct.
+            </p>
+          </div>
+          <div style={{ marginTop: 18, ['--i' as string]: 1 }}>
+            <div className="seg">
+              <button aria-pressed={dictationKey === 'fn'} onClick={() => chooseDictationKey('fn')}>Fn (Globe)</button>
+              <button aria-pressed={dictationKey === 'right-option'} onClick={() => chooseDictationKey('right-option')}>Right Option</button>
+            </div>
+          </div>
+          <div className="card rows lead-key" style={{ marginTop: 16, width: 620, ['--i' as string]: 2 }}>
+            <div className="row"><kbd className="key">{dictateLabel}</kbd>
+              <div><p className="rtitle">Dictate</p><p className="rsub">Speak, and the text lands at your cursor.</p></div><span /></div>
+            <div className="row" style={{ opacity: instructionEnabled ? 1 : 0.55 }}>
+              <kbd className="key">{instructionEnabled ? instructLabel : 'Off'}</kbd>
+              <div><p className="rtitle">Instruct</p>
+                <p className="rsub">{instructionEnabled
+                  ? 'Select text first, then say what to change.'
+                  : 'Switched off — you can turn it back on in Settings → Triggers.'}</p></div><span /></div>
+            <div className="row"><kbd className="key">{orchestrateLabel}</kbd>
+              <div><p className="rtitle">Orchestrate</p><p className="rsub">Describe a job and hand it to your agent.</p></div><span /></div>
+          </div>
+          <div className="card" style={{ marginTop: 14, width: 620, padding: '14px 18px', ['--i' as string]: 3 }}>
+            <p className="p">
+              <strong>One macOS tweak:</strong> by default the Globe key shows emoji or
+              starts Apple Dictation, and unmute is using it for{' '}
+              <strong>{dictationKey === 'fn' ? 'dictation' : 'orchestrate'}</strong>. Open{' '}
+              <strong>System Settings → Keyboard</strong> and set{' '}
+              <strong>“Press 🌐 key to”</strong> → <strong>Do Nothing</strong> to free it.
+            </p>
+            <button className="btn btn-secondary btn-sm" style={{ marginTop: 10 }}
+              onClick={() => api().openKeyboardSettings?.()}>Open Keyboard Settings</button>
+          </div>
+        </>
+      ),
+    },
 
-      <div className="flex flex-col gap-3 mb-7 w-full max-w-[400px]">
-        <ShortcutCard keyLabel={dictateLabel} title="Dictate" description="Speak, and the text lands at your cursor." />
-        <ShortcutCard
-          keyLabel={instructionEnabled ? instructLabel : 'Off'}
-          title="Instruct"
-          description={instructionEnabled
-            ? 'Select text first, then say what to change.'
-            : 'Switched off — you can turn it back on in Settings → Triggers.'}
-          accent={instructionEnabled}
-        />
-        <ShortcutCard keyLabel={orchestrateLabel} title="Orchestrate" description="Describe a job and hand it to your agent." />
-      </div>
+    // ── 10: Connect an agent — optional, and deferrable ──
+    {
+      key: 'agent',
+      nextLabel: agentReady ? 'Continue' : 'I’ll do this later',
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">Setup</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Connect an agent</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 600 }}>
+              Orchestrate needs a coding agent already installed on your Mac — Claude Code
+              or Codex. It runs under your own account with your own credentials; unmute is
+              never in the credential path.
+            </p>
+          </div>
+          <div className="card rows lead-tile" style={{ marginTop: 20, width: 620, ['--i' as string]: 1 }}>
+            <div className="row">
+              <div className="tile tile-mute"><ClaudeMark size={14} /></div>
+              <div><p className="rtitle">Claude Code</p><p className="rsub">The CLI, running in your own terminal</p></div>
+              <span />
+            </div>
+            <div className="row">
+              <div className="tile tile-mute"><CodexMark size={14} /></div>
+              <div><p className="rtitle">Codex</p><p className="rsub">Same deal — your account, your credentials</p></div>
+              <span />
+            </div>
+          </div>
+          {agentReady ? (
+            <div className="rowf" style={{ gap: 10, marginTop: 16, ['--i' as string]: 2 }}>
+              <span className="badge badge-good"><i />An agent is connected</span>
+            </div>
+          ) : (
+            <>
+              <p className="meta" style={{ marginTop: 14, maxWidth: 600, ['--i' as string]: 2 }}>
+                Setup takes about a minute and is not one-way — you can add a second agent
+                months from now, and the same page is always there under Orchestrator when
+                a connection needs repairing.
+              </p>
+              {onOpenAgentSetup && (
+                <div style={{ marginTop: 14, ['--i' as string]: 3 }}>
+                  <button className="btn btn-secondary" onClick={onOpenAgentSetup}>Set it up now</button>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      ),
+    },
 
-      <div className="px-5 py-3 rounded-xl bg-warm-soft border border-warm/15 mb-7 max-w-[400px] text-left">
-        <p className="text-[12.5px] text-ink-60 leading-relaxed">
-          <span className="font-display font-bold text-warm">One macOS tweak:</span>{' '}
-          by default the Globe key shows emoji or starts Apple Dictation, and
-          unmute is using it for{' '}
-          <span className="font-semibold text-ink">
-            {dictationKey === 'fn' ? 'dictation' : 'orchestrate'}
-          </span>
-          . Open <span className="font-semibold text-ink">System Settings → Keyboard</span>{' '}
-          and set <span className="font-semibold text-ink">“Press 🌐 key to”</span> →{' '}
-          <span className="font-semibold text-ink">Do Nothing</span> to free it.
-        </p>
-        <button
-          onClick={() => api().openKeyboardSettings?.()}
-          className="mt-2 px-3 py-1.5 rounded-full border border-warm/25 text-[11px] font-semibold text-warm hover:bg-warm/[0.08] transition-all"
-        >
-          Open Keyboard Settings
-        </button>
-      </div>
-
-      <button onClick={next} className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[14px] hover:bg-accent-hover transition-all duration-200 shadow-sm hover:shadow-md">
-        Continue
-      </button>
-    </div>,
-
-    // ── Step 7: Connect an agent — optional, and deferrable ──
-    <div key="agent" className="flex flex-col items-center justify-center text-center animate-fade-up-in">
-      <h2 className="font-display text-[22px] font-bold text-ink mb-2 tracking-tight">Connect an agent</h2>
-      <p className="text-ink-60 text-[14px] mb-7 max-w-md leading-relaxed">
-        Orchestrate needs a coding agent already installed on your Mac — Claude
-        Code or Codex. It runs under your own account with your own credentials;
-        unmute is never in the credential path.
-      </p>
-
-      {agentReady ? (
-        <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-success-soft border border-success/15 mb-7">
-          <CheckDot />
-          <span className="text-success font-semibold text-[13px]">An agent is connected</span>
-        </div>
-      ) : (
-        <div className="px-4 py-3 rounded-xl bg-ink-07 mb-7 max-w-[420px] text-left">
-          <p className="text-[12.5px] text-ink-60 leading-relaxed">
-            Setup takes about a minute and is not one-way — you can add a second
-            agent months from now, and the same page is always there under
-            Orchestrator when a connection needs repairing.
+    // ── 11: Ready ──
+    {
+      key: 'ready',
+      nextLabel: 'Start using unmute',
+      node: (
+        <div className="stack" style={{ alignItems: 'flex-start', gap: 18 }}>
+          <div className="tile tile-good" style={{ width: 48, height: 48, borderRadius: 16, ['--i' as string]: 0 }}>
+            <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </div>
+          <h2 className="d1" style={{ ['--i' as string]: 1 }}>You’re set.</h2>
+          <p className="lead" style={{ maxWidth: 460, ['--i' as string]: 2 }}>
+            Hold your key and start talking. Tap the notch whenever something is waiting on you.
           </p>
+          <div className="card rows lead-key" style={{ width: 520, ['--i' as string]: 3 }}>
+            <div className="row"><kbd className="key">{dictateLabel}</kbd>
+              <div><p className="rtitle">Dictate anywhere</p></div>
+              <span className="badge badge-good">Ready</span></div>
+            <div className="row"><kbd className="key">{orchestrateLabel}</kbd>
+              <div><p className="rtitle">Speak into the pocket</p></div>
+              <span className="badge badge-good">Ready</span></div>
+          </div>
         </div>
-      )}
-
-      <div className="flex flex-col items-center gap-3">
-        {onOpenAgentSetup && !agentReady && (
-          <button
-            onClick={onOpenAgentSetup}
-            className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[14px] hover:bg-accent-hover transition-all duration-200 shadow-sm hover:shadow-md"
-          >
-            Set it up now
-          </button>
-        )}
-        <button
-          onClick={next}
-          className={agentReady
-            ? 'px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[14px] hover:bg-accent-hover transition-all duration-200 shadow-sm hover:shadow-md'
-            : 'px-8 py-3 rounded-full border border-border text-[13px] font-semibold text-ink-60 hover:bg-cream-mid hover:border-border-md transition-all duration-200'}
-        >
-          {agentReady ? 'Continue' : 'I’ll do this later'}
-        </button>
-      </div>
-    </div>,
-
-    // ── Step 8: Ready ──
-    <div key="ready" className="flex flex-col items-center justify-center text-center animate-fade-up-in">
-      <img src={unmuteLogo} alt="unmute" className="w-48 mb-8 animate-success-pop" />
-      <h2 className="font-display text-[22px] font-bold text-ink mb-3 tracking-tight">Ready.</h2>
-      <p className="text-ink-60 text-[16px] mb-10 max-w-sm leading-relaxed">
-        Press <Keycap>{dictateLabel}</Keycap> anywhere to dictate, or{' '}
-        <Keycap>{orchestrateLabel}</Keycap> to hand a job to your agent. The
-        notch will tell you how it is going.
-      </p>
-      <button onClick={onComplete} className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[16px] hover:bg-accent-hover transition-all duration-200 shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]">
-        Start using unmute
-      </button>
-    </div>,
+      ),
+    },
   ]
+
+  const current = screens[step]
 
   return (
     <Shell
       step={step}
-      total={steps.length}
+      total={screens.length}
       onBack={step > 0 ? () => setStep(step - 1) : undefined}
+      onNext={() => { if (step < screens.length - 1) setStep(step + 1); else onComplete() }}
+      nextLabel={current.nextLabel ?? 'Continue'}
+      nextDisabled={current.blocked}
     >
-      {steps[step]}
+      {current.node}
     </Shell>
   )
 }
 
 /* ─── What's new (decision D4) ─────────────────────────────────────────
  *
- * Users who finished the old flow are on version 1. Nine steps would be an
+ * Users who finished the old flow are on version 1. Twelve steps would be an
  * insult to someone already using the product daily, and skipping it entirely
- * would leave them never hearing about the two things that actually changed.
+ * would leave them never hearing about the things that actually changed.
  * Three screens, then straight into the app.
  */
 
@@ -616,243 +1351,74 @@ export function WhatsNew({ onComplete, onOpenAgentSetup }: OnboardingProps) {
     }).catch(() => {})
   }, [])
 
-  function next() {
-    if (step < screens.length - 1) setStep(step + 1)
-    else onComplete()
-  }
-
-  const screens = [
-    <div key="agents" className="flex flex-col items-center justify-center text-center animate-fade-up-in">
-      <h2 className="font-display text-[22px] font-bold text-ink mb-3 tracking-tight">unmute runs coding agents now</h2>
-      <p className="text-ink-60 text-[16px] mb-8 max-w-md leading-relaxed">
-        Tap <Keycap>{orchestrateLabel}</Keycap> — whichever key dictation is not
-        using — and describe a job out loud. A coding agent runs it on your Mac,
-        under your own account, and reports back. Dictation and Instruct work
-        exactly as they did.
-      </p>
-      <div className="flex flex-col items-center gap-3">
-        <button onClick={next} className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[14px] hover:bg-accent-hover transition-all duration-200 shadow-sm hover:shadow-md">
-          Continue
-        </button>
-        {onOpenAgentSetup && (
-          <button
-            onClick={onOpenAgentSetup}
-            className="text-[12.5px] text-ink-35 font-medium hover:text-ink-60 transition-colors"
-          >
-            Take me to agent setup
-          </button>
-        )}
-      </div>
-    </div>,
-
-    <div key="notch" className="flex flex-col items-center justify-center text-center animate-fade-up-in">
-      <NotchDiagram />
-      <h2 className="font-display text-[22px] font-bold text-ink mb-3 tracking-tight">The notch is where they live</h2>
-      <p className="text-ink-60 text-[16px] mb-8 max-w-md leading-relaxed">
-        Handed-off work does not appear in this window. It appears in the strip
-        at the top of your screen, around the camera — running, waiting on an
-        answer, or finished. Click it to expand.
-      </p>
-      <button onClick={next} className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[14px] hover:bg-accent-hover transition-all duration-200 shadow-sm hover:shadow-md">
-        Continue
-      </button>
-    </div>,
-
-    <div key="pricing" className="flex flex-col items-center justify-center text-center animate-fade-up-in">
-      <h2 className="font-display text-[22px] font-bold text-ink mb-3 tracking-tight">Pricing is a subscription</h2>
-      <p className="text-ink-60 text-[16px] mb-7 max-w-md leading-relaxed">
-        Pay-as-you-go credits are gone. Two flat tiers instead — Dictation at
-        $4.99/mo, or Unmute at $7.99/mo for dictation plus Orchestrate. Cancel
-        any time from Account.
-      </p>
-      <button onClick={onComplete} className="px-10 py-3.5 rounded-full bg-accent text-white font-display font-semibold text-[16px] hover:bg-accent-hover transition-all duration-200 shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]">
-        Got it
-      </button>
-    </div>,
+  const screens: { key: string; node: React.ReactNode; nextLabel?: string }[] = [
+    {
+      key: 'agents',
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">What’s new</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>unmute runs coding agents now</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 600 }}>
+              Tap {orchestrateLabel} — whichever key dictation is not using — and describe a
+              job out loud. A coding agent runs it on your Mac, under your own account, and
+              reports back. Dictation and Instruct work exactly as they did.
+            </p>
+          </div>
+          {onOpenAgentSetup && (
+            <div style={{ marginTop: 16, ['--i' as string]: 1 }}>
+              <button className="btn btn-secondary" onClick={onOpenAgentSetup}>Take me to agent setup</button>
+            </div>
+          )}
+        </>
+      ),
+    },
+    {
+      key: 'pocket',
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">What’s new</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Tap the notch. Answer without leaving.</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 640 }}>
+              Handed-off work lives in the strip at the top of your screen. Tap it, step
+              through with ‹ › until the task you mean is on the card, hold {orchestrateLabel},
+              and your words land in that terminal.
+            </p>
+          </div>
+          <div style={{ marginTop: 14, ['--i' as string]: 1 }}><PocketDemo orchestrateLabel={orchestrateLabel} /></div>
+        </>
+      ),
+    },
+    {
+      key: 'pricing',
+      nextLabel: 'Got it',
+      node: (
+        <>
+          <div style={{ ['--i' as string]: 0 }}>
+            <span className="eyebrow">What’s new</span>
+            <h2 className="d2" style={{ marginTop: 8 }}>Pricing is a subscription</h2>
+            <p className="lead" style={{ marginTop: 12, maxWidth: 600 }}>
+              Pay-as-you-go credits are gone. Two flat tiers instead — Dictation at $4.99/mo,
+              or Unmute at $7.99/mo for dictation plus Orchestrate. Cancel any time from Account.
+            </p>
+          </div>
+        </>
+      ),
+    },
   ]
+
+  const current = screens[step]
 
   return (
     <Shell
       step={step}
       total={screens.length}
       onBack={step > 0 ? () => setStep(step - 1) : undefined}
+      onNext={() => { if (step < screens.length - 1) setStep(step + 1); else onComplete() }}
+      nextLabel={current.nextLabel ?? 'Continue'}
     >
-      {screens[step]}
+      {current.node}
     </Shell>
-  )
-}
-
-/* ─── Shared chrome ─── */
-
-function Shell({ step, total, onBack, children }: {
-  step: number
-  total: number
-  /** Absent on the first screen; otherwise steps one back. The old flow had no
-   *  way back between STEPS — its single "← Back to sign in" only undid a
-   *  step-local toggle — so a user who wanted to re-read an earlier screen had
-   *  to quit and start the whole flow again. */
-  onBack?: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <div className="h-screen bg-cream flex flex-col">
-      {/* Titlebar drag region */}
-      <div className="titlebar-drag absolute top-0 left-0 right-0 h-8" />
-
-      {/* Progress bar */}
-      <div className="flex gap-1.5 px-10 pt-10">
-        {Array.from({ length: total }, (_, i) => (
-          <div key={i} className="h-[3px] flex-1 rounded-full overflow-hidden bg-ink-07">
-            <div className={`h-full rounded-full transition-all duration-500 ease-out ${i <= step ? 'bg-accent w-full' : 'w-0'}`} />
-          </div>
-        ))}
-      </div>
-
-      {/* Step counter + back */}
-      <div className="px-10 mt-4 flex items-center gap-3">
-        <span className="text-[11px] text-ink-35 font-medium">
-          {step + 1} of {total}
-        </span>
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="titlebar-no-drag text-[11px] text-ink-35 font-medium hover:text-ink-60 transition-colors"
-          >
-            ← Back
-          </button>
-        )}
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 flex items-center justify-center px-10 overflow-y-auto py-6">
-        {children}
-      </div>
-    </div>
-  )
-}
-
-function Keycap({ children }: { children: React.ReactNode }) {
-  return (
-    <kbd className="inline-flex px-2 py-1 rounded-lg bg-gradient-to-b from-[#2E2A25] to-ink text-[12.5px] font-bold text-white/90 border border-black/50 shadow-[0_2px_0_rgba(0,0,0,0.55),0_1px_3px_rgba(0,0,0,0.25)]">
-      {children}
-    </kbd>
-  )
-}
-
-function CheckDot() {
-  return (
-    <div className="w-5 h-5 rounded-full bg-success flex items-center justify-center shrink-0">
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="20 6 9 17 4 12" />
-      </svg>
-    </div>
-  )
-}
-
-/** A small picture of the top of a screen with the notch mass filled in — the
- *  surface has to be recognisable before the words about it mean anything. */
-function NotchDiagram() {
-  return (
-    <div className="w-[220px] mb-6">
-      <div className="rounded-t-xl border border-b-0 border-border bg-surface-2 h-[74px] relative overflow-hidden">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 h-[22px] w-[112px] rounded-b-[11px] bg-ink flex items-center justify-center gap-1.5">
-          <span className="w-[5px] h-[5px] rounded-full bg-accent" />
-          <span className="text-[10px] font-semibold text-white/80">running</span>
-        </div>
-      </div>
-      <div className="h-[6px] rounded-b-xl bg-cream-dark border border-t-0 border-border" />
-    </div>
-  )
-}
-
-function FeatureCard({ keyLabel, title, description, muted }: {
-  keyLabel: string
-  title: string
-  description: string
-  muted?: boolean
-}) {
-  return (
-    <div className={`flex items-start gap-4 p-4 rounded-2xl border border-border bg-surface-2 text-left ${muted ? 'opacity-60' : ''}`}>
-      <div className="min-w-[62px] h-11 px-2 rounded-xl bg-accent/[0.06] flex items-center justify-center shrink-0">
-        <span className="text-accent font-mono text-[13px] font-bold whitespace-nowrap">{keyLabel}</span>
-      </div>
-      <div>
-        <p className="text-[14px] font-semibold text-ink">{title}</p>
-        <p className="text-[12.5px] text-ink-60 mt-0.5 leading-relaxed">{description}</p>
-      </div>
-    </div>
-  )
-}
-
-function Bullet({ lead, text }: { lead?: string; text: string }) {
-  return (
-    <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-surface-2 border border-border">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-success shrink-0 mt-0.5">
-        <polyline points="20 6 9 17 4 12" />
-      </svg>
-      <span className="text-[12.5px] text-ink-60 leading-relaxed">
-        {lead && <span className="font-semibold text-ink">{lead}</span>}
-        {text}
-      </span>
-    </div>
-  )
-}
-
-function PlanCard({ name, price, tagline, recommended, busy, signedIn, onChoose }: {
-  name: string
-  price: string
-  tagline: string
-  recommended?: boolean
-  busy: boolean
-  signedIn: boolean
-  onChoose: () => void
-}) {
-  return (
-    <div className={`flex items-center gap-4 p-4 rounded-2xl border text-left ${recommended ? 'border-accent/40 bg-accent/[0.04]' : 'border-border bg-surface-2'}`}>
-      <div className="flex-1 min-w-0">
-        <p className="text-[14px] font-semibold text-ink flex items-center gap-2">
-          {name}
-          {recommended && (
-            <span className="px-1.5 py-[1px] rounded-full bg-accent/12 text-[10px] font-bold tracking-wider uppercase text-accent">
-              Recommended
-            </span>
-          )}
-        </p>
-        <p className="text-[12.5px] text-ink-60 mt-0.5 leading-relaxed">{tagline}</p>
-      </div>
-      <div className="flex flex-col items-end gap-1.5 shrink-0">
-        <span className="text-[13px] font-bold text-ink tabular-nums">{price}</span>
-        <button
-          onClick={onChoose}
-          disabled={busy}
-          className={`px-3.5 py-1.5 rounded-full text-[11px] font-semibold transition-all ${
-            busy
-              ? 'bg-ink-07 text-ink-35 cursor-wait'
-              : 'bg-ink text-white hover:opacity-90'
-          }`}
-        >
-          {busy ? 'Waiting…' : signedIn ? 'Choose' : 'Sign in'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function ShortcutCard({ keyLabel, title, description, accent }: {
-  keyLabel: string
-  title: string
-  description: string
-  accent?: boolean
-}) {
-  return (
-    <div className="flex items-center gap-4 p-4 rounded-2xl border border-border bg-surface-2 text-left">
-      <div className={`min-w-[62px] h-12 px-2 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${accent ? 'bg-accent' : 'bg-cream-mid border border-border'}`}>
-        <span className={`font-mono text-[13px] font-bold whitespace-nowrap ${accent ? 'text-white' : 'text-ink'}`}>{keyLabel}</span>
-      </div>
-      <div>
-        <p className="text-[14px] font-semibold text-ink">{title}</p>
-        <p className="text-[12.5px] text-ink-35 mt-0.5">{description}</p>
-      </div>
-    </div>
   )
 }
