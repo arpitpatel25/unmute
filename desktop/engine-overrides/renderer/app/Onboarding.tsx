@@ -163,7 +163,7 @@ const OB_CSS = `
   background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:13.5px;
   -webkit-font-smoothing:antialiased;
 }
-.ob *{box-sizing:border-box}
+.ob *{box-sizing:border-box;margin:0;padding:0}
 .ob .track{position:absolute;top:0;left:0;right:0;height:2px;background:rgba(24,22,20,.08);z-index:9}
 .ob .track span{display:block;height:100%;background:var(--act);width:8%;transition:width .72s var(--calm)}
 .ob .tbar{height:38px;flex-shrink:0;display:flex;align-items:center;justify-content:flex-end;padding:0 20px}
@@ -176,7 +176,7 @@ const OB_CSS = `
    of empty paper down the right. Every direct child is now the same centred
    700px column, which keeps one shared left edge for headings and artwork
    while the margins stay even at any window width. */
-.ob .screen > *{width:100%;max-width:700px;margin-left:auto;margin-right:auto;
+.ob .screen > *{width:100%;max-width:820px;margin-left:auto;margin-right:auto;
   animation:ob-in .66s var(--expo) both;animation-delay:calc(var(--i,0) * 70ms)}
 @keyframes ob-in{from{opacity:0;transform:translateY(16px) scale(.99)}to{opacity:1;transform:none}}
 .ob .foot{flex-shrink:0;padding:16px 56px 22px;display:flex;align-items:center;gap:12px}
@@ -247,13 +247,13 @@ const OB_CSS = `
 
 /* ── the Mac ── */
 .ob .mac{width:594px;padding:0 17px;user-select:none}
-.ob .macwrap{--ms:.62;width:calc(594px * var(--ms));height:calc(290px * var(--ms));flex-shrink:0}
+.ob .macwrap{--ms:.80;width:calc(594px * var(--ms));height:calc(290px * var(--ms));flex-shrink:0}
 .ob .macwrap .mac{transform:scale(var(--ms));transform-origin:top left}
 /* the capture screens put the machine and the payload side by side. Stacked,
    they ran 112px past the bottom of a 900x640 window and put the attachment
    card — the entire point of the screen — below the fold. */
 .ob .demo{display:flex;align-items:flex-start;gap:18px}
-.ob .demo .pane{flex:1;min-width:0}
+.ob .demo .pane{flex:1;min-width:300px}
 .ob .demo .cap{margin-top:10px}
 .ob .lid{background:#0e0d0c;border-radius:15px;padding:8px 8px 12px;
   box-shadow:0 22px 44px -18px rgba(24,22,20,.5),inset 0 1px 0 rgba(255,255,255,.1)}
@@ -498,20 +498,20 @@ function PocketDemo({ orchestrateLabel }: { orchestrateLabel: string }) {
     setLines(BASE_LINES); setOpen(false); setAt(0); setHot(false); setBeam(null)
     setCaption('Tap the notch to open it.')
     run([
-      [1300, () => { setOpen(true); setCaption('The card is on api-gateway — everything else dims.') }],
-      [2000, () => { setCaption(`Hold ${orchestrateLabel} and talk to it.`) }],
-      [1300, () => { setHot(true); setBeam('api-gateway'); setCaption(`Holding ${orchestrateLabel} — routing into api-gateway.`) }],
-      [1900, () => push('api-gateway', '› yes, and run the tests', 'you')],
+      [1000, () => { setOpen(true); setCaption('The card is on api-gateway — everything else dims.') }],
+      [1500, () => { setCaption(`Hold ${orchestrateLabel} and talk to it.`) }],
+      [1000, () => { setHot(true); setBeam('api-gateway'); setCaption(`Holding ${orchestrateLabel} — routing into api-gateway.`) }],
+      [1450, () => push('api-gateway', '› yes, and run the tests', 'you')],
       [900, () => { setHot(false); setBeam(null) }],
       [900, () => { push('api-gateway', '✓ patch applied', 'go'); setCaption('It landed in api-gateway.') }],
       [1000, () => push('api-gateway', 'running 42 tests…')],
-      [2200, () => { setAt(1); setCaption('Now step the card to web-ui — same key, different task.') }],
-      [2000, () => { setHot(true); setBeam('web-ui'); setCaption(`Holding ${orchestrateLabel} — routing into web-ui.`) }],
-      [1900, () => push('web-ui', '› collapse at 1024, keep the icons', 'you')],
+      [1700, () => { setAt(1); setCaption('Now step the card to web-ui — same key, different task.') }],
+      [1500, () => { setHot(true); setBeam('web-ui'); setCaption(`Holding ${orchestrateLabel} — routing into web-ui.`) }],
+      [1450, () => push('web-ui', '› collapse at 1024, keep the icons', 'you')],
       [900, () => { setHot(false); setBeam(null) }],
       [900, () => { push('web-ui', '✓ set to 1024px', 'go'); setCaption('Same key — it landed in web-ui instead.') }],
-      [2600, () => { setOpen(false); setCaption('Esc closes it — your voice goes back to normal routing.') }],
-      [3000, () => playRef.current()],
+      [2000, () => { setOpen(false); setCaption('Esc closes it — your voice goes back to normal routing.') }],
+      [2200, () => playRef.current()],
     ])
   }, [orchestrateLabel, run])
   playRef.current = play
@@ -633,10 +633,10 @@ function LinkDemo() {
     setPhase(0)
     // reading time, not animation time — the highlight landing on the URL is
     // the whole explanation and it needs a beat to be noticed
-    const steps = [1100, 1500, 900, 1200]
+    const steps = [850, 1150, 700, 950]
     let t = 0
     steps.forEach((d, i) => { t += d; timers.current.push(window.setTimeout(() => setPhase(i + 1), t)) })
-    timers.current.push(window.setTimeout(() => playRef.current(), t + 3400))
+    timers.current.push(window.setTimeout(() => playRef.current(), t + 2400))
   }, [])
   playRef.current = play
   useEffect(() => { play(); return () => { timers.current.forEach((t) => window.clearTimeout(t)) } }, [play])
@@ -693,10 +693,10 @@ function ShotDemo() {
     setPhase(0)
     // the drag has to be watchable, and the attachment appearing BEFORE the
     // sentence resumes is the point of the screen — neither survives a rush
-    const steps = [1100, 1600, 1100, 700, 1200]
+    const steps = [850, 1250, 850, 550, 950]
     let t = 0
     steps.forEach((d, i) => { t += d; timers.current.push(window.setTimeout(() => setPhase(i + 1), t)) })
-    timers.current.push(window.setTimeout(() => playRef.current(), t + 3400))
+    timers.current.push(window.setTimeout(() => playRef.current(), t + 2400))
   }, [])
   playRef.current = play
   useEffect(() => { play(); return () => { timers.current.forEach((t) => window.clearTimeout(t)) } }, [play])
@@ -971,7 +971,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
               Hold a key. Talk. Let go. There is nothing to click and nothing to switch to.
             </p>
           </div>
-          <div className="card rows lead-key" style={{ marginTop: 20, width: 620, ['--i' as string]: 1 }}>
+          <div className="card rows lead-key" style={{ marginTop: 20, ['--i' as string]: 1 }}>
             <div className="row"><kbd className="key">{dictateLabel}</kbd>
               <div><p className="rtitle">Dictate</p>
                 <p className="rsub">Tap it, speak, tap again. Raw text lands exactly where your cursor is, in any app.</p></div>
@@ -1017,9 +1017,8 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
             <span className="eyebrow">The pocket</span>
             <h2 className="d2" style={{ marginTop: 8 }}>Tap the notch. Answer without leaving.</h2>
             <p className="lead" style={{ marginTop: 12, maxWidth: 640 }}>
-              One task on the card at a time — step through with ‹ › until the one you
-              mean is showing, then hold {orchestrateLabel} and talk to it. Escape closes
-              the pocket and your voice goes back to normal routing.
+              One task on the card at a time. Step through with ‹ › until the one you mean
+              is showing, then hold {orchestrateLabel} and talk to it.
             </p>
           </div>
           <div style={{ marginTop: 14, ['--i' as string]: 1 }}><PocketDemo orchestrateLabel={orchestrateLabel} /></div>
@@ -1077,7 +1076,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
               Written plainly, because the honest answer is not “nothing”.
             </p>
           </div>
-          <div className="card rows lead-tile" style={{ marginTop: 20, width: 640, ['--i' as string]: 1 }}>
+          <div className="card rows lead-tile" style={{ marginTop: 20, ['--i' as string]: 1 }}>
             <Fact lead="Dictation audio" text="goes to our transcription service and is discarded the moment the text comes back. We keep a timestamp, a duration and the model name so we can bill you — never the audio, never the text." />
             <Fact lead="Orchestrator tasks never reach us." text="The agent runs on your Mac, under your own account, with your own credentials. unmute passes it your words and reads its status back." />
             <Fact lead="On-device mode sends nothing at all." text="No account, no network." />
@@ -1099,7 +1098,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
               You are already subscribed. Nothing to do here.
             </p>
           </div>
-          <div className="card rows" style={{ marginTop: 20, width: 640, ['--i' as string]: 1 }}>
+          <div className="card rows" style={{ marginTop: 20, ['--i' as string]: 1 }}>
             <div className="row">
               <div><p className="rtitle">{subscription.plan === 'unmute' ? 'On the Unmute plan' : 'On the Dictation plan'}</p>
                 <p className="rsub">Change or cancel it any time from Account.</p></div>
@@ -1116,7 +1115,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
               Cloud transcription is a subscription. Cancel any time from Account.
             </p>
           </div>
-          <div className="card rows" style={{ marginTop: 20, width: 640, ['--i' as string]: 1 }}>
+          <div className="card rows" style={{ marginTop: 20, ['--i' as string]: 1 }}>
             {PLANS.map((tier) => (
               <div className="row" key={tier.plan}>
                 <div><p className="rtitle">{tier.name}</p><p className="rsub">{tier.tagline}</p></div>
@@ -1170,7 +1169,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
               you — it does nothing at all.
             </p>
           </div>
-          <div className="card rows lead-tile" style={{ marginTop: 20, width: 640, ['--i' as string]: 1 }}>
+          <div className="card rows lead-tile" style={{ marginTop: 20, ['--i' as string]: 1 }}>
             <div className="row">
               <div className={micGranted ? 'tile tile-good' : 'tile tile-mute'}>
                 {micGranted ? <Check /> : (
@@ -1241,7 +1240,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
             <span className="eyebrow">Setup</span>
             <h2 className="d2" style={{ marginTop: 8 }}>Choose your dictation key</h2>
             <p className="lead" style={{ marginTop: 12, maxWidth: 540 }}>
-              Orchestrate takes whichever one you don’t. Caps Lock is always Instruct.
+              Orchestrate takes the other. Caps Lock is always Instruct.
             </p>
           </div>
           <div style={{ marginTop: 18, ['--i' as string]: 1 }}>
@@ -1250,7 +1249,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
               <button aria-pressed={dictationKey === 'right-option'} onClick={() => chooseDictationKey('right-option')}>Right Option</button>
             </div>
           </div>
-          <div className="card rows lead-key" style={{ marginTop: 16, width: 620, ['--i' as string]: 2 }}>
+          <div className="card rows lead-key" style={{ marginTop: 16, ['--i' as string]: 2 }}>
             <div className="row"><kbd className="key">{dictateLabel}</kbd>
               <div><p className="rtitle">Dictate</p><p className="rsub">Speak, and the text lands at your cursor.</p></div><span /></div>
             <div className="row" style={{ opacity: instructionEnabled ? 1 : 0.55 }}>
@@ -1262,16 +1261,16 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
             <div className="row"><kbd className="key">{orchestrateLabel}</kbd>
               <div><p className="rtitle">Orchestrate</p><p className="rsub">Describe a job and hand it to your agent.</p></div><span /></div>
           </div>
-          <div className="card" style={{ marginTop: 14, width: 620, padding: '14px 18px', ['--i' as string]: 3 }}>
-            <p className="p">
-              <strong>One macOS tweak:</strong> by default the Globe key shows emoji or
-              starts Apple Dictation, and unmute is using it for{' '}
-              <strong>{dictationKey === 'fn' ? 'dictation' : 'orchestrate'}</strong>. Open{' '}
-              <strong>System Settings → Keyboard</strong> and set{' '}
-              <strong>“Press 🌐 key to”</strong> → <strong>Do Nothing</strong> to free it.
-            </p>
-            <button className="btn btn-secondary btn-sm" style={{ marginTop: 10 }}
-              onClick={() => api().openKeyboardSettings?.()}>Open Keyboard Settings</button>
+          <div className="card" style={{ marginTop: 14, padding: '14px 18px', ['--i' as string]: 3 }}>
+            <div className="rowf" style={{ gap: 16 }}>
+              <p className="p" style={{ flex: 1 }}>
+                <strong>One macOS tweak:</strong> the Globe key shows emoji by default, and
+                unmute is using it for <strong>{dictationKey === 'fn' ? 'dictation' : 'orchestrate'}</strong>.
+                Set <strong>“Press 🌐 key to” → Do Nothing</strong> in Keyboard settings.
+              </p>
+              <button className="btn btn-secondary btn-sm" style={{ flexShrink: 0 }}
+                onClick={() => api().openKeyboardSettings?.()}>Open Keyboard Settings</button>
+            </div>
           </div>
         </>
       ),
@@ -1292,7 +1291,7 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
               never in the credential path.
             </p>
           </div>
-          <div className="card rows lead-tile" style={{ marginTop: 20, width: 620, ['--i' as string]: 1 }}>
+          <div className="card rows lead-tile" style={{ marginTop: 20, ['--i' as string]: 1 }}>
             <div className="row">
               <div className="tile tile-mute"><ClaudeMark size={14} /></div>
               <div><p className="rtitle">Claude Code</p><p className="rsub">The CLI, running in your own terminal</p></div>
