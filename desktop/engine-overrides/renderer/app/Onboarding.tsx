@@ -170,8 +170,14 @@ const OB_CSS = `
 .ob .stepno{font:600 10.5px var(--sans);letter-spacing:.11em;color:var(--ink-4)}
 .ob .stage{flex:1;position:relative;overflow:hidden}
 .ob .screen{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:safe center;
-  padding:14px 56px 10px;overflow-y:auto;animation:ob-in .6s var(--expo) both}
-.ob .screen > *{animation:ob-in .66s var(--expo) both;animation-delay:calc(var(--i,0) * 70ms)}
+  padding:14px 40px 10px;overflow-y:auto;animation:ob-in .6s var(--expo) both}
+/* THE COLUMN IS CENTRED, ITS CONTENTS ARE NOT. The app window is wider than
+   the layout needs, so left-aligning against the window gutter stranded a band
+   of empty paper down the right. Every direct child is now the same centred
+   700px column, which keeps one shared left edge for headings and artwork
+   while the margins stay even at any window width. */
+.ob .screen > *{width:100%;max-width:700px;margin-left:auto;margin-right:auto;
+  animation:ob-in .66s var(--expo) both;animation-delay:calc(var(--i,0) * 70ms)}
 @keyframes ob-in{from{opacity:0;transform:translateY(16px) scale(.99)}to{opacity:1;transform:none}}
 .ob .foot{flex-shrink:0;padding:16px 56px 22px;display:flex;align-items:center;gap:12px}
 .ob .foot .sp{flex:1}
@@ -238,14 +244,17 @@ const OB_CSS = `
 .ob .welcome{width:100%;max-width:520px;margin:0 auto;display:flex;flex-direction:column;
   align-items:center;text-align:center}
 .ob .welcome .rule{width:40px;height:2px;background:var(--ink-4);border-radius:2px;margin:24px 0}
-.ob .wsteps{display:flex;align-items:center;gap:12px;margin-top:28px;padding-top:18px;
-  border-top:1px solid var(--line);width:100%;justify-content:center}
-.ob .wsteps i{width:3px;height:3px;border-radius:50%;background:var(--ink-4);display:block}
 
 /* ── the Mac ── */
-.ob .mac{width:560px;user-select:none}
-.ob .macwrap{width:420px;height:222px}
-.ob .macwrap .mac{transform:scale(.75);transform-origin:top left}
+.ob .mac{width:594px;padding:0 17px;user-select:none}
+.ob .macwrap{--ms:.62;width:calc(594px * var(--ms));height:calc(290px * var(--ms));flex-shrink:0}
+.ob .macwrap .mac{transform:scale(var(--ms));transform-origin:top left}
+/* the capture screens put the machine and the payload side by side. Stacked,
+   they ran 112px past the bottom of a 900x640 window and put the attachment
+   card — the entire point of the screen — below the fold. */
+.ob .demo{display:flex;align-items:flex-start;gap:18px}
+.ob .demo .pane{flex:1;min-width:0}
+.ob .demo .cap{margin-top:10px}
 .ob .lid{background:#0e0d0c;border-radius:15px;padding:8px 8px 12px;
   box-shadow:0 22px 44px -18px rgba(24,22,20,.5),inset 0 1px 0 rgba(255,255,255,.1)}
 .ob .scr{position:relative;height:262px;border-radius:8px;overflow:hidden;
@@ -332,7 +341,7 @@ const OB_CSS = `
   transition:opacity .3s}
 .ob .beam.on{opacity:1}
 .ob .beam path{fill:none;stroke:var(--ink);stroke-width:1.7;stroke-dasharray:5 4;
-  animation:ob-march .65s linear infinite}
+  animation:ob-march 1.1s linear infinite}
 @keyframes ob-march{to{stroke-dashoffset:-18}}
 
 /* a document on the fake screen, with text you watch get selected */
@@ -480,25 +489,32 @@ function PocketDemo({ orchestrateLabel }: { orchestrateLabel: string }) {
   const push = (name: string, text: string, cls?: string) =>
     setLines((prev) => ({ ...prev, [name]: [...prev[name], { text, cls }].slice(-5) }))
 
+  // PACE. Every beat here is a sentence the viewer has to read before the next
+  // one lands, so the timings are reading time, not animation time. The loop
+  // restarts through a ref rather than a self-reference so the closure cannot
+  // go stale when the key label changes underneath it.
+  const playRef = useRef<() => void>(() => {})
   const play = useCallback(() => {
     setLines(BASE_LINES); setOpen(false); setAt(0); setHot(false); setBeam(null)
     setCaption('Tap the notch to open it.')
     run([
-      [800, () => { setOpen(true); setCaption('The card is on api-gateway — everything else dims.') }],
-      [1200, () => { setAt(1); setCaption('Step the card to web-ui.') }],
-      [900, () => { setAt(0); setCaption(`Holding ${orchestrateLabel} — routing into api-gateway.`); setHot(true); setBeam('api-gateway') }],
-      [1400, () => push('api-gateway', '› yes, and run the tests', 'you')],
-      [520, () => { setHot(false); setBeam(null) }],
-      [600, () => { push('api-gateway', '✓ patch applied', 'go'); setCaption('It landed in api-gateway.') }],
-      [700, () => push('api-gateway', 'running 42 tests…')],
-      [1400, () => { setAt(1); setCaption('Now step the card to web-ui.') }],
-      [1100, () => { setCaption(`Holding ${orchestrateLabel} — routing into web-ui.`); setHot(true); setBeam('web-ui') }],
-      [1400, () => push('web-ui', '› collapse at 1024, keep the icons', 'you')],
-      [520, () => { setHot(false); setBeam(null) }],
-      [600, () => { push('web-ui', '✓ set to 1024px', 'go'); setCaption('Same key — it landed in web-ui instead.') }],
-      [1600, () => { setOpen(false); setCaption('Esc closes it — your voice goes back to normal routing.') }],
+      [1300, () => { setOpen(true); setCaption('The card is on api-gateway — everything else dims.') }],
+      [2000, () => { setCaption(`Hold ${orchestrateLabel} and talk to it.`) }],
+      [1300, () => { setHot(true); setBeam('api-gateway'); setCaption(`Holding ${orchestrateLabel} — routing into api-gateway.`) }],
+      [1900, () => push('api-gateway', '› yes, and run the tests', 'you')],
+      [900, () => { setHot(false); setBeam(null) }],
+      [900, () => { push('api-gateway', '✓ patch applied', 'go'); setCaption('It landed in api-gateway.') }],
+      [1000, () => push('api-gateway', 'running 42 tests…')],
+      [2200, () => { setAt(1); setCaption('Now step the card to web-ui — same key, different task.') }],
+      [2000, () => { setHot(true); setBeam('web-ui'); setCaption(`Holding ${orchestrateLabel} — routing into web-ui.`) }],
+      [1900, () => push('web-ui', '› collapse at 1024, keep the icons', 'you')],
+      [900, () => { setHot(false); setBeam(null) }],
+      [900, () => { push('web-ui', '✓ set to 1024px', 'go'); setCaption('Same key — it landed in web-ui instead.') }],
+      [2600, () => { setOpen(false); setCaption('Esc closes it — your voice goes back to normal routing.') }],
+      [3000, () => playRef.current()],
     ])
   }, [orchestrateLabel, run])
+  playRef.current = play
 
   useEffect(() => { play(); return clear }, [play])
 
@@ -589,7 +605,7 @@ function PocketDemo({ orchestrateLabel }: { orchestrateLabel: string }) {
         <div className="base" />
       </div>
 
-      <div className="cap" style={{ width: 560 }}>
+      <div className="cap" style={{ width: 594 }}>
         <kbd className={`key${hot ? ' down' : ''}`} style={{ minWidth: 104 }}>{orchestrateLabel}</kbd>
         <span className="txt">{caption}</span>
         <button className="btn btn-quiet btn-sm" style={{ marginLeft: 'auto' }} onClick={play}>Replay</button>
@@ -606,42 +622,55 @@ function PocketDemo({ orchestrateLabel }: { orchestrateLabel: string }) {
  * the text. Both are what `insertRender.ts` actually does.
  */
 
+const LINK_CAPS = ['Listening…', 'Listening…', 'Selecting the link', '⌘C — copied', 'Spliced in where you copied it']
+
 function LinkDemo() {
   const [phase, setPhase] = useState(0)
   const timers = useRef<number[]>([])
+  const playRef = useRef<() => void>(() => {})
   const play = useCallback(() => {
     timers.current.forEach((t) => window.clearTimeout(t)); timers.current = []
     setPhase(0)
-    const steps = [700, 900, 500, 700]
+    // reading time, not animation time — the highlight landing on the URL is
+    // the whole explanation and it needs a beat to be noticed
+    const steps = [1100, 1500, 900, 1200]
     let t = 0
     steps.forEach((d, i) => { t += d; timers.current.push(window.setTimeout(() => setPhase(i + 1), t)) })
+    timers.current.push(window.setTimeout(() => playRef.current(), t + 3400))
   }, [])
+  playRef.current = play
   useEffect(() => { play(); return () => { timers.current.forEach((t) => window.clearTimeout(t)) } }, [play])
 
   return (
-    <div className="stack" style={{ alignItems: 'flex-start', gap: 12 }}>
-      <div className="macwrap"><div className="mac"><div className="lid"><div className="scr">
-        <div className="mbar"><b>Linear</b><span>File</span><span>Edit</span>
-          <div className="r"><span>Wi-Fi</span><span>9:41</span></div></div>
-        <div className="notch"><span className="fdot" /><span className="wave"><b /><b /><b /><b /><b /></span></div>
-        <div className="docwin">
-          <div className="dh"><i /><i /><i /><b>UN-214 — sidebar collapse</b></div>
-          <div className="dc">
-            <div className="ln m" /><div className="ln s" />
-            <div style={{ margin: '10px 0' }}>
-              <span className={`hl${phase >= 2 && phase < 4 ? ' on' : ''}`}>linear.app/unmute/issue/UN-214</span>
+    <div className="demo">
+      <div>
+        <div className="macwrap"><div className="mac"><div className="lid"><div className="scr">
+          <div className="mbar"><b>Linear</b><span>File</span><span>Edit</span>
+            <div className="r"><span>Wi-Fi</span><span>9:41</span></div></div>
+          <div className="notch"><span className="fdot" /><span className="wave"><b /><b /><b /><b /><b /></span></div>
+          <div className="docwin">
+            <div className="dh"><i /><i /><i /><b>UN-214 — sidebar collapse</b></div>
+            <div className="dc">
+              <div className="ln m" /><div className="ln s" />
+              <div style={{ margin: '10px 0' }}>
+                <span className={`hl${phase >= 2 && phase < 4 ? ' on' : ''}`}>linear.app/unmute/issue/UN-214</span>
+              </div>
+              <div className="ln m" /><div className="ln s" />
             </div>
-            <div className="ln m" /><div className="ln s" />
           </div>
+          <div className={`copychip${phase === 3 ? ' on' : ''}`} style={{ left: 196, top: 128 }}>⌘C</div>
+        </div></div><div className="base" /></div></div>
+        <div className="cap">
+          <kbd className="key">⌘C</kbd>
+          <span className="txt">{LINK_CAPS[phase]}</span>
+          <button className="btn btn-quiet btn-sm" style={{ marginLeft: 'auto' }} onClick={play}>Replay</button>
         </div>
-        <div className={`copychip${phase === 3 ? ' on' : ''}`} style={{ left: 196, top: 128 }}>⌘C</div>
-      </div></div><div className="base" /></div></div>
+      </div>
 
-      <div className="pane" style={{ width: 420 }}>
+      <div className="pane">
         <div className="ph">
           <span className="mic"><span className="d" /><span className="wave"><b /><b /><b /><b /><b /></span></span>
           What the task receives
-          <button className="btn btn-quiet btn-sm" style={{ marginLeft: 'auto', height: 22, padding: '0 9px', fontSize: 10.5 }} onClick={play}>Replay</button>
         </div>
         <div className="pb"><div className="payload">
           {phase >= 1 && 'the spec is at'}
@@ -653,41 +682,54 @@ function LinkDemo() {
   )
 }
 
+const SHOT_CAPS = ['Listening…', 'Listening…', 'Dragging the region', 'Captured', 'Filed as an attachment', 'The sentence carries on']
+
 function ShotDemo() {
   const [phase, setPhase] = useState(0)
   const timers = useRef<number[]>([])
+  const playRef = useRef<() => void>(() => {})
   const play = useCallback(() => {
     timers.current.forEach((t) => window.clearTimeout(t)); timers.current = []
     setPhase(0)
-    const steps = [700, 1100, 800, 400, 700]
+    // the drag has to be watchable, and the attachment appearing BEFORE the
+    // sentence resumes is the point of the screen — neither survives a rush
+    const steps = [1100, 1600, 1100, 700, 1200]
     let t = 0
     steps.forEach((d, i) => { t += d; timers.current.push(window.setTimeout(() => setPhase(i + 1), t)) })
+    timers.current.push(window.setTimeout(() => playRef.current(), t + 3400))
   }, [])
+  playRef.current = play
   useEffect(() => { play(); return () => { timers.current.forEach((t) => window.clearTimeout(t)) } }, [play])
 
   const dragging = phase >= 2 && phase < 4
   return (
-    <div className="stack" style={{ alignItems: 'flex-start', gap: 12 }}>
-      <div className="macwrap"><div className="mac"><div className="lid"><div className="scr">
-        <div className="mbar"><b>Safari</b><span>File</span><span>Edit</span>
-          <div className="r"><span>Wi-Fi</span><span>9:41</span></div></div>
-        <div className="notch"><span className="fdot" /><span className="wave"><b /><b /><b /><b /><b /></span></div>
-        <div className="docwin">
-          <div className="dh"><i /><i /><i /><b>checkout — error state</b></div>
-          <div className="dc"><div className="ln m" /><div className="ln s" /><div className="ln err" /><div className="ln m" /><div className="ln s" /></div>
+    <div className="demo">
+      <div>
+        <div className="macwrap"><div className="mac"><div className="lid"><div className="scr">
+          <div className="mbar"><b>Safari</b><span>File</span><span>Edit</span>
+            <div className="r"><span>Wi-Fi</span><span>9:41</span></div></div>
+          <div className="notch"><span className="fdot" /><span className="wave"><b /><b /><b /><b /><b /></span></div>
+          <div className="docwin">
+            <div className="dh"><i /><i /><i /><b>checkout — error state</b></div>
+            <div className="dc"><div className="ln m" /><div className="ln s" /><div className="ln err" /><div className="ln m" /><div className="ln s" /></div>
+          </div>
+          <div className={`sel${dragging ? ' on' : ''}`}
+            style={{ left: 60, top: 96, width: dragging ? 200 : 0, height: dragging ? 60 : 0 }} />
+          <div className={`cross${dragging ? ' on' : ''}`}
+            style={{ transform: dragging ? 'translate(260px,156px)' : 'translate(60px,96px)' }} />
+          <div className={`flash${phase === 3 ? ' go' : ''}`} />
+        </div></div><div className="base" /></div></div>
+        <div className="cap">
+          <kbd className="key">⇧⌘4</kbd>
+          <span className="txt">{SHOT_CAPS[phase]}</span>
+          <button className="btn btn-quiet btn-sm" style={{ marginLeft: 'auto' }} onClick={play}>Replay</button>
         </div>
-        <div className={`sel${dragging ? ' on' : ''}`}
-          style={{ left: 60, top: 96, width: dragging ? 200 : 0, height: dragging ? 60 : 0 }} />
-        <div className={`cross${dragging ? ' on' : ''}`}
-          style={{ transform: dragging ? 'translate(260px,156px)' : 'translate(60px,96px)' }} />
-        <div className={`flash${phase === 3 ? ' go' : ''}`} />
-      </div></div><div className="base" /></div></div>
+      </div>
 
-      <div className="pane" style={{ width: 420 }}>
+      <div className="pane">
         <div className="ph">
           <span className="mic"><span className="d" /><span className="wave"><b /><b /><b /><b /><b /></span></span>
           What the task receives
-          <button className="btn btn-quiet btn-sm" style={{ marginLeft: 'auto', height: 22, padding: '0 9px', fontSize: 10.5 }} onClick={play}>Replay</button>
         </div>
         <div className="pb">
           <div className="payload">
@@ -913,10 +955,6 @@ export default function Onboarding({ onComplete, onOpenAgentSetup }: OnboardingP
             unmute turns your voice into text anywhere on your Mac — a message, a
             document, a search box. Hold a key, say it, let go.
           </p>
-          <div className="wsteps" style={{ ['--i' as string]: 4 }}>
-            <span className="meta">12 steps</span><i /><span className="meta">about two minutes</span>
-            <i /><span className="meta">we set it up together</span>
-          </div>
         </div>
       ),
     },
