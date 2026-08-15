@@ -92,6 +92,9 @@ export interface NotchControllerDeps {
   getDraft?(id: string): TaskDraft
   setDraftText?(id: string, text: string): void
   addDraftImage?(id: string, path: string, mimeType: string, name: string): Promise<void> | void
+  /** Take or release the Escape key. False means we could not, and Escape is
+   *  left to the system — see keyListener.setEscapeCapture. */
+  setEscapeCapture?(on: boolean): boolean
   removeDraftAttachment?(id: string, attachmentId: string): Promise<void> | void
   sendDraft?(id: string): Promise<boolean> | boolean
   kill(id: string): void
@@ -365,6 +368,8 @@ export class NotchController {
   // there on its own. So there is one sequence now, `crankSlots()`, and the
   // pocket is a window onto it.
   private pocketMode: PocketMode = 'closed'
+  /** Last state pushed to the notch — the input to the Escape gate. */
+  private lastSurfaceState: string = 'dormant'
   /** Index into `crankSlots()`. Whatever sits here is the voice's address. */
   private pocketAt = 0
   /** The pocket's order, nailed down for the duration of a visit. Null when
@@ -981,7 +986,7 @@ export class NotchController {
         const t = this.deps.getTask(this.focusedId)
         if (t) this.sendDetail('stageDetail', t)
       }
-      this.client.send({ type: 'setState', state: 'cockpit', attention, working })
+      this.sendState('cockpit', attention, working)
       return
     }
 
@@ -994,12 +999,45 @@ export class NotchController {
       this.sendDetail('showTask', shown)
       // The task surface needs rail context too (tmux gate etc.).
       if (this.engaged === 'task') this.client.send({ type: 'setCockpit', data: this.buildCockpit() })
-      this.client.send({ type: 'setState', state: this.engaged === 'task' ? 'task' : 'attention', attention, working })
+      this.sendState(this.engaged === 'task' ? 'task' : 'attention', attention, working)
       return
     }
 
     this.engaged = 'none'
-    this.client.send({ type: 'setState', state: working > 0 ? 'active' : 'dormant', attention: 0, working })
+    this.sendState(working > 0 ? 'active' : 'dormant', 0, working)
+  }
+
+  /**
+   * PUSH THE STATE, AND SET WHO OWNS ESCAPE, IN ONE PLACE.
+   *
+   * Escape used to reach the notch AND the app underneath: closing an expanded
+   * surface over a fullscreen video also took the video out of fullscreen. The
+   * notch could see that happen and not stop it — a global NSEvent monitor is
+   * observe-only — so the key is intercepted upstream instead, and this is
+   * where it is decided.
+   *
+   * Ownership is exactly "a surface is up that Escape would close": the
+   * expanded task and cockpit, or an open pocket. Everything else leaves
+   * Escape entirely to the system. Deciding it HERE, in the one funnel every
+   * state change already passes through, is what stops the gate drifting out
+   * of step with what is actually on screen — the class of bug that produced
+   * the leak in the first place.
+   */
+  private sendState(state: string, attention: number, working: number): void {
+    this.lastSurfaceState = state
+    this.client.send({ type: 'setState', state, attention, working })
+    this.applyEscapeOwnership()
+  }
+
+  private applyEscapeOwnership(): void {
+    const owns = this.lastSurfaceState === 'task'
+      || this.lastSurfaceState === 'cockpit'
+      || this.pocketMode === 'open'
+    try {
+      if (this.deps.setEscapeCapture?.(owns) === false && owns) {
+        devEvent(log, 'escape-capture-unavailable', { state: this.lastSurfaceState })
+      }
+    } catch { /* Escape belongs to the system if we cannot take it */ }
   }
 
   // ── gestures ───────────────────────────────────────────────────────────────
@@ -1105,7 +1143,13 @@ export class NotchController {
     this.client.send({ type: 'pocket', data })
   }
 
+  /** Pocket open/close changes who owns Escape, so it re-evaluates here too. */
   private setPocketMode(mode: PocketMode): void {
+    this.setPocketModeInner(mode)
+    this.applyEscapeOwnership()
+  }
+
+  private setPocketModeInner(mode: PocketMode): void {
     if (this.pocketMode === mode) return
     this.pocketMode = mode
     // DELIBERATELY DOES NOT RESET THE INDEX. It used to land on 0 on every

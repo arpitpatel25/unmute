@@ -101,7 +101,8 @@ import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
   adoptPersistedPad, armScratchpad, claimShared, deliveryInFlight, discard as discardPad,
   copyHistoryToClipboard, gateDelivery, heldForSurface, initWatchers, padDirOf, pasteAtCursor, recordInsert,
-  registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot,
+  registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot, takeEscape,
+  registerEscapePressed,
   registerComposerImageSink,
   type DeliveryTarget,
 } from './capture/index'
@@ -2169,6 +2170,20 @@ function initCaptureWatchers(): void {
   // a capture ending, a transcript landing, an open segment cancelled. Without
   // this the panel would appear at an armed stop holding a pad whose words had
   // not arrived yet, and never update.
+  // THE SWALLOWED ESCAPE STILL HAS TO DO SOMETHING.
+  //
+  // The tap consumes the key so the app underneath never sees it; without this
+  // the surface would stop responding to Escape at all, which is worse than
+  // the leak it replaced. Collapse is exactly what the notch did for itself
+  // back when it happened to be the key window.
+  //
+  // Registered, not imported: the engine owns the keyboard and calls in — the
+  // same one-way dependency every other effect here keeps.
+  registerEscapePressed(() => {
+    log.event('escape-captured', { surface: 'notch' })
+    notchController?.collapse()
+  })
+
   registerPadObserver(broadcastScratchpad)
   // DELIVER INTO OUR OWN COMPOSER DIRECTLY, NOT BY POSTING A KEY AT IT.
   //
@@ -3268,6 +3283,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           })
         },
         addDraftImage: (id, path, mimeType, name) => addDraftImageFromPath(id, path, mimeType, name),
+        // Escape is taken only while a surface is up that Escape would close —
+        // the controller decides that; this just performs it. Registered from
+        // engine-overrides rather than imported, the same inversion the paste
+        // effect uses, because remote/ must not import engine-overrides.
+        setEscapeCapture: (on) => takeEscape(on),
         removeDraftAttachment: async (id, attachmentId) => {
           const draftId = taskDrafts.traceId(id)
           const attachment = taskDrafts.removeAttachment(id, attachmentId)

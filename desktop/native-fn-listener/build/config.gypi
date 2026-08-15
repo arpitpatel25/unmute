@@ -485,7 +485,7 @@
     "v8_use_siphash": 1,
     "want_separate_host_toolset": 0,
     "nodedir": "/Users/zodpatel/Library/Caches/node-gyp/23.11.0",
-    "python": "/opt/homebrew/opt/python@3.13/bin/python3.13",
+    "python": "/opt/homebrew/opt/python@3.14/bin/python3.14",
     "standalone_static_library": 1,
     "prefix": "/opt/homebrew",
     "user_agent": "npm/10.9.2 node/v23.11.0 darwin arm64 workspaces/false",
@@ -495,7 +495,7 @@
     "init_module": "/Users/zodpatel/.npm-init.js",
     "userconfig": "/Users/zodpatel/.npmrc",
     "globalconfig": "/opt/homebrew/etc/npmrc",
-    "local_prefix": "/Users/zodpatel/tools/unmute/unmute-cloud/desktop/native-fn-listener",
+    "local_prefix": "/Users/zodpatel/tools/unmute/unmute-cloud/.claude/worktrees/pocket-surface-unify/desktop/native-fn-listener",
     "global_prefix": "/opt/homebrew"
   }
 }

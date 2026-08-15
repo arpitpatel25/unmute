@@ -57,7 +57,7 @@ INCS_Debug := \
 	-I/Users/zodpatel/Library/Caches/node-gyp/23.11.0/deps/uv/include \
 	-I/Users/zodpatel/Library/Caches/node-gyp/23.11.0/deps/zlib \
 	-I/Users/zodpatel/Library/Caches/node-gyp/23.11.0/deps/v8/include \
-	-I/Users/zodpatel/tools/unmute/unmute-cloud/desktop/native-fn-listener/node_modules/node-addon-api
+	-I/Users/zodpatel/tools/unmute/unmute-cloud/.claude/worktrees/pocket-surface-unify/desktop/node_modules/node-addon-api
 
 DEFS_Release := \
 	'-DNODE_GYP_MODULE_NAME=native_fn_listener' \
@@ -113,7 +113,7 @@ INCS_Release := \
 	-I/Users/zodpatel/Library/Caches/node-gyp/23.11.0/deps/uv/include \
 	-I/Users/zodpatel/Library/Caches/node-gyp/23.11.0/deps/zlib \
 	-I/Users/zodpatel/Library/Caches/node-gyp/23.11.0/deps/v8/include \
-	-I/Users/zodpatel/tools/unmute/unmute-cloud/desktop/native-fn-listener/node_modules/node-addon-api
+	-I/Users/zodpatel/tools/unmute/unmute-cloud/.claude/worktrees/pocket-surface-unify/desktop/node_modules/node-addon-api
 
 OBJS := \
 	$(obj).target/$(TARGET)/src/listener.o

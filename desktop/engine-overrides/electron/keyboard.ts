@@ -115,9 +115,20 @@ class KeyboardManager extends EventEmitter {
     return this.activationMode
   }
 
+  /** Invoked when the Escape tap swallowed a key on our behalf. */
+  onEscape?: () => void
+
   handleKey(event: KeyEvent): void {
     console.log('[keyboard] Raw key event:', event, '| dictationActive:', this.dictationActive, '| instructionActive:', this.instructionActive)
     switch (event) {
+      // SWALLOWED ESCAPE. Only arrives when the tap consumed it, which means
+      // the app underneath did NOT get it — a fullscreen video stays
+      // fullscreen. Forwarding it keeps the behaviour the notch already had
+      // when it happened to be the key window; the difference is that the key
+      // now stops here instead of being delivered twice.
+      case 'escape':
+        this.onEscape?.()
+        break
       case 'fn-down':
         // fn is either the dictation key OR (when right-option is dictation)
         // the derived Remote key. The non-dictation branch is ADDITIVE — it
