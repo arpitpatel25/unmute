@@ -306,7 +306,17 @@ Earlier turns keep their counts permanently (`Worked for 8s · 2 steps`).
 live end. While a turn runs it carries the status, so a scrolled-away reader
 still knows. The panel opens scrolled to the live end.
 
-**Width: 520pt.** At 440 file paths truncate. Body 13px/1.5, mono 11px.
+**Width — cap the measure, not the window.** An earlier draft of this spec said
+"520pt", taken from a fixed-width design mock. The real surface has no fixed
+width: `SurfaceFill.user` is a fraction of the SCREEN (0.7 / 0.8 / 0.9), so on a
+1470pt display the panel is about 1,176pt. That is the width complaint — prose
+set across it runs to roughly 180 characters a line, about three times what a
+reader can track back to.
+
+So the window keeps its fraction, and the TEXT is capped: prose at **680pt**
+(~75 characters at 13.5pt), user bubbles at **520pt** so a bubble still reads as
+a bubble. Code, commands and diffs keep the full panel — they are why the window
+is large. Body 13.5pt, steps 12pt, mono 11pt.
 
 **Markdown** renders in `message` blocks only.
 

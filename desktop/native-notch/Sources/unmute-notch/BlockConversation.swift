@@ -15,6 +15,19 @@ import ConversationSupport
 /// scrolled up still knows work is happening without having to come back.
 private let BLOCK_BOTTOM = "block-conversation-bottom"
 
+/// THE MEASURE, not the window.
+///
+/// The surface is a fraction of the SCREEN — 0.8 by default — so on a 1470pt
+/// display this panel is around 1,176pt wide. Prose set across that is close to
+/// 180 characters a line, which is roughly three times what anyone can track
+/// back to the next line without losing their place. Every app this mirrors
+/// caps its text and lets the window be as big as it likes.
+///
+/// 680pt is about 75 characters at 13.5pt, the upper end of the comfortable
+/// range. The panel keeps its full width — code, commands and diffs still get
+/// the room, and they are the reason the window is large in the first place.
+private let READABLE_MEASURE: CGFloat = 680
+
 struct BlockConversation: View {
     let turns: [BlockTurn]
     var id: String = ""

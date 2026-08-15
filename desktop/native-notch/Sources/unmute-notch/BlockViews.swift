@@ -37,6 +37,9 @@ struct BlockTurnView: View {
             }
             if let reply = turn.reply, let text = reply.text {
                 BlockAnswer(text: text)
+                    // Prose is capped for readability; see READABLE_MEASURE.
+                    // Code and diffs keep the full panel.
+                    .frame(maxWidth: 680, alignment: .leading)
             }
         }
     }
@@ -490,6 +493,9 @@ private struct BlockUserBubble: View {
                 .font(.system(size: 13))
                 .foregroundColor(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
+                // A bubble that grows to a 1,100pt panel stops reading as a
+                // bubble; it reads as another paragraph.
+                .frame(maxWidth: 520, alignment: .trailing)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Theme.raised))
