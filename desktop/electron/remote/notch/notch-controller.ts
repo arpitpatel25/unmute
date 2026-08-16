@@ -13,7 +13,7 @@ import { describeActivity, type Activity } from '../activity'
 import type {
   NotchCommand, NotchEvent, NotchStateName, TaskStatusName,
   TaskDetailP, CardP, CockpitPayload, SkillItemP, ProposalDetailP,
-  ScratchpadPayloadP, PocketP, PocketSlotP, PocketMode, TurnP,
+  ScratchpadPayloadP, PocketP, PocketSlotP, PocketMode, TurnP, Block,
 } from './notch-client'
 import type { TaskDraft } from '../task-draft'
 import { providerOf, type ProviderId } from '../providers'
@@ -40,6 +40,9 @@ export interface TaskLite {
   agent?: ProviderId
   codexProject?: string | null
   conversation?: TurnP[] | null
+  /** The chat view — see TaskDetailP.blocks. */
+  blocks?: Block[] | null
+  usage?: { used: number; window: number; rateLimitPercent?: number; resetsAt?: number } | null
   /** Last message that did not reach the agent (NOT a task failure). */
   deliveryError?: string
   /** A message is in flight to the agent. */
@@ -153,6 +156,9 @@ export interface NotchControllerDeps {
   scratchpadArm?(on: boolean): void
   scratchpadRemove?(id: string): void
   scratchpadDeliver?(dest: 'cursor' | 'newTask' | 'openTask'): void
+  /** Read a task's chat view from the agent's own source, whatever its state —
+   *  see the call in sendDetail. */
+  loadBlocks?(taskId: string): Promise<void>
   scratchpadDiscard?(): void
 }
 
@@ -1690,6 +1696,11 @@ export class NotchController {
       // stage can show the message AND the terminal. `terminal` above still
       // says whether there is a PTY to draw underneath it.
       conversation: t.conversation ?? [],
+      // THE CHAT VIEW. Read from the agent's own source, so an OLD thread shows
+      // its full history the moment it is opened — the source file outlives the
+      // card, and outlived the version of Unmute that could not read it.
+      ...(t.blocks?.length ? { blocks: t.blocks } : {}),
+      ...(t.usage ? { usage: t.usage } : {}),
       // ALWAYS SENT — the same fix toCard needed, in the payload one surface
       // over. Driver-only meant a Codex CLI task's expansion arrived with no
       // backend at all, so the mark fell back to Claude: the pocket showed
@@ -1735,6 +1746,13 @@ export class NotchController {
    * thread that had not moved. Sending history is right; re-sending it is not.
    */
   private sendDetail(kind: 'stageDetail' | 'showTask', task: TaskLite): void {
+    // FILL AN OLD THREAD ON OPEN. The pollers watch what is LIVE — a finished
+    // one-off is not polled at all and a finished session polls at a tenth of
+    // the rate — so a conversation from weeks ago would otherwise open empty
+    // and populate later, or never. The source file is still on disk; this asks
+    // for it. Fire-and-forget: it emits `updated` when it finds anything, which
+    // re-sends this detail with the blocks attached.
+    void this.deps.loadBlocks?.(task.id)
     const detail = this.toDetail(task)
     const json = JSON.stringify(detail)
     // Dedupe only against what this surface is CURRENTLY showing. Keying by
@@ -1749,6 +1767,16 @@ export class NotchController {
     const shown = this.lastDetailJson.get(kind)
     if (shown && shown.id === task.id && shown.json === json) return
     this.lastDetailJson.set(kind, { id: task.id, json })
+    // WHAT ACTUALLY WENT OVER THE WIRE. Blocks were built, persisted and then
+    // dropped by a hand-copied field list one layer above this — every log said
+    // they existed and the panel still rendered the old transcript. The only
+    // way to tell was to read the payload, so now the payload says.
+    devEvent(log, 'detail-sent', {
+      kind, taskId: task.id,
+      blocks: detail.blocks?.length ?? 0,
+      usage: !!detail.usage,
+      conversation: detail.conversation?.length ?? 0,
+    })
     this.client.send({ type: kind, task: detail } as never)
   }
 

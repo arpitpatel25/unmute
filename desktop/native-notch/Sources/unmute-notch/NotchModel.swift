@@ -55,9 +55,22 @@ final class NotchModel: ObservableObject {
     private var taskConversationSource: [ConversationTurn]?
     private var stageConversationSource: [ConversationTurn]?
 
+    /// The chat view proper. Empty means this task has none yet — which is the
+    /// case for a task persisted before blocks shipped, and for a Claude
+    /// Desktop conversation we can read but not itemise. Both then fall back to
+    /// the row transcript above.
+    @Published private(set) var taskBlocks: [Block] = []
+    @Published private(set) var stageBlocks: [Block] = []
+    @Published private(set) var taskUsage: BlockUsage? = nil
+    @Published private(set) var stageUsage: BlockUsage? = nil
+
     /// Prepare the stable transcript model when IPC data changes, not while
     /// SwiftUI is repeatedly laying the same transcript out during a resize.
     func prepareTaskConversation(_ task: TaskDetail) {
+        // BLOCKS WIN WHEN PRESENT. Prepared here, off the layout path, for the
+        // same reason the rows are: a resize must not rebuild the transcript.
+        taskBlocks = task.blocks ?? []
+        taskUsage = task.usage
         let turns = (task.conversation ?? []).map(ConversationTurn.init)
         guard turns != taskConversationSource else { return }
         taskConversationRows = ConversationPresentation.build(turns)
@@ -65,6 +78,8 @@ final class NotchModel: ObservableObject {
     }
 
     func prepareStageConversation(_ task: TaskDetail) {
+        stageBlocks = task.blocks ?? []
+        stageUsage = task.usage
         let turns = (task.conversation ?? []).map(ConversationTurn.init)
         guard turns != stageConversationSource else { return }
         stageConversationRows = ConversationPresentation.build(turns)
@@ -74,11 +89,15 @@ final class NotchModel: ObservableObject {
     func clearTaskConversation() {
         taskConversationRows = []
         taskConversationSource = nil
+        taskBlocks = []
+        taskUsage = nil
     }
 
     func clearStageConversation() {
         stageConversationRows = []
         stageConversationSource = nil
+        stageBlocks = []
+        stageUsage = nil
     }
 
     // Skills UI state.
