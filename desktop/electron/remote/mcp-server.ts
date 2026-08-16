@@ -15,13 +15,15 @@
 // its environment (UNMUTE_MCP_TOKEN). The token identifies the CALLER TASK,
 // which is what makes the guardrails enforceable: provenance (the card shows
 // who spawned it), depth-1 (agent-spawned tasks may not spawn), and per-task
-// rate caps. A request with no/unknown token can handshake and list tools,
-// but tool CALLS are rejected with an instructive error.
+// rate caps. A request with no/unknown token can handshake, but sees no tools
+// and tool CALLS are rejected with an instructive error.
 
 import http from 'node:http'
 import { createLogger } from './log'
 import { HOOK_PATH } from './session-policy'
 import { normalizeState } from './status-file'
+import { CapabilityRegistry } from './agent/capabilities/registry'
+import type { CapabilityModule, McpPrincipal, ToolDefinition } from './agent/types'
 
 const log = createLogger('mcp')
 
@@ -44,8 +46,8 @@ export interface McpToolResultTask {
 }
 
 export interface McpHandlers {
-  /** Resolve a bearer token to the calling task id (null = unidentified). */
-  resolveCaller(token: string | null): string | null
+  /** Resolve a bearer token to the calling principal (null = unidentified). */
+  resolveCaller(token: string | null): McpPrincipal | null
   /** Spawn a task on behalf of callerTaskId. Throw Error with a clear message
    *  to reject (depth, rate, disabled, bad dir) — the message reaches the model. */
   createTask(callerTaskId: string, input: McpCreateTaskInput): Promise<McpToolResultTask>
@@ -145,6 +147,61 @@ function toolText(text: string, isError = false) {
   return { content: [{ type: 'text', text }], isError }
 }
 
+/** Existing task tools expressed as one built-in capability module. Their
+ * definitions and response shapes stay on the wire exactly as before. */
+function taskCapability(handlers: McpHandlers): CapabilityModule {
+  const tools: readonly ToolDefinition[] = TOOLS.map((tool) => ({ ...tool, consequence: 'read' }))
+  return {
+    id: 'tasks',
+    roles: ['task'],
+    tools,
+    async call(ctx, toolName, input) {
+      if (ctx.principal.kind !== 'task') throw new Error(`Tool ${toolName} is not available to unmute-agent principals`)
+      const callerTaskId = ctx.principal.taskId
+      const args = (input ?? {}) as Record<string, unknown>
+      if (toolName === 'unmute_create_task') {
+        const taskInput = args as unknown as McpCreateTaskInput
+        if (!taskInput.intent || typeof taskInput.intent !== 'string') throw new Error('intent (string) is required')
+        const out = await handlers.createTask(callerTaskId, taskInput)
+        return toolText(JSON.stringify(out))
+      }
+      if (toolName === 'unmute_task_status') {
+        const tid = args.task_id
+        if (!tid || typeof tid !== 'string') throw new Error('task_id (string) is required')
+        const out = await handlers.taskStatus(callerTaskId, tid)
+        return toolText(JSON.stringify(out))
+      }
+      if (toolName === 'unmute_status') {
+        if (!handlers.setStatus) throw new Error('status reporting is not available')
+        let state = args.state
+        // `ready` is still ACCEPTED on the wire and folded to `done`: an
+        // agent may be working from a cached copy of the old tool schema, and
+        // rejecting its status write would leave the task frozen mid-run over
+        // a word. See normalizeState.
+        state = normalizeState(state)
+        if (typeof state !== 'string' || !['processing', 'needs-user', 'done', 'failed'].includes(state)) {
+          throw new Error('state must be one of: processing, needs-user, ready, done, failed')
+        }
+        await handlers.setStatus(callerTaskId, {
+          state: state as McpStatusInput['state'],
+          ...(typeof args.summary === 'string' ? { summary: args.summary } : {}),
+          ...(typeof args.detail === 'string' ? { detail: args.detail } : {}),
+          ...(typeof args.question === 'string' ? { question: args.question } : {}),
+          ...(Array.isArray(args.artifacts) ? { artifacts: args.artifacts as McpStatusInput['artifacts'] } : {}),
+        })
+        return toolText('recorded')
+      }
+      throw new Error(`unknown tool: ${toolName}`)
+    },
+  }
+}
+
+/** Capability policy fields are internal; MCP clients receive only the same
+ * three standard definition fields the task surface has always exposed. */
+function mcpTool(tool: ToolDefinition): Pick<ToolDefinition, 'name' | 'description' | 'inputSchema'> {
+  return { name: tool.name, description: tool.description, inputSchema: tool.inputSchema }
+}
+
 export interface McpServer {
   close(): void
   port: number
@@ -152,9 +209,23 @@ export interface McpServer {
 
 /** Start the local MCP server. Binds 127.0.0.1 only — this is a same-machine
  *  intercom, never a network service. */
-export function startMcpServer(handlers: McpHandlers, port = MCP_PORT): Promise<McpServer> {
+export function startMcpServer(
+  handlers: McpHandlers,
+  port = MCP_PORT,
+  registry: CapabilityRegistry = new CapabilityRegistry([]),
+): Promise<McpServer> {
+  const taskRegistry = new CapabilityRegistry([taskCapability(handlers)])
+  const knownTaskTools = new Set(TOOLS.map((tool) => tool.name as string))
+  const representativeTask: McpPrincipal = { kind: 'task', taskId: '' }
+  const representativeAgent: McpPrincipal = {
+    kind: 'unmute-agent', runId: '', interactionId: '', expiresAt: Number.MAX_SAFE_INTEGER,
+  }
+  const knownExtensionTools = new Set([
+    ...registry.tools(representativeTask).map((tool) => tool.name),
+    ...registry.tools(representativeAgent).map((tool) => tool.name),
+  ])
   const server = http.createServer((req, res) => {
-    void handleRequest(handlers, req, res).catch((e) => {
+    void handleRequest(handlers, taskRegistry, registry, knownTaskTools, knownExtensionTools, req, res).catch((e) => {
       log.warn('mcp request handler error', { error: (e as Error).message })
       try { res.writeHead(500).end() } catch { /* already gone */ }
     })
@@ -181,7 +252,15 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   })
 }
 
-async function handleRequest(handlers: McpHandlers, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+async function handleRequest(
+  handlers: McpHandlers,
+  taskRegistry: CapabilityRegistry,
+  registry: CapabilityRegistry,
+  knownTaskTools: ReadonlySet<string>,
+  knownExtensionTools: ReadonlySet<string>,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
   // ── Hook lane (session-policy.ts). Claude Code lifecycle hooks curl their
   //    stdin JSON here. ANSWER FIRST, THINK AFTER: the hook is `async` so it
   //    never blocks a turn, but we still respond before doing any work so a
@@ -239,7 +318,11 @@ async function handleRequest(handlers: McpHandlers, req: http.IncomingMessage, r
       respond(rpcResult(msg.id, {}))
       return
     case 'tools/list':
-      respond(rpcResult(msg.id, { tools: TOOLS }))
+      respond(rpcResult(msg.id, {
+        tools: caller
+          ? [...taskRegistry.tools(caller), ...registry.tools(caller)].map(mcpTool)
+          : [],
+      }))
       return
     case 'tools/call': {
       const toolName = msg.params?.name as string | undefined
@@ -250,43 +333,15 @@ async function handleRequest(handlers: McpHandlers, req: http.IncomingMessage, r
           'Unmute rejected this call: no valid task identity. Only sessions spawned by Unmute carry the per-task token (UNMUTE_MCP_TOKEN) required to create tasks.', true)))
         return
       }
-      try {
-        if (toolName === 'unmute_create_task') {
-          const input = args as unknown as McpCreateTaskInput
-          if (!input.intent || typeof input.intent !== 'string') throw new Error('intent (string) is required')
-          const out = await handlers.createTask(caller, input)
-          respond(rpcResult(msg.id, toolText(JSON.stringify(out))))
-          return
-        }
-        if (toolName === 'unmute_task_status') {
-          const tid = args.task_id
-          if (!tid || typeof tid !== 'string') throw new Error('task_id (string) is required')
-          const out = await handlers.taskStatus(caller, tid)
-          respond(rpcResult(msg.id, toolText(JSON.stringify(out))))
-          return
-        }
-        if (toolName === 'unmute_status') {
-          if (!handlers.setStatus) throw new Error('status reporting is not available')
-          let state = args.state
-          // `ready` is still ACCEPTED on the wire and folded to `done`: an
-          // agent may be working from a cached copy of the old tool schema, and
-          // rejecting its status write would leave the task frozen mid-run over
-          // a word. See normalizeState.
-          state = normalizeState(state)
-          if (typeof state !== 'string' || !['processing', 'needs-user', 'done', 'failed'].includes(state)) {
-            throw new Error('state must be one of: processing, needs-user, ready, done, failed')
-          }
-          await handlers.setStatus(caller, {
-            state: state as McpStatusInput['state'],
-            ...(typeof args.summary === 'string' ? { summary: args.summary } : {}),
-            ...(typeof args.detail === 'string' ? { detail: args.detail } : {}),
-            ...(typeof args.question === 'string' ? { question: args.question } : {}),
-            ...(Array.isArray(args.artifacts) ? { artifacts: args.artifacts as McpStatusInput['artifacts'] } : {}),
-          })
-          respond(rpcResult(msg.id, toolText('recorded')))
-          return
-        }
+      if (!toolName || (!knownTaskTools.has(toolName) && !knownExtensionTools.has(toolName))) {
         respond(rpcError(msg.id, -32602, `unknown tool: ${toolName}`))
+        return
+      }
+      try {
+        const result = knownTaskTools.has(toolName)
+          ? await taskRegistry.call(caller, toolName, args)
+          : await registry.call(caller, toolName, args)
+        respond(rpcResult(msg.id, result))
         return
       } catch (e) {
         respond(rpcResult(msg.id, toolText(`Unmute rejected this call: ${(e as Error).message}`, true)))

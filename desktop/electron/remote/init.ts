@@ -52,6 +52,7 @@ import { CodexRouterEngine } from './codex-router-engine'
 import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
+import { CapabilityRegistry } from './agent/capabilities/registry'
 import { SESSION_PREAMBLE } from './session-policy'
 import { installHookSettingsSync, hookToken } from './hooks'
 import { parseHookEvent } from './observer'
@@ -3150,7 +3151,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     resolveCaller: (token) => {
       if (!token) return null
       const tid = mcpTokens.get(token)
-      return tid && !tid.startsWith('pending-') ? tid : null
+      return tid && !tid.startsWith('pending-') ? { kind: 'task', taskId: tid } : null
     },
     createTask: mcpCreateTask,
     taskStatus: mcpTaskStatus,
@@ -3177,7 +3178,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         ...(input.question ? { question: { text: input.question, kind: 'free_text' as const } } : {}),
       })
     },
-  }, getKnobs().mcpPort).catch((e) => log.warn('mcp server not started', { error: (e as Error).message }))
+  }, getKnobs().mcpPort, new CapabilityRegistry([])).catch((e) => log.warn('mcp server not started', { error: (e as Error).message }))
   // Register the server in the user's Claude Code config (idempotent). The
   // header uses env expansion so each session presents ITS OWN token.
   execFile('claude', ['mcp', 'get', 'unmute'], { timeout: 10_000 }, (err) => {
