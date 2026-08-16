@@ -155,6 +155,89 @@ final class BlockPresentationTests: XCTestCase {
         XCTAssertEqual(s.shortDomain, "posthog.com")
     }
 
+    // MARK: - the turn clock
+
+    func testAStartedTurnWithNoEndIsStillRunning() {
+        // The last command can finish while the model keeps thinking. Steps
+        // alone would call that turn done.
+        let turns = BlockPresentation.build([
+            msg("user", "q"),
+            Block(kind: "turnStart", startedAt: 1_786_828_333_000),
+            cmd("echo done"),
+        ])
+        XCTAssertTrue(turns[0].meta.isRunning)
+        XCTAssertEqual(turns[0].meta.startedAt, 1_786_828_333_000)
+    }
+
+    func testTheReportedWallTimeWinsOverStepTime() {
+        // THE BUG: the header summed subprocess seconds and said "Worked for
+        // 44s" while Codex's own window read 4m 19s. The turn reports its real
+        // elapsed time; that is what the header must use.
+        let turns = BlockPresentation.build([
+            msg("user", "q"),
+            Block(kind: "turnStart", startedAt: 1_786_828_333_000),
+            Block(kind: "command", label: "Ran", command: "sleep 1", durationMs: 1000, status: "ok"),
+            Block(kind: "turnEnd", durationMs: 259_000),
+            msg("assistant", "done"),
+        ])
+        XCTAssertEqual(turns[0].meta.durationMs, 259_000)
+        XCTAssertFalse(turns[0].meta.isRunning)
+    }
+
+    func testClockMarkersAreNotCountedAsSteps() {
+        let turns = BlockPresentation.build([
+            msg("user", "q"),
+            Block(kind: "turnStart", startedAt: 1),
+            cmd("a"),
+            Block(kind: "turnEnd", durationMs: 10),
+            msg("assistant", "r"),
+        ])
+        XCTAssertEqual(turns[0].meta.steps, 1)
+    }
+
+    // MARK: - runs
+
+    func testWorkIsCutIntoRunsAtEachPieceOfNarration() {
+        let runs = WorkRun.runs(of: [
+            Block(kind: "reasoning", text: "First I'll look around."),
+            cmd("ls"), cmd("rg foo"),
+            Block(kind: "reasoning", text: "Now I'll read them."),
+            Block(kind: "fileRead", path: "/a.ts"),
+        ])
+        XCTAssertEqual(runs.count, 2)
+        XCTAssertEqual(runs[0].note, "First I'll look around.")
+        XCTAssertEqual(runs[0].steps.count, 2)
+        XCTAssertEqual(runs[1].steps.count, 1)
+    }
+
+    func testARunSummarisesWhatHappenedRatherThanListingIt() {
+        // "exec · 200ms" twenty times is the transport, not the story.
+        let run = WorkRun.runs(of: [cmd("a"), cmd("b"), Block(kind: "fileRead", path: "/x")])[0]
+        XCTAssertEqual(run.summary, "read a file, ran 2 commands")
+    }
+
+    func testARunNamesTheIntegrationItUsed() {
+        let run = WorkRun.runs(of: [
+            Block(kind: "mcpCall", server: "unmute-computer", tool: "click"),
+            Block(kind: "mcpCall", server: "unmute-computer", tool: "type_text"),
+            cmd("ls"),
+        ])[0]
+        XCTAssertEqual(run.summary, "Used unmute-computer, ran a command")
+    }
+
+    func testWorkWithNoNarrationIsStillOneRun() {
+        let runs = WorkRun.runs(of: [cmd("a"), cmd("b")])
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertNil(runs[0].note)
+    }
+
+    func testClockMarkersNeverAppearAsSteps() {
+        let runs = WorkRun.runs(of: [
+            Block(kind: "turnStart", startedAt: 1), cmd("a"), Block(kind: "turnEnd", durationMs: 2),
+        ])
+        XCTAssertEqual(runs[0].steps.count, 1)
+    }
+
     // MARK: - usage
 
     func testAnUnknownWindowDrawsAnEmptyMeterRatherThanAFullOne() {

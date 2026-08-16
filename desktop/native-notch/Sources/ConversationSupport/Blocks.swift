@@ -91,6 +91,9 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
     public let after: Int?
     public let trigger: String?
 
+    // turnStart / turnEnd — the turn's clock, see BlockTurnMeta.startedAt
+    public let startedAt: Int?
+
     // unknown
     public let raw: String?
 
@@ -111,7 +114,9 @@ public struct Block: Codable, Equatable, Sendable, Identifiable {
                 readOnly: Bool? = nil, lines: Int? = nil, query: String? = nil,
                 results: [BlockSource]? = nil, steps: [PlanStep]? = nil, name: String? = nil,
                 what: String? = nil, reason: String? = nil, message: String? = nil,
-                before: Int? = nil, after: Int? = nil, trigger: String? = nil, raw: String? = nil) {
+                before: Int? = nil, after: Int? = nil, trigger: String? = nil,
+                startedAt: Int? = nil, raw: String? = nil) {
+        self.startedAt = startedAt
         self.kind = kind; self.role = role; self.text = text; self.streaming = streaming
         self.label = label; self.command = command; self.cwd = cwd; self.exitCode = exitCode
         self.output = output; self.durationMs = durationMs; self.status = status

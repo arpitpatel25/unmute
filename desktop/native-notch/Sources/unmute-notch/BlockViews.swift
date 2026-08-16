@@ -52,6 +52,10 @@ struct BlockTurnView: View {
 private struct WorkGroup: View {
     let turn: BlockTurn
     @State private var open: Bool?
+    /// Drives the running clock. One tick a second, and ONLY while the turn is
+    /// live — a wall of settled turns must not each hold a timer.
+    @State private var now = Date()
+    private static let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     /// OPEN WHILE IT RUNS, SHUT ONCE IT IS DONE — unless you have said
     /// otherwise. While a turn is working the steps ARE the content; once the
@@ -92,25 +96,98 @@ private struct WorkGroup: View {
             }
 
             if isOpen {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(steps.enumerated()), id: \.offset) { _, b in
-                        BlockStepRow(block: b)
+                // BOUNDED AND SCROLLED IN PLACE. Expanding used to insert every
+                // step into the page, so the panel reflowed under the cursor and
+                // a forty-step turn pushed the answer off screen. Codex opens a
+                // scroll area of a fixed size and the surrounding layout does
+                // not move; this does the same.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(runs) { run in
+                            WorkRunView(run: run)
+                        }
+                        if !turn.sources.isEmpty { SourcesSection(sources: turn.sources) }
                     }
-                    if !turn.sources.isEmpty { SourcesSection(sources: turn.sources) }
+                    .padding(.trailing, 6)
                 }
+                .frame(maxHeight: expandedHeight)
                 .padding(.top, 8)
                 .padding(.leading, 15)
             }
         }
+        .onReceive(Self.tick) { t in
+            guard turn.meta.isRunning else { return }
+            now = t
+        }
     }
 
     /// File changes are drawn outside the group, so they are not repeated here.
-    private var steps: [Block] { turn.work.filter { $0.kind != "fileChange" } }
+    private var runs: [WorkRun] {
+        WorkRun.runs(of: turn.work.filter { $0.kind != "fileChange" }, id: turn.id)
+    }
+
+    /// Tall enough to read a run without scrolling, short enough that the answer
+    /// below stays in view. A short turn shrinks to fit rather than padding out.
+    private var expandedHeight: CGFloat {
+        let rows = runs.reduce(0) { $0 + 1 + $1.steps.count }
+        return min(340, max(90, CGFloat(rows) * 34))
+    }
 
     private var headline: String {
-        if turn.meta.isRunning { return "Working" }
-        if let ms = turn.meta.durationMs { return "Worked for \(formatDuration(ms))" }
+        // WHILE IT RUNS, COUNT. The old header summed step durations and said
+        // "Worked for 44s" — past tense, and forty minutes short of the truth on
+        // a thinking-heavy turn. Codex counts elapsed wall time and says so.
+        if turn.meta.isRunning {
+            guard let started = turn.meta.startedAt, started > 0 else { return "Working" }
+            let elapsed = Int(now.timeIntervalSince1970 * 1000) - started
+            return elapsed > 0 ? "Working for \(formatDuration(elapsed))" : "Working"
+        }
+        if let ms = turn.meta.durationMs, ms > 0 { return "Worked for \(formatDuration(ms))" }
         return "Worked"
+    }
+}
+
+/// One stretch of work: what the model said, then what it did.
+private struct WorkRunView: View {
+    let run: WorkRun
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let note = run.note {
+                Text(note)
+                    .font(.system(size: 12.5))
+                    .foregroundColor(Theme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if !run.steps.isEmpty {
+                Button { withAnimation(.easeOut(duration: 0.14)) { open.toggle() } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 7.5, weight: .semibold))
+                            .foregroundColor(Theme.textFaint)
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                        Text(run.summary)
+                            .font(.system(size: 11.5))
+                            .foregroundColor(Theme.textFaint)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if open {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(run.steps.enumerated()), id: \.offset) { _, b in
+                            BlockStepRow(block: b)
+                        }
+                    }
+                    .padding(.leading, 13)
+                }
+            }
+        }
+        .padding(.vertical, 5)
     }
 }
 

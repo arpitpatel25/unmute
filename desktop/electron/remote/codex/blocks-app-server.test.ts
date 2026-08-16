@@ -103,6 +103,60 @@ test('a nonzero exit marks the command failed', () => {
   assert.equal(only(blocks, 'command')[0].status, 'failed')
 })
 
+// ── phase: narration is not the answer ─────────────────────────────────────
+
+test('commentary is work, not a chat message', () => {
+  // Codex writes several agentMessages per turn — running narration, then the
+  // real answer tagged final_answer. Treating them all as replies put Codex's
+  // thinking-aloud into the chat, and since a reply ENDS a turn, three of them
+  // split one exchange into three turns with no work in any — which is why the
+  // work group disappeared entirely.
+  const { blocks } = foldAppServerBlocks([
+    { method: 'item/completed', params: { item: { type: 'agentMessage', id: 'm1', text: "I'll get oriented in the repository.", phase: 'commentary' } } },
+    { method: 'item/completed', params: { item: { type: 'agentMessage', id: 'm2', text: 'Here is the answer.', phase: 'final_answer' } } },
+  ])
+  assert.deepEqual(kinds(blocks), ['reasoning', 'message'])
+  assert.equal(only(blocks, 'message')[0].text, 'Here is the answer.')
+})
+
+test('an untagged agent message is still treated as the answer', () => {
+  // Older threads carry no phase. Hiding those inside the work group would lose
+  // the reply altogether, so absent means answer.
+  const { blocks } = foldAppServerBlocks([
+    { method: 'item/completed', params: { item: { type: 'agentMessage', id: 'm1', text: 'plain reply' } } },
+  ])
+  assert.deepEqual(kinds(blocks), ['message'])
+})
+
+// ── naming ─────────────────────────────────────────────────────────────────
+
+test('a command is named by what it did, not by its transport', () => {
+  const b = blockFromCodexItem({
+    type: 'commandExecution', id: 'c', status: 'completed', exitCode: 0,
+    command: '/bin/zsh -lc "rg --files -g \'*.ts\' | head -40"',
+  })
+  assert.equal((b as any).label, 'Searched files')
+})
+
+test('an unrecognised binary is named by itself, never invented', () => {
+  const b = blockFromCodexItem({
+    type: 'commandExecution', id: 'c', status: 'completed', exitCode: 0, command: 'terraform apply',
+  })
+  assert.equal((b as any).label, 'Ran terraform')
+})
+
+// ── the turn clock ─────────────────────────────────────────────────────────
+
+test('turn start and completion emit the clock the header counts on', () => {
+  const { blocks } = foldAppServerBlocks([
+    { method: 'turn/started', params: { turn: { id: 't1', startedAt: 1786828333 } } },
+    { method: 'turn/completed', params: { turn: { id: 't1', durationMs: 259000 } } },
+  ])
+  assert.deepEqual(kinds(blocks), ['turnStart', 'turnEnd'])
+  assert.equal(only(blocks, 'turnStart')[0].startedAt, 1786828333000)
+  assert.equal(only(blocks, 'turnEnd')[0].durationMs, 259000)
+})
+
 // ── the open rule at the reader boundary ───────────────────────────────────
 
 test('an unknown notification method is ignored, not turned into a row', () => {

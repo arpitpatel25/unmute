@@ -2440,6 +2440,20 @@ export class TaskManager extends EventEmitter {
     if (!task || TERMINAL.includes(task.state)) return
     const tlog = log.child({ taskId: id })
 
+    // CLAUDE'S CHAT VIEW HAS TO KEEP UP WITH THE TERMINAL.
+    //
+    // Blocks used to refresh only when a turn ENDED, so a working Claude task
+    // showed the prompt and nothing else while its terminal filled with tool
+    // calls — the one moment the panel is most worth looking at. Claude Code
+    // appends each entry to the transcript as it happens, so the data was
+    // always there; nothing was reading it.
+    //
+    // Only while the turn is live: a settled task is refreshed on open, and
+    // re-reading a finished transcript once a second is pure cost.
+    if (task.state === 'processing') {
+      void this.loadBlocksFor(id).catch(() => {})
+    }
+
     const mtime = await statusMtimeMs(task.statusPath)
 
     // A genuinely NEW write (mtime advanced past the last one we applied) is the

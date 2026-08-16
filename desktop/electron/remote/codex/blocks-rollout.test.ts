@@ -202,13 +202,41 @@ test('a torn last line does not throw — Codex writes while we read', () => {
   assert.equal(only(blocks, 'message').length, 1)
 })
 
-test('the ordering of the file is preserved', () => {
+test('the ordering of the file is preserved, with the turn clock around it', () => {
   const { blocks } = run([
+    ev('task_started', { turn_id: 't', started_at: 1786552973 }),
     ev('user_message', { message: 'q' }),
     ev('agent_reasoning', { text: 'thinking' }),
     ri('custom_tool_call', { call_id: 'c1', name: 'shell', input: 'ls' }),
     ri('custom_tool_call_output', { call_id: 'c1', output: 'Exit code: 0\nOutput:\na' }),
-    ev('task_complete', { turn_id: 't', last_agent_message: 'done' }),
+    ev('task_complete', { turn_id: 't', last_agent_message: 'done', duration_ms: 63000 }),
   ])
-  assert.deepEqual(blocks.map((b) => b.kind), ['message', 'reasoning', 'command', 'message'])
+  assert.deepEqual(blocks.map((b) => b.kind),
+    ['turnStart', 'message', 'reasoning', 'command', 'turnEnd', 'message'])
+})
+
+test('the turn clock carries elapsed time, not summed step time', () => {
+  // THE BUG THIS EXISTS FOR: the surface used to add up each step's wall time
+  // and call it "Worked for 44s" while Codex's own window read 4m 19s. Steps
+  // only account for subprocess seconds, never the minutes spent thinking
+  // between them. task_complete reports the real wall time.
+  const { blocks } = run([
+    ev('task_started', { turn_id: 't', started_at: 1786552973 }),
+    ri('custom_tool_call', { call_id: 'c1', name: 'shell', input: 'sleep 1' }),
+    ri('custom_tool_call_output', { call_id: 'c1', output: 'Exit code: 0\nWall time: 1.0 seconds\nOutput:\n' }),
+    ev('task_complete', { turn_id: 't', duration_ms: 259000 }),
+  ])
+  const start = blocks.find((b) => b.kind === 'turnStart') as Extract<Block, { kind: 'turnStart' }>
+  const end = blocks.find((b) => b.kind === 'turnEnd') as Extract<Block, { kind: 'turnEnd' }>
+  assert.equal(start.startedAt, 1786552973000, 'epoch seconds are scaled to ms')
+  assert.equal(end.durationMs, 259000, 'the reported wall time, not the 1s of subprocess')
+})
+
+test('a command is named by what it did, not by "exec"', () => {
+  const { blocks } = run([
+    ri('function_call', { call_id: 'c1', name: 'exec_command', arguments: '{"cmd":"rg --files -g \'*.md\'"}' }),
+  ])
+  const cmd = blocks.find((b) => b.kind === 'command') as Extract<Block, { kind: 'command' }>
+  assert.equal(cmd.label, 'Searched files')
+  assert.equal(cmd.command, "rg --files -g '*.md'", 'the JSON wrapper is unwrapped')
 })

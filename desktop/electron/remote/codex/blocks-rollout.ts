@@ -19,7 +19,22 @@
  */
 
 import type { Block, Source } from '../blocks'
-import { blockFromCodexItem } from './blocks-app-server'
+import { blockFromCodexItem, commandLabel } from './blocks-app-server'
+
+/** `{"cmd":"pwd && rg …"}` → `pwd && rg …`. Falls through for plain strings. */
+function commandFromArgs(raw: string): string {
+  const t = raw.trim()
+  if (!t.startsWith('{')) return t
+  try {
+    const o = JSON.parse(t) as Record<string, unknown>
+    for (const key of ['cmd', 'command', 'script', 'input']) {
+      const v = o[key]
+      if (typeof v === 'string' && v) return v
+      if (Array.isArray(v)) return v.join(' ')
+    }
+  } catch { /* not JSON after all */ }
+  return t
+}
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? v as Record<string, unknown> : {})
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
@@ -132,10 +147,19 @@ export function blocksFromRollout(text: string): RolloutBlocks {
       case 'agent_message':
         break
 
+      // THE TURN'S CLOCK — see the note in blocks-app-server.ts. Codex writes
+      // these as epoch SECONDS here, unlike the wire.
+      case 'task_started': {
+        const s = num(p.started_at)
+        blocks.push({ kind: 'turnStart', startedAt: s !== undefined ? (s < 1e12 ? s * 1000 : s) : 0 })
+        break
+      }
+
       case 'task_complete': {
         const textOut = str(p.last_agent_message)
-        if (textOut) blocks.push({ kind: 'message', role: 'assistant', text: textOut })
         const d = num(p.duration_ms)
+        blocks.push({ kind: 'turnEnd', ...(d !== undefined ? { durationMs: d } : {}) })
+        if (textOut) blocks.push({ kind: 'message', role: 'assistant', text: textOut })
         if (d !== undefined) lastTurnDurationMs = d
         break
       }
@@ -149,7 +173,11 @@ export function blocksFromRollout(text: string): RolloutBlocks {
       case 'custom_tool_call':
       case 'function_call': {
         const callId = str(p.call_id)
-        const input = str(p.input) ?? str(p.arguments) ?? ''
+        // A function_call carries JSON arguments — {"cmd":"pwd && rg …"}. Shown
+        // raw that is worse than the `exec` it replaces, so the command is
+        // lifted out of it.
+        const rawInput = str(p.input) ?? str(p.arguments) ?? ''
+        const input = commandFromArgs(rawInput)
         const name = str(p.name) ?? 'step'
         // An MCP call is a function call with a namespace. Same event, different row.
         const ns = str(p.namespace)
@@ -158,7 +186,7 @@ export function blocksFromRollout(text: string): RolloutBlocks {
           if (callId) pending.set(callId, blocks.length - 1)
           break
         }
-        blocks.push({ kind: 'command', label: 'Running', command: input, status: 'running' })
+        blocks.push({ kind: 'command', label: commandLabel(input), command: input, status: 'running' })
         if (callId) pending.set(callId, blocks.length - 1)
         break
       }
@@ -178,7 +206,6 @@ export function blocksFromRollout(text: string): RolloutBlocks {
         if (existing.kind !== 'command') break
         blocks[at] = {
           ...existing,
-          label: 'Ran command',
           status: parsed.exitCode !== undefined && parsed.exitCode !== 0 ? 'failed' : 'ok',
           ...(parsed.exitCode !== undefined ? { exitCode: parsed.exitCode } : {}),
           ...(parsed.durationMs !== undefined ? { durationMs: parsed.durationMs } : {}),

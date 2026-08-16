@@ -1106,6 +1106,11 @@ function serializeTask(t: Task) {
     codexProject: t.codexProject ?? null,
     // The GUI-agent equivalent of the terminal (see Task.conversation).
     conversation: t.conversation ?? null,
+    // THE CHAT VIEW. This list is hand-copied field by field, which is exactly
+    // how blocks came to be built, persisted, and then silently dropped one
+    // step before the wire: every other layer had them and this one did not.
+    blocks: t.blocks ?? null,
+    usage: t.usage ?? null,
     state: t.state,
     category: t.category ?? null,
     step: t.step ?? null,

@@ -67,6 +67,51 @@ function countChange(diff: string, verb: 'Added' | 'Edited' | 'Deleted'): { adde
   return verb === 'Deleted' ? { added: 0, removed: lines } : { added: lines, removed: 0 }
 }
 
+/**
+ * Name a command the way Codex names it.
+ *
+ * `exec` twenty times down the panel says nothing — it is the transport, not
+ * the act. Codex's own window shows "Ran mdfind …", "Listed files in …",
+ * "Read files". The command line already contains the answer; this reads it.
+ *
+ * Deliberately shallow. It recognises the handful of shapes that dominate real
+ * threads and falls back to the verb the user typed, which is always better
+ * than the word `exec`. It never GUESSES at intent — an unrecognised command is
+ * labelled by its own binary, not by a story about what it might be doing.
+ */
+export function commandLabel(command: string): string {
+  // Strip the shell wrapper Codex adds: /bin/zsh -lc "the real command"
+  const unwrapped = /^\S*(?:sh|zsh|bash)\s+-\w*c\s+["'](.+)["']$/s.exec(command.trim())
+  const cmd = (unwrapped ? unwrapped[1] : command).trim()
+  const head = cmd.split(/\s+/)[0] ?? ''
+  const bin = head.split('/').pop() ?? head
+
+  switch (bin) {
+    case 'rg':
+    case 'grep':
+    case 'ugrep':   return 'Searched files'
+    case 'ls':
+    case 'find':
+    case 'fd':      return 'Listed files'
+    case 'cat':
+    case 'head':
+    case 'tail':
+    case 'sed':     return 'Read files'
+    case 'mdfind':  return 'Searched with Spotlight'
+    case 'git':     return `Ran git ${(cmd.split(/\s+/)[1] ?? '').replace(/[^\w-]/g, '')}`.trim()
+    case 'npm':
+    case 'pnpm':
+    case 'yarn':    return 'Ran a package script'
+    case 'node':
+    case 'python':
+    case 'python3': return 'Ran a script'
+    case 'pwd':
+    case 'echo':    return 'Checked the workspace'
+    case '':        return 'Ran a command'
+    default:        return `Ran ${bin}`
+  }
+}
+
 function textOfContent(v: unknown): string {
   if (typeof v === 'string') return v
   if (!Array.isArray(v)) return ''
@@ -110,6 +155,18 @@ export function blockFromCodexItem(raw: unknown): Block | null {
 
     case 'agentMessage': {
       const text = str(item.text) ?? textOfContent(item.content)
+      if (!text) return null
+      // PHASE DECIDES WHETHER THIS IS THE ANSWER OR NARRATION.
+      //
+      // Codex writes several agentMessages per turn: running commentary as it
+      // works ("I'll get oriented in the repository…"), then the real answer,
+      // tagged `final_answer`. Rendering them all as assistant messages put
+      // Codex's own thinking-aloud into the chat as if each were a reply — and
+      // because a reply ends a turn, three of them split one exchange into
+      // three turns with no work in any of them, which is why the work group
+      // vanished. Commentary belongs inside the work, where Codex puts it.
+      const phase = str(item.phase)
+      if (phase && phase !== 'final_answer') return { kind: 'reasoning', text }
       return { kind: 'message', role: 'assistant', text }
     }
 
@@ -123,12 +180,13 @@ export function blockFromCodexItem(raw: unknown): Block | null {
 
     case 'commandExecution': {
       const command = Array.isArray(item.command) ? item.command.join(' ') : (str(item.command) ?? '')
+      const named = commandLabel(command)
       const exitCode = num(pick(item, 'exitCode', 'exit_code'))
       const status = str(item.status)
       const running = status === 'inProgress' || status === 'running' || status === 'in_progress'
       return {
         kind: 'command',
-        label: running ? 'Running' : 'Ran command',
+        label: named,
         command,
         ...(str(item.cwd) ? { cwd: str(item.cwd)! } : {}),
         ...(exitCode !== undefined ? { exitCode } : {}),
@@ -308,6 +366,28 @@ export class CodexBlockStream {
         if (pct !== undefined) {
           this.usage = { used: this.usage?.used ?? 0, window: this.usage?.window ?? 0, rateLimitPercent: pct, ...(num(primary.resetsAt) !== undefined ? { resetsAt: num(primary.resetsAt)! } : {}) }
         }
+        break
+      }
+
+      // THE TURN'S CLOCK. `startedAt` is what lets the header count up live
+      // instead of adding up subprocess times, which under-reports by the
+      // minutes the model spends thinking between commands.
+      case 'turn/started': {
+        const startedAt = num(obj(p.turn).startedAt)
+        upsert(`turn-start-${str(obj(p.turn).id) ?? order.length}`, {
+          kind: 'turnStart',
+          // Codex reports seconds here; the surface works in ms.
+          startedAt: startedAt !== undefined ? (startedAt < 1e12 ? startedAt * 1000 : startedAt) : 0,
+        })
+        break
+      }
+
+      case 'turn/completed': {
+        const t = obj(p.turn)
+        const d = num(t.durationMs)
+        upsert(`turn-end-${str(t.id) ?? order.length}`, {
+          kind: 'turnEnd', ...(d !== undefined ? { durationMs: d } : {}),
+        })
         break
       }
 

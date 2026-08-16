@@ -17,6 +17,11 @@ public struct BlockTurnMeta: Equatable, Sendable {
     /// "running" | "done" | "failed"
     public let status: String
     public let durationMs: Int?
+    /// Epoch ms the turn began. The header counts from this while running,
+    /// rather than summing step times — those only cover the seconds spent in
+    /// subprocesses, so a turn that thought for four minutes and ran commands
+    /// for forty seconds reported "44s" while Codex's own window said "4m 19s".
+    public let startedAt: Int?
     public let steps: Int
     public let files: Int
     public let added: Int
@@ -97,8 +102,13 @@ public enum BlockPresentation {
         var steps = 0, files = 0, added = 0, removed = 0
         var running = false, failed = false
         var planDone: Int?, planTotal: Int?
+        var startedAt: Int?
+        var durationMs: Int?
 
         for b in work {
+            // The clock markers bound the turn; they are not steps the user did.
+            if b.kind == "turnStart" { startedAt = b.startedAt; continue }
+            if b.kind == "turnEnd" { durationMs = b.durationMs; continue }
             steps += 1
             switch b.kind {
             case "fileChange":
@@ -126,9 +136,13 @@ public enum BlockPresentation {
 
         // Running beats failed: a turn that hit an error and carried on is still
         // working, and settling it would stop a card that is still moving.
+        // A turn with a start and no end is still going, whatever its steps say
+        // — the last command can have finished while the model keeps thinking.
+        if startedAt != nil && durationMs == nil { running = true }
         let status = running ? "running" : (failed ? "failed" : "done")
-        return BlockTurnMeta(status: status, durationMs: nil, steps: steps, files: files,
-                             added: added, removed: removed, planDone: planDone, planTotal: planTotal)
+        return BlockTurnMeta(status: status, durationMs: durationMs, startedAt: startedAt,
+                             steps: steps, files: files, added: added, removed: removed,
+                             planDone: planDone, planTotal: planTotal)
     }
 
     static func sources(of work: [Block]) -> [BlockSource] {
@@ -140,6 +154,84 @@ public enum BlockPresentation {
                 out.append(s)
             }
         }
+        return out
+    }
+}
+
+// MARK: - runs
+
+/// A RUN OF WORK, SUMMARISED THE WAY CODEX SUMMARISES IT.
+///
+/// Codex does not list twenty steps. It shows one line per stretch of work —
+/// "Loaded a tool, read files", "Used Unmute Computer integration, read files,
+/// ran a command" — with its narration in between, and the steps themselves one
+/// click away. A flat list of `exec · 200ms` twenty times over is the transport,
+/// not the story.
+///
+/// A run ends where narration begins: the model saying something is the natural
+/// boundary between one stretch of work and the next.
+public struct WorkRun: Identifiable, Equatable, Sendable {
+    public let id: String
+    /// The narration that introduced this run, if any.
+    public let note: String?
+    public let steps: [Block]
+
+    /// "Read files, ran 2 commands" — what happened, in the order it reads
+    /// best, counted rather than listed.
+    public var summary: String {
+        var parts: [String] = []
+        let n = { (kind: String) in self.steps.filter { $0.kind == kind }.count }
+
+        let mcp = steps.filter { $0.kind == "mcpCall" }
+        if !mcp.isEmpty {
+            let servers = Set(mcp.compactMap { $0.server }.filter { !$0.isEmpty })
+            parts.append(servers.count == 1
+                ? "Used \(servers.first!)"
+                : "Used \(servers.count) integrations")
+        }
+        let reads = n("fileRead")
+        if reads > 0 { parts.append(reads == 1 ? "read a file" : "read \(reads) files") }
+        let cmds = n("command")
+        if cmds > 0 { parts.append(cmds == 1 ? "ran a command" : "ran \(cmds) commands") }
+        let searches = n("search")
+        if searches > 0 { parts.append(searches == 1 ? "searched the web" : "made \(searches) searches") }
+        let subs = n("subAgent")
+        if subs > 0 { parts.append(subs == 1 ? "ran a sub-agent" : "ran \(subs) sub-agents") }
+
+        if parts.isEmpty { return steps.count == 1 ? "1 step" : "\(steps.count) steps" }
+        // Sentence case: the first fragment leads.
+        let first = parts[0]
+        let rest = parts.dropFirst()
+        return rest.isEmpty ? first : "\(first), \(rest.joined(separator: ", "))"
+    }
+}
+
+public extension WorkRun {
+    /// Cut a turn's work into runs at each piece of narration.
+    static func runs(of work: [Block], id: String = "turn") -> [WorkRun] {
+        var out: [WorkRun] = []
+        var note: String?
+        var steps: [Block] = []
+
+        func flush(_ index: Int) {
+            if note == nil && steps.isEmpty { return }
+            out.append(WorkRun(id: "\(id)-run-\(index)", note: note, steps: steps))
+            note = nil
+            steps = []
+        }
+
+        for (i, b) in work.enumerated() {
+            if b.kind == "turnStart" || b.kind == "turnEnd" { continue }
+            if b.kind == "reasoning" {
+                // Narration starts a new run rather than joining the last one,
+                // so the text sits above the work it describes.
+                flush(i)
+                note = b.text
+                continue
+            }
+            steps.append(b)
+        }
+        flush(work.count)
         return out
     }
 }

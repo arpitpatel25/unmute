@@ -1767,6 +1767,16 @@ export class NotchController {
     const shown = this.lastDetailJson.get(kind)
     if (shown && shown.id === task.id && shown.json === json) return
     this.lastDetailJson.set(kind, { id: task.id, json })
+    // WHAT ACTUALLY WENT OVER THE WIRE. Blocks were built, persisted and then
+    // dropped by a hand-copied field list one layer above this — every log said
+    // they existed and the panel still rendered the old transcript. The only
+    // way to tell was to read the payload, so now the payload says.
+    devEvent(log, 'detail-sent', {
+      kind, taskId: task.id,
+      blocks: detail.blocks?.length ?? 0,
+      usage: !!detail.usage,
+      conversation: detail.conversation?.length ?? 0,
+    })
     this.client.send({ type: kind, task: detail } as never)
   }
 

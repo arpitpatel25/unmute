@@ -58,13 +58,26 @@ export type Block =
   | { kind: 'denied'; what: string; reason?: string }
   | { kind: 'error'; message: string }
   | { kind: 'compaction'; before?: number; after?: number; trigger?: string }
+  /**
+   * A turn boundary, carrying its clock.
+   *
+   * THE HEADER NEEDS ELAPSED TIME, NOT SUMMED STEP TIME. The old surface added
+   * up each step's wall time and called it "Worked for 44s" while Codex's own
+   * window read "Working for 4m 19s" — the steps only account for the seconds
+   * the agent spent in a subprocess, not the minutes it spent thinking between
+   * them. `startedAt` lets the surface run a live clock; `durationMs` is what
+   * the agent reported once the turn ended.
+   */
+  | { kind: 'turnStart'; startedAt: number }
+  | { kind: 'turnEnd'; durationMs?: number }
   | { kind: 'unknown'; raw: string }
 
 export type BlockKind = Block['kind']
 
 const KNOWN: ReadonlySet<string> = new Set<BlockKind>([
   'message', 'reasoning', 'command', 'fileChange', 'mcpCall', 'fileRead',
-  'search', 'plan', 'subAgent', 'denied', 'error', 'compaction', 'unknown',
+  'search', 'plan', 'subAgent', 'denied', 'error', 'compaction',
+  'turnStart', 'turnEnd', 'unknown',
 ])
 
 /**
@@ -95,6 +108,8 @@ function safeStringify(v: unknown): string {
 export interface TurnMeta {
   status: 'running' | 'done' | 'failed'
   durationMs?: number
+  /** Epoch ms the turn began, so a running header can count. */
+  startedAt?: number
   /** Work blocks in the turn. Messages are not steps. */
   steps: number
   files: number
@@ -128,9 +143,14 @@ export function turnMetaOf(work: Block[], durationMs?: number): TurnMeta {
   let files = 0, added = 0, removed = 0, steps = 0
   let running = false, failed = false
   let plan: TurnMeta['plan']
+  let startedAt: number | undefined
+  let reported: number | undefined
 
   for (const b of work) {
     if (isMessage(b)) continue          // a reply is not a step
+    // The clock markers bound the turn; they are not work the user did.
+    if (b.kind === 'turnStart') { startedAt = b.startedAt; continue }
+    if (b.kind === 'turnEnd') { reported = b.durationMs; continue }
     steps++
     switch (b.kind) {
       case 'fileChange':
@@ -164,7 +184,14 @@ export function turnMetaOf(work: Block[], durationMs?: number): TurnMeta {
   // Running beats failed: a turn that hit an error and kept going is still
   // working, and calling it failed would settle a card that is still moving.
   const status: TurnMeta['status'] = running ? 'running' : failed ? 'failed' : 'done'
-  return { status, ...(durationMs !== undefined ? { durationMs } : {}), steps, files, added, removed, ...(plan ? { plan } : {}) }
+  // The turn's own reported wall time wins over anything the caller guessed.
+  const ms = reported ?? durationMs
+  return {
+    status,
+    ...(ms !== undefined ? { durationMs: ms } : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    steps, files, added, removed, ...(plan ? { plan } : {}),
+  }
 }
 
 /**
