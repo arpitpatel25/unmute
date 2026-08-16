@@ -352,25 +352,6 @@ function AppInner() {
           )}
         </div>
 
-        <div className="mt-auto pb-4 px-1 shrink-0">
-          {/* Pro tip */}
-          <div className="px-1 mt-3">
-            <div className="p-3 rounded-xl bg-surface-2 border border-border shadow-sm">
-              <p className="text-[11px] font-bold text-ink mb-1.5 flex items-center gap-1.5">
-                <span className="text-[10px] text-gold">✦</span> Pro tip
-              </p>
-              <p className="text-[11px] text-ink-60 leading-relaxed">
-                Press{' '}
-                <kbd className="inline-flex px-1.5 py-0.5 rounded-md bg-gradient-to-b from-white to-cream-dark text-[10px] font-bold text-ink border border-border-md shadow-[0_2px_0_rgba(26,23,20,0.22),0_1px_3px_rgba(0,0,0,0.10)]">{dictationKey === 'fn' ? 'Fn' : 'Right Opt'}</kbd>
-                {' '}to dictate,{' '}
-                <kbd className="inline-flex px-1.5 py-0.5 rounded-md bg-gradient-to-b from-[#2E2A25] to-ink text-[10px] font-bold text-white/90 border border-black/50 shadow-[0_2px_0_rgba(0,0,0,0.55),0_1px_3px_rgba(0,0,0,0.25)]">Caps Lock</kbd>
-                {' '}for instructions, and{' '}
-                <kbd className="inline-flex px-1.5 py-0.5 rounded-md bg-gradient-to-b from-white to-cream-dark text-[10px] font-bold text-ink border border-border-md shadow-[0_2px_0_rgba(26,23,20,0.22),0_1px_3px_rgba(0,0,0,0.10)]">{dictationKey === 'fn' ? 'Right Opt' : 'Fn'}</kbd>
-                {' '}to hand a job to your agent.
-              </p>
-            </div>
-          </div>
-        </div>
       </nav>
 
       {/* Content */}

@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>unmute — app</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE APP — rethought, not restyled.
+
+   WHAT WAS WRONG. Four rail destinations, seven Settings sub-items and four
+   Orchestrator tabs: three levels of navigation for about a dozen screens.
+   And the two biggest lists — History and Orchestrator → Tasks — are the same
+   thing from where the user sits ("what did my voice do?"), so splitting them
+   made you guess which list a thing was in.
+
+   WHAT IT IS NOW. One level. Six destinations, each one click, each ⌘-numbered.
+   History and Tasks are merged into ACTIVITY, the home screen. The Orchestrator's
+   four tabs are gone: Tasks → Activity, Agents → its own destination, How it
+   works → the walkthrough (it is onboarding, not a settings tab), Settings →
+   split between Agents and Notch. Search actually searches.
+
+   TYPE is the shipped scale — 22 / 16 / 14 / 13 / 12.5 / 11 / 10 — in the
+   shipped faces. COLOUR comes from the logo: the violet in its signal arc.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --paper:#f0ede4; --paper-2:#e9e5da; --paper-3:#ded9cb; --card:#fdfcfa;
+  --ink:#181614; --ink-2:rgba(24,22,20,.64); --ink-3:rgba(24,22,20,.42);
+  --ink-4:rgba(24,22,20,.22); --line:rgba(24,22,20,.10); --line-2:rgba(24,22,20,.16);
+
+  /* the action colour is the violet from the logo's signal arc */
+  --br:#181614; --br-2:#2f2a24; --br-3:#46403a; --br-soft:rgba(24,22,20,.06); --br-line:rgba(24,22,20,.30);
+  /* the one hue that means "this is waiting on you" */
+  --flag:#e08a1e; --flag-soft:rgba(224,138,30,.13); --flag-ink:#9c5f0d;
+  --good:#1a7d52; --good-soft:rgba(26,125,82,.10);
+
+  --display:-apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",sans-serif;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
+  --mono:"SF Mono",Menlo,Monaco,ui-monospace,monospace;
+  --r1:8px; --r2:12px; --r3:16px;
+  --expo:cubic-bezier(.16,1,.3,1); --calm:cubic-bezier(.32,.72,0,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--sans);color:var(--ink);background:var(--paper-2);font-size:13px;
+  -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;align-items:center;padding:20px 20px 40px}
+.pagehead{width:100%;max-width:1020px;display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.pagehead .t{font:700 10px var(--sans);letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}
+.pagehead a{font:600 11px var(--sans);color:var(--br);text-decoration:none}
+
+/* ── the Mac's menu bar, with unmute's status item ── */
+.osbar{width:1020px;max-width:100%;height:26px;background:rgba(253,252,250,.94);border:1px solid var(--line-2);
+  border-radius:8px;display:flex;align-items:center;gap:15px;padding:0 12px;margin-bottom:9px;position:relative}
+.osbar b{font:700 11.5px var(--sans)}
+.osbar span{font:400 11.5px var(--sans);color:var(--ink-2)}
+.osbar .r{margin-left:auto;display:flex;align-items:center;gap:13px}
+.statuswrap{position:relative;display:flex}
+.status{border:0;background:none;padding:2px 6px;border-radius:5px;cursor:pointer;display:flex;align-items:center;transition:background .16s}
+.status:hover{background:rgba(24,22,20,.07)}
+.status.on{background:rgba(24,22,20,.13)}
+.status svg{display:block;color:var(--ink)}
+.menupanel{position:absolute;top:26px;right:-6px;width:266px;z-index:40;background:var(--card);
+  border:1px solid var(--line-2);border-radius:11px;padding:5px;
+  box-shadow:0 20px 42px -14px rgba(24,22,20,.42),0 2px 6px rgba(24,22,20,.1);
+  opacity:0;transform:translateY(-6px) scale(.98);transform-origin:top right;pointer-events:none;
+  transition:opacity .18s var(--calm),transform .26s var(--expo)}
+.menupanel.on{opacity:1;transform:none;pointer-events:auto}
+.mi{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:7px;font-size:12.5px;cursor:pointer;transition:background .12s}
+.mi:hover{background:var(--br);color:#fff}
+.mi:hover .sc,.mi:hover .mk{color:rgba(255,255,255,.72)}
+.mi .sc{margin-left:auto;font:400 11px var(--mono);color:var(--ink-4)}
+.mi > .mk{margin-left:auto;font:600 11px var(--mono);color:var(--ink-3)}
+.mi.head{cursor:default;font:700 9.5px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4);padding:7px 9px 3px}
+.mi.head:hover{background:none;color:var(--ink-4)}
+.mi.flag{color:var(--flag-ink);font-weight:600}
+.mi.flag:hover{background:var(--flag);color:#fff}
+.mgroup{padding:4px 0;border-top:1px solid var(--line);margin-top:4px}
+.mgroup:first-of-type{border-top:0;margin-top:0}
+.mgroup .glab{font:700 9px var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-4);padding:5px 9px 4px}
+.mi .dot{width:6px;height:6px;border-radius:50%;background:var(--good)}
+
+/* vendor marks. Colour = status everywhere else in this app; these two are the
+   documented exception, because a mark identifies a maker, not a state. */
+/* THE WORDMARK IS POSITIONED BY ITS INK, NOT ITS CANVAS.
+   unmute-logo.png is 1280×425 with the artwork at 98,88 → 1198,295, i.e. 7.7%
+   of transparent margin on the left, 20.7% on top and 30.4% underneath. Sized
+   by `height` alone it renders small and sits ~7px right of everything below
+   it. These negative margins collapse the box onto the artwork, so --wm is the
+   IMAGE height and the visible mark is 0.489 of it. */
+.wordmark{display:block;height:var(--wm,40px);width:auto;
+  margin-left:calc(var(--wm,40px) * -0.2307);
+  margin-right:calc(var(--wm,40px) * -0.1906);
+  margin-top:calc(var(--wm,40px) * -0.2071);
+  margin-bottom:calc(var(--wm,40px) * -0.3035)}
+.mk{flex-shrink:0;display:block}
+
+/* ═══ WINDOW ═══ */
+.win{width:1020px;max-width:100%;height:686px;background:var(--paper);border:1px solid var(--line-2);
+  border-radius:13px;overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 28px 56px -22px rgba(24,22,20,.3),0 2px 8px rgba(24,22,20,.07)}
+.titlebar{height:36px;flex-shrink:0;display:flex;align-items:center;padding:0 14px;
+  border-bottom:1px solid var(--line);background:var(--paper-3)}
+.titlebar i{width:11px;height:11px;border-radius:50%;background:rgba(24,22,20,.15);margin-right:7px}
+.split{flex:1;display:flex;min-height:0}
+
+/* ── rail: ONE level, six rows, nothing nested ── */
+.side{width:214px;flex-shrink:0;background:var(--paper-3);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;padding:16px 10px 10px}
+.logo{padding:0 10px 16px;margin-bottom:12px;border-bottom:1px solid var(--line)}
+.logo .tag{display:block;font-size:10.5px;color:var(--ink-3);font-weight:500;margin-top:9px}
+.nav{display:flex;flex-direction:column;gap:1px}
+.nav button{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;background:none;
+  border-radius:var(--r2);font:500 13px var(--sans);color:var(--ink-2);cursor:pointer;text-align:left;
+  transition:background .16s var(--calm),color .16s}
+.nav button:hover{background:rgba(24,22,20,.05);color:var(--ink)}
+.nav button.on{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(24,22,20,.07)}
+.nav .ic{width:16px;display:grid;place-items:center;color:var(--ink-3)}
+.nav button.on .ic{color:var(--br)}
+.nav .kb{margin-left:auto;font:500 10px var(--mono);color:var(--ink-4)}
+.nav .flagc{margin-left:6px;font:700 9.5px var(--sans);padding:2px 7px;border-radius:99px;background:var(--flag-soft);color:var(--flag-ink)}
+.navgap{height:12px}
+/* the sidebar foot is the account, not a tip nobody reads */
+.acct{margin-top:auto;display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:var(--r2);
+  border:0;background:none;cursor:pointer;width:100%;text-align:left;transition:background .16s}
+.acct:hover{background:rgba(24,22,20,.05)}
+.acct .av{width:26px;height:26px;border-radius:50%;background:var(--br);color:#fff;display:grid;place-items:center;
+  font:700 10.5px var(--sans);flex-shrink:0}
+.acct .em{display:block;font-size:11.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acct .pl{display:block;font-size:10px;color:var(--ink-3);margin-top:1px}
+
+/* ═══ CONTENT ═══ */
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.top{flex-shrink:0;border-bottom:1px solid var(--line);display:flex;align-items:flex-end;gap:12px;padding:24px 28px 16px}
+.top h1{font:700 22px var(--display);letter-spacing:-.026em}
+.top .sub{font-size:11.5px;color:var(--ink-3);margin-top:5px}
+.top .sp{flex:1}
+.body{flex:1;overflow-y:auto;padding:22px 28px 30px}
+.view{display:none;max-width:720px}
+.view.on{display:block;animation:in .45s var(--expo) both}
+@keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* ═══ CONTROLS (one vocabulary) ═══ */
+.btn{font:600 12.5px var(--sans);display:inline-flex;align-items:center;justify-content:center;gap:7px;height:34px;
+  padding:0 16px;border-radius:var(--r2);border:1px solid transparent;cursor:pointer;white-space:nowrap;
+  transition:background .18s var(--calm),border-color .18s,color .18s,box-shadow .22s,transform .1s}
+.btn:active{transform:scale(.985)}
+.btn-primary{background:var(--br);color:#fff;box-shadow:0 3px 12px -5px rgba(24,22,20,.28)}
+.btn-primary:hover{background:var(--br-2)}
+.btn-secondary{background:var(--card);color:var(--ink);border-color:var(--line-2)}
+.btn-secondary:hover{background:var(--paper-2)}
+.btn-quiet{background:none;color:var(--ink-3)}
+.btn-quiet:hover{background:rgba(24,22,20,.05);color:var(--ink)}
+.btn-sm{height:28px;padding:0 12px;font-size:11.5px;border-radius:var(--r1)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r3)}
+.rows > .row{display:grid;grid-template-columns:var(--lead,1fr) auto;align-items:center;gap:16px;
+  padding:14px 18px;border-bottom:1px solid var(--line)}
+.rows > .row:last-child{border-bottom:0}
+.rows.lead-tile > .row{grid-template-columns:34px 1fr auto}
+.rows.lead-key > .row{grid-template-columns:120px 1fr auto}
+.rtitle{font-size:13px;font-weight:600}
+.rsub{font-size:11px;color:var(--ink-3);margin-top:3px;line-height:1.5}
+.key{font:700 11px var(--mono);color:rgba(255,255,255,.94);display:inline-flex;align-items:center;justify-content:center;
+  height:30px;padding:0 10px;border-radius:var(--r1);white-space:nowrap;background:linear-gradient(180deg,#37332d,#1c1a17);
+  border:1px solid rgba(0,0,0,.5);box-shadow:0 2px 0 rgba(0,0,0,.5),0 2px 5px rgba(0,0,0,.2)}
+.rows.lead-key .key{justify-self:start;min-width:62px}
+.seg{display:inline-flex;background:var(--paper-3);border-radius:var(--r2);padding:3px;gap:3px}
+.seg button{font:500 12px var(--sans);padding:6px 13px;border:0;border-radius:var(--r1);background:none;color:var(--ink-2);
+  cursor:pointer;transition:background .2s var(--calm),color .2s}
+.seg button[aria-pressed="true"]{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(24,22,20,.12)}
+.sw{width:38px;height:22px;border-radius:99px;border:0;background:var(--paper-3);position:relative;cursor:pointer;transition:background .24s var(--calm)}
+.sw[aria-checked="true"]{background:var(--br)}
+.sw i{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.22);transition:transform .28s var(--expo)}
+.sw[aria-checked="true"] i{transform:translateX(16px)}
+.inp{font:400 12.5px var(--sans);color:var(--ink);background:var(--card);border:1px solid var(--line-2);
+  border-radius:var(--r2);padding:9px 12px;width:100%;transition:border-color .2s,box-shadow .2s}
+.inp:focus{outline:0;border-color:var(--br-line);box-shadow:0 0 0 3px var(--br-soft)}
+.inp.mono{font-family:var(--mono);font-size:12px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field .lab{font:600 11px var(--sans);color:var(--ink-2)}
+.badge{display:inline-flex;align-items:center;gap:5px;font:700 10px var(--sans);letter-spacing:.06em;text-transform:uppercase;
+  padding:3px 8px;border-radius:99px;white-space:nowrap}
+.badge i{width:5px;height:5px;border-radius:50%;background:currentColor}
+.badge-br{background:rgba(24,22,20,.07);color:var(--ink-2)}
+.badge-flag{background:var(--flag-soft);color:var(--flag-ink)}
+.badge-good{background:var(--good-soft);color:var(--good)}
+.badge-mute{background:rgba(24,22,20,.06);color:var(--ink-3)}
+.tile{width:34px;height:34px;border-radius:var(--r2);display:grid;place-items:center;flex-shrink:0}
+.tile-mute{background:rgba(24,22,20,.06);color:var(--ink-3)}
+.tile-br{background:rgba(24,22,20,.07);color:var(--ink-2)}
+.tile-good{background:var(--good-soft);color:var(--good)}
+.h2{font:700 16px var(--display);letter-spacing:-.018em}
+.p{font-size:12.5px;color:var(--ink-2);line-height:1.6}
+.meta{font-size:11px;color:var(--ink-3);line-height:1.5}
+.mono{font-family:var(--mono)}
+.stack{display:flex;flex-direction:column}
+.rowf{display:flex;align-items:center}
+.g6{gap:6px}.g10{gap:10px}.g14{gap:14px}
+.mt8{margin-top:8px}.mt14{margin-top:14px}.mt20{margin-top:20px}
+.sechead{display:flex;align-items:center;gap:10px;margin:22px 0 10px}
+.sechead:first-child{margin-top:0}
+.sechead .t{font:700 10px var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3)}
+.sechead .ln{flex:1;height:1px;background:var(--line)}
+.wrap{max-width:100%}
+
+/* ═══ ACTIVITY ═══ */
+.chips{display:flex;gap:5px}
+.chip{font:600 11.5px var(--sans);padding:6px 12px;border-radius:99px;border:1px solid var(--line-2);
+  background:var(--card);color:var(--ink-2);cursor:pointer;transition:background .18s,color .18s,border-color .18s}
+.chip:hover{border-color:var(--ink-4)}
+.chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.needband{background:linear-gradient(180deg,rgba(224,138,30,.09),rgba(224,138,30,.03));
+  border:1px solid rgba(224,138,30,.32);border-radius:var(--r3);padding:13px 15px}
+.needband .nh{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.needband .nh .t{font:700 10px var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--flag-ink)}
+.needcards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.needcard{background:var(--card);border:1px solid var(--line-2);border-radius:var(--r2);padding:12px 13px}
+.needcard .h{display:flex;align-items:center;gap:7px}
+.needcard .n{font:600 12.5px var(--mono)}
+.needcard .q{font-size:12px;color:var(--ink-2);line-height:1.5;margin-top:7px;min-height:36px}
+.needcard .f{display:flex;align-items:center;gap:8px;margin-top:10px}
+.vmark{width:9px;height:9px;border-radius:3px;flex-shrink:0}
+.daylab{font:700 10px var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--ink-4);margin:20px 0 8px}
+.feed{background:var(--card);border:1px solid var(--line);border-radius:var(--r3);overflow:hidden}
+.item{border-bottom:1px solid var(--line)}
+.item:last-child{border-bottom:0}
+.itemhead{display:grid;grid-template-columns:50px 1fr auto auto;align-items:center;gap:14px;
+  padding:13px 18px;cursor:pointer;transition:background .16s}
+.itemhead:hover{background:var(--paper-2)}
+.item.open .itemhead{background:var(--paper-2)}
+.itemhead .tm{font:400 11px var(--mono);color:var(--ink-3)}
+.itemhead .mk{display:inline-block;vertical-align:-2px;margin-right:7px}
+.itemhead .tx{font-size:12.5px;line-height:1.45;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.itemhead .tg{font-size:11px;color:var(--ink-3)}
+.itemhead mark{background:rgba(224,138,30,.28);color:inherit;border-radius:2px;padding:0 1px}
+.detail{display:none;padding:2px 18px 15px 82px;background:var(--paper-2)}
+.item.open .detail{display:block;animation:in .32s var(--expo) both}
+.detail .full{font-size:12.5px;line-height:1.7;color:var(--ink);background:var(--card);border:1px solid var(--line);
+  border-radius:var(--r2);padding:11px 13px}
+.detail .acts{display:flex;gap:7px;margin-top:10px}
+.detail .kv{display:flex;gap:20px;margin-top:10px}
+.detail .kv div{font-size:11px;color:var(--ink-3)}
+.detail .kv b{display:block;font:600 11.5px var(--sans);color:var(--ink);margin-top:2px}
+.empty{text-align:center;padding:52px 20px}
+.empty .t{font:700 16px var(--display);letter-spacing:-.018em}
+.empty .s{font-size:12.5px;color:var(--ink-3);margin-top:7px}
+
+/* ═══ AGENTS ═══ */
+.agrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.agent{background:var(--card);border:1px solid var(--line);border-radius:var(--r3);padding:15px 16px}
+.agent .h{display:flex;align-items:center;gap:9px}
+.agent .nm{font:600 13.5px var(--sans)}
+.agent .pth{font:400 11px var(--mono);color:var(--ink-3);margin-top:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent .f{display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:11px;border-top:1px solid var(--line)}
+
+/* ═══ ACCOUNT ═══ */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r2);padding:13px 14px}
+.stat .k{font:700 9.5px var(--sans);letter-spacing:.11em;text-transform:uppercase;color:var(--ink-4)}
+.stat .v{font:700 22px var(--display);letter-spacing:-.026em;margin-top:5px}
+.stat .s{font-size:10.5px;color:var(--ink-3);margin-top:1px}
+.bar{height:6px;border-radius:99px;background:var(--paper-3);overflow:hidden;margin-top:9px}
+.bar span{display:block;height:100%;background:var(--br);border-radius:99px}
+.meter{display:flex;align-items:flex-end;gap:3px;height:24px}
+.meter b{width:3px;border-radius:2px;background:var(--br);height:4px;transition:height .09s linear}
+
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+
+<div class="pagehead">
+  <span class="t">unmute · app</span>
+  <a href="./onboarding.html">← onboarding</a>
+</div>
+
+<div class="osbar">
+  <b>unmute</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span>
+  <div class="r">
+    <span class="statuswrap">
+    <button class="status" id="statusBtn" title="unmute">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 7v2M5 4.5v7M8 2.5v11M11 5v6M14 7.2v1.6"/></svg>
+    </button>
+  <div class="menupanel" id="menuPanel">
+      <div class="mgroup">
+        <div class="mi"><span class="dot"></span>Ready — mic idle</div>
+      </div>
+      <div class="mgroup">
+        <div class="glab">Hold to talk</div>
+        <div class="mi">Dictate<span class="mk">Fn</span></div>
+        <div class="mi">Instruct<span class="mk">Caps Lock</span></div>
+        <div class="mi">Orchestrate<span class="mk">Right ⌥</span></div>
+      </div>
+      <div class="mgroup">
+        <div class="glab">Your agents</div>
+        <div class="mi flag" data-menu="activity">2 waiting on you<span class="sc" style="color:inherit;opacity:.65">›</span></div>
+        <div class="mi">Open the pocket<span class="sc">⌘P</span></div>
+      </div>
+      <div class="mgroup">
+        <div class="mi">Pause unmute<span class="sc">⌥⌘M</span></div>
+        <div class="mi" data-menu="keys">Settings…<span class="sc">⌘,</span></div>
+        <div class="mi">Quit unmute<span class="sc">⌘Q</span></div>
+      </div>
+    </div>
+    </span>
+    <span>Wi-Fi</span><span>100%</span><span>Sat 16 Aug&nbsp; 9:41</span>
+  </div>
+</div>
+
+<div class="win">
+  <div class="titlebar"><i></i><i></i><i></i></div>
+  <div class="split">
+
+  <!-- ═══ RAIL — one level, six destinations ═══ -->
+  <nav class="side">
+    <div class="logo"><img class="wordmark" src="./unmute-logo.png" alt="unmute" style="--wm:40px"><span class="tag">Typing sucks. Just unmute.</span></div>
+
+    <div class="nav" id="nav">
+      <button data-go="activity"><span class="ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8h3l1.6-4 2.6 8.4L10.9 8h3.6"/></svg></span>Activity<span class="kb">⌘1</span><span class="flagc" id="railFlag">2</span></button>
+      <button data-go="agents"><span class="ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="2.2" y="3" width="11.6" height="8.4" rx="1.8"/><path d="M4.6 5.8l1.9 1.6-1.9 1.6M8.4 9.4h3"/></svg></span>Agents<span class="kb">⌘2</span></button>
+      <div class="navgap"></div>
+      <button data-go="keys"><span class="ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="1.5" y="3.6" width="13" height="8.8" rx="2"/><path d="M4.2 6.4h.01M6.6 6.4h.01M9 6.4h.01M11.4 6.4h.01M4.9 9.4h6.2"/></svg></span>Keys<span class="kb">⌘3</span></button>
+      <button data-go="voice"><span class="ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 2a2.5 2.5 0 0 1 0 5M5.5 2a5 5 0 0 0 0 5M8 7v6M5 13h6"/></svg></span>Voice<span class="kb">⌘4</span></button>
+      <button data-go="notch"><span class="ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="1.5" y="3" width="13" height="9.4" rx="2"/><path d="M5.6 3v1.6a1 1 0 0 0 1 1h2.8a1 1 0 0 0 1-1V3" fill="currentColor" stroke="none"/></svg></span>Notch<span class="kb">⌘5</span></button>
+      <div class="navgap"></div>
+      <button data-go="account"><span class="ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 14.2s5.2-2.4 5.2-6.6V3.5L8 1.6 2.8 3.5v4.1c0 4.2 5.2 6.6 5.2 6.6z"/></svg></span>Account &amp; privacy<span class="kb">⌘6</span></button>
+    </div>
+
+    <button class="acct" data-go="account">
+      <span class="av">RP</span>
+      <span style="min-width:0"><span class="em">rishi@zenskar.com</span><span class="pl">unmute · $20/mo</span></span>
+    </button>
+  </nav>
+
+  <!-- ═══ CONTENT ═══ -->
+  <div class="main">
+    <div class="top">
+      <div><h1 id="title">Activity</h1><p class="sub" id="subtitle">Everything your voice did today</p></div>
+      <span class="sp"></span>
+      <div id="topslot"></div>
+    </div>
+
+    <div class="body" id="bodyEl">
+
+      <!-- ── Activity ── -->
+      <section class="view on" data-view="activity">
+        <div class="rowf g10">
+          <div class="chips" id="chips">
+            <button class="chip on" data-k="all">All</button>
+            <button class="chip" data-k="dictate">Dictated</button>
+            <button class="chip" data-k="instruct">Instructed</button>
+            <button class="chip" data-k="agent">Agents</button>
+          </div>
+          <span class="meta" id="count" style="margin-left:auto"></span>
+        </div>
+
+        <div id="needWrap" class="mt20"></div>
+        <div id="feedWrap"></div>
+      </section>
+
+      <!-- ── Agents ── -->
+      <section class="view" data-view="agents">
+        <div class="sechead"><span class="t">Connected</span><span class="ln"></span></div>
+        <div class="agrid">
+          <div class="agent">
+            <div class="h"><svg class="mk" width="15" height="15" viewBox="0 0 24 24" stroke="#D97757" stroke-width="2.4" stroke-linecap="round"><path d="M12 2.8v18.4M2.8 12h18.4M5.5 5.5l13 13M18.5 5.5l-13 13"/></svg><span class="nm">Claude Code</span>
+              <span class="badge badge-good" style="margin-left:auto"><i></i>Ready</span></div>
+            <p class="pth">~/.local/bin/claude</p>
+            <div class="f"><span class="meta">2 sessions running</span><span style="flex:1"></span>
+              <button class="btn btn-quiet btn-sm">Configure</button></div>
+          </div>
+          <div class="agent">
+            <div class="h"><svg class="mk" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0f9d78" stroke-width="1.9" stroke-linejoin="round"><path d="M12 2.6l8.1 4.7v9.4L12 21.4 3.9 16.7V7.3z"/><path d="M12 7.1l4.2 2.45v4.9L12 16.9l-4.2-2.45v-4.9z"/></svg><span class="nm">Codex</span>
+              <span class="badge badge-good" style="margin-left:auto"><i></i>Ready</span></div>
+            <p class="pth">/opt/homebrew/bin/codex</p>
+            <div class="f"><span class="meta">1 session running</span><span style="flex:1"></span>
+              <button class="btn btn-quiet btn-sm">Configure</button></div>
+          </div>
+        </div>
+
+        <div class="sechead"><span class="t">Found on this Mac, not connected</span><span class="ln"></span></div>
+        <div class="agrid">
+          <div class="agent">
+            <div class="h"><svg class="mk" width="15" height="15" viewBox="0 0 24 24" stroke="#D97757" stroke-width="2.4" stroke-linecap="round"><path d="M12 2.8v18.4M2.8 12h18.4M5.5 5.5l13 13M18.5 5.5l-13 13"/></svg><span class="nm">Claude desktop</span>
+              <span class="badge badge-mute" style="margin-left:auto">Installed</span></div>
+            <p class="pth">/Applications/Claude.app</p>
+            <div class="f"><span class="meta">Not yet linked</span><span style="flex:1"></span>
+              <button class="btn btn-primary btn-sm">Connect</button></div>
+          </div>
+        </div>
+
+        <div class="sechead"><span class="t">Sessions</span><span class="ln"></span></div>
+        <div class="card rows lead-tile wrap">
+          <div class="row"><div class="tile tile-mute"><svg class="mk" width="15" height="15" viewBox="0 0 24 24" stroke="#D97757" stroke-width="2.4" stroke-linecap="round"><path d="M12 2.8v18.4M2.8 12h18.4M5.5 5.5l13 13M18.5 5.5l-13 13"/></svg></div>
+            <div><p class="rtitle mono">api-gateway</p><p class="rsub mono">~/code/api-gateway · Claude Code · Opus</p></div>
+            <span class="badge badge-flag"><i></i>Needs you</span></div>
+          <div class="row"><div class="tile tile-mute"><svg class="mk" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0f9d78" stroke-width="1.9" stroke-linejoin="round"><path d="M12 2.6l8.1 4.7v9.4L12 21.4 3.9 16.7V7.3z"/><path d="M12 7.1l4.2 2.45v4.9L12 16.9l-4.2-2.45v-4.9z"/></svg></div>
+            <div><p class="rtitle mono">web-ui</p><p class="rsub mono">~/code/web-ui · Codex</p></div>
+            <span class="badge badge-flag"><i></i>Needs you</span></div>
+          <div class="row"><div class="tile tile-mute"><svg class="mk" width="15" height="15" viewBox="0 0 24 24" stroke="#D97757" stroke-width="2.4" stroke-linecap="round"><path d="M12 2.8v18.4M2.8 12h18.4M5.5 5.5l13 13M18.5 5.5l-13 13"/></svg></div>
+            <div><p class="rtitle mono">billing-api</p><p class="rsub mono">~/code/billing-api · Claude Code · Sonnet</p></div>
+            <span class="badge badge-br"><i></i>Running</span></div>
+        </div>
+
+        <div class="card wrap mt14" id="addForm" hidden style="padding:17px 19px">
+          <div class="stack g14">
+            <div class="field"><span class="lab">Name</span><input class="inp" placeholder="api-gateway"></div>
+            <div class="field"><span class="lab">Agent</span><div><div class="seg" data-seg><button aria-pressed="true">Claude Code</button><button aria-pressed="false">Codex</button></div></div></div>
+            <div class="field"><span class="lab">Working directory</span><input class="inp mono" placeholder="~/code/api-gateway"></div>
+            <div class="rowf g10"><button class="btn btn-primary">Start session</button><button class="btn btn-quiet" id="addCancel">Cancel</button></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Keys ── -->
+      <section class="view" data-view="keys">
+        <p class="p wrap">Dictation takes one of the two modifiers macOS leaves free. Orchestrate takes the other, automatically.</p>
+        <div class="mt14"><div class="seg" data-seg><button aria-pressed="true">Fn (Globe)</button><button aria-pressed="false">Right Option</button></div></div>
+        <div class="card rows lead-key wrap mt14">
+          <div class="row"><kbd class="key">Fn</kbd><div><p class="rtitle">Dictate</p><p class="rsub">Speak, and the text lands at your cursor</p></div><span class="badge badge-good">Always on</span></div>
+          <div class="row"><kbd class="key">Caps Lock</kbd><div><p class="rtitle">Instruct</p><p class="rsub">Select text, say what to change, it rewrites in place</p></div><button class="sw" aria-checked="true" data-sw><i></i></button></div>
+          <div class="row"><kbd class="key">Right ⌥</kbd><div><p class="rtitle">Orchestrate</p><p class="rsub">Speak into the pocket, to whichever task is on the card</p></div><button class="sw" aria-checked="true" data-sw><i></i></button></div>
+        </div>
+
+        <div class="sechead"><span class="t">Chaining</span><span class="ln"></span></div>
+        <div class="card rows wrap">
+          <div class="row"><div><p class="rtitle">Reshape what you just dictated</p><p class="rsub">Dictate with Fn, then go straight to Caps Lock — Instruct acts on the text you have only just written, with no selection needed.</p></div><button class="sw" aria-checked="true" data-sw><i></i></button></div>
+          <div class="row"><div><p class="rtitle">Chain window</p><p class="rsub">How long after a dictation the chain stays available</p></div>
+            <div class="seg" data-seg><button aria-pressed="false">3s</button><button aria-pressed="true">8s</button><button aria-pressed="false">20s</button></div></div>
+        </div>
+
+        <div class="sechead"><span class="t">How the key behaves</span><span class="ln"></span></div>
+        <div class="card rows wrap">
+          <div class="row"><div><p class="rtitle">Press style</p><p class="rsub">Hold is safer; tap-to-toggle suits long dictations</p></div>
+            <div class="seg" data-seg><button aria-pressed="true">Hold</button><button aria-pressed="false">Tap to toggle</button></div></div>
+          <div class="row"><div><p class="rtitle">Ignore taps shorter than</p><p class="rsub">Stops a brush of the key opening the mic</p></div>
+            <div class="seg" data-seg><button aria-pressed="false">Off</button><button aria-pressed="true">120ms</button><button aria-pressed="false">250ms</button></div></div>
+          <div class="row"><div><p class="rtitle">macOS is intercepting Fn</p><p class="rsub">Set <span class="mono">Press 🌐 to → Do Nothing</span> so the emoji picker stops opening</p></div>
+            <button class="btn btn-secondary btn-sm">Open Keyboard settings</button></div>
+        </div>
+      </section>
+
+      <!-- ── Voice ── -->
+      <section class="view" data-view="voice">
+        <div class="sechead"><span class="t">What unmute hears</span><span class="ln"></span></div>
+        <div class="card rows wrap">
+          <div class="row"><div><p class="rtitle">Input device</p><p class="rsub">Follows the system unless you pin one</p></div>
+            <div class="seg" data-seg><button aria-pressed="true">System default</button><button aria-pressed="false">MacBook Pro Mic</button></div></div>
+          <div class="row"><div><p class="rtitle">Input level</p><p class="rsub">Say something and watch it move</p></div><div class="meter" id="meter"></div></div>
+        </div>
+
+        <div class="sechead"><span class="t">Language</span><span class="ln"></span></div>
+        <div class="card rows wrap">
+          <div class="row"><div><p class="rtitle">Spoken language</p><p class="rsub">What unmute expects to hear</p></div>
+            <div class="seg" data-seg><button aria-pressed="true">English</button><button aria-pressed="false">Hindi</button><button aria-pressed="false">Detect</button></div></div>
+          <div class="row"><div><p class="rtitle">Always write in English</p><p class="rsub">Speak any language, get English text out</p></div><button class="sw" aria-checked="false" data-sw><i></i></button></div>
+          <div class="row"><div><p class="rtitle">Leave technical words alone</p><p class="rsub">Filenames, flags and package names are never "corrected"</p></div><button class="sw" aria-checked="true" data-sw><i></i></button></div>
+        </div>
+
+        <div class="sechead"><span class="t">What comes out</span><span class="ln"></span></div>
+        <div class="card rows wrap">
+          <div class="row"><div><p class="rtitle">Delivery</p><p class="rsub">Pasting is far faster in long documents; typing works everywhere</p></div>
+            <div class="seg" data-seg><button aria-pressed="true">Paste</button><button aria-pressed="false">Type</button></div></div>
+          <div class="row"><div><p class="rtitle">Punctuate automatically</p><p class="rsub">You do not have to say "comma"</p></div><button class="sw" aria-checked="true" data-sw><i></i></button></div>
+          <div class="row"><div><p class="rtitle">Trim the silence at either end</p><p class="rsub">Drops the pause between pressing and speaking</p></div><button class="sw" aria-checked="true" data-sw><i></i></button></div>
+        </div>
+
+        <div class="sechead"><span class="t">Feedback</span><span class="ln"></span></div>
+        <div class="card rows wrap">
+          <div class="row"><div><p class="rtitle">Tick when the mic opens and closes</p><p class="rsub">So you know it heard the key without looking up</p></div><button class="sw" aria-checked="true" data-sw><i></i></button></div>
+          <div class="row"><div><p class="rtitle">Duck other audio while you talk</p><p class="rsub">Music and calls drop for the length of the hold</p></div><button class="sw" aria-checked="false" data-sw><i></i></button></div>
+        </div>
+      </section>
+
+      <!-- ── Notch ── -->
+      <section class="view" data-view="notch">
+        <div class="sechead"><span class="t">The notch</span><span class="ln"></span></div>
+        <div class="card rows wrap">
+          <div class="row"><div><p class="rtitle">Surface</p><p class="rsub">Applies to the expanded panel and the recording pill. The bar itself is always opaque — it is impersonating your hardware.</p></div>
+            <div class="seg" data-seg><button aria-pressed="true">Fixed</button><button aria-pressed="false">Live glass</button></div></div>
+          <div class="row"><div><p class="rtitle">Show it on every display</p><p class="rsub">Otherwise it stays on the built-in screen</p></div><button class="sw" aria-checked="false" data-sw><i></i></button></div>
+          <div class="row"><div><p class="rtitle">Waveform in the pill</p><p class="rsub">Driven by real input level, not a loop</p></div><button class="sw" aria-checked="true" data-sw><i></i></button></div>
+          <div class="row"><div><p class="rtitle">Menu bar icon</p><p class="rsub">A second way in when the notch is covered</p></div><button class="sw" aria-checked="true" data-sw><i></i></button></div>
+        </div>
+
+        <div class="sechead"><span class="t">The pocket</span><span class="ln"></span></div>
+        <div class="card rows wrap">
+          <div class="row"><div><p class="rtitle">How many tasks it holds</p><p class="rsub">Beyond the ones already demanding you</p></div>
+            <div class="seg" data-seg><button aria-pressed="false">3</button><button aria-pressed="true">6</button><button aria-pressed="false">10</button></div></div>
+          <div class="row"><div><p class="rtitle">Keep finished tasks on the carousel</p><p class="rsub">Off means they leave once you have read them</p></div><button class="sw" aria-checked="false" data-sw><i></i></button></div>
+          <div class="row"><div><p class="rtitle">Announce when a task finishes</p><p class="rsub">A chime, and the notch carries the count</p></div><button class="sw" aria-checked="true" data-sw><i></i></button></div>
+          <div class="row"><div><p class="rtitle">The pocket only opens when you open it</p><p class="rsub">Fixed behaviour. If it bloomed on its own it would silently aim every sentence at whatever it happened to be showing.</p></div>
+            <span class="badge badge-mute">Not adjustable</span></div>
+        </div>
+      </section>
+
+      <!-- ── Account & privacy ── -->
+      <section class="view" data-view="account">
+        <div class="card wrap" style="padding:17px 19px">
+          <div class="rowf g14">
+            <div style="flex:1"><p class="meta">Your plan</p><p class="h2" style="font-size:19px;margin-top:5px">unmute</p>
+              <p class="meta mt8">Renews 14 September · $20/month</p></div>
+            <div class="stack g10" style="align-items:flex-end"><span class="badge badge-good"><i></i>Active</span>
+              <button class="btn btn-secondary btn-sm">Manage billing</button></div>
+          </div>
+        </div>
+
+        <div class="sechead"><span class="t">This month</span><span class="ln"></span></div>
+        <div class="stats wrap">
+          <div class="stat"><p class="k">Dictated</p><p class="v">4.2h</p><p class="s">of audio</p></div>
+          <div class="stat"><p class="k">Words</p><p class="v">38.1K</p><p class="s">typed for you</p></div>
+          <div class="stat"><p class="k">Tasks</p><p class="v">126</p><p class="s">handed off</p></div>
+          <div class="stat"><p class="k">Cost</p><p class="v">$6.41</p><p class="s">estimated</p></div>
+        </div>
+        <div class="card wrap mt14" style="padding:15px 17px">
+          <div class="rowf"><span class="rtitle" style="flex:1">Included audio</span><span class="mono meta">4.2h of 10h</span></div>
+          <div class="bar"><span style="width:42%"></span></div>
+        </div>
+
+        <div class="sechead"><span class="t">Permissions</span><span class="ln"></span></div>
+        <div class="card rows lead-tile wrap">
+          <div class="row"><div class="tile tile-good"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div><p class="rtitle">Microphone</p><p class="rsub">Opened only while a key is held</p></div><span class="badge badge-good"><i></i>Granted</span></div>
+          <div class="row"><div class="tile tile-good"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div><p class="rtitle">Accessibility</p><p class="rsub">So text can reach the app you are in</p></div><span class="badge badge-good"><i></i>Granted</span></div>
+          <div class="row"><div class="tile tile-mute"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.5M8 11h.01" stroke-linecap="round"/></svg></div>
+            <div><p class="rtitle">Screen Recording</p><p class="rsub">Only to catch screenshots taken while you are dictating</p></div>
+            <button class="btn btn-primary btn-sm">Grant</button></div>
+        </div>
+
+        <div class="sechead"><span class="t">Your data</span><span class="ln"></span></div>
+        <div class="card rows wrap">
+          <div class="row"><div><p class="rtitle">Audio leaves this Mac, while a key is held</p><p class="rsub">That is the entire list. Transcripts are never stored on our servers — usage rows hold counts and cost, never content.</p></div><span class="badge badge-br">Verified</span></div>
+          <div class="row"><div><p class="rtitle">Activity</p><p class="rsub">The current day only, on this Mac, cleared when the day rolls over</p></div><button class="btn btn-secondary btn-sm">Clear now</button></div>
+          <div class="row"><div><p class="rtitle">Diagnostics</p><p class="rsub">Local JSONL, kept seven days, never uploaded. No third-party analytics SDK is bundled.</p></div><button class="btn btn-quiet btn-sm">Show in Finder</button></div>
+        </div>
+
+        <div class="sechead"><span class="t">About</span><span class="ln"></span></div>
+        <div class="card rows wrap">
+          <div class="row"><div><p class="rtitle">Version</p><p class="rsub mono">2.4.1 (build 3180) · macOS 15.4</p></div><span class="badge badge-good"><i></i>Up to date</span></div>
+          <div class="row"><div><p class="rtitle">Replay the walkthrough</p><p class="rsub">The twelve-step introduction, any time</p></div><button class="btn btn-secondary btn-sm">Open</button></div>
+          <div class="row"><div><p class="rtitle">Open-source engine</p><p class="rsub">Built on unmute-dictation, MIT licensed and never forked</p></div><button class="btn btn-quiet btn-sm">View licence</button></div>
+          <div class="row"><div><p class="rtitle">Signed in as rishi@zenskar.com</p><p class="rsub">Since March 2026</p></div><button class="btn btn-quiet btn-sm">Sign out</button></div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+  </div>
+</div>
+
+<script>
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+
+/* ═══ ONE MODEL FOR EVERYTHING THE VOICE DID ═══
+   Dictations, instructions and agent tasks are one stream because that is how
+   they happen. `needs` lifts a row into the band at the top. */
+const FEED=[
+  {id:1,kind:'agent',day:'Today',t:'09:52',needs:true,agent:'api-gateway',mark:'claude',
+   text:'Apply this patch to src/fetch.ts?',
+   full:'Adds retry with exponential backoff around the fetch helper, and a 30s ceiling. Two call sites change.',
+   target:'Claude Code · Opus',status:'Needs you',dur:'4m'},
+  {id:2,kind:'agent',day:'Today',t:'09:47',needs:true,agent:'web-ui',mark:'codex',
+   text:'Which breakpoint should the sidebar collapse at?',
+   full:'The grid already breaks at 1024. Collapsing the sidebar at the same point keeps one breakpoint in the stylesheet.',
+   target:'Codex',status:'Needs you',dur:'11m'},
+  {id:3,kind:'agent',day:'Today',t:'09:41',agent:'billing-api',mark:'claude',
+   text:'Reconcile the Stripe webhook handler against the usage ledger',
+   full:'Reconcile the Stripe webhook handler against the usage ledger — the totals drift when a retry lands twice.',
+   target:'Claude Code · Sonnet',status:'Running',dur:'2m'},
+  {id:4,kind:'dictate',day:'Today',t:'09:38',
+   text:'the error state looks wrong here, make the copy match the toast style',
+   full:'the error state looks wrong here, make the copy match the toast style',
+   target:'Safari',status:'Delivered',dur:'6s',att:'Screenshot 9.41.02.png'},
+  {id:5,kind:'instruct',day:'Today',t:'09:28',
+   text:'shorter, and drop the second sentence',
+   full:'shorter, and drop the second sentence',target:'Notes',status:'Rewrote 42 words',dur:'3s'},
+  {id:6,kind:'dictate',day:'Today',t:'09:12',
+   text:'can you take a look at the deploy that failed last night — it looks like the migration timed out',
+   full:'can you take a look at the deploy that failed last night — it looks like the migration timed out',
+   target:'Slack',status:'Delivered',dur:'8s'},
+  {id:7,kind:'agent',day:'Yesterday',t:'18:04',agent:'docs-site',mark:'claude',
+   text:'Rewrote the install page and fixed the two broken anchors',
+   full:'Rewrote the install page and fixed the two broken anchors.',
+   target:'Claude Code · Opus',status:'Done',dur:'2m 14s'},
+  {id:8,kind:'dictate',day:'Yesterday',t:'17:22',
+   text:"thanks, that works — I'll pick it up in the morning",
+   full:"thanks, that works — I'll pick it up in the morning",target:'Mail',status:'Delivered',dur:'4s'},
+  {id:9,kind:'instruct',day:'Yesterday',t:'16:47',
+   text:'make this sound less formal',full:'make this sound less formal',
+   target:'Linear',status:'Rewrote 88 words',dur:'3s'},
+];
+const MARK={claude:`<svg class="mk" width="15" height="15" viewBox="0 0 24 24" stroke="#D97757" stroke-width="2.4" stroke-linecap="round"><path d="M12 2.8v18.4M2.8 12h18.4M5.5 5.5l13 13M18.5 5.5l-13 13"/></svg>`,codex:`<svg class="mk" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0f9d78" stroke-width="1.9" stroke-linejoin="round"><path d="M12 2.6l8.1 4.7v9.4L12 21.4 3.9 16.7V7.3z"/><path d="M12 7.1l4.2 2.45v4.9L12 16.9l-4.2-2.45v-4.9z"/></svg>`};
+const GLYPH={
+  dictate:'<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 2a2.5 2.5 0 0 1 0 5M8 7v6M5 13h6"/></svg>',
+  instruct:'<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 12.6l7.2-7.2 2.9 2.9-7.2 7.2H2.5v-2.9zM10.8 3.1l1.7-1.7 2.9 2.9-1.7 1.7"/></svg>',
+  agent:'<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2.2" y="3.4" width="11.6" height="8" rx="1.6"/><path d="M4.8 6l1.7 1.4-1.7 1.4M8.6 9.6h2.8"/></svg>'};
+const KINDNAME={dictate:'Dictated',instruct:'Instructed',agent:'Agent'};
+
+let filter='all', query='', openId=null;
+const esc=t=>t.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function hl(t){ if(!query)return esc(t);
+  const i=t.toLowerCase().indexOf(query); if(i<0)return esc(t);
+  return esc(t.slice(0,i))+'<mark>'+esc(t.slice(i,i+query.length))+'</mark>'+esc(t.slice(i+query.length)); }
+
+function matches(it){
+  if(filter!=='all'&&it.kind!==filter)return false;
+  if(!query)return true;
+  return (it.text+' '+(it.agent||'')+' '+it.target+' '+it.full).toLowerCase().includes(query);
+}
+
+function renderFeed(){
+  const rows=FEED.filter(matches);
+  const needs=rows.filter(r=>r.needs);
+  const rest=rows.filter(r=>!r.needs);
+
+  /* the band exists so "something is blocked on me" never needs scrolling for */
+  $('#needWrap').innerHTML = needs.length ? `
+    <div class="needband">
+      <div class="nh"><span class="badge badge-flag"><i></i>${needs.length}</span><span class="t">Waiting on you</span></div>
+      <div class="needcards">${needs.map(n=>`
+        <div class="needcard">
+          <div class="h">${MARK[n.mark]}<span class="n">${hl(n.agent)}</span>
+            <span class="meta" style="margin-left:auto">${n.dur}</span></div>
+          <p class="q">${hl(n.text)}</p>
+          <div class="f"><span class="meta">${n.target}</span><span style="flex:1"></span>
+            <button class="btn btn-primary btn-sm" data-open="${n.id}">Answer</button></div>
+        </div>`).join('')}</div>
+    </div>` : '';
+
+  let html='';
+  if(!rows.length){
+    html = `<div class="empty"><p class="t">Nothing here yet</p>
+      <p class="s">No ${KINDNAME[filter]||''} activity today.</p>
+      <button class="btn btn-secondary btn-sm" style="margin-top:14px" id="resetAll">Show everything</button></div>`;
+  } else {
+    let day=null;
+    for(const it of rest){
+      if(it.day!==day){ day=it.day; html+=`<p class="daylab">${day}</p><div class="feed">`; html+='</div>'; }
+    }
+    // group properly
+    html=''; day=null; let open=false;
+    for(const it of rest){
+      if(it.day!==day){ if(open)html+='</div>'; day=it.day; html+=`<p class="daylab">${day}</p><div class="feed">`; open=true; }
+      const o = openId===it.id;
+      html+=`<div class="item${o?' open':''}" data-id="${it.id}">
+        <div class="itemhead">
+          <span class="tm">${it.t}</span>
+          <span class="tx">${it.mark?MARK[it.mark]:''}${it.agent?`<span class="mono" style="font-weight:600">${hl(it.agent)}</span> · `:''}${hl(it.text)}</span>
+          <span class="tg">${it.target}</span>
+          <span class="badge ${it.needs?'badge-flag':it.status==='Running'?'badge-br':'badge-mute'}">${it.needs?'Needs you':KINDNAME[it.kind]}</span>
+        </div>
+        <div class="detail">
+          <div class="full">${hl(it.full)}</div>
+          ${it.att?`<p class="meta" style="margin-top:9px;display:flex;align-items:center;gap:6px"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10.6 7.3l-4 4a2.3 2.3 0 0 1-3.3-3.3l5-5a1.6 1.6 0 0 1 2.3 2.3l-4.9 5a.8.8 0 0 1-1.1-1.1l4.5-4.6"/></svg>${it.att} — delivered after the text</p>`:''}
+          <div class="kv"><div>Went to<b>${it.target}</b></div><div>Outcome<b>${it.status}</b></div><div>Took<b>${it.dur}</b></div></div>
+          <div class="acts">
+            <button class="btn btn-secondary btn-sm">Copy text</button>
+            ${it.kind==='agent'?'<button class="btn btn-primary btn-sm">Open the task</button>':'<button class="btn btn-quiet btn-sm">Say it again</button>'}
+          </div>
+        </div>
+      </div>`;
+    }
+    if(open)html+='</div>';
+  }
+  $('#feedWrap').innerHTML=html;
+  $('#count').textContent = rows.length + (rows.length===1?' entry':' entries');
+  $('#railFlag').textContent = FEED.filter(f=>f.needs).length;
+  $('#railFlag').style.display = FEED.some(f=>f.needs)?'':'none';
+
+  $$('.itemhead').forEach(h=>h.onclick=()=>{
+    const id=+h.parentElement.dataset.id; openId = openId===id?null:id; renderFeed();
+  });
+  $$('[data-open]').forEach(b=>b.onclick=()=>{ openId=+b.dataset.open; filter='all'; renderFeed();
+    document.querySelector(`.item[data-id="${openId}"]`)?.scrollIntoView({block:'center',behavior:'smooth'}); });
+  const r=$('#resetAll'); if(r)r.onclick=()=>{filter='all';
+    $$('.chip').forEach(c=>c.classList.toggle('on',c.dataset.k==='all'));renderFeed()};
+}
+
+/* search — it actually searches */
+$$('.chip').forEach(c=>c.onclick=()=>{filter=c.dataset.k;$$('.chip').forEach(x=>x.classList.toggle('on',x===c));renderFeed()});
+
+/* ═══ navigation — one level, ⌘-numbered ═══ */
+const META={activity:['Activity','Everything your voice did today'],
+  agents:['Agents','The tools unmute can hand work to'],
+  keys:['Keys','Which key does what, and how it behaves'],
+  voice:['Voice','What unmute hears, and what it writes'],
+  notch:['Notch','The bar at the top of your screen, and the pocket inside it'],
+  account:['Account & privacy','Your plan, your permissions, and what we store']};
+const TOPSLOT={agents:'<button class="btn btn-primary btn-sm" id="newSess">New session</button>'};
+let view='activity';
+function go(v){
+  view=v;
+  $$('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.go===v));
+  $$('.view').forEach(s=>s.classList.toggle('on',s.dataset.view===v));
+  $('#title').textContent=META[v][0]; $('#subtitle').textContent=META[v][1];
+  $('#topslot').innerHTML=TOPSLOT[v]||'';
+  const ns=$('#newSess'); if(ns)ns.onclick=()=>{$('#addForm').hidden=false;$('#addForm').scrollIntoView({behavior:'smooth',block:'nearest'})};
+  $('#bodyEl').scrollTop=0;
+}
+$$('#nav button, .acct').forEach(b=>b.onclick=()=>go(b.dataset.go));
+const ORDER=['activity','agents','keys','voice','notch','account'];
+addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&/^[1-6]$/.test(e.key)){e.preventDefault();go(ORDER[+e.key-1])}
+});
+
+$('#addCancel').onclick=()=>$('#addForm').hidden=true;
+
+$$('[data-sw]').forEach(s=>s.onclick=()=>s.setAttribute('aria-checked',s.getAttribute('aria-checked')==='true'?'false':'true'));
+$$('[data-seg]').forEach(g=>$$('button',g).forEach(b=>b.onclick=()=>$$('button',g).forEach(x=>x.setAttribute('aria-pressed',String(x===b)))));
+
+/* status menu */
+const panel=$('#menuPanel'), sbtn=$('#statusBtn');
+sbtn.onclick=e=>{e.stopPropagation();sbtn.classList.toggle('on',panel.classList.toggle('on'))};
+document.addEventListener('click',()=>{panel.classList.remove('on');sbtn.classList.remove('on')});
+panel.onclick=e=>e.stopPropagation();
+$$('[data-menu]').forEach(m=>m.onclick=()=>{go(m.dataset.menu);panel.classList.remove('on');sbtn.classList.remove('on')});
+
+/* live input meter */
+const meter=$('#meter');
+meter.innerHTML='<b></b>'.repeat(20);
+const mb=$$('b',meter);
+setInterval(()=>{const t=Date.now();mb.forEach((b,i)=>{
+  b.style.height=(4+Math.abs(Math.sin(t/240+i*.55))*(4+Math.abs(Math.sin(t/700+i*.3))*13)).toFixed(0)+'px'})},70);
+
+renderFeed(); go('activity');
+</script>
+</body>
+</html>
