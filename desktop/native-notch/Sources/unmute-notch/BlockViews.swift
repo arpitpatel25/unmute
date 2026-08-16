@@ -25,26 +25,110 @@ struct BlockTurnView: View {
             if let prompt = turn.prompt, let text = prompt.text {
                 BlockUserBubble(text: text)
             }
-            if !turn.work.isEmpty {
+            // THE PLAN IS NOT A STEP. It is what the turn intends, so it sits
+            // above the work rather than inside it.
+            if let plan = turn.work.last(where: { $0.kind == "plan" }) {
+                PlanCard(block: plan)
+            }
+            if !workSteps.isEmpty {
                 WorkGroup(turn: turn)
             }
-            // FILE CHANGES SURFACE OUT OF THE GROUP. What a turn did to your
-            // files is the single most consequential thing it did, and burying
-            // it behind a disclosure alongside twenty shell steps is how the
-            // old view made "what actually changed" unanswerable.
-            ForEach(Array(fileChanges.enumerated()), id: \.offset) { _, b in
-                FileChangeRow(block: b)
+            // THESE SURFACE OUT OF THE GROUP, all for the same reason: they are
+            // consequences, not steps. What a turn did to your files, what it
+            // refused to do, and what broke are the things you must see without
+            // opening anything.
+            ForEach(Array(surfaced.enumerated()), id: \.offset) { _, b in
+                switch b.kind {
+                case "fileChange": FileChangeRow(block: b)
+                case "denied":     NoticeRow(text: "You rejected: \(b.what ?? "a tool call")", tone: .warn)
+                case "error":      NoticeRow(text: b.message ?? "Error", tone: .error)
+                case "compaction": NoticeRow(text: compactionText(b), tone: .quiet)
+                default:           EmptyView()
+                }
             }
             if let reply = turn.reply, let text = reply.text {
                 BlockAnswer(text: text)
-                    // Prose is capped for readability; see READABLE_MEASURE.
-                    // Code and diffs keep the full panel.
-                    .frame(maxWidth: 680, alignment: .leading)
             }
         }
     }
 
-    private var fileChanges: [Block] { turn.work.filter { $0.kind == "fileChange" } }
+    private static let surfacedKinds: Set<String> = ["fileChange", "denied", "error", "compaction"]
+    private var surfaced: [Block] { turn.work.filter { Self.surfacedKinds.contains($0.kind) } }
+    private var workSteps: [Block] {
+        turn.work.filter { !Self.surfacedKinds.contains($0.kind) && $0.kind != "plan"
+            && $0.kind != "turnStart" && $0.kind != "turnEnd" }
+    }
+
+    private func compactionText(_ b: Block) -> String {
+        if let before = b.before, let after = b.after {
+            return "Context compacted · \(before / 1000)k → \(after / 1000)k"
+        }
+        return "Context compacted"
+    }
+}
+
+/// A consequence the user must see without opening anything.
+private struct NoticeRow: View {
+    enum Tone { case warn, error, quiet }
+    let text: String
+    let tone: Tone
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundColor(color)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 11).padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(border, lineWidth: 0.5))
+    }
+
+    private var color: Color {
+        switch tone {
+        case .warn:  return Theme.cNeeds
+        case .error: return Theme.cError
+        case .quiet: return Theme.textFaint
+        }
+    }
+    private var border: Color {
+        switch tone {
+        case .warn:  return Theme.cNeeds.opacity(0.3)
+        case .error: return Theme.cError.opacity(0.3)
+        case .quiet: return Theme.hairline
+        }
+    }
+}
+
+/// What the turn intends, and how far along it is.
+private struct PlanCard: View {
+    let block: Block
+
+    var body: some View {
+        let steps = block.steps ?? []
+        let done = steps.filter { $0.status == "done" }.count
+        VStack(alignment: .leading, spacing: 6) {
+            Text("PLAN · \(done) OF \(steps.count)")
+                .font(.system(size: 9.5, design: .monospaced))
+                .foregroundColor(Theme.textFaint)
+                .tracking(0.8)
+            ForEach(Array(steps.enumerated()), id: \.offset) { _, s in
+                HStack(alignment: .top, spacing: 8) {
+                    Text(s.status == "done" ? "✓" : s.status == "active" ? "▸" : "·")
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundColor(Theme.textFaint)
+                        .frame(width: 10, alignment: .leading)
+                    Text(s.text)
+                        .font(.system(size: 12.5))
+                        .foregroundColor(s.status == "active" ? Theme.text : Theme.textDim)
+                        .strikethrough(s.status == "done", color: Theme.textFaint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline, lineWidth: 0.5))
+    }
 }
 
 // MARK: - work group
@@ -121,9 +205,11 @@ private struct WorkGroup: View {
         }
     }
 
-    /// File changes are drawn outside the group, so they are not repeated here.
+    /// Consequences and the plan are drawn outside the group — see the turn
+    /// view — so they are not repeated inside it.
+    private static let outside: Set<String> = ["fileChange", "denied", "error", "compaction", "plan"]
     private var runs: [WorkRun] {
-        WorkRun.runs(of: turn.work.filter { $0.kind != "fileChange" }, id: turn.id)
+        WorkRun.runs(of: turn.work.filter { !Self.outside.contains($0.kind) }, id: turn.id)
     }
 
     /// Tall enough to read a run without scrolling, short enough that the answer
@@ -155,9 +241,9 @@ private struct WorkRunView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let note = run.note {
-                Text(note)
-                    .font(.system(size: 12.5))
-                    .foregroundColor(Theme.textDim)
+                // NARRATION IS MARKDOWN. Codex writes **bold headings** into it,
+                // and rendering it as plain text put the asterisks on screen.
+                MarkdownText(text: note, size: 12.5, color: Theme.textDim)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -180,7 +266,7 @@ private struct WorkRunView: View {
                 if open {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(run.steps.enumerated()), id: \.offset) { _, b in
-                            BlockStepRow(block: b)
+                            CallRow(block: b)
                         }
                     }
                     .padding(.leading, 13)
@@ -213,257 +299,160 @@ private struct RunningDot: View {
     }
 }
 
-// MARK: - one step
+// MARK: - LEVEL 3, one call
 
-private struct BlockStepRow: View {
+/// ONE CALL, NAMED AS A SENTENCE, with its payload one more click away.
+///
+/// Codex shows `Start session ›` and nothing else until you ask. The raw
+/// identifier, the command line and the output all live at level 4. Printing
+/// them inline is what made a forty-step turn unreadable and pushed the answer
+/// off the screen.
+private struct CallRow: View {
     let block: Block
+    @State private var open = false
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(glyph)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(Theme.textFaint)
-                .frame(width: 14, alignment: .center)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) { content }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 6)
+    private var hasDetail: Bool {
+        detailBlocks.isEmpty == false
     }
 
-    @ViewBuilder private var content: some View {
-        switch block.kind {
-        case "reasoning":  ReasoningRow(block: block)
-        case "command":    CommandRow(block: block)
-        case "mcpCall":    McpRow(block: block)
-        case "fileRead":   FileReadRow(block: block)
-        case "search":     SearchRow(block: block)
-        case "plan":       PlanRow(block: block)
-        case "subAgent":   SubAgentRow(block: block)
-        case "denied":     DeniedRow(block: block)
-        case "error":      ErrorRow(block: block)
-        case "compaction": CompactionRow(block: block)
-        default:           UnknownRow(block: block)
+    var body: some View {
+        // Rows with nothing underneath are not buttons — a disclosure that
+        // opens onto nothing is a small lie about there being more.
+        VStack(alignment: .leading, spacing: 0) {
+            if hasDetail {
+                Button { withAnimation(.easeOut(duration: 0.13)) { open.toggle() } } label: { head }
+                    .buttonStyle(.plain)
+            } else {
+                head
+            }
+            if open {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(detailBlocks.enumerated()), id: \.offset) { _, d in
+                        OutputBox(tag: d.tag, text: d.text)
+                    }
+                }
+                .padding(.leading, 22)
+                .padding(.top, 5)
+                .padding(.bottom, 7)
+            }
         }
+    }
+
+    private var head: some View {
+        HStack(spacing: 8) {
+            if hasDetail {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 7, weight: .semibold))
+                    .foregroundColor(Theme.textFaint)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                    .frame(width: 8)
+            } else {
+                Spacer().frame(width: 8)
+            }
+            Text(glyph)
+                .font(.system(size: 9.5, design: .monospaced))
+                .foregroundColor(Theme.textFaint)
+                .frame(width: 13)
+            Text(WorkRun.callTitle(block))
+                .font(.system(size: 12.5))
+                .foregroundColor(block.status == "failed" ? Theme.cError : Theme.textDim)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            if let trailing {
+                Text(trailing)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundColor(Theme.textFaint)
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+
+    private var trailing: String? {
+        if let ms = block.durationMs { return formatDuration(ms) }
+        if let n = block.lines { return "\(n) lines" }
+        if block.kind == "subAgent" { return block.status }
+        if block.kind == "search" { return (block.results?.count).map { "\($0) results" } }
+        return nil
+    }
+
+    /// Level 4. Each payload gets its own labelled, scrollable box — the label
+    /// is what Codex uses to tell plaintext from json at a glance.
+    private var detailBlocks: [(tag: String, text: String)] {
+        var out: [(String, String)] = []
+        switch block.kind {
+        case "command":
+            if let c = block.command, !c.isEmpty { out.append(("command", c)) }
+            if let o = block.output, !o.isEmpty { out.append((block.status == "failed" ? "stderr" : "stdout", o)) }
+        case "mcpCall":
+            let id = [block.server, block.tool].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+            if !id.isEmpty { out.append(("tool", id)) }
+            if let a = block.args, a != "{}", !a.isEmpty { out.append((looksJSON(a) ? "json" : "arguments", a)) }
+        case "fileRead":
+            if let p = block.path, !p.isEmpty { out.append(("path", p)) }
+        case "search":
+            if let q = block.query, !q.isEmpty { out.append(("query", q)) }
+        case "unknown":
+            if let r = block.raw, !r.isEmpty { out.append(("raw", r)) }
+        default:
+            break
+        }
+        return out.map { (tag: $0.0, text: $0.1) }
+    }
+
+    private func looksJSON(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.hasPrefix("{") || t.hasPrefix("[")
     }
 
     private var glyph: String {
         switch block.kind {
-        case "reasoning":  return "✳"
         case "command":    return "›_"
-        case "mcpCall":    return "⊞"
+        case "mcpCall":    return "⌘"
         case "fileRead":   return "◇"
         case "search":     return "⌕"
-        case "plan":       return "☰"
         case "subAgent":   return "⑂"
-        case "denied":     return "⊘"
-        case "error":      return "!"
-        case "compaction": return "≡"
+        case "fileChange": return "±"
         default:           return "·"
         }
     }
 }
 
-// MARK: - the kinds
+// MARK: - LEVEL 4, a payload
 
-private struct ReasoningRow: View {
-    let block: Block
+/// Labelled by type, bounded, and scrolled in its own box — never spilling into
+/// the conversation around it.
+private struct OutputBox: View {
+    let tag: String
+    let text: String
+    /// Code is allowed past the prose column — see the note in
+    /// BlockConversation. A terminal line wants the room a paragraph must not
+    /// take.
+    @Environment(\.codeMeasure) private var codeMeasure
+
     var body: some View {
-        Text(block.text ?? "")
-            .font(.system(size: 12))
-            .italic()
-            .foregroundColor(Theme.textDim)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-private struct CommandRow: View {
-    let block: Block
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(block.label ?? "Ran command")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(block.status == "failed" ? Theme.cError : Theme.text)
-            Spacer(minLength: 0)
-            if let ms = block.durationMs {
-                Text(formatDuration(ms))
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundColor(Theme.textFaint)
-            }
-        }
-        Text(block.command ?? "")
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundColor(Theme.textDim)
-            .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
-        if let out = block.output, !out.isEmpty {
-            Text(out)
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundColor(Theme.textFaint)
-                .lineLimit(6)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, 8)
-                .overlay(Rectangle().fill(Theme.hairline).frame(width: 1), alignment: .leading)
-        }
-    }
-}
-
-private struct McpRow: View {
-    let block: Block
-    var body: some View {
-        HStack(spacing: 8) {
-            Text("\(block.server ?? "") · \(block.tool ?? "")")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Theme.text)
-            Spacer(minLength: 0)
-            if let ms = block.durationMs {
-                Text(formatDuration(ms))
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundColor(Theme.textFaint)
-            }
-        }
-        if let args = block.args, args != "{}" {
-            Text(args)
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundColor(Theme.textFaint)
-                .lineLimit(2)
-        }
-    }
-}
-
-private struct FileReadRow: View {
-    let block: Block
-    var body: some View {
-        HStack(spacing: 8) {
-            Text("Read").font(.system(size: 12, weight: .medium)).foregroundColor(Theme.text)
-            Spacer(minLength: 0)
-            if let n = block.lines {
-                Text("\(n) lines")
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundColor(Theme.textFaint)
-            }
-        }
-        Text(shortPath(block.path ?? ""))
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundColor(Theme.textDim)
-            .lineLimit(1).truncationMode(.head)
-    }
-}
-
-private struct SearchRow: View {
-    let block: Block
-    var body: some View {
-        HStack(spacing: 8) {
-            Text("Searched the web").font(.system(size: 12, weight: .medium)).foregroundColor(Theme.text)
-            Spacer(minLength: 0)
-            let n = block.results?.count ?? 0
-            if n > 0 {
-                Text(n == 1 ? "1 result" : "\(n) results")
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundColor(Theme.textFaint)
-            }
-        }
-        Text(block.query ?? "")
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundColor(Theme.textDim)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-private struct PlanRow: View {
-    let block: Block
-    var body: some View {
-        let steps = block.steps ?? []
-        let done = steps.filter { $0.status == "done" }.count
-        Text("PLAN · \(done) OF \(steps.count)")
-            .font(.system(size: 9.5, design: .monospaced))
-            .foregroundColor(Theme.textFaint)
-            .tracking(0.8)
-        ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-            HStack(alignment: .top, spacing: 7) {
-                Text(marker(step.status))
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundColor(Theme.textFaint)
-                    .frame(width: 10, alignment: .leading)
-                Text(step.text)
-                    .font(.system(size: 12))
-                    .foregroundColor(step.status == "active" ? Theme.text : Theme.textDim)
-                    .strikethrough(step.status == "done", color: Theme.textFaint)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private func marker(_ status: String) -> String {
-        switch status {
-        case "done":   return "✓"
-        case "active": return "▸"
-        default:       return "·"
-        }
-    }
-}
-
-private struct SubAgentRow: View {
-    let block: Block
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(block.name ?? "sub-agent")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Theme.text)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            Text(block.status ?? "")
+        VStack(alignment: .leading, spacing: 0) {
+            Text(tag)
                 .font(.system(size: 9.5, design: .monospaced))
                 .foregroundColor(Theme.textFaint)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white.opacity(0.02))
+                .overlay(Rectangle().fill(Theme.hairline).frame(height: 0.5), alignment: .bottom)
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(Theme.textDim)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 11).padding(.vertical, 8)
+            }
+            .frame(maxHeight: 170)
         }
-    }
-}
-
-/// A tool call you REFUSED. It used to render exactly like one that ran, which
-/// is the surface lying about what happened.
-private struct DeniedRow: View {
-    let block: Block
-    var body: some View {
-        Text("You rejected: \(block.what ?? "a tool call")")
-            .font(.system(size: 11.5))
-            .foregroundColor(Theme.cNeeds)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-private struct ErrorRow: View {
-    let block: Block
-    var body: some View {
-        Text(block.message ?? "Error")
-            .font(.system(size: 11.5))
-            .foregroundColor(Theme.cError)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-private struct CompactionRow: View {
-    let block: Block
-    var body: some View {
-        Text(detail)
-            .font(.system(size: 10.5, design: .monospaced))
-            .foregroundColor(Theme.textFaint)
-    }
-    private var detail: String {
-        if let b = block.before, let a = block.after {
-            return "Context compacted · \(b / 1000)k → \(a / 1000)k"
-        }
-        return "Context compacted"
-    }
-}
-
-/// A kind this build does not know. Quiet, honest, and never a message — see
-/// the open rule in Blocks.swift.
-private struct UnknownRow: View {
-    let block: Block
-    var body: some View {
-        Text(block.kind)
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundColor(Theme.textFaint)
+        .frame(maxWidth: codeMeasure, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.hairline, lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 }
 

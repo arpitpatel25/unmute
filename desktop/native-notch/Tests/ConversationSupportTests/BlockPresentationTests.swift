@@ -217,12 +217,40 @@ final class BlockPresentationTests: XCTestCase {
     }
 
     func testARunNamesTheIntegrationItUsed() {
+        // NAMES, NOT COUNTS. Codex writes "Used Unmute Computer integration";
+        // "Used 2 integrations" was the safe choice and it reads worse.
         let run = WorkRun.runs(of: [
             Block(kind: "mcpCall", server: "unmute-computer", tool: "click"),
             Block(kind: "mcpCall", server: "unmute-computer", tool: "type_text"),
             cmd("ls"),
         ])[0]
-        XCTAssertEqual(run.summary, "Used unmute-computer, ran a command")
+        XCTAssertEqual(run.summary, "Used Unmute Computer integration, ran a command")
+    }
+
+    func testTwoIntegrationsAreJoinedWithAnd() {
+        let run = WorkRun.runs(of: [
+            Block(kind: "mcpCall", server: "unmute-computer", tool: "click"),
+            Block(kind: "mcpCall", server: "cua-computer-use", tool: "scroll"),
+        ])[0]
+        XCTAssertEqual(run.summary, "Used Unmute Computer and Cua Computer Use integrations")
+    }
+
+    // MARK: - naming a call
+
+    func testACallIsTitledAsASentence() {
+        // `start_session` is what the protocol calls it; "Start session" is what
+        // the reader needs. The identifier moves down beside its output.
+        XCTAssertEqual(WorkRun.callTitle(Block(kind: "mcpCall", server: "unmute-computer", tool: "start_session")), "Start session")
+        XCTAssertEqual(WorkRun.callTitle(Block(kind: "mcpCall", server: "s", tool: "get_window_state")), "Get window state")
+        XCTAssertEqual(WorkRun.callTitle(Block(kind: "mcpCall", server: "s", tool: "webArm")), "Web arm")
+    }
+
+    func testACommandKeepsTheNameItsLabellerGaveIt() {
+        XCTAssertEqual(WorkRun.callTitle(Block(kind: "command", label: "Searched files", command: "rg x", status: "ok")), "Searched files")
+    }
+
+    func testAToolCallWithNoToolNameFallsBackToTheServer() {
+        XCTAssertEqual(WorkRun.callTitle(Block(kind: "mcpCall", server: "chrome-devtools", tool: "")), "chrome-devtools")
     }
 
     func testWorkWithNoNarrationIsStillOneRun() {

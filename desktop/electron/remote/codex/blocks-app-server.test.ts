@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { foldAppServerBlocks, blockFromCodexItem } from './blocks-app-server'
+import {
+  foldAppServerBlocks, blockFromCodexItem, commandLabel, shellCommandOf, toolTitle,
+} from './blocks-app-server'
 import type { Block } from '../blocks'
 
 // THE FIXTURE IS A REAL TURN, captured from a live `codex app-server` on
@@ -143,6 +145,49 @@ test('an unrecognised binary is named by itself, never invented', () => {
     type: 'commandExecution', id: 'c', status: 'completed', exitCode: 0, command: 'terraform apply',
   })
   assert.equal((b as any).label, 'Ran terraform')
+})
+
+// ── the JS wrapper ─────────────────────────────────────────────────────────
+
+test('a command wrapped in a JS tool call is unwrapped before naming', () => {
+  // "Ran const". Codex CLI does not run bare shell — it runs JavaScript, and
+  // the shell line sits two layers inside. Taking the first token found the
+  // keyword `const` and labelled every single row with it.
+  const js = 'const r = await tools.exec_command({"cmd":"sed -n \'1,240p\' PROJECT.md","workdir":"/tmp","yield_time_ms":10000}); text(r.output);'
+  assert.equal(shellCommandOf(js), "sed -n '1,240p' PROJECT.md")
+  assert.equal(commandLabel(js), 'Read files')
+})
+
+test('a plain JSON argument object is unwrapped too', () => {
+  assert.equal(shellCommandOf('{"cmd":"rg --files"}'), 'rg --files')
+})
+
+test('a bare shell command passes through untouched', () => {
+  assert.equal(shellCommandOf('ls -la'), 'ls -la')
+})
+
+test('an escaped quote inside the wrapped command survives', () => {
+  const js = 'const r = await tools.exec_command({"cmd":"echo \\"hi there\\""});'
+  assert.equal(shellCommandOf(js), 'echo "hi there"')
+})
+
+test('JS with no recognisable command is left alone rather than mangled', () => {
+  const js = 'const hits = ALL_TOOLS.filter(x => /unmute/i.test(x.name)); text(hits);'
+  assert.equal(shellCommandOf(js), js)
+})
+
+// ── naming a tool call ─────────────────────────────────────────────────────
+
+test('a tool id becomes a sentence, the way Codex writes it', () => {
+  assert.equal(toolTitle('start_session'), 'Start session')
+  assert.equal(toolTitle('get_window_state'), 'Get window state')
+  assert.equal(toolTitle('web_arm'), 'Web arm')
+  assert.equal(toolTitle('listWindows'), 'List windows')
+})
+
+test('an already-readable tool name is left as it is', () => {
+  assert.equal(toolTitle('Bash'), 'Bash')
+  assert.equal(toolTitle('WebFetch'), 'Web fetch')
 })
 
 // ── the turn clock ─────────────────────────────────────────────────────────

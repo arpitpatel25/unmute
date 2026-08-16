@@ -15,18 +15,41 @@ import ConversationSupport
 /// scrolled up still knows work is happening without having to come back.
 private let BLOCK_BOTTOM = "block-conversation-bottom"
 
-/// THE MEASURE, not the window.
+/// TWO MEASURES, NOT ONE.
 ///
 /// The surface is a fraction of the SCREEN — 0.8 by default — so on a 1470pt
-/// display this panel is around 1,176pt wide. Prose set across that is close to
-/// 180 characters a line, which is roughly three times what anyone can track
-/// back to the next line without losing their place. Every app this mirrors
-/// caps its text and lets the window be as big as it likes.
+/// display this panel is around 1,176pt wide.
 ///
-/// 680pt is about 75 characters at 13.5pt, the upper end of the comfortable
-/// range. The panel keeps its full width — code, commands and diffs still get
-/// the room, and they are the reason the window is large in the first place.
-private let READABLE_MEASURE: CGFloat = 680
+/// PROSE IS CAPPED, because past roughly 75 characters the eye loses the line
+/// return. It grows a little with the panel and then stops: a fixed cap made
+/// the width control feel dead and left a lake of grey margin at 90%.
+///
+/// CODE IS NOT CAPPED. Commands, stdout, JSON and diffs use the room the panel
+/// has, symmetrically, so the column stays centred. Wanting space for eighty
+/// columns of terminal output is *why* the window is large — capping it there
+/// would waste the width twice over.
+private func proseMeasure(for panelWidth: CGFloat) -> CGFloat {
+    // 680 at a narrow panel, easing to 760 at a wide one.
+    min(760, max(680, panelWidth * 0.62))
+}
+
+private func codeMeasure(for panelWidth: CGFloat) -> CGFloat {
+    // Everything the panel has, less the gutters the column already keeps.
+    max(proseMeasure(for: panelWidth), min(panelWidth - 96, 1180))
+}
+
+/// How wide a code box may grow. Passed down rather than measured per box, so
+/// every payload in a turn lines up instead of each finding its own edge.
+private struct CodeMeasureKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 680
+}
+
+extension EnvironmentValues {
+    var codeMeasure: CGFloat {
+        get { self[CodeMeasureKey.self] }
+        set { self[CodeMeasureKey.self] = newValue }
+    }
+}
 
 struct BlockConversation: View {
     let turns: [BlockTurn]
@@ -34,6 +57,9 @@ struct BlockConversation: View {
     var usage: BlockUsage?
 
     @State private var atBottom = true
+    /// The panel's own width, read once per layout — the column and the code
+    /// measure are both derived from it.
+    @State private var width: CGFloat = 900
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,6 +69,11 @@ struct BlockConversation: View {
                         LazyVStack(alignment: .leading, spacing: 22) {
                             ForEach(turns) { turn in
                                 BlockTurnView(turn: turn)
+                                    // THE COLUMN. Centred, so the conversation
+                                    // sits in the middle of a wide panel rather
+                                    // than pinned to its left edge.
+                                    .frame(maxWidth: proseMeasure(for: width), alignment: .leading)
+                                    .frame(maxWidth: .infinity, alignment: .center)
                             }
                             Color.clear
                                 .frame(height: 1)
@@ -76,6 +107,11 @@ struct BlockConversation: View {
 
             if let usage { UsageFooter(usage: usage) }
         }
+        .background(GeometryReader { geo in
+            Color.clear.onAppear { width = geo.size.width }
+                .onChange(of: geo.size.width) { w in width = w }
+        })
+        .environment(\.codeMeasure, codeMeasure(for: width))
     }
 
     /// What the pill says while something is running. Nil when everything has

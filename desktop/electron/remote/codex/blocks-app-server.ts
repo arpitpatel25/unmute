@@ -79,10 +79,57 @@ function countChange(diff: string, verb: 'Added' | 'Edited' | 'Deleted'): { adde
  * than the word `exec`. It never GUESSES at intent — an unrecognised command is
  * labelled by its own binary, not by a story about what it might be doing.
  */
+/**
+ * Dig the shell command out of whatever Codex wrapped it in.
+ *
+ * THIS IS WHERE "Ran const" CAME FROM. Codex CLI does not run bare shell — it
+ * runs JavaScript, and the command sits two layers inside:
+ *
+ *     const r = await tools.exec_command({"cmd":"sed -n '1,240p' …"}); text(r.output);
+ *
+ * Naming by first token found the keyword `const` and stamped it on every row
+ * in the panel. Three wrappers appear in real threads: this one, a bare JSON
+ * argument object, and `/bin/zsh -lc "…"`.
+ *
+ * Anything unrecognised is returned UNCHANGED. A wrong guess here would rename
+ * a command to something it never ran, which is worse than showing the source.
+ */
+export function shellCommandOf(raw: string): string {
+  const t = raw.trim()
+  if (!t) return t
+
+  // `…exec_command({"cmd":"…"})` or any JSON carrying a cmd/command key.
+  const keyed = /["'](?:cmd|command|script)["']\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(t)
+  if (keyed) {
+    try { return JSON.parse(`"${keyed[1]}"`) } catch { return keyed[1] }
+  }
+
+  // A shell wrapper: /bin/zsh -lc "the real command"
+  const shell = /^\S*(?:sh|zsh|bash)\s+-\w*c\s+["'](.+)["']$/s.exec(t)
+  if (shell) return shell[1]
+
+  return t
+}
+
+/**
+ * `start_session` → "Start session". The way Codex titles a tool call.
+ *
+ * An identifier is what the protocol calls it; a sentence is what the user
+ * reads. Codex shows "Start session", "Get window state", "Web arm" — never the
+ * snake_case id, and never the server bolted onto the front.
+ */
+export function toolTitle(name: string): string {
+  const words = name
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim()
+    .toLowerCase()
+  if (!words) return name
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
 export function commandLabel(command: string): string {
-  // Strip the shell wrapper Codex adds: /bin/zsh -lc "the real command"
-  const unwrapped = /^\S*(?:sh|zsh|bash)\s+-\w*c\s+["'](.+)["']$/s.exec(command.trim())
-  const cmd = (unwrapped ? unwrapped[1] : command).trim()
+  const cmd = shellCommandOf(command).trim()
   const head = cmd.split(/\s+/)[0] ?? ''
   const bin = head.split('/').pop() ?? head
 
@@ -179,8 +226,11 @@ export function blockFromCodexItem(raw: unknown): Block | null {
     }
 
     case 'commandExecution': {
-      const command = Array.isArray(item.command) ? item.command.join(' ') : (str(item.command) ?? '')
-      const named = commandLabel(command)
+      const raw = Array.isArray(item.command) ? item.command.join(' ') : (str(item.command) ?? '')
+      // SHOW THE COMMAND, NOT ITS TRANSPORT. A 400-character JS blob in the
+      // panel is unreadable; the shell line inside it is the thing that ran.
+      const command = shellCommandOf(raw)
+      const named = commandLabel(raw)
       const exitCode = num(pick(item, 'exitCode', 'exit_code'))
       const status = str(item.status)
       const running = status === 'inProgress' || status === 'running' || status === 'in_progress'

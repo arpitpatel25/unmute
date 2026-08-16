@@ -176,18 +176,65 @@ public struct WorkRun: Identifiable, Equatable, Sendable {
     public let note: String?
     public let steps: [Block]
 
+    /// `unmute-computer` → "Unmute Computer". A server id is what the protocol
+    /// calls it; a name is what the sentence needs.
+    static func integrationName(_ server: String) -> String {
+        server.split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    /// `start_session` → "Start session". Codex titles each call as a sentence;
+    /// the raw identifier belongs one level down, beside its output.
+    public static func callTitle(_ block: Block) -> String {
+        switch block.kind {
+        case "mcpCall":
+            let tool = block.tool ?? ""
+            return tool.isEmpty ? (block.server ?? "Tool call") : humanise(tool)
+        case "command":    return block.label ?? "Ran a command"
+        case "fileRead":   return "Read"
+        case "search":     return "Searched the web"
+        case "subAgent":   return block.name ?? "Sub-agent"
+        case "fileChange": return block.verb ?? "Changed a file"
+        default:           return humanise(block.kind)
+        }
+    }
+
+    static func humanise(_ name: String) -> String {
+        var s = ""
+        for ch in name {
+            if ch == "_" || ch == "-" { s.append(" ") }
+            else if ch.isUppercase && !s.isEmpty && s.last != " " { s.append(" "); s.append(ch) }
+            else { s.append(ch) }
+        }
+        let lower = s.trimmingCharacters(in: .whitespaces).lowercased()
+        guard let first = lower.first else { return name }
+        return String(first).uppercased() + lower.dropFirst()
+    }
+
     /// "Read files, ran 2 commands" — what happened, in the order it reads
     /// best, counted rather than listed.
     public var summary: String {
         var parts: [String] = []
         let n = { (kind: String) in self.steps.filter { $0.kind == kind }.count }
 
+        // NAME THEM, DO NOT COUNT THEM. Codex writes "Used Unmute Computer and
+        // Cua Computer Use integrations"; counting was the safe choice and it
+        // reads worse — the names are right there and they are the useful part.
         let mcp = steps.filter { $0.kind == "mcpCall" }
         if !mcp.isEmpty {
-            let servers = Set(mcp.compactMap { $0.server }.filter { !$0.isEmpty })
-            parts.append(servers.count == 1
-                ? "Used \(servers.first!)"
-                : "Used \(servers.count) integrations")
+            var seen: [String] = []
+            for s in mcp.compactMap({ $0.server }) where !s.isEmpty && !seen.contains(s) { seen.append(s) }
+            if !seen.isEmpty {
+                let names = seen.map(Self.integrationName)
+                let joined: String
+                switch names.count {
+                case 1:  joined = names[0]
+                case 2:  joined = "\(names[0]) and \(names[1])"
+                default: joined = names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+                }
+                parts.append("Used \(joined) integration\(names.count == 1 ? "" : "s")")
+            }
         }
         let reads = n("fileRead")
         if reads > 0 { parts.append(reads == 1 ? "read a file" : "read \(reads) files") }
