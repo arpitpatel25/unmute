@@ -1,6 +1,6 @@
 # Unmute Agent and Personal Memory — design
 
-**Status:** proposed for implementation
+**Status:** approved for implementation
 
 **Branch:** `unmute-agent-memory-codex`
 
