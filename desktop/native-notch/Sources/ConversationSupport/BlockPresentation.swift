@@ -58,7 +58,29 @@ public struct BlockTurn: Identifiable, Equatable, Sendable {
 }
 
 public enum BlockPresentation {
-    public static func build(_ blocks: [Block]) -> [BlockTurn] {
+    /// - Parameter running: whether the TASK is still working, which the task
+    ///   manager knows for certain and the blocks often cannot say. Claude's
+    ///   transcript carries no turn markers, so a turn whose last command had
+    ///   finished read as "Worked" while the agent was still thinking. The
+    ///   agent's own state settles it.
+    public static func build(_ blocks: [Block], running: Bool = false) -> [BlockTurn] {
+        var turns = buildTurns(blocks)
+        // Only the LAST turn can be the live one; everything above it is history
+        // whatever the task is doing now.
+        if running, let last = turns.indices.last, turns[last].reply == nil || turns[last].meta.isRunning {
+            let m = turns[last].meta
+            turns[last] = BlockTurn(
+                id: turns[last].id, prompt: turns[last].prompt, work: turns[last].work,
+                reply: turns[last].reply,
+                meta: BlockTurnMeta(status: "running", durationMs: m.durationMs, startedAt: m.startedAt,
+                                    steps: m.steps, files: m.files, added: m.added, removed: m.removed,
+                                    planDone: m.planDone, planTotal: m.planTotal),
+                sources: turns[last].sources)
+        }
+        return turns
+    }
+
+    static func buildTurns(_ blocks: [Block]) -> [BlockTurn] {
         var turns: [BlockTurn] = []
         var prompt: Block?
         var work: [Block] = []

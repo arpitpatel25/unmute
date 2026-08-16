@@ -59,7 +59,8 @@ struct TaskSurfaceView: View {
                     // the rest, two components showing the same thing where only
                     // one of them filled the space it was given.
                     ConversationPanel(rows: model.taskConversationRows, id: t.id,
-                                      blocks: model.taskBlocks, usage: model.taskUsage)
+                                      blocks: model.taskBlocks, usage: model.taskUsage,
+                                      running: t.status == .processing)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 10)
                     if t.status == .needsUser, let q = t.question {

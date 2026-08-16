@@ -203,14 +203,19 @@ private struct JumpToLatest: View {
 private struct UsageFooter: View {
     let usage: BlockUsage
 
-    private var filling: Bool { usage.fraction >= 0.70 }
+    /// A window we were never told is not a window. Claude does not report one,
+    /// so its line shows a bare total rather than a fraction against a number
+    /// somebody made up — which is how "401k / 200k · 100% full" appeared on a
+    /// session whose window was 1M.
+    private var known: Bool { usage.window > 0 }
+    private var filling: Bool { known && usage.fraction >= 0.70 }
 
     var body: some View {
         HStack(spacing: 5) {
             Spacer(minLength: 0)
             Text("Context")
                 .foregroundColor(filling ? Theme.cNeeds.opacity(0.75) : Theme.textFaint.opacity(0.7))
-            Text("\(short(usage.used)) / \(short(usage.window))")
+            Text(known ? "\(short(usage.used)) / \(short(usage.window))" : short(usage.used))
                 .foregroundColor(filling ? Theme.cNeeds : Theme.textFaint)
             if filling {
                 Text("· \(Int(usage.fraction * 100))% full")

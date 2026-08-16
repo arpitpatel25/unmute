@@ -275,4 +275,34 @@ final class BlockPresentationTests: XCTestCase {
     func testUsageFractionIsClamped() {
         XCTAssertEqual(BlockUsage(used: 300, window: 200).fraction, 1)
     }
+
+    // MARK: - the task's own state settles a live turn
+
+    func testARunningTaskMakesItsLastTurnRunning() {
+        // Claude's transcript carries no turn markers, so a turn whose last
+        // command had finished read as "Worked" while the agent was still
+        // thinking — the header contradicting the title bar beside it.
+        let turns = BlockPresentation.build([
+            msg("user", "check the models"), cmd("curl …"),
+        ], running: true)
+        XCTAssertTrue(turns[0].meta.isRunning)
+    }
+
+    func testOnlyTheLastTurnGoesLive() {
+        let turns = BlockPresentation.build([
+            msg("user", "q1"), cmd("a"), msg("assistant", "a1"),
+            msg("user", "q2"), cmd("b"),
+        ], running: true)
+        XCTAssertEqual(turns[0].meta.status, "done", "history stays history")
+        XCTAssertTrue(turns[1].meta.isRunning)
+    }
+
+    func testAnAnsweredTurnIsNotReopenedByAStaleRunningFlag() {
+        // The reply landed; a task-state flag that has not caught up must not
+        // drag a finished turn back to "Working".
+        let turns = BlockPresentation.build([
+            msg("user", "q"), cmd("a"), msg("assistant", "done"),
+        ], running: true)
+        XCTAssertEqual(turns[0].meta.status, "done")
+    }
 }

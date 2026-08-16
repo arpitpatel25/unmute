@@ -31,8 +31,16 @@ export interface ClaudeBlocks {
   title?: string
 }
 
-/** Claude Code's own context window. Not carried per message, so it is named here. */
-const CONTEXT_WINDOW = 200_000
+/**
+ * CLAUDE DOES NOT REPORT ITS CONTEXT WINDOW, so we do not invent one.
+ *
+ * A hardcoded 200k produced "Context 401k / 200k · 100% full" on an Opus 5
+ * session, whose window is 1M — confidently wrong about the one number the
+ * footer exists to give. Codex states `model_context_window` outright, so it
+ * keeps the full form; here the count goes out with no denominator and the
+ * surface shows a bare total rather than a false fraction.
+ */
+const CONTEXT_WINDOW = 0
 
 function textOfContent(content: unknown): string {
   if (typeof content === 'string') return content

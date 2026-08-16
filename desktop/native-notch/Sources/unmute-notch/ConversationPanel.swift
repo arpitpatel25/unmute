@@ -29,10 +29,13 @@ struct ConversationPanel: View {
     /// survives for tasks persisted before blocks shipped.
     var blocks: [Block] = []
     var usage: BlockUsage? = nil
+    /// Whether the agent is still working. The task manager knows this for
+    /// certain; the blocks often cannot say — see BlockPresentation.build.
+    var running: Bool = false
 
     var body: some View {
         if !blocks.isEmpty {
-            BlockConversation(turns: BlockPresentation.build(blocks), id: id, usage: usage)
+            BlockConversation(turns: BlockPresentation.build(blocks, running: running), id: id, usage: usage)
         } else if rows.isEmpty {
             Text("no messages yet")
                 .font(.system(size: 13))
