@@ -28,9 +28,17 @@ private let BLOCK_BOTTOM = "block-conversation-bottom"
 /// has, symmetrically, so the column stays centred. Wanting space for eighty
 /// columns of terminal output is *why* the window is large — capping it there
 /// would waste the width twice over.
+/// MEASURED, NOT GUESSED. Codex sets its reading column at 543pt of 14pt text —
+/// about 78 characters. Ours was 680–760, which at 13.5pt is 100–112 characters:
+/// already WIDER than Codex, so the "too much margin" was never a narrow column.
+/// It is that Codex fills the space beside its column with the Outputs panel
+/// while ours leaves it empty.
+///
+/// 620 is the compromise: comfortably past Codex's 543 so the gutters shrink,
+/// and short of the ~800 where the line return starts getting lost. It eases
+/// with the panel so the width control still does something.
 private func proseMeasure(for panelWidth: CGFloat) -> CGFloat {
-    // 680 at a narrow panel, easing to 760 at a wide one.
-    min(760, max(680, panelWidth * 0.62))
+    min(620, max(543, panelWidth * 0.52))
 }
 
 private func codeMeasure(for panelWidth: CGFloat) -> CGFloat {

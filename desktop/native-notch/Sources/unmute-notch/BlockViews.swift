@@ -153,14 +153,16 @@ private struct WorkGroup: View {
             Button {
                 withAnimation(.easeOut(duration: 0.16)) { open = !isOpen }
             } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(Theme.textFaint)
-                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                // Codex, measured: 14pt / 21, white at 60%, 4pt gap, and the
+                // chevron AFTER the text rather than before it.
+                HStack(spacing: 4) {
                     Text(headline)
-                        .font(.system(size: 12))
-                        .foregroundColor(Theme.textDim)
+                        .font(.system(size: 14))
+                        .foregroundColor(Theme.text.opacity(0.6))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(Theme.text.opacity(0.45))
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
                     if turn.meta.isRunning { RunningDot() }
                     Spacer(minLength: 0)
                 }
@@ -173,11 +175,13 @@ private struct WorkGroup: View {
             // open or shut, so a collapsed running turn still reports itself.
             if let summary = turn.meta.summary {
                 Text(summary)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundColor(Theme.textFaint)
-                    .padding(.leading, 15)
-                    .padding(.top, 3)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(Theme.text.opacity(0.4))
+                    .padding(.top, 2)
             }
+            // The rule Codex draws under the work header, separating what it
+            // did from what it said.
+            Rectangle().fill(Theme.hairline).frame(height: 0.5).padding(.top, 9)
 
             if isOpen {
                 // BOUNDED AND SCROLLED IN PLACE. Expanding used to insert every
@@ -241,10 +245,10 @@ private struct WorkRunView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let note = run.note {
-                // NARRATION IS MARKDOWN. Codex writes **bold headings** into it,
-                // and rendering it as plain text put the asterisks on screen.
-                MarkdownText(text: note, size: 12.5, color: Theme.textDim)
-                    .fixedSize(horizontal: false, vertical: true)
+                // NARRATION IS MARKDOWN, and Codex writes **bold headings**
+                // into it — which showed their asterisks under the inline-only
+                // renderer this replaces.
+                MarkdownBody(text: note, size: 14, color: Theme.textDim)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if !run.steps.isEmpty {
@@ -555,17 +559,16 @@ private struct BlockUserBubble: View {
     var body: some View {
         HStack(spacing: 0) {
             Spacer(minLength: 40)
+            // Codex, measured: 16pt / 24 line-height, radius 20, padding 8×12,
+            // background white at 5%. No border — the fill alone carries it.
             Text(text)
-                .font(.system(size: 13))
+                .font(.system(size: 16))
                 .foregroundColor(Theme.text)
+                .lineSpacing(24 - 16 * 1.2)
                 .fixedSize(horizontal: false, vertical: true)
-                // A bubble that grows to a 1,100pt panel stops reading as a
-                // bubble; it reads as another paragraph.
-                .frame(maxWidth: 520, alignment: .trailing)
-                .padding(.horizontal, 11)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Theme.raised))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hairline, lineWidth: 0.5))
+                .background(RoundedRectangle(cornerRadius: 20).fill(Color.white.opacity(0.05)))
                 .textSelection(.enabled)
         }
     }
@@ -574,8 +577,9 @@ private struct BlockUserBubble: View {
 private struct BlockAnswer: View {
     let text: String
     var body: some View {
-        MarkdownText(text: text, size: 13.5, color: Theme.text)
+        // 14pt, measured off Codex. The old renderer used inline-only markdown,
+        // so bullets and headings arrived as literal dashes and hashes.
+        MarkdownBody(text: text, size: 14, color: Theme.text)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
     }
 }

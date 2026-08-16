@@ -354,6 +354,39 @@ sessions persisted before the upgrade, not as a staging device.
 - **No input-path diff:** `git diff --stat` must not touch `sendTaskReply`,
   executors, CDP paste, or pasteboard files.
 
+## 8a. Codex's own numbers, measured
+
+Measured over CDP from the running Codex Desktop window on 2026-08-16, not
+estimated from screenshots. Re-run with
+`node electron/remote/codex/__fixtures__/measure.mjs` after `web_arm Codex`
+(the probe it evaluates is `probe.js` beside it).
+
+| | Codex |
+|---|---|
+| Body text | **14px**, line-height **22** (1.57), weight **445** |
+| Reading column | **543px** — about **78 characters** |
+| Heading (h2) | 20px / 28, weight 600 |
+| Sub-heading (h4) | 16px / 24, weight 445 |
+| Bullets | `disc`, `padding-inline-start: 21px`, `li padding-left: 2px`, white marker |
+| Nested bullets | `circle`, indent **21px**, `margin-top: 8px` |
+| List block | `margin-bottom: 10px`, no gap between items |
+| Inline code | **12.88px** ui-monospace, bg `white @ 12.6%`, padding `1px 6px`, radius **6** |
+| Work header | 14px / 21, colour `white @ 60%`, row gap **4px**, `align-items: center` |
+| Disclosure icon | **14×14** in a `0 0 20 20` viewBox, filled path, no stroke |
+| User bubble | 16px / 24, radius **20**, padding **8px 12px**, bg `white @ 5%` |
+
+**The column finding is the important one.** Codex sets prose at **543px / 78
+characters**. Ours caps at 680–760px, which at 13.5px is 100–112 characters —
+already *wider* than Codex, not narrower. The perceived "too much margin" is not
+a narrow column; it is that Codex fills the space beside its column with the
+Outputs/Sources panel while ours leaves it empty. Widening our text further
+moves away from Codex, not toward it.
+
+Bullets are `disc` then `circle` — dots, not dashes — at 21px indent. That is
+the single biggest visual gap, and it exists because
+`AttributedString(markdown:)` is used with `.inlineOnlyPreservingWhitespace`,
+which renders **bold** and `code` but leaves `- ` and `## ` as literal text.
+
 ## 9. Fidelity
 
 Rather than eyeballing spacing, measure the real Codex window over CDP —
