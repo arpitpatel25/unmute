@@ -57,7 +57,7 @@ function blocksChanged(prev: Block[] | undefined, next: Block[]): boolean {
 }
 import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
-import { resolveTranscriptById } from './trace-reducer'
+import { resolveTranscriptById, locateTranscript } from './trace-reducer'
 import { rollupCodexEvents, conversationFromCodexEvents } from './codex/cli-observer'
 import { discoverSessionId, findRollout, readRolloutEvents } from './codex/cli-session'
 import { projectSlug } from './projects'
@@ -2066,7 +2066,18 @@ export class TaskManager extends EventEmitter {
       await this.refreshCodexBlocks(task)
       return
     }
-    const path = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
+    // BY SESSION ID IF WE KNOW IT, BY DIRECTORY IF WE DO NOT.
+    //
+    // Claude names its transcript after ITS OWN session id, which Unmute only
+    // learns once a hook fires. For the first seconds of a task — exactly when
+    // someone is watching it work — sessionId is still the task id and the path
+    // does not resolve, so the panel stayed empty while the terminal filled.
+    //
+    // locateTranscript keys on the task's cwd instead. Every task gets its own
+    // directory named after the task id, so the newest transcript in it belongs
+    // to this task and nothing else.
+    const path = (task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null)
+      ?? await locateTranscript(task.cwd)
     if (path) await this.refreshClaudeBlocks(task, path, log.child({ taskId: id }))
   }
 
