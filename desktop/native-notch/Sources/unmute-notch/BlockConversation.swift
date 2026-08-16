@@ -34,20 +34,32 @@ private let BLOCK_BOTTOM = "block-conversation-bottom"
 /// It is that Codex fills the space beside its column with the Outputs panel
 /// while ours leaves it empty.
 ///
-/// HALF THE GUTTER, by request. At 620 the margins ran to ~350pt a side on a
-/// wide panel and read as a void; this cuts them roughly in half.
+/// THE COLUMN IS A FRACTION OF THE PANEL, so widening the surface widens the
+/// reading area by the same proportion — same type size, more words per line.
 ///
-/// It is knowingly past the typographic ideal — Codex sets 543 and the
-/// comfortable ceiling is around 800 — so the cap at 900 is the guard: beyond
-/// it the line return genuinely starts getting lost, which was the original
-/// complaint. One number, easy to move.
+/// A fixed cap used to bind here, which meant the last step of the width control
+/// bought nothing: 894 → 900 between 80% and 90%. Now every step moves by the
+/// same ratio the window does.
+///
+///     70%  panel 1029 → column 782, margins 123
+///     80%  panel 1176 → column 894, margins 141
+///     90%  panel 1323 → column 1005, margins 159
+///
+/// This is the whole conversation measure — the user's bubble hangs off its
+/// right edge and the reply runs from its left, so both move together and the
+/// exchange stays one column rather than two things drifting apart.
+private let COLUMN_FRACTION: CGFloat = 0.76
+
 private func proseMeasure(for panelWidth: CGFloat) -> CGFloat {
-    min(900, max(543, panelWidth * 0.76))
+    // The floor matters only for a panel too narrow to have a sensible column;
+    // there is deliberately no ceiling, so the control never stops working.
+    max(543, panelWidth * COLUMN_FRACTION)
 }
 
 private func codeMeasure(for panelWidth: CGFloat) -> CGFloat {
-    // Everything the panel has, less the gutters the column already keeps.
-    max(proseMeasure(for: panelWidth), min(panelWidth - 96, 1180))
+    // Everything the panel has, less a gutter — terminal output, JSON and diffs
+    // are why the window is large, so they are never narrower than the prose.
+    max(proseMeasure(for: panelWidth), panelWidth - 96)
 }
 
 /// How wide a code box may grow. Passed down rather than measured per box, so
@@ -125,6 +137,15 @@ struct BlockConversation: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             }
         }
+        // FILL FIRST, THEN MEASURE. Without this frame the stack sized itself to
+        // its content, the content was sized by `width`, and `width` was read
+        // back off the stack — a loop SwiftUI settles once and never revisits.
+        // The column froze at whatever the initial value produced and the width
+        // control did nothing, at any setting.
+        //
+        // `maxWidth: .infinity` makes the stack take the panel's width outright,
+        // so what the reader sees no longer depends on what the reader set.
+        .frame(maxWidth: .infinity)
         .background(GeometryReader { geo in
             Color.clear.onAppear { width = geo.size.width }
                 .onChange(of: geo.size.width) { w in width = w }
