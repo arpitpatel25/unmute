@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import path from 'path'
 import { keyListener } from './keyListener'
 import { handOffImages, pasteboardServesReadablePNG, CLIPBOARD_PNG_INFO_SCRIPT, VERIFY_TIMEOUT_MS, type PasteModifier } from './pasteboardHandoff'
+import { captureSelection } from './selectionCapture'
 import { HistoryPasteStage } from './historyPasteStage'
 // Static import (a lazy require of this path can't resolve inside the bundled
 // main — proven live: 'Cannot find module' swallowed by the fail-open catch).
@@ -326,69 +327,54 @@ function simulateViaOsascript(key: string, modifier: string): Promise<void> {
  * Try to capture selected text from the active application.
  *
  * Strategy:
- * 1. First, try simulating Cmd+C via globe-listener/osascript (requires Accessibility permission)
- * 2. If that fails, fall back to reading the current clipboard contents
- *    (user must have manually copied text with Cmd+C before triggering)
+ * 1. Simulate Cmd+C via osascript (requires Accessibility permission) and take
+ *    whatever the frontmost app copies.
+ * 2. If there is no selection — because nothing was highlighted, OR because the
+ *    simulation could not run at all — optionally stand the user's existing
+ *    pasteboard in for one.
  *
- * @param useClipboardFallback If true, reads clipboard as fallback when osascript fails
+ * The ORDER and the restore live in `captureSelection`, which is pure and
+ * tested; this function is only the electron effects it drives. Step 2 used to
+ * be reachable from the simulation-failure branch alone, which meant it never
+ * ran on a machine where Accessibility worked — see selectionCapture.ts.
+ *
+ * @param useClipboardFallback If true, the pasteboard stands in when there is
+ *   no selection. Decided by the CALLER from what it is gathering text for,
+ *   never inferred here.
  */
 export async function captureSelectedText(useClipboardFallback: boolean = false): Promise<string | null> {
   try {
-    // Save current clipboard content
-    const savedClipboard = clipboard.readText()
-    console.log('[clipboard] Current clipboard length:', savedClipboard.length)
+    const before = clipboard.readText()
+    console.log('[clipboard] Current clipboard length:', before.length)
 
-    // Clear clipboard to detect if Cmd+C actually copies something new
-    clipboard.writeText('')
-    noteOurWrite() // (1) ours — the clear
+    const { text, source } = await captureSelection({
+      readClipboardText: () => clipboard.readText(),
+      writeTextAndRecord: (t: string) => {
+        clipboard.writeText(t)
+        // EVERY write announces itself, synchronously. The copy in the middle is
+        // CAUSED by us but PERFORMED by System Events in another process, so its
+        // counter value can only be read once the child has completed — miss it
+        // and the user's own selection is inserted at the top of EVERY SINGLE
+        // dictation, the corruption this whole design exists to prevent.
+        noteOurWrite()
+      },
+      simulateCopy: async () => {
+        await simulateKeyCombo('c', 'command')
+        noteOurWrite() // the copy the child just performed into our cleared slot
+      },
+      settle: sleep,
+    }, { useClipboardFallback })
 
-    // Try to simulate Cmd+C
-    try {
-      await simulateKeyCombo('c', 'command')
-      // (2) THE ONE THAT IS EASY TO MISS. The copy above is CAUSED by us but
-      // PERFORMED by System Events in another process, so its counter value
-      // cannot be known in advance — it can only be read once the child has
-      // completed. Miss it and the user's current selection is inserted at the
-      // top of EVERY SINGLE DICTATION, which is precisely the corruption this
-      // whole design exists to prevent.
-      noteOurWrite()
-      // Wait for clipboard to update
-      await sleep(150)
-
-      // Read the new clipboard content
-      const selectedText = clipboard.readText()
-      console.log('[clipboard] After Cmd+C, clipboard length:', selectedText.length, 'text:', selectedText ? JSON.stringify(selectedText.substring(0, 80)) : 'empty')
-
-      // Restore original clipboard
-      clipboard.writeText(savedClipboard)
-      noteOurWrite() // (3) ours — the restore
-
-      // If clipboard is still empty, nothing was selected
-      if (!selectedText || selectedText.trim() === '') {
-        console.log('[clipboard] No text was selected via Cmd+C')
-        return null
-      }
-
-      return selectedText
-    } catch {
-      // Simulation failed — Accessibility not granted
-      console.log('[clipboard] Cmd+C simulation failed (Accessibility permission needed)')
-
-      // Restore clipboard (we cleared it above)
-      clipboard.writeText(savedClipboard)
-      noteOurWrite() // (3b) ours — the restore on the FAILURE branch, which
-      // still writes. A write that skips its record is indistinguishable from
-      // a user copy, so every branch that writes must announce itself.
-
-      // Fallback: use clipboard contents as context if requested
-      if (useClipboardFallback && savedClipboard && savedClipboard.trim() !== '') {
-        console.log('[clipboard] Using clipboard contents as context (fallback), length:', savedClipboard.length)
-        console.log('[clipboard] Clipboard preview:', JSON.stringify(savedClipboard.substring(0, 100)))
-        return savedClipboard
-      }
-
-      return null
+    if (source === 'selection') {
+      console.log('[clipboard] Captured selection, length:', text!.length, 'text:', JSON.stringify(text!.substring(0, 80)))
+    } else if (source === 'clipboard') {
+      console.log('[clipboard] No selection — using clipboard contents as context, length:', text!.length)
+      console.log('[clipboard] Clipboard preview:', JSON.stringify(text!.substring(0, 100)))
+    } else {
+      console.log('[clipboard] No text was selected, and no clipboard stand-in was requested or available')
     }
+
+    return text
   } catch (err) {
     console.error('[clipboard] Failed to capture selected text:', err)
     return null
