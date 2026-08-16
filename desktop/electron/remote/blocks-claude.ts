@@ -18,6 +18,7 @@
  */
 
 import type { Block, Source } from './blocks'
+import { commandLabel } from './codex/blocks-app-server'
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? v as Record<string, unknown> : {})
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
@@ -240,8 +241,13 @@ function startTool(name: string, input: Record<string, unknown>, entry: Record<s
     }
   }
   switch (name) {
-    case 'Bash':
-      return { kind: 'command', label: 'Bash', command: str(input.command) ?? '', status: 'running' }
+    case 'Bash': {
+      // NAMED BY WHAT IT DID, like the Codex lane. "Bash" twenty times down the
+      // panel is the interpreter, not the act — the command line already says
+      // what happened.
+      const command = str(input.command) ?? ''
+      return { kind: 'command', label: commandLabel(command), command, status: 'running' }
+    }
     case 'Read':
       return { kind: 'fileRead', path: str(input.file_path) ?? '' }
     case 'Edit':

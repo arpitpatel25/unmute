@@ -113,8 +113,31 @@ function textOfContent(v: unknown): string {
   return v.map((p) => str(obj(p).text) ?? '').filter(Boolean).join('')
 }
 
+/**
+ * Is this text something Codex injected rather than something you typed?
+ *
+ * MEASURED IN A REAL THREAD: alongside one genuine prompt, the rollout carried
+ * `<recommended_plugins>`, `<environment_context>` and an AGENTS.md preamble as
+ * USER-ROLE records. Rendering them opened the panel with a wall of plugin
+ * listings and XML the user never wrote.
+ *
+ * Conservative on purpose — it matches the wrapper, not the content. A prompt
+ * that merely mentions a tag is unaffected, because a real message does not
+ * BEGIN with one.
+ */
+function isInjected(text: string): boolean {
+  const t = text.trimStart()
+  if (/^<\/?[a-z_][a-z0-9_-]*>/i.test(t)) return true          // <environment_context>, <INSTRUCTIONS>
+  if (/^#+\s*AGENTS\.md\b/i.test(t)) return true               // repo instructions preamble
+  if (/^<!--/.test(t)) return true                             // comment-fenced injections
+  return false
+}
+
 export function blocksFromRollout(text: string): RolloutBlocks {
   const blocks: Block[] = []
+  /** Prompts from response_item records, used only if no events exist. */
+  const fallbackUserMessages: string[] = []
+  let sawUserEvent = false
   // call_id → index in `blocks`, so an output can complete the call that opened
   // several lines earlier without re-walking what we have already emitted.
   const pending = new Map<string, number>()
@@ -135,7 +158,9 @@ export function blocksFromRollout(text: string): RolloutBlocks {
     switch (t) {
       case 'user_message': {
         const message = str(p.message)
-        if (message) blocks.push({ kind: 'message', role: 'user', text: message })
+        if (!message) break
+        sawUserEvent = true
+        if (!isInjected(message)) blocks.push({ kind: 'message', role: 'user', text: message })
         break
       }
 
@@ -302,21 +327,36 @@ export function blocksFromRollout(text: string): RolloutBlocks {
       }
 
       case 'message': {
-        // response_item/message — the transcript's own copy. Only the USER side
-        // is trusted: Codex injects synthetic developer and tool messages here
-        // (<app-context>, permissions preambles) that were never said.
+        // response_item/message — the transcript's own copy of the prompt.
+        //
+        // HELD BACK, NOT EMITTED. Codex records the same prompt as BOTH an
+        // event and a response_item, so emitting here put every question on
+        // screen twice. The event is the authority. These are kept aside and
+        // used only if the thread turns out to have no events at all, which is
+        // the case for older rollouts — dropping them outright would leave
+        // those threads showing no question.
         if (str(p.role) !== 'user') break
         const body = textOfContent(p.content)
-        // Already emitted by the event_msg above; this is the duplicate.
-        if (body && !blocks.some((b) => b.kind === 'message' && b.text === body)) {
-          blocks.push({ kind: 'message', role: 'user', text: body })
-        }
+        if (body && !isInjected(body)) fallbackUserMessages.push(body)
         break
       }
 
       default:
         break
     }
+  }
+
+  // No events in this thread — an older rollout. Its prompts live only in the
+  // response_items held back above, so use them rather than show no question.
+  if (!sawUserEvent && fallbackUserMessages.length) {
+    const seen = new Set<string>()
+    const restored: Block[] = []
+    for (const t of fallbackUserMessages) {
+      if (seen.has(t)) continue
+      seen.add(t)
+      restored.push({ kind: 'message', role: 'user', text: t })
+    }
+    blocks.unshift(...restored)
   }
 
   return {

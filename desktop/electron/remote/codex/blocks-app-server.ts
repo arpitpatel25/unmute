@@ -155,8 +155,25 @@ export function commandLabel(command: string): string {
     case 'pwd':
     case 'echo':    return 'Checked the workspace'
     case '':        return 'Ran a command'
-    default:        return `Ran ${bin}`
+    default:
+      // JAVASCRIPT, NOT A SHELL LINE. Codex CLI executes JS, and when no shell
+      // command can be lifted out of it the first token is a keyword — which
+      // is where "Ran const" came from. Naming the language beats naming the
+      // syntax.
+      if (/^(const|let|var|await|async|function|return|import)$/.test(bin)) return 'Ran a script'
+      return `Ran ${bin}`
   }
+}
+
+/**
+ * Text Codex injected into the user slot, rather than words the user typed.
+ *
+ * Matches the WRAPPER, not the content: a real message never begins with an XML
+ * tag or an AGENTS.md heading, so a prompt that merely mentions one is safe.
+ */
+export function isInjectedUserText(text: string): boolean {
+  const t = text.trimStart()
+  return /^<\/?[a-z_][a-z0-9_-]*>/i.test(t) || /^#+\s*AGENTS\.md\b/i.test(t) || /^<!--/.test(t)
 }
 
 function textOfContent(v: unknown): string {
@@ -197,8 +214,14 @@ export function blockFromCodexItem(raw: unknown): Block | null {
   if (!type) return null
   // Normalise the casing difference between the wire and the rollout.
   switch (type.charAt(0).toLowerCase() + type.slice(1)) {
-    case 'userMessage':
-      return { kind: 'message', role: 'user', text: textOfContent(item.content) }
+    case 'userMessage': {
+      const text = textOfContent(item.content)
+      // WHAT CODEX INJECTS IS NOT WHAT YOU SAID. <environment_context>,
+      // <recommended_plugins> and AGENTS.md preambles arrive as USER-role
+      // items; shown, they open the panel with a wall of XML nobody typed.
+      if (!text || isInjectedUserText(text)) return null
+      return { kind: 'message', role: 'user', text }
+    }
 
     case 'agentMessage': {
       const text = str(item.text) ?? textOfContent(item.content)

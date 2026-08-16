@@ -16,6 +16,43 @@ const run = (lines: string[]) => blocksFromRollout(lines.join('\n'))
 const only = <K extends Block['kind']>(bs: Block[], k: K) =>
   bs.filter((b): b is Extract<Block, { kind: K }> => b.kind === k)
 
+// ── what Codex injects is not what you said ────────────────────────────────
+
+test('Codex\'s injected preambles are not shown as your messages', () => {
+  // MEASURED IN A REAL THREAD: alongside one genuine prompt, the rollout
+  // carried <recommended_plugins> and <environment_context> as user-role
+  // records. They rendered as your bubbles, so the panel opened with a wall of
+  // plugin listings you never typed.
+  const { blocks } = run([
+    ri('message', { role: 'user', content: [{ type: 'input_text', text: '<recommended_plugins>\nHere is a list of plugins…' }] }),
+    ri('message', { role: 'user', content: [{ type: 'input_text', text: '<environment_context>\n<cwd>/tmp</cwd>' }] }),
+    ri('message', { role: 'user', content: [{ type: 'input_text', text: '# AGENTS.md instructions\n\nDo the thing.' }] }),
+    ev('user_message', { message: 'the real prompt' }),
+  ])
+  const m = only(blocks, 'message')
+  assert.equal(m.length, 1)
+  assert.equal(m[0].text, 'the real prompt')
+})
+
+test('the same prompt recorded twice appears once', () => {
+  // Codex writes the prompt as an event AND as a response_item. Emitting both
+  // put your question on screen twice, one bubble under the other.
+  const { blocks } = run([
+    ev('user_message', { message: 'audit the numbers' }),
+    ri('message', { role: 'user', content: [{ type: 'input_text', text: 'audit the numbers' }] }),
+  ])
+  assert.equal(only(blocks, 'message').length, 1)
+})
+
+test('a thread with only response_item records still shows its prompt', () => {
+  // Older rollouts carry no user_message events. Dropping response_item
+  // wholesale would leave those threads with no question at all.
+  const { blocks } = run([
+    ri('message', { role: 'user', content: [{ type: 'input_text', text: 'an older prompt' }] }),
+  ])
+  assert.equal(only(blocks, 'message')[0].text, 'an older prompt')
+})
+
 test('a user message becomes a user message block', () => {
   const { blocks } = run([ev('user_message', { message: 'audit the numbers' })])
   const m = only(blocks, 'message')

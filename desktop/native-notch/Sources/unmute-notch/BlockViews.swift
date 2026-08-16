@@ -559,12 +559,15 @@ private struct BlockUserBubble: View {
     var body: some View {
         HStack(spacing: 0) {
             Spacer(minLength: 40)
-            // Codex, measured: 16pt / 24 line-height, radius 20, padding 8×12,
-            // background white at 5%. No border — the fill alone carries it.
+            // YOUR TEXT IS THE SAME SIZE AS THE AGENT'S. The 16pt I measured
+            // off Codex belonged to its composer, not its prompt bubble — set
+            // on a reply it read as shouting next to the 14pt answer beneath.
+            // Everything else here is measured: radius 20, padding 8×12,
+            // background white at 5%, no border.
             Text(text)
-                .font(.system(size: 16))
+                .font(.system(size: 14))
                 .foregroundColor(Theme.text)
-                .lineSpacing(24 - 16 * 1.2)
+                .lineSpacing(22 - 14 * 1.2)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)

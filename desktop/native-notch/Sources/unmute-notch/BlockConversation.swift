@@ -34,11 +34,15 @@ private let BLOCK_BOTTOM = "block-conversation-bottom"
 /// It is that Codex fills the space beside its column with the Outputs panel
 /// while ours leaves it empty.
 ///
-/// 620 is the compromise: comfortably past Codex's 543 so the gutters shrink,
-/// and short of the ~800 where the line return starts getting lost. It eases
-/// with the panel so the width control still does something.
+/// HALF THE GUTTER, by request. At 620 the margins ran to ~350pt a side on a
+/// wide panel and read as a void; this cuts them roughly in half.
+///
+/// It is knowingly past the typographic ideal — Codex sets 543 and the
+/// comfortable ceiling is around 800 — so the cap at 900 is the guard: beyond
+/// it the line return genuinely starts getting lost, which was the original
+/// complaint. One number, easy to move.
 private func proseMeasure(for panelWidth: CGFloat) -> CGFloat {
-    min(620, max(543, panelWidth * 0.52))
+    min(900, max(543, panelWidth * 0.76))
 }
 
 private func codeMeasure(for panelWidth: CGFloat) -> CGFloat {
