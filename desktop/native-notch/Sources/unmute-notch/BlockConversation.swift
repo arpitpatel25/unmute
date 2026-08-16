@@ -117,7 +117,13 @@ struct BlockConversation: View {
                 .onChange(of: id) { _ in proxy.scrollTo(BLOCK_BOTTOM, anchor: .bottom) }
             }
 
-            if let usage { UsageFooter(usage: usage) }
+            if let usage {
+                // Aligned to the reading column, not the panel edge — a caption
+                // belongs under the thing it describes.
+                UsageFooter(usage: usage)
+                    .frame(maxWidth: proseMeasure(for: width), alignment: .trailing)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
         .background(GeometryReader { geo in
             Color.clear.onAppear { width = geo.size.width }
@@ -178,36 +184,46 @@ private struct JumpToLatest: View {
     }
 }
 
-/// Context usage, where every app that has one puts it.
+/// HOW FULL THIS CONVERSATION IS. One quiet line, and nothing else.
+///
+/// What this replaces put two unrelated numbers on one row: the context window,
+/// and the plan quota — with a bar tracking the first while the words stated the
+/// second, so a bar at 22% sat beside "45% used" and read as a contradiction.
+/// The plan quota is gone. It answers a different question, moves on a weekly
+/// cycle rather than per turn, and there is nothing to do about it mid-thread,
+/// which is the test for earning a permanent place under every reply.
+///
+/// THE NOUN LEADS. A bare "201k / 258k" could be tokens, messages, credits or
+/// minutes; at this size the word is what makes the line scannable. "Context"
+/// is also what the agent itself says when it runs out of it.
+///
+/// It turns amber past 70% — the same row, the same words, just no longer
+/// ignorable — because that is when a compaction is coming and knowing early is
+/// the only thing you can act on.
 private struct UsageFooter: View {
     let usage: BlockUsage
 
+    private var filling: Bool { usage.fraction >= 0.70 }
+
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 5) {
+            Spacer(minLength: 0)
+            Text("Context")
+                .foregroundColor(filling ? Theme.cNeeds.opacity(0.75) : Theme.textFaint.opacity(0.7))
             Text("\(short(usage.used)) / \(short(usage.window))")
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(Theme.textFaint)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Theme.hairline)
-                    Capsule()
-                        .fill(usage.fraction > 0.85 ? Theme.cNeeds : Theme.textDim)
-                        .frame(width: max(0, geo.size.width * usage.fraction))
-                }
-            }
-            .frame(height: 3)
-            if let pct = usage.rateLimitPercent {
-                Text("\(pct)% used")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(Theme.textFaint)
+                .foregroundColor(filling ? Theme.cNeeds : Theme.textFaint)
+            if filling {
+                Text("· \(Int(usage.fraction * 100))% full")
+                    .foregroundColor(Theme.cNeeds)
             }
         }
-        .padding(.top, 9)
-        .overlay(Rectangle().fill(Theme.hairlineSoft).frame(height: 0.5), alignment: .top)
+        .font(.system(size: 10, design: .monospaced))
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 
-    /// An unknown window shows as "—" rather than 0k, which would read as a
-    /// real measurement of nothing.
+    /// An unknown window shows as "—" rather than 0k, which would read as a real
+    /// measurement of nothing.
     private func short(_ n: Int) -> String {
         if n <= 0 { return "—" }
         if n < 1000 { return "\(n)" }
