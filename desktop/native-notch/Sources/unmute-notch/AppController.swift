@@ -1183,6 +1183,25 @@ final class AppController: NSObject, NotchResizing {
             if typing { return e }
             guard self.model.state == .cockpit || self.model.state == .task else { return e }
             if e.keyCode == 48 { self.model.emit(.next); return nil }            // Tab → crank
+            // ARROWS WALK THE CRANK, and only here.
+            //
+            // The Prev/Next buttons were the only way through a wall of tasks,
+            // and reaching for a mouse to read the next one is the wrong shape
+            // for a surface you opened with your voice.
+            //
+            // SCOPED TO THE ENGAGED SURFACES ON PURPOSE. Task and cockpit are
+            // already key windows — `allowsKey = engaged` above — so this is a
+            // LOCAL monitor consuming a key the panel legitimately owns, and it
+            // costs nothing anywhere else. The pocket is deliberately excluded:
+            // it never takes key, so arrows there would need a system-wide tap,
+            // and arrows are pressed far more than Escape ever was — the video
+            // playing behind the notch seeks with them. That is the same tap
+            // that cost us dictation-cancel on 2026-08-16.
+            //
+            // The `typing` guard above already yields to the composer, so a
+            // caret in a draft still moves a caret.
+            if e.keyCode == 124 { self.model.emit(.next); return nil }           // →
+            if e.keyCode == 123 { self.model.emit(.prev); return nil }           // ←
             if let ch = e.charactersIgnoringModifiers?.lowercased() {
                 if ch == "f", self.model.state == .cockpit, self.model.focusedId != nil {
                     self.model.stageFull.toggle(); return nil
