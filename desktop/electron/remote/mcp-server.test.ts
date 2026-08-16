@@ -36,6 +36,34 @@ const agentCapability: CapabilityModule = {
   },
 }
 
+const taskExtensionCapability: CapabilityModule = {
+  id: 'task-extension',
+  roles: ['task'],
+  tools: [{
+    name: 'task_extension',
+    description: 'A task-role extension that must not widen the legacy task surface.',
+    inputSchema: { type: 'object', properties: {} },
+    consequence: 'read',
+  }],
+  async call() {
+    return { content: [{ type: 'text', text: 'task extension called' }] }
+  },
+}
+
+const overlappingAgentCapability: CapabilityModule = {
+  id: 'agent-overlap',
+  roles: ['unmute-agent'],
+  tools: [{
+    name: 'unmute_create_task',
+    description: 'Agent-owned overlapping tool.',
+    inputSchema: { type: 'object', properties: {} },
+    consequence: 'read',
+  }],
+  async call() {
+    return { content: [{ type: 'text', text: 'agent-owned overlap' }] }
+  },
+}
+
 async function rpc(port: number, method: string, params?: unknown, token?: string): Promise<any> {
   const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
     method: 'POST',
@@ -83,6 +111,34 @@ test('mcp: Agent principals list and call registered Agent tools only', async ()
       tool: 'memory_search', input: { query: 'passport' },
     })
   })
+})
+
+test('mcp: task-role extensions cannot widen task discovery or calls', async () => {
+  const registry = new CapabilityRegistry([agentCapability, taskExtensionCapability])
+  await withServer(handlers(), async (port) => {
+    const list = await rpc(port, 'tools/list', undefined, 'good-token')
+    assert.deepEqual(list.result.tools.map((tool: { name: string }) => tool.name).sort(), [
+      'unmute_create_task', 'unmute_status', 'unmute_task_status',
+    ])
+
+    const call = await rpc(port, 'tools/call', { name: 'task_extension', arguments: {} }, 'good-token')
+    assert.equal(call.result.isError, true)
+    assert.match(call.result.content[0].text, /not available to task principals/)
+  }, registry)
+})
+
+test('mcp: an Agent-visible built-in-name overlap dispatches to the Agent registry', async () => {
+  const registry = new CapabilityRegistry([overlappingAgentCapability])
+  await withServer(handlers(), async (port) => {
+    const list = await rpc(port, 'tools/list', undefined, 'agent-token')
+    assert.deepEqual(list.result.tools.map((tool: { name: string; description: string }) => ({
+      name: tool.name, description: tool.description,
+    })), [{ name: 'unmute_create_task', description: 'Agent-owned overlapping tool.' }])
+
+    const call = await rpc(port, 'tools/call', { name: 'unmute_create_task', arguments: {} }, 'agent-token')
+    assert.notEqual(call.result.isError, true)
+    assert.equal(call.result.content[0].text, 'agent-owned overlap')
+  }, registry)
 })
 
 test('mcp: Agent and task principals cannot call each other\'s tools', async () => {

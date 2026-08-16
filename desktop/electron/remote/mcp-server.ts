@@ -320,7 +320,7 @@ async function handleRequest(
     case 'tools/list':
       respond(rpcResult(msg.id, {
         tools: caller
-          ? [...taskRegistry.tools(caller), ...registry.tools(caller)].map(mcpTool)
+          ? (caller.kind === 'task' ? taskRegistry : registry).tools(caller).map(mcpTool)
           : [],
       }))
       return
@@ -338,9 +338,8 @@ async function handleRequest(
         return
       }
       try {
-        const result = knownTaskTools.has(toolName)
-          ? await taskRegistry.call(caller, toolName, args)
-          : await registry.call(caller, toolName, args)
+        const principalRegistry = caller.kind === 'task' ? taskRegistry : registry
+        const result = await principalRegistry.call(caller, toolName, args)
         respond(rpcResult(msg.id, result))
         return
       } catch (e) {
