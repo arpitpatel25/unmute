@@ -22,7 +22,14 @@ import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { EventEmitter } from 'node:events'
-import { createLogger } from './log'
+import { createLogger, remoteLogDir } from './log'
+import { tapPty } from './pty-tap'
+
+/** Tap a task's PTY bytes next to the run logs. No-op unless the tap is on. */
+function tapPtyForTask(taskId: string, dir: 'in' | 'out', bytes: Buffer, atMs: number): void {
+  const logsDir = remoteLogDir()
+  if (logsDir) tapPty(logsDir, taskId, dir, bytes, atMs)
+}
 import {
   scaffoldStatusFile,
   writeStatusFile,
@@ -777,6 +784,10 @@ export class TaskManager extends EventEmitter {
       this.outputBuffers.set(id, '')
       ex.onData((chunk) => {
         tlog.debug('pty-data', { chunk })
+        // Untruncated copy for diagnosis. The line above is capped at 2000 chars
+        // by the logger, which is exactly why three theories about why a session
+        // dies could not be settled. Off unless UNMUTE_PTY_TAP=1.
+        tapPtyForTask(id, 'out', Buffer.from(chunk), this.clock())
         const cur = (this.outputBuffers.get(id) ?? '') + chunk
         this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
         this.emit('output', { taskId: id, chunk })
@@ -4084,6 +4095,10 @@ export class TaskManager extends EventEmitter {
       this.outputBuffers.set(id, this.outputBuffers.get(id) ?? '')
       ex.onData((chunk) => {
         tlog.debug('pty-data', { chunk })
+        // Untruncated copy for diagnosis. The line above is capped at 2000 chars
+        // by the logger, which is exactly why three theories about why a session
+        // dies could not be settled. Off unless UNMUTE_PTY_TAP=1.
+        tapPtyForTask(id, 'out', Buffer.from(chunk), this.clock())
         const cur = (this.outputBuffers.get(id) ?? '') + chunk
         this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
         this.emit('output', { taskId: id, chunk })
@@ -4258,6 +4273,11 @@ export class TaskManager extends EventEmitter {
     const wt = this.warmTimers.get(id)
     if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
     this.trackTypedTurn(id, data)
+    // The other half of the tap. This path carries BOTH real keystrokes and the
+    // emulator's own protocol replies (DA, colour, size) with nothing to tell
+    // them apart — which is the ambiguity that has to be resolved before any of
+    // the terminal failures can be fixed. Off unless UNMUTE_PTY_TAP=1.
+    tapPtyForTask(id, 'in', Buffer.from(data), this.clock())
     ex.write(data)
   }
 
