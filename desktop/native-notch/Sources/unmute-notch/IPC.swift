@@ -637,8 +637,16 @@ enum IPC {
             var buffer = Data()
             while true {
                 let chunk = input.availableData
-                if chunk.isEmpty { // EOF — parent gone; exit cleanly
-                    DispatchQueue.main.async { onCommand(.quit) }
+                if chunk.isEmpty { // EOF — parent gone
+                    // ASK NICELY, THEN LEAVE ANYWAY.
+                    //
+                    // This used to dispatch .quit and return, which made the
+                    // only escape hatch depend on the main thread being healthy.
+                    // When it was not, an orphaned notch kept a screenSaver-level
+                    // window over every other app with nothing driving it — and
+                    // force-quitting "unmute" never touched it, because this
+                    // process is called unmute-notch. People rebooted.
+                    Lifecycle.shutdownNow(reason: "stdin-eof", onCommand: onCommand)
                     return
                 }
                 buffer.append(chunk)
