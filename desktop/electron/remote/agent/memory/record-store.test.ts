@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises'
+import { link, mkdir, mkdtemp, open, readFile, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import test from 'node:test'
@@ -7,6 +7,7 @@ import test from 'node:test'
 import { MemoryCrypto } from './crypto.ts'
 import {
   EncryptedRecordStore,
+  deserializeMemoryRecord,
   presentMemoryRecord,
   serializeMemoryRecord,
   type RecordStoreFileSystem,
@@ -62,11 +63,18 @@ function nodeFileSystem(overrides: Partial<RecordStoreFileSystem> = {}): RecordS
     async mkdir(path, options) { await mkdir(path, options) },
     readFile: (path) => readFile(path),
     open: (path, flags, mode) => open(path, flags, mode),
+    async link(existingPath, newPath) { await link(existingPath, newPath) },
     async rename(oldPath, newPath) { await rename(oldPath, newPath) },
     readdir: (path, options) => readdir(path, options),
     async unlink(path) { await unlink(path) },
     ...overrides,
   }
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => { resolve = done })
+  return { promise, resolve }
 }
 
 test('rejects invalid records and generated identifiers before writing', async (t) => {
@@ -113,13 +121,14 @@ test('serializes deterministic metadata and Markdown in a versioned JSON payload
 
   assert.equal(serializeMemoryRecord(record), JSON.stringify({
     format: 'unmute-memory-record',
-    serializerVersion: 1,
+    serializerVersion: 2,
     document: [
       '---',
-      'serializerVersion: 1',
+      'serializerVersion: 2',
       'id: "memory-1"',
       'kind: "note"',
       'title: "A: title"',
+      'contentPresent: true',
       'tags: ["two","one"]',
       'scope: null',
       'sensitivity: "normal"',
@@ -161,6 +170,21 @@ test('serializes nested metadata deterministically regardless of property insert
   assert.equal(serializeMemoryRecord(reordered), serializeMemoryRecord(common))
 })
 
+test('round-trips absent content distinctly from explicit empty Markdown', () => {
+  const withoutContent: MemoryRecord = {
+    id: 'without-content', kind: 'note', title: 'Absent', tags: [],
+    sensitivity: 'normal', attachments: [], references: [],
+    provenance: { source: 'import' }, createdAt: 10, updatedAt: 10, version: 1,
+  }
+  const withEmptyContent: MemoryRecord = {
+    ...withoutContent, id: 'empty-content', title: 'Empty', content: '',
+  }
+
+  assert.deepEqual(deserializeMemoryRecord(serializeMemoryRecord(withoutContent)), withoutContent)
+  assert.deepEqual(deserializeMemoryRecord(serializeMemoryRecord(withEmptyContent)), withEmptyContent)
+  assert.notEqual(serializeMemoryRecord(withoutContent), serializeMemoryRecord(withEmptyContent))
+})
+
 test('creates and reads only an encrypted canonical <id>.md.enc record', async (t) => {
   const root = await temporaryRoot(t)
   const records = store(root)
@@ -184,7 +208,7 @@ test('creates and reads only an encrypted canonical <id>.md.enc record', async (
   assert.deepEqual(await readdir(join(root, 'records')), ['memory-1.md.enc'])
 })
 
-test('publishes a write only after staging, fsync, close, and atomic rename', async (t) => {
+test('publishes a create only after staging, fsync, close, and an atomic no-replace link', async (t) => {
   const root = await temporaryRoot(t)
   const events: string[] = []
   const fs = nodeFileSystem({
@@ -201,13 +225,17 @@ test('publishes a write only after staging, fsync, close, and atomic rename', as
       events.push(`rename:${basename(oldPath)}:${basename(newPath)}`)
       await rename(oldPath, newPath)
     },
+    async link(existingPath, newPath) {
+      events.push(`link:${basename(existingPath)}:${basename(newPath)}`)
+      await link(existingPath, newPath)
+    },
   })
 
   await store(root, { fileSystem: fs }).create(input())
 
   assert.match(events[0], /^open:\.stage-memory-1\..+\.tmp:wx:600$/)
   assert.deepEqual(events.slice(1, 4), ['write', 'sync', 'close'])
-  assert.match(events[4], /^rename:\.stage-memory-1\..+\.tmp:memory-1\.md\.enc$/)
+  assert.match(events[4], /^link:\.stage-memory-1\..+\.tmp:memory-1\.md\.enc$/)
 })
 
 test('updates atomically, increments the version, and snapshots the complete prior envelope', async (t) => {
@@ -250,7 +278,7 @@ test('forget moves the encrypted record to recoverable trash and retains version
 
   await records.forget('memory-1')
 
-  await assert.rejects(() => records.read('memory-1'), { code: 'ENOENT' })
+  await assert.rejects(() => records.read('memory-1'), { code: 'not-found' })
   assert.deepEqual(await readFile(join(root, 'trash', 'records', 'memory-1.md.enc')), currentEnvelope)
   assert.deepEqual(await readFile(join(root, 'versions', 'memory-1', '1.json.enc')), versionEnvelope)
   assert.equal((await records.readTrash('memory-1')).title, 'Updated title')
@@ -274,7 +302,7 @@ test('restore reverses forget without rewriting the encrypted record', async (t)
     updatedAt: NOW,
     version: 1,
   })
-  await assert.rejects(() => records.readTrash('memory-1'), { code: 'ENOENT' })
+  await assert.rejects(() => records.readTrash('memory-1'), { code: 'not-found' })
 })
 
 test('keeps unknown future kinds canonical and degrades them only for presentation', async (t) => {
@@ -331,7 +359,7 @@ test('an injected staged-write failure leaves the prior canonical version intact
 
   await assert.rejects(
     () => store(root, { fileSystem: fs }).update('memory-1', { title: 'Must not publish' }),
-    /injected record write failure/,
+    (error: Error & { code?: string }) => error.code === 'storage-failure',
   )
   assert.deepEqual(await readFile(canonicalPath), priorEnvelope)
   assert.deepEqual(await healthy.read('memory-1'), {
@@ -358,9 +386,202 @@ test('an injected final-rename failure leaves the prior canonical version intact
 
   await assert.rejects(
     () => store(root, { fileSystem: fs }).update('memory-1', { title: 'Must not publish' }),
-    /injected record rename failure/,
+    (error: Error & { code?: string }) => error.code === 'storage-failure',
   )
   assert.deepEqual(await readFile(canonicalPath), priorEnvelope)
   assert.equal((await healthy.read('memory-1')).version, 1)
   assert.deepEqual(await readdir(join(root, 'records')), ['memory-1.md.enc'])
+})
+
+test('concurrent creates atomically claim the absent destination without overwrite', async (t) => {
+  const root = await temporaryRoot(t)
+  const bothPublishing = deferred()
+  let publicationCount = 0
+  async function pausePublication(): Promise<void> {
+    publicationCount += 1
+    if (publicationCount === 2) bothPublishing.resolve()
+    await bothPublishing.promise
+  }
+  const canonicalPath = join(root, 'records', 'memory-1.md.enc')
+  const fs = nodeFileSystem({
+    async link(existingPath, newPath) {
+      if (newPath === canonicalPath) await pausePublication()
+      await link(existingPath, newPath)
+    },
+    async rename(oldPath, newPath) {
+      if (newPath === canonicalPath) await pausePublication()
+      await rename(oldPath, newPath)
+    },
+  })
+  const records = store(root, { fileSystem: fs })
+
+  const outcomes = await Promise.allSettled([
+    records.create(input({ title: 'First contender' })),
+    records.create(input({ title: 'Second contender' })),
+  ])
+
+  assert.equal(outcomes.filter(({ status }) => status === 'fulfilled').length, 1)
+  assert.equal(outcomes.filter(({ status }) => status === 'rejected').length, 1)
+  assert.match((outcomes.find(({ status }) => status === 'rejected') as PromiseRejectedResult).reason.message, /already exists/i)
+  assert.match((await records.read('memory-1')).title, /^(First|Second) contender$/)
+})
+
+test('the version snapshot is a no-replace claim that permits only one simultaneous update', async (t) => {
+  const root = await temporaryRoot(t)
+  const healthy = store(root)
+  await healthy.create(input())
+  const bothClaiming = deferred()
+  let claimCount = 0
+  const claimPath = join(root, 'versions', 'memory-1', '1.json.enc')
+  async function pauseClaim(): Promise<void> {
+    claimCount += 1
+    if (claimCount === 2) bothClaiming.resolve()
+    await bothClaiming.promise
+  }
+  const fs = nodeFileSystem({
+    async link(existingPath, newPath) {
+      if (newPath === claimPath) await pauseClaim()
+      await link(existingPath, newPath)
+    },
+    async rename(oldPath, newPath) {
+      if (newPath === claimPath) await pauseClaim()
+      await rename(oldPath, newPath)
+    },
+  })
+  const records = store(root, { fileSystem: fs })
+
+  const outcomes = await Promise.allSettled([
+    records.update('memory-1', { title: 'First update' }),
+    records.update('memory-1', { title: 'Second update' }),
+  ])
+
+  assert.equal(outcomes.filter(({ status }) => status === 'fulfilled').length, 1)
+  assert.equal(outcomes.filter(({ status }) => status === 'rejected').length, 1)
+  assert.match((outcomes.find(({ status }) => status === 'rejected') as PromiseRejectedResult).reason.message, /concurrent update/i)
+  assert.equal((await records.read('memory-1')).version, 2)
+  assert.equal((await records.readVersion('memory-1', 1)).version, 1)
+})
+
+async function assertMoveCollisionDoesNotOverwrite(
+  root: string,
+  operation: 'forget' | 'restore',
+): Promise<void> {
+  const healthy = store(root)
+  await healthy.create(input())
+  if (operation === 'restore') await healthy.forget('memory-1')
+  const source = operation === 'forget'
+    ? join(root, 'records', 'memory-1.md.enc')
+    : join(root, 'trash', 'records', 'memory-1.md.enc')
+  const destination = operation === 'forget'
+    ? join(root, 'trash', 'records', 'memory-1.md.enc')
+    : join(root, 'records', 'memory-1.md.enc')
+  const sourceEnvelope = await readFile(source)
+  const reachedCollisionWindow = deferred()
+  const releaseCollisionWindow = deferred()
+  let delayedProbe = false
+  const fs = nodeFileSystem({
+    async readFile(path) {
+      try {
+        return await readFile(path)
+      } catch (error) {
+        if (path === destination && !delayedProbe) {
+          delayedProbe = true
+          reachedCollisionWindow.resolve()
+          await releaseCollisionWindow.promise
+        }
+        throw error
+      }
+    },
+    async link(existingPath, newPath) {
+      if (newPath === destination) {
+        reachedCollisionWindow.resolve()
+        await releaseCollisionWindow.promise
+      }
+      await link(existingPath, newPath)
+    },
+  })
+  const records = store(root, { fileSystem: fs })
+  const pending = records[operation]('memory-1')
+  await reachedCollisionWindow.promise
+  const collision = Buffer.from('independent destination artifact')
+  await writeFile(destination, collision)
+  releaseCollisionWindow.resolve()
+
+  await assert.rejects(() => pending, /already exists/i)
+  assert.deepEqual(await readFile(source), sourceEnvelope)
+  assert.deepEqual(await readFile(destination), collision)
+}
+
+test('forget uses a forced no-replace move when trash appears during publication', async (t) => {
+  await assertMoveCollisionDoesNotOverwrite(await temporaryRoot(t), 'forget')
+})
+
+test('restore uses a forced no-replace move when a canonical record appears during publication', async (t) => {
+  await assertMoveCollisionDoesNotOverwrite(await temporaryRoot(t), 'restore')
+})
+
+test('canonical and trash reads reject an embedded identifier that differs from the requested path', async (t) => {
+  const root = await temporaryRoot(t)
+  const records = store(root)
+  const created = await records.create(input())
+  const mismatched = await memoryCrypto().encrypt(serializeMemoryRecord({ ...created, id: 'other-id' }))
+  await writeFile(join(root, 'records', 'memory-1.md.enc'), mismatched)
+
+  await assert.rejects(() => records.read('memory-1'), /does not match/i)
+
+  await writeFile(join(root, 'trash', 'records', 'memory-1.md.enc'), mismatched)
+  await assert.rejects(() => records.readTrash('memory-1'), /does not match/i)
+})
+
+test('version reads reject embedded identifiers and versions that differ from the requested path', async (t) => {
+  const root = await temporaryRoot(t)
+  const records = store(root)
+  const created = await records.create(input())
+  await records.update('memory-1', { title: 'Version two' })
+  const versionPath = join(root, 'versions', 'memory-1', '1.json.enc')
+
+  await writeFile(versionPath, await memoryCrypto().encrypt(serializeMemoryRecord({ ...created, id: 'other-id' })))
+  await assert.rejects(() => records.readVersion('memory-1', 1), /does not match/i)
+
+  await writeFile(versionPath, await memoryCrypto().encrypt(serializeMemoryRecord({ ...created, version: 9 })))
+  await assert.rejects(() => records.readVersion('memory-1', 1), /does not match/i)
+})
+
+test('public read failures are typed and never expose managed paths or record content', async (t) => {
+  const root = await temporaryRoot(t)
+  const title = 'Highly Confidential Apollo Plan'
+  const fs = nodeFileSystem({
+    async readFile(path) { throw new Error(`cannot read ${path}: ${title}`) },
+  })
+
+  await assert.rejects(
+    () => store(root, { fileSystem: fs }).read('memory-1'),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.name, 'RecordStoreError')
+      assert.equal(error.code, 'storage-failure')
+      assert.equal(error.message.includes(root), false)
+      assert.equal(error.message.includes(title), false)
+      return true
+    },
+  )
+})
+
+test('public move failures are typed and never expose source or destination paths', async (t) => {
+  const root = await temporaryRoot(t)
+  const records = store(root)
+  await records.create(input())
+  const fs = nodeFileSystem({
+    async link(existingPath, newPath) { throw new Error(`link failed: ${existingPath} -> ${newPath}`) },
+    async rename(oldPath, newPath) { throw new Error(`rename failed: ${oldPath} -> ${newPath}`) },
+  })
+
+  await assert.rejects(
+    () => store(root, { fileSystem: fs }).forget('memory-1'),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.name, 'RecordStoreError')
+      assert.equal(error.code, 'storage-failure')
+      assert.equal(error.message.includes(root), false)
+      return true
+    },
+  )
 })

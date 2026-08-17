@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   mkdir,
+  link,
   open,
   readFile,
   readdir,
@@ -26,7 +27,8 @@ import {
 } from './types'
 
 const SERIALIZER_FORMAT = 'unmute-memory-record'
-const SERIALIZER_VERSION = 1
+const SERIALIZER_VERSION = 2
+const LEGACY_SERIALIZER_VERSION = 1
 const FILE_MODE = 0o600
 const DIRECTORY_MODE = 0o700
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
@@ -38,6 +40,7 @@ export interface RecordStoreFileSystem {
   mkdir(path: string, options: { recursive: true; mode: number }): Promise<void>
   readFile(path: string): Promise<Buffer>
   open(path: string, flags: 'wx', mode: number): Promise<RecordTempFile>
+  link(existingPath: string, newPath: string): Promise<void>
   rename(oldPath: string, newPath: string): Promise<void>
   readdir(path: string, options: { withFileTypes: true }): Promise<Dirent[]>
   unlink(path: string): Promise<void>
@@ -55,10 +58,31 @@ const nodeFileSystem: RecordStoreFileSystem = {
   async mkdir(path, options) { await mkdir(path, options) },
   readFile: (path) => readFile(path),
   open: (path, flags, mode) => open(path, flags, mode),
+  async link(existingPath, newPath) { await link(existingPath, newPath) },
   async rename(oldPath, newPath) { await rename(oldPath, newPath) },
   readdir: (path, options) => readdir(path, options),
   async unlink(path) { await unlink(path) },
 }
+
+export type RecordStoreErrorCode =
+  | 'invalid-input'
+  | 'not-found'
+  | 'already-exists'
+  | 'concurrent-update'
+  | 'corrupt-record'
+  | 'storage-failure'
+
+export class RecordStoreError extends Error {
+  readonly code: RecordStoreErrorCode
+
+  constructor(code: RecordStoreErrorCode, message: string) {
+    super(message)
+    this.name = 'RecordStoreError'
+    this.code = code
+  }
+}
+
+type PublicOperation = 'initialize' | 'create' | 'read' | 'read-trash' | 'read-version' | 'update' | 'forget' | 'restore'
 
 function isNodeError(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code
@@ -66,29 +90,31 @@ function isNodeError(error: unknown, code: string): boolean {
 
 function requireIdentifier(id: unknown): asserts id is string {
   if (typeof id !== 'string' || !IDENTIFIER_PATTERN.test(id)) {
-    throw new Error('Memory identifier is invalid')
+    throw new RecordStoreError('invalid-input', 'Memory identifier is invalid')
   }
 }
 
 function requireNonEmptyString(value: unknown, field: string): asserts value is string {
   if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`Memory ${field} must be a non-empty string`)
+    throw new RecordStoreError('invalid-input', `Memory ${field} must be a non-empty string`)
   }
 }
 
 function requireStringArray(value: unknown, field: string): asserts value is string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.trim() === '')) {
-    throw new Error(`Memory ${field} must contain non-empty strings`)
+    throw new RecordStoreError('invalid-input', `Memory ${field} must contain non-empty strings`)
   }
 }
 
 function requireScope(value: unknown): asserts value is MemoryScope {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Memory scope is invalid')
+    throw new RecordStoreError('invalid-input', 'Memory scope is invalid')
   }
   const scope = value as Record<string, unknown>
   const allowed = new Set(['app', 'project', 'purpose'])
-  if (Object.keys(scope).some((key) => !allowed.has(key))) throw new Error('Memory scope is invalid')
+  if (Object.keys(scope).some((key) => !allowed.has(key))) {
+    throw new RecordStoreError('invalid-input', 'Memory scope is invalid')
+  }
   for (const key of allowed) {
     if (scope[key] !== undefined) requireNonEmptyString(scope[key], `scope ${key}`)
   }
@@ -96,22 +122,22 @@ function requireScope(value: unknown): asserts value is MemoryScope {
 
 function requireSensitivity(value: unknown): asserts value is MemorySensitivity {
   if (value !== 'normal' && value !== 'private' && value !== 'sensitive') {
-    throw new Error('Memory sensitivity is invalid')
+    throw new RecordStoreError('invalid-input', 'Memory sensitivity is invalid')
   }
 }
 
 function requireReferences(value: unknown): asserts value is MemoryReference[] {
-  if (!Array.isArray(value)) throw new Error('Memory references are invalid')
+  if (!Array.isArray(value)) throw new RecordStoreError('invalid-input', 'Memory references are invalid')
   for (const reference of value) {
     if (!reference || typeof reference !== 'object' || Array.isArray(reference)) {
-      throw new Error('Memory reference is invalid')
+      throw new RecordStoreError('invalid-input', 'Memory reference is invalid')
     }
     const candidate = reference as Record<string, unknown>
     if (
       Object.keys(candidate).some((key) => key !== 'type' && key !== 'value')
       || !['url', 'path', 'external'].includes(String(candidate.type))
     ) {
-      throw new Error('Memory reference is invalid')
+      throw new RecordStoreError('invalid-input', 'Memory reference is invalid')
     }
     requireNonEmptyString(candidate.value, 'reference value')
   }
@@ -119,23 +145,23 @@ function requireReferences(value: unknown): asserts value is MemoryReference[] {
 
 function requireProvenance(value: unknown): asserts value is MemoryProvenance {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Memory provenance is invalid')
+    throw new RecordStoreError('invalid-input', 'Memory provenance is invalid')
   }
   const provenance = value as Record<string, unknown>
   if (
     Object.keys(provenance).some((key) => key !== 'source' && key !== 'original')
     || !['voice', 'selection', 'attachment', 'import'].includes(String(provenance.source))
   ) {
-    throw new Error('Memory provenance is invalid')
+    throw new RecordStoreError('invalid-input', 'Memory provenance is invalid')
   }
   if (provenance.original !== undefined && typeof provenance.original !== 'string') {
-    throw new Error('Memory provenance original is invalid')
+    throw new RecordStoreError('invalid-input', 'Memory provenance original is invalid')
   }
 }
 
 function requireTimestamp(value: unknown, field: string): asserts value is number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`Memory ${field} is invalid`)
+    throw new RecordStoreError('invalid-input', `Memory ${field} is invalid`)
   }
 }
 
@@ -144,7 +170,7 @@ function validateRecord(record: MemoryRecord): void {
   requireNonEmptyString(record.kind, 'kind')
   requireNonEmptyString(record.title, 'title')
   if (record.content !== undefined && typeof record.content !== 'string') {
-    throw new Error('Memory content is invalid')
+    throw new RecordStoreError('invalid-input', 'Memory content is invalid')
   }
   requireStringArray(record.tags, 'tags')
   if (record.scope !== undefined) requireScope(record.scope)
@@ -155,21 +181,21 @@ function validateRecord(record: MemoryRecord): void {
   requireTimestamp(record.createdAt, 'createdAt')
   requireTimestamp(record.updatedAt, 'updatedAt')
   if (!Number.isSafeInteger(record.version) || record.version < 1) {
-    throw new Error('Memory version is invalid')
+    throw new RecordStoreError('invalid-input', 'Memory version is invalid')
   }
   if (record.deletedAt !== undefined) requireTimestamp(record.deletedAt, 'deletedAt')
 }
 
 function validateCreateInput(input: CreateMemoryRecordInput): void {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    throw new Error('Memory create input is invalid')
+    throw new RecordStoreError('invalid-input', 'Memory create input is invalid')
   }
   const expected = new Set([
     'kind', 'title', 'content', 'tags', 'scope', 'sensitivity',
     'attachments', 'references', 'provenance',
   ])
   if (Object.keys(input).some((key) => !expected.has(key))) {
-    throw new Error('Memory create input contains unsupported fields')
+    throw new RecordStoreError('invalid-input', 'Memory create input contains unsupported fields')
   }
 }
 
@@ -206,6 +232,7 @@ export function serializeMemoryRecord(record: MemoryRecord): string {
     metadataLine('id', record.id),
     metadataLine('kind', record.kind),
     metadataLine('title', record.title),
+    metadataLine('contentPresent', record.content !== undefined),
     metadataLine('tags', record.tags),
     metadataLine('scope', canonicalScope(record.scope)),
     metadataLine('sensitivity', record.sensitivity),
@@ -222,7 +249,7 @@ export function serializeMemoryRecord(record: MemoryRecord): string {
   return JSON.stringify({ format: SERIALIZER_FORMAT, serializerVersion: SERIALIZER_VERSION, document })
 }
 
-function parseDocument(document: unknown): MemoryRecord {
+function parseDocument(document: unknown, envelopeVersion: number): MemoryRecord {
   if (typeof document !== 'string' || !document.startsWith('---\n')) {
     throw new Error('Encrypted memory record document is invalid')
   }
@@ -240,15 +267,21 @@ function parseDocument(document: unknown): MemoryRecord {
       throw new Error('Encrypted memory record metadata is invalid')
     }
   }
-  if (metadata.get('serializerVersion') !== SERIALIZER_VERSION) {
+  if (metadata.get('serializerVersion') !== envelopeVersion) {
     throw new Error('Encrypted memory record serializer version is unsupported')
   }
   const content = document.slice(metadataEnd + 5)
+  const contentPresent = envelopeVersion === LEGACY_SERIALIZER_VERSION
+    ? content !== ''
+    : metadata.get('contentPresent')
+  if (typeof contentPresent !== 'boolean') {
+    throw new Error('Encrypted memory record content metadata is invalid')
+  }
   const record: MemoryRecord = {
     id: metadata.get('id') as string,
     kind: metadata.get('kind') as string,
     title: metadata.get('title') as string,
-    ...(content === '' ? {} : { content }),
+    ...(contentPresent ? { content } : {}),
     tags: metadata.get('tags') as string[],
     ...(metadata.get('scope') === null ? {} : { scope: metadata.get('scope') as MemoryScope }),
     sensitivity: metadata.get('sensitivity') as MemorySensitivity,
@@ -275,10 +308,14 @@ export function deserializeMemoryRecord(payload: Uint8Array | string): MemoryRec
     throw new Error('Encrypted memory record payload is invalid')
   }
   const candidate = envelope as Record<string, unknown>
-  if (candidate.format !== SERIALIZER_FORMAT || candidate.serializerVersion !== SERIALIZER_VERSION) {
+  if (
+    candidate.format !== SERIALIZER_FORMAT
+    || (candidate.serializerVersion !== LEGACY_SERIALIZER_VERSION
+      && candidate.serializerVersion !== SERIALIZER_VERSION)
+  ) {
     throw new Error('Encrypted memory record serializer version is unsupported')
   }
-  return parseDocument(candidate.document)
+  return parseDocument(candidate.document, candidate.serializerVersion)
 }
 
 export function presentMemoryRecord(record: MemoryRecord): PresentedMemoryRecord {
@@ -309,89 +346,102 @@ export class EncryptedRecordStore {
   }
 
   initialize(): Promise<void> {
-    this.initialization ??= this.initializeFileSystem()
+    this.initialization ??= this.runPublic('initialize', () => this.initializeFileSystem())
     return this.initialization
   }
 
   async create(input: CreateMemoryRecordInput): Promise<MemoryRecord> {
-    await this.initialize()
-    validateCreateInput(input)
-    const id = this.createId()
-    requireIdentifier(id)
-    const at = this.now()
-    const record: MemoryRecord = { id, ...input, createdAt: at, updatedAt: at, version: 1 }
-    validateRecord(record)
-    const target = this.recordPath(id)
-    try {
-      await this.fileSystem.readFile(target)
-      throw new Error('Memory identifier already exists')
-    } catch (error) {
-      if (!isNodeError(error, 'ENOENT')) throw error
-    }
-    await this.writeEncryptedRecord(target, record)
-    return record
+    return this.runPublic('create', async () => {
+      await this.initialize()
+      validateCreateInput(input)
+      const id = this.createId()
+      requireIdentifier(id)
+      const at = this.now()
+      const record: MemoryRecord = { id, ...input, createdAt: at, updatedAt: at, version: 1 }
+      validateRecord(record)
+      await this.writeEncryptedRecord(this.recordPath(id), record, 'no-replace')
+      return record
+    })
   }
 
   async read(id: string): Promise<MemoryRecord> {
-    await this.initialize()
-    requireIdentifier(id)
-    return this.readEncryptedRecord(this.recordPath(id))
+    return this.runPublic('read', async () => {
+      await this.initialize()
+      requireIdentifier(id)
+      return this.readEncryptedRecord(this.recordPath(id), id)
+    })
   }
 
   async readTrash(id: string): Promise<MemoryRecord> {
-    await this.initialize()
-    requireIdentifier(id)
-    return this.readEncryptedRecord(this.trashPath(id))
+    return this.runPublic('read-trash', async () => {
+      await this.initialize()
+      requireIdentifier(id)
+      return this.readEncryptedRecord(this.trashPath(id), id)
+    })
   }
 
   async readVersion(id: string, version: number): Promise<MemoryRecord> {
-    await this.initialize()
-    requireIdentifier(id)
-    if (!Number.isSafeInteger(version) || version < 1) throw new Error('Memory version is invalid')
-    return this.readEncryptedRecord(this.versionPath(id, version))
+    return this.runPublic('read-version', async () => {
+      await this.initialize()
+      requireIdentifier(id)
+      if (!Number.isSafeInteger(version) || version < 1) {
+        throw new RecordStoreError('invalid-input', 'Memory version is invalid')
+      }
+      return this.readEncryptedRecord(this.versionPath(id, version), id, version)
+    })
   }
 
   async update(id: string, patch: MemoryRecordPatch): Promise<MemoryRecord> {
-    await this.initialize()
-    requireIdentifier(id)
-    this.validatePatch(patch)
-    const target = this.recordPath(id)
-    const priorEnvelope = await this.fileSystem.readFile(target)
-    const prior = await this.decryptRecord(priorEnvelope)
-    if (prior.id !== id) throw new Error('Encrypted memory record identifier does not match its path')
-    const updated: MemoryRecord = { ...prior }
-    if (patch.kind !== undefined) updated.kind = patch.kind
-    if (patch.title !== undefined) updated.title = patch.title
-    if (patch.content === null) delete updated.content
-    else if (patch.content !== undefined) updated.content = patch.content
-    if (patch.tags !== undefined) updated.tags = patch.tags
-    if (patch.scope === null) delete updated.scope
-    else if (patch.scope !== undefined) updated.scope = patch.scope
-    if (patch.sensitivity !== undefined) updated.sensitivity = patch.sensitivity
-    if (patch.attachments !== undefined) updated.attachments = patch.attachments
-    if (patch.references !== undefined) updated.references = patch.references
-    if (patch.provenance !== undefined) updated.provenance = patch.provenance
-    updated.updatedAt = this.now()
-    updated.version = prior.version + 1
-    validateRecord(updated)
+    return this.runPublic('update', async () => {
+      await this.initialize()
+      requireIdentifier(id)
+      this.validatePatch(patch)
+      const target = this.recordPath(id)
+      const priorEnvelope = await this.fileSystem.readFile(target)
+      const prior = await this.decryptRecord(priorEnvelope)
+      this.validateRecordLocation(prior, id)
+      const updated: MemoryRecord = { ...prior }
+      if (patch.kind !== undefined) updated.kind = patch.kind
+      if (patch.title !== undefined) updated.title = patch.title
+      if (patch.content === null) delete updated.content
+      else if (patch.content !== undefined) updated.content = patch.content
+      if (patch.tags !== undefined) updated.tags = patch.tags
+      if (patch.scope === null) delete updated.scope
+      else if (patch.scope !== undefined) updated.scope = patch.scope
+      if (patch.sensitivity !== undefined) updated.sensitivity = patch.sensitivity
+      if (patch.attachments !== undefined) updated.attachments = patch.attachments
+      if (patch.references !== undefined) updated.references = patch.references
+      if (patch.provenance !== undefined) updated.provenance = patch.provenance
+      updated.updatedAt = this.now()
+      updated.version = prior.version + 1
+      validateRecord(updated)
 
-    await this.atomicWrite(this.versionPath(id, prior.version), priorEnvelope)
-    await this.writeEncryptedRecord(target, updated)
-    return updated
+      const versionClaim = this.versionPath(id, prior.version)
+      await this.atomicWrite(versionClaim, priorEnvelope, 'no-replace')
+      try {
+        await this.writeEncryptedRecord(target, updated, 'replace')
+      } catch (error) {
+        try { await this.fileSystem.unlink(versionClaim) } catch { /* best-effort claim rollback */ }
+        throw error
+      }
+      return updated
+    })
   }
 
   async forget(id: string): Promise<void> {
-    await this.initialize()
-    requireIdentifier(id)
-    await this.ensureDestinationAbsent(this.trashPath(id))
-    await this.fileSystem.rename(this.recordPath(id), this.trashPath(id))
+    return this.runPublic('forget', async () => {
+      await this.initialize()
+      requireIdentifier(id)
+      await this.moveNoReplace(this.recordPath(id), this.trashPath(id))
+    })
   }
 
   async restore(id: string): Promise<void> {
-    await this.initialize()
-    requireIdentifier(id)
-    await this.ensureDestinationAbsent(this.recordPath(id))
-    await this.fileSystem.rename(this.trashPath(id), this.recordPath(id))
+    return this.runPublic('restore', async () => {
+      await this.initialize()
+      requireIdentifier(id)
+      await this.moveNoReplace(this.trashPath(id), this.recordPath(id))
+    })
   }
 
   private async initializeFileSystem(): Promise<void> {
@@ -431,20 +481,38 @@ export class EncryptedRecordStore {
     return join(this.versionsDir, id, `${version}.json.enc`)
   }
 
-  private async readEncryptedRecord(path: string): Promise<MemoryRecord> {
-    return this.decryptRecord(await this.fileSystem.readFile(path))
+  private async readEncryptedRecord(
+    path: string,
+    expectedId: string,
+    expectedVersion?: number,
+  ): Promise<MemoryRecord> {
+    const record = await this.decryptRecord(await this.fileSystem.readFile(path))
+    this.validateRecordLocation(record, expectedId, expectedVersion)
+    return record
   }
 
   private async decryptRecord(envelope: Buffer): Promise<MemoryRecord> {
-    return deserializeMemoryRecord(await this.crypto.decrypt(envelope))
+    try {
+      return deserializeMemoryRecord(await this.crypto.decrypt(envelope))
+    } catch {
+      throw new RecordStoreError('corrupt-record', 'Encrypted memory record is invalid')
+    }
   }
 
-  private async writeEncryptedRecord(path: string, record: MemoryRecord): Promise<void> {
+  private async writeEncryptedRecord(
+    path: string,
+    record: MemoryRecord,
+    publication: 'replace' | 'no-replace',
+  ): Promise<void> {
     const envelope = await this.crypto.encrypt(serializeMemoryRecord(record))
-    await this.atomicWrite(path, envelope)
+    await this.atomicWrite(path, envelope, publication)
   }
 
-  private async atomicWrite(path: string, data: Uint8Array): Promise<void> {
+  private async atomicWrite(
+    path: string,
+    data: Uint8Array,
+    publication: 'replace' | 'no-replace',
+  ): Promise<void> {
     await this.fileSystem.mkdir(dirname(path), { recursive: true, mode: DIRECTORY_MODE })
     const stem = basename(path).replace(/\.(?:md|json)\.enc$/, '')
     const stagingPath = join(dirname(path), `.stage-${stem}.${randomUUID()}.tmp`)
@@ -455,7 +523,8 @@ export class EncryptedRecordStore {
       await file.sync()
       await file.close()
       file = null
-      await this.fileSystem.rename(stagingPath, path)
+      if (publication === 'no-replace') await this.fileSystem.link(stagingPath, path)
+      else await this.fileSystem.rename(stagingPath, path)
     } finally {
       if (file) await file.close()
       try {
@@ -468,23 +537,61 @@ export class EncryptedRecordStore {
 
   private validatePatch(patch: MemoryRecordPatch): void {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
-      throw new Error('Memory update patch is invalid')
+      throw new RecordStoreError('invalid-input', 'Memory update patch is invalid')
     }
     const allowed = new Set([
       'kind', 'title', 'content', 'tags', 'scope', 'sensitivity',
       'attachments', 'references', 'provenance',
     ])
     if (Object.keys(patch).length === 0 || Object.keys(patch).some((key) => !allowed.has(key))) {
-      throw new Error('Memory update patch is invalid')
+      throw new RecordStoreError('invalid-input', 'Memory update patch is invalid')
     }
   }
 
-  private async ensureDestinationAbsent(path: string): Promise<void> {
-    try {
-      await this.fileSystem.readFile(path)
-      throw new Error('Memory destination already exists')
-    } catch (error) {
-      if (!isNodeError(error, 'ENOENT')) throw error
+  private validateRecordLocation(record: MemoryRecord, expectedId: string, expectedVersion?: number): void {
+    if (record.id !== expectedId) {
+      throw new RecordStoreError(
+        'corrupt-record',
+        'Encrypted memory record identifier does not match the requested record',
+      )
     }
+    if (expectedVersion !== undefined && record.version !== expectedVersion) {
+      throw new RecordStoreError(
+        'corrupt-record',
+        'Encrypted memory record version does not match the requested version',
+      )
+    }
+  }
+
+  private async moveNoReplace(source: string, destination: string): Promise<void> {
+    await this.fileSystem.link(source, destination)
+    try {
+      await this.fileSystem.unlink(source)
+    } catch (error) {
+      try { await this.fileSystem.unlink(destination) } catch { /* best-effort move rollback */ }
+      throw error
+    }
+  }
+
+  private async runPublic<T>(operation: PublicOperation, action: () => Promise<T>): Promise<T> {
+    try {
+      return await action()
+    } catch (error) {
+      throw this.publicError(operation, error)
+    }
+  }
+
+  private publicError(operation: PublicOperation, error: unknown): RecordStoreError {
+    if (error instanceof RecordStoreError) return error
+    if (isNodeError(error, 'ENOENT')) {
+      return new RecordStoreError('not-found', 'Memory record was not found')
+    }
+    if (isNodeError(error, 'EEXIST')) {
+      if (operation === 'update') {
+        return new RecordStoreError('concurrent-update', 'Memory record has a concurrent update')
+      }
+      return new RecordStoreError('already-exists', 'Memory record destination already exists')
+    }
+    return new RecordStoreError('storage-failure', `Memory record ${operation} failed`)
   }
 }
