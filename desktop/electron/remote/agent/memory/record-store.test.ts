@@ -585,3 +585,77 @@ test('public move failures are typed and never expose source or destination path
     },
   )
 })
+
+test('create succeeds after publication when its staging hard-link cleanup fails', async (t) => {
+  const root = await temporaryRoot(t)
+  let injected = false
+  const fs = nodeFileSystem({
+    async unlink(path) {
+      if (!injected && dirname(path) === join(root, 'records') && basename(path).startsWith('.stage-')) {
+        injected = true
+        throw new Error(`injected post-link cleanup failure: ${path}`)
+      }
+      await unlink(path)
+    },
+  })
+  const records = store(root, { fileSystem: fs })
+
+  const created = await records.create(input())
+
+  assert.equal(injected, true)
+  assert.deepEqual(await records.read('memory-1'), created)
+  assert.equal((await readdir(join(root, 'records'))).some((name) => name.startsWith('.stage-')), true)
+})
+
+test('update continues after published version-claim cleanup fails and later updates are not wedged', async (t) => {
+  const root = await temporaryRoot(t)
+  const healthy = store(root)
+  await healthy.create(input())
+  let injected = false
+  const versionDirectory = join(root, 'versions', 'memory-1')
+  const fs = nodeFileSystem({
+    async unlink(path) {
+      if (!injected && dirname(path) === versionDirectory && basename(path).startsWith('.stage-')) {
+        injected = true
+        throw new Error(`injected post-claim cleanup failure: ${path}`)
+      }
+      await unlink(path)
+    },
+  })
+  const records = store(root, { fileSystem: fs })
+
+  const second = await records.update('memory-1', { title: 'Second version' })
+  const third = await records.update('memory-1', { title: 'Third version' })
+
+  assert.equal(injected, true)
+  assert.equal(second.version, 2)
+  assert.equal(third.version, 3)
+  assert.equal((await records.read('memory-1')).title, 'Third version')
+  assert.equal((await records.readVersion('memory-1', 1)).version, 1)
+  assert.equal((await records.readVersion('memory-1', 2)).version, 2)
+})
+
+test('startup recovery removes a staging hard link abandoned after successful publication', async (t) => {
+  const root = await temporaryRoot(t)
+  let injected = false
+  const fs = nodeFileSystem({
+    async unlink(path) {
+      if (!injected && dirname(path) === join(root, 'records') && basename(path).startsWith('.stage-')) {
+        injected = true
+        throw new Error('injected cleanup failure')
+      }
+      await unlink(path)
+    },
+  })
+  const created = await store(root, { fileSystem: fs }).create(input())
+  const namesBeforeRecovery = await readdir(join(root, 'records'))
+
+  assert.equal(namesBeforeRecovery.includes('memory-1.md.enc'), true)
+  assert.equal(namesBeforeRecovery.some((name) => name.startsWith('.stage-')), true)
+
+  const recovered = store(root)
+  await recovered.initialize()
+
+  assert.deepEqual(await readdir(join(root, 'records')), ['memory-1.md.enc'])
+  assert.deepEqual(await recovered.read('memory-1'), created)
+})

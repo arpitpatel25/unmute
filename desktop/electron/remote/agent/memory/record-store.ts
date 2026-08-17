@@ -517,6 +517,8 @@ export class EncryptedRecordStore {
     const stem = basename(path).replace(/\.(?:md|json)\.enc$/, '')
     const stagingPath = join(dirname(path), `.stage-${stem}.${randomUUID()}.tmp`)
     let file: RecordTempFile | null = null
+    let failure: unknown
+    let published = false
     try {
       file = await this.fileSystem.open(stagingPath, 'wx', FILE_MODE)
       await file.writeFile(data)
@@ -525,13 +527,20 @@ export class EncryptedRecordStore {
       file = null
       if (publication === 'no-replace') await this.fileSystem.link(stagingPath, path)
       else await this.fileSystem.rename(stagingPath, path)
-    } finally {
-      if (file) await file.close()
-      try {
-        await this.fileSystem.unlink(stagingPath)
-      } catch (error) {
-        if (!isNodeError(error, 'ENOENT')) throw error
-      }
+      published = true
+    } catch (error) {
+      failure = error
+    }
+    if (file) {
+      try { await file.close() } catch (error) { failure ??= error }
+    }
+    try {
+      await this.fileSystem.unlink(stagingPath)
+    } catch (error) {
+      if (!isNodeError(error, 'ENOENT') && !published) failure ??= error
+    }
+    if (failure !== undefined) {
+      throw failure
     }
   }
 
