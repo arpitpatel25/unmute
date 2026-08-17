@@ -3061,10 +3061,9 @@ export async function dispatchFromCapture(
   targetTaskId?: string | null,
   options: CaptureDispatchOptions = {},
 ): Promise<string | null> {
-  if (agentAddressedCapture) {
-    agentAddressedCapture = false
-    options = { ...options, destination: 'unmute-agent' }
-  }
+  // Read, not consumed, here — the addressed-task shortcut below needs to see it
+  // too. Cleared once the destination has actually been resolved.
+  if (agentAddressedCapture) options = { ...options, destination: 'unmute-agent' }
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
   // surface always returns to idle, whatever path the dispatch takes.
@@ -3101,7 +3100,18 @@ async function dispatchFromCaptureInner(
   //    PURELY ADDITIVE: with nothing focused (orchestrateFocusId === null) the block
   //    is skipped and routing below is exactly as before. We reuse the SAME paths
   //    the router uses (answer a blocked task / followUp to continue) — no new send.
-  const addressedTaskId = targetTaskId ?? orchestrateFocusId
+  // AN EXPLICIT ADDRESS OUTRANKS A VISIBLE ONE.
+  //
+  // The deterministic path below delivers to the task in focus, and it used to
+  // run first — so a capture the user had explicitly addressed to the Agent by
+  // pressing its own key was handed to whatever task happened to be open, and
+  // returned before the destination was ever resolved. Observed in the field:
+  // the Agent key captured correctly, then dispatched as an ordinary task reply.
+  //
+  // Pressing the Agent key is a statement about WHO you are talking to. A task
+  // being on screen is not.
+  const addressedToAgent = agentAddressedCapture || options.destination === 'unmute-agent'
+  const addressedTaskId = addressedToAgent ? null : (targetTaskId ?? orchestrateFocusId)
   if (addressedTaskId && manager.list().some((t) => t.id === addressedTaskId)) {
     const fid = addressedTaskId
     // Hygiene: the deterministic path skips the router, so it must not skip
@@ -3183,6 +3193,7 @@ async function dispatchFromCaptureInner(
     explicitDestination: options.destination,
     transcript: raw,
   })
+  agentAddressedCapture = false
   if (destination === 'unmute-agent') {
     const transcript = agentAddress?.transcript ?? raw
     if (!unmuteAgentController || !unmuteAgentAvailability.available) {
