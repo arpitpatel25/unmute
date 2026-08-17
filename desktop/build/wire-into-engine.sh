@@ -222,6 +222,10 @@ wire_paywall() {
     // install-app-deps rebuilds it against Electron's ABI, and its .node
     // binary must be unpacked from the asar so it can be dlopen'd at runtime.
     pkg.dependencies['node-pty'] = '^1.1.0'
+    // Personal Memory: SQLCipher-capable SQLite is the encrypted index. This
+    // exact native binding is rebuilt against Electron's ABI; ordinary
+    // better-sqlite3 is deliberately not a fallback.
+    pkg.dependencies['better-sqlite3-multiple-ciphers'] = '12.11.1'
     // Unmute Remote: xterm.js renders the owned-PTY stream as a real terminal
     // in the render-on-demand live view (PRD §4.3) — faithful TUI + typeable —
     // instead of the old ANSI-stripped <pre>. Renderer deps (bundled by vite),
@@ -247,6 +251,9 @@ wire_paywall() {
     pkg.build.asarUnpack = pkg.build.asarUnpack || []
     if (!pkg.build.asarUnpack.includes('**/node_modules/node-pty/**')) {
       pkg.build.asarUnpack.push('**/node_modules/node-pty/**')
+    }
+    if (!pkg.build.asarUnpack.includes('**/node_modules/better-sqlite3-multiple-ciphers/**')) {
+      pkg.build.asarUnpack.push('**/node_modules/better-sqlite3-multiple-ciphers/**')
     }
     // Parakeet on-device STT: sherpa-onnx ships native dylibs
     // (libsherpa-onnx-c-api.dylib, libsherpa-onnx-cxx-api.dylib,
@@ -809,12 +816,29 @@ case "$MODE" in
     [[ -d "$WORK/oss-engine" ]] || sync_engine
     wire_paywall
     cd "$WORK/oss-engine"
+    # The SQLCipher-capable SQLite binding is a hard security dependency. Keep
+    # this install unsuppressed so an install/rebuild/ABI failure stops compile
+    # mode rather than silently leaving Personal Memory without encryption.
+    npm install better-sqlite3-multiple-ciphers@12.11.1 --no-save
     # node-pty (PTY backend) + xterm (live-terminal renderer dep) + the markdown
-    # renderer's engine so the integrated build resolves them without a full
-    # install. These mirror the deps wire_paywall adds to package.json; a name
-    # missing here fails ONLY in compile mode, which is the mode whose whole job
-    # is catching that class of mistake.
+    # renderer's engine so the integrated build resolves them. These mirror the
+    # deps wire_paywall adds to package.json; a name missing here fails ONLY in
+    # compile mode, which is the mode whose whole job is catching that class of
+    # mistake.
     npm install node-pty @xterm/xterm @xterm/addon-fit react-markdown remark-gfm --no-save >/dev/null 2>&1 || true
+    # Targeted `npm install` compiles native addons for the host Node ABI and
+    # does not run the engine root's postinstall. Force the memory binding onto
+    # the pinned Electron ABI, then load it with that Electron runtime so a
+    # skipped/incompatible rebuild cannot hide behind a successful Vite build.
+    log "Rebuilding SQLCipher binding for Electron"
+    npx electron-rebuild --force --only better-sqlite3-multiple-ciphers
+    ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "
+      const Database = require('better-sqlite3-multiple-ciphers')
+      const db = new Database(':memory:')
+      db.prepare('SELECT 1').get()
+      db.close()
+    "
+    log "SQLCipher binding loaded under Electron"
     fix_node_pty_helper "$WORK/oss-engine"
     log "Compiling (electron-vite build)…"
     npx electron-vite build

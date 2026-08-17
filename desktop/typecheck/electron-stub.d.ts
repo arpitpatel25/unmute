@@ -81,6 +81,11 @@ declare module 'electron' {
     isPackaged: boolean
   }
   export const app: App
+  export const safeStorage: {
+    isEncryptionAvailable(): boolean
+    encryptString(plainText: string): Buffer
+    decryptString(encrypted: Buffer): string
+  }
   export class Notification {
     constructor(opts: { title: string; body: string })
     show(): void
