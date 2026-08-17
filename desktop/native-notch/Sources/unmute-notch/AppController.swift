@@ -604,7 +604,11 @@ final class AppController: NSObject, NotchResizing {
                 }
                 // NO CUTOUT, NOTHING TO WORK AROUND. The card keeps its own
                 // shape and hangs from the top edge on the ordinary padding.
-                return (geometry.pocketCardFrame(), geometry.panelPlacement, BarContent())
+                // The card is shorter when the task is not asking anything —
+                // the middle row is dropped rather than filled with an echo of
+                // the footer, so the window must not reserve room for it.
+                let asking = !(model.pocket.current?.ask ?? "").isEmpty
+                return (geometry.pocketCardFrame(hasAsk: asking), geometry.panelPlacement, BarContent())
             }
             // BAR LEVEL. Height is the measured menu bar and nothing else; the
             // width follows what the mass has to say, bounded by the room

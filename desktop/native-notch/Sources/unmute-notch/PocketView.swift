@@ -122,10 +122,29 @@ enum PocketFace {
     /// The ask wins when there is one: it is the more specific truth. Falling
     /// back to the same status the closed surface shows means the two can never
     /// disagree.
+    /// NIL WHEN THERE IS NOTHING TO ASK, so the caller can drop the row rather
+    /// than fill it. This used to fall back to `status(for:)` — the same word the
+    /// footer already shows — so a finished task said "Done" twice and paid two
+    /// lines of height to do it. The two still cannot disagree, because now only
+    /// one of them says it.
     static func saying(for slot: PocketSlotP?) -> String {
         guard let slot else { return "Nothing in your pocket" }
         if let ask = slot.ask, !ask.isEmpty { return ask }
         return status(for: slot)
+    }
+
+    /// THE ASK ALONE, nil when there is none.
+    ///
+    /// The row and the card want different answers to "what does this say", and
+    /// conflating them is what made a finished task print "Done" twice.
+    ///
+    /// The ROW has one text slot and no other place for status, so it falls back
+    /// (`saying`). The CARD already shows status on its footer, so a middle row
+    /// repeating it is an echo costing 31pt — two lines sized for prose, spent on
+    /// one word. The card asks this instead and drops the row when it is nil.
+    static func ask(for slot: PocketSlotP?) -> String? {
+        guard let slot, let ask = slot.ask, !ask.isEmpty else { return nil }
+        return ask
     }
 
     /// ONE VOCABULARY. This used to capitalise the wire state — so the card said
@@ -330,12 +349,16 @@ struct PocketCard: View {
         ZStack(alignment: .topTrailing) {
             VStack(alignment: .leading, spacing: Self.rowGap) {
                 header
-                Text(model.toast ?? PocketFace.saying(for: slot))
-                    .font(.system(size: 12))
-                    .foregroundColor(model.toast == nil ? Theme.text.opacity(0.72) : Theme.cError)
-                    .lineLimit(2).truncationMode(.tail)
-                    .frame(maxWidth: .infinity, minHeight: Self.askHeight,
-                           maxHeight: Self.askHeight, alignment: .topLeading)
+                // DROPPED, NOT FILLED. A row of fixed height holding an echo of
+                // the footer is a third of this card spent saying nothing new.
+                if let saying = model.toast ?? PocketFace.ask(for: slot) {
+                    Text(saying)
+                        .font(.system(size: 12))
+                        .foregroundColor(model.toast == nil ? Theme.text.opacity(0.72) : Theme.cError)
+                        .lineLimit(2).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, minHeight: Self.askHeight,
+                               maxHeight: Self.askHeight, alignment: .topLeading)
+                }
                 footer
             }
             .padding(.horizontal, Self.padX)

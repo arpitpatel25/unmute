@@ -1,4 +1,5 @@
 import AppKit
+import SurfaceSizeSupport
 
 // WHERE THE SURFACE SITS, MEASURED FROM ONE SCREEN.
 //
@@ -250,11 +251,16 @@ struct NotchGeometry: Equatable {
     /// word would be withholding rather than compact.
     static let pocketCardWidth: CGFloat = 348
     /// who · what it is asking · which of them (see PocketCard).
-    static let pocketCardHeight: CGFloat = 106
-
-    func pocketCardFrame() -> NSRect {
+    ///
+    /// TWO HEIGHTS, because the middle row is only drawn when there is something
+    /// to ask. It used to be one — 106pt, sized for a two-line question — and a
+    /// task with no question filled that row with the same status word the footer
+    /// shows, so the card said "Done" twice and spent a third of itself doing it.
+    /// The arithmetic lives in SurfaceSizeSupport beside its tests, so the window
+    /// frame and the view cannot drift apart.
+    func pocketCardFrame(hasAsk: Bool) -> NSRect {
         topPinnedFrame(width: Self.pocketCardWidth,
-                       height: Self.pocketCardHeight + 2 * Theme.panelPadding)
+                       height: pocketCardHeight(hasAsk: hasAsk) + 2 * Theme.panelPadding)
     }
 
     /// The window frame for a bar-level mass.
