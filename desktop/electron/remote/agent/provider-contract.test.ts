@@ -691,6 +691,101 @@ test('Codex observation follows a rollout archived during an active resumed turn
   await fs.rm(home, { recursive: true, force: true })
 })
 
+test('Codex fresh observation re-resolves an archive move before its first successful rollout read', async () => {
+  const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
+  const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')
+  const archived = join(home, '.codex', 'archived_sessions')
+  const cwd = join(home, 'repo')
+  const live = join(sessions, `rollout-now-${CODEX_ID}.jsonl`)
+  const moved = join(archived, `rollout-now-${CODEX_ID}.jsonl`)
+  await fs.mkdir(sessions, { recursive: true })
+  await fs.mkdir(archived, { recursive: true })
+  await fs.mkdir(cwd, { recursive: true })
+  const seen: AgentProcessEvent[] = []
+  const observation = await codexRolloutObserver({ home, pollMs: 5 })(
+    codexLaunch(home, { kind: 'fresh' }),
+    (event) => seen.push(event),
+  )
+  if (!observation || typeof observation === 'function') assert.fail('Codex observation lifecycle was not returned')
+  await fs.writeFile(live, rolloutLine('session_meta', {
+    session_id: CODEX_ID,
+    cwd,
+    timestamp: new Date().toISOString(),
+  }) + '\n')
+
+  const readFileDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFile')
+  if (!readFileDescriptor) assert.fail('fs.readFile descriptor was unavailable')
+  const originalReadFile = fs.readFile
+  let liveReads = 0
+  Object.defineProperty(fs, 'readFile', {
+    configurable: true,
+    writable: true,
+    value: async (...args: unknown[]) => {
+      if (String(args[0]) === live && ++liveReads === 2) {
+        await fs.rename(live, moved)
+        await fs.appendFile(moved, [
+          rolloutLine('event_msg', { type: 'task_started' }),
+          rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Fresh archived final.' }),
+        ].join('\n') + '\n')
+      }
+      return Reflect.apply(originalReadFile, fs, args)
+    },
+  })
+
+  try {
+    observation.afterSpawn()
+    await waitUntil(() => seen.some((event) => event.type === 'completion'), 'fresh cursor-zero archive completion was observed')
+    await new Promise<void>((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(seen.filter((event) => event.type === 'handle'), [
+      { type: 'handle', sessionId: CODEX_ID },
+    ])
+    assert.deepEqual(seen.filter((event) => event.type === 'completion'), [
+      { type: 'completion', outcome: 'completed', finalText: 'Fresh archived final.' },
+    ])
+  } finally {
+    Object.defineProperty(fs, 'readFile', readFileDescriptor)
+    observation.stop()
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('Codex resume re-resolves an archive move when its pre-spawn baseline cursor is zero', async () => {
+  const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
+  const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')
+  const archived = join(home, '.codex', 'archived_sessions')
+  const cwd = join(home, 'repo')
+  const live = join(sessions, `rollout-now-${CODEX_ID}.jsonl`)
+  const moved = join(archived, `rollout-now-${CODEX_ID}.jsonl`)
+  await fs.mkdir(sessions, { recursive: true })
+  await fs.mkdir(archived, { recursive: true })
+  await fs.mkdir(cwd, { recursive: true })
+  await fs.writeFile(live, '')
+  const seen: AgentProcessEvent[] = []
+  const observation = await codexRolloutObserver({ home, pollMs: 5 })(
+    codexLaunch(home, { kind: 'resume', id: CODEX_ID }),
+    (event) => seen.push(event),
+  )
+  if (!observation || typeof observation === 'function') assert.fail('Codex observation lifecycle was not returned')
+  await fs.rename(live, moved)
+  await fs.appendFile(moved, [
+    rolloutLine('session_meta', { session_id: CODEX_ID, cwd, timestamp: new Date().toISOString() }),
+    rolloutLine('event_msg', { type: 'task_started' }),
+    rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Resume archived final.' }),
+  ].join('\n') + '\n')
+
+  try {
+    observation.afterSpawn()
+    await waitUntil(() => seen.some((event) => event.type === 'completion'), 'resume cursor-zero archive completion was observed')
+    await new Promise<void>((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(seen, [
+      { type: 'completion', outcome: 'completed', finalText: 'Resume archived final.' },
+    ])
+  } finally {
+    observation.stop()
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
 test('Codex serializes only fresh handle discovery so simultaneous same-cwd runs cannot cross-adopt', async () => {
   const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
   const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')

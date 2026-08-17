@@ -123,7 +123,7 @@ export function codexRolloutObserver(
         if (!rolloutPath) rolloutPath = await findRollout(sessionId, options.home)
         if (!rolloutPath) return
         let events = await readRolloutEvents(rolloutPath)
-        if (!events.length && cursor > 0) {
+        if (!events.length) {
           const relocated = await findRollout(sessionId, options.home)
           if (relocated && relocated !== rolloutPath) {
             rolloutPath = relocated
