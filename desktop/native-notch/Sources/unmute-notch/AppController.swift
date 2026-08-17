@@ -54,6 +54,12 @@ final class AppController: NSObject, NotchResizing {
         super.init()
         NotchLog.log("geometry: screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) barH=\(Int(geometry.barHeight)) cutoutW=\(Int(geometry.cutoutWidth))")
         window = NotchWindow(geometry: geometry)
+        // Tell the engine the moment this window stops being key, so no composer
+        // keeps claiming the caret after the user has clicked away. Without it
+        // the claim was permanent and every dictated image went to that draft.
+        window.onWindowUnfocused = { [weak self] in
+            self?.model.emit(.windowUnfocused)
+        }
         // A plain container holds the SwiftUI view and the resize border as
         // SIBLINGS. The border cannot live inside the hosting view — SwiftUI
         // owns that view's subviews and is free to reorder or drop them.

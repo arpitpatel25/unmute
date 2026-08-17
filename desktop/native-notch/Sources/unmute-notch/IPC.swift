@@ -494,6 +494,10 @@ enum Event {
     /// captured images straight to the focused text box instead of posting a
     /// synthetic ⌘V that may not reach this app — see registerComposerImageSink.
     case composerFocus(id: String, focused: Bool)
+    /// This window stopped being key. The counterpart AppKit never gives us:
+    /// resignFirstResponder fires only for focus moves inside one window, so
+    /// clicking away to another app produced no composerFocus(false) at all.
+    case windowUnfocused
     case addDraftImage(id: String, path: String, mimeType: String, name: String)
     case removeDraftAttachment(id: String, attachmentId: String)
     case sendDraft(id: String)
@@ -562,6 +566,7 @@ enum Event {
         case .answerText(let id, let text): return ["type": "answerText", "id": id, "text": text]
         case .setDraftText(let id, let text): return ["type": "setDraftText", "id": id, "text": text]
         case .composerFocus(let id, let focused): return ["type": "composerFocus", "id": id, "focused": focused]
+        case .windowUnfocused: return ["type": "windowUnfocused"]
         case .addDraftImage(let id, let path, let mimeType, let name): return ["type": "addDraftImage", "id": id, "path": path, "mimeType": mimeType, "name": name]
         case .removeDraftAttachment(let id, let attachmentId): return ["type": "removeDraftAttachment", "id": id, "attachmentId": attachmentId]
         case .sendDraft(let id): return ["type": "sendDraft", "id": id]
