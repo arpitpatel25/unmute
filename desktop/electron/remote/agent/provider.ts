@@ -91,6 +91,7 @@ export type AgentProcessEvent =
   | { type: 'handle'; sessionId: string }
   | { type: 'activity'; kind: AgentActivityKind; summary: string }
   | { type: 'completion'; outcome: AgentCompletion['outcome']; finalText?: string }
+  | { type: 'observer-failure' }
   | { type: 'terminal-output'; chunk: string }
   | { type: 'exit'; exitCode: number }
 
@@ -353,15 +354,20 @@ export class CliProviderRuntime implements AgentProvider {
         if (event.type === 'terminal-output') continue
         if (event.type === 'handle') {
           if (!validSessionId(event.sessionId)) {
-            if (!live.handle) live.learnedHandle.reject(new AgentProviderError('provider-handle-missing'))
-            else this.settle(live, { outcome: 'failed' })
-            continue
+            if (!live.handle) {
+              live.learnedHandle.reject(new AgentProviderError('provider-handle-missing'))
+              await this.closeDriver(live)
+            } else {
+              await this.failAndClose(live)
+            }
+            break
           }
           if (!live.handle) {
             live.handle = { provider: this.id, opaqueId: event.sessionId }
             live.learnedHandle.resolve(live.handle)
           } else if (live.handle.opaqueId !== event.sessionId) {
-            this.settle(live, { outcome: 'failed' })
+            await this.failAndClose(live)
+            break
           }
           continue
         }
@@ -387,16 +393,39 @@ export class CliProviderRuntime implements AgentProvider {
           }
           continue
         }
+        if (event.type === 'observer-failure') {
+          if (!live.handle) {
+            live.learnedHandle.reject(new AgentProviderError('provider-handle-missing'))
+            await this.closeDriver(live)
+          } else {
+            await this.failAndClose(live)
+          }
+          break
+        }
         if (event.type === 'exit') {
-          if (!live.handle) live.learnedHandle.reject(new AgentProviderError('provider-handle-missing'))
-          else if (!live.settled) this.settle(live, { outcome: 'failed' })
+          if (!live.handle) {
+            live.learnedHandle.reject(new AgentProviderError('provider-handle-missing'))
+            await this.closeDriver(live)
+          } else if (!live.settled) {
+            await this.failAndClose(live)
+          }
+          break
         }
       }
-      if (!live.closed && live.handle && !live.settled) this.settle(live, { outcome: 'failed' })
+      if (!live.closed && live.handle && !live.settled) await this.failAndClose(live)
     } catch {
-      if (!live.handle) live.learnedHandle.reject(new AgentProviderError('provider-handle-missing'))
-      else this.settle(live, { outcome: 'failed' })
+      if (!live.handle) {
+        live.learnedHandle.reject(new AgentProviderError('provider-handle-missing'))
+        await this.closeDriver(live)
+      } else {
+        await this.failAndClose(live)
+      }
     }
+  }
+
+  private async failAndClose(live: LiveSession): Promise<void> {
+    await this.closeDriver(live)
+    this.settle(live, { outcome: 'failed' })
   }
 
   private settle(live: LiveSession, result: AgentCompletion): void {
@@ -448,10 +477,16 @@ function redact(value: string, input: AgentStartInput): string {
     .replace(/[A-Za-z]:\\[^\s,;:)\]}"']+/g, '[path]')
 }
 
+export interface ProviderObservation {
+  /** Starts live polling only after the addressed PTY has been spawned. */
+  afterSpawn(): void
+  stop(): void
+}
+
 export type ProviderEventObserver = (
   launch: AgentProcessLaunch,
   emit: (event: AgentProcessEvent) => void,
-) => void | (() => void) | Promise<void | (() => void)>
+) => void | (() => void) | ProviderObservation | Promise<void | (() => void) | ProviderObservation>
 
 interface ExecutorBackedDriverOptions {
   createExecutor(launch: AgentProcessLaunch): AgentExecutor | Promise<AgentExecutor>
@@ -508,8 +543,10 @@ export class ExecutorBackedAgentProcess implements AgentProcessDriver {
     this.executor = executor
     executor.onData((chunk) => this.queue.emit({ type: 'terminal-output', chunk }))
     executor.onExit?.(({ exitCode }) => this.queue.emit({ type: 'exit', exitCode }))
-    const stop = await this.options.observe?.(launch, this.queue.emit)
-    this.stopObserving = stop ?? null
+    const observation = await this.options.observe?.(launch, this.queue.emit)
+    this.stopObserving = typeof observation === 'function'
+      ? observation
+      : observation?.stop.bind(observation) ?? null
     const spawn: SpawnOpts = {
       cwd: launch.cwd,
       env: launch.environment,
@@ -518,6 +555,7 @@ export class ExecutorBackedAgentProcess implements AgentProcessDriver {
       ...(launch.session.kind === 'resume' && launch.session.id ? { resumeSessionId: launch.session.id } : {}),
     }
     await executor.spawn(spawn)
+    if (observation && typeof observation !== 'function') observation.afterSpawn()
   }
 
   async submitUserTurn(text: string): Promise<void> {

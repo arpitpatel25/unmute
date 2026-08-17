@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { SpawnOpts } from '../executor'
 import {
   AgentProviderError,
   ExecutorBackedAgentProcess,
@@ -12,6 +13,7 @@ import {
   type AgentProcessLaunch,
   type AgentProvider,
   type AgentStartInput,
+  type ProviderEventObserver,
 } from './provider'
 import { ClaudeCodeProvider, claudeHookObserver } from './providers/claude'
 import { CodexCliProvider, codexRolloutObserver } from './providers/codex'
@@ -70,6 +72,46 @@ class FakeProcess implements AgentProcessDriver {
     this.closes++
     this.events.end()
   }
+}
+
+interface ManagedExecutorResource {
+  emit(event: AgentProcessEvent): void
+  kills: number
+  stops: number
+}
+
+function managedExecutorHarness() {
+  const resources: ManagedExecutorResource[] = []
+  const ids = [
+    CODEX_ID,
+    '00000002-2222-4222-8222-222222222222',
+    '00000003-2222-4222-8222-222222222222',
+  ]
+  const provider = new CodexCliProvider({
+    processFactory: () => {
+      const id = ids[resources.length]
+      const resource: ManagedExecutorResource = { emit() {}, kills: 0, stops: 0 }
+      resources.push(resource)
+      return new ExecutorBackedAgentProcess({
+        createExecutor: () => ({
+          alive: true,
+          async spawn() { resource.emit({ type: 'handle', sessionId: id }) },
+          async isReady() {},
+          writeStdin() {},
+          write() {},
+          resize() {},
+          onData() {},
+          kill() { resource.kills++ },
+        }),
+        observe: (_launch, emit) => {
+          resource.emit = emit
+          return () => { resource.stops++ }
+        },
+      })
+    },
+    probeBinary: async () => true,
+  })
+  return { provider, resources }
 }
 
 const CLAUDE_ID = '11111111-1111-4111-8111-111111111111'
@@ -340,7 +382,7 @@ test('Claude completion comes only from the pinned session Stop hook', async () 
     subscribe(cb) { source.listener = cb; return () => { source.listener = null } },
   })
   const seen: AgentProcessEvent[] = []
-  const stop = await observe({
+  const stop = await beginObservation(observe, {
     provider: 'claude',
     binary: 'claude',
     argv: ['--session-id', CLAUDE_ID],
@@ -417,14 +459,102 @@ test('Codex closes a live process whose minted handle never becomes observable',
   assert.equal(process.closes, 1)
 })
 
-test('a conflicting late Codex handle fails only its own run', async () => {
-  const { provider, processes } = harness('codex')
+test('malformed or conflicting late handles close only their own identified run', async () => {
+  const { provider, resources } = managedExecutorHarness()
   const a = await provider.start(input('a'))
   const b = await provider.start(input('b'))
-  processes[0].events.emit({ type: 'handle', sessionId: '33333333-3333-4333-8333-333333333333' })
-  processes[1].events.emit({ type: 'completion', outcome: 'completed', finalText: 'B done' })
+
+  resources[0].emit({ type: 'handle', sessionId: '../not-a-session' })
   assert.equal((await a.completion).outcome, 'failed')
+  assert.deepEqual({ kills: resources[0].kills, stops: resources[0].stops }, { kills: 1, stops: 1 })
+  assert.deepEqual({ kills: resources[1].kills, stops: resources[1].stops }, { kills: 0, stops: 0 })
+
+  const c = await provider.start(input('c'))
+  resources[2].emit({ type: 'handle', sessionId: '33333333-3333-4333-8333-333333333333' })
+  resources[1].emit({ type: 'completion', outcome: 'completed', finalText: 'B done' })
+  assert.equal((await c.completion).outcome, 'failed')
+  assert.deepEqual({ kills: resources[2].kills, stops: resources[2].stops }, { kills: 1, stops: 1 })
+  assert.deepEqual({ kills: resources[1].kills, stops: resources[1].stops }, { kills: 0, stops: 0 })
   assert.equal((await b.completion).finalText, 'B done')
+})
+
+test('an observer failure after identity closes its own process exactly once', { timeout: 500 }, async () => {
+  const { provider, resources } = managedExecutorHarness()
+  const a = await provider.start(input('observer-failure-a'))
+  const b = await provider.start(input('observer-failure-b'))
+
+  try {
+    resources[0].emit({ type: 'observer-failure' })
+    const completion = await Promise.race([
+      a.completion,
+      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 30)),
+    ])
+    assert.deepEqual(completion, { outcome: 'failed' })
+    assert.deepEqual({ kills: resources[0].kills, stops: resources[0].stops }, { kills: 1, stops: 1 })
+    assert.deepEqual({ kills: resources[1].kills, stops: resources[1].stops }, { kills: 0, stops: 0 })
+
+    resources[1].emit({ type: 'completion', outcome: 'completed', finalText: 'B survived' })
+    assert.equal((await b.completion).finalText, 'B survived')
+  } finally {
+    await provider.close(a.handle).catch(() => {})
+    await provider.close(b.handle).catch(() => {})
+  }
+})
+
+test('discovery timeout kills the spawned PTY and stops observation exactly once', { timeout: 500 }, async () => {
+  let kills = 0
+  let stops = 0
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn() {},
+        async isReady() {},
+        writeStdin() {},
+        write() {},
+        resize() {},
+        onData() {},
+        kill() { kills++ },
+      }),
+      observe: () => () => { stops++ },
+    }),
+    probeBinary: async () => true,
+    handleTimeoutMs: 20,
+  })
+
+  await assert.rejects(provider.start(input('observer-timeout')), (e) =>
+    assertProviderError(e, 'provider-handle-missing'))
+  assert.equal(kills, 1)
+  assert.equal(stops, 1)
+})
+
+test('a start failure after PTY spawn cleans observer and process exactly once', async () => {
+  let kills = 0
+  let stops = 0
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn() { throw new Error(`${TOKEN} at /Users/alice/private.txt`) },
+        async isReady() {},
+        writeStdin() {},
+        write() {},
+        resize() {},
+        onData() {},
+        kill() { kills++ },
+      }),
+      observe: () => () => { stops++ },
+    }),
+    probeBinary: async () => true,
+  })
+
+  await assert.rejects(provider.start(input('spawn-failure')), (e) => {
+    assertProviderError(e, 'provider-unavailable')
+    assert.doesNotMatch(String(e), new RegExp(`${TOKEN}|Users/alice`))
+    return true
+  })
+  assert.equal(kills, 1)
+  assert.equal(stops, 1)
 })
 
 async function waitUntil(predicate: () => boolean, message: string): Promise<void> {
@@ -433,6 +563,17 @@ async function waitUntil(predicate: () => boolean, message: string): Promise<voi
     await new Promise<void>((resolve) => setTimeout(resolve, 5))
   }
   assert.equal(predicate(), true, message)
+}
+
+async function beginObservation(
+  observe: ProviderEventObserver,
+  launch: AgentProcessLaunch,
+  emit: (event: AgentProcessEvent) => void,
+): Promise<void | (() => void)> {
+  const observation = await observe(launch, emit)
+  if (!observation || typeof observation === 'function') return observation
+  observation.afterSpawn()
+  return observation.stop.bind(observation)
 }
 
 function codexLaunch(home: string, session: AgentProcessLaunch['session']): AgentProcessLaunch {
@@ -459,7 +600,11 @@ test('Codex rollout observation learns a fresh handle and completes from task_co
   await fs.mkdir(sessions, { recursive: true })
   await fs.mkdir(cwd, { recursive: true })
   const seen: AgentProcessEvent[] = []
-  const stop = await codexRolloutObserver({ home, pollMs: 5 })(codexLaunch(home, { kind: 'fresh' }), (event) => seen.push(event))
+  const stop = await beginObservation(
+    codexRolloutObserver({ home, pollMs: 5 }),
+    codexLaunch(home, { kind: 'fresh' }),
+    (event) => seen.push(event),
+  )
   const rollout = join(sessions, `rollout-now-${CODEX_ID}.jsonl`)
   await fs.writeFile(rollout, [
     rolloutLine('session_meta', { session_id: CODEX_ID, cwd, timestamp: new Date().toISOString() }),
@@ -492,7 +637,8 @@ test('Codex resume baselines old rollout completions before observing the new tu
     rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Old final.' }),
   ].join('\n') + '\n')
   const seen: AgentProcessEvent[] = []
-  const stop = await codexRolloutObserver({ home, pollMs: 5 })(
+  const stop = await beginObservation(
+    codexRolloutObserver({ home, pollMs: 5 }),
     codexLaunch(home, { kind: 'resume', id: CODEX_ID }),
     (event) => seen.push(event),
   )
@@ -526,7 +672,8 @@ test('Codex observation follows a rollout archived during an active resumed turn
     timestamp: new Date().toISOString(),
   }) + '\n')
   const seen: AgentProcessEvent[] = []
-  const stop = await codexRolloutObserver({ home, pollMs: 5 })(
+  const stop = await beginObservation(
+    codexRolloutObserver({ home, pollMs: 5 }),
     codexLaunch(home, { kind: 'resume', id: CODEX_ID }),
     (event) => seen.push(event),
   )
@@ -554,11 +701,9 @@ test('Codex serializes only fresh handle discovery so simultaneous same-cwd runs
   const observe = codexRolloutObserver({ home, pollMs: 5 })
   const a: AgentProcessEvent[] = []
   const b: AgentProcessEvent[] = []
-  const stopA = await observe(codexLaunch(home, { kind: 'fresh' }), (event) => a.push(event))
+  const stopA = await beginObservation(observe, codexLaunch(home, { kind: 'fresh' }), (event) => a.push(event))
   let bReady = false
-  const stopBPromise = Promise.resolve(
-    observe(codexLaunch(home, { kind: 'fresh' }), (event) => b.push(event)),
-  )
+  const stopBPromise = beginObservation(observe, codexLaunch(home, { kind: 'fresh' }), (event) => b.push(event))
     .then((stop) => { bReady = true; return stop })
   await new Promise<void>((resolve) => setTimeout(resolve, 10))
   assert.equal(bReady, false, 'the second process must not spawn until the first rollout is claimed')
@@ -582,4 +727,77 @@ test('Codex serializes only fresh handle discovery so simultaneous same-cwd runs
   stopA?.()
   stopB?.()
   await fs.rm(home, { recursive: true, force: true })
+})
+
+test('Codex fresh discovery ignores a recent same-cwd rollout present before its PTY spawn', async () => {
+  const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
+  const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')
+  const cwd = join(home, 'repo')
+  const foreignId = '55555555-5555-4555-8555-555555555555'
+  const ownId = '66666666-6666-4666-8666-666666666666'
+  const foreign = join(sessions, `rollout-foreign-${foreignId}.jsonl`)
+  const own = join(sessions, `rollout-own-${ownId}.jsonl`)
+  await fs.mkdir(sessions, { recursive: true })
+  await fs.mkdir(cwd, { recursive: true })
+  await fs.writeFile(foreign, rolloutLine('session_meta', {
+    session_id: foreignId,
+    cwd,
+    timestamp: new Date().toISOString(),
+  }) + '\n')
+
+  const observe = codexRolloutObserver({ home, pollMs: 5 })
+  const spawns: SpawnOpts[] = []
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn(opts) {
+          spawns.push(opts)
+          if (!opts.resumeSessionId) {
+            await fs.writeFile(own, rolloutLine('session_meta', {
+              session_id: ownId,
+              cwd,
+              timestamp: new Date().toISOString(),
+            }) + '\n')
+          }
+        },
+        async isReady() {},
+        writeStdin() {},
+        write() {},
+        resize() {},
+        onData() {},
+        kill() {},
+      }),
+      observe,
+    }),
+    probeBinary: async () => true,
+    handleTimeoutMs: 500,
+  })
+  let handle: Awaited<ReturnType<typeof provider.start>>['handle'] | null = null
+
+  try {
+    const started = await provider.start(input('foreign-rollout', {
+      cwd,
+      constitutionPath: join(home, 'constitution.md'),
+    }))
+    handle = started.handle
+    assert.equal(started.handle.opaqueId, ownId)
+
+    await fs.appendFile(own, [
+      rolloutLine('event_msg', { type: 'task_started' }),
+      rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Own final.' }),
+    ].join('\n') + '\n')
+    assert.equal((await started.completion).finalText, 'Own final.')
+
+    const resumed = await provider.resume(started.handle, input('foreign-rollout-resume', {
+      cwd,
+      constitutionPath: join(home, 'constitution.md'),
+    }))
+    handle = resumed.handle
+    assert.equal(spawns.at(-1)?.resumeSessionId, ownId)
+    assert.ok(!spawns.some((spawn) => spawn.resumeSessionId === foreignId))
+  } finally {
+    if (handle) await provider.close(handle).catch(() => {})
+    await fs.rm(home, { recursive: true, force: true })
+  }
 })

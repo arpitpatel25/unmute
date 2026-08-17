@@ -1,6 +1,11 @@
 import { promises as fs } from 'node:fs'
 import { CodexExecutor, type CodexExecutorOpts } from '../../codex-executor'
-import { discoverSessionId, findRollout, readRolloutEvents } from '../../codex/cli-session'
+import {
+  discoverSessionId,
+  findRollout,
+  readRolloutEvents,
+  snapshotRolloutSessionIds,
+} from '../../codex/cli-session'
 import {
   CliProviderRuntime,
   ExecutorBackedAgentProcess,
@@ -81,6 +86,12 @@ export function codexRolloutObserver(
     let rolloutPath: string | null = null
     let cursor = 0
     let lastMessage = ''
+    let timer: ReturnType<typeof setInterval> | null = null
+    let afterSpawnCalled = false
+    let observerFailed = false
+    const preSpawnSessions = launch.session.kind === 'fresh'
+      ? await snapshotRolloutSessionIds(options.home)
+      : new Set<string>()
     const sinceMs = Date.now()
 
     // A resumed rollout already contains old completions. Baseline it before
@@ -95,7 +106,13 @@ export function codexRolloutObserver(
       polling = true
       try {
         if (!sessionId) {
-          const discovered = await discoverSessionId(launch.cwd, sinceMs, options.home) ?? undefined
+          const discovered = await discoverSessionId(
+            launch.cwd,
+            sinceMs,
+            options.home,
+            5_000,
+            preSpawnSessions,
+          ) ?? undefined
           if (!discovered || claimedSessions.has(discovered)) return
           sessionId = discovered
           claimedSession = discovered
@@ -125,14 +142,30 @@ export function codexRolloutObserver(
         polling = false
       }
     }
-    await tick()
-    const timer = setInterval(() => { void tick() }, options.pollMs ?? 100)
-    timer.unref?.()
-    return () => {
+
+    const poll = () => {
+      if (observerFailed) return
+      void tick().catch(() => {
+        if (stopped || observerFailed) return
+        observerFailed = true
+        emit({ type: 'observer-failure' })
+      })
+    }
+    const stop = () => {
       stopped = true
-      clearInterval(timer)
+      if (timer) clearInterval(timer)
       releaseFreshDiscovery?.()
       if (claimedSession) claimedSessions.delete(claimedSession)
+    }
+    return {
+      afterSpawn() {
+        if (afterSpawnCalled || stopped) return
+        afterSpawnCalled = true
+        poll()
+        timer = setInterval(poll, options.pollMs ?? 100)
+        timer.unref?.()
+      },
+      stop,
     }
   }
 }

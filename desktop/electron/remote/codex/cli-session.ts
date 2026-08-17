@@ -73,6 +73,11 @@ export async function findRollout(sessionId: string, home?: string): Promise<str
   return all.find((r) => r.sessionId === sessionId)?.path ?? null
 }
 
+/** Snapshot identities that existed before a fresh CLI process was spawned. */
+export async function snapshotRolloutSessionIds(home?: string): Promise<ReadonlySet<string>> {
+  return new Set((await allRollouts(home)).map((rollout) => rollout.sessionId))
+}
+
 /** Parse a rollout into events. Tolerant: a half-written trailing line is
  *  normal — Codex is appending to this file as we read it. */
 export async function readRolloutEvents(path: string): Promise<RolloutEvent[]> {
@@ -192,10 +197,15 @@ export async function findCodexSessionCwd(sessionId: string, home?: string): Pro
 }
 
 export async function discoverSessionId(
-  cwd: string, sinceMs: number, home?: string, graceMs = 5_000,
+  cwd: string,
+  sinceMs: number,
+  home?: string,
+  graceMs = 5_000,
+  excludedSessionIds: ReadonlySet<string> = new Set(),
 ): Promise<string | null> {
   for (const r of await allRollouts(home)) {
     if (r.mtimeMs + graceMs < sinceMs) break        // sorted newest-first: older still
+    if (excludedSessionIds.has(r.sessionId)) continue
     const events = await readRolloutEvents(r.path)
     const meta = events.find((e) => e.type === 'session_meta')?.payload as
       { cwd?: string; session_id?: string; timestamp?: string; originator?: string } | undefined
