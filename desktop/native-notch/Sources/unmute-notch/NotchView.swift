@@ -69,7 +69,17 @@ struct NotchView: View {
         // surface just asked. A tap on the pocket opens the pocket; a tap on
         // the open pocket is handled by its own controls, not here.
         .onTapGesture {
-            guard !expanded else { return }
+            // A CLICK ON THE SURFACE IS A WAY OUT OF THE TEXT BOX.
+            //
+            // Nothing in this app ever called makeFirstResponder, and AppKit only
+            // moves first responder when another responder ACCEPTS it — SwiftUI
+            // text and backgrounds do not. So once the composer took the caret it
+            // kept it, and clicking anywhere inside the notch did nothing: the only
+            // way out was clicking a different application entirely.
+            //
+            // Controls consume their own taps before this fires, so clicking the
+            // composer still focuses it; this only runs for the background.
+            guard !expanded else { NotchFocus.release(); return }
             if model.pocket.isOpen { return }
             model.emit(model.pocket.taskCount > 0 ? .pocketOpen : .tap)
         }
