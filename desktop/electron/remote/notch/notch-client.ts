@@ -10,6 +10,7 @@ import type { ProviderId } from '../providers'
 import { createInterface, type Interface } from 'node:readline'
 import { EventEmitter } from 'node:events'
 import { createLogger } from '../log'
+import { devEvent } from '../curator-devlog'
 import type { PillStateP } from './pill-controller'
 import type { Block } from '../blocks'
 // Re-exported so the controller can describe a task's chat view without
@@ -457,8 +458,15 @@ export class NotchClient extends EventEmitter {
     this.child = spawn(this.opts.binPath, this.opts.binArgs ?? [], { stdio: ['pipe', 'pipe', 'pipe'] })
     this.rl = createInterface({ input: this.child.stdout })
     this.rl.on('line', (line) => this.onLine(line, generation))
+    // MIRRORED ONLY WHEN SOMEONE IS READING IT. The notch already writes every
+    // one of these lines to its own notch.log; re-logging them here stored a
+    // second copy of the same session — measured at ~78 lines a second, 25MB in
+    // under an hour — in the run log, at WARN level, in production, where the
+    // vast majority are ordinary UI state ("bar idle", "CMD setState"). The
+    // notch's own log is the place to read them; this mirror is for a dev build
+    // that wants both streams interleaved.
     this.child.stderr.on('data', (d: Buffer) =>
-      log.warn('notch stderr', { text: d.toString().slice(0, 400) }))
+      devEvent(log, 'notch-stderr', { text: d.toString().slice(0, 400) }))
     this.child.on('exit', (code) => {
       if (generation != this.generation) return
       this.dead = true

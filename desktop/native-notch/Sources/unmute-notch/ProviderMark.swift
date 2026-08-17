@@ -33,6 +33,18 @@ struct ProviderMark: View {
     /// make it bigger or smaller — never lopsided.
     var size: CGFloat = ProviderMark.standard
 
+    /// How wide the mark will be, so a caller can size a surface BEFORE laying
+    /// it out — the pocket's shoulders are measured from their content the same
+    /// way the bar's halves are.
+    ///
+    /// The terminal glyph is an SF Symbol, whose advance is not a number we can
+    /// state exactly; 0.95 of the point size is the measured width of
+    /// `terminal` at every size this draws at, and the pocket adds its own
+    /// slack on top so a point of error cannot ellipsise a title.
+    static func width(size: CGFloat = ProviderMark.standard, terminal: Bool) -> CGFloat {
+        size + (terminal ? size * 0.31 + size * 0.95 : 0)
+    }
+
     var body: some View {
         HStack(spacing: size * 0.31) {
             vendor

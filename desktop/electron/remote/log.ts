@@ -54,6 +54,12 @@ const config: LoggerConfig = {
 }
 
 let currentLogFilePath: string | null = null
+/** The directory those logs live in — so a side-channel (the PTY tap) can write
+ *  next to them instead of inventing its own location. */
+let currentLogDir: string | null = null
+
+/** Where run logs are being written, or null before configureRemoteLogging. */
+export function remoteLogDir(): string | null { return currentLogDir }
 
 /**
  * Configure the file sink. Call ONCE from the Electron main process at
@@ -65,6 +71,7 @@ let currentLogFilePath: string | null = null
 export function configureRemoteLogging(opts: { dir: string; runId: string; minLevel?: LogLevel }): string {
   try {
     mkdirSync(opts.dir, { recursive: true })
+    currentLogDir = opts.dir
     const file = join(opts.dir, `remote-${opts.runId}.log`)
     config.fileStream = createWriteStream(file, { flags: 'a' })
     currentLogFilePath = file

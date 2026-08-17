@@ -14,6 +14,9 @@ import ConversationSupport
 /// While a turn is running the pill carries its status, so a reader who has
 /// scrolled up still knows work is happening without having to come back.
 private let BLOCK_BOTTOM = "block-conversation-bottom"
+/// Coordinate space for the scroll viewport, so the end-marker can be measured
+/// against it rather than against the window.
+private let BLOCK_SCROLL = "block-conversation-scroll"
 
 /// TWO MEASURES, NOT ONE.
 ///
@@ -81,6 +84,9 @@ struct BlockConversation: View {
     var usage: BlockUsage?
 
     @State private var atBottom = true
+    /// Viewport height, so the reporter's measurement can be turned into a
+    /// distance-below-the-fold rather than a raw coordinate.
+    @State private var viewportHeight: CGFloat = 0
     /// The panel's own width, read once per layout — the column and the code
     /// measure are both derived from it.
     @State private var width: CGFloat = 900
@@ -102,11 +108,22 @@ struct BlockConversation: View {
                             Color.clear
                                 .frame(height: 1)
                                 .id(BLOCK_BOTTOM)
-                                .background(BottomWatcher(atBottom: $atBottom))
+                                .background(BottomDistanceReporter { end in
+                                    // viewportHeight - end = points of content
+                                    // still below the fold. Folded through the
+                                    // hysteresis so the Jump control cannot move
+                                    // the value across its own boundary.
+                                    atBottom = isAtBottom(was: atBottom, distance: viewportHeight - end)
+                                })
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.bottom, 2)
                     }
+                    .coordinateSpace(name: BLOCK_SCROLL)
+                    .background(GeometryReader { g in
+                        Color.clear.onAppear { viewportHeight = g.size.height }
+                            .onChange(of: g.size.height) { viewportHeight = $0 }
+                    })
 
                     if !atBottom {
                         JumpToLatest(status: liveStatus) {
@@ -161,19 +178,37 @@ struct BlockConversation: View {
     }
 }
 
-/// Reports whether the transcript's end is on screen, so the jump control can
-/// appear only when it is genuinely useful.
-private struct BottomWatcher: View {
-    @Binding var atBottom: Bool
+/// Reports HOW FAR the transcript's end is from the viewport's bottom edge.
+///
+/// It reports a DISTANCE and nothing else. The previous version reported whether
+/// it was itself on screen, via onAppear/onDisappear — and since that answer
+/// decided whether the Jump control was drawn, and the control's presence moved
+/// this view, the two chased each other and SwiftUI recomputed layout forever.
+/// See ConversationSupport/BottomProximity.swift for the whole account.
+///
+/// A measurement cannot be changed by what we choose to draw afterwards; a
+/// visibility can. The threshold logic — and the dead zone that makes the
+/// control unable to flip its own condition — lives with the pure function.
+private struct BottomDistanceReporter: View {
+    let onMeasure: (CGFloat) -> Void
 
     var body: some View {
         GeometryReader { geo in
             Color.clear
-                .onChange(of: geo.frame(in: .named("scroll")).minY) { _ in }
-                .onAppear { atBottom = true }
-                .onDisappear { atBottom = false }
+                .preference(
+                    key: BottomDistanceKey.self,
+                    // Distance from this marker (the content's end) up to the
+                    // bottom edge of the scroll viewport. Zero when they meet.
+                    value: geo.frame(in: .named(BLOCK_SCROLL)).maxY
+                )
         }
+        .onPreferenceChange(BottomDistanceKey.self, perform: onMeasure)
     }
+}
+
+private struct BottomDistanceKey: PreferenceKey {
+    static var defaultValue: CGFloat = .nan
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 private struct JumpToLatest: View {

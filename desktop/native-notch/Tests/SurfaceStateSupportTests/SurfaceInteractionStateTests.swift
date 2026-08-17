@@ -2,64 +2,22 @@ import XCTest
 @testable import SurfaceStateSupport
 
 final class SurfaceInteractionStateTests: XCTestCase {
-    func testPocketControlsAndHeightShareOneDerivedState() {
+    // THE POCKET'S MORPH TESTS LIVED HERE — five of them, all describing a
+    // second size that no longer exists: the growth order, the no-reversal
+    // rule, the capture-keeps-it-open rule, and the exit that could only be
+    // applied at a settlement boundary. The pocket has ONE size now, so there
+    // is no morph to sequence and nothing here to assert about it.
+    //
+    // What replaced them is a geometry test: PocketRow measures its two
+    // shoulders and PocketCard states its own height, and both are exercised
+    // through NotchGeometry rather than through this reducer.
+
+    func testPointerOnlyTracksTheBar() {
         var state = SurfaceInteractionState()
-        state.reduce(.pocketAvailability(open: true, itemCount: 3))
-        XCTAssertEqual(state.presentation.pocketHeight, 64)
-        XCTAssertFalse(state.presentation.pocketDetailsVisible)
-
-        state.reduce(.pointerEntered(.pocket))
-        XCTAssertEqual(state.presentation.pocketHeight, 146)
-        XCTAssertFalse(state.presentation.pocketDetailsVisible,
-                       "the existing card grows before its lower content appears")
-
-        state.reduce(.pocketGeometrySettled)
-        XCTAssertEqual(state.presentation.pocketHeight, 146)
-        XCTAssertTrue(state.presentation.pocketDetailsVisible)
-
-        state.reduce(.pointerExited(.pocket))
-        XCTAssertEqual(state.presentation.pocketHeight, 146,
-                       "lower content disappears before the card contracts")
-        XCTAssertFalse(state.presentation.pocketDetailsVisible)
-
-        state.reduce(.pocketContentHidden)
-        XCTAssertEqual(state.presentation.pocketHeight, 64)
-        XCTAssertFalse(state.presentation.pocketDetailsVisible)
-    }
-
-    func testExitWhilePocketIsGrowingCannotReverseTheGeometry() {
-        var state = SurfaceInteractionState()
-        state.reduce(.pocketAvailability(open: true, itemCount: 2))
-        state.reduce(.pointerEntered(.pocket))
-
-        state.reduce(.pointerExited(.pocket))
-
-        XCTAssertEqual(state.presentation.pocketHeight, 146)
-        XCTAssertFalse(state.presentation.pocketDetailsVisible)
-        state.reduce(.pocketGeometrySettled)
-        XCTAssertEqual(state.presentation.pocketHeight, 64,
-                       "a real exit observed during growth is applied only after growth settles")
-    }
-
-    func testCaptureKeepsPocketDetailsVisibleAfterPointerExit() {
-        var state = SurfaceInteractionState()
-        state.reduce(.pocketAvailability(open: true, itemCount: 1))
-        state.reduce(.captureAimed(true))
-        state.reduce(.pocketGeometrySettled)
-        state.reduce(.pointerExited(.pocket))
-        XCTAssertEqual(state.presentation.pocketHeight, 120)
-        XCTAssertTrue(state.presentation.pocketDetailsVisible)
-    }
-
-    func testPocketOpenedWhileCaptureIsAlreadyAimedCompletesItsMorph() {
-        var state = SurfaceInteractionState()
-        state.reduce(.captureAimed(true))
-        state.reduce(.pocketAvailability(open: true, itemCount: 2))
-        XCTAssertEqual(state.presentation.pocketHeight, 146)
-        XCTAssertFalse(state.presentation.pocketDetailsVisible)
-
-        state.reduce(.pocketGeometrySettled)
-        XCTAssertTrue(state.presentation.pocketDetailsVisible)
+        state.reduce(.pointerEntered(.bar))
+        XCTAssertTrue(state.presentation.barHovered)
+        state.reduce(.pointerExited(.bar))
+        XCTAssertFalse(state.presentation.barHovered)
     }
 
     func testRepeatedTaskEntryDoesNotResetExplicitTerminalChoice() {

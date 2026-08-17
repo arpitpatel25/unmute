@@ -494,6 +494,10 @@ enum Event {
     /// captured images straight to the focused text box instead of posting a
     /// synthetic ⌘V that may not reach this app — see registerComposerImageSink.
     case composerFocus(id: String, focused: Bool)
+    /// This window stopped being key. The counterpart AppKit never gives us:
+    /// resignFirstResponder fires only for focus moves inside one window, so
+    /// clicking away to another app produced no composerFocus(false) at all.
+    case windowUnfocused
     case addDraftImage(id: String, path: String, mimeType: String, name: String)
     case removeDraftAttachment(id: String, attachmentId: String)
     case sendDraft(id: String)
@@ -562,6 +566,7 @@ enum Event {
         case .answerText(let id, let text): return ["type": "answerText", "id": id, "text": text]
         case .setDraftText(let id, let text): return ["type": "setDraftText", "id": id, "text": text]
         case .composerFocus(let id, let focused): return ["type": "composerFocus", "id": id, "focused": focused]
+        case .windowUnfocused: return ["type": "windowUnfocused"]
         case .addDraftImage(let id, let path, let mimeType, let name): return ["type": "addDraftImage", "id": id, "path": path, "mimeType": mimeType, "name": name]
         case .removeDraftAttachment(let id, let attachmentId): return ["type": "removeDraftAttachment", "id": id, "attachmentId": attachmentId]
         case .sendDraft(let id): return ["type": "sendDraft", "id": id]
@@ -632,8 +637,16 @@ enum IPC {
             var buffer = Data()
             while true {
                 let chunk = input.availableData
-                if chunk.isEmpty { // EOF — parent gone; exit cleanly
-                    DispatchQueue.main.async { onCommand(.quit) }
+                if chunk.isEmpty { // EOF — parent gone
+                    // ASK NICELY, THEN LEAVE ANYWAY.
+                    //
+                    // This used to dispatch .quit and return, which made the
+                    // only escape hatch depend on the main thread being healthy.
+                    // When it was not, an orphaned notch kept a screenSaver-level
+                    // window over every other app with nothing driving it — and
+                    // force-quitting "unmute" never touched it, because this
+                    // process is called unmute-notch. People rebooted.
+                    Lifecycle.shutdownNow(reason: "stdin-eof", onCommand: onCommand)
                     return
                 }
                 buffer.append(chunk)

@@ -1,4 +1,5 @@
 import AppKit
+import SurfaceSizeSupport
 
 // WHERE THE SURFACE SITS, MEASURED FROM ONE SCREEN.
 //
@@ -224,6 +225,42 @@ struct NotchGeometry: Equatable {
                                      : (left > 0 && r > 0 ? Self.segmentGap : 0)
         return MassPlacement(left: left, middle: middle, right: r,
                              fillet: fillet, bottomRadius: barCornerRadius)
+    }
+
+    /// THE POCKET, OPEN — the same mass rules, with one difference.
+    ///
+    /// The right half here is not a status line that can be dropped: it carries
+    /// the close button, and a card you cannot dismiss is not a card. So both
+    /// halves are clamped to the room beside the cutout and neither is ever
+    /// removed. Everything else — the fillets, the anchor, the middle being the
+    /// hole itself — is exactly `mass`.
+    func pocketMass(left: CGFloat, right: CGFloat) -> MassPlacement {
+        let fillet = barFillet
+        let l = min(left, max(leftUsable - fillet - Self.barEdgeKeepOut, 0))
+        let r = min(right, max(rightUsable - fillet - Self.barEdgeKeepOut, 0))
+        return MassPlacement(left: ceil(l), middle: cutoutWidth, right: ceil(r),
+                             fillet: fillet, bottomRadius: barCornerRadius)
+    }
+
+    /// THE POCKET, OFF THE NOTCH. One card, always this size.
+    ///
+    /// There is no housing to work around here, so the card keeps its own shape
+    /// and hangs from the top edge on the ordinary panel padding. It is the
+    /// FULLER card, not the old 64pt compact one: nothing off-notch forces the
+    /// content onto a single line, so a card showing only a title and a status
+    /// word would be withholding rather than compact.
+    static let pocketCardWidth: CGFloat = 348
+    /// who · what it is asking · which of them (see PocketCard).
+    ///
+    /// TWO HEIGHTS, because the middle row is only drawn when there is something
+    /// to ask. It used to be one — 106pt, sized for a two-line question — and a
+    /// task with no question filled that row with the same status word the footer
+    /// shows, so the card said "Done" twice and spent a third of itself doing it.
+    /// The arithmetic lives in SurfaceSizeSupport beside its tests, so the window
+    /// frame and the view cannot drift apart.
+    func pocketCardFrame(hasAsk: Bool) -> NSRect {
+        topPinnedFrame(width: Self.pocketCardWidth,
+                       height: pocketCardHeight(hasAsk: hasAsk) + 2 * Theme.panelPadding)
     }
 
     /// The window frame for a bar-level mass.

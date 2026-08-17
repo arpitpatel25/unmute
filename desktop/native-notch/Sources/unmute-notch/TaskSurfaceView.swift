@@ -1,4 +1,5 @@
 import SwiftUI
+import ComposerSupport
 
 // The single-task surface — status + duration, the pending question (chips or
 // free-text), done result + detail + artifacts, failed reason / mcpGap fix,
@@ -67,16 +68,22 @@ struct TaskSurfaceView: View {
                         QuestionBlock(model: model, taskId: t.id, question: q,
                                       terminalOpen: taskTerminalBinding).padding(.top, 12)
                     }
-                    // ALWAYS OFFERED, unless this is an errand that has genuinely
-                    // finished. A session that completed a step is waiting for your
-                    // next line, not over — and `alive` (a PTY handle) is the wrong
-                    // question to ask about that, which is what this branch used to
-                    // ask before falling through to an empty Spacer.
-                    if !ended(t) {
+                    // OFFERED WHEN IT CAN ACTUALLY BE SENT — see ComposerAvailability.
+                    // Asking "has this task finished?" got it wrong both ways: it hid
+                    // the box through the 8-15 minute parked-warm window when sending
+                    // worked, and it showed the box over a dead executor where every
+                    // send was silently retained.
+                    switch composerState(alive: t.alive, status: t.status.rawValue, kind: t.kind) {
+                    case .composable:
                         CodexComposer(model: model, taskId: t.id, deliveryError: t.deliveryError,
                                       modelLabel: t.modelLabel, sending: t.sending ?? false,
                                       draft: t.draft)
                             .padding(.top, 9)
+                    case .notRunning:
+                        SessionNotRunning(model: model, taskId: t.id, reason: t.deliveryError)
+                            .padding(.top, 9)
+                    case .finished:
+                        EmptyView()
                     }
                 }
 

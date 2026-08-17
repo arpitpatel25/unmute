@@ -19,6 +19,23 @@ final class NotchWindow: NSPanel {
     /// Flipped by AppController on state changes.
     var allowsKey = false { didSet { if !allowsKey && isKeyWindow { resignKey() } } }
 
+    /// Announced when this window stops being key, so the engine can drop its
+    /// record of which composer owns the caret.
+    ///
+    /// THE BLUR APPKIT WILL NOT SEND. `resignFirstResponder` fires only when
+    /// focus moves to another responder INSIDE this window — clicking away to
+    /// Chrome leaves the text view first responder of a window that merely
+    /// stopped being key. Without this, one click into a task composer pinned
+    /// the engine's focused-composer flag for the life of the process, and every
+    /// dictated screenshot after it went to that draft instead of the caret the
+    /// user was actually typing at.
+    var onWindowUnfocused: (() -> Void)?
+
+    override func resignKey() {
+        super.resignKey()
+        onWindowUnfocused?()
+    }
+
     init(geometry: NotchGeometry) {
         super.init(
             contentRect: geometry.dormantFrame(),

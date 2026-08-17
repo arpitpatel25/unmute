@@ -3,6 +3,7 @@ import { pipelineTranscribe, pipelineDualTranscribe, pipelineProcess, pipelineTr
 import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
 import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste, injectImagesIntoTask, injectImagesIntoDesktopTask } from './clipboard'
+import { shouldUseClipboardFallback } from './selectionCapture'
 import { pauseForCapture, resumeAfterCapture } from './mediaController'
 import { saveAudioFile, saveAudioChunk } from './audio'
 import { initTelemetry, logTelemetry, DEV_BUILD, installMainConsoleTee, attachRendererConsoleTee } from './dictationTelemetry'
@@ -2604,7 +2605,17 @@ class SessionManager {
     // MUST wrap the whole call, including its error paths.
     beginOwnClipboardSequence()
     try {
-      const useClipboardFallback = mode === 'instruction'
+      // NOT `mode === 'instruction'`. A Remote capture is started as
+      // startSession('dictation', 'remote') so it can reuse this whole
+      // pipeline, which means it arrives here calling itself dictation — and
+      // for months that silently denied it the pasteboard stand-in, so anything
+      // the user had COPIED before speaking to an agent was read, cleared,
+      // restored and thrown away. The kind is what separates "paste at a
+      // cursor" from "hand this to something that will read it".
+      const useClipboardFallback = shouldUseClipboardFallback(
+        mode,
+        this.currentSession?.kind ?? 'dictation',
+      )
       const selectedText = await captureSelectedText(useClipboardFallback)
       if (selectedText && this.currentSession) {
         this.currentSession.selectedText = selectedText
