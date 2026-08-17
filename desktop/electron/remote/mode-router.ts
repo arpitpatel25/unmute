@@ -18,6 +18,62 @@ const log = createLogger('mode-router')
 
 export type TriggerKey = 'fn' | 'right-option'
 export type CaptureMode = 'dictation' | 'remote'
+export type CaptureDestination = 'cursor' | 'task' | 'unmute-agent'
+
+export interface CaptureRouteInput {
+  /** The immutable kind stamped on the capture session at key-down. */
+  captureMode: CaptureMode
+  /** Instruct remains a cursor operation, independently of capture routing. */
+  recordingMode?: 'dictation' | 'instruction'
+  /** A task address captured at key-down always wins over later routing. */
+  addressedTaskId?: string | null
+  /** Explicit destination selected by the user for this capture only. */
+  explicitDestination?: CaptureDestination
+  transcript?: string
+}
+
+export interface ExplicitAgentAddress {
+  transcript: string
+}
+
+/**
+ * Remove only an unambiguous, leading address to Unmute itself.
+ *
+ * Bare verbs such as "remember" and "store" are deliberately not routing
+ * signals. They become Agent intents only after the capture has reached the
+ * Agent through this explicit address (or an explicit destination selection).
+ */
+export function parseExplicitAgentAddress(transcript: string): ExplicitAgentAddress | null {
+  const text = typeof transcript === 'string' ? transcript.trim() : ''
+  if (!text) return null
+
+  const addressed = [
+    /^(?:hey|ok|okay)\s*,?\s+unmute(?:\s+agent)?(?:\s*[,.:;\-]\s*|\s+)(.+)$/iu,
+    /^unmute\s+agent(?:\s*[,.:;\-]\s*|\s+)(.+)$/iu,
+    /^unmute(?:\s+agent)?\s*[,.:;\-]\s*(.+)$/iu,
+    /^(?:ask|tell)\s+unmute(?:\s+agent)?\s+to\s+(.+)$/iu,
+  ]
+  for (const pattern of addressed) {
+    const match = pattern.exec(text)
+    const request = match?.[1]?.trim()
+    if (request) return { transcript: request }
+  }
+  return null
+}
+
+/**
+ * Additive capture routing. Existing capture axes retain precedence:
+ * dictation/Instruct paste at the cursor, and a captured task address remains
+ * a task follow-up. Only an explicit Agent selection or address reaches the
+ * privileged Agent controller.
+ */
+export function resolveCaptureDestination(input: CaptureRouteInput): CaptureDestination {
+  if (input.captureMode === 'dictation' || input.recordingMode === 'instruction') return 'cursor'
+  if (input.addressedTaskId) return 'task'
+  if (input.explicitDestination === 'unmute-agent') return 'unmute-agent'
+  if (parseExplicitAgentAddress(input.transcript ?? '')) return 'unmute-agent'
+  return 'task'
+}
 
 /** PRD §2.4.4: the Remote key is always "the one not chosen for dictation". */
 export function deriveRemoteKey(dictationKey: TriggerKey): TriggerKey {

@@ -41,7 +41,13 @@ import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
 import { initRuntimeConfig, getModels, getKnobs, getModelCatalog, isSelectableModel } from './runtime-config'
-import { deriveRemoteKey, type TriggerKey } from './mode-router'
+import {
+  deriveRemoteKey,
+  parseExplicitAgentAddress,
+  resolveCaptureDestination,
+  type CaptureDestination,
+  type TriggerKey,
+} from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete, blockerOf, confirmationKey, type BackendProbe } from './setup-status'
@@ -2748,7 +2754,19 @@ async function listClaudeSkillNames(): Promise<string[]> {
   return names
 }
 
-export async function dispatchFromCapture(rawTranscript: string, attachments: readonly string[] = [], targetTaskId?: string | null): Promise<string | null> {
+export interface CaptureDispatchOptions {
+  /** Explicit capture destination. Omitted is the existing task route. */
+  destination?: Extract<CaptureDestination, 'task' | 'unmute-agent'>
+  /** Present only when the user explicitly addressed an earlier Agent run. */
+  priorAgentRunId?: string
+}
+
+export async function dispatchFromCapture(
+  rawTranscript: string,
+  attachments: readonly string[] = [],
+  targetTaskId?: string | null,
+  options: CaptureDispatchOptions = {},
+): Promise<string | null> {
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
   // surface always returns to idle, whatever path the dispatch takes.
@@ -2756,7 +2774,7 @@ export async function dispatchFromCapture(rawTranscript: string, attachments: re
   pendingBeat = null
   let landed: string | null = null
   try {
-    landed = await dispatchFromCaptureInner(rawTranscript, attachments, targetTaskId)
+    landed = await dispatchFromCaptureInner(rawTranscript, attachments, targetTaskId, options)
     return landed
   } finally {
     broadcastCapturePhase('idle', landed)
@@ -2768,7 +2786,12 @@ export async function dispatchFromCapture(rawTranscript: string, attachments: re
   }
 }
 
-async function dispatchFromCaptureInner(rawTranscript: string, attachments: readonly string[] = [], targetTaskId?: string | null): Promise<string | null> {
+async function dispatchFromCaptureInner(
+  rawTranscript: string,
+  attachments: readonly string[] = [],
+  targetTaskId?: string | null,
+  options: CaptureDispatchOptions = {},
+): Promise<string | null> {
   if (!manager) {
     log.error('dispatchFromCapture before initRemote')
     return null
@@ -2847,6 +2870,57 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
   if (!raw) {
     log.warn('empty transcript without an addressed task — not dispatching', { attachments: attachments.length })
     return null
+  }
+
+  // 0b. EXPLICIT UNMUTE AGENT destination. This is intentionally below the
+  // task-address short-circuit: a capture addressed at key-down remains a task
+  // follow-up even if its text happens to begin with "Unmute". Ordinary Remote
+  // speech still falls through to the unchanged router below, and ordinary
+  // dictation/Instruct never enter dispatchFromCapture at all.
+  const agentAddress = parseExplicitAgentAddress(raw)
+  const destination = resolveCaptureDestination({
+    captureMode: 'remote',
+    recordingMode: 'dictation',
+    addressedTaskId,
+    explicitDestination: options.destination,
+    transcript: raw,
+  })
+  if (destination === 'unmute-agent') {
+    const transcript = agentAddress?.transcript ?? raw
+    if (!unmuteAgentController || !unmuteAgentAvailability.available) {
+      log.warn('explicit agent capture refused — Agent unavailable', {
+        reason: unmuteAgentAvailability.reason ?? 'not-initialized',
+        attachments: attachments.length,
+      })
+      pendingBeat = 'Unmute Agent is unavailable.'
+      return null
+    }
+
+    // Captured images stay in the established buffer as host-owned paths.
+    // The main-process controller converts each source into an opaque,
+    // interaction-scoped handle before a provider can see it.
+    const input: AgentInteractionInput = {
+      transcript,
+      attachments: attachments.map((path) => ({
+        path,
+        name: basename(path),
+        mimeType: 'image/png',
+      })),
+      ...(options.priorAgentRunId ? { priorRunId: options.priorAgentRunId } : {}),
+    }
+    const result = await unmuteAgentController.submit(input)
+    log.event('agent-capture-complete', {
+      interactionId: result.interactionId,
+      agentRunId: result.agentRunId,
+      source: result.source,
+      outcome: result.outcome,
+      presentation: result.presentation,
+      attachments: attachments.length,
+    })
+    pendingBeat = result.outcome === 'completed'
+      ? (result.text?.trim() || 'Done.')
+      : (result.error?.message || 'That did not land.')
+    return result.agentRunId || null
   }
 
   // 1. ALL routing goes through the warm router — including answering a task that

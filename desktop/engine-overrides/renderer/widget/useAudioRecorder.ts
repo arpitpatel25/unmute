@@ -1,8 +1,10 @@
 import { useState, useRef, useCallback } from 'react'
 import { getWarmStream, warmIsHot, disconnectWarmMic, setWarmBusy, warmState, setCaptureInFlight } from './micWarm'
 import { effectiveSilenceThreshold, decideCut } from './vadPolicy'
+import type { CaptureDestination } from './agentPicker'
 
 type RecordingMode = 'dictation' | 'instruction'
+export type RecordingDestination = 'cursor' | CaptureDestination
 
 interface UseAudioRecorderReturn {
   isRecording: boolean
@@ -15,7 +17,12 @@ interface UseAudioRecorderReturn {
   /** True when the recording's loudest moment is still faint — coach "bring
    *  the mic closer" while there's time to fix it. */
   tooQuiet: boolean
-  startRecording: (deviceId?: string, mode?: RecordingMode, sessionId?: string) => Promise<void>
+  startRecording: (
+    deviceId?: string,
+    mode?: RecordingMode,
+    sessionId?: string,
+    destination?: RecordingDestination,
+  ) => Promise<void>
   stopRecording: () => Promise<void>
 }
 
@@ -164,6 +171,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   // Session ID this recording belongs to — sent with audio so the main process
   // can reject a late buffer that belongs to a dictation that already ended.
   const frozenSessionIdRef = useRef<string | undefined>(undefined)
+  // Destination is capture-scoped just like mode/session ID. It is deliberately
+  // independent of the Claude/Codex provider picker and never survives into a
+  // later recording. Existing callers omit it and retain their current route.
+  const frozenDestinationRef = useRef<RecordingDestination | undefined>(undefined)
   // Guard against double-sending audio
   const audioSentRef = useRef<boolean>(false)
   // Holds the in-flight AudioContext.close() so the NEXT recording can wait for
@@ -643,6 +654,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       marks: tel.marks,                                 // acquired/pipeLive/recorderStart/firstChunk/firstSound…
       durationMs,
       bytes,
+      destination: frozenDestinationRef.current ?? null,
       kbps: durationMs > 0 ? Math.round((bytes * 8) / durationMs) : 0,
       frames: tel.frames,
       zeroFramePct: tel.frames ? Math.round((tel.zeroFrames / tel.frames) * 100) : 0, // dead-pipe % of the recording
@@ -676,11 +688,19 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         via,
         durationMs,
         bytes,
+        // Capture-scoped telemetry for the main-owned routing seam. It is
+        // frozen at start so a later picker change cannot retarget this audio.
+        destination: frozenDestinationRef.current ?? null,
       })
     } catch { /* never break capture */ }
   }, [])
 
-  const startRecording = useCallback(async (deviceId?: string, mode?: RecordingMode, sessionId?: string) => {
+  const startRecording = useCallback(async (
+    deviceId?: string,
+    mode?: RecordingMode,
+    sessionId?: string,
+    destination?: RecordingDestination,
+  ) => {
     // If there's an active recorder, flush it first (sends its audio with correct
     // mode AND the previous session's frozen ID — set below only after the flush).
     const existingRecorder = mediaRecorderRef.current
@@ -697,6 +717,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     // Reset state for new recording
     frozenModeRef.current = mode || 'dictation'
     frozenSessionIdRef.current = sessionId
+    frozenDestinationRef.current = destination
     audioSentRef.current = false
     heardSpeechRef.current = false
     chunksRef.current = []
