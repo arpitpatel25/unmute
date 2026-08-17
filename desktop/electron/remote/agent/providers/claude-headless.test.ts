@@ -417,3 +417,34 @@ test('a session id that is not the one we pinned is reported, not swallowed', as
     '99999999-2222-4333-8444-555555555555',
   ])
 })
+
+// ── the Agent's tool surface ──────────────────────────────────────────────
+
+// MEASURED IN THE FIELD: a real Agent turn took 15.4s to its first tool call,
+// against ~6s in isolation. The CLI had loaded the user's whole user-scope MCP
+// config — 166 tools across 11 servers (chrome-devtools, cua, Gmail, Drive…) —
+// and every one of those schemas rides in the request. Headless pays that per
+// turn, where the long-lived REPL paid it once.
+//
+// None of them were ever usable: --allowedTools already restricts the Agent to
+// mcp__unmute, so the other 165 were cost without capability. The runtime
+// hands us the Agent's own single-server config; using it changes nothing the
+// Agent can do and removes everything it cannot.
+test('the Agent loads only its own intercom, not the user\'s whole MCP config', () => {
+  const withMcp: AgentProcessLaunch = {
+    ...launch({ kind: 'fresh', id: FRESH }),
+    environment: { UNMUTE_MCP_CONFIG: '{"mcpServers":{"unmute":{"type":"http"}}}' },
+  }
+  const argv = headlessArgv(withMcp, 'CONSTITUTION')
+  assert.equal(argv[argv.indexOf('--mcp-config') + 1], '{"mcpServers":{"unmute":{"type":"http"}}}')
+  // Without this the flag ADDS to the user's servers instead of replacing them.
+  assert.ok(argv.includes('--strict-mcp-config'))
+})
+
+// A turn must still run if the config is missing — losing the intercom is bad,
+// but passing `--mcp-config undefined` fails the spawn outright.
+test('a missing intercom config omits the flags rather than spawning a broken command', () => {
+  const argv = headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'CONSTITUTION')
+  assert.ok(!argv.includes('--mcp-config'))
+  assert.ok(!argv.includes('--strict-mcp-config'))
+})

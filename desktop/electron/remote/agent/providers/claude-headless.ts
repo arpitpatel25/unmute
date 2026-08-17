@@ -58,12 +58,19 @@ export function headlessArgv(
   systemPrompt: string,
   allowedTools: string = AGENT_TOOL_ALLOWLIST,
 ): string[] {
+  // Confine the Agent to its own intercom. Without --strict-mcp-config the
+  // flag ADDS to whatever the user has registered at user scope — which in the
+  // field was 166 tools across 11 servers, none of them reachable through
+  // --allowedTools, all of them re-sent on every headless turn.
+  const mcpConfig = launch.environment.UNMUTE_MCP_CONFIG
+  const mcpArgs = mcpConfig ? ['--mcp-config', mcpConfig, '--strict-mcp-config'] : []
   return [
     '-p',
     '--output-format', 'stream-json',
     '--verbose',
     '--append-system-prompt', systemPrompt,
     '--allowedTools', allowedTools,
+    ...mcpArgs,
     // Fresh-vs-resume was already decided by the runtime. Re-deriving it here
     // is how two paths that must agree start disagreeing.
     ...launch.argv,

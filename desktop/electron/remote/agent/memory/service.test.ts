@@ -352,26 +352,71 @@ async function requireInterruption(
   assert.equal(outcome, 'interrupted')
 }
 
-test('requires an active operation-specific explicit intent before every canonical mutation', async () => {
+// THE BUG THIS REPLACES. A reversible write used to demand that the user's
+// spoken words match /\bremember\b/ — so "note that I prefer oat milk" and
+// "add this to my memory" were both refused, and the Agent had to report a
+// failure for a request it had understood perfectly. Worse, policy.ts already
+// declared these tools 'reversible-write', whose stated rule is an active
+// interaction and NO intent flag; the service quietly overrode its own
+// consequence model with a stricter, dumber one. The model read the sentence
+// and decided to call the tool — that decision IS the intent classification,
+// and a regex is not a second opinion worth having.
+test('a reversible write needs a live interaction, not a magic word in the transcript', async () => {
   const { service, records } = fixture()
-  const existing = await records.create(input())
-  await records.forget(existing.id)
+  const live = await records.create(input())
 
-  const cases = [
-    () => service.store(ctx(), input()),
-    () => service.update(ctx(), existing.id, { title: 'Changed' }),
-    () => service.forget(ctx(), existing.id),
-    () => service.restore(ctx(), existing.id),
-  ]
-  for (const operation of cases) {
-    await assert.rejects(operation(), (error: unknown) => {
+  const stored = await service.store(ctx(), input({ title: 'Stored on judgement' }))
+  assert.equal(stored.title, 'Stored on judgement')
+  const updated = await service.update(ctx(), live.id, { title: 'Changed' })
+  assert.equal(updated.title, 'Changed')
+
+  // Deleting still takes its flag; putting it back does not.
+  await service.forget(ctx('forget'), stored.id)
+  assert.equal(records.active.has(stored.id), false)
+  await service.restore(ctx(), stored.id)
+  assert.equal(records.active.has(stored.id), true)
+})
+
+// What the keyword check was mistaken for, and what actually carries the
+// weight: writes happen only inside a live interaction the user themselves
+// started, and only for the interaction this principal was issued against. A
+// stale or background run still cannot touch memory.
+test('a write outside the user\'s own live interaction is still refused', async () => {
+  const { service, records } = fixture()
+  const inactive: CapabilityCallContext = {
+    principal: agent, now: NOW, interaction: { id: 'ix-1', active: false },
+  }
+  const someoneElses: CapabilityCallContext = {
+    principal: agent, now: NOW, interaction: { id: 'ix-OTHER', active: true },
+  }
+  const expired: CapabilityCallContext = {
+    principal: agent, now: 999_999, interaction: { id: 'ix-1', active: true },
+  }
+  for (const bad of [inactive, someoneElses, { principal: agent, now: NOW }]) {
+    await assert.rejects(service.store(bad, input()), (error: unknown) => {
       assert(error instanceof MemoryServiceError)
       assert.equal(error.code, 'intent-required')
       assert.equal(error.message.includes('/private'), false)
       return true
     })
   }
-  assert.equal(records.creates, 1)
+  await assert.rejects(service.store(expired, input()), (error: unknown) =>
+    error instanceof MemoryServiceError && error.code === 'access-denied')
+  assert.equal(records.creates, 0)
+})
+
+// Deleting is the one place the extra flag still earns its keep: it is the
+// only operation whose consequence policy.ts calls 'destructive'.
+test('deleting still requires the explicit destructive intent', async () => {
+  const { service, records } = fixture()
+  const existing = await records.create(input())
+  await assert.rejects(service.forget(ctx(), existing.id), (error: unknown) => {
+    assert(error instanceof MemoryServiceError)
+    assert.equal(error.code, 'intent-required')
+    return true
+  })
+  await service.forget(ctx('forget'), existing.id)
+  assert.equal(records.active.has(existing.id), false)
 })
 
 test('stores captured attachment handles as opaque canonical attachment identifiers and audits success', async () => {

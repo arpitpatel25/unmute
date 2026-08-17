@@ -479,23 +479,30 @@ function validateRuntime(runtime: AgentControllerRuntime): AgentControllerRuntim
   return runtime
 }
 
+/**
+ * Two flags survive, for the two irreversible consequences: destroying a
+ * record and disclosing a sensitive one. Everything else is the model's call.
+ *
+ * Saving, updating and restoring used to be granted the same way and it was a
+ * bad idea. "Remember X" passed; "note that I prefer oat milk" and "add this
+ * to my memory" were refused, and the Agent had to report failure for a
+ * request it had understood — while the Settings pane deleted records on a
+ * click with no keyword check at all. Speech does not arrive in a fixed
+ * vocabulary, and a transcriber gets a word wrong now and then; a model that
+ * has read the whole sentence classifies intent better than this ever did.
+ *
+ * These two are kept because they are not classification problems — the model
+ * may be perfectly right about what you asked and it still deserves a second
+ * signal before data is destroyed or a secret is spoken aloud. Replace them
+ * with a spoken confirmation, not with a longer regex.
+ */
 function explicitIntents(input: AgentInteractionInput): string[] {
   const values = new Set(input.intents ?? [])
   const text = input.transcript.normalize('NFKC').toLocaleLowerCase('en-US')
   if (
-    /\bremember\b/u.test(text)
-    || /\b(?:save|store)\b[^.?!]{0,80}\b(?:memory|for later)\b/u.test(text)
-  ) values.add('memory.store')
-  if (/\b(?:update|change|edit)\b[^.?!]{0,80}\b(?:memory|saved (?:note|record|information))\b/u.test(text)) {
-    values.add('memory.update')
-  }
-  if (
     /\bforget\b/u.test(text)
     || /\b(?:delete|remove)\b[^.?!]{0,80}\b(?:memory|saved (?:note|record|information))\b/u.test(text)
   ) values.add('memory.forget')
-  if (/\brestore\b[^.?!]{0,80}\b(?:memory|saved (?:note|record|information))\b/u.test(text)) {
-    values.add('memory.restore')
-  }
   if (/\b(?:reveal|show|read)\b[^.?!]{0,40}\bsensitive\b/u.test(text)) {
     values.add('memory.reveal-sensitive')
   }

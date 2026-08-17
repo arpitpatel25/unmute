@@ -130,7 +130,21 @@ function requireActiveInteraction(ctx: CapabilityCallContext): void {
   }
 }
 
-function requireIntent(ctx: CapabilityCallContext, intent: MutationIntent | 'reveal-sensitive'): void {
+/**
+ * The extra flag on top of a live interaction. Reserved for the two
+ * consequences a live interaction alone does not justify: DESTROYING a record,
+ * and DISCLOSING one marked sensitive.
+ *
+ * It deliberately no longer guards ordinary writes. Those are declared
+ * 'reversible-write' in policy.ts, whose rule is a live interaction and no
+ * flag — and the flag's only source for a spoken request was a regex over the
+ * transcript (/\bremember\b/ and friends). That refused "note that I prefer
+ * oat milk" and "add this to my memory" while a Settings button deleted
+ * records on a click with no such check. A model that has just read the
+ * sentence and chosen the tool is the intent classifier; a keyword list is not
+ * a second opinion worth having.
+ */
+function requireIntent(ctx: CapabilityCallContext, intent: 'forget' | 'reveal-sensitive'): void {
   requireActiveInteraction(ctx)
   if (!ctx.interaction?.intents?.includes(`memory.${intent}`)) {
     throw new MemoryServiceError('intent-required', 'Memory operation requires explicit user intent')
@@ -256,7 +270,7 @@ export class MemoryService {
   }
 
   async store(ctx: CapabilityCallContext, input: MemoryStoreInput): Promise<MemoryRecord> {
-    requireIntent(ctx, 'store')
+    requireActiveInteraction(ctx)
     await this.ready('store')
     return this.enqueueMutation(async () => {
       const memoryId = this.createMemoryId()
@@ -414,7 +428,7 @@ export class MemoryService {
     id: string,
     patch: MemoryRecordPatch,
   ): Promise<MemoryRecord> {
-    requireIntent(ctx, 'update')
+    requireActiveInteraction(ctx)
     requireUpdatePatch(patch)
     await this.ready('update')
     return this.enqueueMutation(async () => {
@@ -497,7 +511,7 @@ export class MemoryService {
   }
 
   async restore(ctx: CapabilityCallContext, id: string): Promise<void> {
-    requireIntent(ctx, 'restore')
+    requireActiveInteraction(ctx)
     await this.ready('restore')
     return this.enqueueMutation(async () => {
       const intent = this.mutationIntent(ctx, id, 'restore')
