@@ -14,10 +14,13 @@ const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const tools = [
   {
     name: 'delivery_copy_text',
-    description: 'Copy text to the clipboard for the current user interaction',
+    description: 'Copy text to the clipboard, or prepare it in an explicit existing task draft; this never submits the draft',
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['text'],
-      properties: { text: { type: 'string', minLength: 1 } },
+      properties: {
+        text: { type: 'string', minLength: 1 },
+        taskId: { type: 'string', pattern: IDENTIFIER_PATTERN.source },
+      },
     },
     consequence: 'reversible-write',
   },
@@ -47,6 +50,7 @@ const tools = [
 export interface DeliveryCapabilityAdapters {
   resolveAttachment(principal: McpPrincipal, handle: string): Promise<DeliveryAttachment>
   copyText(text: string): Promise<void>
+  prepareTaskDraftText?(taskId: string, text: string): Promise<void>
   stageAttachmentCopy(metadata: DeliveryAttachmentMetadata): Promise<AttachmentDeliveryTransaction>
   stageTaskDraftAttachment(
     taskId: string,
@@ -55,6 +59,20 @@ export interface DeliveryCapabilityAdapters {
 }
 
 export type DeliveryAttachmentMetadata = Pick<DeliveryAttachment, 'name' | 'mimeType' | 'size'>
+
+export type DeliveryCapabilityErrorCode =
+  | 'destination-unavailable'
+  | 'delivery-failed'
+
+/** Path-free destination failures safe to return through the MCP boundary. */
+export class DeliveryCapabilityError extends Error {
+  constructor(readonly code: DeliveryCapabilityErrorCode) {
+    super(code === 'destination-unavailable'
+      ? 'The requested delivery destination is unavailable; nothing was delivered'
+      : 'The requested delivery could not be completed; nothing was delivered')
+    this.name = 'DeliveryCapabilityError'
+  }
+}
 
 /**
  * Writes remain private to the adapter's staging area. Commit publishes the
@@ -128,9 +146,19 @@ export class DeliveryCapability implements CapabilityModule {
     requireActiveAgentInteraction(ctx)
     switch (tool) {
       case 'delivery_copy_text': {
-        const candidate = requireObject(input, ['text'])
-        await this.adapters.copyText(requireString(candidate.text, 'text'))
-        return result('Text copied')
+        const candidate = requireObject(input, ['text', 'taskId'])
+        const text = requireString(candidate.text, 'text')
+        if (candidate.taskId === undefined) {
+          await this.adapters.copyText(text)
+          return result('Text copied')
+        }
+        const taskId = requireString(candidate.taskId, 'task identifier')
+        if (!IDENTIFIER_PATTERN.test(taskId)) throw new Error('Delivery task identifier input is invalid')
+        if (!this.adapters.prepareTaskDraftText) {
+          throw new DeliveryCapabilityError('destination-unavailable')
+        }
+        await this.adapters.prepareTaskDraftText(taskId, text)
+        return result('Text added to task draft')
       }
       case 'delivery_copy_attachment': {
         const candidate = requireObject(input, ['handle'])

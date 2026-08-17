@@ -21,6 +21,7 @@
 import { ipcMain, BrowserWindow, Notification, shell, app, clipboard, powerMonitor, safeStorage } from 'electron'
 import Store from 'electron-store'
 import { join, dirname, basename } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { existsSync, writeFileSync, mkdirSync, statSync, watch, promises as fs } from 'node:fs'
@@ -60,6 +61,12 @@ import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usag
 import { startMcpServer, MCP_PATH, type McpCreateTaskInput, type McpServer } from './mcp-server'
 import { CapabilityRegistry } from './agent/capabilities/registry'
 import { MemoryCapability } from './agent/capabilities/memory'
+import {
+  DeliveryCapability,
+  DeliveryCapabilityError,
+  type AttachmentDeliveryTransaction,
+  type DeliveryAttachmentMetadata,
+} from './agent/capabilities/delivery'
 import { AgentTokenStore } from './agent/tokens'
 import { AgentRunSupervisor } from './agent/supervisor'
 import { AgentJournal } from './agent/journal'
@@ -128,12 +135,16 @@ import {
 import { createClipboardWatch } from './capture/clipboardWatch'
 import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
-  adoptPersistedPad, armScratchpad, claimShared, deliveryInFlight, discard as discardPad,
+  adoptPersistedPad, armScratchpad, beginOwnClipboardSequence, claimShared, deliveryInFlight, discard as discardPad,
   copyHistoryToClipboard, gateDelivery, heldForSurface, initWatchers, padDirOf, pasteAtCursor, recordInsert,
   registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot,
-  registerComposerImageSink,
+  registerComposerImageSink, endOwnClipboardSequence,
   type DeliveryTarget,
 } from './capture/index'
+import {
+  attachToTaskDraft,
+  registerTaskDraftAttachmentSink,
+} from './task-attachment-paste'
 import { SETTLE_IDLE_MS } from './capture/scratchpadStore'
 import type { Entry, InsertKind } from './capture/types'
 import { CaptureHistoryStore, clipboardPayload, type CaptureHistoryKind } from './capture/history-store'
@@ -532,6 +543,72 @@ let unmuteAgentGeneration = 0
 let mcpServer: McpServer | null = null
 let mcpServerGeneration = 0
 const agentHookListeners = new Set<(event: HookEvent) => void>()
+const AGENT_CLIPBOARD_ATTACHMENT_TTL_MS = 60 * 60 * 1_000
+
+function bufferedAttachmentDelivery(
+  metadata: DeliveryAttachmentMetadata,
+  publish: (data: Uint8Array) => Promise<void>,
+): AttachmentDeliveryTransaction {
+  const chunks: Buffer[] = []
+  let bytes = 0
+  let settled = false
+  return {
+    async write(chunk) {
+      if (settled) throw new DeliveryCapabilityError('delivery-failed')
+      bytes += chunk.byteLength
+      if (bytes > metadata.size) throw new DeliveryCapabilityError('delivery-failed')
+      chunks.push(Buffer.from(chunk))
+    },
+    async commit() {
+      if (settled || bytes !== metadata.size) throw new DeliveryCapabilityError('delivery-failed')
+      settled = true
+      const data = Buffer.concat(chunks, bytes)
+      chunks.length = 0
+      await publish(data)
+    },
+    async rollback() {
+      settled = true
+      chunks.length = 0
+      bytes = 0
+    },
+  }
+}
+
+async function copyAgentAttachment(
+  root: string,
+  metadata: DeliveryAttachmentMetadata,
+  data: Uint8Array,
+): Promise<void> {
+  const deliveryRoot = join(root, 'delivery')
+  const name = basename(metadata.name)
+  const target = join(deliveryRoot, `${randomUUID()}-${name}`)
+  let published = false
+  try {
+    await fs.mkdir(deliveryRoot, { recursive: true, mode: 0o700 })
+    await fs.writeFile(target, data, { mode: 0o600, flag: 'wx' })
+    const fileUrl = pathToFileURL(target).toString()
+    let ownsClipboard = false
+    try {
+      try { beginOwnClipboardSequence(); ownsClipboard = true } catch { /* watcher may not be armed */ }
+      clipboard.writeBuffer('public.file-url', Buffer.from(fileUrl, 'utf8'))
+      const confirmed = clipboard.readBuffer('public.file-url')
+        .toString('utf8')
+        .replace(/\0+$/u, '')
+      if (confirmed !== fileUrl) throw new DeliveryCapabilityError('delivery-failed')
+      published = true
+    } finally {
+      if (ownsClipboard) {
+        try { endOwnClipboardSequence(Date.now()) } catch { /* watcher may have stopped */ }
+      }
+    }
+  } catch (error) {
+    if (!published) await fs.unlink(target).catch(() => {})
+    if (error instanceof DeliveryCapabilityError) throw error
+    throw new DeliveryCapabilityError('delivery-failed')
+  }
+  const cleanup = setTimeout(() => { void fs.unlink(target).catch(() => {}) }, AGENT_CLIPBOARD_ATTACHMENT_TTL_MS)
+  cleanup.unref()
+}
 
 const AGENT_CONSTITUTION = [
   SESSION_PREAMBLE,
@@ -598,13 +675,27 @@ function broadcastUnmuteAgentActivity(activity: AgentInteractionActivity | Unmut
 
 async function submitUnmuteAgent(input: AgentInteractionInput): Promise<AgentInteractionResult> {
   if (!unmuteAgentController) throw new Error('Unmute Agent is unavailable')
+  const focusedTaskId = input.currentContext?.activeTaskId
+    ? undefined
+    : notchController?.focusedComposerTaskId()
+  const focusedTask = focusedTaskId ? manager?.get(focusedTaskId) : undefined
+  const effectiveInput: AgentInteractionInput = focusedTaskId && focusedTask
+    ? {
+        ...input,
+        currentContext: {
+          ...input.currentContext,
+          activeTaskId: focusedTaskId,
+          ...(focusedTask.name ? { activeTaskName: focusedTask.name } : {}),
+        },
+      }
+    : input
   broadcastUnmuteAgentActivity({
     state: 'listening',
     summary: 'Listening to Unmute Agent',
     ...(input.priorRunId ? { agentRunId: input.priorRunId } : {}),
   })
   try {
-    const result = await unmuteAgentController.submit(input)
+    const result = await unmuteAgentController.submit(effectiveInput)
     if (result.presentation === 'task' && result.outcome === 'completed' && result.text?.trim()) {
       await manager?.presentAgentResult({
         agentRunId: result.agentRunId,
@@ -735,7 +826,55 @@ async function initializeUnmuteAgent(): Promise<void> {
       ['claude', claude],
       ['codex', codex],
     ])
-    const registry = new CapabilityRegistry([new MemoryCapability(memory)])
+    const registry = new CapabilityRegistry([
+      new MemoryCapability(memory),
+      new DeliveryCapability({
+        resolveAttachment: (principal, handle) => attachments.resolveForDelivery(principal, handle),
+        async copyText(text) {
+          let ownsClipboard = false
+          try {
+            try { beginOwnClipboardSequence(); ownsClipboard = true } catch { /* watcher may not be armed */ }
+            clipboard.writeText(text)
+            if (clipboard.readText() !== text) throw new DeliveryCapabilityError('delivery-failed')
+          } catch (error) {
+            if (error instanceof DeliveryCapabilityError) throw error
+            throw new DeliveryCapabilityError('delivery-failed')
+          } finally {
+            if (ownsClipboard) {
+              try { endOwnClipboardSequence(Date.now()) } catch { /* watcher may have stopped */ }
+            }
+          }
+        },
+        async prepareTaskDraftText(taskId, text) {
+          if (!manager?.get(taskId)) throw new DeliveryCapabilityError('destination-unavailable')
+          const current = taskDrafts.get(taskId).text
+          const prepared = current ? `${current}\n\n${text}` : text
+          taskDrafts.setText(taskId, prepared)
+          if (taskDrafts.get(taskId).text !== prepared) {
+            throw new DeliveryCapabilityError('delivery-failed')
+          }
+          notchController?.refresh()
+        },
+        async stageAttachmentCopy(metadata) {
+          return bufferedAttachmentDelivery(
+            metadata,
+            (data) => copyAgentAttachment(root, metadata, data),
+          )
+        },
+        async stageTaskDraftAttachment(taskId, metadata) {
+          if (!manager?.get(taskId)) throw new DeliveryCapabilityError('destination-unavailable')
+          return bufferedAttachmentDelivery(metadata, async (data) => {
+            const accepted = await attachToTaskDraft({
+              taskId,
+              name: metadata.name,
+              mimeType: metadata.mimeType,
+              data,
+            })
+            if (!accepted) throw new DeliveryCapabilityError('destination-unavailable')
+          })
+        },
+      }),
+    ])
     const supervisor = new AgentRunSupervisor({
       providers: runtimeProviders,
       tokenStore: tokens,
@@ -813,6 +952,33 @@ async function initializeUnmuteAgent(): Promise<void> {
 
 /** Unsent replies are task-scoped, not owned by any one expanded surface. */
 const taskDrafts = new TaskDraftStore()
+
+registerTaskDraftAttachmentSink(async ({ taskId, name, mimeType, data }) => {
+  const taskManager = manager
+  if (!taskManager?.get(taskId)) return false
+  const extensionFromName = basename(name).includes('.') ? basename(name).split('.').pop() : undefined
+  const extensionFromMime = mimeType.split('/').pop()
+  const extension = (extensionFromName || extensionFromMime || 'bin').replace(/[^a-z0-9]/giu, '').slice(0, 16) || 'bin'
+  let ownedPath: string | null = null
+  try {
+    ownedPath = await taskManager.attachFile(taskId, data, extension)
+    if (!ownedPath) return false
+    const attachmentId = randomUUID()
+    taskDrafts.addAttachment(taskId, {
+      id: attachmentId,
+      path: ownedPath,
+      mimeType,
+      name,
+    })
+    const confirmed = taskDrafts.get(taskId).attachments.some((attachment) => attachment.id === attachmentId)
+    if (!confirmed) await fs.unlink(ownedPath).catch(() => {})
+    else notchController?.refresh()
+    return confirmed
+  } catch {
+    if (ownedPath) await fs.unlink(ownedPath).catch(() => {})
+    return false
+  }
+})
 
 async function persistTaskDraftImage(
   id: string,
