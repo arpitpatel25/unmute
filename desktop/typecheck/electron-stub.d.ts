@@ -67,6 +67,10 @@ declare module 'electron' {
     write(data: { text?: string; image?: NativeImage }): void
     availableFormats(): string[]
     clear(): void
+    /** Raw pasteboard flavours. Used to hand a file URL over as a real
+     *  NSFilenamesPboardType-style payload rather than as text. */
+    writeBuffer(format: string, buffer: Buffer): void
+    readBuffer(format: string): Buffer
   }
   /** Seconds since the last SYSTEM-WIDE input event — the presence signal.
    *  System-wide is the point: it sees you working in any app. */
