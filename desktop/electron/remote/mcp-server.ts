@@ -23,7 +23,7 @@ import { createLogger } from './log'
 import { HOOK_PATH } from './session-policy'
 import { normalizeState } from './status-file'
 import { CapabilityRegistry } from './agent/capabilities/registry'
-import type { CapabilityModule, McpPrincipal, ToolDefinition } from './agent/types'
+import type { CapabilityCallContext, CapabilityModule, McpPrincipal, ToolDefinition } from './agent/types'
 
 const log = createLogger('mcp')
 
@@ -48,6 +48,8 @@ export interface McpToolResultTask {
 export interface McpHandlers {
   /** Resolve a bearer token to the calling principal (null = unidentified). */
   resolveCaller(token: string | null): McpPrincipal | null
+  /** Optional interaction lease for privileged capability policy. */
+  capabilityContext?(principal: McpPrincipal): Pick<CapabilityCallContext, 'interaction'>
   /** Spawn a task on behalf of callerTaskId. Throw Error with a clear message
    *  to reject (depth, rate, disabled, bad dir) — the message reaches the model. */
   createTask(callerTaskId: string, input: McpCreateTaskInput): Promise<McpToolResultTask>
@@ -339,7 +341,12 @@ async function handleRequest(
       }
       try {
         const principalRegistry = caller.kind === 'task' ? taskRegistry : registry
-        const result = await principalRegistry.call(caller, toolName, args)
+        const result = await principalRegistry.call(
+          caller,
+          toolName,
+          args,
+          handlers.capabilityContext?.(caller) ?? {},
+        )
         respond(rpcResult(msg.id, result))
         return
       } catch (e) {

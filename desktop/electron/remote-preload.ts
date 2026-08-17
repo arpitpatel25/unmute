@@ -42,6 +42,63 @@ export interface RemoteSettingsSnapshot {
   logFile: string | null
 }
 
+export type UnmuteAgentProvider = 'claude' | 'codex'
+
+export interface UnmuteAgentSettingsSnapshot {
+  agentProvider: UnmuteAgentProvider
+  unmuteAgentAvailable: boolean
+  unmuteAgentMaxProcesses: number
+}
+
+export interface UnmuteAgentAvailabilitySnapshot {
+  available: boolean
+  reason?: 'disabled' | 'initializing' | 'keychain-unavailable' | 'storage-unavailable' | 'provider-unavailable'
+  providers: Array<{
+    id: UnmuteAgentProvider
+    label: string
+    available: boolean
+    reason?: 'not-installed'
+  }>
+}
+
+export interface UnmuteAgentInteractionInput {
+  transcript: string
+  attachments?: Array<{ path: string; name?: string; mimeType?: string }>
+  selectedText?: string
+  priorRunId?: string
+  intents?: string[]
+  currentContext?: { app?: string; project?: string; activeTaskId?: string; activeTaskName?: string }
+}
+
+export interface UnmuteAgentInteractionResult {
+  interactionId: string
+  agentRunId: string
+  provider?: UnmuteAgentProvider
+  source: 'fast-path' | 'provider'
+  outcome: 'completed' | 'failed' | 'interrupted'
+  presentation: 'transient' | 'task'
+  text?: string
+  memory?: { id: string; title: string }
+  error?: { code: string; message: string }
+}
+
+export interface UnmuteMemorySnapshot {
+  id: string
+  kind: string
+  title: string
+  tags: string[]
+  scope?: { app?: string; project?: string; purpose?: string }
+  sensitivity: 'normal' | 'private' | 'sensitive'
+  content?: string
+  attachments?: string[]
+  snippet?: string
+  score?: number
+  createdAt?: number
+  updatedAt: number
+  version?: number
+  deletedAt?: number
+}
+
 export interface CaptureHistorySnapshot {
   id: string
   kind: 'dictation' | 'scratchpad'
@@ -69,6 +126,26 @@ export interface RemoteSetupStatus {
 }
 
 export const remotePreloadExtensions = {
+  // ── Unmute Agent ──
+  remoteGetAgentSettings: (): Promise<UnmuteAgentSettingsSnapshot> =>
+    ipcRenderer.invoke('remote:get-agent-settings'),
+  remoteSetUnmuteAgentProvider: (provider: UnmuteAgentProvider): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-unmute-agent-provider', provider),
+  remoteGetAgentAvailability: (): Promise<UnmuteAgentAvailabilitySnapshot> =>
+    ipcRenderer.invoke('remote:get-agent-availability'),
+  remoteAgentSubmit: (input: UnmuteAgentInteractionInput): Promise<UnmuteAgentInteractionResult> =>
+    ipcRenderer.invoke('remote:agent-submit', input),
+  remoteAgentCancel: (runId: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:agent-cancel', runId),
+  remoteListMemories: (query?: string): Promise<UnmuteMemorySnapshot[]> =>
+    ipcRenderer.invoke('remote:list-memories', query),
+  remoteGetMemory: (id: string): Promise<UnmuteMemorySnapshot | null> =>
+    ipcRenderer.invoke('remote:get-memory', id),
+  remoteForgetMemory: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:forget-memory', id),
+  remoteRestoreMemory: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:restore-memory', id),
+
   // ── Capture history ──
   remoteListCaptureHistory: (kind?: 'dictation' | 'scratchpad'): Promise<CaptureHistorySnapshot[]> =>
     ipcRenderer.invoke('remote:capture-history-list', kind),
