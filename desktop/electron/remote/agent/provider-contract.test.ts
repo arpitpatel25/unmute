@@ -656,6 +656,127 @@ test('Codex resume baselines old rollout completions before observing the new tu
   await fs.rm(home, { recursive: true, force: true })
 })
 
+test('Codex resume re-baselines exact archived history before spawn and emits only the current turn', async () => {
+  const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
+  const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')
+  const archived = join(home, '.codex', 'archived_sessions')
+  const cwd = join(home, 'repo')
+  const live = join(sessions, `rollout-now-${CODEX_ID}.jsonl`)
+  const moved = join(archived, `rollout-now-${CODEX_ID}.jsonl`)
+  await fs.mkdir(sessions, { recursive: true })
+  await fs.mkdir(archived, { recursive: true })
+  await fs.mkdir(cwd, { recursive: true })
+  await fs.writeFile(live, [
+    rolloutLine('session_meta', { session_id: CODEX_ID, cwd, timestamp: new Date().toISOString() }),
+    rolloutLine('event_msg', { type: 'task_started' }),
+    rolloutLine('event_msg', { type: 'exec_command_end' }),
+    rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Old final.' }),
+  ].join('\n') + '\n')
+
+  const readFileDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFile')
+  if (!readFileDescriptor) assert.fail('fs.readFile descriptor was unavailable')
+  const originalReadFile = fs.readFile
+  let movedDuringBaseline = false
+  Object.defineProperty(fs, 'readFile', {
+    configurable: true,
+    writable: true,
+    value: async (...args: unknown[]) => {
+      if (String(args[0]) === live && !movedDuringBaseline) {
+        movedDuringBaseline = true
+        await fs.rename(live, moved)
+      }
+      return Reflect.apply(originalReadFile, fs, args)
+    },
+  })
+
+  let spawns = 0
+  const observe = codexRolloutObserver({ home, pollMs: 5 })
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn(opts) {
+          spawns++
+          assert.equal(opts.resumeSessionId, CODEX_ID)
+          await fs.appendFile(moved, [
+            rolloutLine('event_msg', { type: 'task_started' }),
+            rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Current final.' }),
+          ].join('\n') + '\n')
+        },
+        async isReady() {},
+        writeStdin() {},
+        write() {},
+        resize() {},
+        onData() {},
+        kill() {},
+      }),
+      observe,
+    }),
+    probeBinary: async () => true,
+  })
+  const handle = { provider: 'codex' as const, opaqueId: CODEX_ID }
+
+  try {
+    const resumed = await provider.resume(handle, input('resume-relocated-baseline', {
+      cwd,
+      constitutionPath: join(home, 'constitution.md'),
+    }))
+    const activities = []
+    for await (const activity of resumed.activity) activities.push(activity)
+    assert.equal(spawns, 1)
+    assert.deepEqual(activities, [])
+    assert.deepEqual(await resumed.completion, { outcome: 'completed', finalText: 'Current final.' })
+  } finally {
+    Object.defineProperty(fs, 'readFile', readFileDescriptor)
+    await provider.close(handle).catch(() => {})
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('Codex resume baseline timeout fails closed before PTY spawn', { timeout: 500 }, async () => {
+  const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
+  const cwd = join(home, 'repo')
+  await fs.mkdir(cwd, { recursive: true })
+  let spawns = 0
+  const observe = codexRolloutObserver({
+    home,
+    pollMs: 5,
+    resumeBaselineTimeoutMs: 20,
+  })
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn() { spawns++ },
+        async isReady() {},
+        writeStdin() {},
+        write() {},
+        resize() {},
+        onData() {},
+        kill() {},
+      }),
+      observe,
+    }),
+    probeBinary: async () => true,
+  })
+  const handle = { provider: 'codex' as const, opaqueId: CODEX_ID }
+  let failure: unknown
+
+  try {
+    await provider.resume(handle, input('resume-missing-baseline', {
+      cwd,
+      constitutionPath: join(home, 'constitution.md'),
+    }))
+  } catch (error) {
+    failure = error
+  } finally {
+    await provider.close(handle).catch(() => {})
+    await fs.rm(home, { recursive: true, force: true })
+  }
+  assert.equal(spawns, 0)
+  assertProviderError(failure, 'provider-unavailable')
+})
+
 test('Codex observation follows a rollout archived during an active resumed turn', async () => {
   const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
   const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')

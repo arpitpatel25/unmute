@@ -23,8 +23,14 @@ export interface CodexCliProviderOptions {
   probeBinary?: ProbeBinary
   observe?: ProviderEventObserver
   executor?: Omit<CodexExecutorOpts, 'codexBin' | 'developerInstructions' | 'extraArgs' | 'remote'>
-  rollout?: { home?: string; pollMs?: number }
+  rollout?: CodexRolloutObserverOptions
   handleTimeoutMs?: number
+}
+
+export interface CodexRolloutObserverOptions {
+  home?: string
+  pollMs?: number
+  resumeBaselineTimeoutMs?: number
 }
 
 /** Codex CLI adapter; fresh handles are learned from its structured rollout. */
@@ -59,7 +65,7 @@ export class CodexCliProvider extends CliProviderRuntime {
  * minted handle and only owned event_msg records can finish a turn.
  */
 export function codexRolloutObserver(
-  options: { home?: string; pollMs?: number } = {},
+  options: CodexRolloutObserverOptions = {},
 ): ProviderEventObserver {
   const freshDiscoveryTails = new Map<string, Promise<void>>()
   const claimedSessions = new Set<string>()
@@ -89,16 +95,25 @@ export function codexRolloutObserver(
     let timer: ReturnType<typeof setInterval> | null = null
     let afterSpawnCalled = false
     let observerFailed = false
-    const preSpawnSessions = launch.session.kind === 'fresh'
-      ? await snapshotRolloutSessionIds(options.home)
-      : new Set<string>()
+    let preSpawnSessions: ReadonlySet<string>
     const sinceMs = Date.now()
 
-    // A resumed rollout already contains old completions. Baseline it before
-    // the new user turn is submitted so those events cannot settle this run.
-    if (sessionId) {
-      rolloutPath = await findRollout(sessionId, options.home)
-      if (rolloutPath) cursor = (await readRolloutEvents(rolloutPath)).length
+    try {
+      preSpawnSessions = launch.session.kind === 'fresh'
+        ? await snapshotRolloutSessionIds(options.home)
+        : new Set<string>()
+
+      // A resumed rollout already contains old completions. Establish a stable
+      // exact-session cursor before spawning so relocation cannot replay them.
+      if (sessionId) {
+        const baseline = await baselineResume(sessionId, options)
+        rolloutPath = baseline.path
+        cursor = baseline.cursor
+      }
+    } catch (error) {
+      releaseFreshDiscovery?.()
+      if (claimedSession) claimedSessions.delete(claimedSession)
+      throw error
     }
 
     const tick = async () => {
@@ -167,6 +182,31 @@ export function codexRolloutObserver(
       },
       stop,
     }
+  }
+}
+
+async function baselineResume(
+  sessionId: string,
+  options: CodexRolloutObserverOptions,
+): Promise<{ path: string; cursor: number }> {
+  const timeoutMs = Number.isFinite(options.resumeBaselineTimeoutMs)
+    ? Math.max(0, options.resumeBaselineTimeoutMs!)
+    : 8_000
+  const pollMs = Number.isFinite(options.pollMs) && options.pollMs! > 0
+    ? options.pollMs!
+    : 100
+  const deadline = Date.now() + timeoutMs
+
+  while (true) {
+    const path = await findRollout(sessionId, options.home)
+    if (path) {
+      const events = await readRolloutEvents(path)
+      const confirmedPath = await findRollout(sessionId, options.home)
+      if (confirmedPath === path) return { path, cursor: events.length }
+    }
+    const remainingMs = deadline - Date.now()
+    if (remainingMs <= 0) throw new Error('Codex resume history is unavailable')
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollMs, remainingMs)))
   }
 }
 
