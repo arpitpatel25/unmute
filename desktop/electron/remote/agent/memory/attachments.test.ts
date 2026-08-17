@@ -428,6 +428,124 @@ test('stale per-hash locks recover, while a fresh lock times out without mutatin
   assert.equal((await recovering.get(recovered.id)).liveReferenceCount, 1)
 })
 
+test('a process crash immediately after creating the reaper gate does not wedge the hash', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'crashed-gate.txt')
+  const bytes = Buffer.from('crashed reaper gate')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const locks = join(root, 'attachments', '.locks')
+  const gate = join(locks, `${sha256}.reaper`)
+  await mkdir(gate, { recursive: true })
+  await utimes(gate, new Date(0), new Date(0))
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => 'crashed-gate-handle' })
+  const store = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 25, lockTimeoutMs: 500, lockRetryMs: 5,
+  })
+
+  const saved = await store.store(agent(), {
+    recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+
+  assert.equal(saved.sha256, sha256)
+  await assert.rejects(stat(gate), { code: 'ENOENT' })
+})
+
+test('a process crash after moving a reaper gate to its tombstone is recovered after a stale interval', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'crashed-reclaimer.txt')
+  const bytes = Buffer.from('crashed stale reclaimer')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const tombstone = join(root, 'attachments', '.locks', `${sha256}.reaper-reclaim`)
+  await mkdir(tombstone, { recursive: true })
+  await writeFile(join(tombstone, 'owner-abandoned-gate'), '')
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => 'crashed-reclaimer-handle' })
+  const store = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 25, lockTimeoutMs: 500, lockRetryMs: 5,
+  })
+
+  const saved = await store.store(agent(), {
+    recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+
+  assert.equal(saved.sha256, sha256)
+  await assert.rejects(stat(tombstone), { code: 'ENOENT' })
+})
+
+test('two simultaneous stores safely converge while recovering one abandoned reaper tombstone', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'two-gate-reclaimers.txt')
+  const bytes = Buffer.from('two gate reclaimers')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const tombstone = join(root, 'attachments', '.locks', `${sha256}.reaper-reclaim`)
+  await mkdir(tombstone, { recursive: true })
+  await writeFile(join(tombstone, 'owner-abandoned-gate'), '')
+  const handles = new InteractionAttachmentHandles({
+    now: () => NOW,
+    createHandle: (() => { let value = 0; return () => `gate-reclaimer-${++value}` })(),
+  })
+  const first = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 25, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    createAttachmentId: () => 'gate-reclaimer-first',
+  })
+  const second = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 25, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    createAttachmentId: () => 'gate-reclaimer-second',
+  })
+
+  const [savedFirst, savedSecond] = await Promise.all([
+    first.store(agent(), {
+      recordId: 'record-first', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }),
+    second.store(agent(), {
+      recordId: 'record-second', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }),
+  ])
+  const saved = await survivingDescriptor(first, savedFirst.id, savedSecond.id)
+
+  assert.equal(saved.liveReferenceCount, 2)
+  await assert.rejects(stat(tombstone), { code: 'ENOENT' })
+})
+
+test('a fresh gate found inside the reclaim tombstone is restored instead of reaped', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'fresh-gate.txt')
+  const bytes = Buffer.from('fresh gate owner')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const locks = join(root, 'attachments', '.locks')
+  const gate = join(locks, `${sha256}.reaper`)
+  const tombstone = join(locks, `${sha256}.reaper-reclaim`)
+  const freshOwner = join(tombstone, 'owner-live-gate')
+  await mkdir(tombstone, { recursive: true })
+  await writeFile(freshOwner, '')
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => 'fresh-gate-handle' })
+  const store = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 50, lockTimeoutMs: 180, lockRetryMs: 5,
+  })
+  const heartbeat = setInterval(() => {
+    const now = new Date()
+    void Promise.all([
+      utimes(freshOwner, now, now),
+      utimes(join(gate, 'owner-live-gate'), now, now),
+    ].map((refresh) => refresh.catch(() => { /* exactly one location exists */ })))
+  }, 5)
+  heartbeat.unref()
+
+  try {
+    await assert.rejects(store.store(agent(), {
+      recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }), /attachment lock timed out/i)
+  } finally {
+    clearInterval(heartbeat)
+  }
+
+  assert.equal((await stat(join(gate, 'owner-live-gate'))).isFile(), true)
+  await assert.rejects(stat(tombstone), { code: 'ENOENT' })
+})
+
 test('an active owner heartbeats across stale intervals and serializes a waiting writer', async (t) => {
   const root = await temporaryRoot(t)
   const source = join(root, 'heartbeat.txt')
@@ -531,6 +649,41 @@ test('a fenced stalled owner cannot publish when it resumes', async (t) => {
   assert.equal((await replacement.get(saved.id)).liveReferenceCount, 1)
   const opened = await replacement.open(agent(), saved.id)
   assert.equal(await contents(await replacement.resolveForDelivery(agent(), opened.handle)).then(String), 'fenced owner')
+})
+
+test('a fenced owner paused before canonical directory creation cannot recreate successor-cleaned state', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'fenced-before-directory.txt')
+  const bytes = Buffer.from('fenced before canonical directory')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const hashDirectory = join(root, 'attachments', sha256)
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `directory-fence-${++nextHandle}` })
+  const controlled = controlledMemoryCrypto(2)
+  const stalled = new EncryptedAttachmentStore({
+    root, crypto: controlled.crypto, handles, staleLockMs: 30, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    leaseHeartbeat: { start() { return async () => {} } },
+  })
+  await stalled.initialize()
+  await mkdir(hashDirectory)
+  await writeFile(join(hashDirectory, 'metadata.json'), await memoryCrypto().encrypt('invalid metadata'))
+  const oldSave = stalled.store(agent(), {
+    recordId: 'record-old', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  await controlled.reached
+  await wait(65)
+  const successor = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 30, lockTimeoutMs: 1_000, lockRetryMs: 5,
+  })
+
+  await successor.initialize()
+  await assert.rejects(stat(hashDirectory), { code: 'ENOENT' })
+  controlled.release()
+  await assert.rejects(oldSave, /attachment lease was fenced/i)
+
+  await assert.rejects(stat(hashDirectory), { code: 'ENOENT' })
+  assert.equal((await readdir(join(root, 'attachments', '.quarantine'))).some((name) => name.startsWith(sha256)), true)
 })
 
 test('a fenced owner release cannot remove the replacement lease', async (t) => {

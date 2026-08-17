@@ -249,6 +249,11 @@ interface HashLease {
   release(): Promise<void>
 }
 
+interface LeaseDirectorySnapshot {
+  ownerName?: string
+  heartbeatMs: number
+}
+
 export interface StoreAttachmentInput {
   recordId: string
   handle: string
@@ -475,8 +480,10 @@ export class EncryptedAttachmentStore {
             const existing = await this.loadMetadataForMutation(staged.sha256, lease)
             const attachmentDir = join(this.attachmentsDir, staged.sha256)
             if (!existing) {
-              await mkdir(attachmentDir, { recursive: true, mode: DIRECTORY_MODE })
-              await this.directorySync(this.attachmentsDir)
+              await lease.commit(async () => {
+                await mkdir(attachmentDir, { mode: DIRECTORY_MODE })
+                await this.directorySync(this.attachmentsDir)
+              })
             }
             const attachmentId = existing?.id ?? this.newAttachmentId()
             const originalPath = join(attachmentDir, 'original.enc')
@@ -1008,6 +1015,7 @@ export class EncryptedAttachmentStore {
     deadline: number,
   ): Promise<() => Promise<void>> {
     const gateDirectory = join(this.locksDir, `${sha256}.reaper`)
+    const tombstoneDirectory = join(this.locksDir, `${sha256}.reaper-reclaim`)
     const token = randomUUID()
     const ownerPath = join(gateDirectory, `owner-${token}`)
     let firstAttempt = true
@@ -1016,15 +1024,47 @@ export class EncryptedAttachmentStore {
         throw new AttachmentStoreError('storage-failure', 'Attachment lock timed out')
       }
       firstAttempt = false
+      await this.recoverAbandonedReaperTombstone(gateDirectory, tombstoneDirectory)
+      if (await this.pathExists(tombstoneDirectory)) {
+        await delay(Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now())))
+        continue
+      }
       try {
         await mkdir(gateDirectory, { mode: DIRECTORY_MODE })
+        if (await this.pathExists(tombstoneDirectory)) {
+          await rmdir(gateDirectory).catch((error: unknown) => {
+            if (!isNodeError(error, 'ENOENT') && !isNodeError(error, 'ENOTEMPTY')) throw error
+          })
+          await delay(Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now())))
+          continue
+        }
         const owner = await open(ownerPath, 'wx', FILE_MODE)
         try {
           await owner.writeFile(String(process.pid))
+          await owner.sync()
         } finally {
           await owner.close()
         }
+        await this.directorySync(gateDirectory)
+        if (await this.pathExists(tombstoneDirectory)) {
+          await unlink(ownerPath).catch((error: unknown) => {
+            if (!isNodeError(error, 'ENOENT')) throw error
+          })
+          await rmdir(gateDirectory).catch((error: unknown) => {
+            if (!isNodeError(error, 'ENOENT') && !isNodeError(error, 'ENOTEMPTY')) throw error
+          })
+          await delay(Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now())))
+          continue
+        }
+        const stopHeartbeat = nodeLeaseHeartbeat.start(async () => {
+          const now = new Date()
+          await utimes(ownerPath, now, now)
+        }, Math.max(1, Math.floor(this.staleLockMs / 3)))
+        let released = false
         return async () => {
+          if (released) return
+          released = true
+          await stopHeartbeat()
           let removedOwnToken = false
           try {
             await unlink(ownerPath)
@@ -1041,8 +1081,164 @@ export class EncryptedAttachmentStore {
         }
       } catch (error) {
         if (!isNodeError(error, 'EEXIST')) throw error
+        await this.reclaimStaleReaperGate(gateDirectory, tombstoneDirectory, deadline)
       }
       await delay(Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now())))
+    }
+  }
+
+  private async reclaimStaleReaperGate(
+    gateDirectory: string,
+    tombstoneDirectory: string,
+    deadline: number,
+  ): Promise<void> {
+    const snapshot = await this.leaseDirectorySnapshot(gateDirectory)
+    if (!snapshot || Date.now() - snapshot.heartbeatMs < this.staleLockMs) return
+    try {
+      await rename(gateDirectory, tombstoneDirectory)
+      await this.directorySync(this.locksDir)
+    } catch (error) {
+      if (isNodeError(error, 'ENOENT') || isNodeError(error, 'EEXIST')) return
+      throw error
+    }
+    const reclaimerPath = join(tombstoneDirectory, `reclaimer-${randomUUID()}`)
+    const reclaimer = await open(reclaimerPath, 'wx', FILE_MODE)
+    try {
+      await reclaimer.writeFile(String(process.pid))
+      await reclaimer.sync()
+    } finally {
+      await reclaimer.close()
+    }
+    await this.finishReaperReclaim(
+      gateDirectory,
+      tombstoneDirectory,
+      reclaimerPath,
+      snapshot,
+      deadline,
+    )
+  }
+
+  private async recoverAbandonedReaperTombstone(
+    gateDirectory: string,
+    tombstoneDirectory: string,
+  ): Promise<void> {
+    let tombstoneStat
+    try {
+      tombstoneStat = await lstat(tombstoneDirectory)
+    } catch (error) {
+      if (isNodeError(error, 'ENOENT')) return
+      throw error
+    }
+    if (Date.now() - tombstoneStat.ctimeMs < this.staleLockMs) return
+    const reclaimerPath = join(tombstoneDirectory, `reclaimer-${randomUUID()}`)
+    try {
+      const reclaimer = await open(reclaimerPath, 'wx', FILE_MODE)
+      try {
+        await reclaimer.writeFile(String(process.pid))
+        await reclaimer.sync()
+      } finally {
+        await reclaimer.close()
+      }
+    } catch (error) {
+      if (isNodeError(error, 'ENOENT')) return
+      throw error
+    }
+    await this.finishReaperReclaim(
+      gateDirectory,
+      tombstoneDirectory,
+      reclaimerPath,
+      undefined,
+      Date.now() + this.lockTimeoutMs,
+    )
+  }
+
+  private async finishReaperReclaim(
+    gateDirectory: string,
+    tombstoneDirectory: string,
+    reclaimerPath: string,
+    snapshot: LeaseDirectorySnapshot | undefined,
+    deadline: number,
+  ): Promise<void> {
+    const current = await this.leaseDirectorySnapshot(tombstoneDirectory)
+    const restore = current?.ownerName !== undefined && (
+      Date.now() - current.heartbeatMs < this.staleLockMs
+      || snapshot !== undefined && (
+        current.ownerName !== snapshot.ownerName
+        || current.heartbeatMs > snapshot.heartbeatMs
+      )
+    )
+    if (!(await this.assertReaperOwned(reclaimerPath))) return
+    if (!restore) {
+      await rm(tombstoneDirectory, { recursive: true })
+      await this.directorySync(this.locksDir)
+      return
+    }
+    for (;;) {
+      if (!(await this.assertReaperOwned(reclaimerPath))) return
+      try {
+        await rename(tombstoneDirectory, gateDirectory)
+        await this.directorySync(this.locksDir)
+        if (!(await this.assertReaperOwned(join(gateDirectory, basename(reclaimerPath))))) return
+        await this.cleanReclaimerTokens(gateDirectory)
+        return
+      } catch (error) {
+        if (isNodeError(error, 'ENOENT')) return
+        if (!isNodeError(error, 'EEXIST')) throw error
+        if (Date.now() >= deadline) {
+          throw new AttachmentStoreError('storage-failure', 'Attachment lock timed out')
+        }
+        await delay(Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now())))
+      }
+    }
+  }
+
+  private async assertReaperOwned(reclaimerPath: string): Promise<boolean> {
+    try {
+      if (!(await lstat(reclaimerPath)).isFile()) throw new Error('Reaper token is invalid')
+      return true
+    } catch (error) {
+      if (isNodeError(error, 'ENOENT')) return false
+      throw error
+    }
+  }
+
+  private async leaseDirectorySnapshot(directory: string): Promise<LeaseDirectorySnapshot | undefined> {
+    try {
+      const owners = (await readdir(directory, { withFileTypes: true }))
+        .filter((entry) => entry.isFile() && entry.name.startsWith('owner-'))
+      if (owners.length === 1) {
+        const ownerName = owners[0]!.name
+        const ownerStat = await lstat(join(directory, ownerName))
+        return { ownerName, heartbeatMs: ownerStat.mtimeMs }
+      }
+      return { heartbeatMs: (await lstat(directory)).mtimeMs }
+    } catch (error) {
+      if (isNodeError(error, 'ENOENT')) return undefined
+      throw error
+    }
+  }
+
+  private async cleanReclaimerTokens(directory: string): Promise<void> {
+    let changed = false
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith('reclaimer-')) continue
+      try {
+        await unlink(join(directory, entry.name))
+        changed = true
+      } catch (error) {
+        if (!isNodeError(error, 'ENOENT')) throw error
+      }
+    }
+    if (changed) await this.directorySync(directory)
+  }
+
+  private async pathExists(path: string): Promise<boolean> {
+    try {
+      await lstat(path)
+      return true
+    } catch (error) {
+      if (isNodeError(error, 'ENOENT')) return false
+      throw error
     }
   }
 
@@ -1051,20 +1247,21 @@ export class EncryptedAttachmentStore {
       await mkdir(lockDirectory, { mode: DIRECTORY_MODE })
     } catch (error) {
       if (!isNodeError(error, 'EEXIST')) throw error
-      const owners = (await readdir(lockDirectory, { withFileTypes: true }))
-        .filter((entry) => entry.isFile() && entry.name.startsWith('owner-'))
-      let stale = owners.length !== 1
-      if (owners.length === 1) {
-        const ownerStat = await lstat(join(lockDirectory, owners[0]!.name))
-        stale = Date.now() - ownerStat.mtimeMs >= this.staleLockMs
-      } else {
-        const lockStat = await lstat(lockDirectory)
-        stale = Date.now() - lockStat.mtimeMs >= this.staleLockMs
-      }
-      if (!stale) return undefined
+      const snapshot = await this.leaseDirectorySnapshot(lockDirectory)
+      if (!snapshot || Date.now() - snapshot.heartbeatMs < this.staleLockMs) return undefined
       const fencedPath = join(this.locksDir, `.fenced-${randomUUID()}`)
       await rename(lockDirectory, fencedPath)
       await this.directorySync(this.locksDir)
+      const current = await this.leaseDirectorySnapshot(fencedPath)
+      if (current?.ownerName !== undefined && (
+        Date.now() - current.heartbeatMs < this.staleLockMs
+        || current.ownerName !== snapshot.ownerName
+        || current.heartbeatMs > snapshot.heartbeatMs
+      )) {
+        await rename(fencedPath, lockDirectory)
+        await this.directorySync(this.locksDir)
+        return undefined
+      }
       await rm(fencedPath, { recursive: true })
       await this.directorySync(this.locksDir)
       await mkdir(lockDirectory, { mode: DIRECTORY_MODE })
@@ -1121,10 +1318,8 @@ export class EncryptedAttachmentStore {
     }
     const stopHeartbeat = this.leaseHeartbeat.start(async () => {
       try {
-        await withGate(async () => {
-          const now = new Date()
-          await utimes(ownerPath, now, now)
-        })
+        const now = new Date()
+        await utimes(ownerPath, now, now)
       } catch (error) {
         heartbeatFailure ??= error
         throw error
@@ -1192,7 +1387,6 @@ export class EncryptedAttachmentStore {
 
   private async writeMetadata(metadata: AttachmentMetadata, lease: HashLease): Promise<void> {
     const directory = join(this.attachmentsDir, metadata.sha256)
-    await mkdir(directory, { recursive: true, mode: DIRECTORY_MODE })
     const stagingPath = join(this.stagingDir, `.stage-${randomUUID()}.metadata.tmp`)
     let file: FileHandle | null = null
     let failure: unknown
