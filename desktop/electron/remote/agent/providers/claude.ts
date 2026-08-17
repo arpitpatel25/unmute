@@ -11,9 +11,16 @@ import {
   type ProbeBinary,
   type ProviderEventObserver,
 } from '../provider'
+import { HeadlessAgentProcess, agentRuntimeMode, type AgentRuntimeMode } from './claude-headless'
 
 export interface ClaudeCodeProviderOptions {
   binary?: string
+  /**
+   * Which process backs a turn. Defaults to UNMUTE_AGENT_RUNTIME, which
+   * defaults to headless — see claude-headless.ts for why, and set
+   * UNMUTE_AGENT_RUNTIME=repl to go back.
+   */
+  runtime?: AgentRuntimeMode
   processFactory?: AgentProcessFactory
   probeBinary?: ProbeBinary
   randomId?: () => string
@@ -24,10 +31,13 @@ export interface ClaudeCodeProviderOptions {
 
 /** Claude Code CLI adapter with a pinned UUID for every fresh conversation. */
 export class ClaudeCodeProvider extends CliProviderRuntime {
+  /** The driver this provider will build — exposed so the choice is testable. */
+  readonly createProcess: AgentProcessFactory
+
   constructor(options: ClaudeCodeProviderOptions = {}) {
     const binary = options.binary ?? 'claude'
     const observe = options.observe ?? (options.hookEvents ? claudeHookObserver(options.hookEvents) : undefined)
-    const processFactory = options.processFactory ?? (() => new ExecutorBackedAgentProcess({
+    const replFactory: AgentProcessFactory = () => new ExecutorBackedAgentProcess({
       createExecutor: async (launch) => new ClaudeCodeExecutor({
         ...options.executor,
         claudeBin: binary,
@@ -36,7 +46,12 @@ export class ClaudeCodeProvider extends CliProviderRuntime {
         tmux: undefined,
       }),
       observe,
-    }))
+    })
+    // An explicitly injected factory always wins: the contract fakes depend on
+    // it, and they must never be dragged onto a real process by an env var.
+    const runtime = options.runtime ?? agentRuntimeMode()
+    const processFactory = options.processFactory
+      ?? (runtime === 'headless' ? () => new HeadlessAgentProcess() : replFactory)
     super({
       id: 'claude',
       binary,
@@ -48,6 +63,7 @@ export class ClaudeCodeProvider extends CliProviderRuntime {
         ? ['--resume', session.id!]
         : ['--session-id', session.id!],
     })
+    this.createProcess = processFactory
   }
 }
 

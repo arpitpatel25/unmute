@@ -77,6 +77,7 @@ import {
   type AgentInteractionResult,
 } from './agent/controller'
 import { ClaudeCodeProvider } from './agent/providers/claude'
+import { agentRuntimeMode } from './agent/providers/claude-headless'
 import { CodexCliProvider } from './agent/providers/codex'
 import { probeCli, type AgentProviderId, type ProviderProbe } from './agent/provider'
 import { FastPathRouter } from './agent/fast-path'
@@ -852,7 +853,13 @@ async function initializeUnmuteAgent(): Promise<void> {
     const constitutionPath = join(root, 'runtime', 'constitution.md')
     mkdirSync(dirname(constitutionPath), { recursive: true, mode: 0o700 })
     writeFileSync(constitutionPath, AGENT_CONSTITUTION, { encoding: 'utf8', mode: 0o600 })
+    // hookEvents/executor are consumed only by the REPL driver; they stay wired
+    // so UNMUTE_AGENT_RUNTIME=repl is a pure environment change. Which driver
+    // is live is logged because the two fail in completely different ways.
+    const agentRuntime = agentRuntimeMode()
+    log.event('unmute-agent-runtime', { runtime: agentRuntime })
     const claude = new ClaudeCodeProvider({
+      runtime: agentRuntime,
       hookEvents: {
         subscribe(listener) {
           agentHookListeners.add(listener)
