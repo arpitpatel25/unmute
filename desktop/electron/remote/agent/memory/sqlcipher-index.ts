@@ -277,8 +277,9 @@ class SqlCipherMemoryIndex implements MemoryIndex {
   search(query: MemoryIndexSearchQuery): MemoryIndexSearchHit[] {
     return operationFailure(() => {
       this.requireOpen()
+      const normalizedText = normalizeSearchable(query.text)
+      if (!normalizedText) throw new MemoryIndexError('invalid-query', 'Memory index query is invalid')
       const expression = ftsExpression(query.text)
-      if (!expression) throw new MemoryIndexError('invalid-query', 'Memory index query is invalid')
       const limit = query.limit ?? DEFAULT_RESULT_LIMIT
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RESULT_LIMIT) {
         throw new MemoryIndexError('invalid-query', 'Memory index query is invalid')
@@ -309,6 +310,7 @@ class SqlCipherMemoryIndex implements MemoryIndex {
       this.addScopeFilter(where, values, 'scope_app', query.scope?.app)
       this.addScopeFilter(where, values, 'scope_project', query.scope?.project)
       this.addScopeFilter(where, values, 'scope_purpose', query.scope?.purpose)
+      if (!expression) return []
       const rows = this.database.prepare(`
         SELECT
           m.id,
@@ -326,7 +328,7 @@ class SqlCipherMemoryIndex implements MemoryIndex {
         WHERE memory_fts MATCH ? AND ${where.join(' AND ')}
         ORDER BY exact_title DESC, lexical_rank ASC, m.updated_at DESC, m.id ASC
         LIMIT ?
-      `).all(normalizeSearchable(query.text), expression, ...values, limit) as SearchRow[]
+      `).all(normalizedText, expression, ...values, limit) as SearchRow[]
 
       const tags = this.database.prepare(
         'SELECT tag FROM memory_tags WHERE memory_id = ? ORDER BY tag_normalized',

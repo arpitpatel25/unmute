@@ -5,7 +5,17 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import test from 'node:test'
 
-import type { MemoryRecord } from './types.ts'
+import type { CapabilityCallContext } from '../types.ts'
+import type { MemoryAuditSink } from './audit.ts'
+import type { MemoryMutationJournal } from './journal.ts'
+import { RecordStoreError } from './record-store.ts'
+import {
+  MemoryService,
+  MemoryServiceError,
+  type MemoryAttachmentStore,
+  type MemoryCanonicalStore,
+} from './service.ts'
+import type { CreateMemoryRecordInput, MemoryRecord, MemoryRecordPatch } from './types.ts'
 import {
   MemoryIndexError,
   openSqlCipherMemoryIndex,
@@ -97,6 +107,51 @@ function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
     version: 1,
     ...overrides,
   }
+}
+
+function readOnlyService(index: ReturnType<typeof openSqlCipherMemoryIndex>, values: MemoryRecord[]): MemoryService {
+  const canonical = new Map(values.map((value) => [value.id, structuredClone(value)]))
+  const records: MemoryCanonicalStore = {
+    async initialize() {},
+    async list() { return [...canonical.values()].map((value) => structuredClone(value)) },
+    async create(_input: CreateMemoryRecordInput) { throw new Error('not used') },
+    async read(id: string) {
+      const value = canonical.get(id)
+      if (!value) throw new RecordStoreError('not-found', 'Memory record was not found')
+      return structuredClone(value)
+    },
+    async readTrash() { throw new RecordStoreError('not-found', 'Memory record was not found') },
+    async update(_id: string, _patch: MemoryRecordPatch) { throw new Error('not used') },
+    async forget() { throw new Error('not used') },
+    async restore() { throw new Error('not used') },
+  }
+  const attachments: MemoryAttachmentStore = {
+    async initialize() {},
+    async store() { throw new Error('not used') },
+    async trashRecord() { throw new Error('not used') },
+    async restoreRecord() { throw new Error('not used') },
+    async purgeRecord() { throw new Error('not used') },
+    async open() { throw new Error('not used') },
+  }
+  const audit: MemoryAuditSink = {
+    async write() {},
+    async writeRow() {},
+  }
+  const journal: MemoryMutationJournal = {
+    async read() { return undefined },
+    async begin() { throw new Error('not used') },
+    async checkpoint() { throw new Error('not used') },
+    async clear() { throw new Error('not used') },
+  }
+  return new MemoryService({ records, attachments, index, audit, journal })
+}
+
+const agentContext: CapabilityCallContext = {
+  principal: {
+    kind: 'unmute-agent', runId: 'run-native-index', interactionId: 'ix-native-index',
+    expiresAt: 20_000,
+  },
+  now: 10_000,
 }
 
 function schemaNames(database: NativeDatabase): string[] {
@@ -326,6 +381,40 @@ test('finds exact titles and lexical body terms while requiring explicit private
     index.search({ text: 'zephyr', includePrivate: true }).map((item) => item.id),
     ['memory-private'],
   )
+})
+
+test('MemoryService retrieves tokenless Unicode exact titles and aliases through the native index', async (t) => {
+  const temporary = await temporaryDatabase(t)
+  const index = openSqlCipherMemoryIndex({ databasePath: temporary.path, key: MASTER_KEY })
+  t.after(() => index.close())
+  const service = readOnlyService(index, [
+    record({ id: 'rocket-title', title: '  🚀  ', content: 'Title evidence', attachments: [] }),
+    record({
+      id: 'rocket-alias', title: 'Launch profile', content: 'Alias evidence',
+      tags: ['alias: 🚀'], attachments: [],
+    }),
+  ])
+
+  assert.deepEqual(
+    (await service.search(agentContext, { text: '🚀' })).map(({ id }) => id),
+    ['rocket-title', 'rocket-alias'],
+  )
+  await assert.rejects(
+    service.search(agentContext, { text: '   ' }),
+    (error: unknown) => error instanceof MemoryServiceError && error.code === 'invalid-input',
+  )
+  for (const query of [
+    { text: '   ' },
+    { text: '🚀', limit: 0 },
+    { text: '🚀', tags: ['   '] },
+    { text: '🚀', scope: { project: '   ' } },
+  ]) {
+    assert.throws(
+      () => index.search(query),
+      (error: unknown) => error instanceof MemoryIndexError && error.code === 'invalid-query',
+    )
+  }
+  assert.deepEqual(index.search({ text: '🚀 " OR *' }), [])
 })
 
 test('omits secret-bearing bodies and tags from every searchable and returned projection surface', async (t) => {
