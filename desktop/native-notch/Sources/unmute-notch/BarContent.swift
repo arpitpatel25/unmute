@@ -132,8 +132,9 @@ struct BarContent: Equatable {
             case .complete:   status = .done;       label = "Done"
             case .failed:     status = .failed;     label = "Couldn't complete"
             }
-            return BarContent(dot: status, left: label, right: activity.summary,
+            return BarContent(dot: status, left: label,
                               emphasis: .status,
+                              right: activity.summary,
                               alarm: activity.state == .confirming || activity.state == .failed ? status : nil)
         }
         // ROUTING OUTRANKS EVERY RESTING STATE.
