@@ -5081,18 +5081,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
   ipcMain.handle('remote:list-memories', async (_e, query?: unknown) => {
     if (!unmuteAgentMemory || !unmuteAgentRecords) return []
-    const now = Date.now()
-    const principal = {
-      kind: 'unmute-agent' as const,
-      runId: `settings-${randomUUID()}`,
-      interactionId: randomUUID(),
-      expiresAt: now + 60_000,
-    }
-    if (typeof query === 'string' && query.trim()) {
-      return unmuteAgentMemory.search({ principal, now }, { text: query.trim(), limit: 100 })
-    }
+    const needle = typeof query === 'string' ? query.trim().toLocaleLowerCase() : ''
     return (await unmuteAgentRecords.list())
-      .filter((record) => record.deletedAt === undefined)
+      .filter((record) => !needle || [
+        record.title, record.kind, record.sensitivity, record.provenance.source,
+        ...record.tags, record.scope?.app, record.scope?.project, record.scope?.purpose,
+        record.deletedAt === undefined ? undefined : 'trash',
+      ].some((value) => value?.toLocaleLowerCase().includes(needle)))
       .map((record) => {
         const presented = presentMemoryRecord(record)
         return {
@@ -5103,27 +5098,53 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
           ...(presented.scope ? { scope: { ...presented.scope } } : {}),
           sensitivity: presented.sensitivity,
           provenance: { source: presented.provenance.source },
+          attachmentCount: presented.attachments.length,
           createdAt: presented.createdAt,
           updatedAt: presented.updatedAt,
           version: presented.version,
+          ...(presented.deletedAt === undefined ? {} : { deletedAt: presented.deletedAt }),
         }
       })
   })
-  ipcMain.handle('remote:get-memory', async (_e, id: unknown) => {
-    if (!unmuteAgentMemory || typeof id !== 'string') return null
+  ipcMain.handle('remote:get-memory', async (_e, id: unknown, revealSensitive?: unknown) => {
+    if (!unmuteAgentMemory || !unmuteAgentRecords || typeof id !== 'string') return null
     const now = Date.now()
+    const interactionId = randomUUID()
     const principal = {
       kind: 'unmute-agent' as const,
       runId: `settings-${randomUUID()}`,
-      interactionId: randomUUID(),
+      interactionId,
       expiresAt: now + 60_000,
     }
     try {
-      return await unmuteAgentMemory.get(
-        { principal, now },
+      const record = (await unmuteAgentRecords.list()).find((candidate) => candidate.id === id)
+      if (!record) return null
+      const view = await unmuteAgentMemory.get(
+        {
+          principal,
+          now,
+          ...(revealSensitive === true
+            ? { interaction: { id: interactionId, active: true, intents: ['memory.reveal-sensitive'] } }
+            : {}),
+        },
         id,
-        { includeContent: true, includeAttachments: true, includeDeleted: true },
+        { includeContent: true, includeDeleted: true },
       )
+      return {
+        id: view.id,
+        kind: view.kind,
+        title: view.title,
+        tags: [...view.tags],
+        ...(view.scope ? { scope: { ...view.scope } } : {}),
+        sensitivity: view.sensitivity,
+        provenance: { source: view.provenance.source },
+        content: view.content,
+        attachmentCount: record.attachments.length,
+        createdAt: view.createdAt,
+        updatedAt: view.updatedAt,
+        version: view.version,
+        ...(view.deletedAt === undefined ? {} : { deletedAt: view.deletedAt }),
+      }
     } catch { return null }
   })
   ipcMain.handle('remote:forget-memory', async (_e, id: unknown) => {

@@ -56,7 +56,7 @@
 
 import React from 'react'
 
-export default function Privacy() {
+export default function Privacy({ onOpenMemory }: { onOpenMemory?: () => void }) {
   return (
     <div>
       <p className="text-[13px] text-ink-60 leading-relaxed mb-6">
@@ -159,6 +159,17 @@ export default function Privacy() {
       {/* ═══ Everything else ═══ */}
       <GroupHeader title="Everything else" />
       <Card>
+        <button
+          type="button"
+          onClick={onOpenMemory}
+          className="w-full px-5 py-4 text-left flex items-center justify-between gap-4 hover:bg-cream-mid transition-colors"
+        >
+          <span>
+            <span className="block text-[13px] font-semibold text-ink">What Unmute keeps</span>
+            <span className="block text-[12.5px] text-ink-60 leading-relaxed mt-1">Inspect saved memory, see where it came from, or move it to Trash.</span>
+          </span>
+          <span className="text-[13px] text-ink-35 shrink-0">›</span>
+        </button>
         <Row
           title="History"
           flow="stays"
@@ -169,6 +180,7 @@ export default function Privacy() {
               uploaded.
             </p>
           }
+          divider
         />
         <Row
           title="Diagnostics"

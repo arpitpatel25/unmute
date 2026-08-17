@@ -35,6 +35,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import Permissions from './Permissions'
 import Language from './Language'
 import Privacy from './Privacy'
+import MemoryManager from '../remote/MemoryManager'
 import { HELP_PAGES, HelpPage, type HelpPageId } from './help'
 // Pack A owns the onboarding gate and exports the reset. Importing it here is a
 // module cycle (App → Settings → App) that resolves under ESM because it is only
@@ -326,9 +327,10 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
   // points: the "What this does" links on Capture and Scratchpad, and the list
   // in Help & about.
   const [helpPage, setHelpPage] = useState<HelpPageId | null>(null)
+  const [memoryManagerOpen, setMemoryManagerOpen] = useState(false)
   // Moving to another section leaves the page — otherwise clicking Privacy in
   // the sidebar would show whatever help page was last open.
-  useEffect(() => { setHelpPage(null) }, [section])
+  useEffect(() => { setHelpPage(null); setMemoryManagerOpen(false) }, [section])
 
   useEffect(() => {
     loadAudioDevices()
@@ -524,6 +526,10 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
         <HelpPage id={helpPage} onBack={() => setHelpPage(null)} />
       </div>
     )
+  }
+
+  if (memoryManagerOpen) {
+    return <MemoryManager onBack={() => setMemoryManagerOpen(false)} />
   }
 
   return (
@@ -826,7 +832,7 @@ export default function Settings({ onDictationKeyChange, section = 'triggers' }:
       {section === 'language' && <Language />}
 
       {/* ══════════════ 6 · Privacy ══════════════ */}
-      {section === 'privacy' && <Privacy />}
+      {section === 'privacy' && <Privacy onOpenMemory={() => setMemoryManagerOpen(true)} />}
 
       {/* ══════════════ 7 · Help & about ══════════════ */}
       {section === 'help' && (

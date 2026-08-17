@@ -107,8 +107,9 @@ export interface UnmuteMemorySnapshot {
   tags: string[]
   scope?: { app?: string; project?: string; purpose?: string }
   sensitivity: 'normal' | 'private' | 'sensitive'
+  provenance?: { source: 'voice' | 'selection' | 'attachment' | 'import' }
   content?: string
-  attachments?: string[]
+  attachmentCount?: number
   snippet?: string
   score?: number
   createdAt?: number
@@ -162,8 +163,8 @@ export const remotePreloadExtensions = {
   },
   remoteListMemories: (query?: string): Promise<UnmuteMemorySnapshot[]> =>
     ipcRenderer.invoke('remote:list-memories', query),
-  remoteGetMemory: (id: string): Promise<UnmuteMemorySnapshot | null> =>
-    ipcRenderer.invoke('remote:get-memory', id),
+  remoteGetMemory: (id: string, revealSensitive = false): Promise<UnmuteMemorySnapshot | null> =>
+    ipcRenderer.invoke('remote:get-memory', id, revealSensitive),
   remoteForgetMemory: (id: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:forget-memory', id),
   remoteRestoreMemory: (id: string): Promise<boolean> =>
