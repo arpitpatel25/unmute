@@ -1,5 +1,22 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, stat, truncate, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { constants } from 'node:fs'
+import {
+  appendFile,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  open as fsOpen,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  symlink,
+  truncate,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -30,10 +47,31 @@ function memoryCrypto(): MemoryCrypto {
   })
 }
 
+function delayedMemoryCrypto(delayMs: number): MemoryCrypto {
+  return new MemoryCrypto({
+    keyProvider: {
+      async getMasterKey() {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+        return Buffer.from(MASTER_KEY)
+      },
+    },
+  })
+}
+
 async function contents(attachment: DeliveryAttachment): Promise<Buffer> {
   const chunks: Buffer[] = []
   for await (const chunk of attachment.open()) chunks.push(Buffer.from(chunk))
   return Buffer.concat(chunks)
+}
+
+async function survivingDescriptor(
+  store: EncryptedAttachmentStore,
+  ...ids: string[]
+) {
+  for (const id of ids) {
+    try { return await store.get(id) } catch { /* try the concurrently returned identity */ }
+  }
+  throw new Error('No concurrent attachment metadata survived')
 }
 
 test('managed copy streams encrypted content into its SHA-256 address with MIME and size metadata', async (t) => {
@@ -86,6 +124,36 @@ test('managed copy rejects a payload truncated exactly between authenticated fra
   const firstFrameBytes = encrypted.readUInt32BE(5)
   await truncate(payloadPath, 5 + 4 + firstFrameBytes)
   const opened = await store.open(agent(), saved.id)
+
+  await assert.rejects(
+    contents(await store.resolveForDelivery(agent(), opened.handle)),
+    /encrypted attachment payload is invalid/i,
+  )
+})
+
+test('managed copy rejects intact ciphertext substituted from another attachment identity', async (t) => {
+  const root = await temporaryRoot(t)
+  const sourceA = join(root, 'a.txt')
+  const sourceB = join(root, 'b.txt')
+  await writeFile(sourceA, 'attachment A')
+  await writeFile(sourceB, 'attachment B with equal-ish size')
+  let nextHandle = 0
+  let nextId = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `substitute-${++nextHandle}` })
+  const store = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, createAttachmentId: () => `attachment-${++nextId}`,
+  })
+  const savedA = await store.store(agent(), {
+    recordId: 'record-a', handle: handles.mintCapture(agent(), { path: sourceA }), storage: 'copy',
+  })
+  const savedB = await store.store(agent(), {
+    recordId: 'record-b', handle: handles.mintCapture(agent(), { path: sourceB }), storage: 'copy',
+  })
+  await copyFile(
+    join(root, 'attachments', savedB.sha256, 'original.enc'),
+    join(root, 'attachments', savedA.sha256, 'original.enc'),
+  )
+  const opened = await store.open(agent(), savedA.id)
 
   await assert.rejects(
     contents(await store.resolveForDelivery(agent(), opened.handle)),
@@ -163,6 +231,154 @@ test('plaintext SHA-256 deduplicates copies while tracking every referring recor
   assert.equal((await readdir(join(root, 'attachments', one.sha256!))).filter((name) => name === 'original.enc').length, 1)
 })
 
+test('two store instances atomically merge concurrent managed-copy references', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'concurrent-copy.bin')
+  await writeFile(source, Buffer.alloc(256 * 1024, 0x63))
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `copy-race-${++nextHandle}` })
+  const one = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, createAttachmentId: () => 'attachment-one',
+  })
+  const two = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, createAttachmentId: () => 'attachment-two',
+  })
+
+  const [savedOne, savedTwo] = await Promise.all([
+    one.store(agent(), { recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy' }),
+    two.store(agent(), { recordId: 'record-2', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy' }),
+  ])
+  const saved = await survivingDescriptor(one, savedOne.id, savedTwo.id)
+
+  assert.equal(saved.liveReferenceCount, 2)
+  assert.equal(saved.storage, 'managed-copy')
+  assert.equal((await readdir(join(root, 'attachments', saved.sha256))).filter((name) => name === 'original.enc').length, 1)
+})
+
+test('two store instances atomically merge concurrent reference-only records', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'concurrent-reference.bin')
+  await writeFile(source, Buffer.alloc(128 * 1024, 0x72))
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `reference-race-${++nextHandle}` })
+  const one = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, createAttachmentId: () => 'reference-one',
+  })
+  const two = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, createAttachmentId: () => 'reference-two',
+  })
+
+  const [savedOne, savedTwo] = await Promise.all([
+    one.store(agent(), { recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'reference' }),
+    two.store(agent(), { recordId: 'record-2', handle: handles.mintCapture(agent(), { path: source }), storage: 'reference' }),
+  ])
+  const saved = await survivingDescriptor(one, savedOne.id, savedTwo.id)
+
+  assert.equal(saved.liveReferenceCount, 2)
+  assert.equal(saved.storage, 'reference')
+  await assert.rejects(readFile(join(root, 'attachments', saved.sha256, 'original.enc')), { code: 'ENOENT' })
+})
+
+test('reference-to-copy races converge on one managed identity with both record references', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'reference-copy-race.bin')
+  await writeFile(source, Buffer.alloc(192 * 1024, 0x75))
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `upgrade-race-${++nextHandle}` })
+  const referenceStore = new EncryptedAttachmentStore({
+    root, crypto: delayedMemoryCrypto(75), handles, createAttachmentId: () => 'reference-identity',
+  })
+  const copyStore = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, createAttachmentId: () => 'copy-identity',
+  })
+
+  const [reference, copy] = await Promise.all([
+    referenceStore.store(agent(), {
+      recordId: 'record-reference', handle: handles.mintCapture(agent(), { path: source }), storage: 'reference',
+    }),
+    copyStore.store(agent(), {
+      recordId: 'record-copy', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }),
+  ])
+  const saved = await survivingDescriptor(referenceStore, reference.id, copy.id)
+
+  assert.equal(saved.storage, 'managed-copy')
+  assert.equal(saved.liveReferenceCount, 2)
+  assert.equal(await stat(join(root, 'attachments', saved.sha256, 'original.enc')).then(() => true), true)
+})
+
+test('startup quarantines a hash directory published without valid encrypted metadata', async (t) => {
+  const root = await temporaryRoot(t)
+  const sha256 = 'a'.repeat(64)
+  const orphan = join(root, 'attachments', sha256)
+  await mkdir(orphan, { recursive: true })
+  await writeFile(join(orphan, 'original.enc'), 'orphan ciphertext')
+  const store = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles: new InteractionAttachmentHandles({ now: () => NOW }),
+  })
+
+  await store.initialize()
+
+  await assert.rejects(stat(orphan), { code: 'ENOENT' })
+  assert.equal((await readdir(join(root, 'attachments', '.quarantine'))).some((name) => name.startsWith(sha256)), true)
+})
+
+test('startup removes stale encrypted staging without unlinking a fresh concurrent writer', async (t) => {
+  const root = await temporaryRoot(t)
+  const staging = join(root, 'attachments', '.staging')
+  await mkdir(staging, { recursive: true })
+  const stale = join(staging, '.stage-stale.payload.tmp')
+  const fresh = join(staging, '.stage-fresh.payload.tmp')
+  await writeFile(stale, 'abandoned ciphertext')
+  await writeFile(fresh, 'active ciphertext')
+  await utimes(stale, new Date(0), new Date(0))
+  const store = new EncryptedAttachmentStore({
+    root,
+    crypto: memoryCrypto(),
+    handles: new InteractionAttachmentHandles({ now: () => NOW }),
+    staleLockMs: 60_000,
+  })
+
+  await store.initialize()
+
+  await assert.rejects(stat(stale), { code: 'ENOENT' })
+  assert.equal((await stat(fresh)).isFile(), true)
+})
+
+test('stale per-hash locks recover, while a fresh lock times out without mutating attachment state', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'locked.txt')
+  const bytes = Buffer.from('locked source')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const locks = join(root, 'attachments', '.locks')
+  await mkdir(locks, { recursive: true })
+  const lock = join(locks, `${sha256}.lock`)
+  await writeFile(lock, 'crashed-owner')
+  await utimes(lock, new Date(0), new Date(0))
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `lock-${++nextHandle}` })
+  const recovering = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 10, lockTimeoutMs: 100,
+  })
+  const recovered = await recovering.store(agent(), {
+    recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  assert.equal(recovered.liveReferenceCount, 1)
+
+  await writeFile(lock, 'active-owner')
+  const blocked = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 60_000, lockTimeoutMs: 20,
+  })
+  await assert.rejects(
+    blocked.store(agent(), {
+      recordId: 'record-2', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }),
+    /attachment lock timed out/i,
+  )
+  assert.equal((await recovering.get(recovered.id)).liveReferenceCount, 1)
+})
+
 test('large regular files default to references unless an explicit managed copy is requested', async (t) => {
   const root = await temporaryRoot(t)
   const source = join(root, 'large.mov')
@@ -202,7 +418,7 @@ test('an unreadable managed copy leaves no payload, metadata, or staging fragmen
     }),
     /attachment copy failed/i,
   )
-  assert.deepEqual(await readdir(join(root, 'attachments')), ['.staging'])
+  assert.deepEqual((await readdir(join(root, 'attachments'))).filter((name) => !name.startsWith('.')), [])
   assert.deepEqual(await readdir(join(root, 'attachments', '.staging')), [])
 })
 
@@ -257,6 +473,135 @@ test('capture handles expire, stay interaction-scoped, and reject model-supplied
     store.store(agent(), { recordId: 'record-1', handle, storage: 'copy' }),
     /attachment handle is invalid/i,
   )
+})
+
+test('capture handles reject separators, traversal, control characters, and path-like source names', () => {
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `unsafe-${++nextHandle}` })
+
+  for (const name of [
+    '../secret.txt',
+    'folder/secret.txt',
+    'folder\\secret.txt',
+    '/absolute.txt',
+    'C:\\absolute.txt',
+    'bad\nname.txt',
+    'bad\u0085name.txt',
+    '.',
+    '..',
+  ]) {
+    assert.throws(
+      () => handles.mintCapture(agent(), { path: '/trusted/source.txt', name }),
+      /capture attachment is invalid/i,
+      name,
+    )
+  }
+})
+
+test('managed copy refuses a symlink source instead of following it', async (t) => {
+  const root = await temporaryRoot(t)
+  const target = join(root, 'target.txt')
+  const source = join(root, 'link.txt')
+  await writeFile(target, 'secret target')
+  await symlink(target, source)
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => 'symlink-handle' })
+  const store = new EncryptedAttachmentStore({ root, crypto: memoryCrypto(), handles })
+
+  await assert.rejects(
+    store.store(agent(), {
+      recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }),
+    /attachment copy failed/i,
+  )
+  assert.deepEqual((await readdir(join(root, 'attachments'))).filter((name) => !name.startsWith('.')), [])
+})
+
+test('source is opened once with no-follow and a path swap cannot change the descriptor being copied', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'source.txt')
+  const replacement = join(root, 'replacement.txt')
+  const archived = join(root, 'opened-source.txt')
+  await writeFile(source, 'descriptor bytes')
+  await writeFile(replacement, 'replacement path bytes')
+  let openCount = 0
+  let observedFlags = 0
+  const sourceFileSystem = {
+    async open(path: string, flags: number) {
+      openCount += 1
+      observedFlags = flags
+      const file = await fsOpen(path, flags)
+      let swapped = false
+      return {
+        async stat() {
+          const value = await file.stat()
+          if (!swapped) {
+            swapped = true
+            await rename(source, archived)
+            await rename(replacement, source)
+          }
+          return value
+        },
+        read: file.read.bind(file),
+        close: file.close.bind(file),
+      }
+    },
+  }
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: (() => {
+    let next = 0
+    return () => `swap-${++next}`
+  })() })
+  const store = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, sourceFileSystem,
+  })
+
+  const saved = await store.store(agent(), {
+    recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  const opened = await store.open(agent(), saved.id)
+
+  assert.equal(openCount, 1)
+  assert.equal((observedFlags & constants.O_NOFOLLOW) !== 0, true)
+  assert.equal(await contents(await store.resolveForDelivery(agent(), opened.handle)).then(String), 'descriptor bytes')
+})
+
+test('a source that grows beyond the implicit copy ceiling becomes a reference during descriptor reads', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'growing.bin')
+  await writeFile(source, 'tiny')
+  let openCount = 0
+  const sourceFileSystem = {
+    async open(path: string, flags: number) {
+      openCount += 1
+      const file = await fsOpen(path, flags)
+      let grown = false
+      return {
+        async stat() {
+          const value = await file.stat()
+          if (!grown) {
+            grown = true
+            await appendFile(source, Buffer.alloc(32, 0x67))
+          }
+          return value
+        },
+        read: file.read.bind(file),
+        close: file.close.bind(file),
+      }
+    },
+  }
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => 'growing-handle' })
+  const store = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, maxManagedBytes: 8, sourceFileSystem,
+  })
+
+  const saved = await store.store(agent(), {
+    recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }),
+  })
+
+  assert.equal(openCount, 1)
+  assert.equal(saved.storage, 'reference')
+  assert.equal(saved.referenceReason, 'large-file')
+  assert.equal(saved.size, 36)
+  await assert.rejects(readFile(join(root, 'attachments', saved.sha256, 'original.enc')), { code: 'ENOENT' })
 })
 
 test('open handles are opaque, scoped to their Agent interaction, and expire', async (t) => {

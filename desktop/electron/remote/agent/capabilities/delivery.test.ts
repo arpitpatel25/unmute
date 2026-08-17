@@ -19,12 +19,24 @@ function attachment(): DeliveryAttachment {
   }
 }
 
+function transaction(options: {
+  write?: (chunk: Uint8Array) => Promise<void>
+  commit?: () => Promise<void>
+  rollback?: () => Promise<void>
+} = {}) {
+  return {
+    write: options.write ?? (async () => {}),
+    commit: options.commit ?? (async () => {}),
+    rollback: options.rollback ?? (async () => {}),
+  }
+}
+
 test('exposes exactly copy text, copy attachment, and attach to task draft to Agent principals', () => {
   const capability = new DeliveryCapability({
     async resolveAttachment() { return attachment() },
     async copyText() {},
-    async copyAttachment() {},
-    async attachToTaskDraft() {},
+    async stageAttachmentCopy() { return transaction() },
+    async stageTaskDraftAttachment() { return transaction() },
   })
   const registry = new CapabilityRegistry([capability])
 
@@ -41,8 +53,8 @@ test('copy text requires the active Agent interaction and delivers only validate
   const registry = new CapabilityRegistry([new DeliveryCapability({
     async resolveAttachment() { return attachment() },
     async copyText(text) { copied.push(text) },
-    async copyAttachment() {},
-    async attachToTaskDraft() {},
+    async stageAttachmentCopy() { return transaction() },
+    async stageTaskDraftAttachment() { return transaction() },
   })])
 
   await assert.rejects(registry.call(agent, 'delivery_copy_text', { text: 'hello' }, { now: NOW }), /active explicit interaction/i)
@@ -68,12 +80,15 @@ test('copy attachment resolves only an opaque open handle and never accepts a pa
       return attachment()
     },
     async copyText() {},
-    async copyAttachment(value) {
-      const chunks: Buffer[] = []
-      for await (const chunk of value.open()) chunks.push(Buffer.from(chunk))
-      copied.push(Buffer.concat(chunks))
+    async stageAttachmentCopy(value) {
+      const staged: Buffer[] = []
+      return transaction({
+        async write(chunk) { staged.push(Buffer.from(chunk)) },
+        async commit() { copied.push(Buffer.concat(staged)) },
+        async rollback() { staged.length = 0 },
+      })
     },
-    async attachToTaskDraft() {},
+    async stageTaskDraftAttachment() { return transaction() },
   })])
 
   await assert.rejects(
@@ -98,8 +113,10 @@ test('attach to task draft validates its own task destination and reports succes
       return attachment()
     },
     async copyText() {},
-    async copyAttachment() {},
-    async attachToTaskDraft(taskId, value) { attached.push({ taskId, name: value.name }) },
+    async stageAttachmentCopy() { return transaction() },
+    async stageTaskDraftAttachment(taskId, value) {
+      return transaction({ async commit() { attached.push({ taskId, name: value.name }) } })
+    },
   })])
 
   await assert.rejects(
@@ -121,8 +138,8 @@ test('direct module calls also fail closed without a live matching Agent interac
   const capability = new DeliveryCapability({
     async resolveAttachment() { called = true; return attachment() },
     async copyText() { called = true },
-    async copyAttachment() { called = true },
-    async attachToTaskDraft() { called = true },
+    async stageAttachmentCopy() { called = true; return transaction() },
+    async stageTaskDraftAttachment() { called = true; return transaction() },
   })
 
   await assert.rejects(
@@ -130,4 +147,71 @@ test('direct module calls also fail closed without a live matching Agent interac
     /active explicit interaction/i,
   )
   assert.equal(called, false)
+})
+
+for (const failure of ['substituted ciphertext', 'truncated final frame'] as const) {
+  test(`${failure} rolls back staged attachment bytes without committing an external side effect`, async () => {
+    const external: Buffer[] = []
+    const staged: Buffer[] = []
+    let commits = 0
+    let rollbacks = 0
+    const corrupt: DeliveryAttachment = {
+      name: 'resume.pdf', mimeType: 'application/pdf', size: 12,
+      async *open() {
+        yield Buffer.from('untrusted partial bytes')
+        throw new Error('Encrypted attachment payload is invalid')
+      },
+    }
+    const registry = new CapabilityRegistry([new DeliveryCapability({
+      async resolveAttachment() { return corrupt },
+      async copyText() {},
+      async stageAttachmentCopy() {
+        return transaction({
+          async write(chunk) { staged.push(Buffer.from(chunk)) },
+          async commit() { commits += 1; external.push(Buffer.concat(staged)) },
+          async rollback() { rollbacks += 1; staged.length = 0 },
+        })
+      },
+      async stageTaskDraftAttachment() { return transaction() },
+    })])
+
+    await assert.rejects(
+      registry.call(agent, 'delivery_copy_attachment', { handle: 'open-opaque' }, { now: NOW, interaction }),
+      /encrypted attachment payload is invalid/i,
+    )
+    assert.deepEqual(external, [])
+    assert.equal(commits, 0)
+    assert.equal(rollbacks, 1)
+    assert.deepEqual(staged, [])
+  })
+}
+
+test('a late destination staging failure explicitly rolls back and never commits', async () => {
+  let commits = 0
+  let rollbacks = 0
+  let writes = 0
+  const registry = new CapabilityRegistry([new DeliveryCapability({
+    async resolveAttachment() {
+      return {
+        name: 'resume.pdf', mimeType: 'application/pdf', size: 6,
+        async *open() { yield Buffer.from('one'); yield Buffer.from('two') },
+      }
+    },
+    async copyText() {},
+    async stageAttachmentCopy() {
+      return transaction({
+        async write() { writes += 1; if (writes === 2) throw new Error('destination staging failed') },
+        async commit() { commits += 1 },
+        async rollback() { rollbacks += 1 },
+      })
+    },
+    async stageTaskDraftAttachment() { return transaction() },
+  })])
+
+  await assert.rejects(
+    registry.call(agent, 'delivery_copy_attachment', { handle: 'open-opaque' }, { now: NOW, interaction }),
+    /destination staging failed/i,
+  )
+  assert.equal(commits, 0)
+  assert.equal(rollbacks, 1)
 })

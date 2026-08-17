@@ -47,8 +47,23 @@ const tools = [
 export interface DeliveryCapabilityAdapters {
   resolveAttachment(principal: McpPrincipal, handle: string): Promise<DeliveryAttachment>
   copyText(text: string): Promise<void>
-  copyAttachment(attachment: DeliveryAttachment): Promise<void>
-  attachToTaskDraft(taskId: string, attachment: DeliveryAttachment): Promise<void>
+  stageAttachmentCopy(metadata: DeliveryAttachmentMetadata): Promise<AttachmentDeliveryTransaction>
+  stageTaskDraftAttachment(
+    taskId: string,
+    metadata: DeliveryAttachmentMetadata,
+  ): Promise<AttachmentDeliveryTransaction>
+}
+
+export type DeliveryAttachmentMetadata = Pick<DeliveryAttachment, 'name' | 'mimeType' | 'size'>
+
+/**
+ * Writes remain private to the adapter's staging area. Commit publishes the
+ * complete value atomically; rollback removes staging without external effect.
+ */
+export interface AttachmentDeliveryTransaction {
+  write(chunk: Uint8Array): Promise<void>
+  commit(): Promise<void>
+  rollback(): Promise<void>
 }
 
 function requireActiveAgentInteraction(ctx: CapabilityCallContext): void {
@@ -84,6 +99,24 @@ function result(text: string): ToolResult {
   return { content: [{ type: 'text', text }] }
 }
 
+async function deliverAttachment(
+  attachment: DeliveryAttachment,
+  stage: (metadata: DeliveryAttachmentMetadata) => Promise<AttachmentDeliveryTransaction>,
+): Promise<void> {
+  const transaction = await stage({
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+  })
+  try {
+    for await (const chunk of attachment.open()) await transaction.write(chunk)
+    await transaction.commit()
+  } catch (error) {
+    try { await transaction.rollback() } catch { /* preserve the delivery/integrity failure */ }
+    throw error
+  }
+}
+
 export class DeliveryCapability implements CapabilityModule {
   readonly id = 'delivery'
   readonly roles = ['unmute-agent'] as const
@@ -105,7 +138,7 @@ export class DeliveryCapability implements CapabilityModule {
           ctx.principal,
           requireString(candidate.handle, 'handle'),
         )
-        await this.adapters.copyAttachment(attachment)
+        await deliverAttachment(attachment, (metadata) => this.adapters.stageAttachmentCopy(metadata))
         return result('Attachment copied')
       }
       case 'delivery_attach_to_task_draft': {
@@ -116,7 +149,10 @@ export class DeliveryCapability implements CapabilityModule {
           ctx.principal,
           requireString(candidate.handle, 'handle'),
         )
-        await this.adapters.attachToTaskDraft(taskId, attachment)
+        await deliverAttachment(
+          attachment,
+          (metadata) => this.adapters.stageTaskDraftAttachment(taskId, metadata),
+        )
         return result('Attachment added to task draft')
       }
       default:

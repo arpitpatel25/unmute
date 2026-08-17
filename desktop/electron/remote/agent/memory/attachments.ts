@@ -1,14 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { createReadStream } from 'node:fs'
+import { constants } from 'node:fs'
 import {
   link,
+  lstat,
   mkdir,
   open,
   readFile,
   readdir,
   rename,
   rm,
-  stat,
   unlink,
   type FileHandle,
 } from 'node:fs/promises'
@@ -20,13 +20,17 @@ import { MemoryCrypto } from './crypto'
 const DIRECTORY_MODE = 0o700
 const FILE_MODE = 0o600
 const DEFAULT_MAX_MANAGED_BYTES = 25 * 1024 * 1024
+const DEFAULT_LOCK_TIMEOUT_MS = 2_000
+const DEFAULT_STALE_LOCK_MS = 120_000
+const DEFAULT_LOCK_RETRY_MS = 10
 const ATTACHMENT_STREAM_HEADER = Buffer.concat([Buffer.from('UATT', 'ascii'), Buffer.from([1])])
 const MAX_ENCRYPTED_FRAME_BYTES = 16 * 1024 * 1024
 const DATA_FRAME = 0
 const FINAL_FRAME = 1
 const FRAME_PREFIX_BYTES = 5
-const FINAL_FRAME_BYTES = 1 + 4 + 8 + 32
+const FINAL_FRAME_PREFIX_BYTES = 1 + 4 + 8 + 32 + 2
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+const SHA256_PATTERN = /^[a-f0-9]{64}$/
 
 type AgentPrincipal = Extract<McpPrincipal, { kind: 'unmute-agent' }>
 type AttachmentStorage = 'managed-copy' | 'reference'
@@ -63,6 +67,27 @@ export interface CaptureAttachmentSource {
   mimeType?: string
 }
 
+type AttachmentSourceFile = Pick<FileHandle, 'stat' | 'read' | 'close'>
+
+export interface AttachmentSourceFileSystem {
+  open(path: string, flags: number): Promise<AttachmentSourceFile>
+}
+
+const nodeSourceFileSystem: AttachmentSourceFileSystem = {
+  open: (path, flags) => open(path, flags),
+}
+
+function isSafeAttachmentName(name: unknown): name is string {
+  return typeof name === 'string'
+    && name.length > 0
+    && name.length <= 255
+    && name !== '.'
+    && name !== '..'
+    && !/[\\/\p{Cc}]/u.test(name)
+    && !/^[A-Za-z]:/.test(name)
+    && basename(name) === name
+}
+
 function requireAgentPrincipal(principal: McpPrincipal, now: number): AgentPrincipal {
   if (principal.kind !== 'unmute-agent' || principal.expiresAt <= now) {
     throw new AttachmentStoreError('invalid-handle', 'Attachment handle is invalid or expired')
@@ -90,10 +115,11 @@ export class InteractionAttachmentHandles {
     expiresAt?: number,
   ): string {
     const agent = requireAgentPrincipal(principal, this.now())
+    const name = source?.name ?? (typeof source?.path === 'string' ? basename(source.path) : '')
     if (
       !source || typeof source !== 'object' || Array.isArray(source)
       || typeof source.path !== 'string' || source.path.length === 0
-      || (source.name !== undefined && (typeof source.name !== 'string' || source.name.length === 0))
+      || !isSafeAttachmentName(name)
       || (source.mimeType !== undefined && !isMimeType(source.mimeType))
     ) {
       throw new AttachmentStoreError('invalid-input', 'Capture attachment is invalid')
@@ -101,7 +127,7 @@ export class InteractionAttachmentHandles {
     return this.mint(agent, {
       kind: 'capture',
       path: source.path,
-      name: source.name ?? basename(source.path),
+      name,
       ...(source.mimeType === undefined ? {} : { mimeType: source.mimeType }),
     }, expiresAt)
   }
@@ -187,6 +213,15 @@ interface AttachmentMetadata {
   trashRecordIds: string[]
 }
 
+interface StagedSource {
+  sha256: string
+  size: number
+  storage: AttachmentStorage
+  referenceReason?: 'large-file'
+  stagingPath?: string
+  sequence: number
+}
+
 export interface StoreAttachmentInput {
   recordId: string
   handle: string
@@ -211,6 +246,10 @@ export interface EncryptedAttachmentStoreOptions {
   handles: InteractionAttachmentHandles
   maxManagedBytes?: number
   createAttachmentId?: () => string
+  sourceFileSystem?: AttachmentSourceFileSystem
+  lockTimeoutMs?: number
+  staleLockMs?: number
+  lockRetryMs?: number
 }
 
 export type AttachmentStoreErrorCode =
@@ -290,14 +329,19 @@ function validateMetadata(value: unknown, expectedHash: string): AttachmentMetad
     metadata.format !== 'unmute-memory-attachment'
     || metadata.version !== 1
     || typeof metadata.id !== 'string' || !IDENTIFIER_PATTERN.test(metadata.id)
-    || metadata.sha256 !== expectedHash || !/^[a-f0-9]{64}$/.test(expectedHash)
-    || typeof metadata.name !== 'string' || metadata.name.length === 0
+    || metadata.sha256 !== expectedHash || !SHA256_PATTERN.test(expectedHash)
+    || !isSafeAttachmentName(metadata.name)
     || !isMimeType(metadata.mimeType)
     || !Number.isSafeInteger(metadata.size) || Number(metadata.size) < 0
     || (metadata.storage !== 'managed-copy' && metadata.storage !== 'reference')
     || (metadata.referenceReason !== undefined && metadata.referenceReason !== 'large-file')
-    || !Array.isArray(metadata.liveRecordIds) || metadata.liveRecordIds.some((id) => typeof id !== 'string')
-    || !Array.isArray(metadata.trashRecordIds) || metadata.trashRecordIds.some((id) => typeof id !== 'string')
+    || !Array.isArray(metadata.liveRecordIds)
+    || metadata.liveRecordIds.some((id) => typeof id !== 'string' || !IDENTIFIER_PATTERN.test(id))
+    || new Set(metadata.liveRecordIds).size !== metadata.liveRecordIds.length
+    || !Array.isArray(metadata.trashRecordIds)
+    || metadata.trashRecordIds.some((id) => typeof id !== 'string' || !IDENTIFIER_PATTERN.test(id))
+    || new Set(metadata.trashRecordIds).size !== metadata.trashRecordIds.length
+    || metadata.liveRecordIds.some((id) => metadata.trashRecordIds?.includes(id))
     || (metadata.sourcePath !== undefined && typeof metadata.sourcePath !== 'string')
   ) {
     throw new AttachmentStoreError('corrupt-attachment', 'Encrypted attachment metadata is invalid')
@@ -310,10 +354,16 @@ type PublicOperation = 'initialize' | 'copy' | 'read' | 'open' | 'trash' | 'rest
 export class EncryptedAttachmentStore {
   private readonly attachmentsDir: string
   private readonly stagingDir: string
+  private readonly locksDir: string
+  private readonly quarantineDir: string
   private readonly crypto: MemoryCrypto
   private readonly handles: InteractionAttachmentHandles
   private readonly maxManagedBytes: number
   private readonly createAttachmentId: () => string
+  private readonly sourceFileSystem: AttachmentSourceFileSystem
+  private readonly lockTimeoutMs: number
+  private readonly staleLockMs: number
+  private readonly lockRetryMs: number
   private initialization: Promise<void> | null = null
   private mutationQueue: Promise<void> = Promise.resolve()
 
@@ -322,22 +372,50 @@ export class EncryptedAttachmentStore {
       || (options.maxManagedBytes ?? DEFAULT_MAX_MANAGED_BYTES) < 0) {
       throw new AttachmentStoreError('invalid-input', 'Managed attachment size limit is invalid')
     }
+    for (const [value, field, minimum] of [
+      [options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS, 'timeout', 0],
+      [options.staleLockMs ?? DEFAULT_STALE_LOCK_MS, 'stale lifetime', 1],
+      [options.lockRetryMs ?? DEFAULT_LOCK_RETRY_MS, 'retry interval', 1],
+    ] as const) {
+      if (!Number.isSafeInteger(value) || value < minimum) {
+        throw new AttachmentStoreError('invalid-input', `Attachment lock ${field} is invalid`)
+      }
+    }
     this.attachmentsDir = join(options.root, 'attachments')
     this.stagingDir = join(this.attachmentsDir, '.staging')
+    this.locksDir = join(this.attachmentsDir, '.locks')
+    this.quarantineDir = join(this.attachmentsDir, '.quarantine')
     this.crypto = options.crypto
     this.handles = options.handles
     this.maxManagedBytes = options.maxManagedBytes ?? DEFAULT_MAX_MANAGED_BYTES
     this.createAttachmentId = options.createAttachmentId ?? (() => `attachment-${randomUUID()}`)
+    this.sourceFileSystem = options.sourceFileSystem ?? nodeSourceFileSystem
+    this.lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS
+    this.staleLockMs = options.staleLockMs ?? DEFAULT_STALE_LOCK_MS
+    this.lockRetryMs = options.lockRetryMs ?? DEFAULT_LOCK_RETRY_MS
   }
 
   initialize(): Promise<void> {
     this.initialization ??= this.runPublic('initialize', async () => {
-      await mkdir(this.stagingDir, { recursive: true, mode: DIRECTORY_MODE })
+      await Promise.all([
+        mkdir(this.stagingDir, { recursive: true, mode: DIRECTORY_MODE }),
+        mkdir(this.locksDir, { recursive: true, mode: DIRECTORY_MODE }),
+        mkdir(this.quarantineDir, { recursive: true, mode: DIRECTORY_MODE }),
+      ])
+      await fsyncDirectory(this.attachmentsDir)
       for (const entry of await readdir(this.stagingDir, { withFileTypes: true })) {
         if (entry.isFile() && entry.name.startsWith('.stage-')) {
-          await unlink(join(this.stagingDir, entry.name))
+          const stagingPath = join(this.stagingDir, entry.name)
+          try {
+            const stagingStat = await lstat(stagingPath)
+            if (Date.now() - stagingStat.mtimeMs >= this.staleLockMs) await unlink(stagingPath)
+          } catch (error) {
+            if (!isNodeError(error, 'ENOENT')) throw error
+          }
         }
       }
+      await fsyncDirectory(this.stagingDir)
+      await this.recoverHashDirectories()
     })
     return this.initialization
   }
@@ -348,68 +426,89 @@ export class EncryptedAttachmentStore {
       const source = this.handles.resolve(principal, input.handle, 'capture')
       return this.mutate(async () => {
         await this.initialize()
-        const sourceStat = await stat(source.path)
-        if (!sourceStat.isFile()) {
-          throw new AttachmentStoreError('invalid-input', 'Attachment source must be a regular file')
-        }
-        const requestedStorage = input.storage
-        const useReference = requestedStorage === 'reference'
-          || (requestedStorage === undefined && sourceStat.size > this.maxManagedBytes)
-        const referenceReason = requestedStorage === undefined && sourceStat.size > this.maxManagedBytes
-          ? 'large-file' as const
-          : undefined
-        const mimeType = source.mimeType ?? inferMimeType(source.name)
-        const staged = useReference
-          ? { ...(await this.hashSource(source.path)), stagingPath: undefined }
-          : await this.stageEncryptedSource(source.path)
-        const attachmentDir = join(this.attachmentsDir, staged.sha256)
-        const originalPath = join(attachmentDir, 'original.enc')
-        let publishedPayload = false
+        const sourceFile = await this.sourceFileSystem.open(
+          source.path,
+          constants.O_RDONLY | constants.O_NOFOLLOW,
+        )
+        let staged: StagedSource
         try {
-          await mkdir(attachmentDir, { recursive: true, mode: DIRECTORY_MODE })
-          const existing = await this.readMetadataIfPresent(staged.sha256)
-          if (!useReference && staged.stagingPath) {
-            try {
-              await link(staged.stagingPath, originalPath)
-              publishedPayload = true
-            } catch (error) {
-              if (!isNodeError(error, 'EEXIST')) throw error
-            }
+          const sourceStat = await sourceFile.stat()
+          if (!sourceStat.isFile()) {
+            throw new AttachmentStoreError('invalid-input', 'Attachment source must be a regular file')
           }
+          const defaultReference = input.storage === undefined && sourceStat.size > this.maxManagedBytes
+          const copy = input.storage === 'copy' || (input.storage === undefined && !defaultReference)
+          staged = await this.readSource(sourceFile, {
+            copy,
+            enforceCopyLimit: input.storage === undefined && copy ? this.maxManagedBytes : undefined,
+            referenceReason: defaultReference ? 'large-file' : undefined,
+          })
+        } finally {
+          await sourceFile.close()
+        }
 
-          const metadata: AttachmentMetadata = existing
-            ? {
-                ...existing,
-                storage: existing.storage === 'managed-copy' || !useReference ? 'managed-copy' : 'reference',
-                ...(existing.storage === 'managed-copy' || !useReference
-                  ? { referenceReason: undefined, sourcePath: undefined }
-                  : {}),
-                liveRecordIds: uniqueSorted([...existing.liveRecordIds, input.recordId]),
+        try {
+          return await this.withHashLock(staged.sha256, async () => {
+            const existing = await this.loadMetadataForMutation(staged.sha256)
+            const attachmentDir = join(this.attachmentsDir, staged.sha256)
+            if (!existing) {
+              await mkdir(attachmentDir, { recursive: true, mode: DIRECTORY_MODE })
+              await fsyncDirectory(this.attachmentsDir)
+            }
+            const attachmentId = existing?.id ?? this.newAttachmentId()
+            const originalPath = join(attachmentDir, 'original.enc')
+            let publishedPayload = false
+            try {
+              if (staged.storage === 'managed-copy' && existing?.storage !== 'managed-copy') {
+                if (!staged.stagingPath) throw new Error('Managed attachment staging is missing')
+                await this.finalizeStagedPayload(staged, attachmentId)
+                await link(staged.stagingPath, originalPath)
+                publishedPayload = true
+                await fsyncDirectory(attachmentDir)
               }
-            : {
-                format: 'unmute-memory-attachment',
-                version: 1,
-                id: this.newAttachmentId(),
-                sha256: staged.sha256,
-                name: source.name,
-                mimeType,
-                size: staged.size,
-                storage: useReference ? 'reference' : 'managed-copy',
-                ...(referenceReason === undefined ? {} : { referenceReason }),
-                ...(useReference ? { sourcePath: source.path } : {}),
-                liveRecordIds: [input.recordId],
-                trashRecordIds: [],
+
+              const managed = existing?.storage === 'managed-copy' || staged.storage === 'managed-copy'
+              const metadata: AttachmentMetadata = existing
+                ? {
+                    ...existing,
+                    storage: managed ? 'managed-copy' : 'reference',
+                    ...(managed
+                      ? { referenceReason: undefined, sourcePath: undefined }
+                      : {}),
+                    liveRecordIds: uniqueSorted([...existing.liveRecordIds, input.recordId]),
+                  }
+                : {
+                    format: 'unmute-memory-attachment',
+                    version: 1,
+                    id: attachmentId,
+                    sha256: staged.sha256,
+                    name: source.name,
+                    mimeType: source.mimeType ?? inferMimeType(source.name),
+                    size: staged.size,
+                    storage: staged.storage,
+                    ...(staged.referenceReason === undefined ? {} : { referenceReason: staged.referenceReason }),
+                    ...(staged.storage === 'reference' ? { sourcePath: source.path } : {}),
+                    liveRecordIds: [input.recordId],
+                    trashRecordIds: [],
+                  }
+              await this.writeMetadata(metadata)
+              return descriptor(metadata)
+            } catch (error) {
+              if (publishedPayload) {
+                try {
+                  await unlink(originalPath)
+                  await fsyncDirectory(attachmentDir)
+                } catch { /* lock prevents another writer from adopting this publication */ }
               }
-          await this.writeMetadata(metadata)
-          return descriptor(metadata)
-        } catch (error) {
-          if (publishedPayload) {
-            try { await unlink(originalPath) } catch { /* best-effort publication rollback */ }
-          }
-          throw error
+              throw error
+            }
+          })
         } finally {
           if (staged.stagingPath) {
-            try { await unlink(staged.stagingPath) } catch { /* startup recovery removes abandoned staging */ }
+            try {
+              await unlink(staged.stagingPath)
+              await fsyncDirectory(this.stagingDir)
+            } catch { /* startup recovery removes abandoned encrypted staging */ }
           }
         }
       })
@@ -450,7 +549,7 @@ export class EncryptedAttachmentStore {
         name: metadata.name,
         mimeType: metadata.mimeType,
         size: metadata.size,
-        open: () => this.openContent(path),
+        open: () => this.openContent(path, metadata),
       }
     })
   }
@@ -478,18 +577,23 @@ export class EncryptedAttachmentStore {
   async purgeRecord(recordId: string): Promise<void> {
     requireIdentifier(recordId, 'record')
     return this.runPublic('purge', () => this.mutate(async () => {
-      for (const metadata of await this.allMetadata()) {
-        if (!metadata.liveRecordIds.includes(recordId) && !metadata.trashRecordIds.includes(recordId)) continue
-        const updated: AttachmentMetadata = {
-          ...metadata,
-          liveRecordIds: metadata.liveRecordIds.filter((id) => id !== recordId),
-          trashRecordIds: metadata.trashRecordIds.filter((id) => id !== recordId),
-        }
-        if (updated.liveRecordIds.length === 0 && updated.trashRecordIds.length === 0) {
-          await rm(join(this.attachmentsDir, metadata.sha256), { recursive: true })
-        } else {
-          await this.writeMetadata(updated)
-        }
+      for (const snapshot of await this.allMetadata()) {
+        await this.withHashLock(snapshot.sha256, async () => {
+          const metadata = await this.readMetadataIfPresent(snapshot.sha256)
+          if (!metadata) return
+          if (!metadata.liveRecordIds.includes(recordId) && !metadata.trashRecordIds.includes(recordId)) return
+          const updated: AttachmentMetadata = {
+            ...metadata,
+            liveRecordIds: metadata.liveRecordIds.filter((id) => id !== recordId),
+            trashRecordIds: metadata.trashRecordIds.filter((id) => id !== recordId),
+          }
+          if (updated.liveRecordIds.length === 0 && updated.trashRecordIds.length === 0) {
+            await rm(join(this.attachmentsDir, metadata.sha256), { recursive: true })
+            await fsyncDirectory(this.attachmentsDir)
+          } else {
+            await this.writeMetadata(updated)
+          }
+        })
       }
     }))
   }
@@ -501,46 +605,67 @@ export class EncryptedAttachmentStore {
   ): Promise<void> {
     requireIdentifier(recordId, 'record')
     return this.runPublic(operation, () => this.mutate(async () => {
-      for (const metadata of await this.allMetadata()) {
-        const updated = update(metadata)
-        if (
-          updated.liveRecordIds.length !== metadata.liveRecordIds.length
-          || updated.trashRecordIds.length !== metadata.trashRecordIds.length
-        ) {
-          await this.writeMetadata(updated)
-        }
+      for (const snapshot of await this.allMetadata()) {
+        await this.withHashLock(snapshot.sha256, async () => {
+          const metadata = await this.readMetadataIfPresent(snapshot.sha256)
+          if (!metadata) return
+          const updated = update(metadata)
+          if (
+            JSON.stringify(updated.liveRecordIds) !== JSON.stringify(metadata.liveRecordIds)
+            || JSON.stringify(updated.trashRecordIds) !== JSON.stringify(metadata.trashRecordIds)
+          ) {
+            await this.writeMetadata(updated)
+          }
+        })
       }
     }))
   }
 
-  private async hashSource(path: string): Promise<{ sha256: string; size: number }> {
-    const hash = createHash('sha256')
-    let size = 0
-    for await (const rawChunk of createReadStream(path)) {
-      const chunk = Buffer.from(rawChunk)
-      hash.update(chunk)
-      size += chunk.byteLength
-    }
-    return { sha256: hash.digest('hex'), size }
-  }
-
-  private async stageEncryptedSource(
-    path: string,
-  ): Promise<{ sha256: string; size: number; stagingPath: string }> {
-    await this.initialize()
-    const stagingPath = join(this.stagingDir, `.stage-${randomUUID()}.payload.tmp`)
+  private async readSource(
+    source: AttachmentSourceFile,
+    options: {
+      copy: boolean
+      enforceCopyLimit?: number
+      referenceReason?: 'large-file'
+    },
+  ): Promise<StagedSource> {
+    const stagingPath = options.copy
+      ? join(this.stagingDir, `.stage-${randomUUID()}.payload.tmp`)
+      : undefined
     const hash = createHash('sha256')
     let size = 0
     let sequence = 0
-    let file: FileHandle | null = null
+    let staging: FileHandle | null = null
+    let copying = options.copy
     let failure: unknown
     try {
-      file = await open(stagingPath, 'wx', FILE_MODE)
-      await writeAll(file, ATTACHMENT_STREAM_HEADER)
-      for await (const rawChunk of createReadStream(path)) {
-        const chunk = Buffer.from(rawChunk)
+      if (stagingPath) {
+        staging = await open(stagingPath, 'wx', FILE_MODE)
+        await writeAll(staging, ATTACHMENT_STREAM_HEADER)
+      }
+      let position = 0
+      const buffer = Buffer.allocUnsafe(64 * 1024)
+      for (;;) {
+        const { bytesRead } = await source.read(buffer, 0, buffer.byteLength, position)
+        if (bytesRead === 0) break
+        position += bytesRead
+        const chunk = Buffer.from(buffer.subarray(0, bytesRead))
         hash.update(chunk)
         size += chunk.byteLength
+        if (!Number.isSafeInteger(size)) throw new Error('Attachment source is too large')
+        if (
+          copying
+          && options.enforceCopyLimit !== undefined
+          && size > options.enforceCopyLimit
+        ) {
+          copying = false
+          if (staging) {
+            await staging.close()
+            staging = null
+          }
+          if (stagingPath) await unlink(stagingPath)
+        }
+        if (!copying) continue
         if (sequence > 0xffff_ffff) throw new Error('Attachment contains too many encrypted frames')
         const frame = Buffer.allocUnsafe(FRAME_PREFIX_BYTES + chunk.byteLength)
         frame[0] = DATA_FRAME
@@ -550,37 +675,71 @@ export class EncryptedAttachmentStore {
         const encrypted = await this.crypto.encrypt(frame)
         const length = Buffer.allocUnsafe(4)
         length.writeUInt32BE(encrypted.byteLength)
-        await writeAll(file, length)
-        await writeAll(file, encrypted)
+        if (!staging) throw new Error('Attachment encrypted staging is unavailable')
+        await writeAll(staging, length)
+        await writeAll(staging, encrypted)
       }
       const digest = hash.digest()
-      const finalFrame = Buffer.alloc(FINAL_FRAME_BYTES)
-      finalFrame[0] = FINAL_FRAME
-      finalFrame.writeUInt32BE(sequence, 1)
-      finalFrame.writeBigUInt64BE(BigInt(size), 5)
-      digest.copy(finalFrame, 13)
-      const encryptedFinal = await this.crypto.encrypt(finalFrame)
-      const finalLength = Buffer.allocUnsafe(4)
-      finalLength.writeUInt32BE(encryptedFinal.byteLength)
-      await writeAll(file, finalLength)
-      await writeAll(file, encryptedFinal)
-      await file.sync()
-      await file.close()
-      file = null
-      return { sha256: digest.toString('hex'), size, stagingPath }
+      if (staging) {
+        await staging.sync()
+        await staging.close()
+        staging = null
+      }
+      const managed = copying && stagingPath !== undefined
+      return {
+        sha256: digest.toString('hex'),
+        size,
+        storage: managed ? 'managed-copy' : 'reference',
+        ...(!managed && (options.referenceReason || options.enforceCopyLimit !== undefined)
+          ? { referenceReason: 'large-file' as const }
+          : {}),
+        ...(managed ? { stagingPath } : {}),
+        sequence,
+      }
     } catch (error) {
       failure = error
     }
-    if (file) {
-      try { await file.close() } catch (error) { failure ??= error }
+    if (staging) {
+      try { await staging.close() } catch (error) { failure ??= error }
     }
-    try { await unlink(stagingPath) } catch (error) {
-      if (!isNodeError(error, 'ENOENT')) failure ??= error
+    if (stagingPath) {
+      try { await unlink(stagingPath) } catch (error) {
+        if (!isNodeError(error, 'ENOENT')) failure ??= error
+      }
     }
     throw failure
   }
 
-  private async *decryptContent(path: string): AsyncIterable<Uint8Array> {
+  private async finalizeStagedPayload(staged: StagedSource, attachmentId: string): Promise<void> {
+    if (!staged.stagingPath || staged.storage !== 'managed-copy') {
+      throw new Error('Managed attachment staging is unavailable')
+    }
+    const identity = Buffer.from(attachmentId, 'utf8')
+    if (identity.byteLength > 0xffff) throw new Error('Attachment identity is too long')
+    const finalFrame = Buffer.alloc(FINAL_FRAME_PREFIX_BYTES + identity.byteLength)
+    finalFrame[0] = FINAL_FRAME
+    finalFrame.writeUInt32BE(staged.sequence, 1)
+    finalFrame.writeBigUInt64BE(BigInt(staged.size), 5)
+    Buffer.from(staged.sha256, 'hex').copy(finalFrame, 13)
+    finalFrame.writeUInt16BE(identity.byteLength, 45)
+    identity.copy(finalFrame, FINAL_FRAME_PREFIX_BYTES)
+    const encryptedFinal = await this.crypto.encrypt(finalFrame)
+    const finalLength = Buffer.allocUnsafe(4)
+    finalLength.writeUInt32BE(encryptedFinal.byteLength)
+    const file = await open(staged.stagingPath, 'a', FILE_MODE)
+    try {
+      await writeAll(file, finalLength)
+      await writeAll(file, encryptedFinal)
+      await file.sync()
+    } finally {
+      await file.close()
+    }
+  }
+
+  private async *decryptContent(
+    path: string,
+    expected: Pick<AttachmentMetadata, 'id' | 'sha256' | 'size'>,
+  ): AsyncIterable<Uint8Array> {
     const file = await open(path, 'r')
     try {
       const header = Buffer.alloc(ATTACHMENT_STREAM_HEADER.byteLength)
@@ -632,16 +791,23 @@ export class EncryptedAttachmentStore {
         if (
           frame[0] !== FINAL_FRAME
           || sawFinalFrame
-          || frame.byteLength !== FINAL_FRAME_BYTES
+          || frame.byteLength < FINAL_FRAME_PREFIX_BYTES
           || frame.readUInt32BE(1) !== expectedSequence
         ) {
           throw new AttachmentStoreError('corrupt-attachment', 'Encrypted attachment payload is invalid')
         }
         const declaredSize = frame.readBigUInt64BE(5)
+        const identityLength = frame.readUInt16BE(45)
+        const identity = frame.subarray(FINAL_FRAME_PREFIX_BYTES).toString('utf8')
+        const digest = plaintextHash.digest()
         if (
           declaredSize > BigInt(Number.MAX_SAFE_INTEGER)
           || Number(declaredSize) !== plaintextSize
-          || !frame.subarray(13).equals(plaintextHash.digest())
+          || Number(declaredSize) !== expected.size
+          || !frame.subarray(13, 45).equals(digest)
+          || digest.toString('hex') !== expected.sha256
+          || frame.byteLength !== FINAL_FRAME_PREFIX_BYTES + identityLength
+          || identity !== expected.id
         ) {
           throw new AttachmentStoreError('corrupt-attachment', 'Encrypted attachment payload is invalid')
         }
@@ -655,12 +821,144 @@ export class EncryptedAttachmentStore {
     }
   }
 
-  private async *openContent(path: string): AsyncIterable<Uint8Array> {
+  private async *openContent(
+    path: string,
+    expected: Pick<AttachmentMetadata, 'id' | 'sha256' | 'size'>,
+  ): AsyncIterable<Uint8Array> {
     try {
-      yield* this.decryptContent(path)
+      yield* this.decryptContent(path, expected)
     } catch (error) {
       if (error instanceof AttachmentStoreError) throw error
       throw new AttachmentStoreError('storage-failure', 'Attachment open failed')
+    }
+  }
+
+  private async recoverHashDirectories(): Promise<void> {
+    for (const entry of await readdir(this.attachmentsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !SHA256_PATTERN.test(entry.name)) continue
+      await this.withHashLock(entry.name, async () => {
+        let metadata: AttachmentMetadata
+        try {
+          metadata = await this.readMetadata(entry.name)
+        } catch (error) {
+          if (
+            error instanceof AttachmentStoreError
+            && (error.code === 'not-found' || error.code === 'corrupt-attachment')
+          ) {
+            await this.quarantineHashDirectory(entry.name)
+            return
+          }
+          throw error
+        }
+        const originalPath = join(this.attachmentsDir, entry.name, 'original.enc')
+        if (metadata.storage === 'managed-copy') {
+          try {
+            if (!(await lstat(originalPath)).isFile()) await this.quarantineHashDirectory(entry.name)
+          } catch (error) {
+            if (isNodeError(error, 'ENOENT')) await this.quarantineHashDirectory(entry.name)
+            else throw error
+          }
+          return
+        }
+        try {
+          await unlink(originalPath)
+          await fsyncDirectory(join(this.attachmentsDir, entry.name))
+        } catch (error) {
+          if (!isNodeError(error, 'ENOENT')) throw error
+        }
+      })
+    }
+  }
+
+  private async loadMetadataForMutation(sha256: string): Promise<AttachmentMetadata | undefined> {
+    try {
+      return await this.readMetadata(sha256)
+    } catch (error) {
+      if (
+        error instanceof AttachmentStoreError
+        && (error.code === 'not-found' || error.code === 'corrupt-attachment')
+      ) {
+        await this.quarantineHashDirectory(sha256)
+        return undefined
+      }
+      throw error
+    }
+  }
+
+  private async quarantineHashDirectory(sha256: string): Promise<void> {
+    const source = join(this.attachmentsDir, sha256)
+    try {
+      await lstat(source)
+    } catch (error) {
+      if (isNodeError(error, 'ENOENT')) return
+      throw error
+    }
+    await mkdir(this.quarantineDir, { recursive: true, mode: DIRECTORY_MODE })
+    await rename(source, join(this.quarantineDir, `${sha256}-${randomUUID()}`))
+    await Promise.all([
+      fsyncDirectory(this.attachmentsDir),
+      fsyncDirectory(this.quarantineDir),
+    ])
+  }
+
+  private async withHashLock<T>(sha256: string, action: () => Promise<T>): Promise<T> {
+    const release = await this.acquireHashLock(sha256)
+    try {
+      return await action()
+    } finally {
+      await release()
+    }
+  }
+
+  private async acquireHashLock(sha256: string): Promise<() => Promise<void>> {
+    if (!SHA256_PATTERN.test(sha256)) {
+      throw new AttachmentStoreError('invalid-input', 'Attachment hash is invalid')
+    }
+    await mkdir(this.locksDir, { recursive: true, mode: DIRECTORY_MODE })
+    const lockPath = join(this.locksDir, `${sha256}.lock`)
+    const token = randomUUID()
+    const deadline = Date.now() + this.lockTimeoutMs
+    let firstAttempt = true
+    for (;;) {
+      if (!firstAttempt && Date.now() >= deadline) {
+        throw new AttachmentStoreError('storage-failure', 'Attachment lock timed out')
+      }
+      firstAttempt = false
+      try {
+        const file = await open(lockPath, 'wx', FILE_MODE)
+        try {
+          await file.writeFile(token)
+          await file.sync()
+        } finally {
+          await file.close()
+        }
+        await fsyncDirectory(this.locksDir)
+        return async () => {
+          try {
+            if ((await readFile(lockPath, 'utf8')) !== token) return
+            await unlink(lockPath)
+            await fsyncDirectory(this.locksDir)
+          } catch { /* a recovered/replaced lock never belongs to this owner */ }
+        }
+      } catch (error) {
+        if (!isNodeError(error, 'EEXIST')) throw error
+      }
+      try {
+        const lockStat = await lstat(lockPath)
+        if (Date.now() - lockStat.mtimeMs >= this.staleLockMs) {
+          try {
+            await unlink(lockPath)
+            await fsyncDirectory(this.locksDir)
+          } catch (error) {
+            if (!isNodeError(error, 'ENOENT')) throw error
+          }
+          continue
+        }
+      } catch (error) {
+        if (isNodeError(error, 'ENOENT')) continue
+        throw error
+      }
+      await delay(Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now())))
     }
   }
 
@@ -701,6 +999,10 @@ export class EncryptedAttachmentStore {
       await file.close()
       file = null
       await rename(stagingPath, join(directory, 'metadata.json'))
+      await Promise.all([
+        fsyncDirectory(directory),
+        fsyncDirectory(this.stagingDir),
+      ])
     } catch (error) {
       failure = error
     }
@@ -726,10 +1028,13 @@ export class EncryptedAttachmentStore {
     const metadata: AttachmentMetadata[] = []
     for (const entry of await readdir(this.attachmentsDir, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue
-      if (!/^[a-f0-9]{64}$/.test(entry.name)) {
+      if (!SHA256_PATTERN.test(entry.name)) {
         throw new AttachmentStoreError('corrupt-attachment', 'Encrypted attachment directory is invalid')
       }
-      metadata.push(await this.readMetadata(entry.name))
+      await this.withHashLock(entry.name, async () => {
+        const current = await this.readMetadataIfPresent(entry.name)
+        if (current) metadata.push(current)
+      })
     }
     return metadata
   }
@@ -800,4 +1105,17 @@ async function writeAll(file: FileHandle, buffer: Buffer): Promise<void> {
     if (bytesWritten === 0) throw new Error('Attachment staging write made no progress')
     offset += bytesWritten
   }
+}
+
+async function fsyncDirectory(path: string): Promise<void> {
+  const directory = await open(path, 'r')
+  try {
+    await directory.sync()
+  } finally {
+    await directory.close()
+  }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
