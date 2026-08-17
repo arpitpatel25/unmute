@@ -8,6 +8,12 @@ import { isRemoteTriggerEnabled } from './remoteTriggerGate'
 export type SessionMode = 'dictation' | 'instruction'
 export type KeyboardEvent =
   | { type: 'session-start'; mode: SessionMode }
+  // ─── Unmute Agent — its own key, its own capture ───
+  // Right Command. Independent of dictation (fn) and Remote (right Option) so
+  // that adding an agent could not change either. Same tap-toggle shape and the
+  // same mutual exclusion; only the destination differs.
+  | { type: 'agent-start' }
+  | { type: 'agent-stop' }
   | { type: 'session-stop'; mode: SessionMode }
   | { type: 'chain-start'; mode: SessionMode }
   | { type: 'chain-expired' }
@@ -28,6 +34,8 @@ type DualModeState = 'idle' | 'held' | 'awaiting-second' | 'push-recording' | 'h
 class KeyboardManager extends EventEmitter {
   private dictationActive = false
   private instructionActive = false
+  private agentActive = false
+  private lastAgentToggleTime = 0
   private chainTimer: NodeJS.Timeout | null = null
   private chainWindowMs = 2000
   // Separate debounce per logical key so Fn and Caps Lock can't cross-block each other
@@ -137,6 +145,12 @@ class KeyboardManager extends EventEmitter {
         if (this.dictationKey === 'right-option') this.handleDictationKeyUp()
         else this.handleRemoteKeyUp()
         break
+      case 'right-command-down':
+        this.handleAgentKeyDown()
+        break
+      case 'right-command-up':
+        // Tap-toggle: the capture ends on the SECOND tap, never on release.
+        break
       case 'caps-down':
       case 'caps-up':
         // Caps Lock is a toggle key — macOS alternates between CAPS_DOWN and CAPS_UP
@@ -192,6 +206,35 @@ class KeyboardManager extends EventEmitter {
     this.remoteActive = true
     console.log('[keyboard] Remote capture START (tap-toggle)')
     this.emit('keyboard', { type: 'remote-start' } as KeyboardEvent)
+  }
+
+  /** Right Command — start/stop a capture addressed at the Unmute Agent.
+   *
+   *  Deliberately a separate flag from `remoteActive`: an agent capture and a
+   *  task capture are different addresses, and sharing one flag would let
+   *  either key stop the other's recording. */
+  private handleAgentKeyDown(): void {
+    const now = Date.now()
+    if (!this.agentActive && now - this.lastAgentToggleTime < this.DEBOUNCE_MS) {
+      console.log('[keyboard] Agent toggle DEBOUNCED (too fast)')
+      return
+    }
+    if (this.agentActive) {
+      this.lastAgentToggleTime = now
+      this.agentActive = false
+      console.log('[keyboard] Agent capture STOP (tap-toggle) → dispatch')
+      this.emit('keyboard', { type: 'agent-stop' } as KeyboardEvent)
+      return
+    }
+    // One microphone. A dictation or a Remote capture already owns it.
+    if (this.dictationActive || this.instructionActive || this.remoteActive) {
+      console.log('[keyboard] Agent key ignored — another capture is active (mutual exclusion)')
+      return
+    }
+    this.lastAgentToggleTime = now
+    this.agentActive = true
+    console.log('[keyboard] Agent capture START (tap-toggle)')
+    this.emit('keyboard', { type: 'agent-start' } as KeyboardEvent)
   }
 
   private handleRemoteKeyUp(): void {

@@ -4,7 +4,7 @@ import { app } from 'electron'
 import path from 'path'
 import fs from 'fs'
 
-export type KeyEvent = 'fn-down' | 'fn-up' | 'caps-down' | 'caps-up' | 'right-option-down' | 'right-option-up' | 'command-v'
+export type KeyEvent = 'fn-down' | 'fn-up' | 'caps-down' | 'caps-up' | 'right-option-down' | 'right-option-up' | 'right-command-down' | 'right-command-up' | 'command-v'
 
 // ─── AI format (instruction) enable/disable ─────────────────────
 //
@@ -179,6 +179,8 @@ class KeyListener extends EventEmitter {
           case 'CAPS_UP': this.emitKey('caps-up' as KeyEvent); break
           case 'RIGHT_OPTION_DOWN': this.emitKey('right-option-down' as KeyEvent); break
           case 'RIGHT_OPTION_UP': this.emitKey('right-option-up' as KeyEvent); break
+          case 'RIGHT_COMMAND_DOWN': this.emitKey('right-command-down' as KeyEvent); break
+          case 'RIGHT_COMMAND_UP': this.emitKey('right-command-up' as KeyEvent); break
           case 'PASTE_OK':
           case 'COPY_OK': break
         }

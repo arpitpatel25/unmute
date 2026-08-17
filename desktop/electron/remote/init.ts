@@ -3044,12 +3044,27 @@ export interface CaptureDispatchOptions {
   priorAgentRunId?: string
 }
 
+/** Set when a capture was started by the Unmute Agent key, and consumed by the
+ *  dispatch that capture produces.
+ *
+ *  The address is decided at KEY-DOWN, exactly as the task route decides its
+ *  target task then: the user pressed the agent key, so this utterance belongs
+ *  to the agent no matter what the router would otherwise infer from the words.
+ *  Cleared on read so it can never leak into the next, unrelated capture. */
+let agentAddressedCapture = false
+export function markCaptureAddressedToAgent(): void { agentAddressedCapture = true }
+export function clearAgentAddressedCapture(): void { agentAddressedCapture = false }
+
 export async function dispatchFromCapture(
   rawTranscript: string,
   attachments: readonly string[] = [],
   targetTaskId?: string | null,
   options: CaptureDispatchOptions = {},
 ): Promise<string | null> {
+  if (agentAddressedCapture) {
+    agentAddressedCapture = false
+    options = { ...options, destination: 'unmute-agent' }
+  }
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
   // surface always returns to idle, whatever path the dispatch takes.
@@ -4419,6 +4434,24 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         : null
       deps.sessionManager.startRemoteCapture(targetTaskId)
       broadcastCapturePhase('listening', targetTaskId) // ADDITIVE observer — the capture itself is untouched
+    } else if (e.type === 'agent-start') {
+      log.event('agent-key', { phase: 'start' })
+      if (settings.get('unmuteAgentAvailable') !== true) {
+        log.event('agent-key', { phase: 'ignored', reason: 'not-available' })
+        return
+      }
+      void router?.warm()
+      pauseOverlayEscape()
+      // Addressed at the AGENT, not at whatever task happens to be in focus —
+      // that is the whole point of giving it its own key.
+      markCaptureAddressedToAgent()
+      deps.sessionManager.startRemoteCapture(null)
+      broadcastCapturePhase('listening', null)
+    } else if (e.type === 'agent-stop') {
+      log.event('agent-key', { phase: 'stop' })
+      resumeOverlayEscape()
+      void deps.sessionManager.stopRemoteCapture()
+      broadcastCapturePhase('transcribing')
     } else if (e.type === 'remote-stop') {
       log.event('remote-key', { phase: 'stop' })
       resumeOverlayEscape() // give Escape back to a still-visible overlay
@@ -4619,6 +4652,19 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
   // Open the cockpit from the in-app Remote screen (the user-facing entry point;
   // ⌘⇧O stays as the power-user toggle).
+  // THE SWITCH THAT WAS MISSING. `unmuteAgentAvailable` was read in five places
+  // and written in none: initialised false, with no IPC, no setter and no
+  // control anywhere in the UI. The feature was complete behind a gate that
+  // nothing could open, which is why the Agent never appeared in the capture
+  // picker no matter what was configured.
+  ipcMain.handle('remote:get-unmute-agent-available', async () =>
+    settings.get('unmuteAgentAvailable') === true)
+  ipcMain.handle('remote:set-unmute-agent-available', async (_e, on: boolean) => {
+    settings.set('unmuteAgentAvailable', on === true)
+    log.event('unmute-agent-availability', { enabled: on === true })
+    return settings.get('unmuteAgentAvailable') === true
+  })
+
   ipcMain.handle('remote:open-orchestrate', async () => { openOrchestrateWindow(); return true })
   // Current terminal owner — lets a freshly-mounted overlay card learn it owns
   // nothing (or that the wall already owns its session) without waiting for an event.

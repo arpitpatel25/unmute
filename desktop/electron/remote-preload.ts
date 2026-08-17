@@ -207,6 +207,12 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-orchestrate-focus', id),
   /** Open the Orchestrate cockpit window from the in-app Remote screen. */
   remoteOpenOrchestrate: (): Promise<boolean> => ipcRenderer.invoke('remote:open-orchestrate'),
+  /** Is the Unmute Agent switched on? Gates its key, its capture destination
+   *  and its settings section — see init.ts. */
+  remoteGetUnmuteAgentAvailable: (): Promise<boolean> =>
+    ipcRenderer.invoke('remote:get-unmute-agent-available'),
+  remoteSetUnmuteAgentAvailable: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-unmute-agent-available', on),
   /** Current wall-owned terminal session (or null) — read once on mount. */
   remoteGetOrchestrateOwner: (): Promise<string | null> => ipcRenderer.invoke('remote:get-orchestrate-owner'),
   /** Attach an image to a session: bytes are saved under the task's dir and the

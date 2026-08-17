@@ -76,6 +76,21 @@ static void handle_flags_changed(NSEvent* event) {
     if (hadOpt && !hasOpt) emit_event("right-option-up");
   }
 
+  // Right Command specifically (keyCode 54) — the Unmute Agent key. Left
+  // Command (55) is ignored for the same reason left Option is: it is where
+  // every system shortcut lives, and claiming it would trample all of them.
+  //
+  // Command was chosen over the remaining modifiers because it composes NO
+  // character. Holding Option produces dead keys and accents; holding Shift
+  // or Control is load-bearing in editors and terminals. Held alone, Command
+  // does nothing on macOS — which is exactly what a push-to-talk key needs.
+  if (event.keyCode == 54) {
+    bool hadCmd = (g_previousFlags & NSEventModifierFlagCommand) != 0;
+    bool hasCmd = (mods & NSEventModifierFlagCommand) != 0;
+    if (!hadCmd && hasCmd) emit_event("right-command-down");
+    if (hadCmd && !hasCmd) emit_event("right-command-up");
+  }
+
   g_previousFlags = mods;
 }
 
