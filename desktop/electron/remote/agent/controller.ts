@@ -62,10 +62,15 @@ export interface AgentInteractionError {
   code:
     | 'invalid-request'
     | 'provider-unavailable'
+    | 'provider-crashed'
     | 'resource-pressure'
     | 'run-unavailable'
     | 'run-busy'
     | 'journal-unavailable'
+    | 'interaction-expired'
+    | 'agent-shutdown'
+    | 'keychain-unavailable'
+    | 'storage-unavailable'
     | 'interaction-failed'
   message: string
 }
@@ -302,7 +307,7 @@ export class UnmuteAgentController {
       const outcome = completion.outcome === 'interrupted' ? 'interrupted' : 'failed'
       const error = completion.outcome === 'completed'
         ? publicError('interaction-failed')
-        : publicError('interaction-failed', completion.outcome)
+        : completionError(completion)
       await this.appendExchange({
         runId,
         interactionId,
@@ -369,6 +374,16 @@ export class UnmuteAgentController {
 
   interact(input: AgentInteractionInput): Promise<AgentInteractionResult> {
     return this.submit(input)
+  }
+
+  /** Immediately revokes every interaction-scoped secret and opaque handle. */
+  dispose(): void {
+    for (const live of this.live.values()) {
+      live.interaction.active = false
+      this.options.tokens.closeRun(live.principal.runId)
+      this.options.attachmentHandles.revokeInteraction(live.principal)
+    }
+    this.live.clear()
   }
 
   private async pumpActivity(
@@ -561,6 +576,7 @@ function controllerError(error: unknown): AgentInteractionError {
   const code = dependencyCode(error)
   switch (code) {
     case 'provider-unavailable': return publicError('provider-unavailable')
+    case 'provider-crashed': return publicError('provider-crashed')
     case 'resource-pressure': return publicError('resource-pressure')
     case 'run-not-found':
     case 'run-closed': return publicError('run-unavailable')
@@ -569,6 +585,14 @@ function controllerError(error: unknown): AgentInteractionError {
     case 'invalid-journal':
     case 'journal-failed':
     case 'journal-full': return publicError('journal-unavailable')
+    case 'interaction-expired':
+    case 'access-denied': return publicError('interaction-expired')
+    case 'shutdown': return publicError('agent-shutdown')
+    case 'keychain-unavailable': return publicError('keychain-unavailable')
+    case 'index-unavailable':
+    case 'storage-full':
+    case 'service-unavailable':
+    case 'recovery-failed': return publicError('storage-unavailable')
     case 'invalid-request':
     case 'invalid-input':
     case 'invalid-handle': return publicError('invalid-request')
@@ -583,15 +607,32 @@ function publicError(
   const messages: Record<AgentInteractionError['code'], string> = {
     'invalid-request': 'The Agent request is invalid.',
     'provider-unavailable': 'The selected Agent provider is unavailable.',
+    'provider-crashed': 'The Agent provider stopped unexpectedly. Retry this request in a fresh turn.',
     'resource-pressure': 'The Agent is busy. Try again after an active run finishes.',
     'run-unavailable': 'That Agent run is unavailable.',
     'run-busy': 'That Agent run already has active work.',
     'journal-unavailable': 'The Agent recovery journal is unavailable.',
+    'interaction-expired': 'This Agent interaction expired. Retry the request.',
+    'agent-shutdown': 'The Agent stopped during application shutdown. Retry the request after restart.',
+    'keychain-unavailable': 'Encrypted Agent memory is unavailable because secure key protection could not be opened.',
+    'storage-unavailable': 'Encrypted Agent memory is unavailable. Existing Unmute features remain available.',
     'interaction-failed': outcome === 'interrupted'
       ? 'The Agent interaction was interrupted.'
       : 'The Agent interaction did not complete.',
   }
   return { code, message: messages[code] }
+}
+
+function completionError(
+  completion: AgentCompletion & { errorCode?: string },
+): AgentInteractionError {
+  switch (completion.errorCode) {
+    case 'provider-crashed': return publicError('provider-crashed')
+    case 'interaction-expired': return publicError('interaction-expired')
+    case 'journal-unavailable': return publicError('journal-unavailable')
+    case 'shutdown': return publicError('agent-shutdown')
+    default: return publicError('interaction-failed', completion.outcome)
+  }
 }
 
 function dependencyCode(error: unknown): unknown {

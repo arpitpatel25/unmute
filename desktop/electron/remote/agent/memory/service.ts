@@ -97,6 +97,12 @@ export type MemoryServiceErrorCode =
   | 'intent-required'
   | 'invalid-input'
   | 'not-found'
+  | 'keychain-unavailable'
+  | 'index-unavailable'
+  | 'storage-full'
+  | 'attachment-copy-failed'
+  | 'recovery-failed'
+  | 'service-unavailable'
   | 'operation-failed'
   | 'compensation-failed'
 
@@ -240,8 +246,13 @@ export class MemoryService {
       const pending = await options.journal.read()
       if (pending) await this.recover(pending)
       const canonical = await options.records.list()
-      options.index.rebuild(canonical)
+      await this.rebuildIndex(canonical)
     })
+  }
+
+  /** Readiness probe for production wiring; performs no search or audit. */
+  async initialize(): Promise<void> {
+    await this.ready('initialize')
   }
 
   async store(ctx: CapabilityCallContext, input: MemoryStoreInput): Promise<MemoryRecord> {
@@ -269,7 +280,7 @@ export class MemoryService {
           record = await this.options.records.update(record.id, { attachments: attachmentIds })
         }
         await this.checkpoint(intent, 'canonical-attached')
-        this.options.index.runInTransaction(() => this.options.index.project(record!))
+        await this.updateIndex(() => this.options.index.project(record!))
         await this.checkpoint(intent, 'indexed')
         await this.audit(ctx, record.id, 'store', 'success')
         await this.checkpoint(intent, 'audited')
@@ -308,13 +319,21 @@ export class MemoryService {
     if (query.includeSensitive) requireIntent(ctx, 'reveal-sensitive')
     await this.ready('search')
     try {
-      const hits = this.options.index.search({
+      const indexQuery = {
         text: validated.text,
         ...(query.kinds === undefined ? {} : { kinds: query.kinds }),
         includePrivate: query.includeSensitive === true,
         includeSensitive: query.includeSensitive === true,
         limit: MAX_SEARCH_LIMIT,
-      })
+      }
+      let hits: ReturnType<MemoryIndex['search']>
+      try {
+        hits = this.options.index.search(indexQuery)
+      } catch (error) {
+        if (!isIndexFailure(error)) throw error
+        await this.rebuildIndex(await this.options.records.list())
+        hits = this.options.index.search(indexQuery)
+      }
       const hitById = new Map(hits.map((hit) => [hit.id, hit]))
       for (const record of await this.options.records.list()) {
         const tier = memorySearchExactTier(validated.text, record)
@@ -405,7 +424,7 @@ export class MemoryService {
         prior = await this.options.records.read(id)
         const updated = await this.options.records.update(id, patch)
         changed = true
-        this.options.index.runInTransaction(() => this.options.index.project(updated))
+        await this.updateIndex(() => this.options.index.project(updated))
         await this.audit(ctx, id, 'update', 'success')
         return updated
       } catch (error) {
@@ -439,7 +458,7 @@ export class MemoryService {
         await this.checkpoint(intent, 'canonical')
         await this.options.attachments.trashRecord(id)
         await this.checkpoint(intent, 'attachments')
-        this.options.index.runInTransaction(() => this.options.index.setDeleted(id, ctx.now))
+        await this.updateIndex(() => this.options.index.setDeleted(id, ctx.now))
         await this.checkpoint(intent, 'indexed')
         await this.audit(ctx, id, 'forget', 'success')
         await this.checkpoint(intent, 'audited')
@@ -491,7 +510,7 @@ export class MemoryService {
         await this.checkpoint(intent, 'canonical')
         await this.options.attachments.restoreRecord(id)
         await this.checkpoint(intent, 'attachments')
-        this.options.index.runInTransaction(() => this.options.index.setDeleted(id, null))
+        await this.updateIndex(() => this.options.index.setDeleted(id, null))
         await this.checkpoint(intent, 'indexed')
         await this.audit(ctx, id, 'restore', 'success')
         await this.checkpoint(intent, 'audited')
@@ -563,6 +582,31 @@ export class MemoryService {
     }
   }
 
+  private async updateIndex(operation: () => void): Promise<void> {
+    try {
+      this.options.index.runInTransaction(operation)
+    } catch (error) {
+      if (!isIndexFailure(error)) throw error
+      await this.rebuildIndex(await this.options.records.list())
+    }
+  }
+
+  private async rebuildIndex(records: readonly MemoryRecord[]): Promise<void> {
+    try {
+      this.options.index.rebuild(records)
+    } catch (error) {
+      if (!isIndexFailure(error)) throw error
+      try {
+        this.options.index.rebuild(records)
+      } catch {
+        throw new MemoryServiceError(
+          'index-unavailable',
+          'Encrypted memory search is unavailable',
+        )
+      }
+    }
+  }
+
   private async audit(
     ctx: CapabilityCallContext,
     memoryId: string,
@@ -606,24 +650,31 @@ export class MemoryService {
   }
 
   private async recover(intent: MemoryMutationIntent): Promise<void> {
-    if (intent.stage === 'audited') {
+    try {
+      if (intent.stage === 'audited') {
+        await this.options.journal.clear()
+        return
+      }
+      if (intent.operation === 'store') {
+        await this.rollbackStoredRecord(intent.memoryId)
+        intent.audit.outcome = 'failure'
+      } else if (intent.operation === 'forget') {
+        if (intent.audit.outcome === 'success') await this.completeForget(intent.memoryId)
+        else await this.rollbackForget(intent.memoryId)
+      } else if (intent.audit.outcome === 'success') {
+        await this.completeRestore(intent.memoryId)
+      } else {
+        await this.rollbackRestore(intent.memoryId)
+      }
+      await this.options.audit.writeRow(intent.audit)
+      await this.checkpoint(intent, 'audited')
       await this.options.journal.clear()
-      return
+    } catch {
+      throw new MemoryServiceError(
+        'recovery-failed',
+        'Memory recovery could not be completed',
+      )
     }
-    if (intent.operation === 'store') {
-      await this.rollbackStoredRecord(intent.memoryId)
-      intent.audit.outcome = 'failure'
-    } else if (intent.operation === 'forget') {
-      if (intent.audit.outcome === 'success') await this.completeForget(intent.memoryId)
-      else await this.rollbackForget(intent.memoryId)
-    } else if (intent.audit.outcome === 'success') {
-      await this.completeRestore(intent.memoryId)
-    } else {
-      await this.rollbackRestore(intent.memoryId)
-    }
-    await this.options.audit.writeRow(intent.audit)
-    await this.checkpoint(intent, 'audited')
-    await this.options.journal.clear()
   }
 
   private async rollbackStoredRecord(id: string): Promise<void> {
@@ -696,6 +747,24 @@ export class MemoryService {
     if (code === 'invalid-input' || code === 'invalid-query') {
       return new MemoryServiceError('invalid-input', `Memory ${operation} input is invalid`)
     }
+    if (code === 'ENOSPC' || code === 'EDQUOT') {
+      return new MemoryServiceError('storage-full', 'Encrypted memory storage is full')
+    }
+    if (isKeychainFailure(error)) {
+      return new MemoryServiceError('keychain-unavailable', 'Secure memory key protection is unavailable')
+    }
+    if (isIndexFailure(error)) {
+      return new MemoryServiceError('index-unavailable', 'Encrypted memory search is unavailable')
+    }
+    if (operation === 'store' && isAttachmentFailure(error)) {
+      return new MemoryServiceError('attachment-copy-failed', 'Memory attachment copy failed')
+    }
+    if (code === 'invalid-journal' || code === 'pending-mutation') {
+      return new MemoryServiceError('recovery-failed', 'Memory recovery could not be completed')
+    }
+    if (operation === 'initialize') {
+      return new MemoryServiceError('service-unavailable', 'Encrypted memory storage is unavailable')
+    }
     return new MemoryServiceError(
       compensationFailed ? 'compensation-failed' : 'operation-failed',
       compensationFailed
@@ -703,4 +772,40 @@ export class MemoryService {
         : `Memory ${operation} failed`,
     )
   }
+}
+
+function dependencyName(error: unknown): unknown {
+  return error && typeof error === 'object' && 'name' in error
+    ? (error as { name?: unknown }).name
+    : undefined
+}
+
+function dependencyMessage(error: unknown): string {
+  return error instanceof Error ? error.message : ''
+}
+
+function isIndexFailure(error: unknown): boolean {
+  const code = dependencyCode(error)
+  return dependencyName(error) === 'MemoryIndexError'
+    || code === 'index-unavailable'
+    || code === 'invalid-key'
+    || code === 'native-unavailable'
+    || code === 'cipher-unavailable'
+    || code === 'open-failed'
+}
+
+function isAttachmentFailure(error: unknown): boolean {
+  const code = dependencyCode(error)
+  return dependencyName(error) === 'AttachmentStoreError'
+    || code === 'corrupt-attachment'
+    || code === 'durability-uncertain'
+    || code === 'storage-failure'
+}
+
+function isKeychainFailure(error: unknown): boolean {
+  const code = dependencyCode(error)
+  if (code === 'keychain-unavailable') return true
+  const message = dependencyMessage(error)
+  return message === 'Secure key protection is unavailable'
+    || message === 'Protected memory master key is invalid'
 }

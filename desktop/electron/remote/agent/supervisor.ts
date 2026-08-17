@@ -54,6 +54,18 @@ export interface SupervisedAgentSession extends AgentSession {
   readonly provider: AgentProviderId
   /** Snapshot at the point the provider accepted the turn. */
   readonly run: AgentRun
+  readonly completion: Promise<SupervisedAgentCompletion>
+}
+
+export type AgentTurnFailureCode =
+  | 'provider-crashed'
+  | 'interaction-expired'
+  | 'journal-unavailable'
+  | 'shutdown'
+
+export interface SupervisedAgentCompletion extends AgentCompletion {
+  /** Stable, path-free recovery reason; present only for failed turns. */
+  errorCode?: AgentTurnFailureCode
 }
 
 export interface SupervisorCounts {
@@ -101,6 +113,9 @@ interface LiveTurn {
   session: AgentSession
   activity: ActivityRelay
   released: boolean
+  tokenExpiresAt: number
+  journalFailed: boolean
+  releaseCode?: AgentTurnFailureCode
 }
 
 /**
@@ -334,25 +349,24 @@ export class AgentRunSupervisor {
     this.disposed = true
     this.timers.clearInterval(this.sweepTimer)
     await this.initialize().catch(() => {})
-    for (const [runId, turn] of [...this.live]) {
-      const run = this.runs.get(runId)
-      if (!run) continue
-      const preserveWaiting = run.state === 'waiting'
-      this.release(runId, turn)
-      if (run.providerHandle) {
-        try { await this.provider(run.provider).close(handleOf(run)) } catch { /* shutdown */ }
+    for (const run of this.runs.values()) {
+      const turn = this.live.get(run.id)
+      const interrupted = Boolean(turn) || !run.providerWorkEnded
+      if (turn) {
+        turn.releaseCode = 'shutdown'
+        this.release(run.id, turn)
       }
-      this.options.tokenStore.closeRun(runId)
-      run.providerWorkEnded = true
-      run.lastActivityAt = this.now()
-      if (!preserveWaiting) {
+      if (run.providerHandle) {
+        try { await this.provider(run.provider).close(handleOf(run)) } catch { /* shutdown is final */ }
+      }
+      this.options.tokenStore.closeRun(run.id)
+      if (interrupted) {
+        run.providerWorkEnded = true
+        run.lastActivityAt = this.now()
         run.state = 'failed'
         run.completedAt = run.lastActivityAt
-      } else {
-        run.state = 'waiting'
-        run.completedAt = undefined
+        await this.options.journal.upsertRun(run).catch(() => {})
       }
-      await this.options.journal.upsertRun(run).catch(() => {})
     }
   }
 
@@ -386,6 +400,7 @@ export class AgentRunSupervisor {
       input.interactionId,
       positiveInteger(input.tokenTtlMs, this.tokenTtlMs),
     )
+    const tokenExpiresAt = this.now() + positiveInteger(input.tokenTtlMs, this.tokenTtlMs)
     const providerInput: AgentStartInput = {
       runId: run.id,
       interactionId: input.interactionId,
@@ -400,6 +415,7 @@ export class AgentRunSupervisor {
       ? await provider.resume(handleOf(run), providerInput)
       : await provider.start(providerInput)
     try {
+      if (this.disposed) throw new AgentSupervisorError('run-closed')
       if (session.handle.provider !== run.provider) throw new AgentProviderError('invalid-handle')
       run.providerHandle = session.handle.opaqueId
       run.state = 'running'
@@ -415,6 +431,8 @@ export class AgentRunSupervisor {
       session,
       activity,
       released: false,
+      tokenExpiresAt,
+      journalFailed: false,
     }
     this.live.set(run.id, turn)
     void this.pumpActivity(run, turn)
@@ -436,7 +454,12 @@ export class AgentRunSupervisor {
         run.state = event.kind === 'waiting' ? 'waiting' : 'running'
         run.lastActivityAt = this.now()
         turn.activity.emit(event)
-        await this.options.journal.upsertRun(run)
+        try {
+          await this.options.journal.upsertRun(run)
+        } catch {
+          turn.journalFailed = true
+          break
+        }
       }
     } catch {
       // Completion remains the single authoritative provider-work boundary.
@@ -445,14 +468,26 @@ export class AgentRunSupervisor {
     }
   }
 
-  private async settleCompletion(run: AgentRun, turn: LiveTurn): Promise<AgentCompletion> {
-    let completion: AgentCompletion
+  private async settleCompletion(run: AgentRun, turn: LiveTurn): Promise<SupervisedAgentCompletion> {
+    let completion: SupervisedAgentCompletion
     try {
       completion = await turn.session.completion
     } catch {
-      completion = { outcome: 'failed' }
+      completion = { outcome: 'failed', errorCode: 'provider-crashed' }
     }
-    if (turn.released) return completion
+    if (turn.released) {
+      return turn.releaseCode
+        ? { outcome: 'failed', errorCode: turn.releaseCode }
+        : completion
+    }
+
+    if (this.now() >= turn.tokenExpiresAt) {
+      completion = { outcome: 'failed', errorCode: 'interaction-expired' }
+    } else if (turn.journalFailed) {
+      completion = { outcome: 'failed', errorCode: 'journal-unavailable' }
+    } else if (completion.outcome === 'failed' && !completion.errorCode) {
+      completion = { outcome: 'failed', errorCode: 'provider-crashed' }
+    }
 
     const at = this.now()
     run.state = completion.outcome === 'completed' ? 'complete' : 'failed'
@@ -464,7 +499,7 @@ export class AgentRunSupervisor {
     try {
       await this.options.journal.upsertRun(run)
     } catch {
-      return { outcome: 'failed' }
+      return { outcome: 'failed', errorCode: 'journal-unavailable' }
     }
     return completion
   }

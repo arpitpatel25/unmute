@@ -527,6 +527,43 @@ interface UnmuteAgentAvailability {
   providers: UnmuteAgentProviderAvailability[]
 }
 
+function initializationFailureCode(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined
+  if (typeof code !== 'string') return 'storage-unavailable'
+  const allowed = new Set([
+    'keychain-unavailable',
+    'index-unavailable',
+    'storage-full',
+    'recovery-failed',
+    'service-unavailable',
+    'native-unavailable',
+    'cipher-unavailable',
+    'open-failed',
+  ])
+  return allowed.has(code) ? code : 'storage-unavailable'
+}
+
+function unavailableAgentError(reason: UnmuteAgentUnavailableReason | undefined) {
+  if (reason === 'keychain-unavailable') {
+    return {
+      code: 'keychain-unavailable',
+      message: 'Encrypted Agent memory is unavailable because secure key protection could not be opened.',
+    }
+  }
+  if (reason === 'storage-unavailable') {
+    return {
+      code: 'storage-unavailable',
+      message: 'Encrypted Agent memory is unavailable. Existing Unmute features remain available.',
+    }
+  }
+  return {
+    code: 'provider-unavailable',
+    message: 'Unmute Agent is unavailable. Check its provider in settings.',
+  }
+}
+
 let unmuteAgentAvailability: UnmuteAgentAvailability = {
   available: false,
   reason: 'disabled',
@@ -552,24 +589,32 @@ function bufferedAttachmentDelivery(
   const chunks: Buffer[] = []
   let bytes = 0
   let settled = false
+  const clear = () => {
+    for (const chunk of chunks) chunk.fill(0)
+    chunks.length = 0
+    bytes = 0
+  }
   return {
     async write(chunk) {
       if (settled) throw new DeliveryCapabilityError('delivery-failed')
       bytes += chunk.byteLength
-      if (bytes > metadata.size) throw new DeliveryCapabilityError('delivery-failed')
+      if (bytes > metadata.size) {
+        settled = true
+        clear()
+        throw new DeliveryCapabilityError('delivery-failed')
+      }
       chunks.push(Buffer.from(chunk))
     },
     async commit() {
       if (settled || bytes !== metadata.size) throw new DeliveryCapabilityError('delivery-failed')
       settled = true
       const data = Buffer.concat(chunks, bytes)
-      chunks.length = 0
-      await publish(data)
+      clear()
+      try { await publish(data) } finally { data.fill(0) }
     },
     async rollback() {
       settled = true
-      chunks.length = 0
-      bytes = 0
+      clear()
     },
   }
 }
@@ -717,7 +762,7 @@ async function submitUnmuteAgent(input: AgentInteractionInput): Promise<AgentInt
   } catch (error) {
     broadcastUnmuteAgentActivity({
       state: 'failed',
-      summary: error instanceof Error ? error.message : 'Unmute Agent could not complete that request',
+      summary: 'Unmute Agent could not complete that request.',
     })
     throw error
   }
@@ -726,6 +771,7 @@ async function submitUnmuteAgent(input: AgentInteractionInput): Promise<AgentInt
 function disposeUnmuteAgent(): void {
   unmuteAgentGeneration += 1
   const supervisor = unmuteAgentSupervisor
+  const controller = unmuteAgentController
   const index = unmuteAgentIndex
   unmuteAgentSupervisor = null
   unmuteAgentController = null
@@ -736,9 +782,10 @@ function disposeUnmuteAgent(): void {
   unmuteAgentIndex = null
   unmuteAgentAvailability = { available: false, reason: 'disabled', providers: [] }
   agentHookListeners.clear()
+  controller?.dispose()
   void (supervisor?.dispose() ?? Promise.resolve())
-    .catch((error) => {
-      log.warn('unmute agent shutdown failed', { error: (error as Error).message })
+    .catch(() => {
+      log.warn('unmute agent shutdown failed', { code: 'shutdown-failed' })
     })
     .finally(() => {
       try { index?.close() } catch { /* best effort during shutdown */ }
@@ -770,6 +817,8 @@ async function initializeUnmuteAgent(): Promise<void> {
   const root = join(app.getPath('userData'), 'unmute-agent')
   const memoryRoot = join(root, 'memory')
   let pendingIndex: ReturnType<typeof openSqlCipherMemoryIndex> | null = null
+  let pendingSupervisor: AgentRunSupervisor | null = null
+  let pendingController: UnmuteAgentController | null = null
   try {
     const keyProvider = new SafeStorageKeyProvider({ root: memoryRoot, protectedValueStore: safeStorage })
     const key = await keyProvider.getMasterKey()
@@ -797,16 +846,7 @@ async function initializeUnmuteAgent(): Promise<void> {
       audit: new JsonlMemoryAudit({ root: memoryRoot }),
       journal: new DurableMemoryMutationJournal({ root: memoryRoot }),
     })
-    const initializedAt = Date.now()
-    await memory.search({
-      principal: {
-        kind: 'unmute-agent',
-        runId: 'initialization',
-        interactionId: 'initialization',
-        expiresAt: initializedAt + 60_000,
-      },
-      now: initializedAt,
-    }, { text: 'unmute-agent-initialization-probe', limit: 1 })
+    await memory.initialize()
     const tokens = new AgentTokenStore()
     const journal = new AgentJournal({ root: join(root, 'runtime') })
     const constitutionPath = join(root, 'runtime', 'constitution.md')
@@ -882,6 +922,7 @@ async function initializeUnmuteAgent(): Promise<void> {
       selectedProvider: () => settings.get('unmuteAgentProvider'),
       maxActiveProcesses: settings.get('unmuteAgentMaxProcesses'),
     })
+    pendingSupervisor = supervisor
     const controller = new UnmuteAgentController({
       supervisor,
       fastPath: new FastPathRouter(memory),
@@ -912,6 +953,7 @@ async function initializeUnmuteAgent(): Promise<void> {
       },
       onActivity: broadcastUnmuteAgentActivity,
     })
+    pendingController = controller
     await supervisor.initialize()
     if (generation !== unmuteAgentGeneration) {
       index.close()
@@ -926,6 +968,8 @@ async function initializeUnmuteAgent(): Promise<void> {
     unmuteAgentController = controller
     unmuteAgentIndex = index
     pendingIndex = null
+    pendingSupervisor = null
+    pendingController = null
     const selected = settings.get('unmuteAgentProvider')
     const selectedReady = providers.find((provider) => provider.id === selected)?.available === true
     unmuteAgentAvailability = {
@@ -933,11 +977,14 @@ async function initializeUnmuteAgent(): Promise<void> {
       ...(selectedReady ? {} : { reason: 'provider-unavailable' as const }),
       providers,
     }
-    log.event('unmute-agent-initialized', { provider: selected, available: selectedReady, memoryRoot })
+    log.event('unmute-agent-initialized', { provider: selected, available: selectedReady })
   } catch (error) {
+    pendingController?.dispose()
+    await pendingSupervisor?.dispose().catch(() => {})
     try { pendingIndex?.close() } catch { /* failed initialization owns this projection */ }
     if (generation !== unmuteAgentGeneration) return
-    const keychainAvailable = safeStorage.isEncryptionAvailable()
+    let keychainAvailable = false
+    try { keychainAvailable = safeStorage.isEncryptionAvailable() } catch { /* fail closed */ }
     unmuteAgentAvailability = {
       available: false,
       reason: keychainAvailable ? 'storage-unavailable' : 'keychain-unavailable',
@@ -945,7 +992,7 @@ async function initializeUnmuteAgent(): Promise<void> {
     }
     log.warn('unmute agent unavailable', {
       reason: unmuteAgentAvailability.reason,
-      error: (error as Error).message,
+      code: initializationFailureCode(error),
     })
   }
 }
@@ -5233,10 +5280,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         source: 'provider',
         outcome: 'failed',
         presentation: 'transient',
-        error: {
-          code: 'provider-unavailable',
-          message: 'Unmute Agent is unavailable. Check its provider in settings.',
-        },
+        error: unavailableAgentError(unmuteAgentAvailability.reason),
       }
     }
     return submitUnmuteAgent(input)
