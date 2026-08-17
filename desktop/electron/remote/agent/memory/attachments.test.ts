@@ -746,6 +746,198 @@ test('concurrent cleaners of one immutable reclaim generation are idempotent', a
   assert.equal(saved.liveReferenceCount, 2)
 })
 
+test('concurrent restore cleaners leave the restored gate releasable and immediately reusable', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'concurrent-generation-restore.txt')
+  const bytes = Buffer.from('concurrent generation restore')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const locks = join(root, 'attachments', '.locks')
+  const gate = join(locks, `${sha256}.reaper`)
+  const lock = join(locks, `${sha256}.lock`)
+  const generation = join(locks, `${sha256}.reaper-reclaim-66666666-6666-4666-8666-666666666666`)
+  const ownerHoldingGate = pausePoint()
+  let ownerPaused = false
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({
+    now: () => NOW,
+    createHandle: () => `concurrent-restore-${++nextHandle}`,
+  })
+  const owner = new EncryptedAttachmentStore({
+    root,
+    crypto: memoryCrypto(),
+    handles,
+    staleLockMs: 60_000,
+    lockTimeoutMs: 500,
+    lockRetryMs: 5,
+    createAttachmentId: () => 'concurrent-restore-owner',
+    async directorySync(path: string) {
+      await syncDirectory(path)
+      if (path === lock && !ownerPaused) {
+        ownerPaused = true
+        ownerHoldingGate.reached()
+        await ownerHoldingGate.resumed
+      }
+    },
+  })
+  const ownerSaving = owner.store(agent(), {
+    recordId: 'record-owner',
+    handle: handles.mintCapture(agent(), { path: source }),
+    storage: 'reference',
+  })
+
+  await ownerHoldingGate.reachedPoint
+  const ownerName = (await readdir(gate)).find((name) => name.startsWith('owner-'))
+  assert.notEqual(ownerName, undefined)
+  await rename(gate, generation)
+  await wait(30)
+  const ownerHeartbeat = setInterval(() => {
+    const now = new Date()
+    void Promise.all([
+      utimes(join(generation, ownerName!), now, now),
+      utimes(join(gate, ownerName!), now, now),
+    ].map((refresh) => refresh.catch(() => { /* the restored owner exists at exactly one path */ })))
+  }, 5)
+  ownerHeartbeat.unref()
+  t.after(() => clearInterval(ownerHeartbeat))
+
+  const generationChecksReady = pausePoint()
+  const secondReclaimerOpen = pausePoint()
+  const secondReclaimerValidation = pausePoint()
+  const restoreRename = pausePoint()
+  const restored = pausePoint()
+  const originalLstat = fs.promises.lstat
+  const originalOpen = fs.promises.open
+  const originalRename = fs.promises.rename
+  const mutablePromises = fs.promises as {
+    lstat: typeof fs.promises.lstat
+    open: typeof fs.promises.open
+    rename: typeof fs.promises.rename
+  }
+  let generationChecks = 0
+  let reclaimerOpens = 0
+  let reclaimerValidations = 0
+  let restorePaused = false
+  mutablePromises.lstat = (async (path: Parameters<typeof originalLstat>[0]) => {
+    const rendered = String(path)
+    if (rendered === generation && generationChecks < 2) {
+      const result = await originalLstat(path)
+      generationChecks += 1
+      if (generationChecks === 2) generationChecksReady.reached()
+      await generationChecksReady.resumed
+      return result
+    }
+    if (dirname(rendered) === generation && basename(rendered).startsWith('reclaimer-')) {
+      reclaimerValidations += 1
+      if (reclaimerValidations === 2) {
+        secondReclaimerValidation.reached()
+        await secondReclaimerValidation.resumed
+      }
+    }
+    return originalLstat(path)
+  }) as typeof originalLstat
+  mutablePromises.open = (async (
+    path: Parameters<typeof originalOpen>[0],
+    flags: Parameters<typeof originalOpen>[1],
+    mode?: Parameters<typeof originalOpen>[2],
+  ) => {
+    const rendered = String(path)
+    if (dirname(rendered) === generation && basename(rendered).startsWith('reclaimer-')) {
+      reclaimerOpens += 1
+      if (reclaimerOpens === 2) {
+        secondReclaimerOpen.reached()
+        await secondReclaimerOpen.resumed
+      }
+    }
+    return originalOpen(path, flags, mode)
+  }) as typeof originalOpen
+  mutablePromises.rename = (async (
+    oldPath: Parameters<typeof originalRename>[0],
+    newPath: Parameters<typeof originalRename>[1],
+  ) => {
+    if (String(oldPath) === generation && String(newPath) === gate && !restorePaused) {
+      restorePaused = true
+      restoreRename.reached()
+      await restoreRename.resumed
+      await originalRename(oldPath, newPath)
+      restored.reached()
+      return
+    }
+    return originalRename(oldPath, newPath)
+  }) as typeof originalRename
+  syncBuiltinESMExports()
+  const restoreFs = () => {
+    mutablePromises.lstat = originalLstat
+    mutablePromises.open = originalOpen
+    mutablePromises.rename = originalRename
+    syncBuiltinESMExports()
+  }
+  t.after(restoreFs)
+
+  const first = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 20, lockTimeoutMs: 0, lockRetryMs: 5,
+  })
+  const second = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 20, lockTimeoutMs: 0, lockRetryMs: 5,
+  })
+  const cleanerSaves = [
+    first.store(agent(), {
+      recordId: 'record-cleaner-first',
+      handle: handles.mintCapture(agent(), { path: source }),
+      storage: 'reference',
+    }),
+    second.store(agent(), {
+      recordId: 'record-cleaner-second',
+      handle: handles.mintCapture(agent(), { path: source }),
+      storage: 'reference',
+    }),
+  ]
+
+  try {
+    await generationChecksReady.reachedPoint
+    await utimes(join(generation, ownerName!), new Date(), new Date())
+    generationChecksReady.resume()
+    await Promise.all([restoreRename.reachedPoint, secondReclaimerOpen.reachedPoint])
+    secondReclaimerOpen.resume()
+    await secondReclaimerValidation.reachedPoint
+    restoreRename.resume()
+    await restored.reachedPoint
+    secondReclaimerValidation.resume()
+    await Promise.allSettled(cleanerSaves)
+  } finally {
+    generationChecksReady.resume()
+    secondReclaimerOpen.resume()
+    secondReclaimerValidation.resume()
+    restoreRename.resume()
+  }
+
+  restoreFs()
+  clearInterval(ownerHeartbeat)
+  const reclaimerTokens = (await readdir(gate)).filter((name) => name.startsWith('reclaimer-'))
+  ownerHoldingGate.resume()
+  const [ownerResult] = await Promise.allSettled([ownerSaving])
+
+  assert.deepEqual(reclaimerTokens, [])
+  if (ownerResult.status === 'rejected') throw ownerResult.reason
+  await assert.rejects(stat(gate), { code: 'ENOENT' })
+
+  const successor = new EncryptedAttachmentStore({
+    root,
+    crypto: memoryCrypto(),
+    handles,
+    staleLockMs: 60_000,
+    lockTimeoutMs: 250,
+    lockRetryMs: 5,
+  })
+  const saved = await successor.store(agent(), {
+    recordId: 'record-successor',
+    handle: handles.mintCapture(agent(), { path: source }),
+    storage: 'reference',
+  })
+  assert.equal(saved.sha256, sha256)
+  assert.equal(saved.liveReferenceCount, 2)
+})
+
 test('a crashed immutable reclaim generation is stale-recoverable', async (t) => {
   const root = await temporaryRoot(t)
   const source = join(root, 'crashed-immutable-generation.txt')

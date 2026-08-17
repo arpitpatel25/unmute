@@ -1232,14 +1232,15 @@ export class EncryptedAttachmentStore {
     if (!(await this.assertReaperOwned(reclaimerPath))) return
     const current = await this.leaseDirectorySnapshot(tombstoneDirectory)
     if (!current) return
-    const restore = current.ownerName !== undefined && (
+    const restoredOwnerName = current.ownerName
+    const restore = restoredOwnerName !== undefined && (
       Date.now() - current.heartbeatMs < this.staleLockMs
       || snapshot !== undefined && (
-        current.ownerName !== snapshot.ownerName
+        restoredOwnerName !== snapshot.ownerName
         || current.heartbeatMs > snapshot.heartbeatMs
       )
     )
-    if (!restore) {
+    if (!restore || restoredOwnerName === undefined) {
       try {
         await rm(tombstoneDirectory, { recursive: true })
         await this.directorySync(this.locksDir)
@@ -1253,6 +1254,12 @@ export class EncryptedAttachmentStore {
       try {
         await rename(tombstoneDirectory, gateDirectory)
         await this.directorySync(this.locksDir)
+        const restored = await this.leaseDirectorySnapshot(gateDirectory)
+        if (restored?.ownerName !== restoredOwnerName) return
+        await this.cleanReclaimerTokens(gateDirectory)
+        const validated = await this.leaseDirectorySnapshot(gateDirectory)
+        if (validated?.ownerName !== restoredOwnerName) return
+        await this.directorySync(gateDirectory)
         return
       } catch (error) {
         if (isNodeError(error, 'ENOENT')) return
