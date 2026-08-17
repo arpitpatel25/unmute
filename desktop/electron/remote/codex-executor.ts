@@ -32,6 +32,8 @@ export interface CodexExecutorOpts {
    *  is `model_reasoning_effort`, and it is a property OF the model — Sol and
    *  Terra offer six levels, Luna five — so it is only sent alongside one. */
   effort?: string
+  /** Agent-only developer context. Kept in Codex config, never a user turn. */
+  developerInstructions?: string
 }
 
 /**
@@ -80,6 +82,9 @@ function modelArgs(o: CodexExecutorOpts): string[] {
   return [
     ...(o.model ? ['-c', `model="${o.model}"`] : []),
     ...(o.model && o.effort ? ['-c', `model_reasoning_effort="${o.effort}"`] : []),
+    ...(o.developerInstructions
+      ? ['-c', `developer_instructions=${JSON.stringify(o.developerInstructions)}`]
+      : []),
   ]
 }
 
@@ -98,6 +103,7 @@ export class CodexExecutor extends CliAgentExecutor {
       // Keep Codex on the subscription/login pool, not API billing.
       stripEnvVars: ['OPENAI_API_KEY', 'OPENAI_API_BASE'],
       ptyLoader: opts.ptyLoader,
+      interruptSequence: '\x1b',
       label: 'codex',
     })
   }
