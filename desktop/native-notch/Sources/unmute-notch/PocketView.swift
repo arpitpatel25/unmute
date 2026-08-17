@@ -151,14 +151,26 @@ enum PocketFace {
     /// "Needs User" two inches from a bar saying "Needs you", which reads as a
     /// different system talking. `Theme.statusLabel` is that sentence, and it is
     /// what the bar already uses.
+    /// THE STATUS, TYPED — so the word and the colour cannot disagree with the
+    /// expanded panel, or with the dot beside them.
+    ///
+    /// Everything that shows status now derives from this one value. Before, the
+    /// pocket resolved the word from a loose string while the dot resolved the
+    /// colour separately and the panel used the enum, so the same task could read
+    /// "Working" in grey here and "Working" in green an inch away — and an
+    /// unrecognised wire value could print itself capitalised ("Needs User")
+    /// beside a bar saying "Needs you".
+    ///
+    /// A value we do not recognise is not rendered verbatim. It resolves to the
+    /// honest coarse answer — does this need you or not — which is the question
+    /// the pocket exists to answer.
+    static func resolved(for slot: PocketSlotP?) -> TaskStatus {
+        if let raw = slot?.status, !raw.isEmpty, let known = TaskStatus(rawValue: raw) { return known }
+        return slot?.demanding == true ? .needsUser : .ready
+    }
+
     static func status(for slot: PocketSlotP?) -> String {
-        guard let raw = slot?.status, !raw.isEmpty else {
-            return slot?.demanding == true ? "Needs you" : "Ready"
-        }
-        if let known = TaskStatus(rawValue: raw) { return Theme.statusLabel(known) }
-        return raw.replacingOccurrences(of: "-", with: " ")
-                  .replacingOccurrences(of: "_", with: " ")
-                  .capitalized
+        Theme.statusLabel(resolved(for: slot))
     }
 
     static func count(for pocket: PocketP) -> String {
@@ -267,7 +279,7 @@ struct PocketRow: View {
     private func identity(height: CGFloat) -> some View {
         HStack(spacing: 0) {
             OnBlackCard(height: height) {
-                Dot(status: quiet ? .done : (slot.flatMap { TaskStatus(rawValue: $0.status ?? "") } ?? .needsUser),
+                Dot(status: quiet ? .done : PocketFace.resolved(for: slot),
                     size: PocketRowMetrics.dotSize)
                 Spacer().frame(width: PocketRowMetrics.cardGap)
                 ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true,
@@ -385,7 +397,7 @@ struct PocketCard: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Dot(status: quiet ? .done : (slot.flatMap { TaskStatus(rawValue: $0.status ?? "") } ?? .needsUser),
+            Dot(status: quiet ? .done : PocketFace.resolved(for: slot),
                 size: 8)
             ProviderMark(backend: slot?.backend, terminal: slot?.terminal ?? true, size: 14)
             Text(slot?.title ?? "Nothing in your pocket")
@@ -405,9 +417,12 @@ struct PocketCard: View {
             if listening {
                 AimedChip(level: model.captureLevel, compact: true)
             } else {
+                // THE SAME COLOUR THE PANEL USES. This was a flat grey, so the
+                // pocket said "Working" in grey and the expanded view said
+                // "Working" in green — one fact, two renderings.
                 Text(PocketFace.status(for: slot))
                     .font(.system(size: 11.5, weight: .medium))
-                    .foregroundColor(Theme.text.opacity(0.68))
+                    .foregroundColor(Theme.status(PocketFace.resolved(for: slot)))
                     .lineLimit(1)
             }
         }
