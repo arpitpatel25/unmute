@@ -30,8 +30,38 @@ interface NativeDatabaseConstructor {
   prototype: NativeDatabase
 }
 
+interface ModuleInternals {
+  _load(request: string, parent: unknown, isMain: boolean): unknown
+}
+
+interface KeyCopyObservation {
+  copies: Buffer[]
+  restore(): void
+}
+
 function nativeDatabase(): NativeDatabaseConstructor {
   return require('better-sqlite3-multiple-ciphers') as NativeDatabaseConstructor
+}
+
+function observeTemporaryKeyCopies(source: Uint8Array): KeyCopyObservation {
+  const mutableBuffer = Buffer as unknown as { from(...values: unknown[]): Buffer }
+  const originalFrom = mutableBuffer.from
+  const copies: Buffer[] = []
+  mutableBuffer.from = function(...values) {
+    const result = originalFrom.apply(Buffer, values)
+    if (values[0] === source) copies.push(result)
+    return result
+  }
+  return {
+    copies,
+    restore() { mutableBuffer.from = originalFrom },
+  }
+}
+
+function assertKeyCopyCleared(observation: KeyCopyObservation, caller: Buffer, byte: number): void {
+  assert.equal(observation.copies.length, 1)
+  assert.deepEqual(observation.copies[0], Buffer.alloc(caller.byteLength))
+  assert.deepEqual(caller, Buffer.alloc(caller.byteLength, byte))
 }
 
 function applyKey(database: NativeDatabase, key: Buffer): void {
@@ -105,6 +135,77 @@ test('opens a real SQLCipher database and creates the complete projection schema
     'sqlite_autoindex_memories_1',
   ])
   encrypted.close()
+})
+
+test('clears an invalid temporary key copy without mutating the caller key', () => {
+  const caller = Buffer.alloc(31, 0x31)
+  const observation = observeTemporaryKeyCopies(caller)
+  try {
+    assert.throws(
+      () => openSqlCipherMemoryIndex({ databasePath: 'unused.sqlite', key: caller }),
+      (error: unknown) => error instanceof MemoryIndexError && error.code === 'invalid-key',
+    )
+  } finally {
+    observation.restore()
+  }
+
+  assertKeyCopyCleared(observation, caller, 0x31)
+})
+
+test('clears the temporary key copy when lazy native loading fails', () => {
+  const caller = Buffer.alloc(32, 0x32)
+  const observation = observeTemporaryKeyCopies(caller)
+  const modules = require('node:module') as ModuleInternals
+  const originalLoad = modules._load
+  modules._load = function(request, parent, isMain) {
+    if (request === 'better-sqlite3-multiple-ciphers') throw new Error('injected native load failure')
+    return originalLoad.call(this, request, parent, isMain)
+  }
+  try {
+    assert.throws(
+      () => openSqlCipherMemoryIndex({ databasePath: 'unused.sqlite', key: caller }),
+      (error: unknown) => error instanceof MemoryIndexError && error.code === 'native-unavailable',
+    )
+  } finally {
+    modules._load = originalLoad
+    observation.restore()
+  }
+
+  assertKeyCopyCleared(observation, caller, 0x32)
+})
+
+test('clears the temporary key copy when the native database cannot open the path', async (t) => {
+  const temporary = await temporaryDatabase(t)
+  const caller = Buffer.alloc(32, 0x33)
+  const observation = observeTemporaryKeyCopies(caller)
+  try {
+    assert.throws(
+      () => openSqlCipherMemoryIndex({
+        databasePath: join(temporary.root, 'missing-parent', 'memory.sqlite'),
+        key: caller,
+      }),
+      (error: unknown) => error instanceof MemoryIndexError && error.code === 'open-failed',
+    )
+  } finally {
+    observation.restore()
+  }
+
+  assertKeyCopyCleared(observation, caller, 0x33)
+})
+
+test('clears the temporary key copy after a normal encrypted open', async (t) => {
+  const temporary = await temporaryDatabase(t)
+  const caller = Buffer.alloc(32, 0x34)
+  const observation = observeTemporaryKeyCopies(caller)
+  let index
+  try {
+    index = openSqlCipherMemoryIndex({ databasePath: temporary.path, key: caller })
+  } finally {
+    observation.restore()
+  }
+  index?.close()
+
+  assertKeyCopyCleared(observation, caller, 0x34)
 })
 
 test('fails closed before schema creation when the native cipher engine has no attestation', async (t) => {
@@ -196,33 +297,66 @@ test('finds exact titles and lexical body terms while requiring explicit private
   )
 })
 
-test('never writes sensitive or credential bodies into the FTS projection', async (t) => {
+test('omits secret-bearing bodies and tags from every searchable and returned projection surface', async (t) => {
   const temporary = await temporaryDatabase(t)
   const index = openSqlCipherMemoryIndex({ databasePath: temporary.path, key: MASTER_KEY })
   index.project(record({
-    id: 'memory-sensitive',
+    id: 'memory-credential',
     kind: 'credential-ref',
     title: 'Production API credential',
     content: 'raw-secret-value-sk_live_123',
-    tags: ['raw-secret-tag'],
+    tags: ['credential-tag-canary'],
+    sensitivity: 'normal',
+  }))
+  index.project(record({
+    id: 'memory-sensitive',
+    kind: 'guidance',
+    title: 'Private recovery answer',
+    content: 'sensitive-answer-canary',
+    tags: ['sensitive-tag-canary'],
     sensitivity: 'sensitive',
   }))
 
-  assert.deepEqual(index.search({ text: 'sk_live_123', includeSensitive: true }), [])
-  assert.deepEqual(index.search({ text: 'raw-secret-tag', includeSensitive: true }), [])
-  assert.deepEqual(
-    index.search({ text: 'Production API credential', includeSensitive: true }).map((item) => item.id),
-    ['memory-sensitive'],
-  )
+  assert.deepEqual(index.search({ text: 'sk_live_123' }), [])
+  assert.deepEqual(index.search({ text: 'credential-tag-canary' }), [])
+  const credentialHits = index.search({ text: 'Production API credential' })
+  assert.deepEqual(credentialHits.map((item) => item.id), ['memory-credential'])
+  assert.deepEqual(credentialHits[0]!.tags, [])
+  assert.deepEqual(index.search({
+    text: 'Production API credential',
+    tags: ['credential-tag-canary'],
+  }), [])
+
+  assert.deepEqual(index.search({ text: 'sensitive-answer-canary', includeSensitive: true }), [])
+  assert.deepEqual(index.search({ text: 'sensitive-tag-canary', includeSensitive: true }), [])
+  const sensitiveHits = index.search({ text: 'Private recovery answer', includeSensitive: true })
+  assert.deepEqual(sensitiveHits.map((item) => item.id), ['memory-sensitive'])
+  assert.deepEqual(sensitiveHits[0]!.tags, [])
+  assert.deepEqual(index.search({
+    text: 'Private recovery answer',
+    tags: ['sensitive-tag-canary'],
+    includeSensitive: true,
+  }), [])
   index.close()
 
   const Database = nativeDatabase()
   const encrypted = new Database(temporary.path, { readonly: true, fileMustExist: true })
   applyKey(encrypted, MASTER_KEY)
   assert.deepEqual(
-    encrypted.prepare('SELECT body, tags FROM memory_fts WHERE memory_id = ?').get('memory-sensitive'),
-    { body: '', tags: '' },
+    encrypted.prepare(
+      `SELECT memory_id, body, tags FROM memory_fts
+        WHERE memory_id IN ('memory-credential', 'memory-sensitive')
+        ORDER BY memory_id`,
+    ).all(),
+    [
+      { memory_id: 'memory-credential', body: '', tags: '' },
+      { memory_id: 'memory-sensitive', body: '', tags: '' },
+    ],
   )
+  assert.deepEqual(encrypted.prepare(
+    `SELECT memory_id, tag FROM memory_tags
+      WHERE memory_id IN ('memory-credential', 'memory-sensitive')`,
+  ).all(), [])
   encrypted.close()
 })
 

@@ -143,6 +143,7 @@ function loadNativeDatabase(): NativeDatabaseConstructor {
 function requireMasterKey(key: Uint8Array): Buffer {
   const bytes = Buffer.from(key)
   if (bytes.byteLength !== MASTER_KEY_BYTES) {
+    bytes.fill(0)
     throw new MemoryIndexError('invalid-key', 'Memory index key must be 32 bytes')
   }
   return bytes
@@ -431,7 +432,7 @@ class SqlCipherMemoryIndex implements MemoryIndex {
     const insertTag = this.database.prepare(
       'INSERT OR REPLACE INTO memory_tags (memory_id, tag, tag_normalized) VALUES (?, ?, ?)',
     )
-    for (const tag of record.tags) {
+    for (const tag of secretBearing ? [] : record.tags) {
       const normalized = normalizeSearchable(tag)
       if (normalized) insertTag.run(record.id, tag, normalized)
     }
@@ -480,25 +481,28 @@ export function openSqlCipherMemoryIndex(
   options: OpenSqlCipherMemoryIndexOptions,
 ): MemoryIndex {
   const key = requireMasterKey(options.key)
-  const Database = loadNativeDatabase()
-  const existed = existsSync(options.databasePath)
   try {
-    const opened = initializeDatabase(Database, options.databasePath, key)
-    return new SqlCipherMemoryIndex(opened.database, opened.cipherVersion)
-  } catch (error) {
-    if (error instanceof CipherUnavailableError) {
-      throw new MemoryIndexError('cipher-unavailable', 'SQLCipher support is unavailable')
-    }
-    if (options.recoverCorruption && existed && isNativeCorruption(error)) {
-      try {
-        quarantineProjection(options.databasePath)
-        const opened = initializeDatabase(Database, options.databasePath, key)
-        return new SqlCipherMemoryIndex(opened.database, opened.cipherVersion)
-      } catch {
-        throw new MemoryIndexError('open-failed', 'Encrypted memory index could not be opened')
+    const Database = loadNativeDatabase()
+    const existed = existsSync(options.databasePath)
+    try {
+      const opened = initializeDatabase(Database, options.databasePath, key)
+      return new SqlCipherMemoryIndex(opened.database, opened.cipherVersion)
+    } catch (error) {
+      if (error instanceof MemoryIndexError) throw error
+      if (error instanceof CipherUnavailableError) {
+        throw new MemoryIndexError('cipher-unavailable', 'SQLCipher support is unavailable')
       }
+      if (options.recoverCorruption && existed && isNativeCorruption(error)) {
+        try {
+          quarantineProjection(options.databasePath)
+          const opened = initializeDatabase(Database, options.databasePath, key)
+          return new SqlCipherMemoryIndex(opened.database, opened.cipherVersion)
+        } catch {
+          throw new MemoryIndexError('open-failed', 'Encrypted memory index could not be opened')
+        }
+      }
+      throw new MemoryIndexError('open-failed', 'Encrypted memory index could not be opened')
     }
-    throw new MemoryIndexError('open-failed', 'Encrypted memory index could not be opened')
   } finally {
     key.fill(0)
   }
