@@ -1,5 +1,16 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -7,6 +18,7 @@ import test from 'node:test'
 import { MemoryCrypto } from './crypto.ts'
 import {
   SafeStorageKeyProvider,
+  type KeyProviderFileSystem,
   type ProtectedValueStore,
 } from './key-provider.ts'
 
@@ -38,8 +50,15 @@ function keyProvider(
   root: string,
   protectedValueStore: FakeProtectedValueStore,
   randomBytes?: (size: number) => Buffer,
+  fileSystem?: KeyProviderFileSystem,
 ): SafeStorageKeyProvider {
-  return new SafeStorageKeyProvider({ root, protectedValueStore, randomBytes })
+  return new SafeStorageKeyProvider({ root, protectedValueStore, randomBytes, fileSystem })
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => { resolve = done })
+  return { promise, resolve }
 }
 
 test('creates one protected 32-byte master key with owner-only permissions', async (t) => {
@@ -70,6 +89,56 @@ test('recovers the existing master key instead of replacing it', async (t) => {
   }).getMasterKey()
 
   assert.deepEqual(recovered, expectedKey)
+})
+
+test('publishes a concurrent first-use key only after its protected blob is complete', async (t) => {
+  const root = await temporaryRoot(t)
+  const protectedValueStore = new FakeProtectedValueStore()
+  const firstKey = Buffer.alloc(32, 0x11)
+  const winningKey = Buffer.alloc(32, 0x22)
+  const firstPublishReached = deferred()
+  const releaseFirstPublish = deferred()
+  let linkCount = 0
+  const fileSystem = {
+    async mkdir(path, options) { await mkdir(path, options) },
+    readFile: (path) => readFile(path),
+    open: (path, flags, mode) => open(path, flags, mode),
+    async link(existingPath, newPath) {
+      linkCount += 1
+      if (linkCount === 1) {
+        firstPublishReached.resolve()
+        await releaseFirstPublish.promise
+      }
+      await link(existingPath, newPath)
+    },
+    unlink: (path) => unlink(path),
+  } satisfies KeyProviderFileSystem
+
+  const firstResult = keyProvider(
+    root,
+    protectedValueStore,
+    () => Buffer.from(firstKey),
+    fileSystem,
+  ).getMasterKey()
+  const firstEvent = await Promise.race([
+    firstPublishReached.promise.then(() => 'ready-to-publish' as const),
+    firstResult.then(() => 'returned-before-staging' as const),
+  ])
+
+  assert.equal(firstEvent, 'ready-to-publish')
+
+  const winnerResult = await keyProvider(
+    root,
+    protectedValueStore,
+    () => Buffer.from(winningKey),
+    fileSystem,
+  ).getMasterKey()
+  releaseFirstPublish.resolve()
+
+  assert.deepEqual(winnerResult, winningKey)
+  assert.deepEqual(await firstResult, winningKey)
+  assert.deepEqual(await readdir(join(root, 'runtime')), ['master-key.enc'])
+  assert.equal((await stat(join(root, 'runtime', 'master-key.enc'))).mode & 0o777, 0o600)
 })
 
 test('AES-256-GCM encryption round-trips binary payloads', async (t) => {

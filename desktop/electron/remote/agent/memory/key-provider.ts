@@ -1,5 +1,5 @@
-import { randomBytes as nodeRandomBytes } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { randomBytes as nodeRandomBytes, randomUUID } from 'node:crypto'
+import { link, mkdir, open, readFile, unlink, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { safeStorage as electronSafeStorage } from 'electron'
@@ -16,10 +16,29 @@ export interface MasterKeyProvider {
   getMasterKey(): Promise<Buffer>
 }
 
+type KeyTempFile = Pick<FileHandle, 'writeFile' | 'sync' | 'close'>
+
+export interface KeyProviderFileSystem {
+  mkdir(path: string, options: { recursive: true; mode: number }): Promise<void>
+  readFile(path: string): Promise<Buffer>
+  open(path: string, flags: 'wx', mode: number): Promise<KeyTempFile>
+  link(existingPath: string, newPath: string): Promise<void>
+  unlink(path: string): Promise<void>
+}
+
 export interface SafeStorageKeyProviderOptions {
   root: string
   protectedValueStore: ProtectedValueStore
   randomBytes?: (size: number) => Buffer
+  fileSystem?: KeyProviderFileSystem
+}
+
+const nodeFileSystem: KeyProviderFileSystem = {
+  async mkdir(path, options) { await mkdir(path, options) },
+  readFile: (path) => readFile(path),
+  open: (path, flags, mode) => open(path, flags, mode),
+  async link(existingPath, newPath) { await link(existingPath, newPath) },
+  async unlink(path) { await unlink(path) },
 }
 
 function isNodeError(error: unknown, code: string): boolean {
@@ -38,11 +57,13 @@ export class SafeStorageKeyProvider implements MasterKeyProvider {
   private readonly root: string
   private readonly protectedValueStore: ProtectedValueStore
   private readonly randomBytes: (size: number) => Buffer
+  private readonly fileSystem: KeyProviderFileSystem
 
   constructor(options: SafeStorageKeyProviderOptions) {
     this.root = options.root
     this.protectedValueStore = options.protectedValueStore
     this.randomBytes = options.randomBytes ?? nodeRandomBytes
+    this.fileSystem = options.fileSystem ?? nodeFileSystem
   }
 
   async getMasterKey(): Promise<Buffer> {
@@ -52,12 +73,13 @@ export class SafeStorageKeyProvider implements MasterKeyProvider {
 
     const keyPath = join(this.root, MASTER_KEY_FILE)
     try {
-      return this.unprotect(await readFile(keyPath))
+      return this.unprotect(await this.fileSystem.readFile(keyPath))
     } catch (error) {
       if (!isNodeError(error, 'ENOENT')) throw error
     }
 
-    await mkdir(join(this.root, 'runtime'), { recursive: true, mode: 0o700 })
+    const runtimeDir = join(this.root, 'runtime')
+    await this.fileSystem.mkdir(runtimeDir, { recursive: true, mode: 0o700 })
 
     const key = Buffer.from(this.randomBytes(MASTER_KEY_BYTES))
     if (key.byteLength !== MASTER_KEY_BYTES) {
@@ -68,13 +90,30 @@ export class SafeStorageKeyProvider implements MasterKeyProvider {
       throw new Error('Secure key protection returned an invalid blob')
     }
 
+    const tempPath = join(runtimeDir, `.master-key.${process.pid}.${randomUUID()}.tmp`)
+    let tempFile: KeyTempFile | null = null
     try {
-      await writeFile(keyPath, protectedBlob, { flag: 'wx', mode: 0o600 })
-      return key
-    } catch (error) {
-      if (!isNodeError(error, 'EEXIST')) throw error
-      key.fill(0)
-      return this.unprotect(await readFile(keyPath))
+      tempFile = await this.fileSystem.open(tempPath, 'wx', 0o600)
+      await tempFile.writeFile(protectedBlob)
+      await tempFile.sync()
+      await tempFile.close()
+      tempFile = null
+
+      try {
+        await this.fileSystem.link(tempPath, keyPath)
+        return key
+      } catch (error) {
+        if (!isNodeError(error, 'EEXIST')) throw error
+        key.fill(0)
+        return this.unprotect(await this.fileSystem.readFile(keyPath))
+      }
+    } finally {
+      if (tempFile) await tempFile.close()
+      try {
+        await this.fileSystem.unlink(tempPath)
+      } catch (error) {
+        if (!isNodeError(error, 'ENOENT')) throw error
+      }
     }
   }
 
