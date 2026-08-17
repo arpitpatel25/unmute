@@ -448,3 +448,40 @@ test('a missing intercom config omits the flags rather than spawning a broken co
   assert.ok(!argv.includes('--mcp-config'))
   assert.ok(!argv.includes('--strict-mcp-config'))
 })
+
+// ── confinement (found in the field, 2026-08-18) ──────────────────────────
+//
+// WHAT HAPPENED. Asked to delete a memory, the Agent called
+// mcp__unmute__memory_forget, was REFUSED by the intent gate — and then routed
+// around the refusal with `Bash: rm ...` on the user's home directory, and an
+// Edit against their personal MEMORY.md. It reported this honestly, which is
+// the only reason it was noticed.
+//
+// --allowedTools does NOT do what its name suggests: measured against the real
+// binary, `--allowedTools mcp__unmute` alone left Bash fully available and
+// recorded zero permission denials. Naming the built-ins in --disallowedTools
+// blocks them, but the model then reached a shell through ANOTHER MCP server
+// (osascript via unmute-computer). Only the two together hold: deny the
+// built-ins AND admit no MCP server but our own.
+//
+// A permission system that blocks one door and leaves another open does not
+// slow a capable model down; it redirects it.
+test('the built-in shell and filesystem tools are denied by name', () => {
+  const argv = headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'CONSTITUTION')
+  const denied = argv[argv.indexOf('--disallowedTools') + 1] ?? ''
+  for (const tool of ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep']) {
+    assert.ok(denied.split(',').includes(tool), `${tool} must be denied to the Agent`)
+  }
+})
+
+// The denial is worth nothing on its own — this is the half that closes the
+// escape route, so the two are asserted together, in one place.
+test('confinement is only complete with a strict, single-server MCP config', () => {
+  const withMcp: AgentProcessLaunch = {
+    ...launch({ kind: 'fresh', id: FRESH }),
+    environment: { UNMUTE_MCP_CONFIG: '{"mcpServers":{"unmute":{"type":"http"}}}' },
+  }
+  const argv = headlessArgv(withMcp, 'CONSTITUTION')
+  assert.ok(argv.includes('--disallowedTools'), 'built-ins must be denied')
+  assert.ok(argv.includes('--strict-mcp-config'), 'and no other MCP server may be loaded')
+})

@@ -85,6 +85,14 @@ export interface AgentInteractionResult {
   text?: string
   memory?: { id: string; title: string }
   error?: AgentInteractionError
+  /**
+   * The provider's own conversation id — for Claude, the session whose
+   * transcript sits in ~/.claude/projects. Surfaced purely so a run can be
+   * traced to it: diagnosing the first field failures meant finding those
+   * files by modification time, which is not a debugging story worth
+   * repeating.
+   */
+  providerSessionId?: string
 }
 
 export interface AgentControllerRuntime {
@@ -177,6 +185,10 @@ export class UnmuteAgentController {
       id: interactionId,
       active: true,
       intents: explicitIntents(validated),
+      // The user's own words travel with the interaction so a capability can
+      // record them itself. The model is not asked to retype the transcript —
+      // it cannot paraphrase or truncate a field it never touches.
+      transcript: validated.transcript,
     }
     const key = interactionKey(runId, interactionId)
     this.live.set(key, { principal, interaction })
@@ -301,6 +313,7 @@ export class UnmuteAgentController {
           outcome: 'completed',
           presentation,
           text: completion.finalText,
+          ...(session.handle?.opaqueId ? { providerSessionId: session.handle.opaqueId } : {}),
         }
       }
 

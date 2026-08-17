@@ -41,6 +41,27 @@ export function agentRuntimeMode(env: NodeJS.ProcessEnv = process.env): AgentRun
 /** The Unmute intercom, which is where every Agent capability lives. */
 const AGENT_TOOL_ALLOWLIST = 'mcp__unmute'
 
+/**
+ * Built-in tools the Agent must never hold. It has no business touching the
+ * filesystem or a shell: everything it may do is a capability behind the
+ * intercom.
+ *
+ * This is not belt-and-braces, it is the belt. Measured against the real
+ * binary: `--allowedTools mcp__unmute` on its own leaves Bash fully usable and
+ * reports ZERO permission denials — and in the field the Agent, refused a
+ * delete by the intent gate, went around it with `Bash: rm` against the user's
+ * home directory. Denying these names blocks that, and `--strict-mcp-config`
+ * (above) closes the other route, where the model reached a shell through a
+ * different MCP server's osascript tool. Neither half is sufficient alone.
+ */
+const AGENT_TOOL_DENYLIST = [
+  'Bash', 'BashOutput', 'KillShell',
+  'Read', 'Write', 'Edit', 'NotebookEdit',
+  'Glob', 'Grep',
+  'WebFetch', 'WebSearch',
+  'Task', 'ToolSearch',
+].join(',')
+
 /** How long exit waits for stdout to finish before speaking anyway. */
 const EXIT_DRAIN_CAP_MS = 2_000
 
@@ -70,6 +91,7 @@ export function headlessArgv(
     '--verbose',
     '--append-system-prompt', systemPrompt,
     '--allowedTools', allowedTools,
+    '--disallowedTools', AGENT_TOOL_DENYLIST,
     ...mcpArgs,
     // Fresh-vs-resume was already decided by the runtime. Re-deriving it here
     // is how two paths that must agree start disagreeing.

@@ -30,6 +30,13 @@ export interface ExplicitInteraction {
   id: string
   active: boolean
   intents?: readonly string[]
+  /**
+   * What the user actually said this interaction, verbatim. Capabilities that
+   * record the user's own words take them from HERE, never from a model
+   * argument: a model asked to retype a transcript can paraphrase, tidy or
+   * truncate it, and one that cannot reach the field cannot get it wrong.
+   */
+  transcript?: string
 }
 
 export interface CapabilityCallContext {
