@@ -305,6 +305,23 @@ test('restore reverses forget without rewriting the encrypted record', async (t)
   await assert.rejects(() => records.readTrash('memory-1'), { code: 'not-found' })
 })
 
+test('lists active and trash canonical truth in stable identifier order for index rebuild', async (t) => {
+  const root = await temporaryRoot(t)
+  const identifiers = ['memory-b', 'memory-a']
+  const records = store(root, { createId: () => identifiers.shift() ?? 'unexpected-id' })
+  const trashed = await records.create(input({ title: 'Trashed record' }))
+  const active = await records.create(input({ title: 'Active record' }))
+  await records.forget(trashed.id)
+
+  const canonical = await records.list()
+
+  assert.deepEqual(canonical, [
+    active,
+    { ...trashed, deletedAt: trashed.updatedAt },
+  ])
+  assert.equal(JSON.stringify(canonical).includes(root), false)
+})
+
 test('keeps unknown future kinds canonical and degrades them only for presentation', async (t) => {
   const root = await temporaryRoot(t)
   const records = store(root)

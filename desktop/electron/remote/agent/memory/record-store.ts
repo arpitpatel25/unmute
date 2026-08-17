@@ -82,7 +82,7 @@ export class RecordStoreError extends Error {
   }
 }
 
-type PublicOperation = 'initialize' | 'create' | 'read' | 'read-trash' | 'read-version' | 'update' | 'forget' | 'restore'
+type PublicOperation = 'initialize' | 'list' | 'create' | 'read' | 'read-trash' | 'read-version' | 'update' | 'forget' | 'restore'
 
 function isNodeError(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code
@@ -350,6 +350,20 @@ export class EncryptedRecordStore {
     return this.initialization
   }
 
+  async list(): Promise<MemoryRecord[]> {
+    return this.runPublic('list', async () => {
+      await this.initialize()
+      const records = [
+        ...await this.listDirectory(this.recordsDir, false),
+        ...await this.listDirectory(this.trashRecordsDir, true),
+      ].sort((left, right) => left.id === right.id ? 0 : left.id < right.id ? -1 : 1)
+      if (records.some((record, index) => index > 0 && records[index - 1]?.id === record.id)) {
+        throw new RecordStoreError('corrupt-record', 'Encrypted memory record has duplicate locations')
+      }
+      return records
+    })
+  }
+
   async create(input: CreateMemoryRecordInput): Promise<MemoryRecord> {
     return this.runPublic('create', async () => {
       await this.initialize()
@@ -467,6 +481,21 @@ export class EncryptedRecordStore {
         await this.removeStagingFiles(path, false)
       }
     }))
+  }
+
+  private async listDirectory(directory: string, deleted: boolean): Promise<MemoryRecord[]> {
+    const entries = await this.fileSystem.readdir(directory, { withFileTypes: true })
+    const records: MemoryRecord[] = []
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      const match = /^([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.md\.enc$/.exec(entry.name)
+      if (!match?.[1]) continue
+      const record = await this.readEncryptedRecord(join(directory, entry.name), match[1])
+      records.push(deleted && record.deletedAt === undefined
+        ? { ...record, deletedAt: record.updatedAt }
+        : record)
+    }
+    return records
   }
 
   private recordPath(id: string): string {
