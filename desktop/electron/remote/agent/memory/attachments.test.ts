@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { constants } from 'node:fs'
+import fs, { constants } from 'node:fs'
 import {
   appendFile,
   copyFile,
@@ -17,8 +17,9 @@ import {
   utimes,
   writeFile,
 } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import test from 'node:test'
 
 import type { McpPrincipal } from '../types.ts'
@@ -84,6 +85,14 @@ function controlledMemoryCrypto(blockCall: number) {
 
 async function wait(milliseconds: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function pausePoint() {
+  let resume!: () => void
+  let reached!: () => void
+  const resumed = new Promise<void>((resolve) => { resume = resolve })
+  const reachedPoint = new Promise<void>((resolve) => { reached = resolve })
+  return { resume, reached, resumed, reachedPoint }
 }
 
 async function syncDirectory(path: string): Promise<void> {
@@ -544,6 +553,265 @@ test('a fresh gate found inside the reclaim tombstone is restored instead of rea
 
   assert.equal((await stat(join(gate, 'owner-live-gate'))).isFile(), true)
   await assert.rejects(stat(tombstone), { code: 'ENOENT' })
+})
+
+test('a validated stale-gate reclaimer never mutates a replacement reclaim generation', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'immutable-reclaim-generation.txt')
+  const bytes = Buffer.from('immutable reclaim generation')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const locks = join(root, 'attachments', '.locks')
+  const gate = join(locks, `${sha256}.reaper`)
+  await mkdir(gate, { recursive: true })
+  const staleOwner = join(gate, 'owner-stale-generation')
+  await writeFile(staleOwner, '')
+  await utimes(staleOwner, new Date(0), new Date(0))
+
+  const validation = pausePoint()
+  const originalLstat = fs.promises.lstat
+  const mutablePromises = fs.promises as { lstat: typeof fs.promises.lstat }
+  let validatedGeneration = ''
+  let paused = false
+  mutablePromises.lstat = (async (path: Parameters<typeof originalLstat>[0]) => {
+    const result = await originalLstat(path)
+    const rendered = String(path)
+    if (
+      !paused
+      && basename(rendered).startsWith('reclaimer-')
+      && dirname(rendered).includes(`${sha256}.reaper-reclaim`)
+    ) {
+      paused = true
+      validatedGeneration = dirname(rendered)
+      validation.reached()
+      await validation.resumed
+    }
+    return result
+  }) as typeof originalLstat
+  syncBuiltinESMExports()
+  const restoreLstat = () => {
+    mutablePromises.lstat = originalLstat
+    syncBuiltinESMExports()
+  }
+  t.after(restoreLstat)
+
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => 'immutable-generation-handle' })
+  const store = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 60_000, lockTimeoutMs: 180, lockRetryMs: 5,
+  })
+  const saving = store.store(agent(), {
+    recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+
+  const reachedValidation = await Promise.race([
+    validation.reachedPoint.then(() => true),
+    wait(500).then(() => false),
+  ])
+  assert.equal(reachedValidation, true, 'the stale reclaimer must reach its token validation')
+  const archivedGeneration = join(root, 'validated-t1-generation')
+  await rename(validatedGeneration, archivedGeneration)
+  const replacementGeneration = validatedGeneration.endsWith(`${sha256}.reaper-reclaim`)
+    ? validatedGeneration
+    : join(locks, `${sha256}.reaper-reclaim-11111111-1111-4111-8111-111111111111`)
+  await mkdir(replacementGeneration)
+  const replacementOwner = join(replacementGeneration, 'owner-replacement-generation')
+  await writeFile(replacementOwner, '')
+  validation.resume()
+  restoreLstat()
+
+  await assert.rejects(saving, /attachment lock timed out/i)
+  assert.equal((await stat(replacementOwner)).isFile(), true)
+})
+
+test('an acquirer paused through gate reap and replacement cannot return a phantom lease', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'phantom-gate.txt')
+  const bytes = Buffer.from('phantom gate')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const locks = join(root, 'attachments', '.locks')
+  const gate = join(locks, `${sha256}.reaper`)
+  const lock = join(locks, `${sha256}.lock`)
+  const gateReady = pausePoint()
+  let paused = false
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => 'phantom-gate-handle' })
+  const store = new EncryptedAttachmentStore({
+    root,
+    crypto: memoryCrypto(),
+    handles,
+    staleLockMs: 60_000,
+    lockTimeoutMs: 500,
+    lockRetryMs: 5,
+    async directorySync(path: string) {
+      await syncDirectory(path)
+      if (path === gate && !paused) {
+        paused = true
+        gateReady.reached()
+        await gateReady.resumed
+      }
+    },
+  })
+  const saving = store.store(agent(), {
+    recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+
+  await gateReady.reachedPoint
+  const originalOwnerName = (await readdir(gate)).find((name) => name.startsWith('owner-'))
+  assert.notEqual(originalOwnerName, undefined)
+  const originalGate = join(locks, `${sha256}.reaper-reclaim-55555555-5555-4555-8555-555555555555`)
+  await rename(gate, originalGate)
+  await mkdir(gate)
+  const replacementOwner = join(gate, 'owner-replacement-gate')
+  await writeFile(replacementOwner, '')
+  gateReady.resume()
+
+  let savedHash: string | undefined
+  try {
+    await wait(40)
+    await assert.rejects(stat(lock), { code: 'ENOENT' })
+    assert.equal((await stat(replacementOwner)).isFile(), true)
+    await assert.rejects(stat(join(originalGate, originalOwnerName!)), { code: 'ENOENT' })
+  } finally {
+    await rm(gate, { recursive: true, force: true })
+    await rm(originalGate, { recursive: true, force: true })
+    savedHash = (await saving).sha256
+  }
+  assert.equal(savedHash, sha256)
+})
+
+test('concurrent cleaners of one immutable reclaim generation are idempotent', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'concurrent-generation-cleaners.txt')
+  const bytes = Buffer.from('concurrent generation cleaners')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const locks = join(root, 'attachments', '.locks')
+  const generation = join(locks, `${sha256}.reaper-reclaim-22222222-2222-4222-8222-222222222222`)
+  await mkdir(generation, { recursive: true })
+  const crashedOwner = join(generation, 'owner-crashed-cleaner')
+  await writeFile(crashedOwner, '')
+  await utimes(crashedOwner, new Date(0), new Date(0))
+  await wait(30)
+
+  const cleanersReady = pausePoint()
+  const originalLstat = fs.promises.lstat
+  const mutablePromises = fs.promises as { lstat: typeof fs.promises.lstat }
+  let generationChecks = 0
+  mutablePromises.lstat = (async (path: Parameters<typeof originalLstat>[0]) => {
+    const result = await originalLstat(path)
+    if (String(path) === generation && generationChecks < 2) {
+      generationChecks += 1
+      if (generationChecks === 2) cleanersReady.reached()
+      await cleanersReady.resumed
+    }
+    return result
+  }) as typeof originalLstat
+  syncBuiltinESMExports()
+  const restoreLstat = () => {
+    mutablePromises.lstat = originalLstat
+    syncBuiltinESMExports()
+  }
+  t.after(restoreLstat)
+
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `concurrent-cleaner-${++nextHandle}` })
+  const first = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 20, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    createAttachmentId: () => 'concurrent-cleaner-first',
+  })
+  const second = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 20, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    createAttachmentId: () => 'concurrent-cleaner-second',
+  })
+  const saves = Promise.all([
+    first.store(agent(), {
+      recordId: 'record-first', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }),
+    second.store(agent(), {
+      recordId: 'record-second', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }),
+  ])
+
+  const bothValidated = await Promise.race([
+    cleanersReady.reachedPoint.then(() => true),
+    wait(250).then(() => false),
+  ])
+  cleanersReady.resume()
+  restoreLstat()
+  const [savedFirst, savedSecond] = await saves
+
+  assert.equal(bothValidated, true, 'both cleaners must inspect the same stale generation before cleanup')
+  await assert.rejects(stat(generation), { code: 'ENOENT' })
+  const saved = await survivingDescriptor(first, savedFirst.id, savedSecond.id)
+  assert.equal(saved.liveReferenceCount, 2)
+})
+
+test('a crashed immutable reclaim generation is stale-recoverable', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'crashed-immutable-generation.txt')
+  const bytes = Buffer.from('crashed immutable generation')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const generation = join(
+    root,
+    'attachments',
+    '.locks',
+    `${sha256}.reaper-reclaim-33333333-3333-4333-8333-333333333333`,
+  )
+  await mkdir(generation, { recursive: true })
+  const crashedOwner = join(generation, 'owner-crashed-generation')
+  await writeFile(crashedOwner, '')
+  await utimes(crashedOwner, new Date(0), new Date(0))
+  await wait(30)
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => 'crashed-generation-handle' })
+  const store = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 20, lockTimeoutMs: 500, lockRetryMs: 5,
+  })
+
+  const saved = await store.store(agent(), {
+    recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+
+  assert.equal(saved.sha256, sha256)
+  await assert.rejects(stat(generation), { code: 'ENOENT' })
+})
+
+test('a live owner in an immutable reclaim generation is restored to the fixed gate', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'live-immutable-generation.txt')
+  const bytes = Buffer.from('live immutable generation')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const locks = join(root, 'attachments', '.locks')
+  const gate = join(locks, `${sha256}.reaper`)
+  const generation = join(locks, `${sha256}.reaper-reclaim-44444444-4444-4444-8444-444444444444`)
+  const ownerName = 'owner-live-generation'
+  await mkdir(generation, { recursive: true })
+  await writeFile(join(generation, ownerName), '')
+  const heartbeat = setInterval(() => {
+    const now = new Date()
+    void Promise.all([
+      utimes(join(generation, ownerName), now, now),
+      utimes(join(gate, ownerName), now, now),
+    ].map((refresh) => refresh.catch(() => { /* the live owner exists at exactly one path */ })))
+  }, 5)
+  heartbeat.unref()
+  await wait(30)
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => 'live-generation-handle' })
+  const store = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 20, lockTimeoutMs: 120, lockRetryMs: 5,
+  })
+
+  try {
+    await assert.rejects(store.store(agent(), {
+      recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }), /attachment lock timed out/i)
+  } finally {
+    clearInterval(heartbeat)
+  }
+
+  assert.equal((await stat(join(gate, ownerName))).isFile(), true)
+  await assert.rejects(stat(generation), { code: 'ENOENT' })
 })
 
 test('an active owner heartbeats across stale intervals and serializes a waiting writer', async (t) => {
