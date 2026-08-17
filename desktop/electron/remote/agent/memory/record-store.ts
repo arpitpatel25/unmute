@@ -364,11 +364,11 @@ export class EncryptedRecordStore {
     })
   }
 
-  async create(input: CreateMemoryRecordInput): Promise<MemoryRecord> {
+  async create(input: CreateMemoryRecordInput, expectedId?: string): Promise<MemoryRecord> {
     return this.runPublic('create', async () => {
       await this.initialize()
       validateCreateInput(input)
-      const id = this.createId()
+      const id = expectedId ?? this.createId()
       requireIdentifier(id)
       const at = this.now()
       const record: MemoryRecord = { id, ...input, createdAt: at, updatedAt: at, version: 1 }

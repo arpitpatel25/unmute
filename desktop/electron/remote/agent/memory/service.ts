@@ -1,12 +1,25 @@
+import { randomUUID } from 'node:crypto'
+
 import type { CapabilityCallContext, McpPrincipal } from '../types'
 import type {
   AttachmentDescriptor,
   OpenAttachmentHandle,
   StoreAttachmentInput,
 } from './attachments'
-import type { MemoryAuditInput, MemoryAuditOperation, MemoryAuditSink } from './audit'
+import {
+  memoryAuditRow,
+  type MemoryAuditInput,
+  type MemoryAuditOperation,
+  type MemoryAuditSink,
+} from './audit'
 import type { MemoryIndex } from './index'
-import { rankMemorySearch, type MemorySearchQuery, type MemorySearchResult } from './search'
+import type { MemoryMutationIntent, MemoryMutationJournal } from './journal'
+import {
+  memorySearchExactTier,
+  rankMemorySearch,
+  type MemorySearchQuery,
+  type MemorySearchResult,
+} from './search'
 import {
   presentMemoryRecord,
 } from './record-store'
@@ -23,6 +36,9 @@ const MAX_SEARCH_LIMIT = 100
 const UNASSIGNED_MEMORY_ID = 'unassigned'
 const SEARCH_QUERY_KEYS = new Set(['text', 'kinds', 'tags', 'scope', 'includeSensitive', 'limit'])
 const GET_OPTION_KEYS = new Set(['includeContent', 'includeAttachments', 'includeDeleted'])
+const UPDATE_PATCH_KEYS = new Set([
+  'kind', 'title', 'content', 'tags', 'scope', 'sensitivity', 'references', 'provenance',
+])
 
 type MutationIntent = 'store' | 'update' | 'forget' | 'restore'
 
@@ -50,7 +66,7 @@ export interface MemoryGetOptions {
 export interface MemoryCanonicalStore {
   initialize(): Promise<void>
   list(): Promise<MemoryRecord[]>
-  create(input: CreateMemoryRecordInput): Promise<MemoryRecord>
+  create(input: CreateMemoryRecordInput, expectedId?: string): Promise<MemoryRecord>
   read(id: string): Promise<MemoryRecord>
   readTrash(id: string): Promise<MemoryRecord>
   update(id: string, patch: MemoryRecordPatch): Promise<MemoryRecord>
@@ -72,6 +88,8 @@ export interface MemoryServiceOptions {
   attachments: MemoryAttachmentStore
   index: MemoryIndex
   audit: MemoryAuditSink
+  journal: MemoryMutationJournal
+  createMemoryId?: () => string
 }
 
 export type MemoryServiceErrorCode =
@@ -150,6 +168,24 @@ function requireGetOptions(options: MemoryGetOptions): void {
   }
 }
 
+function requireUpdatePatch(patch: MemoryRecordPatch): void {
+  if (
+    !patch || typeof patch !== 'object' || Array.isArray(patch)
+    || Object.keys(patch).length === 0
+    || Object.keys(patch).some((key) => !UPDATE_PATCH_KEYS.has(key))
+  ) throw new MemoryServiceError('invalid-input', 'Memory update input is invalid')
+}
+
+function dependencyCode(error: unknown): unknown {
+  return error && typeof error === 'object' && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined
+}
+
+function isNotFound(error: unknown): boolean {
+  return dependencyCode(error) === 'not-found'
+}
+
 function rollbackPatch(record: MemoryRecord): MemoryRecordPatch {
   return {
     kind: record.kind,
@@ -195,10 +231,14 @@ function view(record: MemoryRecord, options: MemoryGetOptions): MemoryRecordView
 export class MemoryService {
   private mutationQueue: Promise<void> = Promise.resolve()
   private readonly initialization: Promise<void>
+  private readonly createMemoryId: () => string
 
   constructor(private readonly options: MemoryServiceOptions) {
+    this.createMemoryId = options.createMemoryId ?? randomUUID
     this.initialization = this.enqueueMutation(async () => {
       await Promise.all([options.records.initialize(), options.attachments.initialize()])
+      const pending = await options.journal.read()
+      if (pending) await this.recover(pending)
       const canonical = await options.records.list()
       options.index.rebuild(canonical)
     })
@@ -208,54 +248,55 @@ export class MemoryService {
     requireIntent(ctx, 'store')
     await this.ready('store')
     return this.enqueueMutation(async () => {
+      const memoryId = this.createMemoryId()
+      const intent = this.mutationIntent(ctx, memoryId, 'store')
       let record: MemoryRecord | undefined
-      let attachmentAttempted = false
+      try { await this.options.journal.begin(intent) } catch (error) { throw this.failure('store', error) }
       try {
         const handles = [...(input.attachments ?? [])]
-        record = await this.options.records.create({ ...input, attachments: [] })
+        record = await this.options.records.create({ ...input, attachments: [] }, memoryId)
+        await this.checkpoint(intent, 'canonical')
         const attachmentIds: string[] = []
         for (const handle of handles) {
-          attachmentAttempted = true
           const attachment = await this.options.attachments.store(ctx.principal, {
             recordId: record.id,
             handle,
           })
           attachmentIds.push(attachment.id)
         }
+        await this.checkpoint(intent, 'attachments')
         if (attachmentIds.length > 0) {
           record = await this.options.records.update(record.id, { attachments: attachmentIds })
         }
+        await this.checkpoint(intent, 'canonical-attached')
         this.options.index.runInTransaction(() => this.options.index.project(record!))
+        await this.checkpoint(intent, 'indexed')
         await this.audit(ctx, record.id, 'store', 'success')
+        await this.checkpoint(intent, 'audited')
+        await this.options.journal.clear()
         return record
       } catch (error) {
-        const memoryId = record?.id ?? UNASSIGNED_MEMORY_ID
         let compensationFailed = false
-        if (record) {
-          try { this.options.index.runInTransaction(() => this.options.index.remove(record!.id)) }
-          catch { compensationFailed = true }
-          if (attachmentAttempted) {
-            let detached = record.attachments.length === 0
-            if (!detached) {
-              try {
-                record = await this.options.records.update(record.id, { attachments: [] })
-                detached = true
-              } catch {
-                compensationFailed = true
-              }
-            }
-            if (detached) {
-              try { await this.options.attachments.purgeRecord(record.id) }
-              catch { compensationFailed = true }
-            } else {
-              try { await this.options.attachments.trashRecord(record.id) }
-              catch { compensationFailed = true }
-            }
-          }
-          try { await this.options.records.forget(record.id) }
-          catch { compensationFailed = true }
+        try {
+          intent.audit.outcome = 'failure'
+          intent.stage = 'intent'
+          await this.options.journal.checkpoint(intent)
+        } catch {
+          throw this.failure('store', error, true)
         }
-        await this.audit(ctx, memoryId, 'store', 'failure')
+        try { this.options.index.runInTransaction(() => this.options.index.remove(memoryId)) }
+        catch { compensationFailed = true }
+        try { await this.rollbackStoredRecord(memoryId) }
+        catch { compensationFailed = true }
+        try {
+          await this.audit(ctx, memoryId, 'store', 'failure')
+          if (!compensationFailed) {
+            await this.checkpoint(intent, 'audited')
+            await this.options.journal.clear()
+          }
+        } catch {
+          compensationFailed = true
+        }
         throw this.failure('store', error, compensationFailed)
       }
     })
@@ -274,23 +315,42 @@ export class MemoryService {
         includeSensitive: query.includeSensitive === true,
         limit: MAX_SEARCH_LIMIT,
       })
+      const hitById = new Map(hits.map((hit) => [hit.id, hit]))
+      for (const record of await this.options.records.list()) {
+        const tier = memorySearchExactTier(validated.text, record)
+        if (tier === 0 || record.deletedAt !== undefined || hitById.has(record.id)) continue
+        hitById.set(record.id, {
+          id: record.id,
+          kind: record.kind,
+          title: record.title,
+          tags: [...record.tags],
+          ...(record.scope === undefined ? {} : { scope: { ...record.scope } }),
+          sensitivity: record.sensitivity,
+          updatedAt: record.updatedAt,
+          exactTitle: tier === 2,
+          lexicalRank: 0,
+        })
+      }
       const candidates = []
-      for (const hit of hits) {
+      for (const hit of hitById.values()) {
         try {
           const record = await this.options.records.read(hit.id)
           if (record.deletedAt !== undefined) continue
           if (!query.includeSensitive && record.sensitivity !== 'normal') continue
           if (query.kinds?.length && !query.kinds.includes(record.kind)) continue
           candidates.push({ hit, record })
-        } catch {
-          // A stale projection row is not evidence. Startup/recovery rebuild removes it.
+        } catch (error) {
+          if (!isNotFound(error)) throw error
+          // Only a typed missing canonical row can be treated as stale projection state.
         }
       }
       const results = rankMemorySearch({ ...query, limit: validated.limit }, candidates, ctx.now)
       for (const result of results) await this.audit(ctx, result.id, 'search', 'success')
       return results
     } catch (error) {
-      await this.audit(ctx, UNASSIGNED_MEMORY_ID, 'search', 'failure')
+      try { await this.audit(ctx, UNASSIGNED_MEMORY_ID, 'search', 'failure') } catch (auditError) {
+        throw this.failure('search', auditError)
+      }
       throw this.failure('search', error)
     }
   }
@@ -308,18 +368,23 @@ export class MemoryService {
       try {
         record = await this.options.records.read(id)
       } catch (error) {
-        if (!options.includeDeleted) throw error
+        if (!options.includeDeleted || !isNotFound(error)) throw error
         const deleted = await this.options.records.readTrash(id)
         record = { ...deleted, deletedAt: deleted.deletedAt ?? deleted.updatedAt }
       }
-      if (options.includeContent && record.sensitivity === 'sensitive') {
+      if (options.includeAttachments && record.deletedAt !== undefined) {
+        throw new MemoryServiceError('not-found', 'Memory record was not found')
+      }
+      if ((options.includeContent || options.includeAttachments) && record.sensitivity === 'sensitive') {
         requireIntent(ctx, 'reveal-sensitive')
       }
       const result = view(record, options)
       await this.audit(ctx, id, 'get', 'success')
       return result
     } catch (error) {
-      await this.audit(ctx, id, 'get', 'failure')
+      try { await this.audit(ctx, id, 'get', 'failure') } catch (auditError) {
+        throw this.failure('get', auditError)
+      }
       if (error instanceof MemoryServiceError) throw error
       throw this.failure('get', error)
     }
@@ -331,6 +396,7 @@ export class MemoryService {
     patch: MemoryRecordPatch,
   ): Promise<MemoryRecord> {
     requireIntent(ctx, 'update')
+    requireUpdatePatch(patch)
     await this.ready('update')
     return this.enqueueMutation(async () => {
       let prior: MemoryRecord | undefined
@@ -352,7 +418,7 @@ export class MemoryService {
             compensationFailed = true
           }
         }
-        await this.audit(ctx, id, 'update', 'failure')
+        try { await this.audit(ctx, id, 'update', 'failure') } catch { compensationFailed = true }
         throw this.failure('update', error, compensationFailed)
       }
     })
@@ -362,32 +428,50 @@ export class MemoryService {
     requireIntent(ctx, 'forget')
     await this.ready('forget')
     return this.enqueueMutation(async () => {
+      const intent = this.mutationIntent(ctx, id, 'forget')
       let prior: MemoryRecord | undefined
-      let canonicalMoved = false
-      let attachmentAttempted = false
+      let journalStarted = false
       try {
         prior = await this.options.records.read(id)
+        await this.options.journal.begin(intent)
+        journalStarted = true
         await this.options.records.forget(id)
-        canonicalMoved = true
-        attachmentAttempted = true
+        await this.checkpoint(intent, 'canonical')
         await this.options.attachments.trashRecord(id)
+        await this.checkpoint(intent, 'attachments')
         this.options.index.runInTransaction(() => this.options.index.setDeleted(id, ctx.now))
+        await this.checkpoint(intent, 'indexed')
         await this.audit(ctx, id, 'forget', 'success')
+        await this.checkpoint(intent, 'audited')
+        await this.options.journal.clear()
       } catch (error) {
         let compensationFailed = false
-        if (attachmentAttempted) {
-          try { await this.options.attachments.restoreRecord(id) }
-          catch { compensationFailed = true }
+        if (journalStarted) {
+          try {
+            intent.audit.outcome = 'failure'
+            intent.stage = 'intent'
+            await this.options.journal.checkpoint(intent)
+          } catch {
+            throw this.failure('forget', error, true)
+          }
         }
-        if (canonicalMoved) {
-          try { await this.options.records.restore(id) }
+        if (journalStarted) {
+          try { await this.rollbackForget(id) }
           catch { compensationFailed = true }
         }
         if (prior) {
           try { this.options.index.runInTransaction(() => this.options.index.project(prior!)) }
           catch { /* the original index failure remains authoritative */ }
         }
-        await this.audit(ctx, id, 'forget', 'failure')
+        try {
+          await this.audit(ctx, id, 'forget', 'failure')
+          if (journalStarted && !compensationFailed) {
+            await this.checkpoint(intent, 'audited')
+            await this.options.journal.clear()
+          }
+        } catch {
+          compensationFailed = true
+        }
         throw this.failure('forget', error, compensationFailed)
       }
     })
@@ -397,27 +481,45 @@ export class MemoryService {
     requireIntent(ctx, 'restore')
     await this.ready('restore')
     return this.enqueueMutation(async () => {
-      let canonicalMoved = false
-      let attachmentAttempted = false
+      const intent = this.mutationIntent(ctx, id, 'restore')
+      let journalStarted = false
       try {
         await this.options.records.readTrash(id)
+        await this.options.journal.begin(intent)
+        journalStarted = true
         await this.options.records.restore(id)
-        canonicalMoved = true
-        attachmentAttempted = true
+        await this.checkpoint(intent, 'canonical')
         await this.options.attachments.restoreRecord(id)
+        await this.checkpoint(intent, 'attachments')
         this.options.index.runInTransaction(() => this.options.index.setDeleted(id, null))
+        await this.checkpoint(intent, 'indexed')
         await this.audit(ctx, id, 'restore', 'success')
+        await this.checkpoint(intent, 'audited')
+        await this.options.journal.clear()
       } catch (error) {
         let compensationFailed = false
-        if (attachmentAttempted) {
-          try { await this.options.attachments.trashRecord(id) }
+        if (journalStarted) {
+          try {
+            intent.audit.outcome = 'failure'
+            intent.stage = 'intent'
+            await this.options.journal.checkpoint(intent)
+          } catch {
+            throw this.failure('restore', error, true)
+          }
+        }
+        if (journalStarted) {
+          try { await this.rollbackRestore(id) }
           catch { compensationFailed = true }
         }
-        if (canonicalMoved) {
-          try { await this.options.records.forget(id) }
-          catch { compensationFailed = true }
+        try {
+          await this.audit(ctx, id, 'restore', 'failure')
+          if (journalStarted && !compensationFailed) {
+            await this.checkpoint(intent, 'audited')
+            await this.options.journal.clear()
+          }
+        } catch {
+          compensationFailed = true
         }
-        await this.audit(ctx, id, 'restore', 'failure')
         throw this.failure('restore', error, compensationFailed)
       }
     })
@@ -427,12 +529,21 @@ export class MemoryService {
     requireActiveInteraction(ctx)
     await this.ready('open attachment')
     return this.enqueueMutation(async () => {
+      let memoryId = UNASSIGNED_MEMORY_ID
       try {
+        const owner = (await this.options.records.list())
+          .filter((record) => record.deletedAt === undefined && record.attachments.includes(id))
+          .sort((left, right) => left.id === right.id ? 0 : left.id < right.id ? -1 : 1)[0]
+        if (!owner) throw new MemoryServiceError('not-found', 'Memory record was not found')
+        memoryId = owner.id
+        if (owner.sensitivity === 'sensitive') requireIntent(ctx, 'reveal-sensitive')
         const handle = await this.options.attachments.open(ctx.principal, id)
-        await this.audit(ctx, id, 'open-attachment', 'success')
+        await this.audit(ctx, memoryId, 'open-attachment', 'success')
         return handle
       } catch (error) {
-        await this.audit(ctx, id, 'open-attachment', 'failure')
+        try { await this.audit(ctx, memoryId, 'open-attachment', 'failure') } catch (auditError) {
+          throw this.failure('open attachment', auditError)
+        }
         throw this.failure('open attachment', error)
       }
     })
@@ -458,22 +569,131 @@ export class MemoryService {
     operation: MemoryAuditOperation,
     outcome: MemoryAuditInput['outcome'],
   ): Promise<void> {
+    await this.options.audit.write({ principal: ctx.principal, memoryId, operation, at: ctx.now, outcome })
+  }
+
+  private mutationIntent(
+    ctx: CapabilityCallContext,
+    memoryId: string,
+    operation: MemoryMutationIntent['operation'],
+  ): MemoryMutationIntent {
     try {
-      await this.options.audit.write({ principal: ctx.principal, memoryId, operation, at: ctx.now, outcome })
-    } catch {
-      // Audit storage never changes an already-authoritative memory outcome.
+      return {
+        format: 'unmute-memory-mutation',
+        version: 1,
+        operation,
+        memoryId,
+        stage: 'intent',
+        audit: memoryAuditRow({
+          principal: ctx.principal,
+          memoryId,
+          operation,
+          at: ctx.now,
+          outcome: 'success',
+        }),
+      }
+    } catch (error) {
+      throw this.failure(operation, error)
     }
+  }
+
+  private async checkpoint(
+    intent: MemoryMutationIntent,
+    stage: MemoryMutationIntent['stage'],
+  ): Promise<void> {
+    intent.stage = stage
+    await this.options.journal.checkpoint(intent)
+  }
+
+  private async recover(intent: MemoryMutationIntent): Promise<void> {
+    if (intent.stage === 'audited') {
+      await this.options.journal.clear()
+      return
+    }
+    if (intent.operation === 'store') {
+      await this.rollbackStoredRecord(intent.memoryId)
+      intent.audit.outcome = 'failure'
+    } else if (intent.operation === 'forget') {
+      if (intent.audit.outcome === 'success') await this.completeForget(intent.memoryId)
+      else await this.rollbackForget(intent.memoryId)
+    } else if (intent.audit.outcome === 'success') {
+      await this.completeRestore(intent.memoryId)
+    } else {
+      await this.rollbackRestore(intent.memoryId)
+    }
+    await this.options.audit.writeRow(intent.audit)
+    await this.checkpoint(intent, 'audited')
+    await this.options.journal.clear()
+  }
+
+  private async rollbackStoredRecord(id: string): Promise<void> {
+    let active: MemoryRecord | undefined
+    try {
+      active = await this.options.records.read(id)
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+      try {
+        const trashed = await this.options.records.readTrash(id)
+        await this.options.records.restore(id)
+        active = trashed
+      } catch (trashError) {
+        if (!isNotFound(trashError)) throw trashError
+      }
+    }
+    if (active?.attachments.length) {
+      await this.options.records.update(id, { attachments: [] })
+    }
+    await this.options.attachments.purgeRecord(id)
+    if (active) await this.options.records.forget(id)
+  }
+
+  private async completeForget(id: string): Promise<void> {
+    try {
+      await this.options.records.readTrash(id)
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+      await this.options.records.forget(id)
+    }
+    await this.options.attachments.trashRecord(id)
+  }
+
+  private async rollbackForget(id: string): Promise<void> {
+    try {
+      await this.options.records.read(id)
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+      await this.options.records.restore(id)
+    }
+    await this.options.attachments.restoreRecord(id)
+  }
+
+  private async completeRestore(id: string): Promise<void> {
+    try {
+      await this.options.records.read(id)
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+      await this.options.records.restore(id)
+    }
+    await this.options.attachments.restoreRecord(id)
+  }
+
+  private async rollbackRestore(id: string): Promise<void> {
+    try {
+      await this.options.records.readTrash(id)
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+      await this.options.records.forget(id)
+    }
+    await this.options.attachments.trashRecord(id)
   }
 
   private failure(operation: string, error: unknown, compensationFailed = false): MemoryServiceError {
     if (error instanceof MemoryServiceError) return error
-    const dependencyCode = error && typeof error === 'object' && 'code' in error
-      ? (error as { code?: unknown }).code
-      : undefined
-    if (dependencyCode === 'not-found') {
+    const code = dependencyCode(error)
+    if (code === 'not-found') {
       return new MemoryServiceError('not-found', 'Memory record was not found')
     }
-    if (dependencyCode === 'invalid-input' || dependencyCode === 'invalid-query') {
+    if (code === 'invalid-input' || code === 'invalid-query') {
       return new MemoryServiceError('invalid-input', `Memory ${operation} input is invalid`)
     }
     return new MemoryServiceError(

@@ -38,6 +38,7 @@ export interface MemoryAuditRow {
 
 export interface MemoryAuditSink {
   write(event: MemoryAuditInput): Promise<void>
+  writeRow(row: MemoryAuditRow): Promise<void>
 }
 
 export interface JsonlMemoryAuditOptions {
@@ -63,7 +64,7 @@ export function principalIdHash(principal: McpPrincipal): string {
   return createHash('sha256').update(principalIdentity(principal), 'utf8').digest('hex')
 }
 
-function row(event: MemoryAuditInput): MemoryAuditRow {
+export function memoryAuditRow(event: MemoryAuditInput): MemoryAuditRow {
   if (
     !IDENTIFIER_PATTERN.test(event.memoryId)
     || !Number.isSafeInteger(event.at)
@@ -95,7 +96,30 @@ export class JsonlMemoryAudit implements MemoryAuditSink {
   write(event: MemoryAuditInput): Promise<void> {
     let value: MemoryAuditRow
     try {
-      value = row(event)
+      value = memoryAuditRow(event)
+    } catch {
+      return Promise.reject(new MemoryAuditError())
+    }
+    return this.writeRow(value)
+  }
+
+  writeRow(row: MemoryAuditRow): Promise<void> {
+    let value: MemoryAuditRow
+    try {
+      const keys = row && typeof row === 'object' ? Object.keys(row) : []
+      if (
+        keys.length !== 6
+        || !['principalKind', 'principalIdHash', 'memoryId', 'operation', 'at', 'outcome']
+          .every((key) => keys.includes(key))
+        || !['task', 'unmute-agent'].includes(row.principalKind)
+        || !/^[a-f0-9]{64}$/.test(row.principalIdHash)
+        || !IDENTIFIER_PATTERN.test(row.memoryId)
+        || !['store', 'search', 'get', 'update', 'forget', 'restore', 'open-attachment']
+          .includes(row.operation)
+        || !Number.isSafeInteger(row.at) || row.at < 0
+        || !['success', 'failure'].includes(row.outcome)
+      ) throw new MemoryAuditError()
+      value = { ...row }
     } catch {
       return Promise.reject(new MemoryAuditError())
     }
@@ -114,6 +138,8 @@ export class JsonlMemoryAudit implements MemoryAuditSink {
       } finally {
         await file.close()
       }
+      const directory = await open(this.directory, 'r')
+      try { await directory.sync() } finally { await directory.close() }
     } catch {
       throw new MemoryAuditError()
     }

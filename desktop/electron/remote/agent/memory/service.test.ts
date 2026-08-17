@@ -8,6 +8,7 @@ import { RecordStoreError } from './record-store.ts'
 import { MemoryService, MemoryServiceError } from './service.ts'
 import type {
   MemoryAuditInput,
+  MemoryAuditRow,
   MemoryAuditSink,
 } from './audit.ts'
 import type {
@@ -58,6 +59,11 @@ class FakeRecordStore {
   concurrent = 0
   maxConcurrent = 0
   beforeCreate?: () => Promise<void>
+  afterCreate?: () => Promise<void>
+  afterUpdate?: () => Promise<void>
+  afterForget?: () => Promise<void>
+  afterRestore?: () => Promise<void>
+  readonly readErrors = new Map<string, Error>()
   private nextId = 1
 
   async initialize(): Promise<void> {}
@@ -69,17 +75,20 @@ class FakeRecordStore {
     ]
   }
 
-  async create(value: CreateMemoryRecordInput): Promise<MemoryRecord> {
+  async create(value: CreateMemoryRecordInput, expectedId?: string): Promise<MemoryRecord> {
     this.creates += 1
     this.concurrent += 1
     this.maxConcurrent = Math.max(this.maxConcurrent, this.concurrent)
     try {
       await this.beforeCreate?.()
       const record: MemoryRecord = {
-        ...clone(value), id: `memory-${this.nextId++}`,
+        ...clone(value), id: expectedId ?? `memory-${this.nextId++}`,
         createdAt: NOW, updatedAt: NOW, version: 1,
       }
       this.active.set(record.id, record)
+      const afterCreate = this.afterCreate
+      this.afterCreate = undefined
+      await afterCreate?.()
       return clone(record)
     } finally {
       this.concurrent -= 1
@@ -87,6 +96,8 @@ class FakeRecordStore {
   }
 
   async read(id: string): Promise<MemoryRecord> {
+    const failure = this.readErrors.get(id)
+    if (failure) throw failure
     const record = this.active.get(id)
     if (!record) throw new RecordStoreError('not-found', 'Memory record was not found')
     return clone(record)
@@ -113,6 +124,9 @@ class FakeRecordStore {
     if (patch.references !== undefined) next.references = clone(patch.references)
     if (patch.provenance !== undefined) next.provenance = clone(patch.provenance)
     this.active.set(id, next)
+    const afterUpdate = this.afterUpdate
+    this.afterUpdate = undefined
+    await afterUpdate?.()
     return clone(next)
   }
 
@@ -120,17 +134,28 @@ class FakeRecordStore {
     const record = await this.read(id)
     this.active.delete(id)
     this.trash.set(id, record)
+    const afterForget = this.afterForget
+    this.afterForget = undefined
+    await afterForget?.()
   }
 
   async restore(id: string): Promise<void> {
     const record = await this.readTrash(id)
     this.trash.delete(id)
     this.active.set(id, record)
+    const afterRestore = this.afterRestore
+    this.afterRestore = undefined
+    await afterRestore?.()
   }
 }
 
 class FakeAttachments {
   readonly calls: string[] = []
+  readonly liveRecords = new Set<string>()
+  readonly trashRecords = new Set<string>()
+  afterStore?: () => Promise<void>
+  afterTrash?: () => Promise<void>
+  afterRestore?: () => Promise<void>
   private nextId = 1
 
   async initialize(): Promise<void> {}
@@ -141,16 +166,38 @@ class FakeAttachments {
   ): Promise<AttachmentDescriptor> {
     assert.equal(principal, agent)
     this.calls.push(`store:${value.recordId}:${value.handle}`)
+    this.liveRecords.add(value.recordId)
     const id = `attachment-${this.nextId++}`
+    const afterStore = this.afterStore
+    this.afterStore = undefined
+    await afterStore?.()
     return {
       id, sha256: 'a'.repeat(64), name: 'capture.txt', mimeType: 'text/plain', size: 7,
       storage: 'managed-copy', liveReferenceCount: 1, trashReferenceCount: 0,
     }
   }
 
-  async trashRecord(id: string): Promise<void> { this.calls.push(`trash:${id}`) }
-  async restoreRecord(id: string): Promise<void> { this.calls.push(`restore:${id}`) }
-  async purgeRecord(id: string): Promise<void> { this.calls.push(`purge:${id}`) }
+  async trashRecord(id: string): Promise<void> {
+    this.calls.push(`trash:${id}`)
+    if (this.liveRecords.delete(id)) this.trashRecords.add(id)
+    const afterTrash = this.afterTrash
+    this.afterTrash = undefined
+    await afterTrash?.()
+  }
+
+  async restoreRecord(id: string): Promise<void> {
+    this.calls.push(`restore:${id}`)
+    if (this.trashRecords.delete(id)) this.liveRecords.add(id)
+    const afterRestore = this.afterRestore
+    this.afterRestore = undefined
+    await afterRestore?.()
+  }
+
+  async purgeRecord(id: string): Promise<void> {
+    this.calls.push(`purge:${id}`)
+    this.liveRecords.delete(id)
+    this.trashRecords.delete(id)
+  }
 
   async open(principal: McpPrincipal, id: string): Promise<OpenAttachmentHandle> {
     assert.equal(principal, agent)
@@ -221,16 +268,88 @@ class FakeIndex implements MemoryIndex {
 
 class CollectingAudit implements MemoryAuditSink {
   readonly events: MemoryAuditInput[] = []
-  async write(event: MemoryAuditInput): Promise<void> { this.events.push(clone(event)) }
+  readonly rows: MemoryAuditRow[] = []
+  fail = false
+  async write(event: MemoryAuditInput): Promise<void> {
+    if (this.fail) throw new Error('audit failed at /private/audit.jsonl')
+    this.events.push(clone(event))
+  }
+  async writeRow(row: MemoryAuditRow): Promise<void> {
+    if (this.fail) throw new Error('audit failed at /private/audit.jsonl')
+    this.rows.push(clone(row))
+  }
 }
 
-function fixture() {
+type TestMutationOperation = 'store' | 'forget' | 'restore'
+type TestMutationStage = 'intent' | 'canonical' | 'attachments' | 'canonical-attached' | 'indexed' | 'audited'
+
+interface TestMutationIntent {
+  operation: TestMutationOperation
+  memoryId: string
+  stage: TestMutationStage
+  audit: MemoryAuditRow
+}
+
+class FakeMutationJournal {
+  pending?: TestMutationIntent
+  afterClear?: () => Promise<void>
+
+  async read(): Promise<TestMutationIntent | undefined> { return clone(this.pending) }
+  async begin(intent: TestMutationIntent): Promise<void> {
+    if (this.pending) throw new Error('pending mutation')
+    this.pending = clone(intent)
+  }
+  async checkpoint(intent: TestMutationIntent): Promise<void> { this.pending = clone(intent) }
+  async clear(): Promise<void> {
+    const afterClear = this.afterClear
+    this.afterClear = undefined
+    await afterClear?.()
+    this.pending = undefined
+  }
+}
+
+function dependencies() {
   const records = new FakeRecordStore()
   const attachments = new FakeAttachments()
   const index = new FakeIndex()
   const audit = new CollectingAudit()
-  const service = new MemoryService({ records, attachments, index, audit })
-  return { service, records, attachments, index, audit }
+  const journal = new FakeMutationJournal()
+  return { records, attachments, index, audit, journal }
+}
+
+function serviceFor(value: ReturnType<typeof dependencies>, memoryId?: string): MemoryService {
+  let nextMemoryId = 1
+  return new MemoryService({
+    records: value.records,
+    attachments: value.attachments,
+    index: value.index,
+    audit: value.audit,
+    journal: value.journal,
+    createMemoryId: () => memoryId ?? `memory-${nextMemoryId++}`,
+  } as never)
+}
+
+function fixture() {
+  const value = dependencies()
+  return { service: serviceFor(value), ...value }
+}
+
+function interruption(): { reached: Promise<void>; hook: () => Promise<void> } {
+  let signal!: () => void
+  const reached = new Promise<void>((resolve) => { signal = resolve })
+  const never = new Promise<void>(() => {})
+  return { reached, hook: async () => { signal(); await never } }
+}
+
+async function requireInterruption(
+  operation: Promise<unknown>,
+  reached: Promise<void>,
+): Promise<void> {
+  const outcome = await Promise.race([
+    reached.then(() => 'interrupted'),
+    operation.then(() => 'completed', () => 'failed'),
+  ])
+  assert.equal(outcome, 'interrupted')
 }
 
 test('requires an active operation-specific explicit intent before every canonical mutation', async () => {
@@ -351,6 +470,30 @@ test('compensates update, forget, and restore when their index transaction fails
   assert.equal((await records.readTrash(original.id)).title, 'Original')
   assert.deepEqual(attachments.calls.slice(-2), [`restore:${original.id}`, `trash:${original.id}`])
   assert.notEqual(index.projected.get(original.id)?.deletedAt, undefined)
+})
+
+test('compensates by durable identity when a store move committed before reporting failure', async () => {
+  const created = fixture()
+  created.records.afterCreate = async () => { throw new Error('uncertain create completion') }
+  await assert.rejects(created.service.store(ctx('store'), input()), /memory store failed/i)
+  assert.equal(created.records.active.has('memory-1'), false)
+  assert.equal(created.records.trash.has('memory-1'), true)
+  assert.equal(created.journal.pending, undefined)
+
+  const forgotten = fixture()
+  const live = await forgotten.service.store(ctx('store'), input({ attachments: ['capture-handle'] }))
+  forgotten.records.afterForget = async () => { throw new Error('uncertain forget completion') }
+  await assert.rejects(forgotten.service.forget(ctx('forget'), live.id), /memory forget failed/i)
+  assert.equal(forgotten.records.active.has(live.id), true)
+  assert.equal(forgotten.attachments.liveRecords.has(live.id), true)
+  assert.equal(forgotten.journal.pending, undefined)
+
+  await forgotten.service.forget(ctx('forget'), live.id)
+  forgotten.records.afterRestore = async () => { throw new Error('uncertain restore completion') }
+  await assert.rejects(forgotten.service.restore(ctx('restore'), live.id), /memory restore failed/i)
+  assert.equal(forgotten.records.trash.has(live.id), true)
+  assert.equal(forgotten.attachments.trashRecords.has(live.id), true)
+  assert.equal(forgotten.journal.pending, undefined)
 })
 
 test('ranks exact normalized titles, then exact aliases, then BM25 with bounded context boosts', async () => {
@@ -487,7 +630,11 @@ test('rebuilds the disposable index exactly once from canonical active and trash
 })
 
 test('opens only an opaque attachment delivery handle and never accepts a destination or path', async () => {
-  const { service, attachments } = fixture()
+  const { service, attachments, records } = fixture()
+  records.active.set('memory-owner', {
+    ...input({ attachments: ['attachment-1'] }),
+    id: 'memory-owner', createdAt: 1, updatedAt: 2, version: 1,
+  })
   const result = await service.openAttachment(ctx(), 'attachment-1')
   assert.deepEqual(result, { handle: 'opaque-delivery-handle', expiresAt: 15_000 })
   assert.deepEqual(attachments.calls, ['open:attachment-1'])
@@ -532,5 +679,283 @@ test('audits a content-free failure outcome when search aborts before selecting 
     operation: 'search',
     at: NOW,
     outcome: 'failure',
+  })
+})
+
+test('recovers an interrupted store at every durable boundary without exposing a partial record', async (t) => {
+  const boundaries = [
+    'canonical', 'attachments', 'canonical-attached', 'audited',
+  ] as const
+  for (const boundary of boundaries) {
+    await t.test(boundary, async () => {
+      const value = dependencies()
+      const paused = interruption()
+      if (boundary === 'canonical') value.records.afterCreate = paused.hook
+      if (boundary === 'attachments') value.attachments.afterStore = paused.hook
+      if (boundary === 'canonical-attached') value.records.afterUpdate = paused.hook
+      if (boundary === 'audited') value.journal.afterClear = paused.hook
+      const first = serviceFor(value, 'memory-recovery')
+
+      await requireInterruption(first.store(ctx('store'), {
+        ...input({ title: 'Crash boundary' }), attachments: ['capture-handle'],
+      }), paused.reached)
+
+      const restarted = serviceFor(value, 'unused-after-restart')
+      await restarted.search(ctx(), { text: 'Crash boundary' })
+      assert.equal(value.journal.pending, undefined)
+      if (boundary === 'audited') {
+        assert.equal(value.records.active.has('memory-recovery'), true)
+        assert.equal(value.attachments.liveRecords.has('memory-recovery'), true)
+        assert.equal(value.index.projected.get('memory-recovery')?.deletedAt, undefined)
+        assert.equal(value.audit.events.filter((event) => event.operation === 'store').length, 1)
+      } else {
+        assert.equal(value.records.active.has('memory-recovery'), false)
+        assert.deepEqual(value.records.trash.get('memory-recovery')?.attachments, [])
+        assert.equal(value.attachments.liveRecords.has('memory-recovery'), false)
+        assert.equal(value.attachments.trashRecords.has('memory-recovery'), false)
+        assert.notEqual(value.index.projected.get('memory-recovery')?.deletedAt, undefined)
+        assert.deepEqual(value.audit.rows.map(({ memoryId, operation, outcome }) => ({ memoryId, operation, outcome })), [
+          { memoryId: 'memory-recovery', operation: 'store', outcome: 'failure' },
+        ])
+      }
+    })
+  }
+})
+
+test('recovers interrupted forget forward at canonical, attachment, and audited boundaries', async (t) => {
+  for (const boundary of ['canonical', 'attachments', 'audited'] as const) {
+    await t.test(boundary, async () => {
+      const value = dependencies()
+      value.records.active.set('memory-live', {
+        ...input({ title: 'Forget boundary', attachments: ['attachment-1'] }),
+        id: 'memory-live', createdAt: 1, updatedAt: 2, version: 1,
+      })
+      value.attachments.liveRecords.add('memory-live')
+      const paused = interruption()
+      if (boundary === 'canonical') value.records.afterForget = paused.hook
+      if (boundary === 'attachments') value.attachments.afterTrash = paused.hook
+      if (boundary === 'audited') value.journal.afterClear = paused.hook
+
+      await requireInterruption(
+        serviceFor(value).forget(ctx('forget'), 'memory-live'),
+        paused.reached,
+      )
+      await serviceFor(value).search(ctx(), { text: 'Forget boundary' })
+
+      assert.equal(value.journal.pending, undefined)
+      assert.equal(value.records.active.has('memory-live'), false)
+      assert.equal(value.records.trash.has('memory-live'), true)
+      assert.equal(value.attachments.liveRecords.has('memory-live'), false)
+      assert.equal(value.attachments.trashRecords.has('memory-live'), true)
+      assert.notEqual(value.index.projected.get('memory-live')?.deletedAt, undefined)
+      const forgetAudits = [
+        ...value.audit.events.filter((event) => event.operation === 'forget'),
+        ...value.audit.rows.filter((row) => row.operation === 'forget'),
+      ]
+      assert.equal(forgetAudits.length, 1)
+      assert.equal(forgetAudits[0]?.memoryId, 'memory-live')
+      assert.equal(forgetAudits[0]?.outcome, 'success')
+    })
+  }
+})
+
+test('recovers interrupted restore forward at canonical, attachment, and audited boundaries', async (t) => {
+  for (const boundary of ['canonical', 'attachments', 'audited'] as const) {
+    await t.test(boundary, async () => {
+      const value = dependencies()
+      value.records.trash.set('memory-trash', {
+        ...input({ title: 'Restore boundary', attachments: ['attachment-1'] }),
+        id: 'memory-trash', createdAt: 1, updatedAt: 2, version: 1,
+      })
+      value.attachments.trashRecords.add('memory-trash')
+      const paused = interruption()
+      if (boundary === 'canonical') value.records.afterRestore = paused.hook
+      if (boundary === 'attachments') value.attachments.afterRestore = paused.hook
+      if (boundary === 'audited') value.journal.afterClear = paused.hook
+
+      await requireInterruption(
+        serviceFor(value).restore(ctx('restore'), 'memory-trash'),
+        paused.reached,
+      )
+      const results = await serviceFor(value).search(ctx(), { text: 'Restore boundary' })
+
+      assert.equal(value.journal.pending, undefined)
+      assert.equal(value.records.active.has('memory-trash'), true)
+      assert.equal(value.records.trash.has('memory-trash'), false)
+      assert.equal(value.attachments.liveRecords.has('memory-trash'), true)
+      assert.equal(value.attachments.trashRecords.has('memory-trash'), false)
+      assert.equal(value.index.projected.get('memory-trash')?.deletedAt, undefined)
+      assert.deepEqual(results.map(({ id }) => id), ['memory-trash'])
+      const restoreAudits = [
+        ...value.audit.events.filter((event) => event.operation === 'restore'),
+        ...value.audit.rows.filter((row) => row.operation === 'restore'),
+      ]
+      assert.equal(restoreAudits.length, 1)
+      assert.equal(restoreAudits[0]?.memoryId, 'memory-trash')
+      assert.equal(restoreAudits[0]?.outcome, 'success')
+    })
+  }
+})
+
+test('retries recovery idempotently when recovery itself is interrupted', async () => {
+  const value = dependencies()
+  value.records.active.set('memory-retry', {
+    ...input({ title: 'Retry recovery', attachments: ['attachment-1'] }),
+    id: 'memory-retry', createdAt: 1, updatedAt: 2, version: 1,
+  })
+  value.attachments.liveRecords.add('memory-retry')
+  value.journal.pending = {
+    operation: 'store', memoryId: 'memory-retry', stage: 'canonical-attached',
+    audit: {
+      principalKind: 'unmute-agent', principalIdHash: 'a'.repeat(64),
+      memoryId: 'memory-retry', operation: 'store', at: NOW, outcome: 'success',
+    },
+  }
+  const paused = interruption()
+  value.records.afterUpdate = paused.hook
+
+  await requireInterruption(
+    serviceFor(value).search(ctx(), { text: 'Retry recovery' }),
+    paused.reached,
+  )
+  await serviceFor(value).search(ctx(), { text: 'Retry recovery' })
+
+  assert.equal(value.journal.pending, undefined)
+  assert.equal(value.records.active.has('memory-retry'), false)
+  assert.deepEqual(value.records.trash.get('memory-retry')?.attachments, [])
+  assert.equal(value.attachments.liveRecords.has('memory-retry'), false)
+  assert.deepEqual(value.audit.rows.map(({ memoryId, operation, outcome }) => ({ memoryId, operation, outcome })), [
+    { memoryId: 'memory-retry', operation: 'store', outcome: 'failure' },
+  ])
+})
+
+test('gates attachment disclosure by live canonical ownership, deletion, and sensitivity', async () => {
+  const value = dependencies()
+  value.records.active.set('memory-normal', {
+    ...input({ attachments: ['attachment-normal'] }),
+    id: 'memory-normal', createdAt: 1, updatedAt: 2, version: 1,
+  })
+  value.records.active.set('memory-sensitive', {
+    ...input({ sensitivity: 'sensitive', attachments: ['attachment-sensitive'] }),
+    id: 'memory-sensitive', createdAt: 1, updatedAt: 2, version: 1,
+  })
+  value.records.trash.set('memory-deleted', {
+    ...input({ attachments: ['attachment-deleted'] }),
+    id: 'memory-deleted', createdAt: 1, updatedAt: 2, version: 1,
+  })
+  const service = serviceFor(value)
+
+  await assert.rejects(
+    service.get(ctx(), 'memory-sensitive', { includeAttachments: true }),
+    (error: unknown) => error instanceof MemoryServiceError && error.code === 'intent-required',
+  )
+  await assert.rejects(
+    service.get(ctx(), 'memory-deleted', { includeAttachments: true, includeDeleted: true }),
+    (error: unknown) => error instanceof MemoryServiceError && error.code === 'not-found',
+  )
+  await assert.rejects(
+    service.openAttachment(ctx(), 'attachment-sensitive'),
+    (error: unknown) => error instanceof MemoryServiceError && error.code === 'intent-required',
+  )
+  await assert.rejects(
+    service.openAttachment(ctx(), 'attachment-deleted'),
+    (error: unknown) => error instanceof MemoryServiceError && error.code === 'not-found',
+  )
+  await assert.rejects(
+    service.openAttachment(ctx(), 'attachment-orphan'),
+    (error: unknown) => error instanceof MemoryServiceError && error.code === 'not-found',
+  )
+  await service.openAttachment(ctx('reveal-sensitive'), 'attachment-sensitive')
+  await service.openAttachment(ctx(), 'attachment-normal')
+
+  assert.deepEqual(value.attachments.calls, [
+    'open:attachment-sensitive', 'open:attachment-normal',
+  ])
+  const opens = value.audit.events.filter((event) => event.operation === 'open-attachment')
+  assert.deepEqual(opens.map(({ memoryId, outcome }) => ({ memoryId, outcome })), [
+    { memoryId: 'memory-sensitive', outcome: 'failure' },
+    { memoryId: 'unassigned', outcome: 'failure' },
+    { memoryId: 'unassigned', outcome: 'failure' },
+    { memoryId: 'memory-sensitive', outcome: 'success' },
+    { memoryId: 'memory-normal', outcome: 'success' },
+  ])
+  assert.equal(opens.some(({ memoryId }) => memoryId.startsWith('attachment-')), false)
+})
+
+test('rejects attachment and unknown update fields before canonical or metadata drift', async () => {
+  const { service, records, attachments, index } = fixture()
+  const stored = await service.store(ctx('store'), {
+    ...input(), attachments: ['capture-handle'],
+  })
+  const calls = [...attachments.calls]
+
+  for (const patch of [{ attachments: [] }, { unexpected: 'field' }] as const) {
+    await assert.rejects(
+      service.update(ctx('update'), stored.id, patch as never),
+      (error: unknown) => error instanceof MemoryServiceError && error.code === 'invalid-input',
+    )
+  }
+
+  assert.deepEqual((await records.read(stored.id)).attachments, ['attachment-1'])
+  assert.deepEqual(index.projected.get(stored.id)?.attachments, ['attachment-1'])
+  assert.deepEqual(attachments.calls, calls)
+})
+
+test('swallows only typed not-found projection staleness and fails closed on canonical corruption', async () => {
+  const { service, records, index } = fixture()
+  const hit = (id: string): MemoryIndexSearchHit => ({
+    id, kind: 'note', title: 'Atlas', tags: [], sensitivity: 'normal',
+    updatedAt: 2, exactTitle: true, lexicalRank: 0,
+  })
+  index.searchHits = [hit('stale')]
+  assert.deepEqual(await service.search(ctx(), { text: 'atlas' }), [])
+
+  records.readErrors.set('corrupt', new RecordStoreError('corrupt-record', 'secret at /private/record'))
+  index.searchHits = [hit('corrupt')]
+  await assert.rejects(service.search(ctx(), { text: 'atlas' }), (error: unknown) => {
+    assert(error instanceof MemoryServiceError)
+    assert.equal(error.code, 'operation-failed')
+    assert.equal(error.message.includes('/private'), false)
+    return true
+  })
+
+  records.trash.set('corrupt', {
+    ...input(), id: 'corrupt', createdAt: 1, updatedAt: 2, version: 1,
+  })
+  await assert.rejects(
+    service.get(ctx(), 'corrupt', { includeDeleted: true }),
+    (error: unknown) => error instanceof MemoryServiceError && error.code === 'operation-failed',
+  )
+})
+
+test('retrieves exact normalized tokenless Unicode titles and aliases outside FTS', async () => {
+  const { service, records, index } = fixture()
+  records.active.set('rocket-title', {
+    ...input({ title: '  🚀  ' }), id: 'rocket-title', createdAt: 1, updatedAt: 2, version: 1,
+  })
+  records.active.set('rocket-alias', {
+    ...input({ title: 'Launch', tags: ['alias: 🚀'] }),
+    id: 'rocket-alias', createdAt: 1, updatedAt: 2, version: 1,
+  })
+  index.searchHits = []
+
+  assert.deepEqual(
+    (await service.search(ctx(), { text: '🚀' })).map(({ id }) => id),
+    ['rocket-title', 'rocket-alias'],
+  )
+})
+
+test('fails closed with a typed redacted error when the required content-free audit is unavailable', async () => {
+  const { service, records, audit } = fixture()
+  records.active.set('audited-memory', {
+    ...input({ title: 'Audited' }), id: 'audited-memory', createdAt: 1, updatedAt: 2, version: 1,
+  })
+  audit.fail = true
+
+  await assert.rejects(service.get(ctx(), 'audited-memory', {}), (error: unknown) => {
+    assert(error instanceof MemoryServiceError)
+    assert.equal(error.code, 'operation-failed')
+    assert.equal(error.message.includes('/private'), false)
+    return true
   })
 })

@@ -48,9 +48,15 @@ function aliasValues(tags: readonly string[]): string[] {
   return aliases
 }
 
+export function memorySearchExactTier(query: string, record: MemoryRecord): number {
+  const normalized = normalizeMemorySearchText(query)
+  if (normalizeMemorySearchText(record.title) === normalized) return 2
+  return aliasValues(record.tags).includes(normalized) ? 1 : 0
+}
+
 function exactTier(query: string, candidate: MemorySearchCandidate): number {
   if (candidate.hit.exactTitle || normalizeMemorySearchText(candidate.record.title) === query) return 2
-  return aliasValues(candidate.record.tags).includes(query) ? 1 : 0
+  return memorySearchExactTier(query, candidate.record)
 }
 
 function matchesNormalized(values: readonly string[], expected: string): boolean {

@@ -103,6 +103,16 @@ test('rejects runtime create fields that could override canonical store identity
   await assert.rejects(() => readFile(join(root, 'records', 'memory-1.md.enc')), { code: 'ENOENT' })
 })
 
+test('accepts a service-journaled identifier without consulting the fallback generator', async (t) => {
+  const root = await temporaryRoot(t)
+  const records = store(root, { createId: () => { throw new Error('fallback must not run') } })
+
+  const created = await records.create(input(), 'memory-journaled')
+
+  assert.equal(created.id, 'memory-journaled')
+  assert.equal((await records.read('memory-journaled')).id, 'memory-journaled')
+})
+
 test('serializes deterministic metadata and Markdown in a versioned JSON payload', () => {
   const record: MemoryRecord = {
     id: 'memory-1',
