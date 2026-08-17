@@ -1,11 +1,13 @@
 import { promises as fs } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { CodexExecutor, type CodexExecutorOpts } from '../../codex-executor'
 import {
-  discoverSessionId,
-  findRollout,
-  readRolloutEvents,
+  discoverSessionIdStrict,
+  findRolloutCandidates,
+  readRolloutSnapshot,
   snapshotRolloutSessionIds,
 } from '../../codex/cli-session'
+import type { RolloutEvent } from '../../codex/cli-observer'
 import {
   CliProviderRuntime,
   ExecutorBackedAgentProcess,
@@ -31,6 +33,7 @@ export interface CodexRolloutObserverOptions {
   home?: string
   pollMs?: number
   resumeBaselineTimeoutMs?: number
+  liveReadTimeoutMs?: number
 }
 
 /** Codex CLI adapter; fresh handles are learned from its structured rollout. */
@@ -70,13 +73,20 @@ export function codexRolloutObserver(
   const freshDiscoveryTails = new Map<string, Promise<void>>()
   const claimedSessions = new Set<string>()
   return async (launch, emit) => {
+    const setupDeadline = new HardDeadline(baselineTimeoutMs(options))
     let releaseFreshDiscovery: (() => void) | null = null
     if (launch.session.kind === 'fresh') {
       const predecessor = freshDiscoveryTails.get(launch.cwd) ?? Promise.resolve()
       let release!: () => void
       const ownGate = new Promise<void>((resolve) => { release = resolve })
       freshDiscoveryTails.set(launch.cwd, ownGate)
-      await predecessor
+      try {
+        await setupDeadline.run(() => predecessor)
+      } catch (error) {
+        release()
+        if (freshDiscoveryTails.get(launch.cwd) === ownGate) freshDiscoveryTails.delete(launch.cwd)
+        throw error
+      }
       releaseFreshDiscovery = () => {
         if (!releaseFreshDiscovery) return
         releaseFreshDiscovery = null
@@ -89,26 +99,27 @@ export function codexRolloutObserver(
     let sessionId = launch.session.kind === 'resume' ? launch.session.id : undefined
     let claimedSession = sessionId
     if (claimedSession) claimedSessions.add(claimedSession)
-    let rolloutPath: string | null = null
-    let cursor = 0
     let lastMessage = ''
     let timer: ReturnType<typeof setInterval> | null = null
     let afterSpawnCalled = false
     let observerFailed = false
     let preSpawnSessions: ReadonlySet<string>
+    const knownHistories = new Map<string, readonly string[]>()
+    let activeFileIds = new Set<string>()
+    let activeTurnPrefix: readonly string[] = []
     const sinceMs = Date.now()
 
     try {
       preSpawnSessions = launch.session.kind === 'fresh'
-        ? await snapshotRolloutSessionIds(options.home)
+        ? await setupDeadline.run(() => snapshotRolloutSessionIds(options.home))
         : new Set<string>()
 
-      // A resumed rollout already contains old completions. Establish a stable
-      // exact-session cursor before spawning so relocation cannot replay them.
+      // Keep the pre-spawn availability check: a missing or unreadable exact
+      // resume must fail before PTY spawn. The causal boundary itself is reset
+      // later, after readiness and immediately before the user turn is sent.
       if (sessionId) {
-        const baseline = await baselineResume(sessionId, options)
-        rolloutPath = baseline.path
-        cursor = baseline.cursor
+        const histories = await captureStableExactHistory(sessionId, options, setupDeadline)
+        rememberHistories(knownHistories, histories)
       }
     } catch (error) {
       releaseFreshDiscovery?.()
@@ -117,54 +128,50 @@ export function codexRolloutObserver(
     }
 
     const tick = async () => {
-      if (stopped || polling) return
-      polling = true
-      try {
-        if (!sessionId) {
-          const discovered = await discoverSessionId(
-            launch.cwd,
-            sinceMs,
-            options.home,
-            5_000,
-            preSpawnSessions,
-          ) ?? undefined
-          if (!discovered || claimedSessions.has(discovered)) return
-          sessionId = discovered
-          claimedSession = discovered
-          claimedSessions.add(discovered)
-          emit({ type: 'handle', sessionId })
-          releaseFreshDiscovery?.()
-        }
-        if (!rolloutPath) rolloutPath = await findRollout(sessionId, options.home)
-        if (!rolloutPath) return
-        let events = await readRolloutEvents(rolloutPath)
-        if (!events.length) {
-          const relocated = await findRollout(sessionId, options.home)
-          if (relocated && relocated !== rolloutPath) {
-            rolloutPath = relocated
-            events = await readRolloutEvents(rolloutPath)
-          }
-        }
-        if (events.length < cursor) {
-          cursor = 0
-          lastMessage = ''
-        }
-        for (const event of events.slice(cursor)) {
-          lastMessage = emitCodexEvent(event, emit, lastMessage)
-        }
-        cursor = events.length
-      } finally {
-        polling = false
+      if (stopped) return
+      if (!sessionId) {
+        const discovered = await setupDeadline.run(() => discoverSessionIdStrict(
+          launch.cwd, sinceMs, options.home, 5_000, preSpawnSessions,
+        )) ?? undefined
+        if (!discovered || claimedSessions.has(discovered)) return
+        sessionId = discovered
+        claimedSession = discovered
+        claimedSessions.add(discovered)
+        emit({ type: 'handle', sessionId })
+        releaseFreshDiscovery?.()
       }
+      const liveDeadline = new HardDeadline(liveReadTimeoutMs(options))
+      const attempt = await readExactHistoryOnce(sessionId, options, liveDeadline)
+      if (!attempt.complete || !attempt.histories.length) return
+      const selected = selectCurrentTurnEvents(
+        attempt.histories,
+        knownHistories,
+        activeFileIds,
+        activeTurnPrefix,
+      )
+      activeFileIds = selected.activeFileIds
+      activeTurnPrefix = selected.activeTurnPrefix
+      for (const event of selected.events) {
+        lastMessage = emitCodexEvent(event, emit, lastMessage)
+      }
+      rememberHistories(knownHistories, attempt.histories)
+    }
+
+    let operationTail = Promise.resolve()
+    const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
+      const result = operationTail.then(operation)
+      operationTail = result.then(() => undefined, () => undefined)
+      return result
     }
 
     const poll = () => {
-      if (observerFailed) return
-      void tick().catch(() => {
+      if (observerFailed || stopped || polling) return
+      polling = true
+      void serialize(tick).catch(() => {
         if (stopped || observerFailed) return
         observerFailed = true
         emit({ type: 'observer-failure' })
-      })
+      }).finally(() => { polling = false })
     }
     const stop = () => {
       stopped = true
@@ -178,40 +185,275 @@ export function codexRolloutObserver(
         afterSpawnCalled = true
         poll()
         timer = setInterval(poll, options.pollMs ?? 100)
-        timer.unref?.()
+      },
+      async beforeSubmit() {
+        await serialize(async () => {
+          setupDeadline.ensure()
+          if (!sessionId) throw new Error('Codex session identity is unavailable')
+          const histories = await captureStableExactHistory(sessionId, options, setupDeadline)
+          knownHistories.clear()
+          rememberHistories(knownHistories, histories)
+          activeFileIds = new Set()
+          activeTurnPrefix = []
+          lastMessage = ''
+        })
       },
       stop,
     }
   }
 }
 
-async function baselineResume(
+interface KeyedHistory {
+  fileId: string
+  path: string
+  events: readonly RolloutEvent[]
+  fingerprints: readonly string[]
+}
+
+interface ExactHistoryAttempt {
+  complete: boolean
+  histories: KeyedHistory[]
+}
+
+async function captureStableExactHistory(
   sessionId: string,
   options: CodexRolloutObserverOptions,
-): Promise<{ path: string; cursor: number }> {
-  const timeoutMs = Number.isFinite(options.resumeBaselineTimeoutMs)
-    ? Math.max(0, options.resumeBaselineTimeoutMs!)
-    : 8_000
+  deadline: HardDeadline,
+): Promise<KeyedHistory[]> {
   const pollMs = Number.isFinite(options.pollMs) && options.pollMs! > 0
     ? options.pollMs!
     : 100
-  const deadline = Date.now() + timeoutMs
 
   while (true) {
-    const path = await findRollout(sessionId, options.home)
-    if (path) {
-      const events = await readRolloutEvents(path)
-      const confirmedPath = await findRollout(sessionId, options.home)
-      if (confirmedPath === path) return { path, cursor: events.length }
+    const attempt = await readExactHistoryOnce(sessionId, options, deadline)
+    if (attempt.complete && attempt.histories.length) return attempt.histories
+    await deadline.wait(pollMs)
+  }
+}
+
+async function readExactHistoryOnce(
+  sessionId: string,
+  options: CodexRolloutObserverOptions,
+  deadline: HardDeadline,
+): Promise<ExactHistoryAttempt> {
+  const candidates = await deadline.run(() => findRolloutCandidates(sessionId, options.home))
+  if (!candidates.length) return { complete: true, histories: [] }
+  const histories: KeyedHistory[] = []
+  let complete = true
+  for (const candidate of candidates) {
+    const snapshot = await deadline.run(() => readRolloutSnapshot(candidate.path))
+    if (snapshot.status === 'missing' || !snapshot.stable || snapshot.fileId !== candidate.fileId) {
+      complete = false
+      continue
     }
-    const remainingMs = deadline - Date.now()
-    if (remainingMs <= 0) throw new Error('Codex resume history is unavailable')
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollMs, remainingMs)))
+    histories.push({
+      fileId: snapshot.fileId,
+      path: candidate.path,
+      events: snapshot.events,
+      fingerprints: snapshot.events.map(eventFingerprint),
+    })
+  }
+  const confirmed = await deadline.run(() => findRolloutCandidates(sessionId, options.home))
+  if (!sameCandidateSet(candidates, confirmed, histories)) complete = false
+  return { complete, histories }
+}
+
+function sameCandidateSet(
+  before: Awaited<ReturnType<typeof findRolloutCandidates>>,
+  after: Awaited<ReturnType<typeof findRolloutCandidates>>,
+  histories: readonly KeyedHistory[],
+): boolean {
+  if (before.length !== after.length || histories.length !== before.length) return false
+  const afterByPath = new Map(after.map((candidate) => [candidate.path, candidate]))
+  const historyIds = new Map(histories.map((history) => [history.path, history.fileId]))
+  return before.every((candidate) => {
+    const confirmed = afterByPath.get(candidate.path)
+    return confirmed?.fileId === candidate.fileId
+      && confirmed.mtimeMs === candidate.mtimeMs
+      && historyIds.get(candidate.path) === candidate.fileId
+  })
+}
+
+function rememberHistories(
+  known: Map<string, readonly string[]>,
+  histories: readonly KeyedHistory[],
+): void {
+  for (const history of histories) known.set(history.fileId, history.fingerprints)
+}
+
+function selectCurrentTurnEvents(
+  histories: readonly KeyedHistory[],
+  known: ReadonlyMap<string, readonly string[]>,
+  activeFileIds: ReadonlySet<string>,
+  activeTurnPrefix: readonly string[],
+): { events: RolloutEvent[]; activeFileIds: Set<string>; activeTurnPrefix: readonly string[] } {
+  if (!activeFileIds.size) {
+    const candidates: Array<{ history: KeyedHistory; start: number }> = []
+    for (const history of histories) {
+      const oldPrefix = knownPrefixForHistory(history, known)
+      const start = history.events.findIndex((event, index) =>
+        index >= oldPrefix && event.type === 'event_msg' && event.payload?.type === 'task_started')
+      if (start >= 0) candidates.push({ history, start })
+    }
+    if (!candidates.length) return { events: [], activeFileIds: new Set(), activeTurnPrefix: [] }
+    const selected = longestCompatibleLineage(candidates.map(({ history, start }) => ({
+      history,
+      start,
+      fingerprints: history.fingerprints.slice(start),
+    })))
+    const ids = new Set<string>()
+    for (const candidate of candidates) {
+      const lineage = candidate.history.fingerprints.slice(candidate.start)
+      if (prefixCompatible(lineage, selected.fingerprints)) ids.add(candidate.history.fileId)
+    }
+    return {
+      events: selected.history.events.slice(selected.start),
+      activeFileIds: ids,
+      activeTurnPrefix: selected.fingerprints,
+    }
+  }
+
+  const continuations: Array<{ history: KeyedHistory; start: number; fingerprints: readonly string[] }> = []
+  const ids = new Set(activeFileIds)
+  for (const history of histories) {
+    const ownsTurn = activeFileIds.has(history.fileId)
+      || contiguousIndex(history.fingerprints, activeTurnPrefix) >= 0
+    if (!ownsTurn) continue
+    ids.add(history.fileId)
+    const start = knownPrefixForHistory(history, known)
+    if (start < history.events.length) {
+      continuations.push({
+        history,
+        start,
+        fingerprints: history.fingerprints.slice(start),
+      })
+    }
+  }
+  if (!continuations.length) {
+    return { events: [], activeFileIds: ids, activeTurnPrefix }
+  }
+  const selected = longestCompatibleLineage(continuations)
+  return {
+    events: selected.history.events.slice(selected.start),
+    activeFileIds: ids,
+    activeTurnPrefix: [...activeTurnPrefix, ...selected.fingerprints],
+  }
+}
+
+function longestCompatibleLineage<T extends { fingerprints: readonly string[] }>(candidates: readonly T[]): T {
+  const sorted = [...candidates].sort((a, b) => b.fingerprints.length - a.fingerprints.length)
+  const selected = sorted[0]
+  for (const candidate of sorted.slice(1)) {
+    if (!prefixCompatible(candidate.fingerprints, selected.fingerprints)) {
+      throw new Error('Divergent exact-session rollout histories')
+    }
+  }
+  return selected
+}
+
+function prefixCompatible(a: readonly string[], b: readonly string[]): boolean {
+  const count = Math.min(a.length, b.length)
+  for (let index = 0; index < count; index++) {
+    if (a[index] !== b[index]) return false
+  }
+  return true
+}
+
+function knownPrefixLength(
+  sequence: readonly string[],
+  histories: Iterable<readonly string[]>,
+): number {
+  let best = 0
+  for (const known of histories) {
+    let knownIndex = 0
+    let matched = 0
+    while (matched < sequence.length) {
+      while (knownIndex < known.length && known[knownIndex] !== sequence[matched]) knownIndex++
+      if (knownIndex >= known.length) break
+      knownIndex++
+      matched++
+    }
+    best = Math.max(best, matched)
+  }
+  return best
+}
+
+function knownPrefixForHistory(
+  history: KeyedHistory,
+  known: ReadonlyMap<string, readonly string[]>,
+): number {
+  const sameFile = known.get(history.fileId)
+  return knownPrefixLength(
+    history.fingerprints,
+    sameFile ? [sameFile] : known.values(),
+  )
+}
+
+function contiguousIndex(sequence: readonly string[], part: readonly string[]): number {
+  if (!part.length) return -1
+  outer: for (let index = 0; index <= sequence.length - part.length; index++) {
+    for (let offset = 0; offset < part.length; offset++) {
+      if (sequence[index + offset] !== part[offset]) continue outer
+    }
+    return index
+  }
+  return -1
+}
+
+function eventFingerprint(event: RolloutEvent): string {
+  return createHash('sha256').update(JSON.stringify(event)).digest('hex')
+}
+
+function baselineTimeoutMs(options: CodexRolloutObserverOptions): number {
+  return Number.isFinite(options.resumeBaselineTimeoutMs)
+    ? Math.max(0, options.resumeBaselineTimeoutMs!)
+    : 8_000
+}
+
+function liveReadTimeoutMs(options: CodexRolloutObserverOptions): number {
+  return Number.isFinite(options.liveReadTimeoutMs)
+    ? Math.max(1, options.liveReadTimeoutMs!)
+    : 8_000
+}
+
+class HardDeadline {
+  private readonly expiresAt: number
+
+  constructor(timeoutMs: number) {
+    this.expiresAt = Date.now() + timeoutMs
+  }
+
+  ensure(): void {
+    if (Date.now() >= this.expiresAt) throw new Error('Codex rollout setup timed out')
+  }
+
+  async run<T>(operation: () => Promise<T>): Promise<T> {
+    this.ensure()
+    const remaining = Math.max(0, this.expiresAt - Date.now())
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const value = await Promise.race([
+        operation(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Codex rollout setup timed out')), remaining)
+        }),
+      ])
+      this.ensure()
+      return value
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  async wait(delayMs: number): Promise<void> {
+    this.ensure()
+    const remaining = this.expiresAt - Date.now()
+    await this.run(() => new Promise<void>((resolve) => setTimeout(resolve, Math.min(delayMs, remaining))))
   }
 }
 
 function emitCodexEvent(
-  event: Awaited<ReturnType<typeof readRolloutEvents>>[number],
+  event: RolloutEvent,
   emit: (event: AgentProcessEvent) => void,
   lastMessage: string,
 ): string {

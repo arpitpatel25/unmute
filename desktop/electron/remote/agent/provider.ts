@@ -479,7 +479,9 @@ function redact(value: string, input: AgentStartInput): string {
 
 export interface ProviderObservation {
   /** Starts live polling only after the addressed PTY has been spawned. */
-  afterSpawn(): void
+  afterSpawn(): void | Promise<void>
+  /** Establishes the current-turn boundary after readiness, immediately before input. */
+  beforeSubmit?(): void | Promise<void>
   stop(): void
 }
 
@@ -533,6 +535,7 @@ export class ExecutorBackedAgentProcess implements AgentProcessDriver {
   private readonly queue = new DriverEventQueue()
   readonly events: AsyncIterable<AgentProcessEvent> = this.queue
   private executor: ObservableAgentExecutor | null = null
+  private observation: ProviderObservation | null = null
   private stopObserving: (() => void) | null = null
   private closed = false
 
@@ -544,6 +547,7 @@ export class ExecutorBackedAgentProcess implements AgentProcessDriver {
     executor.onData((chunk) => this.queue.emit({ type: 'terminal-output', chunk }))
     executor.onExit?.(({ exitCode }) => this.queue.emit({ type: 'exit', exitCode }))
     const observation = await this.options.observe?.(launch, this.queue.emit)
+    this.observation = observation && typeof observation !== 'function' ? observation : null
     this.stopObserving = typeof observation === 'function'
       ? observation
       : observation?.stop.bind(observation) ?? null
@@ -555,12 +559,14 @@ export class ExecutorBackedAgentProcess implements AgentProcessDriver {
       ...(launch.session.kind === 'resume' && launch.session.id ? { resumeSessionId: launch.session.id } : {}),
     }
     await executor.spawn(spawn)
-    if (observation && typeof observation !== 'function') observation.afterSpawn()
+    if (observation && typeof observation !== 'function') await observation.afterSpawn()
   }
 
   async submitUserTurn(text: string): Promise<void> {
     if (!this.executor) throw new Error('not started')
     await this.executor.isReady()
+    await this.observation?.beforeSubmit?.()
+    if (this.closed) throw new Error('closed')
     this.executor.writeStdin(text)
   }
 

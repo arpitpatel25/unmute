@@ -40,17 +40,42 @@ const log = createLogger('codex-cli-session')
 
 const ROLLOUT = /^rollout-.*-([0-9a-f-]{36})\.jsonl$/i
 
+export interface RolloutCandidate {
+  path: string
+  sessionId: string
+  mtimeMs: number
+  fileId: string
+}
+
+export type RolloutSnapshot =
+  | { status: 'missing'; path: string }
+  | {
+      status: 'present'
+      path: string
+      fileId: string
+      mtimeMs: number
+      size: number
+      stable: boolean
+      events: RolloutEvent[]
+    }
+
 function roots(home = homedir()): string[] {
   return [join(home, '.codex', 'sessions'), join(home, '.codex', 'archived_sessions')]
 }
 
 /** Every rollout on disk, newest first. Walks the date-partitioned tree. */
-async function allRollouts(home?: string): Promise<Array<{ path: string; sessionId: string; mtimeMs: number }>> {
-  const out: Array<{ path: string; sessionId: string; mtimeMs: number }> = []
+async function allRollouts(home?: string, strict = false): Promise<RolloutCandidate[]> {
+  const out: RolloutCandidate[] = []
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (depth > 4) return
     let entries
-    try { entries = await fs.readdir(dir, { withFileTypes: true }) } catch { return }
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true })
+    } catch (error) {
+      if (missingPath(error)) return
+      if (strict) throw error
+      return
+    }
     for (const e of entries) {
       const p = join(dir, e.name)
       if (e.isDirectory()) { await walk(p, depth + 1); continue }
@@ -58,8 +83,15 @@ async function allRollouts(home?: string): Promise<Array<{ path: string; session
       if (!m) continue
       try {
         const st = await fs.stat(p)
-        out.push({ path: p, sessionId: m[1], mtimeMs: st.mtimeMs })
-      } catch { /* vanished between readdir and stat */ }
+        out.push({
+          path: p,
+          sessionId: m[1],
+          mtimeMs: st.mtimeMs,
+          fileId: `${st.dev}:${st.ino}`,
+        })
+      } catch (error) {
+        if (!missingPath(error) && strict) throw error
+      }
     }
   }
   for (const r of roots(home)) await walk(r, 0)
@@ -73,22 +105,68 @@ export async function findRollout(sessionId: string, home?: string): Promise<str
   return all.find((r) => r.sessionId === sessionId)?.path ?? null
 }
 
+/** Every readable path carrying one exact provider session identity. */
+export async function findRolloutCandidates(sessionId: string, home?: string): Promise<RolloutCandidate[]> {
+  return (await allRollouts(home, true)).filter((rollout) => rollout.sessionId === sessionId)
+}
+
 /** Snapshot identities that existed before a fresh CLI process was spawned. */
 export async function snapshotRolloutSessionIds(home?: string): Promise<ReadonlySet<string>> {
-  return new Set((await allRollouts(home)).map((rollout) => rollout.sessionId))
+  return new Set((await allRollouts(home, true)).map((rollout) => rollout.sessionId))
 }
 
 /** Parse a rollout into events. Tolerant: a half-written trailing line is
  *  normal — Codex is appending to this file as we read it. */
 export async function readRolloutEvents(path: string): Promise<RolloutEvent[]> {
+  const snapshot = await readRolloutSnapshot(path)
+  return snapshot.status === 'present' ? snapshot.events : []
+}
+
+/** A read with explicit missing/present state and file identity. Integrity and
+ * storage errors are never converted into an empty history. */
+export async function readRolloutSnapshot(path: string): Promise<RolloutSnapshot> {
+  let before: import('node:fs').Stats
+  try {
+    before = await fs.stat(path)
+  } catch (error) {
+    if (missingPath(error)) return { status: 'missing', path }
+    throw error
+  }
   let text: string
-  try { text = await fs.readFile(path, 'utf8') } catch { return [] }
+  try {
+    text = await fs.readFile(path, 'utf8')
+  } catch (error) {
+    if (missingPath(error)) return { status: 'missing', path }
+    throw error
+  }
+  let after: import('node:fs').Stats
+  try {
+    after = await fs.stat(path)
+  } catch (error) {
+    if (missingPath(error)) return { status: 'missing', path }
+    throw error
+  }
   const out: RolloutEvent[] = []
   for (const line of text.split('\n')) {
     if (!line) continue
     try { out.push(JSON.parse(line) as RolloutEvent) } catch { /* mid-write tail */ }
   }
-  return out
+  const fileId = `${after.dev}:${after.ino}`
+  return {
+    status: 'present',
+    path,
+    fileId,
+    mtimeMs: after.mtimeMs,
+    size: after.size,
+    stable: before.dev === after.dev
+      && before.ino === after.ino
+      && Buffer.byteLength(text, 'utf8') === after.size,
+    events: out,
+  }
+}
+
+function missingPath(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === 'ENOENT'
 }
 
 /**
@@ -203,10 +281,34 @@ export async function discoverSessionId(
   graceMs = 5_000,
   excludedSessionIds: ReadonlySet<string> = new Set(),
 ): Promise<string | null> {
-  for (const r of await allRollouts(home)) {
+  return discoverSessionIdFrom(cwd, sinceMs, home, graceMs, excludedSessionIds, false)
+}
+
+/** Agent discovery is fail-closed on unreadable rollout storage. */
+export async function discoverSessionIdStrict(
+  cwd: string,
+  sinceMs: number,
+  home?: string,
+  graceMs = 5_000,
+  excludedSessionIds: ReadonlySet<string> = new Set(),
+): Promise<string | null> {
+  return discoverSessionIdFrom(cwd, sinceMs, home, graceMs, excludedSessionIds, true)
+}
+
+async function discoverSessionIdFrom(
+  cwd: string,
+  sinceMs: number,
+  home: string | undefined,
+  graceMs: number,
+  excludedSessionIds: ReadonlySet<string>,
+  strict: boolean,
+): Promise<string | null> {
+  for (const r of await allRollouts(home, strict)) {
     if (r.mtimeMs + graceMs < sinceMs) break        // sorted newest-first: older still
     if (excludedSessionIds.has(r.sessionId)) continue
-    const events = await readRolloutEvents(r.path)
+    const snapshot = await readRolloutSnapshot(r.path)
+    if (snapshot.status === 'missing' || !snapshot.stable) continue
+    const events = snapshot.events
     const meta = events.find((e) => e.type === 'session_meta')?.payload as
       { cwd?: string; session_id?: string; timestamp?: string; originator?: string } | undefined
     if (!meta?.cwd || meta.cwd !== cwd) continue

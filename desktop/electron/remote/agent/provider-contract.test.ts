@@ -565,6 +565,13 @@ async function waitUntil(predicate: () => boolean, message: string): Promise<voi
   assert.equal(predicate(), true, message)
 }
 
+async function completionWithin<T>(completion: Promise<T>, timeoutMs = 1_000): Promise<T | 'timed-out'> {
+  return Promise.race([
+    completion,
+    new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), timeoutMs)),
+  ])
+}
+
 async function beginObservation(
   observe: ProviderEventObserver,
   launch: AgentProcessLaunch,
@@ -572,7 +579,7 @@ async function beginObservation(
 ): Promise<void | (() => void)> {
   const observation = await observe(launch, emit)
   if (!observation || typeof observation === 'function') return observation
-  observation.afterSpawn()
+  await observation.afterSpawn()
   return observation.stop.bind(observation)
 }
 
@@ -1016,4 +1023,372 @@ test('Codex fresh discovery ignores a recent same-cwd rollout present before its
     if (handle) await provider.close(handle).catch(() => {})
     await fs.rm(home, { recursive: true, force: true })
   }
+})
+
+test('Codex same-path growth during resume setup cannot publish historical activity or completion', { timeout: 3_000 }, async () => {
+  const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
+  const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')
+  const cwd = join(home, 'repo')
+  const rollout = join(sessions, `rollout-now-${CODEX_ID}.jsonl`)
+  await fs.mkdir(sessions, { recursive: true })
+  await fs.mkdir(cwd, { recursive: true })
+  await fs.writeFile(rollout, [
+    rolloutLine('session_meta', { session_id: CODEX_ID, cwd, timestamp: new Date().toISOString() }),
+    rolloutLine('event_msg', { type: 'task_started' }),
+  ].join('\n') + '\n')
+
+  const oldTail = [
+    rolloutLine('event_msg', { type: 'exec_command_end' }),
+    rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Historical final.' }),
+  ].join('\n') + '\n'
+  const currentTail = [
+    rolloutLine('event_msg', { type: 'task_started' }),
+    rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Current final.' }),
+  ].join('\n') + '\n'
+  const readDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFile')
+  if (!readDescriptor) assert.fail('fs.readFile descriptor was unavailable')
+  const originalRead = fs.readFile
+  let historicalTailWritten = false
+  Object.defineProperty(fs, 'readFile', {
+    configurable: true,
+    writable: true,
+    value: async (...args: unknown[]) => {
+      const text = await Reflect.apply(originalRead, fs, args)
+      if (String(args[0]) === rollout && !historicalTailWritten) {
+        await fs.appendFile(rollout, oldTail)
+        historicalTailWritten = true
+      }
+      return text
+    },
+  })
+
+  let currentWrite: Promise<void> | null = null
+  const observe = codexRolloutObserver({ home, pollMs: 5 })
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn() {},
+        async isReady() {},
+        writeStdin() { currentWrite = fs.appendFile(rollout, currentTail) },
+        write() {},
+        resize() {},
+        onData() {},
+        kill() {},
+      }),
+      observe,
+    }),
+    probeBinary: async () => true,
+  })
+  const handle = { provider: 'codex' as const, opaqueId: CODEX_ID }
+
+  try {
+    const resumed = await provider.resume(handle, input('same-path-growth', {
+      cwd,
+      constitutionPath: join(home, 'constitution.md'),
+    }))
+    if (currentWrite) await currentWrite
+    const activitiesPromise = (async () => {
+      const activities = []
+      for await (const activity of resumed.activity) activities.push(activity)
+      return activities
+    })()
+    assert.equal(historicalTailWritten, true)
+    assert.deepEqual(await completionWithin(resumed.completion), {
+      outcome: 'completed',
+      finalText: 'Current final.',
+    })
+    assert.deepEqual(await activitiesPromise, [])
+  } finally {
+    Object.defineProperty(fs, 'readFile', readDescriptor)
+    await provider.close(handle).catch(() => {})
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('Codex reconciles divergent exact-ID live and archive candidates around the current writer', { timeout: 3_000 }, async () => {
+  const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
+  const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')
+  const archived = join(home, '.codex', 'archived_sessions')
+  const cwd = join(home, 'repo')
+  const live = join(sessions, `rollout-live-${CODEX_ID}.jsonl`)
+  const archive = join(archived, `rollout-archive-${CODEX_ID}.jsonl`)
+  await fs.mkdir(sessions, { recursive: true })
+  await fs.mkdir(archived, { recursive: true })
+  await fs.mkdir(cwd, { recursive: true })
+  const metaLine = rolloutLine('session_meta', { session_id: CODEX_ID, cwd, timestamp: new Date().toISOString() })
+  await fs.writeFile(live, metaLine + '\n')
+  await fs.writeFile(archive, [
+    metaLine,
+    rolloutLine('event_msg', { type: 'task_started' }),
+    rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Archived historical final.' }),
+  ].join('\n') + '\n')
+  const past = new Date(Date.now() - 60_000)
+  const future = new Date(Date.now() + 60_000)
+  await fs.utimes(live, past, past)
+  await fs.utimes(archive, future, future)
+
+  const currentTail = [
+    rolloutLine('event_msg', { type: 'task_started' }),
+    rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Live current final.' }),
+  ].join('\n') + '\n'
+  let currentWrite: Promise<void> | null = null
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn() {},
+        async isReady() {},
+        writeStdin() { currentWrite = fs.appendFile(live, currentTail) },
+        write() {},
+        resize() {},
+        onData() {},
+        kill() {},
+      }),
+      observe: codexRolloutObserver({ home, pollMs: 5 }),
+    }),
+    probeBinary: async () => true,
+  })
+  const handle = { provider: 'codex' as const, opaqueId: CODEX_ID }
+
+  try {
+    const resumed = await provider.resume(handle, input('duplicate-exact-id', {
+      cwd,
+      constitutionPath: join(home, 'constitution.md'),
+    }))
+    if (currentWrite) await currentWrite
+    assert.deepEqual(await completionWithin(resumed.completion), {
+      outcome: 'completed',
+      finalText: 'Live current final.',
+    })
+  } finally {
+    await provider.close(handle).catch(() => {})
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('Codex relocation to a shorter exact-ID copy never regresses and replays an old completion', { timeout: 3_000 }, async () => {
+  const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
+  const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')
+  const archived = join(home, '.codex', 'archived_sessions')
+  const cwd = join(home, 'repo')
+  const live = join(sessions, `rollout-live-${CODEX_ID}.jsonl`)
+  const shorter = join(archived, `rollout-short-${CODEX_ID}.jsonl`)
+  await fs.mkdir(sessions, { recursive: true })
+  await fs.mkdir(archived, { recursive: true })
+  await fs.mkdir(cwd, { recursive: true })
+  const metaLine = rolloutLine('session_meta', { session_id: CODEX_ID, cwd, timestamp: new Date().toISOString() })
+  const oldStart = rolloutLine('event_msg', { type: 'task_started' })
+  const oldTool = rolloutLine('event_msg', { type: 'exec_command_end' })
+  const oldCompletion = rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Old replayed final.' })
+  await fs.writeFile(live, [metaLine, oldStart, oldTool, oldCompletion].join('\n') + '\n')
+
+  const currentStart = rolloutLine('event_msg', { type: 'task_started' })
+  const currentCompletion = rolloutLine('event_msg', { type: 'task_complete', last_agent_message: 'Short-copy current final.' })
+  let relocation: Promise<void> | null = null
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn() {},
+        async isReady() {},
+        writeStdin() {
+          relocation = (async () => {
+            await fs.rm(live)
+            await fs.writeFile(shorter, [oldCompletion, currentStart, currentCompletion].join('\n') + '\n')
+          })()
+        },
+        write() {},
+        resize() {},
+        onData() {},
+        kill() {},
+      }),
+      observe: codexRolloutObserver({ home, pollMs: 5 }),
+    }),
+    probeBinary: async () => true,
+  })
+  const handle = { provider: 'codex' as const, opaqueId: CODEX_ID }
+
+  try {
+    const resumed = await provider.resume(handle, input('shorter-copy', {
+      cwd,
+      constitutionPath: join(home, 'constitution.md'),
+    }))
+    if (relocation) await relocation
+    assert.deepEqual(await completionWithin(resumed.completion), {
+      outcome: 'completed',
+      finalText: 'Short-copy current final.',
+    })
+  } finally {
+    await provider.close(handle).catch(() => {})
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('Codex resume setup hard-times-out a hung history read before spawning', { timeout: 1_000 }, async () => {
+  const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
+  const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')
+  const cwd = join(home, 'repo')
+  const rollout = join(sessions, `rollout-now-${CODEX_ID}.jsonl`)
+  await fs.mkdir(sessions, { recursive: true })
+  await fs.mkdir(cwd, { recursive: true })
+  await fs.writeFile(rollout, rolloutLine('session_meta', {
+    session_id: CODEX_ID,
+    cwd,
+    timestamp: new Date().toISOString(),
+  }) + '\n')
+
+  const readDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFile')
+  if (!readDescriptor) assert.fail('fs.readFile descriptor was unavailable')
+  const originalRead = fs.readFile
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  Object.defineProperty(fs, 'readFile', {
+    configurable: true,
+    writable: true,
+    value: async (...args: unknown[]) => {
+      if (String(args[0]) === rollout) await gate
+      return Reflect.apply(originalRead, fs, args)
+    },
+  })
+
+  let spawns = 0
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn() { spawns++ },
+        async isReady() {},
+        writeStdin() {},
+        write() {},
+        resize() {},
+        onData() {},
+        kill() {},
+      }),
+      observe: codexRolloutObserver({ home, pollMs: 5, resumeBaselineTimeoutMs: 20 }),
+    }),
+    probeBinary: async () => true,
+  })
+  const handle = { provider: 'codex' as const, opaqueId: CODEX_ID }
+  const attempt = provider.resume(handle, input('hung-history', {
+    cwd,
+    constitutionPath: join(home, 'constitution.md'),
+  }))
+
+  try {
+    const result = await Promise.race([
+      attempt.then(() => 'resolved', () => 'rejected'),
+      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 100)),
+    ])
+    assert.equal(result, 'rejected')
+    assert.equal(spawns, 0)
+  } finally {
+    release()
+    await attempt.catch(() => null)
+    Object.defineProperty(fs, 'readFile', readDescriptor)
+    await provider.close(handle).catch(() => {})
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('Codex resume treats rollout EIO as fatal before spawn or prompt submission', async () => {
+  const home = join(tmpdir(), `unmute-agent-provider-${randomUUID()}`)
+  const sessions = join(home, '.codex', 'sessions', '2026', '08', '17')
+  const cwd = join(home, 'repo')
+  const rollout = join(sessions, `rollout-now-${CODEX_ID}.jsonl`)
+  await fs.mkdir(sessions, { recursive: true })
+  await fs.mkdir(cwd, { recursive: true })
+  await fs.writeFile(rollout, rolloutLine('session_meta', {
+    session_id: CODEX_ID,
+    cwd,
+    timestamp: new Date().toISOString(),
+  }) + '\n')
+
+  const readDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFile')
+  if (!readDescriptor) assert.fail('fs.readFile descriptor was unavailable')
+  const originalRead = fs.readFile
+  Object.defineProperty(fs, 'readFile', {
+    configurable: true,
+    writable: true,
+    value: async (...args: unknown[]) => {
+      if (String(args[0]) === rollout) {
+        const failure = new Error(`${TOKEN} /Users/alice/private.txt`) as NodeJS.ErrnoException
+        failure.code = 'EIO'
+        throw failure
+      }
+      return Reflect.apply(originalRead, fs, args)
+    },
+  })
+
+  let spawns = 0
+  let writes = 0
+  let kills = 0
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn() { spawns++ },
+        async isReady() {},
+        writeStdin() { writes++ },
+        write() {},
+        resize() {},
+        onData() {},
+        kill() { kills++ },
+      }),
+      observe: codexRolloutObserver({ home, pollMs: 5 }),
+    }),
+    probeBinary: async () => true,
+  })
+  const handle = { provider: 'codex' as const, opaqueId: CODEX_ID }
+
+  try {
+    await assert.rejects(provider.resume(handle, input('rollout-eio', {
+      cwd,
+      constitutionPath: join(home, 'constitution.md'),
+    })), (error) => {
+      assertProviderError(error, 'provider-unavailable')
+      assert.doesNotMatch(String(error), new RegExp(`${TOKEN}|Users/alice`))
+      return true
+    })
+    assert.deepEqual({ spawns, writes, kills }, { spawns: 0, writes: 0, kills: 1 })
+  } finally {
+    Object.defineProperty(fs, 'readFile', readDescriptor)
+    await provider.close(handle).catch(() => {})
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('a failing pre-submit observation boundary prevents the prompt and cleans its PTY', async () => {
+  let spawns = 0
+  let writes = 0
+  let kills = 0
+  let stops = 0
+  const provider = new CodexCliProvider({
+    processFactory: () => new ExecutorBackedAgentProcess({
+      createExecutor: () => ({
+        alive: true,
+        async spawn() { spawns++ },
+        async isReady() {},
+        writeStdin() { writes++ },
+        write() {},
+        resize() {},
+        onData() {},
+        kill() { kills++ },
+      }),
+      observe: () => ({
+        afterSpawn() {},
+        async beforeSubmit() { throw new Error(`EIO ${TOKEN} /Users/alice/private.txt`) },
+        stop() { stops++ },
+      }),
+    }),
+    probeBinary: async () => true,
+  })
+  const handle = { provider: 'codex' as const, opaqueId: CODEX_ID }
+
+  await assert.rejects(provider.resume(handle, input('pre-submit-failure')), (error) => {
+    assertProviderError(error, 'provider-unavailable')
+    assert.doesNotMatch(String(error), new RegExp(`${TOKEN}|Users/alice`))
+    return true
+  })
+  assert.deepEqual({ spawns, writes, kills, stops }, { spawns: 1, writes: 0, kills: 1, stops: 1 })
 })
