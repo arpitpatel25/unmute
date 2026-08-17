@@ -58,6 +58,39 @@ function delayedMemoryCrypto(delayMs: number): MemoryCrypto {
   })
 }
 
+function controlledMemoryCrypto(blockCall: number) {
+  let calls = 0
+  let release!: () => void
+  let reached!: () => void
+  const blocked = new Promise<void>((resolve) => { release = resolve })
+  const reachedBlock = new Promise<void>((resolve) => { reached = resolve })
+  return {
+    crypto: new MemoryCrypto({
+      keyProvider: {
+        async getMasterKey() {
+          calls += 1
+          if (calls === blockCall) {
+            reached()
+            await blocked
+          }
+          return Buffer.from(MASTER_KEY)
+        },
+      },
+    }),
+    reached: reachedBlock,
+    release,
+  }
+}
+
+async function wait(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const directory = await fsOpen(path, 'r')
+  try { await directory.sync() } finally { await directory.close() }
+}
+
 async function contents(attachment: DeliveryAttachment): Promise<Buffer> {
   const chunks: Buffer[] = []
   for await (const chunk of attachment.open()) chunks.push(Buffer.from(chunk))
@@ -124,11 +157,17 @@ test('managed copy rejects a payload truncated exactly between authenticated fra
   const firstFrameBytes = encrypted.readUInt32BE(5)
   await truncate(payloadPath, 5 + 4 + firstFrameBytes)
   const opened = await store.open(agent(), saved.id)
+  let consumed = 0
 
   await assert.rejects(
-    contents(await store.resolveForDelivery(agent(), opened.handle)),
+    async () => {
+      for await (const chunk of (await store.resolveForDelivery(agent(), opened.handle)).open()) {
+        consumed += chunk.byteLength
+      }
+    },
     /encrypted attachment payload is invalid/i,
   )
+  assert.equal(consumed, 0)
 })
 
 test('managed copy rejects intact ciphertext substituted from another attachment identity', async (t) => {
@@ -154,11 +193,17 @@ test('managed copy rejects intact ciphertext substituted from another attachment
     join(root, 'attachments', savedA.sha256, 'original.enc'),
   )
   const opened = await store.open(agent(), savedA.id)
+  let consumed = 0
 
   await assert.rejects(
-    contents(await store.resolveForDelivery(agent(), opened.handle)),
+    async () => {
+      for await (const chunk of (await store.resolveForDelivery(agent(), opened.handle)).open()) {
+        consumed += chunk.byteLength
+      }
+    },
     /encrypted attachment payload is invalid/i,
   )
+  assert.equal(consumed, 0)
 })
 
 test('deferred delivery failures never expose the managed payload path', async (t) => {
@@ -323,15 +368,17 @@ test('startup quarantines a hash directory published without valid encrypted met
   assert.equal((await readdir(join(root, 'attachments', '.quarantine'))).some((name) => name.startsWith(sha256)), true)
 })
 
-test('startup removes stale encrypted staging without unlinking a fresh concurrent writer', async (t) => {
+test('startup cleans staging owned by a fenced hash lease without age-deleting unowned staging', async (t) => {
   const root = await temporaryRoot(t)
   const staging = join(root, 'attachments', '.staging')
   await mkdir(staging, { recursive: true })
-  const stale = join(staging, '.stage-stale.payload.tmp')
-  const fresh = join(staging, '.stage-fresh.payload.tmp')
-  await writeFile(stale, 'abandoned ciphertext')
-  await writeFile(fresh, 'active ciphertext')
-  await utimes(stale, new Date(0), new Date(0))
+  const sha256 = 'b'.repeat(64)
+  const owned = join(staging, `.stage-${sha256}-crashed-owner.payload.tmp`)
+  const unowned = join(staging, '.stage-unowned.payload.tmp')
+  await writeFile(owned, 'abandoned ciphertext')
+  await writeFile(unowned, 'unowned ciphertext')
+  await utimes(unowned, new Date(0), new Date(0))
+  await mkdir(join(root, 'attachments', sha256))
   const store = new EncryptedAttachmentStore({
     root,
     crypto: memoryCrypto(),
@@ -341,8 +388,8 @@ test('startup removes stale encrypted staging without unlinking a fresh concurre
 
   await store.initialize()
 
-  await assert.rejects(stat(stale), { code: 'ENOENT' })
-  assert.equal((await stat(fresh)).isFile(), true)
+  await assert.rejects(stat(owned), { code: 'ENOENT' })
+  assert.equal((await stat(unowned)).isFile(), true)
 })
 
 test('stale per-hash locks recover, while a fresh lock times out without mutating attachment state', async (t) => {
@@ -354,19 +401,21 @@ test('stale per-hash locks recover, while a fresh lock times out without mutatin
   const locks = join(root, 'attachments', '.locks')
   await mkdir(locks, { recursive: true })
   const lock = join(locks, `${sha256}.lock`)
-  await writeFile(lock, 'crashed-owner')
-  await utimes(lock, new Date(0), new Date(0))
+  await mkdir(lock)
+  await writeFile(join(lock, 'owner-crashed-owner'), '')
+  await utimes(join(lock, 'owner-crashed-owner'), new Date(0), new Date(0))
   let nextHandle = 0
   const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `lock-${++nextHandle}` })
   const recovering = new EncryptedAttachmentStore({
-    root, crypto: memoryCrypto(), handles, staleLockMs: 10, lockTimeoutMs: 100,
+    root, crypto: memoryCrypto(), handles, staleLockMs: 50, lockTimeoutMs: 500,
   })
   const recovered = await recovering.store(agent(), {
     recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
   })
   assert.equal(recovered.liveReferenceCount, 1)
 
-  await writeFile(lock, 'active-owner')
+  await mkdir(lock)
+  await writeFile(join(lock, 'owner-active-owner'), '')
   const blocked = new EncryptedAttachmentStore({
     root, crypto: memoryCrypto(), handles, staleLockMs: 60_000, lockTimeoutMs: 20,
   })
@@ -377,6 +426,180 @@ test('stale per-hash locks recover, while a fresh lock times out without mutatin
     /attachment lock timed out/i,
   )
   assert.equal((await recovering.get(recovered.id)).liveReferenceCount, 1)
+})
+
+test('an active owner heartbeats across stale intervals and serializes a waiting writer', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'heartbeat.txt')
+  await writeFile(source, 'heartbeat lease')
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `heartbeat-${++nextHandle}` })
+  const controlled = controlledMemoryCrypto(2)
+  const owner = new EncryptedAttachmentStore({
+    root, crypto: controlled.crypto, handles, staleLockMs: 45, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    createAttachmentId: () => 'heartbeat-owner',
+  })
+  const waiter = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 45, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    createAttachmentId: () => 'heartbeat-waiter',
+  })
+  const ownerSave = owner.store(agent(), {
+    recordId: 'record-owner', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  await controlled.reached
+  let waiterSettled = false
+  const waiterSave = waiter.store(agent(), {
+    recordId: 'record-waiter', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  }).finally(() => { waiterSettled = true })
+
+  await wait(160)
+  assert.equal(waiterSettled, false)
+  controlled.release()
+  const [savedOwner, savedWaiter] = await Promise.all([ownerSave, waiterSave])
+  const saved = await survivingDescriptor(owner, savedOwner.id, savedWaiter.id)
+  assert.equal(saved.liveReferenceCount, 2)
+})
+
+test('two simultaneous stale reclaimers are gated and merge after fencing one stalled owner', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'two-reclaimers.txt')
+  await writeFile(source, 'two stale reclaimers')
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `reaper-${++nextHandle}` })
+  const stalledCrypto = controlledMemoryCrypto(2)
+  const noHeartbeat = { start() { return async () => {} } }
+  const stalled = new EncryptedAttachmentStore({
+    root, crypto: stalledCrypto.crypto, handles, staleLockMs: 35, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    leaseHeartbeat: noHeartbeat,
+    createAttachmentId: () => 'stalled-owner',
+  })
+  const firstSave = stalled.store(agent(), {
+    recordId: 'record-stalled', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  await stalledCrypto.reached
+  await wait(70)
+  const first = new EncryptedAttachmentStore({
+    root, crypto: delayedMemoryCrypto(55), handles, staleLockMs: 35, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    createAttachmentId: () => 'first-reclaimer',
+  })
+  const second = new EncryptedAttachmentStore({
+    root, crypto: delayedMemoryCrypto(55), handles, staleLockMs: 35, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    createAttachmentId: () => 'second-reclaimer',
+  })
+  const reclaimers = Promise.all([
+    first.store(agent(), {
+      recordId: 'record-first', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }),
+    second.store(agent(), {
+      recordId: 'record-second', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+    }),
+  ])
+  const [savedFirst, savedSecond] = await reclaimers
+  stalledCrypto.release()
+  await assert.rejects(firstSave, /attachment lease was fenced/i)
+  const saved = await survivingDescriptor(first, savedFirst.id, savedSecond.id)
+  assert.equal(saved.liveReferenceCount, 2)
+})
+
+test('a fenced stalled owner cannot publish when it resumes', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'fenced-owner.txt')
+  await writeFile(source, 'fenced owner')
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `fenced-${++nextHandle}` })
+  const controlled = controlledMemoryCrypto(2)
+  const stalled = new EncryptedAttachmentStore({
+    root, crypto: controlled.crypto, handles, staleLockMs: 30, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    leaseHeartbeat: { start() { return async () => {} } },
+    createAttachmentId: () => 'fenced-old',
+  })
+  const replacement = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 30, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    createAttachmentId: () => 'fenced-new',
+  })
+  const oldSave = stalled.store(agent(), {
+    recordId: 'record-old', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  await controlled.reached
+  await wait(65)
+  const saved = await replacement.store(agent(), {
+    recordId: 'record-new', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  controlled.release()
+
+  await assert.rejects(oldSave, /attachment lease was fenced/i)
+  assert.equal((await replacement.get(saved.id)).liveReferenceCount, 1)
+  const opened = await replacement.open(agent(), saved.id)
+  assert.equal(await contents(await replacement.resolveForDelivery(agent(), opened.handle)).then(String), 'fenced owner')
+})
+
+test('a fenced owner release cannot remove the replacement lease', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'release-race.txt')
+  await writeFile(source, 'release replacement')
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `release-${++nextHandle}` })
+  const oldCrypto = controlledMemoryCrypto(2)
+  const newCrypto = controlledMemoryCrypto(2)
+  const old = new EncryptedAttachmentStore({
+    root, crypto: oldCrypto.crypto, handles, staleLockMs: 30, lockTimeoutMs: 1_000, lockRetryMs: 5,
+    leaseHeartbeat: { start() { return async () => {} } },
+  })
+  const replacement = new EncryptedAttachmentStore({
+    root, crypto: newCrypto.crypto, handles, staleLockMs: 30, lockTimeoutMs: 1_000, lockRetryMs: 5,
+  })
+  const oldSave = old.store(agent(), {
+    recordId: 'record-old', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  await oldCrypto.reached
+  await wait(65)
+  const replacementSave = replacement.store(agent(), {
+    recordId: 'record-new', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  await newCrypto.reached
+  oldCrypto.release()
+  await assert.rejects(oldSave, /attachment lease was fenced/i)
+
+  const blocked = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 1_000, lockTimeoutMs: 25, lockRetryMs: 5,
+  })
+  await assert.rejects(blocked.store(agent(), {
+    recordId: 'record-third', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  }), /attachment lock timed out/i)
+  newCrypto.release()
+  await replacementSave
+})
+
+test('startup recovery waits for a live heartbeating writer and does not quarantine its in-flight hash', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'live-recovery.txt')
+  const bytes = Buffer.from('live recovery')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  let nextHandle = 0
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: () => `recovery-${++nextHandle}` })
+  const controlled = controlledMemoryCrypto(2)
+  const writer = new EncryptedAttachmentStore({
+    root, crypto: controlled.crypto, handles, staleLockMs: 40, lockTimeoutMs: 1_000, lockRetryMs: 5,
+  })
+  const write = writer.store(agent(), {
+    recordId: 'record-live', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  await controlled.reached
+  const recovery = new EncryptedAttachmentStore({
+    root, crypto: memoryCrypto(), handles, staleLockMs: 40, lockTimeoutMs: 1_000, lockRetryMs: 5,
+  })
+  let recovered = false
+  const initialize = recovery.initialize().then(() => { recovered = true })
+  await wait(140)
+  assert.equal(recovered, false)
+  controlled.release()
+  const saved = await write
+  await initialize
+
+  assert.equal(saved.sha256, sha256)
+  assert.equal((await stat(join(root, 'attachments', sha256, 'original.enc'))).isFile(), true)
+  assert.equal((await readdir(join(root, 'attachments', '.quarantine'))).length, 0)
 })
 
 test('large regular files default to references unless an explicit managed copy is requested', async (t) => {
@@ -420,6 +643,53 @@ test('an unreadable managed copy leaves no payload, metadata, or staging fragmen
   )
   assert.deepEqual((await readdir(join(root, 'attachments'))).filter((name) => !name.startsWith('.')), [])
   assert.deepEqual(await readdir(join(root, 'attachments', '.staging')), [])
+})
+
+test('metadata directory fsync failure after rename keeps the committed payload readable and retryable', async (t) => {
+  const root = await temporaryRoot(t)
+  const source = join(root, 'durability.txt')
+  const bytes = Buffer.from('durability uncertain')
+  await writeFile(source, bytes)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const attachmentDir = join(root, 'attachments', sha256)
+  let attachmentSyncs = 0
+  let failOnce = true
+  const handles = new InteractionAttachmentHandles({ now: () => NOW, createHandle: (() => {
+    let value = 0
+    return () => `durability-${++value}`
+  })() })
+  const store = new EncryptedAttachmentStore({
+    root,
+    crypto: memoryCrypto(),
+    handles,
+    createAttachmentId: () => 'attachment-durability',
+    async directorySync(path: string) {
+      if (path === attachmentDir) {
+        attachmentSyncs += 1
+        if (attachmentSyncs === 2 && failOnce) {
+          failOnce = false
+          throw new Error('forced metadata directory fsync failure')
+        }
+      }
+      await syncDirectory(path)
+    },
+  })
+  const firstHandle = handles.mintCapture(agent(), { path: source })
+
+  await assert.rejects(
+    store.store(agent(), { recordId: 'record-1', handle: firstHandle, storage: 'copy' }),
+    (error: unknown) => error instanceof Error
+      && 'code' in error
+      && error.code === 'durability-uncertain',
+  )
+  assert.equal((await stat(join(attachmentDir, 'original.enc'))).isFile(), true)
+  assert.equal((await store.get('attachment-durability')).liveReferenceCount, 1)
+
+  const retried = await store.store(agent(), {
+    recordId: 'record-1', handle: handles.mintCapture(agent(), { path: source }), storage: 'copy',
+  })
+  const opened = await store.open(agent(), retried.id)
+  assert.deepEqual(await contents(await store.resolveForDelivery(agent(), opened.handle)), bytes)
 })
 
 test('trash retains shared payloads until the final explicit purge boundary', async (t) => {
