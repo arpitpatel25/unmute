@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { CapabilityRegistry } from './registry.ts'
+import { MemoryCapability } from './memory.ts'
 import type { CapabilityModule, McpPrincipal } from '../types.ts'
+import type { MemoryCapabilityService } from './memory.ts'
 
 const task: McpPrincipal = { kind: 'task', taskId: 'task-1' }
 const agent: McpPrincipal = {
@@ -52,4 +54,20 @@ test('authorizes a tool before its module handler runs', async () => {
 
   await assert.rejects(registry.call(agent, 'memory_save', {}), /active explicit interaction/)
   assert.equal(called, false)
+})
+
+test('the real Memory capability remains invisible to ordinary task principals', async () => {
+  const service = {
+    async search() { return [] }, async get() { throw new Error('not used') },
+    async store() { throw new Error('not used') }, async update() { throw new Error('not used') },
+    async forget() {}, async restore() {}, async openAttachment() { throw new Error('not used') },
+  } as MemoryCapabilityService
+  const registry = new CapabilityRegistry([tasks, new MemoryCapability(service)])
+
+  assert.deepEqual(registry.tools(task).map((tool) => tool.name), ['unmute_create_task'])
+  assert.deepEqual(registry.tools(agent).map((tool) => tool.name), [
+    'memory_search', 'memory_get', 'memory_store', 'memory_update',
+    'memory_forget', 'memory_restore', 'memory_open_attachment',
+  ])
+  await assert.rejects(registry.call(task, 'memory_get', { id: 'memory-1' }), /not available to task principals/)
 })
