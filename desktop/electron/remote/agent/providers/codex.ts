@@ -104,8 +104,8 @@ export function codexRolloutObserver(
     let afterSpawnCalled = false
     let observerFailed = false
     let preSpawnSessions: ReadonlySet<string>
-    const knownHistories = new Map<string, readonly string[]>()
-    let activeFileIds = new Set<string>()
+    const turnBaselineHistories = new Map<string, readonly string[]>()
+    let activeFileId: string | null = null
     let activeTurnPrefix: readonly string[] = []
     const sinceMs = Date.now()
 
@@ -119,7 +119,7 @@ export function codexRolloutObserver(
       // later, after readiness and immediately before the user turn is sent.
       if (sessionId) {
         const histories = await captureStableExactHistory(sessionId, options, setupDeadline)
-        rememberHistories(knownHistories, histories)
+        rememberHistories(turnBaselineHistories, histories)
       }
     } catch (error) {
       releaseFreshDiscovery?.()
@@ -145,16 +145,15 @@ export function codexRolloutObserver(
       if (!attempt.complete || !attempt.histories.length) return
       const selected = selectCurrentTurnEvents(
         attempt.histories,
-        knownHistories,
-        activeFileIds,
+        turnBaselineHistories,
+        activeFileId,
         activeTurnPrefix,
       )
-      activeFileIds = selected.activeFileIds
+      activeFileId = selected.activeFileId
       activeTurnPrefix = selected.activeTurnPrefix
       for (const event of selected.events) {
         lastMessage = emitCodexEvent(event, emit, lastMessage)
       }
-      rememberHistories(knownHistories, attempt.histories)
     }
 
     let operationTail = Promise.resolve()
@@ -185,15 +184,17 @@ export function codexRolloutObserver(
         afterSpawnCalled = true
         poll()
         timer = setInterval(poll, options.pollMs ?? 100)
+        timer.unref?.()
       },
       async beforeSubmit() {
         await serialize(async () => {
           setupDeadline.ensure()
+          if (observerFailed) throw new Error('Codex rollout observation failed')
           if (!sessionId) throw new Error('Codex session identity is unavailable')
           const histories = await captureStableExactHistory(sessionId, options, setupDeadline)
-          knownHistories.clear()
-          rememberHistories(knownHistories, histories)
-          activeFileIds = new Set()
+          turnBaselineHistories.clear()
+          rememberHistories(turnBaselineHistories, histories)
+          activeFileId = null
           activeTurnPrefix = []
           lastMessage = ''
         })
@@ -246,6 +247,13 @@ async function readExactHistoryOnce(
       complete = false
       continue
     }
+    if (!snapshot.sessionId) {
+      complete = false
+      continue
+    }
+    if (snapshot.sessionId.toLowerCase() !== sessionId.toLowerCase()) {
+      throw new Error('Codex rollout identity mismatch')
+    }
     histories.push({
       fileId: snapshot.fileId,
       path: candidate.path,
@@ -283,80 +291,117 @@ function rememberHistories(
 
 function selectCurrentTurnEvents(
   histories: readonly KeyedHistory[],
-  known: ReadonlyMap<string, readonly string[]>,
-  activeFileIds: ReadonlySet<string>,
+  baseline: ReadonlyMap<string, readonly string[]>,
+  activeFileId: string | null,
   activeTurnPrefix: readonly string[],
-): { events: RolloutEvent[]; activeFileIds: Set<string>; activeTurnPrefix: readonly string[] } {
-  if (!activeFileIds.size) {
-    const candidates: Array<{ history: KeyedHistory; start: number }> = []
-    for (const history of histories) {
-      const oldPrefix = knownPrefixForHistory(history, known)
-      const start = history.events.findIndex((event, index) =>
-        index >= oldPrefix && event.type === 'event_msg' && event.payload?.type === 'task_started')
-      if (start >= 0) candidates.push({ history, start })
-    }
-    if (!candidates.length) return { events: [], activeFileIds: new Set(), activeTurnPrefix: [] }
-    const selected = longestCompatibleLineage(candidates.map(({ history, start }) => ({
-      history,
-      start,
-      fingerprints: history.fingerprints.slice(start),
-    })))
-    const ids = new Set<string>()
-    for (const candidate of candidates) {
-      const lineage = candidate.history.fingerprints.slice(candidate.start)
-      if (prefixCompatible(lineage, selected.fingerprints)) ids.add(candidate.history.fileId)
-    }
+): { events: RolloutEvent[]; activeFileId: string | null; activeTurnPrefix: readonly string[] } {
+  const unique = uniqueFileHistories(histories)
+  const lineages = unique
+    .map((history) => turnLineage(history, baseline))
+    .filter((lineage): lineage is TurnLineage => lineage !== null)
+
+  if (!activeFileId) {
+    if (!lineages.length) return { events: [], activeFileId: null, activeTurnPrefix: [] }
+    if (lineages.length !== 1) throw new Error('Ambiguous exact-session rollout writer')
+    const selected = lineages[0]
     return {
       events: selected.history.events.slice(selected.start),
-      activeFileIds: ids,
+      activeFileId: selected.history.fileId,
       activeTurnPrefix: selected.fingerprints,
     }
   }
 
-  const continuations: Array<{ history: KeyedHistory; start: number; fingerprints: readonly string[] }> = []
-  const ids = new Set(activeFileIds)
-  for (const history of histories) {
-    const ownsTurn = activeFileIds.has(history.fileId)
-      || contiguousIndex(history.fingerprints, activeTurnPrefix) >= 0
-    if (!ownsTurn) continue
-    ids.add(history.fileId)
-    const start = knownPrefixForHistory(history, known)
-    if (start < history.events.length) {
-      continuations.push({
-        history,
-        start,
-        fingerprints: history.fingerprints.slice(start),
-      })
+  const owner = lineages.find((lineage) => lineage.history.fileId === activeFileId)
+  if (owner) {
+    if (!isPrefix(activeTurnPrefix, owner.fingerprints)) {
+      throw new Error('Divergent exact-session rollout writer')
+    }
+    for (const candidate of lineages) {
+      if (candidate === owner) continue
+      if (!isPrefix(candidate.fingerprints, activeTurnPrefix)) {
+        throw new Error('Competing exact-session rollout writer')
+      }
+    }
+    return {
+      events: owner.history.events.slice(owner.start + activeTurnPrefix.length),
+      activeFileId,
+      activeTurnPrefix: owner.fingerprints,
     }
   }
-  if (!continuations.length) {
-    return { events: [], activeFileIds: ids, activeTurnPrefix }
+
+  const migrations: TurnLineage[] = []
+  for (const candidate of lineages) {
+    if (isPrefix(activeTurnPrefix, candidate.fingerprints)) migrations.push(candidate)
+    else if (!isPrefix(candidate.fingerprints, activeTurnPrefix)) {
+      throw new Error('Divergent exact-session rollout writer')
+    }
   }
-  const selected = longestCompatibleLineage(continuations)
+  if (!migrations.length) return { events: [], activeFileId, activeTurnPrefix }
+  if (migrations.length !== 1) throw new Error('Ambiguous exact-session rollout migration')
+  const migrated = migrations[0]
   return {
-    events: selected.history.events.slice(selected.start),
-    activeFileIds: ids,
-    activeTurnPrefix: [...activeTurnPrefix, ...selected.fingerprints],
+    events: migrated.history.events.slice(migrated.start + activeTurnPrefix.length),
+    activeFileId: migrated.history.fileId,
+    activeTurnPrefix: migrated.fingerprints,
   }
 }
 
-function longestCompatibleLineage<T extends { fingerprints: readonly string[] }>(candidates: readonly T[]): T {
-  const sorted = [...candidates].sort((a, b) => b.fingerprints.length - a.fingerprints.length)
-  const selected = sorted[0]
-  for (const candidate of sorted.slice(1)) {
-    if (!prefixCompatible(candidate.fingerprints, selected.fingerprints)) {
-      throw new Error('Divergent exact-session rollout histories')
+interface TurnLineage {
+  history: KeyedHistory
+  start: number
+  fingerprints: readonly string[]
+}
+
+function uniqueFileHistories(histories: readonly KeyedHistory[]): KeyedHistory[] {
+  const unique = new Map<string, KeyedHistory>()
+  for (const history of histories) {
+    const prior = unique.get(history.fileId)
+    if (prior && !sameSequence(prior.fingerprints, history.fingerprints)) {
+      throw new Error('Unstable exact-session rollout inode')
     }
+    if (!prior) unique.set(history.fileId, history)
   }
-  return selected
+  return [...unique.values()]
 }
 
-function prefixCompatible(a: readonly string[], b: readonly string[]): boolean {
-  const count = Math.min(a.length, b.length)
-  for (let index = 0; index < count; index++) {
-    if (a[index] !== b[index]) return false
+function turnLineage(
+  history: KeyedHistory,
+  baseline: ReadonlyMap<string, readonly string[]>,
+): TurnLineage | null {
+  const oldPrefix = baselinePrefixForHistory(history, baseline)
+  const start = history.events.findIndex((event, index) =>
+    index >= oldPrefix && event.type === 'event_msg' && event.payload?.type === 'task_started')
+  return start < 0 ? null : {
+    history,
+    start,
+    fingerprints: history.fingerprints.slice(start),
+  }
+}
+
+function baselinePrefixForHistory(
+  history: KeyedHistory,
+  baseline: ReadonlyMap<string, readonly string[]>,
+): number {
+  const sameFile = baseline.get(history.fileId)
+  if (sameFile) {
+    if (!isPrefix(sameFile, history.fingerprints)) {
+      throw new Error('Exact-session rollout history regressed')
+    }
+    return sameFile.length
+  }
+  return knownPrefixLength(history.fingerprints, baseline.values())
+}
+
+function isPrefix(prefix: readonly string[], sequence: readonly string[]): boolean {
+  if (prefix.length > sequence.length) return false
+  for (let index = 0; index < prefix.length; index++) {
+    if (prefix[index] !== sequence[index]) return false
   }
   return true
+}
+
+function sameSequence(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && isPrefix(a, b)
 }
 
 function knownPrefixLength(
@@ -376,28 +421,6 @@ function knownPrefixLength(
     best = Math.max(best, matched)
   }
   return best
-}
-
-function knownPrefixForHistory(
-  history: KeyedHistory,
-  known: ReadonlyMap<string, readonly string[]>,
-): number {
-  const sameFile = known.get(history.fileId)
-  return knownPrefixLength(
-    history.fingerprints,
-    sameFile ? [sameFile] : known.values(),
-  )
-}
-
-function contiguousIndex(sequence: readonly string[], part: readonly string[]): number {
-  if (!part.length) return -1
-  outer: for (let index = 0; index <= sequence.length - part.length; index++) {
-    for (let offset = 0; offset < part.length; offset++) {
-      if (sequence[index + offset] !== part[offset]) continue outer
-    }
-    return index
-  }
-  return -1
 }
 
 function eventFingerprint(event: RolloutEvent): string {

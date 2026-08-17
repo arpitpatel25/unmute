@@ -537,6 +537,7 @@ export class ExecutorBackedAgentProcess implements AgentProcessDriver {
   private executor: ObservableAgentExecutor | null = null
   private observation: ProviderObservation | null = null
   private stopObserving: (() => void) | null = null
+  private observationArmed = false
   private closed = false
 
   constructor(private readonly options: ExecutorBackedDriverOptions) {}
@@ -546,7 +547,13 @@ export class ExecutorBackedAgentProcess implements AgentProcessDriver {
     this.executor = executor
     executor.onData((chunk) => this.queue.emit({ type: 'terminal-output', chunk }))
     executor.onExit?.(({ exitCode }) => this.queue.emit({ type: 'exit', exitCode }))
-    const observation = await this.options.observe?.(launch, this.queue.emit)
+    const emitObserved = (event: AgentProcessEvent) => {
+      const turnEvent = event.type === 'activity'
+        || event.type === 'completion'
+        || event.type === 'observer-failure'
+      if (!turnEvent || this.observationArmed) this.queue.emit(event)
+    }
+    const observation = await this.options.observe?.(launch, emitObserved)
     this.observation = observation && typeof observation !== 'function' ? observation : null
     this.stopObserving = typeof observation === 'function'
       ? observation
@@ -567,6 +574,7 @@ export class ExecutorBackedAgentProcess implements AgentProcessDriver {
     await this.executor.isReady()
     await this.observation?.beforeSubmit?.()
     if (this.closed) throw new Error('closed')
+    this.observationArmed = true
     this.executor.writeStdin(text)
   }
 
