@@ -110,6 +110,12 @@ enum Theme {
     /// A recessed element — text fields, the terminal well.
     static let sunken       = Color.black.opacity(0.30)
     static let hairline     = Color.white.opacity(0.10)
+    /// A card drawn on the BARE BLACK mass rather than on `plane` — the open
+    /// pocket's shoulders. `raised` was tuned against `plane` and all but
+    /// vanishes against the housing's own black, which is exactly why the open
+    /// pocket used to read as another bar message instead of as something held.
+    static let onBlackFill  = Color.white.opacity(0.085)
+    static let onBlackEdge  = Color.white.opacity(0.14)
     static let hairlineSoft = Color.white.opacity(0.06)
     /// The sidebar wash. Edge-to-edge per Golden Gate — no floating inset.
     static let railBg       = Color.white.opacity(0.028)

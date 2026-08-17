@@ -116,10 +116,12 @@ final class NotchModel: ObservableObject {
     /// reachable by voice — and costing you nothing but the notch until you
     /// either speak or tap it open.
     @Published var pocket: PocketP = .empty
-    /// Presentation only: the pocket remains open and voice-addressable while
-    /// its secondary controls are tucked away. Hover and an aimed Remote
-    /// capture reveal them without creating another navigation state.
-    @Published var pocketDetailsVisible: Bool = false
+    /// How tall the card inside each shoulder is, on a notched display.
+    ///
+    /// Derived from the MEASURED menu bar (see PocketRowMetrics), so it travels
+    /// with the same resolve pass that sizes the window rather than being
+    /// recomputed inside the view from a number the view does not have.
+    @Published var pocketCardHeight: CGFloat = 27
     /// Fallback for the rare pocket → expanded transition where its destination
     /// data has not arrived yet. Prepared content participates in the resize;
     /// withholding it is what previously produced a large blank panel.
@@ -182,7 +184,6 @@ final class NotchModel: ObservableObject {
     var emit: (Event) -> Void = IPC.emit
     /// Hover relay → AppController (dormant ⇄ idle wake lives there).
     var onHover: (Bool) -> Void = { _ in }
-    var onPocketDetails: (Bool) -> Void = { _ in }
     /// BACK, not close. Wired to AppController.stepDown — the graded walk back
     /// out of whatever you drilled into. Escape and an outside click no longer
     /// do this; they close outright, which is what those two gestures mean

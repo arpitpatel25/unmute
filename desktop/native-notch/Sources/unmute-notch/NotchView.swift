@@ -211,7 +211,10 @@ struct NotchView: View {
         Group {
             if expanded {
                 ZStack {
-                    if let pocket = model.transitionPocket {
+                    if let pocket = model.transitionPocket, !model.hasNotch {
+                        // The hand-off snapshot only exists for the card. The
+                        // notched row is bar-height and shares the expanded
+                        // panel's top edge, so there is nothing to cross-fade.
                         pocketPlane { PocketCard(model: model, pocketOverride: pocket, listening: model.captureAimed) }
                             .allowsHitTesting(false)
                             .transition(.opacity)
@@ -227,7 +230,16 @@ struct NotchView: View {
             // looking at one address, and a card naming a second would be two
             // answers to the same question.
             else if model.pocket.isOpen {
-                pocketPlane { PocketCard(model: model, listening: model.captureAimed) }
+                // TWO ARRANGEMENTS OF ONE STATE. On a notched display the pocket
+                // is a row on the housing's own line, drawn straight onto the
+                // black mass — no plane, because a second material is exactly
+                // what cannot pass behind the camera. Anywhere else there is
+                // nothing to work around and it stays a card.
+                if model.hasNotch {
+                    PocketRow(model: model, listening: model.captureAimed)
+                } else {
+                    pocketPlane { PocketCard(model: model, listening: model.captureAimed) }
+                }
             }
             else { barRow }
         }
@@ -377,7 +389,11 @@ struct NotchView: View {
     /// corners included, fell outside the window and was clipped, and its top
     /// no longer nested in the shape's concave flare. A notch fix that broke
     /// every machine without one.
-    private var pocketTopPad: CGFloat { model.hasNotch ? topInset : Theme.panelPadding }
+    /// OFF-NOTCH ONLY, so there is no housing to clear and this is the ordinary
+    /// panel padding. It used to be `topInset` on a notched display, which is
+    /// what pushed the whole card below the camera; that case is now the row,
+    /// which does not use a plane at all.
+    private var pocketTopPad: CGFloat { Theme.panelPadding }
 
     @ViewBuilder private func pocketPlane<Content: View>(@ViewBuilder _ body: () -> Content) -> some View {
         body()

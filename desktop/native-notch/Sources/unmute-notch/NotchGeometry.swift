@@ -226,6 +226,37 @@ struct NotchGeometry: Equatable {
                              fillet: fillet, bottomRadius: barCornerRadius)
     }
 
+    /// THE POCKET, OPEN — the same mass rules, with one difference.
+    ///
+    /// The right half here is not a status line that can be dropped: it carries
+    /// the close button, and a card you cannot dismiss is not a card. So both
+    /// halves are clamped to the room beside the cutout and neither is ever
+    /// removed. Everything else — the fillets, the anchor, the middle being the
+    /// hole itself — is exactly `mass`.
+    func pocketMass(left: CGFloat, right: CGFloat) -> MassPlacement {
+        let fillet = barFillet
+        let l = min(left, max(leftUsable - fillet - Self.barEdgeKeepOut, 0))
+        let r = min(right, max(rightUsable - fillet - Self.barEdgeKeepOut, 0))
+        return MassPlacement(left: ceil(l), middle: cutoutWidth, right: ceil(r),
+                             fillet: fillet, bottomRadius: barCornerRadius)
+    }
+
+    /// THE POCKET, OFF THE NOTCH. One card, always this size.
+    ///
+    /// There is no housing to work around here, so the card keeps its own shape
+    /// and hangs from the top edge on the ordinary panel padding. It is the
+    /// FULLER card, not the old 64pt compact one: nothing off-notch forces the
+    /// content onto a single line, so a card showing only a title and a status
+    /// word would be withholding rather than compact.
+    static let pocketCardWidth: CGFloat = 348
+    /// who · what it is asking · which of them (see PocketCard).
+    static let pocketCardHeight: CGFloat = 106
+
+    func pocketCardFrame() -> NSRect {
+        topPinnedFrame(width: Self.pocketCardWidth,
+                       height: Self.pocketCardHeight + 2 * Theme.panelPadding)
+    }
+
     /// The window frame for a bar-level mass.
     ///
     /// ANCHORED ON THE HOLE, not on the screen: the mass's middle must sit
