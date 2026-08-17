@@ -30,6 +30,30 @@ function tapPtyForTask(taskId: string, dir: 'in' | 'out', bytes: Buffer, atMs: n
   const logsDir = remoteLogDir()
   if (logsDir) tapPty(logsDir, taskId, dir, bytes, atMs)
 }
+
+/** AN EXCEPTION HERE KILLS THE WHOLE APP, so nothing is allowed to escape.
+ *
+ *  PTY output arrives through node-pty's thread-safe function: native code calls
+ *  into JS, and a throw crossing back over that N-API boundary has nowhere to go
+ *  — libc++ calls std::terminate and the process aborts. There is a crash report
+ *  in the field with exactly that stack (pty.node → Napi::ThreadSafeFunction →
+ *  __cxa_throw → abort, SIGABRT), and when the app dies that way it takes every
+ *  running task with it and, before the lifecycle fix, stranded the notch on
+ *  screen.
+ *
+ *  Every consumer of a chunk is bookkeeping — buffers, logs, an emit. None of it
+ *  is worth the process, so a failure is recorded and the stream continues. */
+function guardPtyCallback(taskId: string, body: () => void): void {
+  try {
+    body()
+  } catch (e) {
+    try {
+      createLogger('task-manager').error('pty-callback threw — contained', {
+        taskId, error: e instanceof Error ? e.message : String(e),
+      })
+    } catch { /* logging must not be the thing that aborts us either */ }
+  }
+}
 import {
   scaffoldStatusFile,
   writeStatusFile,
@@ -782,7 +806,7 @@ export class TaskManager extends EventEmitter {
       // Buffer raw PTY output (capped) for render-on-demand (§4.3/§13.4#8) and
       // emit it live so a watching terminal view updates in real time.
       this.outputBuffers.set(id, '')
-      ex.onData((chunk) => {
+      ex.onData((chunk) => guardPtyCallback(id, () => {
         tlog.debug('pty-data', { chunk })
         // Untruncated copy for diagnosis. The line above is capped at 2000 chars
         // by the logger, which is exactly why three theories about why a session
@@ -791,7 +815,7 @@ export class TaskManager extends EventEmitter {
         const cur = (this.outputBuffers.get(id) ?? '') + chunk
         this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
         this.emit('output', { taskId: id, chunk })
-      })
+      }))
 
       await ex.spawn({
         cwd: runCwd, env: process.env, taskId: id,
@@ -1298,11 +1322,11 @@ export class TaskManager extends EventEmitter {
       const ex = this.opts.executorFactory(false, 'codex', { browser: false, codexRemote: { url, threadId } })
       this.executors.set(id, ex)
       this.outputBuffers.set(id, '')
-      ex.onData((chunk) => {
+      ex.onData((chunk) => guardPtyCallback(id, () => {
         const cur = (this.outputBuffers.get(id) ?? '') + chunk
         this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
         this.emit('output', { taskId: id, chunk })
-      })
+      }))
       // `resume <threadId>` — codexArgs turns resumeSessionId into the
       // subcommand, and --remote (from the factory) points it at our server.
       await ex.spawn({ cwd: runCwd, env: process.env, taskId: id, resumeSessionId: threadId })

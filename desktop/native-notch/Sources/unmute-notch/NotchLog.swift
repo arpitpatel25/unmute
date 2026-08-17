@@ -24,14 +24,24 @@ enum NotchLog {
     static func log(_ msg: String) {
         let line = "\(stamp.string(from: Date())) \(msg)\n"
         guard let data = line.data(using: .utf8) else { return }
+        // BOTH WRITES GO ON THE QUEUE. The stderr write used to happen inline,
+        // synchronously, on whatever thread called log() — which is usually the
+        // main thread, because most of what is logged here is UI state. Measured
+        // in the field at ~78 lines a second during ordinary use, that is 78
+        // blocking writes a second on the thread that draws the surface, and the
+        // reported symptom is the surface wedging. A log line must never be able
+        // to stall the UI.
+        //
+        // Ordering is preserved because both writes share this one serial queue.
+        let errLine = ("[notch] " + line).data(using: .utf8)
         queue.async {
             if let h = FileHandle(forWritingAtPath: path) {
                 h.seekToEndOfFile(); h.write(data); try? h.close()
             } else {
                 try? data.write(to: URL(fileURLWithPath: path))
             }
+            if let errLine { FileHandle.standardError.write(errLine) }
         }
-        FileHandle.standardError.write(("[notch] " + line).data(using: .utf8)!)
     }
 
     static func rect(_ r: NSRect) -> String {
