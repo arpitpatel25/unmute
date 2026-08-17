@@ -43,13 +43,19 @@ function nativeDatabase(): NativeDatabaseConstructor {
   return require('better-sqlite3-multiple-ciphers') as NativeDatabaseConstructor
 }
 
-function observeTemporaryKeyCopies(source: Uint8Array): KeyCopyObservation {
+function observeTemporaryKeyCopies(
+  source: Uint8Array,
+  wrap: (copy: Buffer) => Buffer = (copy) => copy,
+): KeyCopyObservation {
   const mutableBuffer = Buffer as unknown as { from(...values: unknown[]): Buffer }
   const originalFrom = mutableBuffer.from
   const copies: Buffer[] = []
   mutableBuffer.from = function(...values) {
     const result = originalFrom.apply(Buffer, values)
-    if (values[0] === source) copies.push(result)
+    if (values[0] === source) {
+      copies.push(result)
+      return wrap(result)
+    }
     return result
   }
   return {
@@ -150,6 +156,31 @@ test('clears an invalid temporary key copy without mutating the caller key', () 
   }
 
   assertKeyCopyCleared(observation, caller, 0x31)
+})
+
+test('clears the temporary key copy when validation aborts after copying', () => {
+  const caller = Buffer.alloc(32, 0x35)
+  let firstLengthRead = true
+  const observation = observeTemporaryKeyCopies(caller, (copy) => new Proxy(copy, {
+    get(target, property) {
+      if (property === 'byteLength' && firstLengthRead) {
+        firstLengthRead = false
+        throw new Error('injected key validation failure')
+      }
+      const value = Reflect.get(target, property, target) as unknown
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }))
+  try {
+    assert.throws(
+      () => openSqlCipherMemoryIndex({ databasePath: 'unused.sqlite', key: caller }),
+      /injected key validation failure/,
+    )
+  } finally {
+    observation.restore()
+  }
+
+  assertKeyCopyCleared(observation, caller, 0x35)
 })
 
 test('clears the temporary key copy when lazy native loading fails', () => {

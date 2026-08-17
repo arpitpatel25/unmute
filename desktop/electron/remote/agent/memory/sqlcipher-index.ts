@@ -140,15 +140,6 @@ function loadNativeDatabase(): NativeDatabaseConstructor {
   }
 }
 
-function requireMasterKey(key: Uint8Array): Buffer {
-  const bytes = Buffer.from(key)
-  if (bytes.byteLength !== MASTER_KEY_BYTES) {
-    bytes.fill(0)
-    throw new MemoryIndexError('invalid-key', 'Memory index key must be 32 bytes')
-  }
-  return bytes
-}
-
 function isNativeCorruption(error: unknown): boolean {
   const code = (error as NativeError | undefined)?.code
   return code === 'SQLITE_CORRUPT' || code === 'SQLITE_NOTADB'
@@ -480,12 +471,15 @@ class SqlCipherMemoryIndex implements MemoryIndex {
 export function openSqlCipherMemoryIndex(
   options: OpenSqlCipherMemoryIndexOptions,
 ): MemoryIndex {
-  const key = requireMasterKey(options.key)
+  const keyCopy = Buffer.from(options.key)
   try {
+    if (keyCopy.byteLength !== MASTER_KEY_BYTES) {
+      throw new MemoryIndexError('invalid-key', 'Memory index key must be 32 bytes')
+    }
     const Database = loadNativeDatabase()
     const existed = existsSync(options.databasePath)
     try {
-      const opened = initializeDatabase(Database, options.databasePath, key)
+      const opened = initializeDatabase(Database, options.databasePath, keyCopy)
       return new SqlCipherMemoryIndex(opened.database, opened.cipherVersion)
     } catch (error) {
       if (error instanceof MemoryIndexError) throw error
@@ -495,7 +489,7 @@ export function openSqlCipherMemoryIndex(
       if (options.recoverCorruption && existed && isNativeCorruption(error)) {
         try {
           quarantineProjection(options.databasePath)
-          const opened = initializeDatabase(Database, options.databasePath, key)
+          const opened = initializeDatabase(Database, options.databasePath, keyCopy)
           return new SqlCipherMemoryIndex(opened.database, opened.cipherVersion)
         } catch {
           throw new MemoryIndexError('open-failed', 'Encrypted memory index could not be opened')
@@ -504,6 +498,6 @@ export function openSqlCipherMemoryIndex(
       throw new MemoryIndexError('open-failed', 'Encrypted memory index could not be opened')
     }
   } finally {
-    key.fill(0)
+    keyCopy.fill(0)
   }
 }
