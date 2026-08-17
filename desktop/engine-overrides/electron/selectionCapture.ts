@@ -45,6 +45,14 @@ function hasContent(s: string | null | undefined): s is string {
   return !!s && s.trim() !== ''
 }
 
+/** Whether the pasteboard is still holding what we last pasted. Compared on
+ *  trimmed text because delivery pads its output (padOutput) — an exact match
+ *  would miss the very case this exists to catch. */
+function isOwnDelivery(clip: string, lastDelivered: string | null | undefined): boolean {
+  if (!hasContent(lastDelivered)) return false
+  return clip.trim() === lastDelivered.trim()
+}
+
 /** Whether an absent selection should fall back to the user's pasteboard.
  *
  *  The question is what the text is FOR, and the mode alone cannot answer it:
@@ -79,7 +87,11 @@ export function shouldUseClipboardFallback(
  *  prevent. It is never inferred here. */
 export async function captureSelection(
   deps: SelectionCaptureDeps,
-  { useClipboardFallback }: { useClipboardFallback: boolean },
+  { useClipboardFallback, lastDelivered }: {
+    useClipboardFallback: boolean
+    /** What WE last pasted, so our own residue is never mistaken for intent. */
+    lastDelivered?: string | null
+  },
 ): Promise<SelectionCaptureResult> {
   const saved = deps.readClipboardText()
 
@@ -105,6 +117,15 @@ export async function captureSelection(
   deps.writeTextAndRecord(saved)
 
   if (hasContent(selected)) return { text: selected, source: 'selection' }
-  if (useClipboardFallback && hasContent(saved)) return { text: saved, source: 'clipboard' }
+  // OUR OWN RESIDUE IS NOT THE USER'S INTENT.
+  //
+  // Delivery writes the transcript to the pasteboard and pastes it, so after
+  // every dictation the clipboard holds unmute's own last output. Standing that
+  // in for an absent selection attached the previous utterance to whatever was
+  // said next — in the field, 12 times in one afternoon. A non-empty pasteboard
+  // is only evidence of intent when someone other than us filled it.
+  if (useClipboardFallback && hasContent(saved) && !isOwnDelivery(saved, lastDelivered)) {
+    return { text: saved, source: 'clipboard' }
+  }
   return { text: null, source: 'none' }
 }

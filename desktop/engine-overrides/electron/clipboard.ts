@@ -342,6 +342,11 @@ function simulateViaOsascript(key: string, modifier: string): Promise<void> {
  *   no selection. Decided by the CALLER from what it is gathering text for,
  *   never inferred here.
  */
+/** The last text WE pasted. Read by captureSelectedText so unmute's own output
+ *  is never mistaken for something the user copied. */
+let lastDeliveredText: string | null = null
+export function noteDeliveredText(text: string): void { lastDeliveredText = text }
+
 export async function captureSelectedText(useClipboardFallback: boolean = false): Promise<string | null> {
   try {
     const before = clipboard.readText()
@@ -363,7 +368,7 @@ export async function captureSelectedText(useClipboardFallback: boolean = false)
         noteOurWrite() // the copy the child just performed into our cleared slot
       },
       settle: sleep,
-    }, { useClipboardFallback })
+    }, { useClipboardFallback, lastDelivered: lastDeliveredText })
 
     if (source === 'selection') {
       console.log('[clipboard] Captured selection, length:', text!.length, 'text:', JSON.stringify(text!.substring(0, 80)))
@@ -608,6 +613,9 @@ function currentClipboardIdentity(): { changeCount: number | null; text: string 
  * merely observes that keystroke; after the target has consumed the text, the
  * exact same image sequencer used by live dictation appends each image. */
 export function stageHistoryPaste(text: string, images: readonly string[]): void {
+  // Staged for the user's own Cmd+V, so it sits on the pasteboard until they
+  // use it. Same residue, same rule.
+  noteDeliveredText(text)
   clipboard.writeText(text)
   noteOurWrite()
   if (!images.length) {
@@ -637,6 +645,10 @@ export async function injectOutput(text: string, images?: readonly string[]): Pr
   // `attachments` and hands them here. Nothing is swept off the clipboard
   // blind, and nothing is appended without the user having captured it.
   const padded = padOutput(text)
+  // REMEMBERED, so the selection stand-in can tell our own residue from a copy
+  // the user made. Delivery leaves this text on the pasteboard; without this the
+  // next Remote capture attached the previous utterance to itself.
+  noteDeliveredText(padded)
   clipboard.writeText(padded)
   noteOurWrite() // ours — delivery's own write, synchronous with it
   console.log(`[clipboard] writeText (${padded.length} chars) in ${Date.now() - tStart}ms`)
@@ -691,6 +703,9 @@ export async function injectOutput(text: string, images?: readonly string[]): Pr
 
 export function copyToClipboard(text: string): void {
   const padded = padOutput(text)
+  // Clipboard-mode delivery leaves our output there by design — that IS the
+  // delivery. All the more reason the stand-in must not read it back as intent.
+  noteDeliveredText(padded)
   clipboard.writeText(padded)
   noteOurWrite() // ours — the clipboard-mode delivery write
   console.log('[clipboard] Text copied to clipboard (padded), length:', padded.length)

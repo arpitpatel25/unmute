@@ -77,6 +77,51 @@ describe('captureSelection', () => {
     assert.equal(r.source, 'clipboard')
   })
 
+  // THE REGRESSION THE FALLBACK SHIPPED WITH.
+  //
+  // Unmute delivers a dictation by writing it to the pasteboard and pasting it,
+  // so after every dictation the clipboard holds unmute's OWN last output. The
+  // stand-in could not tell that from something the user deliberately copied, so
+  // speaking to an agent attached the previous utterance to it — 12 times in one
+  // afternoon in the field. The pasteboard being non-empty is not evidence of
+  // user intent when we are the ones who filled it.
+  test('refuses a clipboard that is only our own last delivery', async () => {
+    const { deps } = recorder({ initialClipboard: 'the thing I dictated a moment ago' })
+
+    const r = await captureSelection(deps, {
+      useClipboardFallback: true,
+      lastDelivered: 'the thing I dictated a moment ago',
+    })
+
+    assert.equal(r.text, null)
+    assert.equal(r.source, 'none')
+  })
+
+  test('ignores surrounding whitespace when recognising our own delivery', async () => {
+    const { deps } = recorder({ initialClipboard: '  my last dictation \n' })
+
+    const r = await captureSelection(deps, {
+      useClipboardFallback: true,
+      lastDelivered: 'my last dictation',
+    })
+
+    assert.equal(r.source, 'none')
+  })
+
+  // …but a genuine copy still gets through, which is the whole point of the
+  // stand-in. Losing this would re-open the bug it was written for.
+  test('still uses a clipboard the user actually copied', async () => {
+    const { deps } = recorder({ initialClipboard: 'a paragraph I copied from an article' })
+
+    const r = await captureSelection(deps, {
+      useClipboardFallback: true,
+      lastDelivered: 'something else I dictated earlier',
+    })
+
+    assert.equal(r.text, 'a paragraph I copied from an article')
+    assert.equal(r.source, 'clipboard')
+  })
+
   test('an empty clipboard yields nothing even with the fallback on', async () => {
     const { deps } = recorder({ initialClipboard: '   ' })
 
