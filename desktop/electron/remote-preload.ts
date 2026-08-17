@@ -11,6 +11,8 @@ import type { ProviderId } from './remote/providers'
 export interface RemoteTaskSnapshot {
   id: string
   intent: string
+  origin?: 'unmute-agent'
+  agentRunId?: string
   state: 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
   category: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
   /** Latest short progress label ("Editing X · 12/18 tests"), if any. */
@@ -82,6 +84,22 @@ export interface UnmuteAgentInteractionResult {
   error?: { code: string; message: string }
 }
 
+export type UnmuteAgentActivityState =
+  | 'listening'
+  | 'searching'
+  | 'thinking'
+  | 'confirming'
+  | 'complete'
+  | 'failed'
+
+export interface UnmuteAgentActivitySnapshot {
+  state: UnmuteAgentActivityState
+  summary: string
+  interactionId?: string
+  agentRunId?: string
+  provider?: UnmuteAgentProvider
+}
+
 export interface UnmuteMemorySnapshot {
   id: string
   kind: string
@@ -137,6 +155,11 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:agent-submit', input),
   remoteAgentCancel: (runId: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:agent-cancel', runId),
+  remoteOnAgentActivity: (cb: (activity: UnmuteAgentActivitySnapshot) => void): (() => void) => {
+    const handler = (_e: unknown, activity: UnmuteAgentActivitySnapshot) => cb(activity)
+    ipcRenderer.on('remote:agent-activity', handler)
+    return () => ipcRenderer.removeListener('remote:agent-activity', handler)
+  },
   remoteListMemories: (query?: string): Promise<UnmuteMemorySnapshot[]> =>
     ipcRenderer.invoke('remote:list-memories', query),
   remoteGetMemory: (id: string): Promise<UnmuteMemorySnapshot | null> =>

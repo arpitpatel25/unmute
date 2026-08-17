@@ -38,6 +38,10 @@ final class NotchModel: ObservableObject {
     @Published var attention: Int = 0
     @Published var working: Int = 0
 
+    /// Ephemeral Unmute Agent progress. It is deliberately separate from tasks:
+    /// only a consequential final result is allowed onto the wall.
+    @Published var agentActivity: AgentActivityP? = nil
+
     // The fronted task (attention strip + task surface).
     @Published var task: TaskDetail? = nil
     @Published private(set) var taskConversationRows: [ConversationRow] = []

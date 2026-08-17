@@ -162,6 +162,9 @@ struct StageView: View {
         HStack(spacing: 6) {
             Dot(status: t.status, size: 9, breathing: t.status == .processing)
             ProviderMark(backend: t.backend, terminal: t.hasTerminal)
+            if let origin = t.agentOriginPresentation {
+                Badge(text: origin.label, color: Theme.cReady)
+            }
             // WHERE YOUR VOICE IS GOING, while it is going there.
             //
             // Only for a REMOTE capture — `capturePhase == "listening"` is set

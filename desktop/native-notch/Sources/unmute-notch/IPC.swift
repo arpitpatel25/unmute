@@ -95,6 +95,8 @@ struct TaskDraftP: Codable { let text: String; let attachments: [DraftAttachment
 struct TaskDetail: Codable {
     let id: String
     let title: String
+    let origin: String?
+    let agentRunId: String?
     let status: TaskStatus
     let kind: String           // "oneoff" | "session"
     let alive: Bool
@@ -222,6 +224,8 @@ extension ConversationTurn {
 struct CardP: Codable {
     let id: String
     let title: String
+    let origin: String?
+    let agentRunId: String?
     let activity: String?
     let status: TaskStatus
     let kind: String           // "oneoff" | "session"
@@ -260,6 +264,38 @@ struct SkillP: Codable {
     let lastUsed: String?
     let description: String?
     let origin: String?        // "unmute" for curator-authored
+}
+
+struct AgentOriginPresentation {
+    let label: String
+    let runId: String?
+}
+
+protocol AgentOriginPresenting {
+    var origin: String? { get }
+    var agentRunId: String? { get }
+}
+
+extension AgentOriginPresenting {
+    var agentOriginPresentation: AgentOriginPresentation? {
+        guard origin == "unmute-agent" else { return nil }
+        return AgentOriginPresentation(label: "Unmute", runId: agentRunId)
+    }
+}
+
+extension TaskDetail: AgentOriginPresenting {}
+extension CardP: AgentOriginPresenting {}
+
+enum AgentActivityState: String, Codable {
+    case listening, searching, thinking, confirming, complete, failed
+}
+
+struct AgentActivityP: Codable {
+    let state: AgentActivityState
+    let summary: String
+    let interactionId: String?
+    let agentRunId: String?
+    let provider: String?
 }
 struct ShelfItemP: Codable { let id: String; let name: String }
 /// A Claude Code CLI session on this machine that unmute does not have. Exists
@@ -361,6 +397,7 @@ enum Command {
     /// go. See ScratchpadModel — every field on that payload decodes leniently,
     /// so a partial or older push still draws instead of being dropped.
     case scratchpad(ScratchpadPayload)
+    case agentActivity(AgentActivityP)
     case collapse
     case quit
     case unknown
@@ -413,6 +450,9 @@ enum Command {
             // to get here is a malformed `data`, and an empty pad (no panel) is
             // the safe reading of "we do not know what is held".
             return .scratchpad(sub("data", ScratchpadPayload.self) ?? .empty)
+        case "agentActivity":
+            guard let activity = sub("activity", AgentActivityP.self) else { return .unknown }
+            return .agentActivity(activity)
         case "appearance":
             // An unknown value falls back to `.system` rather than being
             // dropped: a malformed preference must never leave the surface

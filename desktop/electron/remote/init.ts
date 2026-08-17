@@ -63,7 +63,12 @@ import { MemoryCapability } from './agent/capabilities/memory'
 import { AgentTokenStore } from './agent/tokens'
 import { AgentRunSupervisor } from './agent/supervisor'
 import { AgentJournal } from './agent/journal'
-import { UnmuteAgentController, type AgentInteractionInput } from './agent/controller'
+import {
+  UnmuteAgentController,
+  type AgentInteractionActivity,
+  type AgentInteractionInput,
+  type AgentInteractionResult,
+} from './agent/controller'
 import { ClaudeCodeProvider } from './agent/providers/claude'
 import { CodexCliProvider } from './agent/providers/codex'
 import { probeCli, type AgentProviderId, type ProviderProbe } from './agent/provider'
@@ -558,9 +563,72 @@ async function probeUnmuteAgentProviders(): Promise<UnmuteAgentProviderAvailabil
   return providerAvailability(probes)
 }
 
-function broadcastUnmuteAgentActivity(activity: unknown): void {
+type UnmuteAgentActivityState = 'listening' | 'searching' | 'thinking' | 'confirming' | 'complete' | 'failed'
+
+interface UnmuteAgentActivitySnapshot {
+  state: UnmuteAgentActivityState
+  summary: string
+  interactionId?: string
+  agentRunId?: string
+  provider?: AgentProviderId
+}
+
+function presentUnmuteAgentActivity(activity: AgentInteractionActivity): UnmuteAgentActivitySnapshot {
+  const state: UnmuteAgentActivityState = activity.kind === 'searching-memory'
+    ? 'searching'
+    : activity.kind === 'waiting'
+      ? 'confirming'
+      : 'thinking'
+  return {
+    state,
+    summary: activity.summary,
+    interactionId: activity.interactionId,
+    agentRunId: activity.agentRunId,
+    ...(activity.provider ? { provider: activity.provider } : {}),
+  }
+}
+
+function broadcastUnmuteAgentActivity(activity: AgentInteractionActivity | UnmuteAgentActivitySnapshot): void {
+  const snapshot = 'state' in activity ? activity : presentUnmuteAgentActivity(activity)
   for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) window.webContents.send('remote:agent-activity', activity)
+    if (!window.isDestroyed()) window.webContents.send('remote:agent-activity', snapshot)
+  }
+  notchClient?.send({ type: 'agentActivity', activity: snapshot })
+}
+
+async function submitUnmuteAgent(input: AgentInteractionInput): Promise<AgentInteractionResult> {
+  if (!unmuteAgentController) throw new Error('Unmute Agent is unavailable')
+  broadcastUnmuteAgentActivity({
+    state: 'listening',
+    summary: 'Listening to Unmute Agent',
+    ...(input.priorRunId ? { agentRunId: input.priorRunId } : {}),
+  })
+  try {
+    const result = await unmuteAgentController.submit(input)
+    if (result.presentation === 'task' && result.outcome === 'completed' && result.text?.trim()) {
+      await manager?.presentAgentResult({
+        agentRunId: result.agentRunId,
+        intent: input.transcript,
+        text: result.text,
+        provider: result.provider,
+      })
+    }
+    broadcastUnmuteAgentActivity({
+      state: result.outcome === 'completed' ? 'complete' : 'failed',
+      summary: result.outcome === 'completed'
+        ? (result.text?.trim() || 'Done')
+        : (result.error?.message || 'Unmute Agent could not complete that request'),
+      interactionId: result.interactionId,
+      agentRunId: result.agentRunId,
+      ...(result.provider ? { provider: result.provider } : {}),
+    })
+    return result
+  } catch (error) {
+    broadcastUnmuteAgentActivity({
+      state: 'failed',
+      summary: error instanceof Error ? error.message : 'Unmute Agent could not complete that request',
+    })
+    throw error
   }
 }
 
@@ -1358,6 +1426,8 @@ function serializeTask(t: Task) {
   return {
     id: t.id,
     intent: t.intent,
+    origin: t.origin,
+    agentRunId: t.agentRunId,
     name: t.name ?? null,
     cwd: t.cwd,
     kind: t.kind ?? 'oneoff',
@@ -2908,7 +2978,7 @@ async function dispatchFromCaptureInner(
       })),
       ...(options.priorAgentRunId ? { priorRunId: options.priorAgentRunId } : {}),
     }
-    const result = await unmuteAgentController.submit(input)
+    const result = await submitUnmuteAgent(input)
     log.event('agent-capture-complete', {
       interactionId: result.interactionId,
       agentRunId: result.agentRunId,
@@ -5003,7 +5073,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         },
       }
     }
-    return unmuteAgentController.submit(input)
+    return submitUnmuteAgent(input)
   })
   ipcMain.handle('remote:agent-cancel', async (_e, runId: unknown) => {
     if (!unmuteAgentSupervisor || typeof runId !== 'string' || !runId) return false

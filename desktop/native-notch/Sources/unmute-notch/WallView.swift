@@ -207,7 +207,11 @@ struct WallView: View {
                     Dot(status: c.status, size: 7, breathing: c.status == .processing)
                     StatusLabel(status: c.status)
                     if c.promoted == true { Badge(text: "now a session", color: Theme.accent) }
-                    if c.agent == true { Badge(text: "agent", color: Theme.cReady) }
+                    if let origin = c.agentOriginPresentation {
+                        Badge(text: origin.label, color: Theme.cReady)
+                    } else if c.agent == true {
+                        Badge(text: "agent", color: Theme.cReady)
+                    }
                     Spacer(minLength: 0)
                     if let q = c.qpos { Badge(text: "Q\(q)") }
                 }

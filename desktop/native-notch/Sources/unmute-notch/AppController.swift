@@ -39,6 +39,7 @@ final class AppController: NSObject, NotchResizing {
     private var departureReturnTimer: Timer?
     private var expandedContentGeneration: UInt64 = 0
     private var toastTimer: Timer?
+    private var agentActivityTimer: Timer?
     /// Sole authority for visit-scoped interaction. Domain data remains in the
     /// model; controls, geometry and user choices are projected from this value.
     private var interaction = SurfaceInteractionState()
@@ -202,6 +203,26 @@ final class AppController: NSObject, NotchResizing {
                 applyState(state, animated: false)
                 window.present()
                 NotchLog.log("automatic departure settled compact — showing without destination-space collapse")
+            }
+
+        case let .agentActivity(activity):
+            agentActivityTimer?.invalidate()
+            model.agentActivity = activity
+            if model.state == .dormant {
+                applyState(.idle)
+            } else if !isExpanded(model.state) {
+                refreshBar()
+            }
+            if activity.state == .complete || activity.state == .failed {
+                agentActivityTimer = Timer.scheduledTimer(withTimeInterval: 2.2, repeats: false) { [weak self] _ in
+                    guard let self else { return }
+                    self.model.agentActivity = nil
+                    if self.commandedState == .dormant && self.model.state == .idle {
+                        self.applyState(.dormant)
+                    } else if !self.isExpanded(self.model.state) {
+                        self.refreshBar()
+                    }
+                }
             }
 
         case let .showTask(task):

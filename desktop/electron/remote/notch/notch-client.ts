@@ -111,6 +111,8 @@ export interface TurnP {
 export interface TaskDetailP {
   id: string
   title: string
+  origin?: 'unmute-agent'
+  agentRunId?: string
   status: TaskStatusName
   kind: 'oneoff' | 'session'
   alive: boolean
@@ -168,6 +170,8 @@ export interface TaskDetailP {
 export interface CardP {
   id: string
   title: string
+  origin?: 'unmute-agent'
+  agentRunId?: string
   activity?: string
   status: TaskStatusName
   kind: 'oneoff' | 'session'
@@ -320,6 +324,14 @@ export interface ScratchpadPayloadP {
   destinations: ScratchpadDestinationsP
 }
 
+export interface UnmuteAgentActivityP {
+  state: 'listening' | 'searching' | 'thinking' | 'confirming' | 'complete' | 'failed'
+  summary: string
+  interactionId?: string
+  agentRunId?: string
+  provider?: 'claude' | 'codex'
+}
+
 // ── Commands (main → helper) ────────────────────────────────────────────────
 
 export type NotchCommand =
@@ -336,6 +348,7 @@ export type NotchCommand =
   | { type: 'pocket'; data: PocketP }
   | { type: 'pill'; state: PillStateP }
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
+  | { type: 'agentActivity'; activity: UnmuteAgentActivityP }
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
   | { type: 'surfaceFill'; fill: number }

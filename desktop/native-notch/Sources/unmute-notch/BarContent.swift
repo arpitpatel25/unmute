@@ -121,6 +121,21 @@ struct BarContent: Equatable {
         if let toast = m.toast, !toast.isEmpty, !isExpandedState(state) {
             return BarContent(dot: .failed, left: "Couldn't complete", right: toast, alarm: .failed)
         }
+        if let activity = m.agentActivity, !isExpandedState(state) {
+            let status: TaskStatus
+            let label: String
+            switch activity.state {
+            case .listening:  status = .processing; label = "Listening"
+            case .searching:  status = .processing; label = "Searching"
+            case .thinking:   status = .processing; label = "Thinking"
+            case .confirming: status = .needsUser;  label = "Confirming"
+            case .complete:   status = .done;       label = "Done"
+            case .failed:     status = .failed;     label = "Couldn't complete"
+            }
+            return BarContent(dot: status, left: label, right: activity.summary,
+                              emphasis: .status,
+                              alarm: activity.state == .confirming || activity.state == .failed ? status : nil)
+        }
         // ROUTING OUTRANKS EVERY RESTING STATE.
         //
         // Between the recording pill vanishing and the task appearing, the
