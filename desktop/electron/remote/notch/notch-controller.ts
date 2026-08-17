@@ -20,6 +20,7 @@ import { providerOf, type ProviderId } from '../providers'
 import { ALWAYS_PRESENT, type PresenceLike } from '../presence'
 import { createLogger } from '../log'
 import { devEvent } from '../curator-devlog'
+import { nextFocusedComposer, type ComposerFocusEvent } from './composerFocus'
 
 const log = createLogger('notch-controller')
 
@@ -325,6 +326,16 @@ export class NotchController {
 
   /** The composer Unmute's own dictation should deliver images into. */
   focusedComposerTaskId(): string | null { return this.focusedComposerId }
+
+  /** Single writer for the focused-composer flag. Every path that could end a
+   *  composer's claim on the caret folds through here, so the policy lives in
+   *  one tested table (composerFocus.ts) rather than in scattered assignments —
+   *  which is how the clear went missing in the first place. */
+  private applyComposerFocus(e: ComposerFocusEvent): void {
+    const next = nextFocusedComposer(this.focusedComposerId, e)
+    if (next === this.focusedComposerId) return
+    this.focusedComposerId = next
+  }
   /** oneoff→session graduation narration (id → badge deadline). */
   private promotedUntil = new Map<string, number>()
   private kindSeen = new Map<string, string>()
@@ -530,9 +541,17 @@ export class NotchController {
     // Knowing the focused composer lets the capture path hand images straight
     // over instead of aiming a keystroke at a window that may not receive it.
     on('composerFocus', (e) => {
-      const { id, focused } = e as { id: string; focused: boolean }
-      this.focusedComposerId = focused ? id : (this.focusedComposerId === id ? null : this.focusedComposerId)
+      const { id, focused } = e as unknown as { id: string; focused: boolean }
+      this.applyComposerFocus(focused ? { kind: 'focus', taskId: id } : { kind: 'blur', taskId: id })
       devEvent(log, 'task-reply-ui-event', { taskId: id, event: 'composerFocus', focused })
+    })
+    // The blur AppKit will not send. resignFirstResponder fires only when focus
+    // moves inside the same window, so clicking away to another app left the
+    // flag set forever — and every dictated image after that went to a draft
+    // nobody was looking at instead of the caret the user was typing at.
+    on('windowUnfocused', () => {
+      this.applyComposerFocus({ kind: 'window-unfocused' })
+      devEvent(log, 'task-reply-ui-event', { event: 'windowUnfocused' })
     })
     on('removeDraftAttachment', (e) => {
       const { id, attachmentId } = e as { id: string; attachmentId: string }
@@ -1354,6 +1373,11 @@ export class NotchController {
 
   private setFocus(id: string | null): void {
     this.focusedId = id
+    // The surface moved. Anything but a re-render of the SAME task means that
+    // composer is no longer where the user is typing, so it stops being the
+    // place captured images go. leave() routes through here with null, so
+    // pocketing and collapsing are covered by this one line too.
+    this.applyComposerFocus({ kind: 'surface-changed', taskId: id })
     this.deps.focus(id) // focus IS the voice address (consent model)
     if (id) {
       // ACKNOWLEDGMENT IS NOT CLEARED HERE, and that was the bug behind "I

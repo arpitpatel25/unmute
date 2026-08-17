@@ -33,8 +33,6 @@ final class AppController: NSObject, NotchResizing {
     private var commandedState: NotchState = .dormant
     private var hoverTimer: Timer?
     private var hoverExitTimer: Timer?
-    private var pocketHoverTimer: Timer?
-    private var pocketContentTimer: Timer?
     private var departureTransition = SurfaceDepartureTransition()
     private var departureReturnTimer: Timer?
     private var expandedContentGeneration: UInt64 = 0
@@ -55,6 +53,12 @@ final class AppController: NSObject, NotchResizing {
         super.init()
         NotchLog.log("geometry: screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) barH=\(Int(geometry.barHeight)) cutoutW=\(Int(geometry.cutoutWidth))")
         window = NotchWindow(geometry: geometry)
+        // Tell the engine the moment this window stops being key, so no composer
+        // keeps claiming the caret after the user has clicked away. Without it
+        // the claim was permanent and every dictated image went to that draft.
+        window.onWindowUnfocused = { [weak self] in
+            self?.model.emit(.windowUnfocused)
+        }
         // A plain container holds the SwiftUI view and the resize border as
         // SIBLINGS. The border cannot live inside the hosting view — SwiftUI
         // owns that view's subviews and is free to reorder or drop them.
@@ -75,7 +79,6 @@ final class AppController: NSObject, NotchResizing {
             self?.afterEmit(ev)
         }
         model.onHover = { [weak self] entering in self?.handleHover(entering) }
-        model.onPocketDetails = { [weak self] visible in self?.setPocketDetails(visible) }
         model.onBack = { [weak self] in self?.stepDown() }
         model.selectSurfaceFill = { [weak self] fill in self?.selectSurface(fill) }
         model.setTaskTerminalVisible = { [weak self] visible in
@@ -346,22 +349,14 @@ final class AppController: NSObject, NotchResizing {
             // needs a refit — but only when it is the thing being shown. An
             // expanded task outranks it: you are already looking at one address,
             // and a card announcing a second would be two answers to one question.
-            let wasOpen = model.pocket.isOpen
             model.pocket = p
             let pocketIsVisible = !isExpanded(model.state) || model.state == .attention
-            if pocketIsVisible {
-                reducePocketInteraction(.pocketAvailability(open: p.isOpen, itemCount: p.slots.count))
-            } else {
-                interaction.reduce(.pocketAvailability(open: p.isOpen, itemCount: p.slots.count))
-                projectInteraction()
-            }
             NotchLog.log("CMD pocket mode=\(p.mode) at=\(p.at) slots=\(p.slots.count)")
-            if pocketIsVisible {
-                // reducePocketInteraction already owns every open/close frame
-                // transition. Data-only updates need only redraw the current
-                // card; sending a second frame request would retarget the morph.
-                if wasOpen == p.isOpen { refreshBar() }
-            }
+            // ONE STATE, SO ONE KIND OF CHANGE. Opening, closing, moving to the
+            // next slot and a data-only update are all just "the surface says
+            // something else now", which is a refit like any other. There is no
+            // second size to sequence against.
+            if pocketIsVisible { refit(animated: true) }
 
         case let .toast(text):
             showToast(text)
@@ -418,13 +413,18 @@ final class AppController: NSObject, NotchResizing {
             // arrives from the audio path and cannot outlive the microphone. If
             // a key-up is ever missed, the aim clears here instead of leaving a
             // chip claiming the user's voice is going somewhere it is not.
+            let wasAimed = model.captureAimed
             model.captureAimed = state.phase == .recording
                 && state.kind == .remote
                 && model.capturePhase == "listening"
-            // `pill` arrives for every microphone-level sample. The reducer is
-            // idempotent, so geometry changes only when capture aim changes,
-            // not 60 times per second.
-            reducePocketInteraction(.captureAimed(model.captureAimed))
+            // THE AIM CHANGES WHAT THE POCKET SAYS — the words give way to the
+            // mic, in place — and the surface is as wide as what it says, so a
+            // change of aim is a size change like any other. `pill` arrives for
+            // every microphone-level sample, so only a CHANGE may move the
+            // window, not 60 samples a second.
+            if model.captureAimed != wasAimed, model.pocket.isOpen, !isExpanded(model.state) {
+                refit(animated: true)
+            }
             reconcileSurfaces()
 
         case let .scratchpad(payload):
@@ -610,20 +610,26 @@ final class AppController: NSObject, NotchResizing {
             // whole ask. Anything bigger and we are back to a surface that is
             // in the way, which is the problem the pocket exists to solve.
             if model.pocket.isOpen {
-                // Shorter without the ghost-hint row, and shorter again when a
-                // single task makes the carousel pointless.
-                // ROOM FOR THE HOUSING ON TOP OF THE CARD, not instead of it.
-                // The card keeps its full height; the window grows by whatever
-                // the cutout occupies so the card still fits underneath it.
-                // Zero on a notchless display, so nothing moves there.
-                // GROW BY WHAT THE PLANE ACTUALLY ADDS, which is the inset
-                // MINUS the padding it replaced — not the whole inset. And zero
-                // on a notchless display, where the plane is unchanged.
-                let clearance = geometry.hasNotch ? max(0, topInset - Theme.panelPadding) : 0
-                let cardHeight = CGFloat(interaction.presentation.pocketHeight ?? 64)
-                return (geometry.topPinnedFrame(width: 348, height: cardHeight + clearance),
-                        geometry.panelPlacement,
-                        BarContent())
+                // ON THE NOTCH'S OWN LINE. The mass is bar-height and its middle
+                // IS the cutout: the words sit on the shoulders either side, so
+                // nothing readable ever passes behind the camera and nothing has
+                // to be pushed below it. Same rules as the bar, measured the
+                // same way — see PocketRowMetrics.
+                if geometry.hasNotch {
+                    let m = PocketRowMetrics.make(for: model.pocket,
+                                                  listening: model.captureAimed,
+                                                  barHeight: geometry.barHeight)
+                    model.pocketCardHeight = m.cardHeight
+                    let mass = geometry.pocketMass(left: m.left, right: m.right)
+                    return (geometry.barFrame(mass), mass, BarContent())
+                }
+                // NO CUTOUT, NOTHING TO WORK AROUND. The card keeps its own
+                // shape and hangs from the top edge on the ordinary padding.
+                // The card is shorter when the task is not asking anything —
+                // the middle row is dropped rather than filled with an echo of
+                // the footer, so the window must not reserve room for it.
+                let asking = !(model.pocket.current?.ask ?? "").isEmpty
+                return (geometry.pocketCardFrame(hasAsk: asking), geometry.panelPlacement, BarContent())
             }
             // BAR LEVEL. Height is the measured menu bar and nothing else; the
             // width follows what the mass has to say, bounded by the room
@@ -690,71 +696,18 @@ final class AppController: NSObject, NotchResizing {
         NotchLog.log("bar \(model.state.rawValue) window=\(NotchLog.rect(r.frame)) mass=[\(Int(r.placement.left))|\(Int(r.placement.middle))|\(Int(r.placement.right))] left=\(r.content.left ?? "—") right=\(r.content.right ?? "—")")
     }
 
-    /// Secondary pocket controls are a presentation detail, not a route. Their
-    /// frame change is coordinated through the same native transition as every
-    /// other pocket resize.
-    private func setPocketDetails(_ hovering: Bool) {
-        pocketHoverTimer?.invalidate()
-        if hovering {
-            reducePocketInteraction(.pointerEntered(.pocket))
-            return
-        }
-        // SwiftUI rebuilds its tracking region while the panel animates. That
-        // can emit a synthetic exit even though the pointer is still inside the
-        // same surface, creating a 64↔146pt resize loop. Defer only collapse and
-        // confirm against the physical window frame before accepting the exit.
-        pocketHoverTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { [weak self] _ in
-            guard let self, self.model.pocket.isOpen, !self.model.captureAimed else { return }
-            if self.pocketTargetFrame().contains(NSEvent.mouseLocation) { return }
-            self.reducePocketInteraction(.pointerExited(.pocket))
-        }
-    }
-
-    /// One ordered pocket morph. Geometry grows first and details appear only
-    /// after it settles; on exit details leave first and geometry follows.
-    /// Pointer intent may change in flight, but the current leg never reverses.
-    private func reducePocketInteraction(_ action: SurfaceInteractionAction) {
-        let before = interaction.presentation
-        interaction.reduce(action)
-        let after = interaction.presentation
-        guard before != after else { return }
-
-        if before.pocketDetailsVisible != after.pocketDetailsVisible {
-            withAnimation(after.pocketDetailsVisible ? Theme.contentIn : Theme.contentOut) {
-                projectInteraction()
-            }
-        } else {
-            projectInteraction()
-        }
-
-        if before.pocketHeight != after.pocketHeight {
-            let growing = (after.pocketHeight ?? 0) > (before.pocketHeight ?? 0)
-            refit(animated: true, completion: growing ? { [weak self] in
-                self?.settlePocketGeometry()
-            } : nil)
-        } else if before.pocketDetailsVisible && !after.pocketDetailsVisible {
-            pocketContentTimer?.invalidate()
-            pocketContentTimer = Timer.scheduledTimer(
-                withTimeInterval: Theme.contentOutDuration,
-                repeats: false
-            ) { [weak self] _ in
-                self?.finishPocketContentExit()
-            }
-        }
-    }
-
-    private func settlePocketGeometry() {
-        reducePocketInteraction(.pocketGeometrySettled)
-    }
-
-    private func finishPocketContentExit() {
-        reducePocketInteraction(.pocketContentHidden)
-    }
+    // setPocketDetails / reducePocketInteraction / settlePocketGeometry /
+    // finishPocketContentExit LIVED HERE, and they are gone with the second
+    // pocket size they existed to sequence: grow the window, wait for it to
+    // settle, then fade the extra controls in; on the way out, fade first and
+    // contract after; never reverse a leg in flight; and a 0.18s debounce on
+    // the exit because SwiftUI rebuilt its tracking region mid-resize and
+    // reported a pointer exit the pointer had not made — which oscillated the
+    // window between 64 and 146pt. One state has none of these problems.
 
     private func projectInteraction() {
         let p = interaction.presentation
         model.hovering = p.barHovered
-        model.pocketDetailsVisible = p.pocketDetailsVisible
         model.taskTerminalOpen = interaction.terminalVisible
     }
 
@@ -779,26 +732,12 @@ final class AppController: NSObject, NotchResizing {
     /// expanded merely because they still exist during collapse.
     private func stableHitFrame(for region: SurfaceRegion) -> CGRect {
         switch region {
-        case .pocket:
-            let clearance = geometry.hasNotch ? max(0, topInset - Theme.panelPadding) : 0
-            return geometry.topPinnedFrame(width: 348, height: 64 + clearance)
         case .bar:
             var content = BarContent.make(for: model, state: model.state, hovering: false)
             let mass = geometry.mass(left: content.leftWidth, right: content.wantsRightWidth)
             if mass.right == 0 { content.right = nil }
             return geometry.barFrame(mass)
         }
-    }
-
-    /// The frame this pocket leg is travelling toward, not the transient
-    /// WindowServer frame and not always the 64pt compact frame. Tracking-area
-    /// rebuilds during growth must not manufacture an exit from this target.
-    private func pocketTargetFrame() -> CGRect {
-        let clearance = geometry.hasNotch ? max(0, topInset - Theme.panelPadding) : 0
-        return geometry.topPinnedFrame(
-            width: 348,
-            height: CGFloat(interaction.presentation.pocketHeight ?? 64) + clearance
-        )
     }
 
     // MARK: - Auto-present (default ON)

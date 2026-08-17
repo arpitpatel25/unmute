@@ -29,6 +29,15 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "LifecycleSupport",
+            path: "Sources/LifecycleSupport"
+        ),
+        .testTarget(
+            name: "LifecycleSupportTests",
+            dependencies: ["LifecycleSupport"],
+            path: "Tests/LifecycleSupportTests"
+        ),
+        .target(
             name: "SurfaceTransitionSupport",
             path: "Sources/SurfaceTransitionSupport"
         ),
@@ -106,7 +115,8 @@ let package = Package(
                 "ComposerSupport",
                 "SurfaceSizeSupport",
                 "SurfaceTransitionSupport",
-                "SurfaceStateSupport"
+                "SurfaceStateSupport",
+                "LifecycleSupport"
             ],
             path: "Sources/unmute-notch"
         )

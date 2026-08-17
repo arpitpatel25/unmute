@@ -16,6 +16,14 @@ IPC.startReadLoop { command in
     controller.handle(command)
 }
 
+// Never outlive the app. stdin EOF covers the ordinary case from inside the
+// read loop; this covers the rest — a descriptor held open elsewhere, or a main
+// thread too wedged to service the quit. Both routes end in a hard exit, so an
+// orphaned surface can no longer sit above every window with nothing driving it.
+Lifecycle.startOrphanWatchdog { command in
+    controller.handle(command)
+}
+
 // Handshake: tell Electron main we're up and listening.
 IPC.emit(.ready)
 
