@@ -1,5 +1,11 @@
 import { EventEmitter } from 'events'
 import { keyListener, KeyEvent } from './keyListener'
+import {
+  freshGestureState,
+  recogniseAgentGesture,
+  type GestureEventKind,
+  type GestureState,
+} from '../../electron/remote/capture/agentGesture'
 // Remote trigger gate (plan entitlement + the user's session toggle). Static
 // import on purpose — a lazy require of a relative path dies in the bundled
 // main process, and a silently-missing gate would leave Remote ungated.
@@ -35,6 +41,8 @@ class KeyboardManager extends EventEmitter {
   private dictationActive = false
   private instructionActive = false
   private agentActive = false
+  /** Recognition state for the double-tap gesture. Pure fold, tested. */
+  private agentGesture: GestureState = freshGestureState()
   private lastAgentToggleTime = 0
   private chainTimer: NodeJS.Timeout | null = null
   private chainWindowMs = 2000
@@ -146,10 +154,15 @@ class KeyboardManager extends EventEmitter {
         else this.handleRemoteKeyUp()
         break
       case 'right-command-down':
-        this.handleAgentKeyDown()
+        this.feedAgentGesture('down')
         break
       case 'right-command-up':
-        // Tap-toggle: the capture ends on the SECOND tap, never on release.
+        this.feedAgentGesture('up')
+        break
+      case 'right-command-chord':
+        // Another key arrived while right Command was held: this is a
+        // shortcut, so it can never be a tap.
+        this.feedAgentGesture('other')
         break
       case 'caps-down':
       case 'caps-up':
@@ -197,9 +210,15 @@ class KeyboardManager extends EventEmitter {
       return
     }
 
-    // First tap → start. Mutual exclusion with an active dictation/instruction.
-    if (this.dictationActive || this.instructionActive) {
-      console.log('[keyboard] Remote key ignored — a dictation capture is active (mutual exclusion)')
+    // First tap → start. Mutual exclusion against EVERY other lane.
+    //
+    // `agentActive` was missing here while the Agent path already checked
+    // `remoteActive`, and that asymmetry is exactly how two captures came to be
+    // armed one second apart on 18 August: the Agent key armed one, the Remote
+    // key armed another on top of it, and ownership of the utterance was
+    // decided seventy seconds later by whichever flag had survived.
+    if (this.dictationActive || this.instructionActive || this.agentActive) {
+      console.log('[keyboard] Remote key ignored — another capture is active (mutual exclusion)')
       return
     }
     this.lastRemoteToggleTime = now
@@ -213,29 +232,48 @@ class KeyboardManager extends EventEmitter {
    *  Deliberately a separate flag from `remoteActive`: an agent capture and a
    *  task capture are different addresses, and sharing one flag would let
    *  either key stop the other's recording. */
-  private handleAgentKeyDown(): void {
-    const now = Date.now()
-    if (!this.agentActive && now - this.lastAgentToggleTime < this.DEBOUNCE_MS) {
-      console.log('[keyboard] Agent toggle DEBOUNCED (too fast)')
-      return
-    }
-    if (this.agentActive) {
-      this.lastAgentToggleTime = now
-      this.agentActive = false
-      console.log('[keyboard] Agent capture STOP (tap-toggle) → dispatch')
-      this.emit('keyboard', { type: 'agent-stop' } as KeyboardEvent)
-      return
-    }
-    // One microphone. A dictation or a Remote capture already owns it.
+  /**
+   * The Agent gesture: double-tap right Command to start, one tap to submit.
+   *
+   * Command is always held WITH another key, so a press followed by anything
+   * else is a shortcut and never a tap — which leaves the user's entire ⌘
+   * vocabulary untouched, and means no capture is ever begun speculatively.
+   * The same rule governs the submit tap, so ⌘C during a recording still feeds
+   * the scratchpad instead of ending the turn.
+   *
+   * The recognition itself lives in capture/agentGesture.ts, where it is a
+   * pure fold with tests, rather than timing logic buried in an event handler.
+   */
+  private feedAgentGesture(kind: GestureEventKind): void {
+    const result = recogniseAgentGesture(
+      this.agentGesture,
+      { kind, at: Date.now() },
+      this.agentActive,
+    )
+    this.agentGesture = result.state
+    if (result.action === 'start') this.startAgentCapture()
+    else if (result.action === 'submit') this.stopAgentCapture()
+  }
+
+  private stopAgentCapture(): void {
+    this.agentActive = false
+    this.agentGesture = freshGestureState()
+    console.log('[keyboard] Agent capture STOP → dispatch')
+    this.emit('keyboard', { type: 'agent-stop' } as KeyboardEvent)
+  }
+
+  private startAgentCapture(): void {
+    // One microphone. Any other lane already owns it.
     if (this.dictationActive || this.instructionActive || this.remoteActive) {
-      console.log('[keyboard] Agent key ignored — another capture is active (mutual exclusion)')
+      console.log('[keyboard] Agent gesture ignored — another capture is active (mutual exclusion)')
       return
     }
-    this.lastAgentToggleTime = now
     this.agentActive = true
-    console.log('[keyboard] Agent capture START (tap-toggle)')
+    console.log('[keyboard] Agent capture START (double-tap)')
     this.emit('keyboard', { type: 'agent-start' } as KeyboardEvent)
   }
+
+
 
   private handleRemoteKeyUp(): void {
     // Tap-toggle ignores key-up — the capture ends on the SECOND tap or on

@@ -36,6 +36,10 @@
 static id g_globalMonitor = nil;
 static id g_localMonitor = nil;
 static NSEventModifierFlags g_previousFlags = 0;
+// Whether the RIGHT Command key specifically is down. NSEventModifierFlagCommand
+// cannot distinguish left from right, so the flagsChanged handler tracks it and
+// the keyDown handler reads it.
+static bool g_rightCommandDown = false;
 static Napi::ThreadSafeFunction g_tsfn;
 static bool g_started = false;
 
@@ -87,8 +91,8 @@ static void handle_flags_changed(NSEvent* event) {
   if (event.keyCode == 54) {
     bool hadCmd = (g_previousFlags & NSEventModifierFlagCommand) != 0;
     bool hasCmd = (mods & NSEventModifierFlagCommand) != 0;
-    if (!hadCmd && hasCmd) emit_event("right-command-down");
-    if (hadCmd && !hasCmd) emit_event("right-command-up");
+    if (!hadCmd && hasCmd) { g_rightCommandDown = true;  emit_event("right-command-down"); }
+    if (hadCmd && !hasCmd) { g_rightCommandDown = false; emit_event("right-command-up"); }
   }
 
   g_previousFlags = mods;
@@ -106,6 +110,16 @@ static void handle_key_down(NSEvent* event) {
       (mods & NSEventModifierFlagCommand) != 0 &&
       (mods & otherChordModifiers) == 0) {
     emit_event("command-v");
+  }
+
+  // Any key pressed while right Command is held makes this a SHORTCUT, not a
+  // tap. The Agent gesture is a double-tap of right Command alone; without this
+  // signal there would be no way to tell ⌘C from someone invoking the Agent,
+  // and the only alternative is starting a capture speculatively on every ⌘
+  // press and cancelling it a moment later. Observation only — the event is
+  // still delivered, so the shortcut works exactly as before.
+  if (g_rightCommandDown) {
+    emit_event("right-command-chord");
   }
 }
 

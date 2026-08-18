@@ -4,7 +4,7 @@ import { app } from 'electron'
 import path from 'path'
 import fs from 'fs'
 
-export type KeyEvent = 'fn-down' | 'fn-up' | 'caps-down' | 'caps-up' | 'right-option-down' | 'right-option-up' | 'right-command-down' | 'right-command-up' | 'command-v'
+export type KeyEvent = 'fn-down' | 'fn-up' | 'caps-down' | 'caps-up' | 'right-option-down' | 'right-option-up' | 'right-command-down' | 'right-command-up' | 'right-command-chord' | 'command-v'
 
 // ─── AI format (instruction) enable/disable ─────────────────────
 //
