@@ -65,6 +65,35 @@ const AGENT_TOOL_DENYLIST = [
 /** How long exit waits for stdout to finish before speaking anyway. */
 const EXIT_DRAIN_CAP_MS = 2_000
 
+/**
+ * Every live headless turn, so the app can reap them on the way out.
+ *
+ * A running Agent turn must not survive the app that started it. We have
+ * shipped this exact fix once already: the native notch process outlived its
+ * parent and sat on screen with nothing driving it — and force-quitting Unmute
+ * never touched it, because the process was named something else. A headless
+ * `claude` holding a model connection has the same shape, and inherits the
+ * same failure if nobody reaps it.
+ */
+const liveTurns = new Set<{ kill(signal: NodeJS.Signals): void }>()
+
+/** How many turns are currently running. Exposed for tests and diagnostics. */
+export function liveHeadlessTurns(): number {
+  return liveTurns.size
+}
+
+/**
+ * Kill every running turn. Safe with nothing running and safe to call twice:
+ * it runs from process-exit handlers, which fire in ways that are hard to
+ * predict and impossible to debug after the fact.
+ */
+export function reapHeadlessTurns(): void {
+  for (const child of [...liveTurns]) {
+    try { child.kill('SIGKILL') } catch { /* it may already be gone */ }
+    liveTurns.delete(child)
+  }
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms).unref?.() })
 }
@@ -240,6 +269,7 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
       { binary: launch.binary, cwd: launch.cwd, env: launch.environment },
     )
     this.child = child
+    liveTurns.add(child)
     this.drained = this.readStdout(child)
     child.onExit((code) => { void this.onExit(code) })
     void this.readStderr(child)
@@ -256,6 +286,7 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    if (this.child) liveTurns.delete(this.child)
     try { this.child?.kill('SIGKILL') } catch { /* process may already have exited */ }
     this.queue.end()
   }
@@ -294,6 +325,7 @@ export class HeadlessAgentProcess implements AgentProcessDriver {
    * that never ends cannot reinstate the very hang this driver removes.
    */
   private async onExit(code: number | null): Promise<void> {
+    if (this.child) liveTurns.delete(this.child)
     await Promise.race([this.drained, delay(EXIT_DRAIN_CAP_MS)])
     if (this.closed) return
     // An answer already given is not rewritten by however the process ended.

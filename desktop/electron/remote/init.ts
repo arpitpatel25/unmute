@@ -77,7 +77,7 @@ import {
   type AgentInteractionResult,
 } from './agent/controller'
 import { ClaudeCodeProvider } from './agent/providers/claude'
-import { agentRuntimeMode } from './agent/providers/claude-headless'
+import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-headless'
 import { agentConstitution } from './agent/constitution'
 import {
   nextCaptureAddress,
@@ -938,7 +938,18 @@ async function initializeUnmuteAgent(): Promise<void> {
       runtime: () => {
         const endpoint = `http://127.0.0.1:${getKnobs().mcpPort}${MCP_PATH}`
         return {
-          cwd: homedir(),
+          // THE AGENT'S OWN GROUND. It used to run in the user's home
+          // directory, which meant Claude filed every Agent transcript into
+          // ~/.claude/projects/-Users-<user>/ — the same folder as any session
+          // the user had ever started from home. Twenty-five files there, ten
+          // of them Agent turns, indistinguishable by location.
+          //
+          // That is fatal to session oversight: asked "what have we been
+          // working on?", the Agent would read its own turns back as the
+          // user's work, and "consolidate those" could consolidate its own
+          // answers. One file is written per turn, forever, so the pollution
+          // grows with use. Its own directory gives it its own slug.
+          cwd: dirname(constitutionPath),
           constitutionPath,
           environment: process.env,
           mcp: {
@@ -4626,6 +4637,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // none is left orphaned on the user's machine/plan (PRD §10.4).
   app.on('before-quit', () => {
     try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
+    // A running Agent turn must not survive us. Same failure as the notch
+    // process that outlived its parent and sat on screen with nothing driving
+    // it — force-quitting Unmute never touched it, because the process was
+    // named something else. A headless `claude` holding a model connection is
+    // the same shape.
+    try { reapHeadlessTurns() } catch (e) { log.warn('agent reap failed', { error: (e as Error).message }) }
     disposeUnmuteAgent()
     disposeMcpServer()
     try { cuaManager?.dispose(); cuaServer?.close(); void cuaArming.disposeAll() } catch (e) { log.warn('cua shutdown failed', { error: (e as Error).message }) }

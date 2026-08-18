@@ -5,6 +5,8 @@ import {
   agentRuntimeMode,
   headlessArgv,
   headlessEvents,
+  liveHeadlessTurns,
+  reapHeadlessTurns,
   type HeadlessChild,
 } from './claude-headless'
 import { ClaudeCodeProvider } from './claude'
@@ -484,4 +486,57 @@ test('confinement is only complete with a strict, single-server MCP config', () 
   const argv = headlessArgv(withMcp, 'CONSTITUTION')
   assert.ok(argv.includes('--disallowedTools'), 'built-ins must be denied')
   assert.ok(argv.includes('--strict-mcp-config'), 'and no other MCP server may be loaded')
+})
+
+// ── the orphan guard (design §15) ─────────────────────────────────────────
+//
+// A running Agent turn must not survive the app that started it. We have
+// already shipped this exact fix once: the native notch process outlived its
+// parent and sat on screen with nothing driving it, and force-quitting Unmute
+// never touched it because the process was named something else. The headless
+// Agent process has the same shape — a long-lived child holding a model
+// connection — and no guard.
+
+test('a spawned turn is registered so it can be reaped with the app', async () => {
+  reapHeadlessTurns() // earlier tests in this file leave turns running
+  const child = new FakeChild()
+  const { driver } = driverWith(child)
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('hello')
+  assert.equal(liveHeadlessTurns(), 1, 'a running turn must be reachable for reaping')
+  child.finish(0)
+  await settled()
+  assert.equal(liveHeadlessTurns(), 0, 'and must deregister when it ends on its own')
+})
+
+test('closing a turn deregisters it', async () => {
+  reapHeadlessTurns()
+  const child = new FakeChild()
+  const { driver } = driverWith(child)
+  await driver.start(launch({ kind: 'fresh', id: FRESH }))
+  await driver.submitUserTurn('hello')
+  await driver.close()
+  assert.equal(liveHeadlessTurns(), 0)
+})
+
+// The reaper must be safe to call when nothing is running, and safe to call
+// twice — it runs from process-exit handlers, which fire in ways that are hard
+// to predict and impossible to debug after the fact.
+test('reaping is safe with nothing running, and idempotent', () => {
+  reapHeadlessTurns()
+  reapHeadlessTurns()
+  assert.equal(liveHeadlessTurns(), 0)
+})
+
+test('reaping kills every live turn', async () => {
+  reapHeadlessTurns()
+  const a = new FakeChild(); const b = new FakeChild()
+  const da = driverWith(a).driver; const db = driverWith(b).driver
+  await da.start(launch({ kind: 'fresh', id: FRESH })); await da.submitUserTurn('one')
+  await db.start(launch({ kind: 'fresh', id: FRESH })); await db.submitUserTurn('two')
+  assert.equal(liveHeadlessTurns(), 2)
+  reapHeadlessTurns()
+  assert.deepEqual(a.killed, ['SIGKILL'])
+  assert.deepEqual(b.killed, ['SIGKILL'])
+  assert.equal(liveHeadlessTurns(), 0)
 })
