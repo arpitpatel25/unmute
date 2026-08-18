@@ -83,6 +83,8 @@ import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
 import { noteAgentDelivery } from './capture/agentDelivery'
 import { nextConversation, type Conversation } from './agent/continuity'
 import { HandoffCapability } from './agent/capabilities/handoff'
+import { SessionsCapability } from './agent/capabilities/sessions'
+import { selectSessions, type IndexedSession } from './agent/sessions/index'
 
 /** Where the Agent's last conversation got to. Memory is the durable
  *  continuity; this is only the short-term thread. */
@@ -903,6 +905,49 @@ async function initializeUnmuteAgent(): Promise<void> {
     ])
     const registry = new CapabilityRegistry([
       new MemoryCapability(memory),
+      // What the user has been working on. Backed by the task manager, which
+      // already holds every session Unmute created — so v1 needs no filesystem
+      // scanner, and the Agent's OWN runs are excluded by construction because
+      // they are not tasks.
+      new SessionsCapability({
+        async list(query) {
+          const all = (manager?.list() ?? [])
+            .filter((task) => task.origin !== 'unmute-agent')
+            .map((task): IndexedSession => ({
+              id: task.id,
+              source: 'unmute',
+              startedAt: task.createdAt ?? 0,
+              updatedAt: task.updatedAt ?? task.createdAt ?? 0,
+              turns: task.conversation?.length ?? 0,
+              ...(task.cwd ? { project: basename(task.cwd) } : {}),
+              ...(task.intent ? { intent: task.intent, opening: task.intent } : {}),
+              ...(task.state ? { state: String(task.state) } : {}),
+              taskId: task.id,
+            }))
+          return selectSessions(all, query)
+        },
+        async read(sessionId) {
+          const task = manager?.get(sessionId)
+          if (!task || task.origin === 'unmute-agent') return null
+          // Lazily assembled from what the task already holds — still no model
+          // call. A richer summary can be generated and cached here later
+          // without changing the tool's contract.
+          const parts = [
+            task.intent ? `Intent: ${task.intent}` : '',
+            task.result?.summary ? `Outcome: ${task.result.summary}` : '',
+            task.result?.detail ?? '',
+          ].filter(Boolean)
+          return {
+            session: {
+              id: task.id, source: 'unmute' as const,
+              startedAt: task.createdAt ?? 0, updatedAt: task.updatedAt ?? 0,
+              turns: task.conversation?.length ?? 0,
+              ...(task.intent ? { intent: task.intent } : {}),
+            },
+            content: parts.join('\n\n') || 'Nothing was recorded for this session.',
+          }
+        },
+      }),
       // Outside work is handed off, never refused and never attempted. The
       // card carries its origin so the user can see the Agent made it.
       new HandoffCapability({
