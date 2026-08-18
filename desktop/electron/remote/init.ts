@@ -81,6 +81,11 @@ import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-he
 import { agentConstitution } from './agent/constitution'
 import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
 import { noteAgentDelivery } from './capture/agentDelivery'
+import { nextConversation, type Conversation } from './agent/continuity'
+
+/** Where the Agent's last conversation got to. Memory is the durable
+ *  continuity; this is only the short-term thread. */
+let lastAgentConversation: Conversation | null = null
 import {
   nextCaptureAddress,
   type CaptureAddress,
@@ -3266,7 +3271,15 @@ async function dispatchFromCaptureInner(
         name: basename(path),
         mimeType: 'image/png',
       })),
-      ...(options.priorAgentRunId ? { priorRunId: options.priorAgentRunId } : {}),
+      // CONTINUITY FOLLOWS ATTENTION, NOT THE CLOCK. An explicit prior run
+      // still wins; otherwise the last conversation is resumed only if this
+      // utterance arrived shortly after it finished and it has not run long.
+      ...(options.priorAgentRunId
+        ? { priorRunId: options.priorAgentRunId }
+        : (() => {
+          const decision = nextConversation(lastAgentConversation, Date.now())
+          return decision.resume ? { priorRunId: decision.runId } : {}
+        })()),
     }
     const result = await submitUnmuteAgent(input)
     log.event('agent-capture-complete', {
@@ -3295,6 +3308,15 @@ async function dispatchFromCaptureInner(
     }
     if (fitted.text) {
       notchClient?.send({ type: 'caption', text: fitted.text, dwellMs: captionDwellMs(fitted.text) })
+    }
+    // Remember where this conversation got to, so the next utterance can tell
+    // a follow-up from a new subject.
+    if (result.agentRunId) {
+      lastAgentConversation = {
+        runId: result.agentRunId,
+        turns: (lastAgentConversation?.runId === result.agentRunId ? lastAgentConversation.turns : 0) + 1,
+        endedAt: Date.now(),
+      }
     }
     pendingBeat = spoken
     return result.agentRunId || null
