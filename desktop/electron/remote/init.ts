@@ -79,6 +79,11 @@ import {
 import { ClaudeCodeProvider } from './agent/providers/claude'
 import { agentRuntimeMode } from './agent/providers/claude-headless'
 import { agentConstitution } from './agent/constitution'
+import {
+  nextCaptureAddress,
+  type CaptureAddress,
+  type CaptureAddressEvent,
+} from './capture/captureAddress'
 import { CodexCliProvider } from './agent/providers/codex'
 import { probeCli, type AgentProviderId, type ProviderProbe } from './agent/provider'
 import { SafeStorageKeyProvider } from './agent/memory/key-provider'
@@ -3043,16 +3048,14 @@ export interface CaptureDispatchOptions {
   priorAgentRunId?: string
 }
 
-/** Set when a capture was started by the Unmute Agent key, and consumed by the
- *  dispatch that capture produces.
- *
- *  The address is decided at KEY-DOWN, exactly as the task route decides its
- *  target task then: the user pressed the agent key, so this utterance belongs
- *  to the agent no matter what the router would otherwise infer from the words.
- *  Cleared on read so it can never leak into the next, unrelated capture. */
-let agentAddressedCapture = false
-export function markCaptureAddressedToAgent(): void { agentAddressedCapture = true }
-export function clearAgentAddressedCapture(): void { agentAddressedCapture = false }
+/** Who the live capture is addressed to. The rule, and the failure it exists
+ *  for, live in capture/captureAddress.ts where they are tested. */
+let captureAddress: CaptureAddress = 'task'
+function advanceCaptureAddress(event: CaptureAddressEvent): void {
+  captureAddress = nextCaptureAddress(captureAddress, event)
+}
+export function markCaptureAddressedToAgent(): void { advanceCaptureAddress('agent-start') }
+export function clearAgentAddressedCapture(): void { advanceCaptureAddress('remote-start') }
 
 export async function dispatchFromCapture(
   rawTranscript: string,
@@ -3062,7 +3065,7 @@ export async function dispatchFromCapture(
 ): Promise<string | null> {
   // Read, not consumed, here — the addressed-task shortcut below needs to see it
   // too. Cleared once the destination has actually been resolved.
-  if (agentAddressedCapture) options = { ...options, destination: 'unmute-agent' }
+  if (captureAddress === 'agent') options = { ...options, destination: 'unmute-agent' }
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
   // surface always returns to idle, whatever path the dispatch takes.
@@ -3109,7 +3112,7 @@ async function dispatchFromCaptureInner(
   //
   // Pressing the Agent key is a statement about WHO you are talking to. A task
   // being on screen is not.
-  const addressedToAgent = agentAddressedCapture || options.destination === 'unmute-agent'
+  const addressedToAgent = captureAddress === 'agent' || options.destination === 'unmute-agent'
   const addressedTaskId = addressedToAgent ? null : (targetTaskId ?? orchestrateFocusId)
   if (addressedTaskId && manager.list().some((t) => t.id === addressedTaskId)) {
     const fid = addressedTaskId
@@ -3192,7 +3195,7 @@ async function dispatchFromCaptureInner(
     explicitDestination: options.destination,
     transcript: raw,
   })
-  agentAddressedCapture = false
+  advanceCaptureAddress('dispatched')
   if (destination === 'unmute-agent') {
     const transcript = agentAddress?.transcript ?? raw
     if (!unmuteAgentController || !unmuteAgentAvailability.available) {
@@ -4438,6 +4441,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   deps.keyboardManager.on('keyboard', (e) => {
     if (e.type === 'remote-start') {
       log.event('remote-key', { phase: 'start' })
+      // This utterance is addressed at a task, not at the Agent. Say so now:
+      // a previous Agent capture that never dispatched must not speak for it.
+      clearAgentAddressedCapture()
       void router?.warm() // ensure the classifier is ready before the utterance lands (re-warms if it died)
       pauseOverlayEscape() // capture owns Escape (cancel) while recording
       // Snapshot the visible address now. Transcription completes later, during
