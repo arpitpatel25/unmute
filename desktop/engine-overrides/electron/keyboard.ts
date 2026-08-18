@@ -97,6 +97,35 @@ class KeyboardManager extends EventEmitter {
     keyListener.stop()
   }
 
+  /**
+   * The session says a capture ended — however it ended.
+   *
+   * THIS IS THE WIRING THAT WAS MISSING. sessionManager fires onSessionEnded
+   * from every ending it has: a completed dispatch, a cancel, a too-short
+   * capture with no audio, a junk-STT discard. Nothing was ever subscribed to
+   * it, so a lane's lock had exactly ONE path to false — its own stop tap.
+   *
+   * That is why Escape stranded the Agent: the capture died, the flag did not,
+   * and mutual exclusion then refused right-Option indefinitely. A single tap
+   * later "stopped" a capture that no longer existed, which is where the
+   * phantom "processing" came from.
+   *
+   * DICTATION IS DELIBERATELY NOT CLEARED HERE. It manages its own toggle, and
+   * more importantly it is the user's way out: dictation does not consult the
+   * other lanes' locks, so it keeps working even when something else is wedged.
+   * That escape hatch is now a property to preserve, not an oversight.
+   */
+  onCaptureEnded(): void {
+    if (this.agentActive || this.remoteActive) {
+      console.log('[keyboard] capture ended externally — clearing lane locks',
+        '(agent:', this.agentActive, 'remote:', this.remoteActive, ')')
+    }
+    this.agentActive = false
+    this.remoteActive = false
+    this.agentGesture = freshGestureState()
+    this.lastAgentTapAt = 0
+  }
+
   /** Reset ALL routing state — call when session ends externally (cancel, processing complete, etc.).
    *  Every mutable variable that influences the next keystroke MUST be reset here. */
   resetState(): void {

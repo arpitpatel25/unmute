@@ -173,9 +173,16 @@ import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
 interface SessionManagerLike {
   startRemoteCapture(targetTaskId?: string | null): void
   stopRemoteCapture(): Promise<void>
+  /** Fired from every ending the session has — dispatch, cancel, too-short,
+   *  junk STT. Declared here so the lane locks can be cleared however a capture
+   *  dies, rather than only by its own stop tap. */
+  onSessionEnded?: (() => void) | null
 }
 interface KeyboardManagerLike {
   on(event: 'keyboard', cb: (e: { type: string }) => void): unknown
+  /** Clears the Orchestrator and Agent locks. Never dictation's — that lane is
+   *  the user's way out when something else is wedged. */
+  onCaptureEnded?(): void
 }
 export interface RemoteInitDeps {
   sessionManager: SessionManagerLike
@@ -4614,6 +4621,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // keyboard.ts emits 'remote-start'/'remote-stop' for the non-dictation key;
   // route them to the sessionManager's Remote capture (which reuses the STT
   // pipeline then calls dispatchFromCapture).
+  // THE SESSION OWNS THE TRUTH ABOUT WHETHER A CAPTURE IS LIVE, so it is the
+  // session that tells the keyboard when one ended. Declared in sessionManager
+  // and fired from all four of its endings — dispatch, cancel, too-short, junk
+  // STT — this callback had never been assigned by anything, which left every
+  // lane's lock clearable only by its own stop tap.
+  deps.sessionManager.onSessionEnded = () => {
+    try { deps.keyboardManager.onCaptureEnded?.() } catch (e) {
+      log.warn('capture-end lock clear failed', { error: (e as Error).message })
+    }
+  }
+
   deps.keyboardManager.on('keyboard', (e) => {
     if (e.type === 'remote-start') {
       // WHICH KEY, AND WHAT IT DECIDED. Every diagnosis on 18 August meant
