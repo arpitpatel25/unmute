@@ -48,7 +48,12 @@ final class CaptionWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    /// Centre of the lower half: horizontally centred, vertically at 75% down.
+    /// Horizontally centred, vertically at 65% down — the lower third of the
+    /// screen, not the floor of it. Sitting lower reads as belonging to the
+    /// dock and the pill; this height is where the eye already rests when
+    /// reading, and far enough above the bottom furniture to never collide
+    /// with it.
+    ///
     /// Placed against the screen with the mouse on it, so a caption answers on
     /// the display the user is actually looking at.
     func positionOnActiveScreen() {
@@ -57,8 +62,8 @@ final class CaptionWindow: NSPanel {
         guard let frame = screen?.frame else { return }
         let size = self.frame.size
         let x = frame.midX - size.width / 2
-        // AppKit's origin is bottom-left, so "75% down the screen" is 25% up.
-        let y = frame.minY + frame.height * 0.25 - size.height / 2
+        // AppKit's origin is bottom-left, so "65% down the screen" is 35% up.
+        let y = frame.minY + frame.height * 0.35 - size.height / 2
         setFrameOrigin(NSPoint(x: x.rounded(), y: y.rounded()))
     }
 }
