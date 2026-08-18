@@ -82,6 +82,7 @@ import { agentConstitution } from './agent/constitution'
 import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
 import { noteAgentDelivery } from './capture/agentDelivery'
 import { nextConversation, type Conversation } from './agent/continuity'
+import { HandoffCapability } from './agent/capabilities/handoff'
 
 /** Where the Agent's last conversation got to. Memory is the durable
  *  continuity; this is only the short-term thread. */
@@ -902,6 +903,29 @@ async function initializeUnmuteAgent(): Promise<void> {
     ])
     const registry = new CapabilityRegistry([
       new MemoryCapability(memory),
+      // Outside work is handed off, never refused and never attempted. The
+      // card carries its origin so the user can see the Agent made it.
+      new HandoffCapability({
+        async createTask(input) {
+          if (!manager) throw new Error('Unmute Remote is not initialized')
+          // The same dispatch the right-Option key uses. A hand-off is an
+          // ordinary Orchestrator task in every respect except that the card
+          // can say the Agent asked for it rather than the user (Law IV).
+          const seeded = input.sourceSessionIds?.length
+            ? `${input.intent}\n\nStart from these earlier sessions: ${input.sourceSessionIds.join(', ')}`
+            : input.intent
+          const taskId = await manager.dispatch(seeded, { kind: 'oneoff' })
+          manager.mergeAgentOrigin(taskId, input.agentRunId)
+          log.event('agent-handoff-created', {
+            taskId, agentRunId: input.agentRunId, sources: input.sourceSessionIds?.length ?? 0,
+          })
+          return { taskId }
+        },
+        async taskStatus(taskId) {
+          const task = manager?.get(taskId)
+          return task ? { state: String(task.state), intent: task.intent } : null
+        },
+      }),
       new DeliveryCapability({
         resolveAttachment: (principal, handle) => attachments.resolveForDelivery(principal, handle),
         async copyText(text) {

@@ -910,6 +910,23 @@ export class TaskManager extends EventEmitter {
    * activity stream never calls this, so searches and other transient turns do
    * not enter the task map. Repeated turns on one run update the same card.
    */
+  /**
+   * Mark a task as having been created BY THE AGENT rather than by the user.
+   *
+   * Law IV: every object records how it came to exist. Without it, "what have
+   * we been working on?" cannot separate the user's own work from the Agent's
+   * side-effects, and a hand-off is indistinguishable from something they
+   * asked for directly.
+   */
+  mergeAgentOrigin(taskId: string, agentRunId: string): void {
+    const task = this.tasks.get(taskId)
+    if (!task) return
+    task.origin = 'unmute-agent'
+    task.agentRunId = agentRunId
+    this.mergeMeta(task, { origin: 'unmute-agent', agentRunId }, 'agent-handoff-origin')
+    this.emit('updated', task)
+  }
+
   async presentAgentResult(input: {
     agentRunId: string
     intent: string
