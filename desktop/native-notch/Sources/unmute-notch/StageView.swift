@@ -212,7 +212,14 @@ struct StageView: View {
             // dead arm — while the same change made Codex tasks report alive, so
             // the button could never render at all. Two edits that cancelled out.
             HStack(spacing: 4) {
-                if !t.isOwned {
+                // ONLY FOR A TASK THAT GENUINELY LIVES IN ANOTHER APP.
+                //
+                // An Agent hand-off is always a CLI session — Claude or Codex,
+                // whichever the user set — so there is no other app to open it
+                // in. The button was rendering on those cards anyway, labelled
+                // "Open in Codex" over a Claude task, because `isOwned` alone
+                // does not distinguish "not ours" from "not a desktop app".
+                if !t.isOwned && !t.foreignAppName.isEmpty {
                     KeyButton(label: "Open in \(t.foreignAppName)", symbol: "arrow.up.forward.app") {
                         model.emit(.openInTerminal(id: t.id))
                     }

@@ -39,8 +39,11 @@ const tools = [
       properties: {
         intent: {
           type: 'string', minLength: 1, maxLength: MAX_INTENT_LENGTH,
-          description: 'What the session should do, written as the user would say it and'
-            + ' complete enough to act on without seeing this conversation.',
+          description: 'What the person asked for, in their own terms — and NOTHING MORE.'
+            + ' Do not add steps, places to search, or precautions they did not mention:'
+            + ' a one-sentence request becomes a one-sentence task. The session that picks'
+            + ' this up is fully tooled, so every extra clause you invent is work it will'
+            + ' actually go and do.',
         },
         sourceSessionIds: {
           type: 'array',
