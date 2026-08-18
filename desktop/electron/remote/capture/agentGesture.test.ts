@@ -41,8 +41,15 @@ test('a tap followed by a press-and-hold still pairs', () => {
     'double-tap-and-hold is an ordinary way to start talking')
 })
 
-test('a single tap while capturing submits', () => {
-  assert.deepEqual(play([['down', 0, true], ['up', 60]]), ['submit'])
+// SYMMETRIC: two taps to start, two to submit. A single tap while capturing
+// does nothing, which is what stops a habitual double-tap-to-stop from opening
+// a capture nobody asked for.
+test('two taps while capturing submit', () => {
+  assert.deepEqual(play([['down', 0, true], ['up', 60], ['down', 200], ['up', 260]]), ['submit'])
+})
+
+test('a lone tap while capturing does nothing at all', () => {
+  assert.deepEqual(play([['down', 0, true], ['up', 60]]), [])
 })
 
 // THE RULE THAT MAKES THIS KEY USABLE AT ALL. Command is always held WITH
@@ -69,8 +76,25 @@ test('a shortcut between two taps breaks the pair', () => {
 
 test('start then submit is the whole round trip', () => {
   assert.deepEqual(
-    play([['down', 0], ['up', 50], ['down', 150], ['up', 200], ['down', 3_000, true], ['up', 3_050]]),
+    play([
+      ['down', 0], ['up', 50], ['down', 150], ['up', 200],
+      ['down', 3_000, true], ['up', 3_050], ['down', 3_150], ['up', 3_200],
+    ]),
     ['start', 'submit'],
+  )
+})
+
+// THE HANG. Double-tapping to stop, because that is how you started, must not
+// leave a capture running behind you.
+test('double-tapping to stop does not open a new capture', () => {
+  assert.deepEqual(
+    play([
+      ['down', 0], ['up', 50], ['down', 150], ['up', 200],        // start
+      ['down', 3_000, true], ['up', 3_050], ['down', 3_150], ['up', 3_200], // submit
+      ['down', 3_300, false], ['up', 3_350],                       // a stray extra tap
+    ]),
+    ['start', 'submit'],
+    'the trailing tap must not begin anything',
   )
 })
 
@@ -87,4 +111,8 @@ test('a third tap does not start a second capture', () => {
     play([['down', 0], ['up', 40], ['down', 120], ['up', 160], ['down', 240], ['up', 280]]),
     ['start'],
   )
+})
+
+test('a lone tap on its own never starts anything', () => {
+  assert.deepEqual(play([['down', 0], ['up', 60]]), [])
 })

@@ -15,7 +15,7 @@ import path from 'path'
 // console line (main + widget renderer) into dated console-*.log files and
 // includes full transcript texts in telemetry events — never ship true:
 // production machines must not persist what users say.
-export const DEV_BUILD = true
+export const DEV_BUILD = false
 
 const KEEP_DAYS = 7
 const FILE_RE = /^(?:dictation|console)-(\d{4})-(\d{2})-(\d{2})\.(?:jsonl|log)$/

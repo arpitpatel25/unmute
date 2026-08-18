@@ -2478,7 +2478,22 @@ async function pushPillChips(taskId: string | null = null): Promise<void> {
     // could only be diagnosed by reading Swift: the engine logged the models it
     // read and the agent it switched to, and nothing about the payload between
     // them, so the one broken link was the only one not written down.
+    // NO PICKER IN THE AGENT LANE. A backend and model chooser at invocation
+    // reintroduces the one question the Agent exists to abstract away — "which
+    // session am I starting?" — and neither control does anything for it: its
+    // provider is a setting, chosen once. Blanked rather than skipped, because
+    // `push` MERGES and an absent key would leave the previous lane's chips on
+    // screen.
+    if (captureAddress === 'agent') {
+      chips.agent = 'Unmute Agent'
+      chips.agentOptions = []
+      chips.model = undefined
+      chips.modelOptions = []
+      chips.modelAxes = []
+      chips.modelEmpty = undefined
+    }
     log.event('pill-chips', {
+      lane: captureAddress === 'agent' ? 'agent' : 'orchestrator',
       agent: chips.agent ?? null,
       model: chips.model ?? null,
       axes: (chips.modelAxes ?? []).map((a) => `${a.axis}:${a.values.length}`),
@@ -4631,6 +4646,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       markCaptureAddressedToAgent()
       deps.sessionManager.startRemoteCapture(null)
       broadcastCapturePhase('listening', null)
+    } else if (e.type === 'agent-ignored' || e.type === 'remote-ignored') {
+      log.event('key-ignored', {
+        lane: e.type === 'agent-ignored' ? 'agent' : 'orchestrator',
+        reason: (e as { reason?: string }).reason ?? 'unknown',
+      })
     } else if (e.type === 'agent-stop') {
       log.event('agent-key', { phase: 'stop' })
       resumeOverlayEscape()

@@ -80,15 +80,19 @@ export function recogniseAgentGesture(
       if (!state.held || state.spoiled) {
         return { state: { ...state, held: false, spoiled: false, pairing: false }, action: null }
       }
-      // A clean tap.
-      if (capturing) {
-        return { state: freshGestureState(), action: 'submit' }
-      }
+      // A clean tap. SYMMETRIC: two taps to start, two to submit.
+      //
+      // It used to submit on a single tap, and that produced the hang. If you
+      // double-tap to stop out of habit — which people do, because that is how
+      // they started — the first tap submits and the SECOND becomes tap one of
+      // a new pair. A third opens a capture nobody asked for, which then sits
+      // recording until it times out. Observed: five starts, three stops, eight
+      // cancellations. Symmetry makes a stray single tap inert.
       if (state.pairing) {
+        return { state: freshGestureState(), action: capturing ? 'submit' : 'start' }
+      }
         // Reset rather than remember: a third tap must begin a new pair, not
         // immediately pair with the second and start again.
-        return { state: freshGestureState(), action: 'start' }
-      }
       return { state: { held: false, spoiled: false, lastTapAt: event.at, pairing: false }, action: null }
     }
   }

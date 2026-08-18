@@ -19,6 +19,9 @@ export type KeyboardEvent =
   // that adding an agent could not change either. Same tap-toggle shape and the
   // same mutual exclusion; only the destination differs.
   | { type: 'agent-start' }
+  /** A press that deliberately did nothing, and why. */
+  | { type: 'agent-ignored'; reason: string }
+  | { type: 'remote-ignored'; reason: string }
   | { type: 'agent-stop' }
   | { type: 'session-stop'; mode: SessionMode }
   | { type: 'chain-start'; mode: SessionMode }
@@ -219,6 +222,7 @@ class KeyboardManager extends EventEmitter {
     // decided seventy seconds later by whichever flag had survived.
     if (this.dictationActive || this.instructionActive || this.agentActive) {
       console.log('[keyboard] Remote key ignored — another capture is active (mutual exclusion)')
+      this.emit('keyboard', { type: 'remote-ignored', reason: 'capture-already-live' } as KeyboardEvent)
       return
     }
     this.lastRemoteToggleTime = now
@@ -265,7 +269,11 @@ class KeyboardManager extends EventEmitter {
   private startAgentCapture(): void {
     // One microphone. Any other lane already owns it.
     if (this.dictationActive || this.instructionActive || this.remoteActive) {
+      // A press that does nothing must SAY it did nothing, and why. "I pressed
+      // it and nothing happened" was unanswerable from the logs, which is how
+      // the routing bug stayed hidden for an hour.
       console.log('[keyboard] Agent gesture ignored — another capture is active (mutual exclusion)')
+      this.emit('keyboard', { type: 'agent-ignored', reason: 'capture-already-live' } as KeyboardEvent)
       return
     }
     this.agentActive = true
