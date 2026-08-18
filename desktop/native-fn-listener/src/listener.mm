@@ -36,6 +36,10 @@
 static id g_globalMonitor = nil;
 static id g_localMonitor = nil;
 static NSEventModifierFlags g_previousFlags = 0;
+/** RAW flags, device bits intact. `g_previousFlags` is masked with
+ *  DeviceIndependentFlagsMask, which strips exactly the left/right bits we need
+ *  to tell one Command key from the other. */
+static NSEventModifierFlags g_previousRawFlags = 0;
 // Whether the RIGHT Command key specifically is down. NSEventModifierFlagCommand
 // cannot distinguish left from right, so the flagsChanged handler tracks it and
 // the keyDown handler reads it.
@@ -88,14 +92,27 @@ static void handle_flags_changed(NSEvent* event) {
   // character. Holding Option produces dead keys and accents; holding Shift
   // or Control is load-bearing in editors and terminals. Held alone, Command
   // does nothing on macOS — which is exactly what a push-to-talk key needs.
-  if (event.keyCode == 54) {
-    bool hadCmd = (g_previousFlags & NSEventModifierFlagCommand) != 0;
-    bool hasCmd = (mods & NSEventModifierFlagCommand) != 0;
-    if (!hadCmd && hasCmd) { g_rightCommandDown = true;  emit_event("right-command-down"); }
-    if (hadCmd && !hasCmd) { g_rightCommandDown = false; emit_event("right-command-up"); }
+  // RIGHT Command specifically, tested against the DEVICE-DEPENDENT bit rather
+  // than NSEventModifierFlagCommand.
+  //
+  // The shared flag cannot tell left from right, and that left a hole: press
+  // right Command, then left Command, then release RIGHT — the shared flag is
+  // still set because left is held, so the up branch never ran and
+  // g_rightCommandDown stayed true permanently. Every keystroke thereafter
+  // emitted right-command-chord, each one a BlockingCall onto the main thread.
+  // NX_DEVICERCMDKEYMASK (0x10) is set only while the right key itself is down,
+  // so the state cannot survive its own release.
+  const NSEventModifierFlags kRightCommand = 0x10;  // NX_DEVICERCMDKEYMASK
+  {
+    // RAW flags on both sides — the masked ones have this bit removed.
+    bool hadRight = (g_previousRawFlags & kRightCommand) != 0;
+    bool hasRight = (event.modifierFlags & kRightCommand) != 0;
+    if (!hadRight && hasRight) { g_rightCommandDown = true;  emit_event("right-command-down"); }
+    if (hadRight && !hasRight) { g_rightCommandDown = false; emit_event("right-command-up"); }
   }
 
   g_previousFlags = mods;
+  g_previousRawFlags = event.modifierFlags;
 }
 
 static void handle_key_down(NSEvent* event) {
