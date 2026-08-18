@@ -130,10 +130,13 @@ test('declares exactly the seven approved Agent-only tools with strict schemas a
   })), [
     { name: 'memory_search', consequence: 'read', intent: undefined },
     { name: 'memory_get', consequence: 'read', intent: undefined },
-    { name: 'memory_store', consequence: 'reversible-write', intent: 'memory.store' },
-    { name: 'memory_update', consequence: 'reversible-write', intent: 'memory.update' },
-    { name: 'memory_forget', consequence: 'destructive', intent: 'memory.forget' },
-    { name: 'memory_restore', consequence: 'reversible-write', intent: 'memory.restore' },
+    // No tool carries an intent flag any more. Every memory operation is
+    // reversible — forget moves to trash and restore brings it back — and the
+    // boundary is a live interaction, not a word the user has to remember.
+    { name: 'memory_store', consequence: 'reversible-write', intent: undefined },
+    { name: 'memory_update', consequence: 'reversible-write', intent: undefined },
+    { name: 'memory_forget', consequence: 'reversible-write', intent: undefined },
+    { name: 'memory_restore', consequence: 'reversible-write', intent: undefined },
     { name: 'memory_open_attachment', consequence: 'reversible-write', intent: undefined },
   ])
   for (const tool of capability.tools) {
@@ -310,18 +313,19 @@ test('registry rejects ordinary tasks, expired principals, inactive interactions
   assert.equal(service.calls.length, 0)
 })
 
-test('forget requires exact destructive intent and does not dispatch on absent or mismatched intent', async () => {
+test('no memory tool demands an intent flag any more', async () => {
   const service = new FakeMemoryService()
-  const registry = new CapabilityRegistry([new MemoryCapability(service)])
-  for (const intents of [undefined, ['memory.store'], ['memory.forget-something-else']]) {
-    await assert.rejects(
-      registry.call(agent, 'memory_forget', { id: 'memory-1' }, {
-        now: NOW, interaction: { id: 'ix-1', active: true, ...(intents ? { intents } : {}) },
-      }),
-      /explicit matching intent flag/,
-    )
+  const capability = new MemoryCapability(service)
+  // A live interaction carrying NO intents at all is enough for every one.
+  const bare = { principal: agent, now: NOW, interaction: { id: 'ix-1', active: true, transcript: 'x' } }
+  for (const [tool, input] of [
+    ['memory_forget', { id: 'memory-1' }],
+    ['memory_restore', { id: 'memory-1' }],
+    ['memory_update', { id: 'memory-1', patch: { title: 'x' } }],
+  ] as Array<[string, unknown]>) {
+    const output = await capability.call(bare, tool, input)
+    assert.equal(output.isError, undefined, `${tool} was refused without an intent flag`)
   }
-  assert.equal(service.calls.length, 0)
 })
 
 test('ordinary reads do not require reveal intent while sensitive requests remain service-authorized', async () => {

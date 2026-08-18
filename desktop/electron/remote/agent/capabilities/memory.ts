@@ -195,7 +195,6 @@ const tools = [
       },
     },
     consequence: 'reversible-write',
-    intent: 'memory.store',
   },
   {
     name: 'memory_update',
@@ -210,7 +209,6 @@ const tools = [
       },
     },
     consequence: 'reversible-write',
-    intent: 'memory.update',
   },
   {
     name: 'memory_forget',
@@ -220,8 +218,12 @@ const tools = [
       type: 'object', additionalProperties: false, required: ['id'],
       properties: { id: { ...identifierSchema, description: 'The id of the record to discard.' } },
     },
-    consequence: 'destructive',
-    intent: 'memory.forget',
+    // Reversible, and now labelled honestly: forget MOVES a record to
+    // trash/records, memory_restore brings it back, and nothing purges it on a
+    // timer. Calling it destructive drove a second authorization check that
+    // only ever refused the user — the model routed around it with a shell,
+    // and confinement, not the label, is what stops that.
+    consequence: 'reversible-write',
   },
   {
     name: 'memory_restore',
@@ -231,7 +233,6 @@ const tools = [
       properties: { id: { ...identifierSchema, description: 'The id of the trashed record to bring back.' } },
     },
     consequence: 'reversible-write',
-    intent: 'memory.restore',
   },
   {
     name: 'memory_open_attachment',

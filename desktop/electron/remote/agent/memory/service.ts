@@ -130,26 +130,6 @@ function requireActiveInteraction(ctx: CapabilityCallContext): void {
   }
 }
 
-/**
- * The extra flag on top of a live interaction. Reserved for the two
- * consequences a live interaction alone does not justify: DESTROYING a record,
- * and DISCLOSING one marked sensitive.
- *
- * It deliberately no longer guards ordinary writes. Those are declared
- * 'reversible-write' in policy.ts, whose rule is a live interaction and no
- * flag — and the flag's only source for a spoken request was a regex over the
- * transcript (/\bremember\b/ and friends). That refused "note that I prefer
- * oat milk" and "add this to my memory" while a Settings button deleted
- * records on a click with no such check. A model that has just read the
- * sentence and chosen the tool is the intent classifier; a keyword list is not
- * a second opinion worth having.
- */
-function requireIntent(ctx: CapabilityCallContext, intent: 'forget' | 'reveal-sensitive'): void {
-  requireActiveInteraction(ctx)
-  if (!ctx.interaction?.intents?.includes(`memory.${intent}`)) {
-    throw new MemoryServiceError('intent-required', 'Memory operation requires explicit user intent')
-  }
-}
 
 function requireSearchQuery(query: MemorySearchQuery): Required<Pick<MemorySearchQuery, 'text' | 'limit'>> {
   const limit = query?.limit ?? DEFAULT_SEARCH_LIMIT
@@ -330,7 +310,7 @@ export class MemoryService {
   async search(ctx: CapabilityCallContext, query: MemorySearchQuery): Promise<MemorySearchResult[]> {
     requireAgent(ctx)
     const validated = requireSearchQuery(query)
-    if (query.includeSensitive) requireIntent(ctx, 'reveal-sensitive')
+    if (query.includeSensitive) requireActiveInteraction(ctx)
     await this.ready('search')
     try {
       const indexQuery = {
@@ -409,7 +389,7 @@ export class MemoryService {
         throw new MemoryServiceError('not-found', 'Memory record was not found')
       }
       if ((options.includeContent || options.includeAttachments) && record.sensitivity === 'sensitive') {
-        requireIntent(ctx, 'reveal-sensitive')
+        requireActiveInteraction(ctx)
       }
       const result = view(record, options)
       await this.audit(ctx, id, 'get', 'success')
@@ -458,7 +438,7 @@ export class MemoryService {
   }
 
   async forget(ctx: CapabilityCallContext, id: string): Promise<void> {
-    requireIntent(ctx, 'forget')
+    requireActiveInteraction(ctx)
     await this.ready('forget')
     return this.enqueueMutation(async () => {
       const intent = this.mutationIntent(ctx, id, 'forget')
@@ -569,7 +549,7 @@ export class MemoryService {
           .sort((left, right) => left.id === right.id ? 0 : left.id < right.id ? -1 : 1)[0]
         if (!owner) throw new MemoryServiceError('not-found', 'Memory record was not found')
         memoryId = owner.id
-        if (owner.sensitivity === 'sensitive') requireIntent(ctx, 'reveal-sensitive')
+        if (owner.sensitivity === 'sensitive') requireActiveInteraction(ctx)
         const handle = await this.options.attachments.open(ctx.principal, id)
         await this.audit(ctx, memoryId, 'open-attachment', 'success')
         return handle

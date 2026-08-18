@@ -493,33 +493,29 @@ function validateRuntime(runtime: AgentControllerRuntime): AgentControllerRuntim
 }
 
 /**
- * Two flags survive, for the two irreversible consequences: destroying a
- * record and disclosing a sensitive one. Everything else is the model's call.
+ * NO INTENT IS DERIVED FROM WHAT THE USER SAID. There is no keyword list here
+ * any more, for any operation.
  *
- * Saving, updating and restoring used to be granted the same way and it was a
- * bad idea. "Remember X" passed; "note that I prefer oat milk" and "add this
- * to my memory" were refused, and the Agent had to report failure for a
- * request it had understood — while the Settings pane deleted records on a
- * click with no keyword check at all. Speech does not arrive in a fixed
- * vocabulary, and a transcriber gets a word wrong now and then; a model that
- * has read the whole sentence classifies intent better than this ever did.
+ * There used to be one per operation. Saving required /\bremember\b/, so
+ * "note that I prefer oat milk" was refused. Deleting required a phrasing that
+ * "delete Rishi's email from my memory" did not satisfy. Every one of them
+ * failed the same way: people do not repeat a fixed vocabulary, transcription
+ * varies, and a model that has read the whole sentence classifies intent
+ * better than a pattern ever could. Using an intelligent model and then
+ * overruling it with a regex is paying for judgement and refusing to accept
+ * it.
  *
- * These two are kept because they are not classification problems — the model
- * may be perfectly right about what you asked and it still deserves a second
- * signal before data is destroyed or a secret is spoken aloud. Replace them
- * with a spoken confirmation, not with a longer regex.
+ * Nor did they protect anything. When the delete gate refused, the model went
+ * around it with a shell; what stopped that was confinement, not the keyword.
+ * A rule that blocks the person and not the failure is worse than no rule.
+ *
+ * The boundary is `requireActiveInteraction`: a live interaction the user
+ * themselves started, matching the principal it was issued to. Callers with
+ * their own consent story — the Settings pane, where a click IS the intent —
+ * still pass intents explicitly, and those are honoured.
  */
 function explicitIntents(input: AgentInteractionInput): string[] {
-  const values = new Set(input.intents ?? [])
-  const text = input.transcript.normalize('NFKC').toLocaleLowerCase('en-US')
-  if (
-    /\bforget\b/u.test(text)
-    || /\b(?:delete|remove)\b[^.?!]{0,80}\b(?:memory|saved (?:note|record|information))\b/u.test(text)
-  ) values.add('memory.forget')
-  if (/\b(?:reveal|show|read)\b[^.?!]{0,40}\bsensitive\b/u.test(text)) {
-    values.add('memory.reveal-sensitive')
-  }
-  return [...values]
+  return [...new Set(input.intents ?? [])]
 }
 
 function providerTranscript(

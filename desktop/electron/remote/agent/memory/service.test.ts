@@ -405,18 +405,29 @@ test('a write outside the user\'s own live interaction is still refused', async 
   assert.equal(records.creates, 0)
 })
 
-// Deleting is the one place the extra flag still earns its keep: it is the
-// only operation whose consequence policy.ts calls 'destructive'.
-test('deleting still requires the explicit destructive intent', async () => {
+// NO OPERATION IS GATED ON THE WORDS YOU HAPPEN TO USE. Deleting was the last
+// one, and it failed in the field on "delete Rishi's email from my memory" —
+// a sentence nobody could call ambiguous. The gate never protected anything
+// either: when it refused, the model simply went around it with a shell, and
+// what actually stopped that was confinement, not the keyword. A rule that
+// blocks the user and not the failure is worse than no rule.
+test('deleting needs a live interaction and nothing else', async () => {
   const { service, records } = fixture()
   const existing = await records.create(input())
-  await assert.rejects(service.forget(ctx(), existing.id), (error: unknown) => {
-    assert(error instanceof MemoryServiceError)
-    assert.equal(error.code, 'intent-required')
-    return true
-  })
-  await service.forget(ctx('forget'), existing.id)
+  await service.forget(ctx(), existing.id)
   assert.equal(records.active.has(existing.id), false)
+})
+
+// Reading a secret back to the person who saved it, during their own live
+// interaction, is the point of saving it. Disclosure to anywhere ELSE is a
+// delivery, which is a separate capability with its own boundary.
+test('revealing a sensitive record needs a live interaction and nothing else', async () => {
+  const { service } = fixture()
+  const secret = await service.store(ctx(), input({
+    title: 'Secret', content: 'sensitive-body', sensitivity: 'sensitive',
+  }))
+  const revealed = await service.get(ctx(), secret.id, { includeContent: true })
+  assert.equal(revealed.content, 'sensitive-body')
 })
 
 test('stores captured attachment handles as opaque canonical attachment identifiers and audits success', async () => {
@@ -645,11 +656,10 @@ test('get reveals only requested fields, conceals paths, and gates sensitive con
   const sensitive = await service.store(ctx('store'), input({
     title: 'Secret', content: 'sensitive-body', sensitivity: 'sensitive',
   }))
-  await assert.rejects(
-    service.get(ctx(), sensitive.id, { includeContent: true }),
-    (error: unknown) => error instanceof MemoryServiceError && error.code === 'intent-required',
-  )
-  const revealed = await service.get(ctx('reveal-sensitive'), sensitive.id, { includeContent: true })
+  // Sensitivity still shapes what is returned by DEFAULT — a search will not
+  // volunteer it — but reading your own secret back inside your own live
+  // interaction is not something a keyword should have to unlock.
+  const revealed = await service.get(ctx(), sensitive.id, { includeContent: true })
   assert.equal(revealed.content, 'sensitive-body')
 })
 
@@ -890,18 +900,17 @@ test('gates attachment disclosure by live canonical ownership, deletion, and sen
   })
   const service = serviceFor(value)
 
-  await assert.rejects(
-    service.get(ctx(), 'memory-sensitive', { includeAttachments: true }),
-    (error: unknown) => error instanceof MemoryServiceError && error.code === 'intent-required',
-  )
+  // Sensitive material is reachable inside a live interaction; what is still
+  // enforced here is OWNERSHIP and DELETION, which are facts about the store
+  // rather than guesses about the user's phrasing.
+  const sensitiveView = await service.get(ctx(), 'memory-sensitive', { includeAttachments: true })
+  assert.deepEqual(sensitiveView.attachments, ['attachment-sensitive'])
   await assert.rejects(
     service.get(ctx(), 'memory-deleted', { includeAttachments: true, includeDeleted: true }),
     (error: unknown) => error instanceof MemoryServiceError && error.code === 'not-found',
   )
-  await assert.rejects(
-    service.openAttachment(ctx(), 'attachment-sensitive'),
-    (error: unknown) => error instanceof MemoryServiceError && error.code === 'intent-required',
-  )
+  const opened = await service.openAttachment(ctx(), 'attachment-sensitive')
+  assert.equal(typeof opened.handle, 'string')
   await assert.rejects(
     service.openAttachment(ctx(), 'attachment-deleted'),
     (error: unknown) => error instanceof MemoryServiceError && error.code === 'not-found',
@@ -910,18 +919,19 @@ test('gates attachment disclosure by live canonical ownership, deletion, and sen
     service.openAttachment(ctx(), 'attachment-orphan'),
     (error: unknown) => error instanceof MemoryServiceError && error.code === 'not-found',
   )
-  await service.openAttachment(ctx('reveal-sensitive'), 'attachment-sensitive')
   await service.openAttachment(ctx(), 'attachment-normal')
 
   assert.deepEqual(value.attachments.calls, [
     'open:attachment-sensitive', 'open:attachment-normal',
   ])
   const opens = value.audit.events.filter((event) => event.operation === 'open-attachment')
+  // The sensitive open now succeeds inside a live interaction; the two
+  // 'unassigned' failures are the deleted and orphaned attachments, which are
+  // still refused because ownership is a fact, not an inference.
   assert.deepEqual(opens.map(({ memoryId, outcome }) => ({ memoryId, outcome })), [
-    { memoryId: 'memory-sensitive', outcome: 'failure' },
-    { memoryId: 'unassigned', outcome: 'failure' },
-    { memoryId: 'unassigned', outcome: 'failure' },
     { memoryId: 'memory-sensitive', outcome: 'success' },
+    { memoryId: 'unassigned', outcome: 'failure' },
+    { memoryId: 'unassigned', outcome: 'failure' },
     { memoryId: 'memory-normal', outcome: 'success' },
   ])
   assert.equal(opens.some(({ memoryId }) => memoryId.startsWith('attachment-')), false)
