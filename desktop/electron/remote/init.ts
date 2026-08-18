@@ -4621,17 +4621,6 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // keyboard.ts emits 'remote-start'/'remote-stop' for the non-dictation key;
   // route them to the sessionManager's Remote capture (which reuses the STT
   // pipeline then calls dispatchFromCapture).
-  // THE SESSION OWNS THE TRUTH ABOUT WHETHER A CAPTURE IS LIVE, so it is the
-  // session that tells the keyboard when one ended. Declared in sessionManager
-  // and fired from all four of its endings — dispatch, cancel, too-short, junk
-  // STT — this callback had never been assigned by anything, which left every
-  // lane's lock clearable only by its own stop tap.
-  deps.sessionManager.onSessionEnded = () => {
-    try { deps.keyboardManager.onCaptureEnded?.() } catch (e) {
-      log.warn('capture-end lock clear failed', { error: (e as Error).message })
-    }
-  }
-
   deps.keyboardManager.on('keyboard', (e) => {
     if (e.type === 'remote-start') {
       // WHICH KEY, AND WHAT IT DECIDED. Every diagnosis on 18 August meant
@@ -4664,6 +4653,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       markCaptureAddressedToAgent()
       deps.sessionManager.startRemoteCapture(null)
       broadcastCapturePhase('listening', null)
+    } else if (e.type === 'key-state') {
+      // THE SEQUENCE, IN FULL. Every key and the state it left behind, so a
+      // transition bug can be read straight off the log instead of inferred.
+      const k = e as unknown as Record<string, unknown>
+      log.event('key-state', {
+        trigger: k.trigger,
+        dictation: k.dictationActive, instruction: k.instructionActive,
+        remote: k.remoteActive, agent: k.agentActive,
+        agentHeld: k.agentHeld, agentSpoiled: k.agentSpoiled, agentPendingTap: k.agentPendingTap,
+      })
     } else if (e.type === 'agent-ignored' || e.type === 'remote-ignored') {
       log.event('key-ignored', {
         lane: e.type === 'agent-ignored' ? 'agent' : 'orchestrator',

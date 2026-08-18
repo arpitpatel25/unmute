@@ -115,6 +115,32 @@ class KeyboardManager extends EventEmitter {
    * other lanes' locks, so it keeps working even when something else is wedged.
    * That escape hatch is now a property to preserve, not an oversight.
    */
+  /**
+   * EVERY KEY, AND THE STATE IT LEFT BEHIND.
+   *
+   * Every bug tonight was a state-transition bug, and each cost an hour because
+   * the log recorded INTENTIONS ("agent-key start") and never the state that
+   * followed. Two lanes disagreed about whether a capture was live and nothing
+   * wrote it down.
+   *
+   * One line per raw key event, emitted after the handlers have run, carrying
+   * every flag that decides what the NEXT key does. Verbose on purpose: a
+   * sequence you can read straight through beats a theory every time.
+   */
+  private emitKeyState(trigger: string): void {
+    this.emit('keyboard', {
+      type: 'key-state',
+      trigger,
+      dictationActive: this.dictationActive,
+      instructionActive: this.instructionActive,
+      remoteActive: this.remoteActive,
+      agentActive: this.agentActive,
+      agentHeld: this.agentGesture.held,
+      agentSpoiled: this.agentGesture.spoiled,
+      agentPendingTap: this.lastAgentTapAt > 0,
+    } as unknown as KeyboardEvent)
+  }
+
   onCaptureEnded(): void {
     if (this.agentActive || this.remoteActive) {
       console.log('[keyboard] capture ended externally — clearing lane locks',
@@ -124,6 +150,7 @@ class KeyboardManager extends EventEmitter {
     this.remoteActive = false
     this.agentGesture = freshGestureState()
     this.lastAgentTapAt = 0
+    this.emitKeyState('capture-ended')
   }
 
   /** Reset ALL routing state — call when session ends externally (cancel, processing complete, etc.).
@@ -140,12 +167,19 @@ class KeyboardManager extends EventEmitter {
     this.clearDualTimers()
     this.dualState = 'idle'
     this.remoteActive = false // ADDITIVE: clear Remote capture lock on any reset
-    // NOT agentActive. It has exactly one writer — the Agent key handler —
-    // because a second one clears the lock underneath a live capture, which is
-    // how both lanes came to record at once. The key can always stop its own
-    // capture (see feedAgentGesture step 2), so it needs no outside rescue.
+    // AND THE AGENT'S. main.ts calls resetState() from onSessionEnded — every
+    // genuine ending the session has, Escape included — and from
+    // onSessionRejected. Those are exactly the moments when no capture is live,
+    // so this is the right place and always was.
+    //
+    // I removed this an hour ago believing resetState fired routinely and would
+    // clear the lock mid-capture. It does not: it fires when a session ENDS. The
+    // belief came from grepping only the source tree — main.ts lives in the
+    // copied engine tree, so "nothing ever calls resetState" was half a search.
+    this.agentActive = false
     this.agentGesture = freshGestureState()
     this.lastAgentTapAt = 0
+    this.emitKeyState('reset-state')
   }
 
   setChainWindow(ms: number): void {
@@ -214,6 +248,8 @@ class KeyboardManager extends EventEmitter {
         this.handleInstructionToggle()
         break
     }
+    // AFTER the handlers have run: exactly what the NEXT key will see.
+    this.emitKeyState(event)
   }
 
   // ─── Unmute Remote (task creation) key dispatchers (ADDITIVE, PRD §2.4.4 / §5) ───
