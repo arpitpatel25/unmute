@@ -6,6 +6,12 @@ export const MEMORY_KINDS = [
   'guidance',
   'template',
   'credential-ref',
+  // A group is a record whose whole substance is its links: the description of
+  // why these belong together, plus the ordered membership. Grouping is done
+  // this way rather than with folders because a record belongs in more than one
+  // place — an email is a contact AND a project member — and a container forces
+  // a single parent.
+  'group',
 ] as const
 
 export type MemoryKind = typeof MEMORY_KINDS[number]
@@ -38,8 +44,22 @@ export interface MemoryRecord {
   id: string
   kind: string
   title: string
+  /**
+   * What this record holds and when it is useful, written for a reader who has
+   * never seen it. NOT an excerpt: search returns summaries rather than bodies,
+   * so this is what the Agent decides on without opening anything.
+   *
+   * Optional on the type because records written before it existed have none;
+   * required by the store tool, because a record without one is undecidable.
+   */
+  summary?: string
   content?: string
   tags: string[]
+  /**
+   * Ordered pointers to other records. ORDER IS LOAD-BEARING: a workflow's
+   * steps are meaningless shuffled, so this is a list and never a set.
+   */
+  links: string[]
   scope?: MemoryScope
   sensitivity: MemorySensitivity
   attachments: string[]
@@ -59,8 +79,10 @@ export type CreateMemoryRecordInput = Omit<
 export interface MemoryRecordPatch {
   kind?: string
   title?: string
+  summary?: string | null
   content?: string | null
   tags?: string[]
+  links?: string[]
   scope?: MemoryScope | null
   sensitivity?: MemorySensitivity
   attachments?: string[]

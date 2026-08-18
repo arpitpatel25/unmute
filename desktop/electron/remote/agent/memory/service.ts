@@ -12,6 +12,7 @@ import {
   type MemoryAuditOperation,
   type MemoryAuditSink,
 } from './audit'
+import { buildMemoryMap, listGroupMembers, listUngrouped, type MemoryMap, type MemoryMapEntry } from './map'
 import type { MemoryIndex } from './index'
 import type { MemoryMutationIntent, MemoryMutationJournal } from './journal'
 import {
@@ -104,6 +105,26 @@ export type MemoryServiceErrorCode =
   | 'service-unavailable'
   | 'operation-failed'
   | 'compensation-failed'
+
+export interface MemoryListOptions {
+  /** Enumerate this group's members instead of the whole map. */
+  group?: string
+  /** Enumerate what no group links to. Ignored when `group` is given. */
+  ungrouped?: boolean
+}
+
+export type MemoryListResult =
+  | { map: MemoryMap; entries?: undefined }
+  | { entries: MemoryMapEntry[]; map?: undefined }
+
+export interface MemoryLinkInput {
+  /** The record joining the group. */
+  id: string
+  /** The group record it joins. */
+  group: string
+  /** Zero-based position; appended when absent. */
+  position?: number
+}
 
 export class MemoryServiceError extends Error {
   constructor(readonly code: MemoryServiceErrorCode, message: string) {
@@ -211,7 +232,9 @@ function view(record: MemoryRecord, options: MemoryGetOptions): MemoryRecordView
     id: presented.id,
     kind: presented.kind,
     title: presented.title,
+    ...(presented.summary === undefined ? {} : { summary: presented.summary }),
     tags: [...presented.tags],
+    links: [...presented.links],
     ...(presented.scope === undefined ? {} : { scope: { ...presented.scope } }),
     sensitivity: presented.sensitivity,
     references: pathFreeReferences(presented.references),
@@ -357,7 +380,12 @@ export class MemoryService {
         }
       }
       const results = rankMemorySearch({ ...query, limit: validated.limit }, candidates, ctx.now)
-      for (const result of results) await this.audit(ctx, result.id, 'search', 'success')
+      // ONE ROW FOR THE QUERY, not one per hit. Auditing per result meant a
+      // search that matched nothing wrote nothing at all, so "looked and found
+      // nothing" and "never looked" were the same in the log — and the one
+      // time it mattered, the Agent claimed the store was empty and the log
+      // could neither confirm nor contradict it.
+      await this.audit(ctx, results[0]?.id ?? UNASSIGNED_MEMORY_ID, 'search', 'success')
       return results
     } catch (error) {
       try { await this.audit(ctx, UNASSIGNED_MEMORY_ID, 'search', 'failure') } catch (auditError) {
@@ -365,6 +393,87 @@ export class MemoryService {
       }
       throw this.failure('search', error)
     }
+  }
+
+  /**
+   * What the store contains — the map when no group is named, one group's
+   * members when it is.
+   *
+   * READ FROM THE FILES, NOT THE INDEX. The files are the record; the index is
+   * a projection that can fall behind them. Enumeration is the one operation
+   * where being right matters more than being fast, because its whole purpose
+   * is to answer "is there anything here at all" — the question the Agent
+   * previously had no tool for and answered wrongly.
+   *
+   * The cost is decrypting every record. At the scale a person accumulates by
+   * speaking, that is nothing; past a few thousand it wants a cache.
+   */
+  async list(ctx: CapabilityCallContext, options: MemoryListOptions = {}): Promise<MemoryListResult> {
+    requireAgent(ctx)
+    await this.ready('list')
+    try {
+      const records = await this.options.records.list()
+      const result: MemoryListResult = options.group === undefined
+        ? (options.ungrouped === true
+          ? { entries: listUngrouped(records) }
+          : { map: buildMemoryMap(records) })
+        : { entries: listGroupMembers(records, options.group) }
+      // Audited once for the call, not once per row: a listing is a single act
+      // of looking, and rows-as-events would make an empty store unauditable.
+      await this.audit(ctx, options.group ?? UNASSIGNED_MEMORY_ID, 'list', 'success')
+      return result
+    } catch (error) {
+      try { await this.audit(ctx, options.group ?? UNASSIGNED_MEMORY_ID, 'list', 'failure') } catch (auditError) {
+        throw this.failure('list', auditError)
+      }
+      throw this.failure('list', error)
+    }
+  }
+
+  /**
+   * Attach a record to a group, optionally at a position.
+   *
+   * LINKS, NEVER MOVES. The record stays wherever else it is already linked
+   * from, which is the entire reason groups are records rather than folders.
+   *
+   * Position is honoured because a group may be a workflow: appending a step to
+   * the end when the user said "second" would silently corrupt the meaning.
+   */
+  async link(ctx: CapabilityCallContext, input: MemoryLinkInput): Promise<MemoryRecord> {
+    requireActiveInteraction(ctx)
+    await this.ready('link')
+    return this.enqueueMutation(async () => {
+      try {
+        const group = await this.options.records.read(input.group)
+        if (group.kind !== 'group') {
+          throw new MemoryServiceError('invalid-input', 'That memory is not a group')
+        }
+        // Reading the member proves it exists before the group claims it: a
+        // group holding an id that was never there is a dangling link nothing
+        // would ever repair.
+        const member = await this.options.records.read(input.id)
+        if (member.deletedAt !== undefined) {
+          throw new MemoryServiceError('not-found', 'That memory is in the trash')
+        }
+        if (member.id === group.id) {
+          throw new MemoryServiceError('invalid-input', 'A group cannot contain itself')
+        }
+        const links = group.links.filter((id) => id !== input.id)
+        const at = input.position === undefined
+          ? links.length
+          : Math.max(0, Math.min(links.length, input.position))
+        links.splice(at, 0, input.id)
+        const updated = await this.options.records.update(group.id, { links })
+        await this.updateIndex(() => this.options.index.project(updated))
+        await this.audit(ctx, group.id, 'link', 'success')
+        return updated
+      } catch (error) {
+        try { await this.audit(ctx, input.group, 'link', 'failure') } catch (auditError) {
+          throw this.failure('link', auditError)
+        }
+        throw this.failure('link', error)
+      }
+    })
   }
 
   async get(

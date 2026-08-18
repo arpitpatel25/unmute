@@ -45,6 +45,10 @@ export interface StubBehaviour {
   }>
   getRecord?: Record<string, unknown>
   storeFails?: string
+  /** What memory_list returns with no group: the map. Absent means an empty store. */
+  map?: Record<string, unknown>
+  /** What memory_list returns for a named group. */
+  groupEntries?: Array<Record<string, unknown>>
 }
 
 const PROTOCOL_VERSION = '2024-11-05'
@@ -101,7 +105,11 @@ export async function startStub(behaviour: StubBehaviour): Promise<{
         const tool = String(msg.params?.name ?? '')
         const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
         calls.push({ tool, args })
-        if (tool === 'memory_search') {
+        if (tool === 'memory_list') {
+          send(toolText(JSON.stringify(args.group === undefined
+            ? { ok: true, result: { map: behaviour.map ?? { total: 0, groups: [], ungrouped: 0 } } }
+            : { ok: true, result: { entries: behaviour.groupEntries ?? [] } })))
+        } else if (tool === 'memory_search') {
           send(toolText(JSON.stringify({ ok: true, result: { results: behaviour.searchResults ?? [] } })))
         } else if (tool === 'memory_get') {
           send(toolText(JSON.stringify({ ok: true, result: { record: behaviour.getRecord ?? {} } })))

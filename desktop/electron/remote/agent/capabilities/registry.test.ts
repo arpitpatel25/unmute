@@ -58,6 +58,8 @@ test('authorizes a tool before its module handler runs', async () => {
 
 test('the real Memory capability remains invisible to ordinary task principals', async () => {
   const service = {
+    async list() { return { map: { total: 0, groups: [], groupsOmitted: 0, ungrouped: 0 } } },
+    async link() { throw new Error('not used') },
     async search() { return [] }, async get() { throw new Error('not used') },
     async store() { throw new Error('not used') }, async update() { throw new Error('not used') },
     async forget() {}, async restore() {}, async openAttachment() { throw new Error('not used') },
@@ -66,6 +68,7 @@ test('the real Memory capability remains invisible to ordinary task principals',
 
   assert.deepEqual(registry.tools(task).map((tool) => tool.name), ['unmute_create_task'])
   assert.deepEqual(registry.tools(agent).map((tool) => tool.name), [
+    'memory_list', 'memory_link',
     'memory_search', 'memory_get', 'memory_store', 'memory_update',
     'memory_forget', 'memory_restore', 'memory_open_attachment',
   ])

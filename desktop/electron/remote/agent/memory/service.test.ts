@@ -39,6 +39,7 @@ function input(overrides: Partial<CreateMemoryRecordInput> = {}): CreateMemoryRe
     title: 'Memory title',
     content: 'Memory body',
     tags: [],
+    links: [],
     scope: { project: 'Atlas' },
     sensitivity: 'normal',
     attachments: [],
@@ -114,9 +115,12 @@ class FakeRecordStore {
     const next: MemoryRecord = { ...prior, updatedAt: prior.updatedAt + 1, version: prior.version + 1 }
     if (patch.kind !== undefined) next.kind = patch.kind
     if (patch.title !== undefined) next.title = patch.title
+    if (patch.summary === null) delete next.summary
+    else if (patch.summary !== undefined) next.summary = patch.summary
     if (patch.content === null) delete next.content
     else if (patch.content !== undefined) next.content = patch.content
     if (patch.tags !== undefined) next.tags = clone(patch.tags)
+    if (patch.links !== undefined) next.links = clone(patch.links)
     if (patch.scope === null) delete next.scope
     else if (patch.scope !== undefined) next.scope = clone(patch.scope)
     if (patch.sensitivity !== undefined) next.sensitivity = patch.sensitivity
@@ -361,6 +365,96 @@ async function requireInterruption(
 // consequence model with a stricter, dumber one. The model read the sentence
 // and decided to call the tool — that decision IS the intent classification,
 // and a regex is not a second opinion worth having.
+test('listing reads the files, so a record the index lost is still reported', async () => {
+  const { service, records, index } = fixture()
+  await service.store(ctx(), input({ title: 'Product philosophy' }))
+  // The index forgets it. The file does not, and the file is the record.
+  index.projected.clear()
+
+  const listed = await service.list(ctx())
+
+  assert.equal(listed.map?.total, 1)
+  assert.equal(listed.map?.ungrouped, 1)
+  assert.equal((await records.list()).length, 1)
+})
+
+test('an empty store is auditable, where an empty search was not', async () => {
+  const { service, audit } = fixture()
+
+  await service.list(ctx())
+  await service.search(ctx(), { text: 'nothing here' })
+
+  assert.deepEqual(audit.events.map((row) => [row.operation, row.outcome]), [
+    ['list', 'success'],
+    ['search', 'success'],
+  ])
+})
+
+test('linking adds to a group without removing the record from any other', async () => {
+  const { service } = fixture()
+  const note = await service.store(ctx(), input({ title: 'Hook variants' }))
+  const meta = await service.store(ctx(), input({ kind: 'group', title: 'Meta ads' }))
+  const styles = await service.store(ctx(), input({ kind: 'group', title: 'Writing styles' }))
+
+  await service.link(ctx(), { id: note.id, group: meta.id })
+  await service.link(ctx(), { id: note.id, group: styles.id })
+
+  const map = (await service.list(ctx())).map!
+  assert.deepEqual(
+    map.groups.map((group) => [group.title, group.memberCount]).sort(),
+    [['Meta ads', 1], ['Writing styles', 1]],
+  )
+  assert.equal(map.ungrouped, 0, 'a record in two groups is loose in neither')
+})
+
+test('a position is honoured, because a group may be a sequence of steps', async () => {
+  const { service } = fixture()
+  const group = await service.store(ctx(), input({ kind: 'group', title: 'Workflow' }))
+  const first = await service.store(ctx(), input({ title: 'Step one' }))
+  const third = await service.store(ctx(), input({ title: 'Step three' }))
+  const second = await service.store(ctx(), input({ title: 'Step two' }))
+
+  await service.link(ctx(), { id: first.id, group: group.id })
+  await service.link(ctx(), { id: third.id, group: group.id })
+  await service.link(ctx(), { id: second.id, group: group.id, position: 1 })
+
+  const members = await service.list(ctx(), { group: group.id })
+  assert.deepEqual(members.entries?.map((entry) => entry.title), ['Step one', 'Step two', 'Step three'])
+})
+
+test('linking the same record twice moves it rather than duplicating it', async () => {
+  const { service } = fixture()
+  const group = await service.store(ctx(), input({ kind: 'group', title: 'Group' }))
+  const a = await service.store(ctx(), input({ title: 'A' }))
+  const b = await service.store(ctx(), input({ title: 'B' }))
+
+  await service.link(ctx(), { id: a.id, group: group.id })
+  await service.link(ctx(), { id: b.id, group: group.id })
+  const updated = await service.link(ctx(), { id: a.id, group: group.id, position: 1 })
+
+  assert.deepEqual(updated.links.length, 2, 'a member appears once however often it is linked')
+  const members = await service.list(ctx(), { group: group.id })
+  assert.deepEqual(members.entries?.map((entry) => entry.title), ['B', 'A'])
+})
+
+test('a group cannot contain itself, and a non-group cannot contain anything', async () => {
+  const { service } = fixture()
+  const group = await service.store(ctx(), input({ kind: 'group', title: 'Group' }))
+  const note = await service.store(ctx(), input({ title: 'Note' }))
+
+  await assert.rejects(() => service.link(ctx(), { id: group.id, group: group.id }))
+  await assert.rejects(() => service.link(ctx(), { id: group.id, group: note.id }))
+})
+
+test('a link to a record that does not exist is refused before the group claims it', async () => {
+  const { service, records } = fixture()
+  const group = await service.store(ctx(), input({ kind: 'group', title: 'Group' }))
+
+  await assert.rejects(() => service.link(ctx(), { id: 'memory-missing', group: group.id }))
+
+  assert.deepEqual((await records.read(group.id)).links, [], 'no dangling id may be left behind')
+})
+
 test('a reversible write needs a live interaction, not a magic word in the transcript', async () => {
   const { service, records } = fixture()
   const live = await records.create(input())

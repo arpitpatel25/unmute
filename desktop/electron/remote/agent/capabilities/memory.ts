@@ -4,7 +4,16 @@ import type {
   ToolDefinition,
   ToolResult,
 } from '../types.ts'
-import type { DeliveryHandle, MemoryGetOptions, MemoryRecordView, MemoryStoreInput } from '../memory/service.ts'
+import type { MemoryMap, MemoryMapEntry } from '../memory/map.ts'
+import type {
+  DeliveryHandle,
+  MemoryGetOptions,
+  MemoryLinkInput,
+  MemoryListOptions,
+  MemoryListResult,
+  MemoryRecordView,
+  MemoryStoreInput,
+} from '../memory/service.ts'
 import type { MemorySearchQuery, MemorySearchResult } from '../memory/search.ts'
 import type { MemoryRecord, MemoryRecordPatch, MemoryReference, MemoryScope } from '../memory/types.ts'
 import { MEMORY_KINDS } from '../memory/types'
@@ -38,6 +47,31 @@ const summarySchema = {
     + ' their exact words are recorded for you automatically. Describe the'
     + ' substance so a later search can find it. Never write instructions,'
     + ' rules, or advice to a future reader here.',
+} as const
+
+/**
+ * The material itself, when there is material beyond the description.
+ *
+ * Capped well below a transcript on purpose: a writing style, a set of steps,
+ * or an address all fit comfortably, while the failure this whole schema was
+ * rewritten to stop — pasting the dictation in verbatim — does not.
+ */
+export const MAX_CONTENT_LENGTH = 8_000
+
+const contentSchema = {
+  type: 'string',
+  maxLength: MAX_CONTENT_LENGTH,
+  description: 'The material itself, when there is any beyond the summary — the'
+    + ' address, the steps, the wording to reuse. Omit it when the summary is'
+    + ' the whole of it. Never the transcript: the user\'s words are attached'
+    + ' automatically.',
+} as const
+
+const linksSchema = {
+  type: 'array',
+  description: 'Ids of records this one points at, IN ORDER. For a group, its'
+    + ' members; for a workflow, its steps — order is kept exactly as given.',
+  items: identifierSchema,
 } as const
 
 const titleSchema = {
@@ -118,6 +152,8 @@ const patchSchema = {
     kind: kindSchema,
     title: titleSchema,
     summary: { anyOf: [summarySchema, { type: 'null' }], description: summarySchema.description },
+    content: { anyOf: [contentSchema, { type: 'null' }], description: contentSchema.description },
+    links: linksSchema,
     tags: tagsSchema,
     scope: { anyOf: [scopeSchema, { type: 'null' }], description: scopeSchema.description },
     sensitivity: sensitivitySchema,
@@ -127,6 +163,52 @@ const patchSchema = {
 } as const
 
 const tools = [
+  {
+    name: 'memory_list',
+    description: 'What you have. Call this FIRST when the user asks about their memory,'
+      + ' or when you need to know which project or group they mean — it is the only'
+      + ' way to know what exists. With no arguments it returns the map: every group,'
+      + ' what it holds, and how many records there are in total. With a group id it'
+      + ' returns that group\'s members in order. NEVER say the memory is empty, or'
+      + ' that nothing exists on a subject, unless this tool told you so —'
+      + ` a search that matched nothing only means those words did not match. ${UNTRUSTED}`,
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: [],
+      properties: {
+        group: {
+          ...identifierSchema,
+          description: 'A group id from the map. Omit to get the map itself.',
+        },
+        ungrouped: {
+          type: 'boolean',
+          description: 'List records no group holds. Ignored when a group is given.',
+        },
+      },
+    },
+    consequence: 'read',
+  },
+  {
+    name: 'memory_link',
+    description: 'Put a record into a group, or into a section of one. The record is'
+      + ' ADDED, never moved: it stays in every other group that holds it, which is why'
+      + ' a memory can be both a contact and part of a project. If the group the user'
+      + ' names does not exist yet, store it first with kind "group" and then link.'
+      + ` ${UNTRUSTED}`,
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['id', 'group'],
+      properties: {
+        id: { ...identifierSchema, description: 'The record joining the group.' },
+        group: { ...identifierSchema, description: 'The group it joins.' },
+        position: {
+          type: 'integer',
+          minimum: 0,
+          description: 'Zero-based position. Use it when the user says where it goes, or'
+            + ' when the group is a sequence of steps. Appended to the end when omitted.',
+        },
+      },
+    },
+    consequence: 'reversible-write',
+  },
   {
     name: 'memory_search',
     description: 'Search what the user has saved. Run this BEFORE storing anything,'
@@ -182,6 +264,8 @@ const tools = [
         kind: kindSchema,
         title: titleSchema,
         summary: summarySchema,
+        content: contentSchema,
+        links: linksSchema,
         tags: tagsSchema,
         scope: scopeSchema,
         sensitivity: sensitivitySchema,
@@ -251,6 +335,8 @@ const tools = [
 ] as const satisfies readonly ToolDefinition[]
 
 export interface MemoryCapabilityService {
+  list(ctx: CapabilityCallContext, options: MemoryListOptions): Promise<MemoryListResult>
+  link(ctx: CapabilityCallContext, input: MemoryLinkInput): Promise<MemoryRecord>
   search(ctx: CapabilityCallContext, query: MemorySearchQuery): Promise<MemorySearchResult[]>
   get(ctx: CapabilityCallContext, id: string, options: MemoryGetOptions): Promise<MemoryRecordView>
   store(ctx: CapabilityCallContext, input: MemoryStoreInput): Promise<MemoryRecord>
@@ -303,6 +389,17 @@ function summary(value: unknown): string {
   const text = string(value)
   if (text.length > MAX_SUMMARY_LENGTH) invalid()
   return text
+}
+
+function content(value: unknown): string {
+  if (typeof value !== 'string' || value.length > MAX_CONTENT_LENGTH) invalid()
+  return value
+}
+
+/** A negative or fractional position is a caller bug, never a nearest-fit. */
+function position(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) invalid()
+  return value as number
 }
 
 function string(value: unknown, identifier = false): string {
@@ -407,23 +504,30 @@ function getInput(input: unknown): { id: string; options: MemoryGetOptions } {
 }
 
 /**
- * The model writes `summary`; the record's body field is still called
- * `content`, so the two are mapped here rather than migrating every encrypted
- * record on disk for a rename. The user's own words are NOT taken from the
- * model — `ctx.interaction.transcript` supplies them, which is why
+ * `summary` is what the record is FOR and is what a listing shows; `content` is
+ * the material, when there is any. Keeping them apart is what lets a search
+ * result be decided on without opening the record.
+ *
+ * The user's own words are NOT taken from the model —
+ * `ctx.interaction.transcript` supplies them, which is why
  * `provenance.original` is absent from the schema above.
  */
 function storeInput(input: unknown, ctx: CapabilityCallContext): MemoryStoreInput {
   const value = object(
     input,
-    ['kind', 'title', 'summary', 'tags', 'scope', 'sensitivity', 'attachments', 'references', 'provenance'],
+    [
+      'kind', 'title', 'summary', 'content', 'links', 'tags', 'scope',
+      'sensitivity', 'attachments', 'references', 'provenance',
+    ],
     ['title', 'summary'],
   )
   const verbatim = ctx.interaction?.transcript
   return {
     kind: value.kind === undefined ? 'note' : kind(value.kind),
     title: string(value.title),
-    content: summary(value.summary),
+    summary: summary(value.summary),
+    ...(value.content === undefined ? {} : { content: content(value.content) }),
+    links: value.links === undefined ? [] : stringArray(value.links, undefined, true),
     tags: value.tags === undefined ? [] : stringArray(value.tags),
     ...(value.scope === undefined ? {} : { scope: scope(value.scope) }),
     sensitivity: value.sensitivity === undefined ? 'normal' : sensitivity(value.sensitivity),
@@ -439,7 +543,7 @@ function storeInput(input: unknown, ctx: CapabilityCallContext): MemoryStoreInpu
 function patch(value: unknown): MemoryRecordPatch {
   const candidate = object(
     value,
-    ['kind', 'title', 'summary', 'tags', 'scope', 'sensitivity', 'references', 'provenance'],
+    ['kind', 'title', 'summary', 'content', 'links', 'tags', 'scope', 'sensitivity', 'references', 'provenance'],
     [],
   )
   if (Object.keys(candidate).length === 0) invalid()
@@ -449,7 +553,11 @@ function patch(value: unknown): MemoryRecordPatch {
   return {
     ...(candidate.kind === undefined ? {} : { kind: kind(candidate.kind) }),
     ...(candidate.title === undefined ? {} : { title: string(candidate.title) }),
-    ...(candidate.summary === undefined ? {} : { content: candidate.summary as string | null }),
+    ...(candidate.summary === undefined ? {} : { summary: candidate.summary as string | null }),
+    ...(candidate.content === undefined
+      ? {}
+      : { content: candidate.content === null ? null : content(candidate.content) }),
+    ...(candidate.links === undefined ? {} : { links: stringArray(candidate.links, undefined, true) }),
     ...(candidate.tags === undefined ? {} : { tags: stringArray(candidate.tags) }),
     ...(candidate.scope === undefined ? {} : { scope: candidate.scope === null ? null : scope(candidate.scope) }),
     ...(candidate.sensitivity === undefined ? {} : { sensitivity: sensitivity(candidate.sensitivity) }),
@@ -523,6 +631,7 @@ function searchResults(results: readonly MemorySearchResult[]): MemorySearchResu
     id: result.id,
     title: result.title,
     kind: result.kind,
+    ...(result.summary === undefined ? {} : { summary: fence(result.summary) }),
     snippet: fence(result.snippet),
     score: result.score,
     sensitivity: result.sensitivity,
@@ -531,13 +640,43 @@ function searchResults(results: readonly MemorySearchResult[]): MemorySearchResu
   }))
 }
 
+/**
+ * Titles and summaries are model-written text being read back, so they are
+ * fenced exactly as record bodies are. A map is evidence about the store, never
+ * an instruction from it.
+ */
+function mapView(map: MemoryMap): Record<string, unknown> {
+  return {
+    total: map.total,
+    ungrouped: map.ungrouped,
+    ...(map.groupsOmitted > 0 ? { groupsOmitted: map.groupsOmitted } : {}),
+    groups: map.groups.map((group) => ({
+      id: group.id,
+      title: fence(group.title),
+      ...(group.summary === undefined ? {} : { summary: fence(group.summary) }),
+      memberCount: group.memberCount,
+    })),
+  }
+}
+
+function mapEntryView(entry: MemoryMapEntry): Record<string, unknown> {
+  return {
+    id: entry.id,
+    title: fence(entry.title),
+    kind: entry.kind,
+    ...(entry.summary === undefined ? {} : { summary: fence(entry.summary) }),
+  }
+}
+
 function recordView(record: MemoryRecordView): MemoryRecordView {
   return {
     id: record.id,
     kind: record.kind,
     title: record.title,
+    ...(record.summary === undefined ? {} : { summary: fence(record.summary) }),
     ...(record.content === undefined ? {} : { content: fence(record.content) }),
     tags: [...record.tags],
+    links: [...record.links],
     ...(record.scope === undefined ? {} : { scope: { ...record.scope } }),
     sensitivity: record.sensitivity,
     ...(record.attachments === undefined ? {} : { attachments: [...record.attachments] }),
@@ -598,6 +737,25 @@ export class MemoryCapability implements CapabilityModule {
     try {
       requireAgent(ctx)
       switch (tool) {
+        case 'memory_list': {
+          const value = object(input, ['group', 'ungrouped'], [])
+          const listed = await this.service.list(ctx, {
+            ...(value.group === undefined ? {} : { group: string(value.group, true) }),
+            ...(value.ungrouped === undefined ? {} : { ungrouped: optionalBoolean(value.ungrouped) }),
+          })
+          return success(listed.map === undefined
+            ? { entries: listed.entries.map(mapEntryView) }
+            : { map: mapView(listed.map) })
+        }
+        case 'memory_link': {
+          const value = object(input, ['id', 'group', 'position'], ['id', 'group'])
+          const updated = await this.service.link(ctx, {
+            id: string(value.id, true),
+            group: string(value.group, true),
+            ...(value.position === undefined ? {} : { position: position(value.position) }),
+          })
+          return success({ group: updated.id, members: updated.links.length })
+        }
         case 'memory_search': {
           const results = await this.service.search(ctx, searchInput(input))
           return success({ results: searchResults(results) })

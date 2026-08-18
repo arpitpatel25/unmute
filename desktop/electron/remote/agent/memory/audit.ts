@@ -15,6 +15,8 @@ export type MemoryAuditOperation =
   | 'update'
   | 'forget'
   | 'restore'
+  | 'list'
+  | 'link'
   | 'open-attachment'
 
 export type MemoryAuditOutcome = 'success' | 'failure'

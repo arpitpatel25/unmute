@@ -27,7 +27,9 @@ import {
 } from './types'
 
 const SERIALIZER_FORMAT = 'unmute-memory-record'
-const SERIALIZER_VERSION = 2
+const SERIALIZER_VERSION = 3
+/** Readable versions, oldest first. A record written by any of them parses. */
+const SUPPORTED_SERIALIZER_VERSIONS = [1, 2, 3] as const
 const LEGACY_SERIALIZER_VERSION = 1
 const FILE_MODE = 0o600
 const DIRECTORY_MODE = 0o700
@@ -143,6 +145,24 @@ function requireReferences(value: unknown): asserts value is MemoryReference[] {
   }
 }
 
+/**
+ * Links are an ORDERED list of record identifiers. Order is preserved rather
+ * than normalised because a group may be a workflow, and a workflow's steps
+ * mean nothing shuffled. Duplicates are rejected: a member appearing twice is
+ * a bug at the caller, never an intention.
+ */
+function requireLinks(value: unknown): asserts value is string[] {
+  if (!Array.isArray(value)) throw new RecordStoreError('invalid-input', 'Memory links are invalid')
+  const seen = new Set<string>()
+  for (const link of value) {
+    if (typeof link !== 'string' || !IDENTIFIER_PATTERN.test(link)) {
+      throw new RecordStoreError('invalid-input', 'Memory link is invalid')
+    }
+    if (seen.has(link)) throw new RecordStoreError('invalid-input', 'Memory links contain a duplicate')
+    seen.add(link)
+  }
+}
+
 function requireProvenance(value: unknown): asserts value is MemoryProvenance {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new RecordStoreError('invalid-input', 'Memory provenance is invalid')
@@ -177,6 +197,10 @@ function validateRecord(record: MemoryRecord): void {
   requireSensitivity(record.sensitivity)
   requireStringArray(record.attachments, 'attachments')
   requireReferences(record.references)
+  if (record.summary !== undefined && typeof record.summary !== 'string') {
+    throw new RecordStoreError('invalid-input', 'Memory summary is invalid')
+  }
+  requireLinks(record.links)
   requireProvenance(record.provenance)
   requireTimestamp(record.createdAt, 'createdAt')
   requireTimestamp(record.updatedAt, 'updatedAt')
@@ -191,7 +215,7 @@ function validateCreateInput(input: CreateMemoryRecordInput): void {
     throw new RecordStoreError('invalid-input', 'Memory create input is invalid')
   }
   const expected = new Set([
-    'kind', 'title', 'content', 'tags', 'scope', 'sensitivity',
+    'kind', 'title', 'summary', 'content', 'tags', 'links', 'scope', 'sensitivity',
     'attachments', 'references', 'provenance',
   ])
   if (Object.keys(input).some((key) => !expected.has(key))) {
@@ -232,8 +256,10 @@ export function serializeMemoryRecord(record: MemoryRecord): string {
     metadataLine('id', record.id),
     metadataLine('kind', record.kind),
     metadataLine('title', record.title),
+    metadataLine('summary', record.summary ?? null),
     metadataLine('contentPresent', record.content !== undefined),
     metadataLine('tags', record.tags),
+    metadataLine('links', record.links),
     metadataLine('scope', canonicalScope(record.scope)),
     metadataLine('sensitivity', record.sensitivity),
     metadataLine('attachments', record.attachments),
@@ -277,12 +303,20 @@ function parseDocument(document: unknown, envelopeVersion: number): MemoryRecord
   if (typeof contentPresent !== 'boolean') {
     throw new Error('Encrypted memory record content metadata is invalid')
   }
+  // Records written before summary and links existed simply lack the lines.
+  // They read back as a record with no summary and no links rather than as a
+  // parse failure: the fields are additive, so an older file is not a broken
+  // one.
+  const summary = metadata.get('summary')
+  const links = metadata.get('links')
   const record: MemoryRecord = {
     id: metadata.get('id') as string,
     kind: metadata.get('kind') as string,
     title: metadata.get('title') as string,
+    ...(typeof summary === 'string' ? { summary } : {}),
     ...(contentPresent ? { content } : {}),
     tags: metadata.get('tags') as string[],
+    links: Array.isArray(links) ? links as string[] : [],
     ...(metadata.get('scope') === null ? {} : { scope: metadata.get('scope') as MemoryScope }),
     sensitivity: metadata.get('sensitivity') as MemorySensitivity,
     attachments: metadata.get('attachments') as string[],
@@ -308,14 +342,15 @@ export function deserializeMemoryRecord(payload: Uint8Array | string): MemoryRec
     throw new Error('Encrypted memory record payload is invalid')
   }
   const candidate = envelope as Record<string, unknown>
+  const serializerVersion = candidate.serializerVersion
   if (
     candidate.format !== SERIALIZER_FORMAT
-    || (candidate.serializerVersion !== LEGACY_SERIALIZER_VERSION
-      && candidate.serializerVersion !== SERIALIZER_VERSION)
+    || typeof serializerVersion !== 'number'
+    || !(SUPPORTED_SERIALIZER_VERSIONS as readonly number[]).includes(serializerVersion)
   ) {
     throw new Error('Encrypted memory record serializer version is unsupported')
   }
-  return parseDocument(candidate.document, candidate.serializerVersion)
+  return parseDocument(candidate.document, serializerVersion)
 }
 
 export function presentMemoryRecord(record: MemoryRecord): PresentedMemoryRecord {
@@ -417,9 +452,12 @@ export class EncryptedRecordStore {
       const updated: MemoryRecord = { ...prior }
       if (patch.kind !== undefined) updated.kind = patch.kind
       if (patch.title !== undefined) updated.title = patch.title
+      if (patch.summary === null) delete updated.summary
+      else if (patch.summary !== undefined) updated.summary = patch.summary
       if (patch.content === null) delete updated.content
       else if (patch.content !== undefined) updated.content = patch.content
       if (patch.tags !== undefined) updated.tags = patch.tags
+      if (patch.links !== undefined) updated.links = patch.links
       if (patch.scope === null) delete updated.scope
       else if (patch.scope !== undefined) updated.scope = patch.scope
       if (patch.sensitivity !== undefined) updated.sensitivity = patch.sensitivity
@@ -578,7 +616,7 @@ export class EncryptedRecordStore {
       throw new RecordStoreError('invalid-input', 'Memory update patch is invalid')
     }
     const allowed = new Set([
-      'kind', 'title', 'content', 'tags', 'scope', 'sensitivity',
+      'kind', 'title', 'summary', 'content', 'tags', 'links', 'scope', 'sensitivity',
       'attachments', 'references', 'provenance',
     ])
     if (Object.keys(patch).length === 0 || Object.keys(patch).some((key) => !allowed.has(key))) {

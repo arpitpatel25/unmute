@@ -35,6 +35,7 @@ function input(overrides: Partial<CreateMemoryRecordInput> = {}): CreateMemoryRe
     title: 'Project Atlas voice',
     content: 'Use **short**, direct sentences.\n\nKeep the launch name intact.',
     tags: ['atlas', 'voice'],
+    links: [],
     scope: { app: 'Slack', project: 'Atlas', purpose: 'writing' },
     sensitivity: 'private',
     attachments: ['attachment-1'],
@@ -120,6 +121,7 @@ test('serializes deterministic metadata and Markdown in a versioned JSON payload
     title: 'A: title',
     content: '# Body\n\nText',
     tags: ['two', 'one'],
+    links: [],
     sensitivity: 'normal',
     attachments: [],
     references: [],
@@ -131,15 +133,17 @@ test('serializes deterministic metadata and Markdown in a versioned JSON payload
 
   assert.equal(serializeMemoryRecord(record), JSON.stringify({
     format: 'unmute-memory-record',
-    serializerVersion: 2,
+    serializerVersion: 3,
     document: [
       '---',
-      'serializerVersion: 2',
+      'serializerVersion: 3',
       'id: "memory-1"',
       'kind: "note"',
       'title: "A: title"',
+      'summary: null',
       'contentPresent: true',
       'tags: ["two","one"]',
+      'links: []',
       'scope: null',
       'sensitivity: "normal"',
       'attachments: []',
@@ -161,6 +165,7 @@ test('serializes nested metadata deterministically regardless of property insert
     kind: 'reference',
     title: 'Reference',
     tags: [],
+    links: [],
     sensitivity: 'normal',
     attachments: [],
     references: [{ type: 'url', value: 'https://example.com' }],
@@ -182,7 +187,7 @@ test('serializes nested metadata deterministically regardless of property insert
 
 test('round-trips absent content distinctly from explicit empty Markdown', () => {
   const withoutContent: MemoryRecord = {
-    id: 'without-content', kind: 'note', title: 'Absent', tags: [],
+    id: 'without-content', kind: 'note', title: 'Absent', tags: [], links: [],
     sensitivity: 'normal', attachments: [], references: [],
     provenance: { source: 'import' }, createdAt: 10, updatedAt: 10, version: 1,
   }
@@ -262,6 +267,7 @@ test('updates atomically, increments the version, and snapshots the complete pri
     title: 'Project Atlas written voice',
     content: 'Prefer active voice.',
     tags: ['atlas', 'writing'],
+    links: [],
   })
 
   assert.equal(updated.version, 2)

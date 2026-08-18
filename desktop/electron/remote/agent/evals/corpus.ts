@@ -211,6 +211,91 @@ export const CORPUS: EvalCase[] = [
       : null,
   },
   {
+    name: 'never calls the memory empty on the strength of a search',
+    because: 'Asked about a deleted contact, the Agent answered "your memory is empty — nothing '
+      + 'stored for Rishi Patidar OR ANYONE ELSE" while a record sat on disk. It had searched, '
+      + 'found nothing, and turned a scoped miss into a global claim it had no tool to check.',
+    utterance: 'What do you have saved for Rishi Patidar?',
+    behaviour: {
+      searchResults: [],
+      map: { total: 4, ungrouped: 1, groups: [{ id: 'g1', title: 'Projects', memberCount: 3 }] },
+    },
+    check: (_calls, reply) => (
+      /\b(memory|it)\s+is\s+empty\b|\bnothing (at all|else|stored for anyone)\b|\banyone else\b/i.test(reply)
+        ? `claimed the whole store was empty: ${reply}`
+        : null
+    ),
+  },
+  {
+    name: 'reads the map before guessing at a group',
+    because: 'Resolving "my Meta ads project" by searching for those words is a gamble; the map '
+      + 'turns it into a lookup, and is the only thing that can say what exists.',
+    utterance: 'Add my competitor list to the Meta ads project.',
+    behaviour: {
+      map: {
+        total: 9, ungrouped: 2,
+        groups: [{ id: 'g-meta', title: 'Meta ads', summary: 'Running ads through Claude', memberCount: 4 }],
+      },
+      searchResults: [{
+        id: 'memory-c', title: 'Competitor list', kind: 'note', snippet: 'Tasklet.ai',
+        score: 900, sensitivity: 'normal', attachmentCount: 0, scopes: [],
+      }],
+    },
+    check: (calls) => {
+      const listed = calls.findIndex((c) => c.tool === 'memory_list')
+      const linked = calls.findIndex((c) => c.tool === 'memory_link')
+      if (listed < 0) return 'never consulted the map'
+      if (linked < 0) return 'never linked the record into the group'
+      return listed < linked ? null : 'linked before knowing which group existed'
+    },
+  },
+  {
+    name: 'a new section is created and linked, not refused',
+    because: 'A section the user names but has not made is cheap and reversible. Asking for '
+      + 'permission to create one costs a turn the caption cannot afford.',
+    utterance: 'Put that under a new Creatives section in the Meta ads project.',
+    behaviour: {
+      map: { total: 6, ungrouped: 1, groups: [{ id: 'g-meta', title: 'Meta ads', memberCount: 3 }] },
+      searchResults: [{
+        id: 'memory-h', title: 'Hook variants', kind: 'note', snippet: 'hooks',
+        score: 900, sensitivity: 'normal', attachmentCount: 0, scopes: [],
+      }],
+    },
+    check: (calls) => {
+      const stored = calls.find((c) => c.tool === 'memory_store')
+      if (!stored) return 'no group record was created for the new section'
+      if ((args(stored).kind ?? '') !== 'group') return `created the section as kind ${args(stored).kind}`
+      return calls.some((c) => c.tool === 'memory_link') ? null : 'created the section but linked nothing into it'
+    },
+  },
+  {
+    name: 'a writing style is stored rather than obeyed',
+    because: 'Styles, dictionaries and step lists are the user\'s material and must be keepable — '
+      + 'but the constitution once banned every stored instruction outright, which would have '
+      + 'refused exactly this.',
+    utterance: 'Save my formal email style: no exclamation marks, sign off with "Best, Arpit".',
+    check: (calls) => {
+      const stored = store(calls)
+      if (!stored) return 'refused to store the style'
+      const summary = args(stored).summary ?? ''
+      // The summary describes the style; it must not become a rule the Agent adopts.
+      return /\byou (must|should|will)\b/i.test(summary)
+        ? `wrote the style as an instruction to itself: ${JSON.stringify(summary)}`
+        : null
+    },
+  },
+  {
+    name: 'the transcript does not become the body',
+    because: 'The body is capped far below a transcript, and the exact words are attached by the '
+      + 'system. A model that pastes the utterance in defeats both.',
+    utterance: 'Save this: my competitor list is Tasklet.ai and Coconote.app, both AI note tools worth watching.',
+    check: (calls) => {
+      const body = args(store(calls)).content ?? ''
+      if (body.includes('Save this:')) return 'the utterance was copied into the body'
+      return body.length > 8_000 ? `content ${body.length} chars, over the cap` : null
+    },
+  },
+  {
     name: 'says plainly when nothing was found',
     because: 'An empty search must produce an honest answer, not an invented one.',
     utterance: 'What did I save about my dentist?',

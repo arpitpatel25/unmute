@@ -23,6 +23,12 @@ export interface MemorySearchResult {
   id: string
   title: string
   kind: MemoryKind
+  /**
+   * What the record is for, as written when it was stored. THIS is what a
+   * result is meant to be decided on — the snippet below is raw material and
+   * exists only for records written before summaries did.
+   */
+  summary?: string
   snippet: string
   score: number
   sensitivity: MemorySensitivity
@@ -96,11 +102,16 @@ function kind(record: MemoryRecord): MemoryKind {
     : 'note'
 }
 
+/**
+ * Prefers the summary over an excerpt of the body. A slice of content shows
+ * what a record CONTAINS; a summary says what it is FOR, and only the second
+ * can be decided on without opening the record.
+ */
 function quotedSnippet(record: MemoryRecord): string {
   if (record.sensitivity === 'sensitive' || record.kind === 'credential-ref') {
     return JSON.stringify('[sensitive memory content withheld]')
   }
-  const source = record.content ?? record.title
+  const source = record.summary ?? record.content ?? record.title
   const codePoints = [...source]
   const excerpt = codePoints.length <= MAX_SNIPPET_CODE_POINTS
     ? source
@@ -142,6 +153,7 @@ export function rankMemorySearch(
     id: candidate.record.id,
     title: candidate.record.title,
     kind: kind(candidate.record),
+    ...(candidate.record.summary === undefined ? {} : { summary: candidate.record.summary }),
     snippet: quotedSnippet(candidate.record),
     score: value,
     sensitivity: candidate.record.sensitivity,
