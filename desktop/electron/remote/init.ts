@@ -3189,6 +3189,14 @@ export async function dispatchFromCapture(
   // Read, not consumed, here — the addressed-task shortcut below needs to see it
   // too. Cleared once the destination has actually been resolved.
   if (captureAddress === 'agent') options = { ...options, destination: 'unmute-agent' }
+  // WHY THIS WENT WHERE IT WENT, recorded rather than left to inference. The
+  // failure that made this necessary looked exactly like a normal Agent turn
+  // in the logs, twelve seconds after a Remote key release.
+  log.event('capture-destination', {
+    address: captureAddress,
+    explicit: options.destination ?? null,
+    targetTaskId: targetTaskId ?? null,
+  })
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
   // surface always returns to idle, whatever path the dispatch takes.
@@ -4593,7 +4601,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // pipeline then calls dispatchFromCapture).
   deps.keyboardManager.on('keyboard', (e) => {
     if (e.type === 'remote-start') {
-      log.event('remote-key', { phase: 'start' })
+      // WHICH KEY, AND WHAT IT DECIDED. Every diagnosis on 18 August meant
+      // reconstructing ownership from timestamps; the address is now stated
+      // here, at key-down, where it is decided.
+      log.event('remote-key', { phase: 'start', lane: 'orchestrator', address: 'task' })
       // This utterance is addressed at a task, not at the Agent. Say so now:
       // a previous Agent capture that never dispatched must not speak for it.
       clearAgentAddressedCapture()
@@ -4608,7 +4619,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       deps.sessionManager.startRemoteCapture(targetTaskId)
       broadcastCapturePhase('listening', targetTaskId) // ADDITIVE observer — the capture itself is untouched
     } else if (e.type === 'agent-start') {
-      log.event('agent-key', { phase: 'start' })
+      log.event('agent-key', { phase: 'start', lane: 'agent', address: 'agent' })
       if (settings.get('unmuteAgentAvailable') !== true) {
         log.event('agent-key', { phase: 'ignored', reason: 'not-available' })
         return
