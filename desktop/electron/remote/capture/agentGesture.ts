@@ -38,71 +38,46 @@ export interface GestureEvent {
   at: number
 }
 
-export type GestureAction = 'start' | 'submit'
+/** A clean tap: pressed and released with no other key in between. */
+export interface TapResult {
+  state: GestureState
+  /** True on release of a press that nothing spoiled. */
+  tap: boolean
+}
 
 export interface GestureState {
   /** The modifier is currently held. */
   held: boolean
   /** Another key arrived during this hold, so it can no longer be a tap. */
   spoiled: boolean
-  /** When the last clean tap completed, or null if there is no pending one. */
-  lastTapAt: number | null
-  /** This hold began inside the window, so releasing it completes a pair. */
-  pairing: boolean
 }
 
 export function freshGestureState(): GestureState {
-  return { held: false, spoiled: false, lastTapAt: null, pairing: false }
+  return { held: false, spoiled: false }
 }
 
-export function recogniseAgentGesture(
-  state: GestureState,
-  event: GestureEvent,
-  capturing: boolean,
-  windowMs: number = DOUBLE_TAP_WINDOW_MS,
-): { state: GestureState; action: GestureAction | null } {
+/**
+ * WHAT THIS DELIBERATELY DOES NOT KNOW: whether a capture is running.
+ *
+ * It used to take a `capturing` flag and decide start-vs-submit itself. That
+ * moved the question "am I already recording?" out of the handler that owns the
+ * flag — and on the lane that works, right-Option, answering that question
+ * FIRST is the property that makes a live capture always stoppable. Losing it
+ * produced five starts against one stop.
+ *
+ * So: this reports taps. The handler decides what a tap means, in the same
+ * order right-Option uses.
+ */
+export function recogniseTap(state: GestureState, event: GestureEvent): TapResult {
   switch (event.kind) {
-    case 'down': {
-      // The window is the GAP BETWEEN TAPS, measured here at the second press
-      // — not at its release. Otherwise a tap followed by a press-and-hold
-      // fails for being held too long, when double-tap-and-hold is a perfectly
-      // ordinary way to start talking.
-      const pairing = state.lastTapAt !== null && event.at - state.lastTapAt <= windowMs
-      return { state: { ...state, held: true, spoiled: false, pairing }, action: null }
-    }
-
+    case 'down':
+      return { state: { held: true, spoiled: false }, tap: false }
     case 'other':
-      // A shortcut. It spoils the current hold AND discards any pending first
-      // tap: someone who taps, then uses a shortcut, has moved on.
-      return { state: { ...state, spoiled: true, lastTapAt: null, pairing: false }, action: null }
-
+      // A shortcut. This hold can never be a tap.
+      return { state: { ...state, spoiled: true }, tap: false }
     case 'up': {
-      if (!state.held || state.spoiled) {
-        return { state: { ...state, held: false, spoiled: false, pairing: false }, action: null }
-      }
-      // A clean tap. TWO to start, ONE to submit.
-      //
-      // It used to submit on a single tap, and that produced the hang. If you
-      // double-tap to stop out of habit — which people do, because that is how
-      // they started — the first tap submits and the SECOND becomes tap one of
-      // a new pair. A third opens a capture nobody asked for, which then sits
-      // recording until it times out. Observed: five starts, three stops, eight
-      // cancellations. Symmetry makes a stray single tap inert.
-      // Submitting on a single tap is deliberate and asymmetric: starting is
-      // the act that must not happen by accident, ending is the act that must
-      // not be hard. An earlier version made both a double-tap after phantom
-      // captures appeared — but those came from right Command getting stuck
-      // down and spoiling every tap, not from the asymmetry, and making the
-      // user tap twice to stop was a fix for the wrong thing.
-      if (capturing) {
-        return { state: freshGestureState(), action: 'submit' }
-      }
-      if (state.pairing) {
-        return { state: freshGestureState(), action: 'start' }
-      }
-        // Reset rather than remember: a third tap must begin a new pair, not
-        // immediately pair with the second and start again.
-      return { state: { held: false, spoiled: false, lastTapAt: event.at, pairing: false }, action: null }
+      const clean = state.held && !state.spoiled
+      return { state: freshGestureState(), tap: clean }
     }
   }
 }
