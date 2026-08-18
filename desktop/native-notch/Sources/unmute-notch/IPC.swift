@@ -398,6 +398,8 @@ enum Command {
     /// so a partial or older push still draws instead of being dropped.
     case scratchpad(ScratchpadPayload)
     case agentActivity(AgentActivityP)
+    /// The Agent's conclusion, as a caption. `text` empty means "take it down".
+    case caption(String, Int)
     case collapse
     case quit
     case unknown
@@ -453,6 +455,11 @@ enum Command {
         case "agentActivity":
             guard let activity = sub("activity", AgentActivityP.self) else { return .unknown }
             return .agentActivity(activity)
+        case "caption":
+            // A caption with no dwell is a request to dismiss, which is why an
+            // absent number reads as 0 rather than as a default duration: a
+            // malformed push must never leave text stranded on screen.
+            return .caption(obj["text"] as? String ?? "", obj["dwellMs"] as? Int ?? 0)
         case "appearance":
             // An unknown value falls back to `.system` rather than being
             // dropped: a malformed preference must never leave the surface

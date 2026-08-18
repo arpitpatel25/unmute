@@ -79,6 +79,7 @@ import {
 import { ClaudeCodeProvider } from './agent/providers/claude'
 import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-headless'
 import { agentConstitution } from './agent/constitution'
+import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
 import {
   nextCaptureAddress,
   type CaptureAddress,
@@ -3243,9 +3244,22 @@ async function dispatchFromCaptureInner(
       // actually did is to hunt for session files by modification time.
       providerSessionId: result.providerSessionId ?? null,
     })
-    pendingBeat = result.outcome === 'completed'
+    // THE AGENT SPEAKS IN ONE LINE. The notch carries progress while a turn
+    // runs; the caption carries the conclusion. Two surfaces, never competing:
+    // one live, one final.
+    const spoken = result.outcome === 'completed'
       ? (result.text?.trim() || 'Done.')
       : (result.error?.message || 'That did not land.')
+    const fitted = fitCaption(spoken)
+    if (fitted.truncated) {
+      // Worth knowing: the model was asked to put detail where the user wanted
+      // it and say where it went, and instead wrote past the cap.
+      log.warn('agent caption clipped', { chars: spoken.length, cap: MAX_CAPTION_LENGTH })
+    }
+    if (fitted.text) {
+      notchClient?.send({ type: 'caption', text: fitted.text, dwellMs: captionDwellMs(fitted.text) })
+    }
+    pendingBeat = spoken
     return result.agentRunId || null
   }
 

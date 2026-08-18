@@ -350,6 +350,8 @@ export type NotchCommand =
   | { type: 'pill'; state: PillStateP }
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
   | { type: 'agentActivity'; activity: UnmuteAgentActivityP }
+  /** The Agent's conclusion. Empty text takes the caption down. */
+  | { type: 'caption'; text: string; dwellMs: number }
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
   | { type: 'surfaceFill'; fill: number }
