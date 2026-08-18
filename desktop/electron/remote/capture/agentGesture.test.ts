@@ -44,12 +44,10 @@ test('a tap followed by a press-and-hold still pairs', () => {
 // SYMMETRIC: two taps to start, two to submit. A single tap while capturing
 // does nothing, which is what stops a habitual double-tap-to-stop from opening
 // a capture nobody asked for.
-test('two taps while capturing submit', () => {
-  assert.deepEqual(play([['down', 0, true], ['up', 60], ['down', 200], ['up', 260]]), ['submit'])
-})
-
-test('a lone tap while capturing does nothing at all', () => {
-  assert.deepEqual(play([['down', 0, true], ['up', 60]]), [])
+// Asymmetric on purpose: starting must not happen by accident, ending must not
+// be hard.
+test('a single tap while capturing submits', () => {
+  assert.deepEqual(play([['down', 0, true], ['up', 60]]), ['submit'])
 })
 
 // THE RULE THAT MAKES THIS KEY USABLE AT ALL. Command is always held WITH
@@ -78,7 +76,7 @@ test('start then submit is the whole round trip', () => {
   assert.deepEqual(
     play([
       ['down', 0], ['up', 50], ['down', 150], ['up', 200],
-      ['down', 3_000, true], ['up', 3_050], ['down', 3_150], ['up', 3_200],
+      ['down', 3_000, true], ['up', 3_050],
     ]),
     ['start', 'submit'],
   )
@@ -86,15 +84,16 @@ test('start then submit is the whole round trip', () => {
 
 // THE HANG. Double-tapping to stop, because that is how you started, must not
 // leave a capture running behind you.
-test('double-tapping to stop does not open a new capture', () => {
+// A stray tap after submitting is only the FIRST of a pair, so it cannot start
+// anything on its own.
+test('a stray tap after submitting starts nothing', () => {
   assert.deepEqual(
     play([
-      ['down', 0], ['up', 50], ['down', 150], ['up', 200],        // start
-      ['down', 3_000, true], ['up', 3_050], ['down', 3_150], ['up', 3_200], // submit
-      ['down', 3_300, false], ['up', 3_350],                       // a stray extra tap
+      ['down', 0], ['up', 50], ['down', 150], ['up', 200],   // start
+      ['down', 3_000, true], ['up', 3_050],                  // submit
+      ['down', 3_300, false], ['up', 3_350],                 // stray
     ]),
     ['start', 'submit'],
-    'the trailing tap must not begin anything',
   )
 })
 

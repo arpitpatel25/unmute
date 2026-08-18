@@ -107,6 +107,14 @@ class KeyboardManager extends EventEmitter {
     this.clearDualTimers()
     this.dualState = 'idle'
     this.remoteActive = false // ADDITIVE: clear Remote capture lock on any reset
+    // AND THE AGENT'S. Omitted when the Agent lane was added, which left
+    // agentActive with exactly ONE path to false — a clean submit tap — while
+    // remoteActive had three. Once mutual exclusion started consulting it, a
+    // capture that ended any other way (Escape, an empty transcript, a spoiled
+    // tap) disabled the Remote key outright, with no exit but completing the
+    // Agent gesture. Observed: twelve minutes of a dead right-Option key.
+    this.agentActive = false
+    this.agentGesture = freshGestureState()
   }
 
   setChainWindow(ms: number): void {

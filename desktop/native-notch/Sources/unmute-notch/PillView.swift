@@ -744,7 +744,13 @@ private struct AgentModelControl: View {
                 }
                 Text((state.agent ?? "Claude Code") + (state.agentConnected ? "" : " · connect"))
                     .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundColor(Theme.text.opacity(state.agentConnected ? 1 : 0.55))
+                    // THE AGENT LANE WEARS ITS OWN COLOUR. There is nothing to
+                    // choose in it, so the label is all there is — and it needs
+                    // to be legible at a glance as a different lane, not a
+                    // differently-worded version of the same one.
+                    .foregroundColor(isAgentLane
+                        ? Theme.cReady
+                        : Theme.text.opacity(state.agentConnected ? 1 : 0.55))
                     .lineLimit(1)
                 if let m = state.model {
                     // NOT Claude's brand orange — this chip also represents
@@ -754,10 +760,16 @@ private struct AgentModelControl: View {
                         .foregroundColor(Theme.textDim)
                         .lineLimit(1)
                 }
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundColor(Theme.textFaint)
-                    .rotationEffect(.degrees(open ? 180 : 0))
+                // NO AFFORDANCE IN THE AGENT LANE. Suppressing the OPTIONS was
+                // not enough: the chip stayed a button, so tapping it opened a
+                // panel headed "No models to choose from". An empty control is
+                // worse than none — it advertises a choice that does not exist.
+                if !isAgentLane {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(Theme.textFaint)
+                        .rotationEffect(.degrees(open ? 180 : 0))
+                }
             }
             // Symmetric, now that there is no seam to compensate for.
             .padding(.horizontal, 15)
@@ -765,8 +777,17 @@ private struct AgentModelControl: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // The Agent has one provider, set once in Settings. Nothing here is a
+        // control, so it does not accept a tap at all.
+        .allowsHitTesting(!isAgentLane)
         .pillGlass(Capsule())
         .animation(Theme.hover, value: open)
+    }
+
+    /// The Agent lane is recognised by having nothing to offer: the engine
+    /// blanks both option lists for it, and only for it.
+    private var isAgentLane: Bool {
+        (state.agentOptions?.isEmpty ?? true) && (state.modelOptions?.isEmpty ?? true)
     }
 }
 
