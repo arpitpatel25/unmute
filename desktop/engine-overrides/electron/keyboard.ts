@@ -5,7 +5,7 @@ import {
   recogniseAgentGesture,
   type GestureEventKind,
   type GestureState,
-} from '../../electron/remote/capture/agentGesture'
+} from './paywall/remote/capture/agentGesture'
 // Remote trigger gate (plan entitlement + the user's session toggle). Static
 // import on purpose — a lazy require of a relative path dies in the bundled
 // main process, and a silently-missing gate would leave Remote ungated.

@@ -344,7 +344,7 @@ function simulateViaOsascript(key: string, modifier: string): Promise<void> {
  */
 /** The last text WE pasted. Read by captureSelectedText so unmute's own output
  *  is never mistaken for something the user copied. */
-import { shouldRestoreAgentDelivery } from '../../electron/remote/capture/agentDelivery'
+import { shouldRestoreAgentDelivery } from './paywall/remote/capture/agentDelivery'
 
 let lastDeliveredText: string | null = null
 export function noteDeliveredText(text: string): void { lastDeliveredText = text }
