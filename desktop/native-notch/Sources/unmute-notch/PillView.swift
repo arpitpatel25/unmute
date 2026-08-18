@@ -484,6 +484,13 @@ struct PillView: View {
                     .modifier(Breathing())
                 Text(processingLabel)
                     .font(.system(size: 15, weight: .medium)).foregroundColor(Theme.text)
+                    // ONE LINE, AND THE CAPSULE GROWS TO FIT IT. Without these
+                    // the label wraps inside a capsule narrower than the word,
+                    // and "Processing" renders as "Processi / ng" — broken
+                    // mid-word across two lines. The pill is a strip: text
+                    // never wraps in it, the strip widens instead.
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 BouncingDots()
                 if s.draftOffer {
                     CapsuleButton(label: "Use quick draft") { model.emit(.acceptDraft) }
