@@ -80,6 +80,7 @@ import { ClaudeCodeProvider } from './agent/providers/claude'
 import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-headless'
 import { agentConstitution } from './agent/constitution'
 import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
+import { noteAgentDelivery } from './capture/agentDelivery'
 import {
   nextCaptureAddress,
   type CaptureAddress,
@@ -626,6 +627,28 @@ function bufferedAttachmentDelivery(
   }
 }
 
+/**
+ * Materialise a stored attachment and hand it to whichever application owns it.
+ *
+ * Records are encrypted at rest and DeliveryAttachment is a stream with no
+ * path — deliberately, so a path never crosses the capability boundary. Opening
+ * therefore means writing a decrypted copy into the same 0700 delivery root the
+ * clipboard path already uses, and asking the system to open THAT. The Agent
+ * still never sees or composes a path.
+ */
+async function openAgentAttachment(
+  root: string,
+  metadata: DeliveryAttachmentMetadata,
+  data: Uint8Array,
+): Promise<void> {
+  const deliveryRoot = join(root, 'delivery')
+  const target = join(deliveryRoot, `${randomUUID()}-${basename(metadata.name)}`)
+  await fs.mkdir(deliveryRoot, { recursive: true, mode: 0o700 })
+  await fs.writeFile(target, data, { mode: 0o600, flag: 'wx' })
+  const failure = await shell.openPath(target)
+  if (failure) throw new DeliveryCapabilityError('delivery-failed')
+}
+
 async function copyAgentAttachment(
   root: string,
   metadata: DeliveryAttachmentMetadata,
@@ -882,6 +905,11 @@ async function initializeUnmuteAgent(): Promise<void> {
             try { beginOwnClipboardSequence(); ownsClipboard = true } catch { /* watcher may not be armed */ }
             clipboard.writeText(text)
             if (clipboard.readText() !== text) throw new DeliveryCapabilityError('delivery-failed')
+            // Claim it. Dictation delivers through this same pasteboard, so
+            // without this the user's next sentence erases the answer they
+            // just asked for — and reporting that requires speaking, which
+            // erases it again.
+            noteAgentDelivery(text, Date.now())
           } catch (error) {
             if (error instanceof DeliveryCapabilityError) throw error
             throw new DeliveryCapabilityError('delivery-failed')
@@ -900,6 +928,15 @@ async function initializeUnmuteAgent(): Promise<void> {
             throw new DeliveryCapabilityError('delivery-failed')
           }
           notchController?.refresh()
+        },
+        // Opening is not copying. The Agent holds no path — it hands back an
+        // opaque handle the app resolves here, so a composed path can never
+        // reach the shell.
+        async openAttachmentFile(metadata) {
+          return bufferedAttachmentDelivery(
+            metadata,
+            (data) => openAgentAttachment(root, metadata, data),
+          )
         },
         async stageAttachmentCopy(metadata) {
           return bufferedAttachmentDelivery(

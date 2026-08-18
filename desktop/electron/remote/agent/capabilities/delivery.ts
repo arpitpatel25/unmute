@@ -14,12 +14,35 @@ const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const tools = [
   {
     name: 'delivery_copy_text',
-    description: 'Copy text to the clipboard, or prepare it in an explicit existing task draft; this never submits the draft',
+    description: 'Put text the user asked for on their clipboard, or prepare it in an explicit'
+      + ' existing task draft; this never submits the draft. Say in your reply that you copied it.',
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['text'],
       properties: {
-        text: { type: 'string', minLength: 1 },
-        taskId: { type: 'string', pattern: IDENTIFIER_PATTERN.source },
+        text: {
+          type: 'string', minLength: 1,
+          description: 'Exactly what the user should end up with. Not a description of it.',
+        },
+        taskId: {
+          type: 'string', pattern: IDENTIFIER_PATTERN.source,
+          description: 'Prepare it in this existing task draft instead of the clipboard.',
+        },
+      },
+    },
+    consequence: 'reversible-write',
+  },
+  {
+    name: 'delivery_open_attachment_file',
+    description: 'Open a stored attachment in whichever application owns it, when the user asked'
+      + ' to OPEN something rather than to be given its text. There is no clipboard step —'
+      + ' opening a file and copying its contents are different requests.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['handle'],
+      properties: {
+        handle: {
+          type: 'string', minLength: 1,
+          description: 'An opaque delivery handle from memory_open_attachment. Never a path you composed.',
+        },
       },
     },
     consequence: 'reversible-write',
@@ -52,6 +75,8 @@ export interface DeliveryCapabilityAdapters {
   copyText(text: string): Promise<void>
   prepareTaskDraftText?(taskId: string, text: string): Promise<void>
   stageAttachmentCopy(metadata: DeliveryAttachmentMetadata): Promise<AttachmentDeliveryTransaction>
+  /** Open a stored attachment in whichever application owns it. */
+  openAttachmentFile(metadata: DeliveryAttachmentMetadata): Promise<AttachmentDeliveryTransaction>
   stageTaskDraftAttachment(
     taskId: string,
     metadata: DeliveryAttachmentMetadata,
@@ -168,6 +193,20 @@ export class DeliveryCapability implements CapabilityModule {
         )
         await deliverAttachment(attachment, (metadata) => this.adapters.stageAttachmentCopy(metadata))
         return result('Attachment copied')
+      }
+
+      // OPENING AND COPYING ARE DIFFERENT REQUESTS. "Give me my resume" wants
+      // text on the clipboard; "open my resume" wants the document in front of
+      // the user. Routing the second through the clipboard leaves them holding
+      // a file path and wondering what to do with it.
+      case 'delivery_open_attachment_file': {
+        const candidate = requireObject(input, ['handle'])
+        const attachment = await this.adapters.resolveAttachment(
+          ctx.principal,
+          requireString(candidate.handle, 'handle'),
+        )
+        await deliverAttachment(attachment, (metadata) => this.adapters.openAttachmentFile(metadata))
+        return result('Attachment opened')
       }
       case 'delivery_attach_to_task_draft': {
         const candidate = requireObject(input, ['handle', 'taskId'])

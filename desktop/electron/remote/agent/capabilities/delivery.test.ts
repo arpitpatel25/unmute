@@ -31,7 +31,7 @@ function transaction(options: {
   }
 }
 
-test('exposes exactly copy text, copy attachment, and attach to task draft to Agent principals', () => {
+test('exposes exactly copy text, open attachment file, copy attachment, and attach to task draft to Agent principals', () => {
   const capability = new DeliveryCapability({
     async resolveAttachment() { return attachment() },
     async copyText() {},
@@ -42,6 +42,10 @@ test('exposes exactly copy text, copy attachment, and attach to task draft to Ag
 
   assert.deepEqual(registry.tools(agent).map(({ name }) => name), [
     'delivery_copy_text',
+    // Opening and copying are different requests: "give me my resume" wants
+    // text on the clipboard, "open my resume" wants the document in front of
+    // the user.
+    'delivery_open_attachment_file',
     'delivery_copy_attachment',
     'delivery_attach_to_task_draft',
   ])

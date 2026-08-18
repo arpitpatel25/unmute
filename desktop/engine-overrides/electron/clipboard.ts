@@ -344,6 +344,8 @@ function simulateViaOsascript(key: string, modifier: string): Promise<void> {
  */
 /** The last text WE pasted. Read by captureSelectedText so unmute's own output
  *  is never mistaken for something the user copied. */
+import { shouldRestoreAgentDelivery } from '../../electron/remote/capture/agentDelivery'
+
 let lastDeliveredText: string | null = null
 export function noteDeliveredText(text: string): void { lastDeliveredText = text }
 
@@ -697,6 +699,23 @@ export async function injectOutput(text: string, images?: readonly string[]): Pr
       await deliverImagesAfterText(images, padded)
     } catch (err) {
       console.warn('[clipboard] captured-image delivery skipped:', err instanceof Error ? err.message : err)
+    }
+  }
+
+  // GIVE THE AGENT'S ANSWER BACK. Its only text channel is this same
+  // pasteboard, so without this a dictation destroys whatever the user just
+  // asked the Agent for — and reporting that requires speaking, which destroys
+  // it again. The dictation has already been pasted at the cursor by this
+  // point, so restoring costs the user nothing.
+  const restore = shouldRestoreAgentDelivery(Date.now())
+  if (restore.restore) {
+    try {
+      clipboard.writeText(restore.text)
+      noteOurWrite()
+      noteDeliveredText(restore.text)
+      console.log('[clipboard] restored the Agent delivery a dictation would have erased')
+    } catch (err) {
+      console.warn('[clipboard] could not restore the Agent delivery:', err instanceof Error ? err.message : err)
     }
   }
 }
