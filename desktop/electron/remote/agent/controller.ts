@@ -16,11 +16,6 @@ import type {
 } from './supervisor'
 import type { AgentRunTokenStore } from './supervisor'
 import type { CapabilityCallContext, ExplicitInteraction, McpPrincipal } from './types'
-import {
-  classifyFastPathTranscript,
-  type FastPathAnswer,
-  type FastPathRouter,
-} from './fast-path'
 
 const DEFAULT_INTERACTION_TTL_MS = 30 * 60 * 1_000
 const MAX_TRANSCRIPT_CODE_POINTS = 64 * 1_024
@@ -31,7 +26,10 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 export type AgentPresentation = 'transient' | 'task'
 export type AgentInteractionOutcome = 'completed' | 'failed' | 'interrupted'
-export type AgentInteractionSource = 'fast-path' | 'provider'
+/** Only one source now. The deterministic retrieval grammar is gone: it
+ *  never fired once in the field, and it was a regex deciding what the user
+ *  meant — the thing this Agent deliberately does not do. */
+export type AgentInteractionSource = 'provider'
 
 export interface AgentCurrentContext {
   app?: string
@@ -114,7 +112,6 @@ export interface UnmuteAgentControllerOptions {
     AgentRunSupervisor,
     'start' | 'resume' | 'recentExchanges'
   >
-  fastPath: Pick<FastPathRouter, 'attempt'>
   tokens: Pick<AgentRunTokenStore, 'closeRun'>
   attachmentHandles: Pick<InteractionAttachmentHandles, 'mintCapture' | 'revokeInteraction'>
   journal: Pick<AgentJournalStore, 'appendExchange'>
@@ -208,45 +205,6 @@ export class UnmuteAgentController {
         interaction,
       }
 
-      if (eligibleForFastPath(validated)) {
-        await this.emit({
-          interactionId,
-          agentRunId: runId,
-          kind: 'searching-memory',
-          summary: 'Searching saved memory',
-        })
-        let answer: FastPathAnswer | null = null
-        try {
-          answer = await this.options.fastPath.attempt({
-            transcript: validated.transcript,
-            context: callContext,
-          })
-        } catch {
-          // Deterministic retrieval is optional. A storage/search failure is
-          // handed to the Agent, which can report the typed MCP failure.
-        }
-        if (answer) {
-          source = 'fast-path'
-          finalOutcome = 'completed'
-          await this.appendExchange({
-            runId,
-            interactionId,
-            at: this.now(),
-            outcome: 'completed',
-            summary: 'Exact normal-sensitivity memory lookup completed.',
-          })
-          journaled = true
-          return {
-            interactionId,
-            agentRunId: runId,
-            source,
-            outcome: 'completed',
-            presentation: 'transient',
-            text: answer.text,
-            memory: { id: answer.memoryId, title: answer.title },
-          }
-        }
-      }
 
       provider = this.options.selectedProvider()
       if (provider !== 'claude' && provider !== 'codex') {
@@ -430,12 +388,6 @@ export class UnmuteAgentController {
 
 export { UnmuteAgentController as AgentController }
 
-function eligibleForFastPath(input: RequiredInput): boolean {
-  return input.attachments.length === 0
-    && input.selectedText === undefined
-    && input.priorRunId === undefined
-    && classifyFastPathTranscript(input.transcript) !== null
-}
 
 interface RequiredInput extends AgentInteractionInput {
   transcript: string

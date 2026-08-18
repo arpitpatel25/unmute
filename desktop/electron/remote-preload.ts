@@ -76,7 +76,7 @@ export interface UnmuteAgentInteractionResult {
   interactionId: string
   agentRunId: string
   provider?: UnmuteAgentProvider
-  source: 'fast-path' | 'provider'
+  source: 'provider'
   outcome: 'completed' | 'failed' | 'interrupted'
   presentation: 'transient' | 'task'
   text?: string

@@ -81,7 +81,6 @@ import { agentRuntimeMode } from './agent/providers/claude-headless'
 import { agentConstitution } from './agent/constitution'
 import { CodexCliProvider } from './agent/providers/codex'
 import { probeCli, type AgentProviderId, type ProviderProbe } from './agent/provider'
-import { FastPathRouter } from './agent/fast-path'
 import { SafeStorageKeyProvider } from './agent/memory/key-provider'
 import { MemoryCrypto } from './agent/memory/crypto'
 import { EncryptedRecordStore, presentMemoryRecord } from './agent/memory/record-store'
@@ -926,7 +925,6 @@ async function initializeUnmuteAgent(): Promise<void> {
     pendingSupervisor = supervisor
     const controller = new UnmuteAgentController({
       supervisor,
-      fastPath: new FastPathRouter(memory),
       tokens,
       attachmentHandles: handles,
       journal,

@@ -40,7 +40,6 @@ const UPDATE_PATCH_KEYS = new Set([
   'kind', 'title', 'content', 'tags', 'scope', 'sensitivity', 'references', 'provenance',
 ])
 
-type MutationIntent = 'store' | 'update' | 'forget' | 'restore'
 
 export type DeliveryHandle = OpenAttachmentHandle
 
