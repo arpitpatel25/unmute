@@ -137,7 +137,13 @@ struct WallView: View {
                     model.emit(.showAll(group: nil, on: false))
                 }
             } else if let n = data.hiddenTotal, n > 0 {
-                QuietButton(label: "Show all · \(n) older", color: Theme.cReady) {
+                // NO HUE ON A DISCLOSURE. cReady (teal) is the ON colour, and
+                // spending it here put a coloured link beside every group
+                // heading while nothing was actually on — so the one control
+                // that IS stateful, the Today chip, no longer stood out from
+                // the ones that merely reveal rows. QuietButton's default is
+                // Theme.textDim; letting it apply is the whole fix.
+                QuietButton(label: "Show all · \(n) older") {
                     model.emit(.showAll(group: nil, on: true))
                 }
             }
@@ -185,7 +191,7 @@ struct WallView: View {
                 if g.expanded == true {
                     QuietButton(label: "Show less") { model.emit(.showAll(group: g.name, on: false)) }
                 } else if let n = g.hidden, n > 0 {
-                    QuietButton(label: "Show all · \(n)", color: Theme.cReady) {
+                    QuietButton(label: "Show all · \(n)") {
                         model.emit(.showAll(group: g.name, on: true))
                     }
                 }

@@ -60,11 +60,35 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
+/** Last known setup status, so the required section is never absent. */
+const SETUP_CACHE_KEY = 'unmute.setupStatus.v1'
+
 export function RemoteSetup({ onBack }: { onBack: () => void }) {
-  const [status, setStatus] = useState<SetupStatus | null>(null)
+  // SEEDED FROM THE LAST ANSWER, NOT FROM NOTHING.
+  //
+  // remoteGetSetupStatus probes for real — it looks for the CLIs, and talks to
+  // the Codex app over CDP — and that took ~30s on a cold start. The card below
+  // is gated on `backends.length > 0`, so for that whole time the page rendered
+  // its heading and then jumped straight to the Chrome extension: the ONE
+  // section this page calls required was the one section missing.
+  //
+  // The previous result is almost always still true (agents do not uninstall
+  // themselves), so it is shown immediately and corrected in place when the
+  // probe returns. First run on a machine has nothing cached and falls through
+  // to the checking state below.
+  const [status, setStatus] = useState<SetupStatus | null>(() => {
+    try {
+      const cached = localStorage.getItem(SETUP_CACHE_KEY)
+      return cached ? JSON.parse(cached) as SetupStatus : null
+    } catch { return null }
+  })
   const [busy, setBusy] = useState(false)
 
-  const refresh = () => api().remoteGetSetupStatus?.().then((v) => v && setStatus(v))
+  const refresh = () => api().remoteGetSetupStatus?.().then((v) => {
+    if (!v) return
+    setStatus(v)
+    try { localStorage.setItem(SETUP_CACHE_KEY, JSON.stringify(v)) } catch { /* private mode */ }
+  })
   useEffect(() => { void refresh() }, [])
 
   // AGENTS FIRST. Everything below is an enhancement; without a backend there is
@@ -102,7 +126,10 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
           First, because nothing else matters without one. Each row is
           auto-detected, and offers whatever fix is actually possible: a command
           when something must be installed, a button when Unmute can do it. */}
-      {backends.length > 0 && (
+      {/* ALWAYS RENDERED. A section the page calls required must not vanish
+          while it is being checked — its absence reads as "you have no agents",
+          which is the opposite of what an unfinished probe means. */}
+      {(backends.length > 0 || status === null) && (
         <div className="rounded-lg border border-black/10 p-4 mb-4">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-[13px] font-semibold text-ink">Agents</span>
@@ -114,6 +141,9 @@ export function RemoteSetup({ onBack }: { onBack: () => void }) {
             Where your tasks actually run. You need at least one; nothing else on this
             page matters without it.
           </div>
+          {backends.length === 0 && (
+            <div className="py-2 text-[12.5px] text-ink/40">Checking your agents…</div>
+          )}
           {backends.map((step) => (
             <div key={step.key} className="py-2 border-t border-black/5 first:border-t-0">
               <div className="flex items-start gap-2">
