@@ -109,6 +109,26 @@ static void handle_flags_changed(NSEvent* event) {
     bool hasRight = (event.modifierFlags & kRightCommand) != 0;
     if (!hadRight && hasRight) { g_rightCommandDown = true;  emit_event("right-command-down"); }
     if (hadRight && !hasRight) { g_rightCommandDown = false; emit_event("right-command-up"); }
+
+    // A MODIFIER JOINING IS A CHORD TOO.
+    //
+    // handle_key_down below spoils the gesture when a KEY is pressed while
+    // right Command is held, which covers ⌘C. It cannot cover ⌘⇧4 or ⌘⌃⇧4:
+    // Shift, Control and Option arrive here through flagsChanged and never
+    // reach keyDown, so holding right Command and adding ⇧ produced no spoil
+    // signal at all — and the release then read as a clean single tap, which
+    // SUBMITTED the Agent capture the user was still speaking into. Taking a
+    // screenshot mid-utterance sent it.
+    //
+    // Emitting on every qualifying flags change is fine: the receiver treats
+    // the signal as a latch, so repeats are idempotent.
+    if (hasRight) {
+      const NSEventModifierFlags kOtherChord =
+        NSEventModifierFlagShift | NSEventModifierFlagControl | NSEventModifierFlagOption;
+      bool hadOther = (g_previousRawFlags & kOtherChord) != 0;
+      bool hasOther = (event.modifierFlags & kOtherChord) != 0;
+      if (!hadOther && hasOther) emit_event("right-command-chord");
+    }
   }
 
   g_previousFlags = mods;

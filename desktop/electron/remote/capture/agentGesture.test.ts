@@ -48,3 +48,32 @@ test('it reports taps and holds no opinion about recording', () => {
   const signature = recogniseTap.length
   assert.equal(signature, 2, 'state and event only — no capturing flag')
 })
+
+// TAKING A SCREENSHOT MID-UTTERANCE MUST NOT SUBMIT IT.
+//
+// ⌘⌃⇧4 begins as right Command plus two modifiers. Those arrive through
+// flagsChanged and never reach keyDown, so for a while nothing spoiled the
+// gesture and the release read as a clean tap — which submitted the Agent
+// capture the user was still speaking into. The native listener now emits a
+// chord when a modifier JOINS a held right Command; this is the receiving end.
+test('a modifier joining right Command spoils the tap, so a screenshot cannot submit', () => {
+  let state = freshGestureState()
+  state = recogniseTap(state, { kind: 'down', at: 0 }).state        // right Command
+  state = recogniseTap(state, { kind: 'other', at: 10 }).state      // Shift joins
+  state = recogniseTap(state, { kind: 'other', at: 20 }).state      // Control joins
+  const released = recogniseTap(state, { kind: 'up', at: 400 })
+
+  assert.equal(released.tap, false, 'a chord is a shortcut, never a tap')
+})
+
+test('the spoil does not outlive its own gesture', () => {
+  let state = freshGestureState()
+  state = recogniseTap(state, { kind: 'down', at: 0 }).state
+  state = recogniseTap(state, { kind: 'other', at: 10 }).state
+  state = recogniseTap(state, { kind: 'up', at: 100 }).state
+
+  // The very next press is a clean one and must be honoured, or a single
+  // screenshot would disable the Agent until relaunch.
+  state = recogniseTap(state, { kind: 'down', at: 500 }).state
+  assert.equal(recogniseTap(state, { kind: 'up', at: 560 }).tap, true)
+})
