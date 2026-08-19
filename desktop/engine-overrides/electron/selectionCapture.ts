@@ -45,53 +45,12 @@ function hasContent(s: string | null | undefined): s is string {
   return !!s && s.trim() !== ''
 }
 
-/** Whether the pasteboard is still holding what we last pasted. Compared on
- *  trimmed text because delivery pads its output (padOutput) — an exact match
- *  would miss the very case this exists to catch. */
-function isOwnDelivery(clip: string, lastDelivered: string | null | undefined): boolean {
-  if (!hasContent(lastDelivered)) return false
-  return clip.trim() === lastDelivered.trim()
-}
-
-/** Whether an absent selection should fall back to the user's pasteboard.
- *
- *  The question is what the text is FOR, and the mode alone cannot answer it:
- *  a Remote capture reuses the dictation pipeline wholesale and is started as
- *  `startSession('dictation', 'remote')`, so it arrives here calling itself
- *  dictation. That is why this takes the kind too — deriving the answer from
- *  `mode === 'instruction'` alone is what left Remote dispatches unable to see
- *  anything the user had copied.
- *
- *  ON when we are gathering context to hand to something that will read it —
- *  an instruction, or an agent on the other end of a Remote dispatch. The user
- *  copied a paragraph and then spoke about it; the pasteboard is the only place
- *  that paragraph still exists.
- *
- *  OFF for plain dictation, which pastes at a cursor. There, an absent
- *  selection means the user wants their words and nothing else, and quietly
- *  prepending whatever sat on the pasteboard would corrupt every utterance. */
-export function shouldUseClipboardFallback(
-  mode: 'dictation' | 'instruction',
-  kind: 'dictation' | 'remote',
-): boolean {
-  return mode === 'instruction' || kind === 'remote'
-}
-
 /** Copy the frontmost selection, restoring the user's pasteboard either way.
  *
- *  `useClipboardFallback` decides what happens when there is no selection: the
- *  caller is gathering context to send somewhere (an instruction, a Remote
- *  dispatch) and the pasteboard is a reasonable second guess, or it is plain
- *  dictation about to paste at a cursor, where silently prepending the
- *  pasteboard to every utterance is the corruption this whole design exists to
- *  prevent. It is never inferred here. */
+ *  A selection is read; the pasteboard is never used as a stand-in for one.
+ *  See the note at the return below. */
 export async function captureSelection(
   deps: SelectionCaptureDeps,
-  { useClipboardFallback, lastDelivered }: {
-    useClipboardFallback: boolean
-    /** What WE last pasted, so our own residue is never mistaken for intent. */
-    lastDelivered?: string | null
-  },
 ): Promise<SelectionCaptureResult> {
   const saved = deps.readClipboardText()
 
@@ -117,15 +76,26 @@ export async function captureSelection(
   deps.writeTextAndRecord(saved)
 
   if (hasContent(selected)) return { text: selected, source: 'selection' }
-  // OUR OWN RESIDUE IS NOT THE USER'S INTENT.
+  // NOTHING FROM BEFORE THE TRIGGER. A capture is the window between the key
+  // going down and the utterance being submitted, and only what happens inside
+  // it is intent.
   //
-  // Delivery writes the transcript to the pasteboard and pastes it, so after
-  // every dictation the clipboard holds unmute's own last output. Standing that
-  // in for an absent selection attached the previous utterance to whatever was
-  // said next — in the field, 12 times in one afternoon. A non-empty pasteboard
-  // is only evidence of intent when someone other than us filled it.
-  if (useClipboardFallback && hasContent(saved) && !isOwnDelivery(saved, lastDelivered)) {
-    return { text: saved, source: 'clipboard' }
-  }
+  // The pasteboard used to stand in for an absent selection, guarded by "is
+  // this our own residue?". The guard could not hold: it compared strings, and
+  // delivery pads, polishes and chunks its output, so any of those made our own
+  // last dictation look like the user's material. On 19 August a dictation to
+  // one lane was silently prepended to the next Agent request, which acted on
+  // it and dispatched a task the user never asked for.
+  //
+  // Ours-versus-theirs was the wrong question anyway. Text copied an hour ago
+  // and already used is exactly as irrelevant as our own leftovers, and no
+  // amount of ownership detection rejects it. Recency cannot separate them
+  // either — our residue is seconds old too.
+  //
+  // So the pasteboard is no longer consulted at all. A copy made DURING the
+  // capture is seen by clipboardWatch and placed where it happened; a copy made
+  // before it belongs to whatever the user was doing then. The cost is having
+  // to trigger first and copy second, which is visible and recoverable — where
+  // the silent prepend was neither.
   return { text: null, source: 'none' }
 }

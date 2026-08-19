@@ -3,7 +3,6 @@ import { pipelineTranscribe, pipelineDualTranscribe, pipelineProcess, pipelineTr
 import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
 import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste, injectImagesIntoTask, injectImagesIntoDesktopTask } from './clipboard'
-import { shouldUseClipboardFallback } from './selectionCapture'
 import { pauseForCapture, resumeAfterCapture } from './mediaController'
 import { saveAudioFile, saveAudioChunk } from './audio'
 import { initTelemetry, logTelemetry, DEV_BUILD, installMainConsoleTee, attachRendererConsoleTee } from './dictationTelemetry'
@@ -2607,16 +2606,12 @@ class SessionManager {
     try {
       // NOT `mode === 'instruction'`. A Remote capture is started as
       // startSession('dictation', 'remote') so it can reuse this whole
-      // pipeline, which means it arrives here calling itself dictation — and
-      // for months that silently denied it the pasteboard stand-in, so anything
-      // the user had COPIED before speaking to an agent was read, cleared,
-      // restored and thrown away. The kind is what separates "paste at a
-      // cursor" from "hand this to something that will read it".
-      const useClipboardFallback = shouldUseClipboardFallback(
-        mode,
-        this.currentSession?.kind ?? 'dictation',
-      )
-      const selectedText = await captureSelectedText(useClipboardFallback)
+      // A SELECTION ONLY. What is highlighted right now is deliberate and
+      // current; what is sitting on the pasteboard is a leftover from whatever
+      // the user was doing before, and no lane gets to guess that it was meant
+      // for this utterance. A copy made DURING the capture is a different
+      // thing entirely — clipboardWatch sees it and it lands where it happened.
+      const selectedText = await captureSelectedText()
       if (selectedText && this.currentSession) {
         this.currentSession.selectedText = selectedText
         this.currentSession.selectedTextRole = mode === 'dictation' ? 'quote' : 'context'

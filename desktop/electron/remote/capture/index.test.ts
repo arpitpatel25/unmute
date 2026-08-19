@@ -524,7 +524,7 @@ describe('one clock per pad — order composes ACROSS captures', () => {
     twoCaptures()
     assert.equal(
       render(snapshot().pad!, 'task').text,
-      'first utterance https://LATE-in-capture-1 second utterance https://EARLY-in-capture-2',
+      'first utterance\n\n"https://LATE-in-capture-1"\n\nsecond utterance\n\n"https://EARLY-in-capture-2"',
     )
   })
 
@@ -596,7 +596,7 @@ describe('deliver and discard', () => {
     endSegment(2000)
 
     const out = deliver('task')
-    assert.equal(out?.text, 'look at this https://a.com')
+    assert.equal(out?.text, 'look at this\n\n"https://a.com"')
     assert.equal(snapshot().pad, null)
     assert.equal(isArmed(), false, 'delivering ends the hold')
   })
@@ -1620,7 +1620,7 @@ describe('an unarmed stop delivers what was captured, not the speech alone', () 
 
     assert.equal(
       delivered(id, 'go through the thread from this morning'),
-      'go through the thread from this morning https://slack.com/archives/C04',
+      'go through the thread from this morning\n\n"https://slack.com/archives/C04"',
     )
   })
 
@@ -1629,7 +1629,7 @@ describe('an unarmed stop delivers what was captured, not the speech alone', () 
     recordInsert({ kind: 'block', content: 'a ``` b', atMs: 2000 }, 2000)
     endSegment(3000)
 
-    assert.equal(delivered(id, 'look at this'), 'look at this\n\n````\na ``` b\n````')
+    assert.equal(delivered(id, 'look at this'), 'look at this\n\n"a ``` b"')
   })
 
   test('an image is skipped at the cursor and referenced for a task', () => {
@@ -1713,7 +1713,7 @@ describe('an unarmed stop delivers what was captured, not the speech alone', () 
     recordInsert({ kind: 'url', content: 'https://example.com', atMs: 2000 }, 2000)
     endSegment(3000)
 
-    assert.equal(delivered('a-segment-that-is-gone', 'the words'), 'the words https://example.com')
+    assert.equal(delivered('a-segment-that-is-gone', 'the words'), 'the words\n\n"https://example.com"')
   })
 })
 
@@ -1845,7 +1845,7 @@ describe('an armed tap that said nothing holds nothing', () => {
     endSegment(2000)
 
     assert.ok(heldForSurface(snapshot(), 2500), 'the user captured it deliberately')
-    assert.equal(deliver('cursor')?.text, 'https://example.com')
+    assert.equal(deliver('cursor')?.text, '"https://example.com"')
   })
 })
 
@@ -2093,8 +2093,8 @@ describe('a copy lands WHERE IT HAPPENED, not at the end of the paste', () => {
     assert.equal(
       delivered(id, SPOKEN),
       'So I want you to go through the open source cross project, '
-      + "right? It's about agent or this tracker. "
-      + `${LINK} `
+      + "right? It's about agent or this tracker."
+      + `\n\n"${LINK}"\n\n`
       + 'It allows you to do all case straight multiple agents.',
     )
   })
@@ -2107,10 +2107,10 @@ describe('a copy lands WHERE IT HAPPENED, not at the end of the paste', () => {
 
     assert.equal(
       delivered(id, SPOKEN),
-      'So I want you to go through the open source cross project, right? '
-      + 'https://a.example '
-      + "It's about agent or this tracker. "
-      + 'https://b.example '
+      'So I want you to go through the open source cross project, right?'
+      + '\n\n"https://a.example"\n\n'
+      + "It's about agent or this tracker."
+      + '\n\n"https://b.example"\n\n'
       + 'It allows you to do all case straight multiple agents.',
     )
   })
@@ -2123,7 +2123,7 @@ describe('a copy lands WHERE IT HAPPENED, not at the end of the paste', () => {
 
     assert.equal(
       delivered(id, 'go through the thread from this morning and compare them'),
-      `go through the thread from this morning and compare them ${LINK}`,
+      `go through the thread from this morning and compare them\n\n"${LINK}"`,
     )
   })
 
@@ -2135,7 +2135,7 @@ describe('a copy lands WHERE IT HAPPENED, not at the end of the paste', () => {
     attachTranscript(id, SPOKEN, 16_500)
 
     const out = takeForDelivery('cursor')!
-    assert.match(out.text, /this tracker\. https:\/\/github\.com\/Untrivial-ai\/agent-orchestrator It allows/)
+    assert.match(out.text, /this tracker\.\n\n"https:\/\/github\.com\/Untrivial-ai\/agent-orchestrator"\n\nIt allows/)
   })
 
   test('a held pad splits ONLY its own stretch — an earlier capture is untouched', () => {
@@ -2152,7 +2152,7 @@ describe('a copy lands WHERE IT HAPPENED, not at the end of the paste', () => {
     const out = takeForDelivery('cursor')!
     assert.equal(
       out.text,
-      `One. Two. Three. Four. ${LINK} Five. Six.`,
+      `One. Two. Three. Four.\n\n"${LINK}"\n\nFive. Six.`,
       'the earlier capture reads exactly as it did, and the link sits INSIDE the second',
     )
   })
@@ -2191,7 +2191,7 @@ describe('ONE COPY IS ONE INSERT — a browser writing three flavours is still o
 
     assert.equal(
       composeWithInserts(id, 'take a look at this', 'cursor'),
-      `take a look at this ${LINK}`,
+      `take a look at this\n\n"${LINK}"`,
       'once, not three times',
     )
   })
@@ -2288,7 +2288,8 @@ describe('a screenshot taken during a dictation actually reaches the cursor', ()
 
     const captured = { attachments: [] as string[] }
     const text = composeWithInserts(id, 'look. and fix.', 'cursor', captured)
-    assert.equal(text, 'look. https://a.example and fix.', 'the URL is text, so it composes inline')
+    assert.equal(text, 'look.\n\n"https://a.example"\n\nand fix.',
+      'the URL is marked, never merged into the sentence')
     assert.deepEqual(captured.attachments, [SHOT], 'the image rides separately, after the text')
   })
 

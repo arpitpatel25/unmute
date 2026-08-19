@@ -348,7 +348,7 @@ function simulateViaOsascript(key: string, modifier: string): Promise<void> {
 let lastDeliveredText: string | null = null
 export function noteDeliveredText(text: string): void { lastDeliveredText = text }
 
-export async function captureSelectedText(useClipboardFallback: boolean = false): Promise<string | null> {
+export async function captureSelectedText(): Promise<string | null> {
   try {
     const before = clipboard.readText()
     console.log('[clipboard] Current clipboard length:', before.length)
@@ -369,15 +369,12 @@ export async function captureSelectedText(useClipboardFallback: boolean = false)
         noteOurWrite() // the copy the child just performed into our cleared slot
       },
       settle: sleep,
-    }, { useClipboardFallback, lastDelivered: lastDeliveredText })
+    })
 
     if (source === 'selection') {
       console.log('[clipboard] Captured selection, length:', text!.length, 'text:', JSON.stringify(text!.substring(0, 80)))
-    } else if (source === 'clipboard') {
-      console.log('[clipboard] No selection — using clipboard contents as context, length:', text!.length)
-      console.log('[clipboard] Clipboard preview:', JSON.stringify(text!.substring(0, 100)))
     } else {
-      console.log('[clipboard] No text was selected, and no clipboard stand-in was requested or available')
+      console.log('[clipboard] No text was selected — the pasteboard is not consulted')
     }
 
     return text

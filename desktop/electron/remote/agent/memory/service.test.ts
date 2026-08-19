@@ -442,15 +442,26 @@ test('a group cannot contain itself, and a non-group cannot contain anything', a
   const group = await service.store(ctx(), input({ kind: 'group', title: 'Group' }))
   const note = await service.store(ctx(), input({ title: 'Note' }))
 
-  await assert.rejects(() => service.link(ctx(), { id: group.id, group: group.id }))
-  await assert.rejects(() => service.link(ctx(), { id: group.id, group: note.id }))
+  // Matched on the message, not just "something threw": a bare rejects also
+  // passes on a TypeError from a mistake in this test.
+  await assert.rejects(
+    () => service.link(ctx(), { id: group.id, group: group.id }),
+    /cannot contain itself/,
+  )
+  await assert.rejects(
+    () => service.link(ctx(), { id: group.id, group: note.id }),
+    /not a group/,
+  )
 })
 
 test('a link to a record that does not exist is refused before the group claims it', async () => {
   const { service, records } = fixture()
   const group = await service.store(ctx(), input({ kind: 'group', title: 'Group' }))
 
-  await assert.rejects(() => service.link(ctx(), { id: 'memory-missing', group: group.id }))
+  await assert.rejects(
+    () => service.link(ctx(), { id: 'memory-missing', group: group.id }),
+    (error: unknown) => (error as { code?: string }).code === 'not-found',
+  )
 
   assert.deepEqual((await records.read(group.id)).links, [], 'no dangling id may be left behind')
 })
