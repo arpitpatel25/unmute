@@ -125,6 +125,7 @@ import { Presence } from './presence'
 import { listImportableSessions, findSessionCwd } from './claude-cli-sessions'
 import { listImportableCodexSessions, findCodexSessionCwd } from './codex/cli-session'
 import { applyAxRegistration } from './ax/register'
+import { pruneUnmuteFromCodex } from './ax/codex-prune'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
@@ -4111,6 +4112,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     router: cuaLaneRouter,
   }).then((s) => { cuaServer = s }).catch((e) => log.warn('cua server not started', { error: (e as Error).message }))
   void applyAxRegistration(normalizePolicy(settings.get('computerUse')).enabled)
+  // AND TAKE IT BACK OUT OF CODEX. applyAxRegistration above registers with
+  // Claude Code, which is the only agent it was ever meant for. The ChatGPT
+  // desktop app's "import your Claude setup" then copies the whole thing —
+  // every MCP server plus CLAUDE.md into ~/.codex/AGENTS.md — so Codex ends up
+  // holding a computer-use server registered for a different agent, and a steer
+  // preferring it over its own.
+  //
+  // Unconditional, and not gated on the toggle: the toggle is about Claude Code
+  // and has never said anything about Codex. Removal only, never registration —
+  // Unmute must not become a second writer of another agent's config.
+  void pruneUnmuteFromCodex()
 
   // ── Notch shell (native Swift helper) ──
   // The single task/attention surface (spec 2026-07-24). Spawned by THIS signed
