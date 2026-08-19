@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { ComputerUseSettings } from './ComputerUseSettings'
+import { AgentSettings } from './AgentSettings'
 import { ProviderGlyph } from './ProviderMark'
 import { SectionHeader, SettingRow, Toggle } from '../app/_shared'
 
@@ -569,8 +570,10 @@ export function RemoteSettings({ onOpenHowItWorks }: {
 
   return (
     <div>
+      <AgentSettings />
+
       <div className="flex items-center justify-between">
-        <SectionHeader icon={<AgentIcon />} title="Agent" />
+        <SectionHeader icon={<AgentIcon />} title="Orchestrator agent" />
         {/* Drawn only when the tab above can actually be navigated. Unwired, the
             tab's own "How it works" segment is the route — this would only be a
             link that moves the content and leaves the selection behind. */}

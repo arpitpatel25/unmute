@@ -11,6 +11,8 @@ import type { ProviderId } from './remote/providers'
 export interface RemoteTaskSnapshot {
   id: string
   intent: string
+  origin?: 'unmute-agent'
+  agentRunId?: string
   state: 'processing' | 'needs-user' | 'ready' | 'stuck' | 'done' | 'failed'
   category: 'info' | 'navigate' | 'watch' | 'consume' | 'act' | null
   /** Latest short progress label ("Editing X · 12/18 tests"), if any. */
@@ -42,6 +44,80 @@ export interface RemoteSettingsSnapshot {
   logFile: string | null
 }
 
+export type UnmuteAgentProvider = 'claude' | 'codex'
+
+export interface UnmuteAgentSettingsSnapshot {
+  agentProvider: UnmuteAgentProvider
+  unmuteAgentAvailable: boolean
+  unmuteAgentMaxProcesses: number
+}
+
+export interface UnmuteAgentAvailabilitySnapshot {
+  available: boolean
+  reason?: 'disabled' | 'initializing' | 'keychain-unavailable' | 'storage-unavailable' | 'provider-unavailable'
+  providers: Array<{
+    id: UnmuteAgentProvider
+    label: string
+    available: boolean
+    reason?: 'not-installed'
+  }>
+}
+
+export interface UnmuteAgentInteractionInput {
+  transcript: string
+  attachments?: Array<{ path: string; name?: string; mimeType?: string }>
+  selectedText?: string
+  priorRunId?: string
+  intents?: string[]
+  currentContext?: { app?: string; project?: string; activeTaskId?: string; activeTaskName?: string }
+}
+
+export interface UnmuteAgentInteractionResult {
+  interactionId: string
+  agentRunId: string
+  provider?: UnmuteAgentProvider
+  source: 'provider'
+  outcome: 'completed' | 'failed' | 'interrupted'
+  presentation: 'transient' | 'task'
+  text?: string
+  memory?: { id: string; title: string }
+  error?: { code: string; message: string }
+}
+
+export type UnmuteAgentActivityState =
+  | 'listening'
+  | 'searching'
+  | 'thinking'
+  | 'confirming'
+  | 'complete'
+  | 'failed'
+
+export interface UnmuteAgentActivitySnapshot {
+  state: UnmuteAgentActivityState
+  summary: string
+  interactionId?: string
+  agentRunId?: string
+  provider?: UnmuteAgentProvider
+}
+
+export interface UnmuteMemorySnapshot {
+  id: string
+  kind: string
+  title: string
+  tags: string[]
+  scope?: { app?: string; project?: string; purpose?: string }
+  sensitivity: 'normal' | 'private' | 'sensitive'
+  provenance?: { source: 'voice' | 'selection' | 'attachment' | 'import' }
+  content?: string
+  attachmentCount?: number
+  snippet?: string
+  score?: number
+  createdAt?: number
+  updatedAt: number
+  version?: number
+  deletedAt?: number
+}
+
 export interface CaptureHistorySnapshot {
   id: string
   kind: 'dictation' | 'scratchpad'
@@ -69,6 +145,31 @@ export interface RemoteSetupStatus {
 }
 
 export const remotePreloadExtensions = {
+  // ── Unmute Agent ──
+  remoteGetAgentSettings: (): Promise<UnmuteAgentSettingsSnapshot> =>
+    ipcRenderer.invoke('remote:get-agent-settings'),
+  remoteSetUnmuteAgentProvider: (provider: UnmuteAgentProvider): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-unmute-agent-provider', provider),
+  remoteGetAgentAvailability: (): Promise<UnmuteAgentAvailabilitySnapshot> =>
+    ipcRenderer.invoke('remote:get-agent-availability'),
+  remoteAgentSubmit: (input: UnmuteAgentInteractionInput): Promise<UnmuteAgentInteractionResult> =>
+    ipcRenderer.invoke('remote:agent-submit', input),
+  remoteAgentCancel: (runId: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:agent-cancel', runId),
+  remoteOnAgentActivity: (cb: (activity: UnmuteAgentActivitySnapshot) => void): (() => void) => {
+    const handler = (_e: unknown, activity: UnmuteAgentActivitySnapshot) => cb(activity)
+    ipcRenderer.on('remote:agent-activity', handler)
+    return () => ipcRenderer.removeListener('remote:agent-activity', handler)
+  },
+  remoteListMemories: (query?: string): Promise<UnmuteMemorySnapshot[]> =>
+    ipcRenderer.invoke('remote:list-memories', query),
+  remoteGetMemory: (id: string, revealSensitive = false): Promise<UnmuteMemorySnapshot | null> =>
+    ipcRenderer.invoke('remote:get-memory', id, revealSensitive),
+  remoteForgetMemory: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:forget-memory', id),
+  remoteRestoreMemory: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke('remote:restore-memory', id),
+
   // ── Capture history ──
   remoteListCaptureHistory: (kind?: 'dictation' | 'scratchpad'): Promise<CaptureHistorySnapshot[]> =>
     ipcRenderer.invoke('remote:capture-history-list', kind),
@@ -106,6 +207,12 @@ export const remotePreloadExtensions = {
     ipcRenderer.invoke('remote:set-orchestrate-focus', id),
   /** Open the Orchestrate cockpit window from the in-app Remote screen. */
   remoteOpenOrchestrate: (): Promise<boolean> => ipcRenderer.invoke('remote:open-orchestrate'),
+  /** Is the Unmute Agent switched on? Gates its key, its capture destination
+   *  and its settings section — see init.ts. */
+  remoteGetUnmuteAgentAvailable: (): Promise<boolean> =>
+    ipcRenderer.invoke('remote:get-unmute-agent-available'),
+  remoteSetUnmuteAgentAvailable: (on: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('remote:set-unmute-agent-available', on),
   /** Current wall-owned terminal session (or null) — read once on mount. */
   remoteGetOrchestrateOwner: (): Promise<string | null> => ipcRenderer.invoke('remote:get-orchestrate-owner'),
   /** Attach an image to a session: bytes are saved under the task's dir and the

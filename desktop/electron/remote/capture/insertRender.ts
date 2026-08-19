@@ -19,17 +19,24 @@ export interface RenderResult {
   attachments: string[]
 }
 
-/** A fence long enough to survive whatever backtick runs are inside. */
-export function fenceFor(content: string): string {
-  let longest = 0
-  for (const run of content.match(/`+/g) ?? []) {
-    if (run.length > longest) longest = run.length
-  }
-  return '`'.repeat(Math.max(3, longest + 1))
+/** Wrap verbatim material so it cannot be mistaken for what was spoken.
+ *
+ *  NOT MARKDOWN. This text is pasted wherever the cursor is — Notes, a
+ *  terminal, a chat box, a search field — and nothing there renders backticks.
+ *  A fenced block came out as literal ``` characters in every one of them.
+ *  A blank line and a pair of straight quotes are visible in all of them and
+ *  syntax in none.
+ *
+ *  Straight quotes, not curly: the cleanup pipeline normalises curly quotes,
+ *  and a marker that gets rewritten downstream is not a marker.
+ *
+ *  EVERY KIND IS MARKED, including a bare link or a single line. Those used to
+ *  be merged into the sentence on the theory that they read as part of it —
+ *  but the reader cannot then tell a URL that was SAID from one that was
+ *  COPIED, which is the only distinction this exists to make. */
+export function quoteFor(content: string): string {
+  return `"${content.trim()}"`
 }
-
-/** Kinds that read as part of the sentence. Everything else gets a boundary. */
-const INLINE = new Set(['url', 'path', 'line'])
 
 export function render(pad: Pad, dest: Destination): RenderResult {
   const attachments: string[] = []
@@ -57,12 +64,9 @@ export function render(pad: Pad, dest: Destination): RenderResult {
       attachments.push(e.content)
       continue
     }
-    if (INLINE.has(e.kind)) {
-      pieces.push({ text: e.content.trim(), block: false })
-      continue
-    }
-    const fence = fenceFor(e.content)
-    pieces.push({ text: `${fence}\n${e.content}\n${fence}`, block: true })
+    // Every insert stands alone, whatever its kind: a blank line above and
+    // below, and quotes around it.
+    pieces.push({ text: quoteFor(e.content), block: true })
   }
 
   // Track prevBlock explicitly. Do NOT look the previous piece up with

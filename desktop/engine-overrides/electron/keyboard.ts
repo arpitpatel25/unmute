@@ -1,5 +1,12 @@
 import { EventEmitter } from 'events'
 import { keyListener, KeyEvent } from './keyListener'
+import {
+  DOUBLE_TAP_WINDOW_MS,
+  freshGestureState,
+  recogniseTap,
+  type GestureEventKind,
+  type GestureState,
+} from './paywall/remote/capture/agentGesture'
 // Remote trigger gate (plan entitlement + the user's session toggle). Static
 // import on purpose — a lazy require of a relative path dies in the bundled
 // main process, and a silently-missing gate would leave Remote ungated.
@@ -8,6 +15,15 @@ import { isRemoteTriggerEnabled } from './remoteTriggerGate'
 export type SessionMode = 'dictation' | 'instruction'
 export type KeyboardEvent =
   | { type: 'session-start'; mode: SessionMode }
+  // ─── Unmute Agent — its own key, its own capture ───
+  // Right Command. Independent of dictation (fn) and Remote (right Option) so
+  // that adding an agent could not change either. Same tap-toggle shape and the
+  // same mutual exclusion; only the destination differs.
+  | { type: 'agent-start' }
+  /** A press that deliberately did nothing, and why. */
+  | { type: 'agent-ignored'; reason: string }
+  | { type: 'remote-ignored'; reason: string }
+  | { type: 'agent-stop' }
   | { type: 'session-stop'; mode: SessionMode }
   | { type: 'chain-start'; mode: SessionMode }
   | { type: 'chain-expired' }
@@ -28,6 +44,13 @@ type DualModeState = 'idle' | 'held' | 'awaiting-second' | 'push-recording' | 'h
 class KeyboardManager extends EventEmitter {
   private dictationActive = false
   private instructionActive = false
+  private agentActive = false
+  /** Tap-recognition state only — it holds no opinion about recording. */
+  private agentGesture: GestureState = freshGestureState()
+  /** When the first tap of a pending pair landed. 0 = none. */
+  private lastAgentTapAt = 0
+  private lastAgentToggleTime = 0
+  private lastAgentToggleTime = 0
   private chainTimer: NodeJS.Timeout | null = null
   private chainWindowMs = 2000
   // Separate debounce per logical key so Fn and Caps Lock can't cross-block each other
@@ -74,6 +97,62 @@ class KeyboardManager extends EventEmitter {
     keyListener.stop()
   }
 
+  /**
+   * The session says a capture ended — however it ended.
+   *
+   * THIS IS THE WIRING THAT WAS MISSING. sessionManager fires onSessionEnded
+   * from every ending it has: a completed dispatch, a cancel, a too-short
+   * capture with no audio, a junk-STT discard. Nothing was ever subscribed to
+   * it, so a lane's lock had exactly ONE path to false — its own stop tap.
+   *
+   * That is why Escape stranded the Agent: the capture died, the flag did not,
+   * and mutual exclusion then refused right-Option indefinitely. A single tap
+   * later "stopped" a capture that no longer existed, which is where the
+   * phantom "processing" came from.
+   *
+   * DICTATION IS DELIBERATELY NOT CLEARED HERE. It manages its own toggle, and
+   * more importantly it is the user's way out: dictation does not consult the
+   * other lanes' locks, so it keeps working even when something else is wedged.
+   * That escape hatch is now a property to preserve, not an oversight.
+   */
+  /**
+   * EVERY KEY, AND THE STATE IT LEFT BEHIND.
+   *
+   * Every bug tonight was a state-transition bug, and each cost an hour because
+   * the log recorded INTENTIONS ("agent-key start") and never the state that
+   * followed. Two lanes disagreed about whether a capture was live and nothing
+   * wrote it down.
+   *
+   * One line per raw key event, emitted after the handlers have run, carrying
+   * every flag that decides what the NEXT key does. Verbose on purpose: a
+   * sequence you can read straight through beats a theory every time.
+   */
+  private emitKeyState(trigger: string): void {
+    this.emit('keyboard', {
+      type: 'key-state',
+      trigger,
+      dictationActive: this.dictationActive,
+      instructionActive: this.instructionActive,
+      remoteActive: this.remoteActive,
+      agentActive: this.agentActive,
+      agentHeld: this.agentGesture.held,
+      agentSpoiled: this.agentGesture.spoiled,
+      agentPendingTap: this.lastAgentTapAt > 0,
+    } as unknown as KeyboardEvent)
+  }
+
+  onCaptureEnded(): void {
+    if (this.agentActive || this.remoteActive) {
+      console.log('[keyboard] capture ended externally — clearing lane locks',
+        '(agent:', this.agentActive, 'remote:', this.remoteActive, ')')
+    }
+    this.agentActive = false
+    this.remoteActive = false
+    this.agentGesture = freshGestureState()
+    this.lastAgentTapAt = 0
+    this.emitKeyState('capture-ended')
+  }
+
   /** Reset ALL routing state — call when session ends externally (cancel, processing complete, etc.).
    *  Every mutable variable that influences the next keystroke MUST be reset here. */
   resetState(): void {
@@ -88,6 +167,19 @@ class KeyboardManager extends EventEmitter {
     this.clearDualTimers()
     this.dualState = 'idle'
     this.remoteActive = false // ADDITIVE: clear Remote capture lock on any reset
+    // AND THE AGENT'S. main.ts calls resetState() from onSessionEnded — every
+    // genuine ending the session has, Escape included — and from
+    // onSessionRejected. Those are exactly the moments when no capture is live,
+    // so this is the right place and always was.
+    //
+    // I removed this an hour ago believing resetState fired routinely and would
+    // clear the lock mid-capture. It does not: it fires when a session ENDS. The
+    // belief came from grepping only the source tree — main.ts lives in the
+    // copied engine tree, so "nothing ever calls resetState" was half a search.
+    this.agentActive = false
+    this.agentGesture = freshGestureState()
+    this.lastAgentTapAt = 0
+    this.emitKeyState('reset-state')
   }
 
   setChainWindow(ms: number): void {
@@ -137,6 +229,17 @@ class KeyboardManager extends EventEmitter {
         if (this.dictationKey === 'right-option') this.handleDictationKeyUp()
         else this.handleRemoteKeyUp()
         break
+      case 'right-command-down':
+        this.feedAgentGesture('down')
+        break
+      case 'right-command-up':
+        this.feedAgentGesture('up')
+        break
+      case 'right-command-chord':
+        // Another key arrived while right Command was held: this is a
+        // shortcut, so it can never be a tap.
+        this.feedAgentGesture('other')
+        break
       case 'caps-down':
       case 'caps-up':
         // Caps Lock is a toggle key — macOS alternates between CAPS_DOWN and CAPS_UP
@@ -145,6 +248,8 @@ class KeyboardManager extends EventEmitter {
         this.handleInstructionToggle()
         break
     }
+    // AFTER the handlers have run: exactly what the NEXT key will see.
+    this.emitKeyState(event)
   }
 
   // ─── Unmute Remote (task creation) key dispatchers (ADDITIVE, PRD §2.4.4 / §5) ───
@@ -183,15 +288,94 @@ class KeyboardManager extends EventEmitter {
       return
     }
 
-    // First tap → start. Mutual exclusion with an active dictation/instruction.
-    if (this.dictationActive || this.instructionActive) {
-      console.log('[keyboard] Remote key ignored — a dictation capture is active (mutual exclusion)')
+    // First tap → start. Mutual exclusion against EVERY other lane.
+    //
+    // `agentActive` was missing here while the Agent path already checked
+    // `remoteActive`, and that asymmetry is exactly how two captures came to be
+    // armed one second apart on 18 August: the Agent key armed one, the Remote
+    // key armed another on top of it, and ownership of the utterance was
+    // decided seventy seconds later by whichever flag had survived.
+    if (this.dictationActive || this.instructionActive || this.agentActive) {
+      console.log('[keyboard] Remote key ignored — another capture is active (mutual exclusion)')
+      this.emit('keyboard', { type: 'remote-ignored', reason: 'capture-already-live' } as KeyboardEvent)
       return
     }
     this.lastRemoteToggleTime = now
     this.remoteActive = true
     console.log('[keyboard] Remote capture START (tap-toggle)')
     this.emit('keyboard', { type: 'remote-start' } as KeyboardEvent)
+  }
+
+  /** Right Command — start/stop a capture addressed at the Unmute Agent.
+   *
+   *  Deliberately a separate flag from `remoteActive`: an agent capture and a
+   *  task capture are different addresses, and sharing one flag would let
+   *  either key stop the other's recording. */
+  /**
+   * The Agent key, ordered exactly like right-Option — the lane that has never
+   * wedged. Only the gesture differs: two taps to start, one to submit.
+   *
+   *   1. STOP FIRST  already recording? then this tap ends it. Return.
+   *   2. debounce    guards the START only; a stop must always go through.
+   *   3. exclusion   only now consider the other lanes.
+   *   4. START       second clean tap inside the window.
+   *
+   * STOPPING BEFORE EXCLUSION IS THE WHOLE PROPERTY. Once a capture is live, the only
+   * thing this key can do is end it — no gate, no exclusion, nothing can stand
+   * between the user and stopping their own capture. That is why a stuck lock on
+   * right-Option has never been reachable, and why the Agent lane wedged when I
+   * checked exclusion first and never checked `agentActive` at all.
+   *
+   * ONE WRITER. `agentActive` is set and cleared here and nowhere else. A second
+   * writer (I had added one in resetState) is how a lock gets cleared underneath
+   * a live capture, which let both lanes record at once.
+   */
+  private feedAgentGesture(kind: GestureEventKind): void {
+    const result = recogniseTap(this.agentGesture, { kind, at: Date.now() })
+    this.agentGesture = result.state
+    if (!result.tap) return
+
+    const now = Date.now()
+
+    // 1 · gate — the Agent's availability is checked where it is owned, in
+    // init.ts on agent-start. Nothing to gate here.
+
+    // 2 · STOP FIRST — a single clean tap ends a running capture.
+    if (this.agentActive) {
+      this.lastAgentToggleTime = now
+      this.agentActive = false
+      this.lastAgentTapAt = 0
+      console.log('[keyboard] Agent capture STOP (single tap) → dispatch')
+      this.emit('keyboard', { type: 'agent-stop' } as KeyboardEvent)
+      return
+    }
+
+    // 3 · debounce the START only.
+    if (now - this.lastAgentToggleTime < this.DEBOUNCE_MS) {
+      console.log('[keyboard] Agent toggle DEBOUNCED (too fast)')
+      return
+    }
+
+    // 5a · pair the taps. A lone tap is remembered, not acted on.
+    const paired = this.lastAgentTapAt > 0 && now - this.lastAgentTapAt <= DOUBLE_TAP_WINDOW_MS
+    if (!paired) {
+      this.lastAgentTapAt = now
+      return
+    }
+    this.lastAgentTapAt = 0
+
+    // 4 · exclusion — only once we know this is a start.
+    if (this.dictationActive || this.instructionActive || this.remoteActive) {
+      console.log('[keyboard] Agent gesture ignored — another capture is active (mutual exclusion)')
+      this.emit('keyboard', { type: 'agent-ignored', reason: 'capture-already-live' } as KeyboardEvent)
+      return
+    }
+
+    // 5b · start
+    this.lastAgentToggleTime = now
+    this.agentActive = true
+    console.log('[keyboard] Agent capture START (double tap)')
+    this.emit('keyboard', { type: 'agent-start' } as KeyboardEvent)
   }
 
   private handleRemoteKeyUp(): void {

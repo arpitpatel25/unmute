@@ -66,12 +66,15 @@ export interface CliAgentConfig {
   tmux?: TmuxConfig
   /** Component label for logs. */
   label: string
+  /** Provider-specific active-turn interrupt key. Defaults to Ctrl-C. */
+  interruptSequence?: string
 }
 
 /** Generic interactive-CLI-agent executor in an owned PTY. */
 export class CliAgentExecutor implements AgentExecutor {
   private pty: IPtyProcess | null = null
   private dataCbs: Array<(chunk: string) => void> = []
+  private exitCbs: Array<(event: { exitCode: number }) => void> = []
   private lastDataAt = 0
   private outputSerial = 0
   private recentOutput: Array<{ serial: number; text: string }> = []
@@ -158,10 +161,14 @@ export class CliAgentExecutor implements AgentExecutor {
       }
     })
     pty.onExit(({ exitCode }) => {
+      if (this.exited) return
       this.exited = true
       // PRD §4.5: the bare REPL does NOT exit on task completion — so an exit
       // here means we killed it, it crashed, or the user closed it.
       slog.event('pty-exit', { exitCode })
+      for (const cb of this.exitCbs) {
+        try { cb({ exitCode }) } catch (e) { slog.error('onExit callback threw', { error: (e as Error).message }) }
+      }
     })
   }
 
@@ -246,6 +253,16 @@ export class CliAgentExecutor implements AgentExecutor {
 
   onData(cb: (chunk: string) => void): void {
     this.dataCbs.push(cb)
+  }
+
+  onExit(cb: (event: { exitCode: number }) => void): void {
+    this.exitCbs.push(cb)
+  }
+
+  /** Ctrl-C stops one turn; unlike kill(), the provider conversation survives. */
+  interrupt(): void {
+    if (!this.pty || this.exited) return
+    this.pty.write(this.cfg.interruptSequence ?? '\x03')
   }
 
   kill(): void {

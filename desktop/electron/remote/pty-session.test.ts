@@ -6,6 +6,7 @@ import { ClaudeCodeExecutor } from './pty-session.ts'
 function makeFakePty() {
   const calls: { file?: string; args?: string[]; opts?: Record<string, unknown> } = {}
   let dataCb: ((d: string) => void) | null = null
+  let exitCb: ((e: { exitCode: number }) => void) | null = null
   const writes: string[] = []
   let killed = false
   const loader = () => ({
@@ -15,13 +16,20 @@ function makeFakePty() {
       calls.opts = opts
       return {
         onData(cb: (d: string) => void) { dataCb = cb },
-        onExit(_cb: (e: { exitCode: number }) => void) { /* not used here */ },
+        onExit(cb: (e: { exitCode: number }) => void) { exitCb = cb },
         write(d: string) { writes.push(d) },
         kill() { killed = true },
       }
     },
   })
-  return { loader, calls, emitData: (d: string) => dataCb?.(d), writes, isKilled: () => killed }
+  return {
+    loader,
+    calls,
+    emitData: (d: string) => dataCb?.(d),
+    emitExit: (exitCode: number) => exitCb?.({ exitCode }),
+    writes,
+    isKilled: () => killed,
+  }
 }
 
 test('BILLING: spawn args never include -p / SDK flags (PRD §3.2)', async () => {
@@ -141,4 +149,23 @@ test('kill marks the session not-alive and calls pty.kill', async () => {
   assert.equal(ex.alive, true)
   ex.kill()
   assert.equal(fake.isKilled(), true)
+})
+
+test('interrupt sends Ctrl-C without killing the resumable provider resource', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader })
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 't1' })
+  ex.interrupt()
+  assert.deepEqual(fake.writes, ['\x03'])
+  assert.equal(fake.isKilled(), false)
+})
+
+test('onExit reports the owned PTY exit event once', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader })
+  const exits: number[] = []
+  ex.onExit(({ exitCode }) => exits.push(exitCode))
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 't1' })
+  fake.emitExit(7)
+  assert.deepEqual(exits, [7])
 })

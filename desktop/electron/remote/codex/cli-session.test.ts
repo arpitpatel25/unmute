@@ -4,7 +4,14 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { findRollout, readRolloutEvents, discoverSessionId, listImportableCodexSessions, findCodexSessionCwd } from './cli-session'
+import {
+  discoverSessionId,
+  findCodexSessionCwd,
+  findRollout,
+  listImportableCodexSessions,
+  readRolloutEvents,
+  readRolloutSnapshot,
+} from './cli-session'
 
 const UUID_A = '019fccd9-d64b-7142-bf79-f721387b9e97'
 const UUID_B = '019fccd9-aaaa-7142-bf79-f721387b9e98'
@@ -37,6 +44,53 @@ test('a half-written trailing line is normal, not a parse failure', async () => 
   await fs.writeFile(p, meta('/repo', UUID_A, '2026-08-09T10:00:00.000Z') + '\n{"type":"event_msg","pay')
   const events = await readRolloutEvents(p)
   assert.equal(events.length, 1, 'the good line survives; the fragment is dropped')
+})
+
+test('rollout reads never disguise storage failures as an empty history', async () => {
+  const h = await home()
+  const p = join(h, '.codex/sessions/2026/08/09', `rollout-x-${UUID_A}.jsonl`)
+  await fs.writeFile(p, meta('/repo', UUID_A, '2026-08-09T10:00:00.000Z') + '\n')
+  const descriptor = Object.getOwnPropertyDescriptor(fs, 'readFile')
+  if (!descriptor) assert.fail('fs.readFile descriptor was unavailable')
+  const original = fs.readFile
+  Object.defineProperty(fs, 'readFile', {
+    configurable: true,
+    writable: true,
+    value: async (...args: unknown[]) => {
+      if (String(args[0]) === p) {
+        const failure = new Error('simulated disk failure') as NodeJS.ErrnoException
+        failure.code = 'EIO'
+        throw failure
+      }
+      return Reflect.apply(original, fs, args)
+    },
+  })
+
+  try {
+    await assert.rejects(readRolloutEvents(p), (error: unknown) => {
+      assert.equal((error as NodeJS.ErrnoException).code, 'EIO')
+      return true
+    })
+  } finally {
+    Object.defineProperty(fs, 'readFile', descriptor)
+    await fs.rm(h, { recursive: true, force: true })
+  }
+})
+
+test('strict rollout snapshots distinguish a missing file from an empty file', async () => {
+  const h = await home()
+  const empty = join(h, '.codex/sessions/2026/08/09', `rollout-empty-${UUID_A}.jsonl`)
+  const missing = join(h, '.codex/sessions/2026/08/09', `rollout-missing-${UUID_B}.jsonl`)
+  await fs.writeFile(empty, '')
+
+  const emptySnapshot = await readRolloutSnapshot(empty)
+  assert.equal(emptySnapshot.status, 'present')
+  if (emptySnapshot.status === 'present') {
+    assert.equal(emptySnapshot.stable, true)
+    assert.deepEqual(emptySnapshot.events, [])
+  }
+  assert.deepEqual(await readRolloutSnapshot(missing), { status: 'missing', path: missing })
+  await fs.rm(h, { recursive: true, force: true })
 })
 
 test('discovery needs BOTH the cwd and a start after our spawn', async () => {

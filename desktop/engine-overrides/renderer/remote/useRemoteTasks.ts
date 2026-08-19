@@ -9,6 +9,8 @@ import { useEffect, useState, useCallback } from 'react'
 export interface RemoteTask {
   id: string
   intent: string
+  origin?: 'unmute-agent'
+  agentRunId?: string
   /** Short session name (2-5 words), generated async after dispatch; null until it
    *  lands. UIs show this instead of the full intent, falling back to a truncation. */
   name?: string | null

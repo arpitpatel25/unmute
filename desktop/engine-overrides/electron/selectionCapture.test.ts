@@ -2,7 +2,6 @@ import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   captureSelection,
-  shouldUseClipboardFallback,
   type SelectionCaptureDeps,
 } from './selectionCapture'
 
@@ -28,151 +27,89 @@ function recorder(
 
 describe('captureSelection', () => {
   test('returns the selection when Cmd+C copies something', async () => {
-    const { deps, trace } = recorder({
-      initialClipboard: 'previous clipboard',
-      simulateCopy: async () => { trace.push('copy') },
-    })
-    // The copy lands real text in the slot, as a live selection would.
+    const { deps, trace } = recorder({ initialClipboard: 'previous clipboard' })
     const withSelection: SelectionCaptureDeps = {
       ...deps,
       simulateCopy: async () => { deps.writeTextAndRecord('the selected words') },
     }
 
-    const r = await captureSelection(withSelection, { useClipboardFallback: false })
+    const r = await captureSelection(withSelection)
 
-    assert.equal(r.text, 'the selected words')
-    assert.equal(r.source, 'selection')
+    assert.deepEqual(r, { text: 'the selected words', source: 'selection' })
+    assert.equal(trace.at(-1), 'write("previous clipboard")+record', 'the slot is handed back')
   })
 
-  // THE BUG. Nothing was selected, the clipboard holds real content, and the
-  // caller asked for the fallback — this returned null because the fallback
-  // lived only in the branch that runs when the copy THROWS.
-  test('falls back to the clipboard when nothing was selected', async () => {
-    const { deps } = recorder({ initialClipboard: 'the copied paragraph' })
+  // THE 19 AUGUST CORRUPTION. A dictation leaves its own transcript on the
+  // pasteboard. The next capture used to stand that in for an absent selection,
+  // so the previous utterance was silently prepended to the next one — in one
+  // case to an Agent request, which acted on it and dispatched a task the user
+  // never asked for.
+  test('a pasteboard from before the capture is never used, whoever filled it', async () => {
+    for (const clipboard of [
+      'the thing I dictated a moment ago',
+      'a github link I copied an hour ago',
+      '   surrounded by whitespace   ',
+    ]) {
+      const { deps } = recorder({ initialClipboard: clipboard })
 
-    const r = await captureSelection(deps, { useClipboardFallback: true })
+      const r = await captureSelection(deps)
 
-    assert.equal(r.text, 'the copied paragraph')
-    assert.equal(r.source, 'clipboard')
+      assert.deepEqual(r, { text: null, source: 'none' }, JSON.stringify(clipboard))
+    }
   })
 
-  test('returns nothing when no selection and the fallback is off', async () => {
-    const { deps } = recorder({ initialClipboard: 'the copied paragraph' })
-
-    const r = await captureSelection(deps, { useClipboardFallback: false })
-
-    assert.equal(r.text, null)
-    assert.equal(r.source, 'none')
-  })
-
-  test('falls back to the clipboard when the copy throws', async () => {
+  test('a copy that throws is indistinguishable from an empty selection', async () => {
     const { deps } = recorder({
-      initialClipboard: 'the copied paragraph',
-      simulateCopy: async () => { throw new Error('Accessibility not granted') },
+      initialClipboard: 'something copied earlier',
+      simulateCopy: async () => { throw new Error('accessibility not granted') },
     })
 
-    const r = await captureSelection(deps, { useClipboardFallback: true })
-
-    assert.equal(r.text, 'the copied paragraph')
-    assert.equal(r.source, 'clipboard')
+    assert.deepEqual(await captureSelection(deps), { text: null, source: 'none' })
   })
 
-  // THE REGRESSION THE FALLBACK SHIPPED WITH.
-  //
-  // Unmute delivers a dictation by writing it to the pasteboard and pasting it,
-  // so after every dictation the clipboard holds unmute's OWN last output. The
-  // stand-in could not tell that from something the user deliberately copied, so
-  // speaking to an agent attached the previous utterance to it — 12 times in one
-  // afternoon in the field. The pasteboard being non-empty is not evidence of
-  // user intent when we are the ones who filled it.
-  test('refuses a clipboard that is only our own last delivery', async () => {
-    const { deps } = recorder({ initialClipboard: 'the thing I dictated a moment ago' })
+  test('an empty pasteboard yields nothing', async () => {
+    const { deps } = recorder({ initialClipboard: '' })
 
-    const r = await captureSelection(deps, {
-      useClipboardFallback: true,
-      lastDelivered: 'the thing I dictated a moment ago',
-    })
-
-    assert.equal(r.text, null)
-    assert.equal(r.source, 'none')
+    assert.deepEqual(await captureSelection(deps), { text: null, source: 'none' })
   })
 
-  test('ignores surrounding whitespace when recognising our own delivery', async () => {
-    const { deps } = recorder({ initialClipboard: '  my last dictation \n' })
+  // The clear is a BORROW, not a wipe: it exists so anything read after the
+  // copy can only have come from the copy. What was there goes back on every
+  // path, because the pasteboard belongs to the user.
+  test('clears before the copy and restores afterwards, in order', async () => {
+    const { deps, trace, slot } = recorder({ initialClipboard: 'user material' })
 
-    const r = await captureSelection(deps, {
-      useClipboardFallback: true,
-      lastDelivered: 'my last dictation',
-    })
-
-    assert.equal(r.source, 'none')
-  })
-
-  // …but a genuine copy still gets through, which is the whole point of the
-  // stand-in. Losing this would re-open the bug it was written for.
-  test('still uses a clipboard the user actually copied', async () => {
-    const { deps } = recorder({ initialClipboard: 'a paragraph I copied from an article' })
-
-    const r = await captureSelection(deps, {
-      useClipboardFallback: true,
-      lastDelivered: 'something else I dictated earlier',
-    })
-
-    assert.equal(r.text, 'a paragraph I copied from an article')
-    assert.equal(r.source, 'clipboard')
-  })
-
-  test('an empty clipboard yields nothing even with the fallback on', async () => {
-    const { deps } = recorder({ initialClipboard: '   ' })
-
-    const r = await captureSelection(deps, { useClipboardFallback: true })
-
-    assert.equal(r.text, null)
-    assert.equal(r.source, 'none')
-  })
-
-  test('restores the original clipboard, pre-clearing before the copy', async () => {
-    const { deps, trace, slot } = recorder({ initialClipboard: 'user content' })
-
-    await captureSelection(deps, { useClipboardFallback: false })
+    await captureSelection(deps)
 
     assert.deepEqual(trace, [
       'write("")+record',
       'copy',
       'settle',
-      'write("user content")+record',
+      'write("user material")+record',
     ])
-    assert.equal(slot(), 'user content')
+    assert.equal(slot(), 'user material')
   })
 
-  test('restores the original clipboard even when the copy throws', async () => {
+  test('restores the pasteboard even when the copy throws', async () => {
     const { deps, slot } = recorder({
-      initialClipboard: 'user content',
-      simulateCopy: async () => { throw new Error('boom') },
+      initialClipboard: 'user material',
+      simulateCopy: async () => { throw new Error('helper died') },
     })
 
-    await captureSelection(deps, { useClipboardFallback: false })
+    await captureSelection(deps)
 
-    assert.equal(slot(), 'user content')
-  })
-})
-
-describe('shouldUseClipboardFallback', () => {
-  // Plain dictation pastes at a cursor. Standing the pasteboard in for an
-  // absent selection would prepend it to EVERY utterance the user speaks with
-  // something copied — the corruption the pre-clear exists to prevent.
-  test('is off for plain dictation at a cursor', () => {
-    assert.equal(shouldUseClipboardFallback('dictation', 'dictation'), false)
+    assert.equal(slot(), 'user material', 'a thrown copy must not eat the pasteboard')
   })
 
-  test('is on for an instruction, which is gathering context to act on', () => {
-    assert.equal(shouldUseClipboardFallback('instruction', 'dictation'), true)
-  })
+  test('a selection wins even when the pasteboard also holds something', async () => {
+    const { deps } = recorder({ initialClipboard: 'stale clipboard text' })
+    const withSelection: SelectionCaptureDeps = {
+      ...deps,
+      simulateCopy: async () => { deps.writeTextAndRecord('what is highlighted now') },
+    }
 
-  // A Remote capture reuses the dictation machinery wholesale and is started
-  // with mode 'dictation' (startRemoteCapture → startSession('dictation',
-  // 'remote')), so the mode alone cannot tell these apart. The kind can.
-  test('is on for a Remote dispatch even though its mode says dictation', () => {
-    assert.equal(shouldUseClipboardFallback('dictation', 'remote'), true)
+    assert.deepEqual(await captureSelection(withSelection), {
+      text: 'what is highlighted now', source: 'selection',
+    })
   })
 })

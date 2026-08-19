@@ -155,10 +155,19 @@ wire_paywall() {
   fi
 
   # Vendor the mediaremote-adapter (pause background media while dictating).
-  # NOT fatal if absent: the feature is opt-in and degrades to doing nothing,
-  # which is far better than refusing to build. macOS 15.4+ put MediaRemote
-  # behind an entitlement, and this adapter reaches it through /usr/bin/perl —
-  # see vendor/mediaremote-adapter/fetch.sh for why the media key is not an
+  # FATAL IF MISSING, like cua-driver above. It used to be a warning, on the
+  # reasoning that the feature is opt-in and degrades to doing nothing — which
+  # is true at RUNTIME and wrong at BUILD time. The runtime is deliberately
+  # silent about an absent adapter so a broken install never breaks dictation;
+  # that same silence meant a build made in a fresh checkout shipped without it
+  # and said nothing. Observed 19 August: every dev build for days had no media
+  # pause, and it was found by a user noticing, not by any check.
+  #
+  # The artefacts are fetched, not committed (see the .gitignore beside
+  # fetch.sh), so EVERY new clone and worktree starts without them. A warning
+  # in a few hundred lines of build output is not a signal anyone reads.
+  # macOS 15.4+ put MediaRemote behind an entitlement, and this adapter reaches
+  # it through /usr/bin/perl — see fetch.sh for why the media key is not an
   # acceptable substitute.
   if [[ -d "$ROOT/vendor/mediaremote-adapter/MediaRemoteAdapter.framework" ]]; then
     log "Copying mediaremote-adapter (background media pause)"
@@ -167,7 +176,9 @@ wire_paywall() {
     cp "$ROOT/vendor/mediaremote-adapter/mediaremote-adapter.pl" "$engine/vendor/mediaremote-adapter/"
     cp "$ROOT/vendor/mediaremote-adapter/LICENSE" "$engine/vendor/mediaremote-adapter/LICENSE"
   else
-    log "WARN: vendor/mediaremote-adapter missing — pausing background media will no-op (run its fetch.sh)"
+    log "ERROR: vendor/mediaremote-adapter missing — background media pause would silently no-op."
+    log "       Run: bash desktop/vendor/mediaremote-adapter/fetch.sh"
+    exit 1
   fi
 
   # Build + vendor the native notch shell (spec 2026-07-24). Like cua-driver it
@@ -222,6 +233,10 @@ wire_paywall() {
     // install-app-deps rebuilds it against Electron's ABI, and its .node
     // binary must be unpacked from the asar so it can be dlopen'd at runtime.
     pkg.dependencies['node-pty'] = '^1.1.0'
+    // Personal Memory: SQLCipher-capable SQLite is the encrypted index. This
+    // exact native binding is rebuilt against Electron's ABI; ordinary
+    // better-sqlite3 is deliberately not a fallback.
+    pkg.dependencies['better-sqlite3-multiple-ciphers'] = '12.11.1'
     // Unmute Remote: xterm.js renders the owned-PTY stream as a real terminal
     // in the render-on-demand live view (PRD §4.3) — faithful TUI + typeable —
     // instead of the old ANSI-stripped <pre>. Renderer deps (bundled by vite),
@@ -247,6 +262,9 @@ wire_paywall() {
     pkg.build.asarUnpack = pkg.build.asarUnpack || []
     if (!pkg.build.asarUnpack.includes('**/node_modules/node-pty/**')) {
       pkg.build.asarUnpack.push('**/node_modules/node-pty/**')
+    }
+    if (!pkg.build.asarUnpack.includes('**/node_modules/better-sqlite3-multiple-ciphers/**')) {
+      pkg.build.asarUnpack.push('**/node_modules/better-sqlite3-multiple-ciphers/**')
     }
     // Parakeet on-device STT: sherpa-onnx ships native dylibs
     // (libsherpa-onnx-c-api.dylib, libsherpa-onnx-cxx-api.dylib,
@@ -809,12 +827,29 @@ case "$MODE" in
     [[ -d "$WORK/oss-engine" ]] || sync_engine
     wire_paywall
     cd "$WORK/oss-engine"
+    # The SQLCipher-capable SQLite binding is a hard security dependency. Keep
+    # this install unsuppressed so an install/rebuild/ABI failure stops compile
+    # mode rather than silently leaving Personal Memory without encryption.
+    npm install better-sqlite3-multiple-ciphers@12.11.1 --no-save
     # node-pty (PTY backend) + xterm (live-terminal renderer dep) + the markdown
-    # renderer's engine so the integrated build resolves them without a full
-    # install. These mirror the deps wire_paywall adds to package.json; a name
-    # missing here fails ONLY in compile mode, which is the mode whose whole job
-    # is catching that class of mistake.
+    # renderer's engine so the integrated build resolves them. These mirror the
+    # deps wire_paywall adds to package.json; a name missing here fails ONLY in
+    # compile mode, which is the mode whose whole job is catching that class of
+    # mistake.
     npm install node-pty @xterm/xterm @xterm/addon-fit react-markdown remark-gfm --no-save >/dev/null 2>&1 || true
+    # Targeted `npm install` compiles native addons for the host Node ABI and
+    # does not run the engine root's postinstall. Force the memory binding onto
+    # the pinned Electron ABI, then load it with that Electron runtime so a
+    # skipped/incompatible rebuild cannot hide behind a successful Vite build.
+    log "Rebuilding SQLCipher binding for Electron"
+    npx electron-rebuild --force --only better-sqlite3-multiple-ciphers
+    ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "
+      const Database = require('better-sqlite3-multiple-ciphers')
+      const db = new Database(':memory:')
+      db.prepare('SELECT 1').get()
+      db.close()
+    "
+    log "SQLCipher binding loaded under Electron"
     fix_node_pty_helper "$WORK/oss-engine"
     log "Compiling (electron-vite build)…"
     npx electron-vite build

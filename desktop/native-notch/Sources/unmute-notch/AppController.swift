@@ -17,6 +17,11 @@ final class AppController: NSObject, NotchResizing {
     // already covers the pill.
     private let pillModel = PillModel()
     private var pillWindow: PillWindow!
+    /// The Agent's caption. Its own window, deliberately not the notch — a
+    /// surface descending from the top of the display reads as the notch
+    /// talking rather than the computer.
+    private var captionWindow: CaptionWindow?
+    private var captionTimer: Timer?
     private var pillHost: NSHostingView<AnyView>!
     // The pad — held work, waiting for a destination. It is drawn INSIDE the
     // pill's panel, as one more element in the cluster's row (PillView.pad), so
@@ -37,6 +42,9 @@ final class AppController: NSObject, NotchResizing {
     private var departureReturnTimer: Timer?
     private var expandedContentGeneration: UInt64 = 0
     private var toastTimer: Timer?
+    private var agentActivityTimer: Timer?
+
+
     /// Sole authority for visit-scoped interaction. Domain data remains in the
     /// model; controls, geometry and user choices are projected from this value.
     private var interaction = SurfaceInteractionState()
@@ -205,6 +213,26 @@ final class AppController: NSObject, NotchResizing {
                 applyState(state, animated: false)
                 window.present()
                 NotchLog.log("automatic departure settled compact — showing without destination-space collapse")
+            }
+
+        case let .agentActivity(activity):
+            agentActivityTimer?.invalidate()
+            model.agentActivity = activity
+            if model.state == .dormant {
+                applyState(.idle)
+            } else if !isExpanded(model.state) {
+                refreshBar()
+            }
+            if activity.state == .complete || activity.state == .failed {
+                agentActivityTimer = Timer.scheduledTimer(withTimeInterval: 2.2, repeats: false) { [weak self] _ in
+                    guard let self else { return }
+                    self.model.agentActivity = nil
+                    if self.commandedState == .dormant && self.model.state == .idle {
+                        self.applyState(.dormant)
+                    } else if !self.isExpanded(self.model.state) {
+                        self.refreshBar()
+                    }
+                }
             }
 
         case let .showTask(task):
@@ -410,6 +438,9 @@ final class AppController: NSObject, NotchResizing {
             NotchLog.log("CMD scratchpad enabled=\(payload.enabled) armed=\(payload.armed) delivering=\(payload.delivering) entries=\(payload.pad?.entries.count ?? 0)")
             scratchModel.state = payload
             reconcileSurfaces()
+
+        case let .caption(text, dwellMs):
+            showCaption(text: text, dwellMs: dwellMs)
 
         case .collapse:
             model.focusedId = nil
@@ -1364,4 +1395,49 @@ final class AppController: NSObject, NotchResizing {
         pillWindow?.fit(geometry: geometry)   // the pad rides inside it
         NotchLog.log("geometry recomputed (\(reason)): screen=\(NotchLog.rect(geometry.screenFrame)) hasNotch=\(geometry.hasNotch) → window=\(NotchLog.rect(r.frame))")
     }
+
+    // ─── The caption ────────────────────────────────────────────────────
+    //
+    // EXACTLY ONE ON SCREEN, EVER. Concurrency is deliberately deferred, and
+    // this constraint is what keeps it deferrable: a second answer replaces
+    // the first rather than stacking, so there is never a queue to reason
+    // about and never two captions competing for the same eye.
+
+    private func showCaption(text: String, dwellMs: Int) {
+        captionTimer?.invalidate()
+        captionTimer = nil
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, dwellMs > 0 else {
+            dismissCaption()
+            return
+        }
+
+        let window = captionWindow ?? CaptionWindow()
+        captionWindow = window
+        let host = NSHostingView(rootView: CaptionView(text: trimmed) { [weak self] in
+            self?.dismissCaption()
+        })
+        host.setFrameSize(host.fittingSize)
+        window.contentView = host
+        window.setContentSize(host.fittingSize)
+        window.positionOnActiveScreen()
+        window.orderFrontRegardless()
+
+        // Dwell is computed by the sender from the text length: video captions
+        // are timed to speech, and these have no clock.
+        captionTimer = Timer.scheduledTimer(
+            withTimeInterval: Double(dwellMs) / 1000.0, repeats: false
+        ) { [weak self] _ in
+            self?.dismissCaption()
+        }
+        NotchLog.log("caption shown chars=\(trimmed.count) dwellMs=\(dwellMs)")
+    }
+
+    private func dismissCaption() {
+        captionTimer?.invalidate()
+        captionTimer = nil
+        captionWindow?.orderOut(nil)
+    }
+
 }

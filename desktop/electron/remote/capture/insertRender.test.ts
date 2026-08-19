@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert'
-import { render, fenceFor } from './insertRender'
+import { render } from './insertRender'
 import { emptyPad, addSegment, addInsert } from './captureBuffer'
 import type { Pad } from './types'
 
@@ -12,62 +12,51 @@ function build(): Pad {
   return p
 }
 
-describe('inline kinds read as one sentence', () => {
-  test('a url joins the speech inline at the cursor', () => {
+// NOT MARKDOWN, AND NOTHING INLINE.
+//
+// This text is pasted wherever the cursor is — Notes, a terminal, a chat box.
+// Backtick fences arrive there as literal ``` characters. And a copied link
+// merged into the sentence is indistinguishable from a link the user SAID,
+// which is the one distinction an insert exists to make.
+describe('every insert is quoted and stands alone', () => {
+  test('a url gets a blank line and quotes, not inline placement', () => {
     assert.equal(
       render(build(), 'cursor').text,
-      'go through the thread https://slack.com/x and tell me what you think',
+      'go through the thread\n\n"https://slack.com/x"\n\nand tell me what you think',
     )
   })
-  test('and inline for a task too — a url carries no ambiguity anywhere', () => {
+
+  test('the same at a task destination — the marker does not vary by where it lands', () => {
     assert.equal(
       render(build(), 'task').text,
-      'go through the thread https://slack.com/x and tell me what you think',
+      'go through the thread\n\n"https://slack.com/x"\n\nand tell me what you think',
     )
   })
-  test('no doubled spaces when speech already ends in one', () => {
-    let p = emptyPad('p', 'cursor', 0)
-    p = addSegment(p, { id: 's1', text: 'look at ', startMs: 0, endMs: 1 })
-    p = addInsert(p, { id: 'i1', kind: 'url', content: 'https://a.com', atMs: 2 })
-    assert.equal(render(p, 'cursor').text, 'look at https://a.com')
-  })
-})
 
-describe('block kinds are fenced in every destination', () => {
-  test('a multi-line paste is fenced', () => {
+  test('a single copied line is marked exactly like a long one', () => {
+    let p = emptyPad('p', 'cursor', 0)
+    p = addSegment(p, { id: 's1', text: 'it says', startMs: 0, endMs: 1 })
+    p = addInsert(p, { id: 'i1', kind: 'line', content: 'the build is broken', atMs: 2 })
+    assert.equal(render(p, 'cursor').text, 'it says\n\n"the build is broken"')
+  })
+
+  test('a multi-line paste keeps its newlines inside the quotes', () => {
     let p = emptyPad('p', 'task', 0)
     p = addSegment(p, { id: 's1', text: 'I got this', startMs: 0, endMs: 1 })
     p = addInsert(p, { id: 'i1', kind: 'block', content: 'line one\nline two', atMs: 2 })
     p = addSegment(p, { id: 's2', text: 'please fix it', startMs: 3, endMs: 4 })
     assert.equal(
       render(p, 'task').text,
-      'I got this\n\n```\nline one\nline two\n```\n\nplease fix it',
+      'I got this\n\n"line one\nline two"\n\nplease fix it',
     )
   })
-  test('fenced at the cursor too — readability, not provenance', () => {
-    let p = emptyPad('p', 'cursor', 0)
-    p = addInsert(p, { id: 'i1', kind: 'block', content: 'a\nb', atMs: 1 })
-    assert.equal(render(p, 'cursor').text, '```\na\nb\n```')
-  })
-})
 
-describe('fenceFor escapes content containing backticks', () => {
-  test('plain content uses three', () => {
-    assert.equal(fenceFor('hello'), '```')
-  })
-  test('content with a three-run uses four', () => {
-    assert.equal(fenceFor('a ``` b'), '````')
-  })
-  test('content with a five-run uses six', () => {
-    assert.equal(fenceFor('`````'), '``````')
-  })
-  test('inline single backticks do not extend the fence', () => {
-    assert.equal(fenceFor('use `x` here'), '```')
-  })
-  test('a fenced block containing a fence still round-trips', () => {
-    let p = emptyPad('p', 'task', 0)
-    p = addInsert(p, { id: 'i1', kind: 'block', content: '```js\nx\n```', atMs: 1 })
-    assert.equal(render(p, 'task').text, '````\n```js\nx\n```\n````')
+  test('no backticks reach the output, whatever the content contains', () => {
+    let p = emptyPad('p', 'cursor', 0)
+    p = addInsert(p, { id: 'i1', kind: 'block', content: 'a ``` b', atMs: 1 })
+    const out = render(p, 'cursor').text
+    assert.equal(out, '"a ``` b"')
+    assert.equal(out.startsWith('```'), false, 'a fence must never be produced')
   })
 })
 
@@ -122,14 +111,15 @@ describe('edges', () => {
     let p = emptyPad('p', 'task', 0)
     p = addSegment(p, { id: 's1', text: '', startMs: 0, endMs: 1 })
     p = addInsert(p, { id: 'i1', kind: 'url', content: 'https://a.com', atMs: 2 })
-    assert.equal(render(p, 'task').text, 'https://a.com')
+    assert.equal(render(p, 'task').text, '"https://a.com"')
   })
 })
 
-test('two identical blocks both render (no indexOf aliasing)', () => {
+test('two identical inserts both render (no indexOf aliasing)', () => {
   let p = emptyPad('p', 'task', 0)
   p = addInsert(p, { id: 'i1', kind: 'block', content: 'same\nsame', atMs: 1 })
   p = addInsert(p, { id: 'i2', kind: 'block', content: 'same\nsame', atMs: 2 })
-  const t = render(p, 'task').text
-  assert.equal(t.split('```').length - 1, 4)
+  // Two by value, two in the output: the separator is computed against the
+  // real previous piece, not the first one that happens to be equal to it.
+  assert.equal(render(p, 'task').text, '"same\nsame"\n\n"same\nsame"')
 })

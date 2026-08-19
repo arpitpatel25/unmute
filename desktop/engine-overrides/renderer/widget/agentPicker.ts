@@ -33,6 +33,53 @@ export interface AgentPickerState {
   options: AgentOption[]
 }
 
+/**
+ * Capture destination is a separate axis from the backend that executes a
+ * normal task. Selecting Unmute must never rewrite the Claude/Codex picker.
+ */
+export type CaptureDestination = 'task' | 'unmute-agent'
+
+export interface CaptureDestinationOption {
+  id: CaptureDestination
+  label: string
+  available: boolean
+}
+
+export interface CaptureDestinationPickerState {
+  current: CaptureDestination
+  unmuteAgentAvailable: boolean
+}
+
+/** The ordinary task route is always present; Agent is offered only when live. */
+export function offeredCaptureDestinations(
+  picker: CaptureDestinationPickerState | null | undefined,
+): CaptureDestinationOption[] {
+  const destinations: CaptureDestinationOption[] = [
+    { id: 'task', label: 'Task', available: true },
+  ]
+  if (picker?.unmuteAgentAvailable) {
+    destinations.push({ id: 'unmute-agent', label: 'Unmute', available: true })
+  }
+  return destinations
+}
+
+export function currentCaptureDestinationLabel(
+  picker: CaptureDestinationPickerState | null | undefined,
+): string {
+  const offered = offeredCaptureDestinations(picker)
+  return offered.find((option) => option.id === picker?.current)?.label ?? offered[0].label
+}
+
+/** One-tap destination cycle. This does not read or mutate provider state. */
+export function nextCaptureDestination(
+  picker: CaptureDestinationPickerState | null | undefined,
+): CaptureDestination | null {
+  const offered = offeredCaptureDestinations(picker)
+  if (offered.length < 2) return null
+  const index = offered.findIndex((option) => option.id === picker?.current)
+  return offered[(index + 1) % offered.length].id
+}
+
 /** Backends worth offering: usable now, or installed and one tap from usable. */
 export function offeredAgents(picker: AgentPickerState | null | undefined): AgentOption[] {
   return picker?.options.filter((o) => o.available || o.installed) ?? []

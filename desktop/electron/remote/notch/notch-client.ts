@@ -112,6 +112,8 @@ export interface TurnP {
 export interface TaskDetailP {
   id: string
   title: string
+  origin?: 'unmute-agent'
+  agentRunId?: string
   status: TaskStatusName
   kind: 'oneoff' | 'session'
   alive: boolean
@@ -169,6 +171,8 @@ export interface TaskDetailP {
 export interface CardP {
   id: string
   title: string
+  origin?: 'unmute-agent'
+  agentRunId?: string
   activity?: string
   status: TaskStatusName
   kind: 'oneoff' | 'session'
@@ -295,7 +299,9 @@ export interface ScratchpadPadP {
   id: string
   /** Where the capture that opened this pad was heading — the DEFAULT
    *  destination, never a commitment. */
-  origin: 'cursor' | 'task'
+  /** Where the capture was headed when it opened. The pad panel picks its
+   *  destination buttons from this, so 'agent' has to survive the wire. */
+  origin: 'cursor' | 'task' | 'agent'
   entries: ScratchpadEntryP[]
 }
 
@@ -321,6 +327,14 @@ export interface ScratchpadPayloadP {
   destinations: ScratchpadDestinationsP
 }
 
+export interface UnmuteAgentActivityP {
+  state: 'listening' | 'searching' | 'thinking' | 'confirming' | 'complete' | 'failed'
+  summary: string
+  interactionId?: string
+  agentRunId?: string
+  provider?: 'claude' | 'codex'
+}
+
 // ── Commands (main → helper) ────────────────────────────────────────────────
 
 export type NotchCommand =
@@ -337,6 +351,9 @@ export type NotchCommand =
   | { type: 'pocket'; data: PocketP }
   | { type: 'pill'; state: PillStateP }
   | { type: 'scratchpad'; data: ScratchpadPayloadP }
+  | { type: 'agentActivity'; activity: UnmuteAgentActivityP }
+  /** The Agent's conclusion. Empty text takes the caption down. */
+  | { type: 'caption'; text: string; dwellMs: number }
   | { type: 'toast'; text: string }
   | { type: 'notchGeometry'; hasNotch: boolean; x: number; y: number; w: number; h: number }
   | { type: 'surfaceFill'; fill: number }
@@ -417,7 +434,7 @@ export type NotchEvent =
   // deliberate acts on the pad itself, never a side effect of a mode switch.
   | { type: 'scratchpadArm'; on: boolean }
   | { type: 'scratchpadRemove'; id: string }
-  | { type: 'scratchpadDeliver'; dest: 'cursor' | 'newTask' | 'openTask' }
+  | { type: 'scratchpadDeliver'; dest: 'cursor' | 'newTask' | 'openTask' | 'agent' }
   | { type: 'scratchpadDiscard' }
 
 export interface NotchClientOpts {

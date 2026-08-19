@@ -3,7 +3,6 @@ import { pipelineTranscribe, pipelineDualTranscribe, pipelineProcess, pipelineTr
 import { parakeetManager } from './parakeet'
 import { fasterWhisperManager } from './fasterWhisper'
 import { captureSelectedText, injectOutput, copyToClipboard, stageHistoryPaste, injectImagesIntoTask, injectImagesIntoDesktopTask } from './clipboard'
-import { shouldUseClipboardFallback } from './selectionCapture'
 import { pauseForCapture, resumeAfterCapture } from './mediaController'
 import { saveAudioFile, saveAudioChunk } from './audio'
 import { initTelemetry, logTelemetry, DEV_BUILD, installMainConsoleTee, attachRendererConsoleTee } from './dictationTelemetry'
@@ -147,6 +146,10 @@ interface SessionState {
   // Remote capture can never leak its mode into the next dictation. Default-safe:
   // a fresh session is always 'dictation' unless explicitly started as remote.
   kind: 'dictation' | 'remote'
+  /** The Agent lane IS the remote pipeline, so `kind` cannot tell them apart —
+   *  this can. It decides the pad's origin, and therefore which destinations
+   *  the scratchpad offers when a capture is held. */
+  agentAddressed: boolean
   /** The task visible at Right Option key-down. It is immutable for this
    * capture: a task update while transcription runs must not retarget speech. */
   remoteTargetId: string | null
@@ -826,7 +829,7 @@ class SessionManager {
     return this.usePipeline
   }
 
-  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation', remoteTargetId: string | null = null): void {
+  startSession(mode: 'dictation' | 'instruction', kind: 'dictation' | 'remote' = 'dictation', remoteTargetId: string | null = null, agentAddressed = false): void {
     console.log('[session] startSession called, mode:', mode, '| kind:', kind, '| isProcessing:', this.isProcessing, '| currentSession:', this.currentSession?.sessionId || 'null')
     if (!this.telemetryReady) {
       this.telemetryReady = true
@@ -896,11 +899,15 @@ class SessionManager {
         errorMessage: null,
         createdAt: Date.now(),
         kind, // stamped at birth; default 'dictation' (default-safe → paste)
+        // Stamped at birth for the same reason `kind` is: a capture that is
+        // later cancelled or superseded must not leave the address behind for
+        // the next one to inherit.
+        agentAddressed,
         remoteTargetId: kind === 'remote' ? remoteTargetId : null,
         captureSegmentId: null,
         captureAttachments: [],
       }
-      console.log('[session] New session created:', sessionId, '| kind:', kind)
+      console.log('[session] New session created:', sessionId, '| kind:', kind, '| agentAddressed:', agentAddressed)
       logTelemetry('session-start', { sessionId, mode, kind, engineMode: (() => { try { return getPaywallEngineMode() } catch { return '?' } })() })
     } else {
       console.log('[session] Reusing existing session:', this.currentSession.sessionId, '| kind:', this.currentSession.kind)
@@ -928,7 +935,15 @@ class SessionManager {
     // the consent signal (spec §5.4). Fire-and-forget: a capture failure must
     // never surface on the dictation path.
     try {
-      const origin = this.currentSession.kind === 'remote' ? 'task' : 'cursor'
+      // THE PAD INHERITS THE ADDRESS OF THE KEY THAT OPENED IT. Deriving this
+      // from `kind` alone is what sent an Agent utterance to the cursor: the
+      // Agent lane is stamped 'remote', so it read as a task and then, having
+      // no task, as the cursor.
+      const origin = this.currentSession.agentAddressed
+        ? 'agent'
+        : this.currentSession.kind === 'remote' ? 'task' : 'cursor'
+      console.log('[session] 📮 capture addressed to:', origin,
+        '(kind:', this.currentSession.kind, 'agentAddressed:', this.currentSession.agentAddressed, ')')
       this.currentSession.captureSegmentId = beginSegment(
         origin, Date.now(), canObserve(getCaptureSettings()),
       )
@@ -973,7 +988,7 @@ class SessionManager {
   //
   // Set by the keyboard 'remote-start'/'remote-stop' events (main.ts).
 
-  startRemoteCapture(targetTaskId: string | null = null): void {
+  startRemoteCapture(targetTaskId: string | null = null, agentAddressed = false): void {
     if (this.isProcessing) {
       console.log('[session] ⛔ Remote capture blocked — still processing')
       this.onSessionRejected?.()
@@ -983,7 +998,7 @@ class SessionManager {
     // Reuse the dictation capture machinery wholesale, but stamp the session as
     // 'remote' at birth so delivery dispatches instead of pasting. The kind lives
     // on the session, so it can't leak if this capture is later cancelled.
-    this.startSession('dictation', 'remote', targetTaskId)
+    this.startSession('dictation', 'remote', targetTaskId, agentAddressed)
   }
 
   async stopRemoteCapture(): Promise<void> {
@@ -2607,16 +2622,12 @@ class SessionManager {
     try {
       // NOT `mode === 'instruction'`. A Remote capture is started as
       // startSession('dictation', 'remote') so it can reuse this whole
-      // pipeline, which means it arrives here calling itself dictation — and
-      // for months that silently denied it the pasteboard stand-in, so anything
-      // the user had COPIED before speaking to an agent was read, cleared,
-      // restored and thrown away. The kind is what separates "paste at a
-      // cursor" from "hand this to something that will read it".
-      const useClipboardFallback = shouldUseClipboardFallback(
-        mode,
-        this.currentSession?.kind ?? 'dictation',
-      )
-      const selectedText = await captureSelectedText(useClipboardFallback)
+      // A SELECTION ONLY. What is highlighted right now is deliberate and
+      // current; what is sitting on the pasteboard is a leftover from whatever
+      // the user was doing before, and no lane gets to guess that it was meant
+      // for this utterance. A copy made DURING the capture is a different
+      // thing entirely — clipboardWatch sees it and it lands where it happened.
+      const selectedText = await captureSelectedText()
       if (selectedText && this.currentSession) {
         this.currentSession.selectedText = selectedText
         this.currentSession.selectedTextRole = mode === 'dictation' ? 'quote' : 'context'

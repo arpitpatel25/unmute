@@ -18,9 +18,10 @@
 // NOT unit-tested — exactly like paywall/main-extensions.ts. The logic it
 // orchestrates (TaskManager, executor, status-file) is unit-tested separately.
 
-import { ipcMain, BrowserWindow, Notification, shell, app, clipboard, powerMonitor } from 'electron'
+import { ipcMain, BrowserWindow, Notification, shell, app, clipboard, powerMonitor, safeStorage } from 'electron'
 import Store from 'electron-store'
 import { join, dirname, basename } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { existsSync, writeFileSync, mkdirSync, statSync, watch, promises as fs } from 'node:fs'
@@ -41,7 +42,13 @@ import { installApprovalHook } from './codex/hooks'
 import { cleanIntent, nameIntent, type CompleteFn } from './intent-cleanup'
 import { MODELS } from './config'
 import { initRuntimeConfig, getModels, getKnobs, getModelCatalog, isSelectableModel } from './runtime-config'
-import { deriveRemoteKey, type TriggerKey } from './mode-router'
+import {
+  deriveRemoteKey,
+  parseExplicitAgentAddress,
+  resolveCaptureDestination,
+  type CaptureDestination,
+  type TriggerKey,
+} from './mode-router'
 import { configureRemoteLogging, createLogger, getRemoteLogFilePath } from './log'
 import { fixPath } from './fix-path'
 import { buildSetupChecklist, setupComplete, blockerOf, confirmationKey, type BackendProbe } from './setup-status'
@@ -51,10 +58,55 @@ import { Router, type RoutableTask, type AgentAvailability } from './router'
 import { CodexRouterEngine } from './codex-router-engine'
 import { knownProjects, projectSlug } from './projects'
 import { recordSkillUsage, readSkillStats, defaultStatsPath } from './skill-usage'
-import { startMcpServer, MCP_PATH, type McpCreateTaskInput } from './mcp-server'
+import { startMcpServer, MCP_PATH, type McpCreateTaskInput, type McpServer } from './mcp-server'
+import { CapabilityRegistry } from './agent/capabilities/registry'
+import { MemoryCapability } from './agent/capabilities/memory'
+import {
+  DeliveryCapability,
+  DeliveryCapabilityError,
+  type AttachmentDeliveryTransaction,
+  type DeliveryAttachmentMetadata,
+} from './agent/capabilities/delivery'
+import { AgentTokenStore } from './agent/tokens'
+import { AgentRunSupervisor } from './agent/supervisor'
+import { AgentJournal } from './agent/journal'
+import {
+  UnmuteAgentController,
+  type AgentInteractionActivity,
+  type AgentInteractionInput,
+  type AgentInteractionResult,
+} from './agent/controller'
+import { ClaudeCodeProvider } from './agent/providers/claude'
+import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-headless'
+import { agentConstitution } from './agent/constitution'
+import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
+import { nextConversation, type Conversation } from './agent/continuity'
+import { HandoffCapability } from './agent/capabilities/handoff'
+import { SessionsCapability } from './agent/capabilities/sessions'
+import { HistoryCapability } from './agent/capabilities/history'
+import { selectSessions, type IndexedSession } from './agent/sessions/index'
+
+/** Where the Agent's last conversation got to. Memory is the durable
+ *  continuity; this is only the short-term thread. */
+let lastAgentConversation: Conversation | null = null
+import {
+  nextCaptureAddress,
+  type CaptureAddress,
+  type CaptureAddressEvent,
+} from './capture/captureAddress'
+import { CodexCliProvider } from './agent/providers/codex'
+import { probeCli, type AgentProviderId, type ProviderProbe } from './agent/provider'
+import { SafeStorageKeyProvider } from './agent/memory/key-provider'
+import { MemoryCrypto } from './agent/memory/crypto'
+import { EncryptedRecordStore, presentMemoryRecord } from './agent/memory/record-store'
+import { InteractionAttachmentHandles, EncryptedAttachmentStore } from './agent/memory/attachments'
+import { JsonlMemoryAudit } from './agent/memory/audit'
+import { DurableMemoryMutationJournal } from './agent/memory/journal'
+import { openSqlCipherMemoryIndex } from './agent/memory/sqlcipher-index'
+import { MemoryService } from './agent/memory/service'
 import { SESSION_PREAMBLE } from './session-policy'
 import { installHookSettingsSync, hookToken } from './hooks'
-import { parseHookEvent } from './observer'
+import { parseHookEvent, type HookEvent } from './observer'
 import type { ExecutorFactoryOpts } from './executor'
 import { startCuaServer, type CuaServer } from './cua/server'
 import { NotchClient } from './notch/notch-client'
@@ -74,6 +126,7 @@ import { Presence } from './presence'
 import { listImportableSessions, findSessionCwd } from './claude-cli-sessions'
 import { listImportableCodexSessions, findCodexSessionCwd } from './codex/cli-session'
 import { applyAxRegistration } from './ax/register'
+import { pruneUnmuteFromCodex, sweepUnmuteFromCodexAfterConnect } from './ax/codex-prune'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
@@ -99,12 +152,16 @@ import {
 import { createClipboardWatch } from './capture/clipboardWatch'
 import { createScreenshotWatch } from './capture/screenshotWatch'
 import {
-  adoptPersistedPad, armScratchpad, claimShared, deliveryInFlight, discard as discardPad,
+  adoptPersistedPad, armScratchpad, beginOwnClipboardSequence, claimShared, deliveryInFlight, discard as discardPad,
   copyHistoryToClipboard, gateDelivery, heldForSurface, initWatchers, padDirOf, pasteAtCursor, recordInsert,
   registerPadObserver, registerSettings, removeFromPad, runDelivery, snapshot,
-  registerComposerImageSink,
+  registerComposerImageSink, endOwnClipboardSequence,
   type DeliveryTarget,
 } from './capture/index'
+import {
+  attachToTaskDraft,
+  registerTaskDraftAttachmentSink,
+} from './task-attachment-paste'
 import { SETTLE_IDLE_MS } from './capture/scratchpadStore'
 import type { Entry, InsertKind } from './capture/types'
 import { CaptureHistoryStore, clipboardPayload, type CaptureHistoryKind } from './capture/history-store'
@@ -115,11 +172,18 @@ import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
 // don't entangle with engine internals. main.ts passes its real instances.
 interface SessionManagerLike {
-  startRemoteCapture(targetTaskId?: string | null): void
+  startRemoteCapture(targetTaskId?: string | null, agentAddressed?: boolean): void
   stopRemoteCapture(): Promise<void>
+  /** Fired from every ending the session has — dispatch, cancel, too-short,
+   *  junk STT. Declared here so the lane locks can be cleared however a capture
+   *  dies, rather than only by its own stop tap. */
+  onSessionEnded?: (() => void) | null
 }
 interface KeyboardManagerLike {
   on(event: 'keyboard', cb: (e: { type: string }) => void): unknown
+  /** Clears the Orchestrator and Agent locks. Never dictation's — that lane is
+   *  the user's way out when something else is wedged. */
+  onCaptureEnded?(): void
 }
 export interface RemoteInitDeps {
   sessionManager: SessionManagerLike
@@ -263,6 +327,12 @@ interface RemoteSettings {
   // Once enabled, allowAll (default) puts the WHOLE computer in scope; the
   // allowlist is an optional restriction. See ./ax/policy.
   computerUse: AxPolicy
+  /** Provider used only by the privileged Unmute Agent, never task routing. */
+  unmuteAgentProvider: AgentProviderId
+  /** Internal rollout gate. Existing Unmute remains unchanged while false. */
+  unmuteAgentAvailable: boolean
+  /** Maximum concurrently owned Agent CLI processes. */
+  unmuteAgentMaxProcesses: number
 }
 
 const settings = new Store<RemoteSettings>({
@@ -307,6 +377,9 @@ const settings = new Store<RemoteSettings>({
     surfaceAppearance: 'solid',
     agentTasksEnabled: true,
     computerUse: { enabled: false, screenshotEnabled: true, allowAll: true, allowed: [] },
+    unmuteAgentProvider: 'claude',
+    unmuteAgentAvailable: false,
+    unmuteAgentMaxProcesses: 2,
   },
 })
 
@@ -457,8 +530,662 @@ async function getSetupStatus() {
 }
 
 let manager: TaskManager | null = null
+
+type UnmuteAgentUnavailableReason =
+  | 'disabled'
+  | 'initializing'
+  | 'keychain-unavailable'
+  | 'storage-unavailable'
+  | 'provider-unavailable'
+
+interface UnmuteAgentProviderAvailability {
+  id: AgentProviderId
+  label: string
+  available: boolean
+  reason?: 'not-installed'
+}
+
+interface UnmuteAgentAvailability {
+  available: boolean
+  reason?: UnmuteAgentUnavailableReason
+  providers: UnmuteAgentProviderAvailability[]
+}
+
+function initializationFailureCode(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined
+  if (typeof code !== 'string') return 'storage-unavailable'
+  const allowed = new Set([
+    'keychain-unavailable',
+    'index-unavailable',
+    'storage-full',
+    'recovery-failed',
+    'service-unavailable',
+    'native-unavailable',
+    'cipher-unavailable',
+    'open-failed',
+  ])
+  return allowed.has(code) ? code : 'storage-unavailable'
+}
+
+function unavailableAgentError(reason: UnmuteAgentUnavailableReason | undefined) {
+  if (reason === 'keychain-unavailable') {
+    return {
+      code: 'keychain-unavailable',
+      message: 'Encrypted Agent memory is unavailable because secure key protection could not be opened.',
+    }
+  }
+  if (reason === 'storage-unavailable') {
+    return {
+      code: 'storage-unavailable',
+      message: 'Encrypted Agent memory is unavailable. Existing Unmute features remain available.',
+    }
+  }
+  return {
+    code: 'provider-unavailable',
+    message: 'Unmute Agent is unavailable. Check its provider in settings.',
+  }
+}
+
+let unmuteAgentAvailability: UnmuteAgentAvailability = {
+  available: false,
+  reason: 'disabled',
+  providers: [],
+}
+let unmuteAgentTokens: AgentTokenStore | null = null
+let unmuteAgentRecords: EncryptedRecordStore | null = null
+let unmuteAgentMemory: MemoryService | null = null
+let unmuteAgentRegistry: CapabilityRegistry = new CapabilityRegistry([])
+let unmuteAgentSupervisor: AgentRunSupervisor | null = null
+let unmuteAgentController: UnmuteAgentController | null = null
+let unmuteAgentIndex: ReturnType<typeof openSqlCipherMemoryIndex> | null = null
+let unmuteAgentGeneration = 0
+let mcpServer: McpServer | null = null
+let mcpServerGeneration = 0
+const agentHookListeners = new Set<(event: HookEvent) => void>()
+const AGENT_CLIPBOARD_ATTACHMENT_TTL_MS = 60 * 60 * 1_000
+
+function bufferedAttachmentDelivery(
+  metadata: DeliveryAttachmentMetadata,
+  publish: (data: Uint8Array) => Promise<void>,
+): AttachmentDeliveryTransaction {
+  const chunks: Buffer[] = []
+  let bytes = 0
+  let settled = false
+  const clear = () => {
+    for (const chunk of chunks) chunk.fill(0)
+    chunks.length = 0
+    bytes = 0
+  }
+  return {
+    async write(chunk) {
+      if (settled) throw new DeliveryCapabilityError('delivery-failed')
+      bytes += chunk.byteLength
+      if (bytes > metadata.size) {
+        settled = true
+        clear()
+        throw new DeliveryCapabilityError('delivery-failed')
+      }
+      chunks.push(Buffer.from(chunk))
+    },
+    async commit() {
+      if (settled || bytes !== metadata.size) throw new DeliveryCapabilityError('delivery-failed')
+      settled = true
+      const data = Buffer.concat(chunks, bytes)
+      clear()
+      try { await publish(data) } finally { data.fill(0) }
+    },
+    async rollback() {
+      settled = true
+      clear()
+    },
+  }
+}
+
+/**
+ * Materialise a stored attachment and hand it to whichever application owns it.
+ *
+ * Records are encrypted at rest and DeliveryAttachment is a stream with no
+ * path — deliberately, so a path never crosses the capability boundary. Opening
+ * therefore means writing a decrypted copy into the same 0700 delivery root the
+ * clipboard path already uses, and asking the system to open THAT. The Agent
+ * still never sees or composes a path.
+ */
+async function openAgentAttachment(
+  root: string,
+  metadata: DeliveryAttachmentMetadata,
+  data: Uint8Array,
+): Promise<void> {
+  const deliveryRoot = join(root, 'delivery')
+  const target = join(deliveryRoot, `${randomUUID()}-${basename(metadata.name)}`)
+  await fs.mkdir(deliveryRoot, { recursive: true, mode: 0o700 })
+  await fs.writeFile(target, data, { mode: 0o600, flag: 'wx' })
+  const failure = await shell.openPath(target)
+  if (failure) throw new DeliveryCapabilityError('delivery-failed')
+}
+
+async function copyAgentAttachment(
+  root: string,
+  metadata: DeliveryAttachmentMetadata,
+  data: Uint8Array,
+): Promise<void> {
+  const deliveryRoot = join(root, 'delivery')
+  const name = basename(metadata.name)
+  const target = join(deliveryRoot, `${randomUUID()}-${name}`)
+  let published = false
+  try {
+    await fs.mkdir(deliveryRoot, { recursive: true, mode: 0o700 })
+    await fs.writeFile(target, data, { mode: 0o600, flag: 'wx' })
+    const fileUrl = pathToFileURL(target).toString()
+    let ownsClipboard = false
+    try {
+      try { beginOwnClipboardSequence(); ownsClipboard = true } catch { /* watcher may not be armed */ }
+      clipboard.writeBuffer('public.file-url', Buffer.from(fileUrl, 'utf8'))
+      const confirmed = clipboard.readBuffer('public.file-url')
+        .toString('utf8')
+        .replace(/\0+$/u, '')
+      if (confirmed !== fileUrl) throw new DeliveryCapabilityError('delivery-failed')
+      published = true
+    } finally {
+      if (ownsClipboard) {
+        try { endOwnClipboardSequence(Date.now()) } catch { /* watcher may have stopped */ }
+      }
+    }
+  } catch (error) {
+    if (!published) await fs.unlink(target).catch(() => {})
+    if (error instanceof DeliveryCapabilityError) throw error
+    throw new DeliveryCapabilityError('delivery-failed')
+  }
+  const cleanup = setTimeout(() => { void fs.unlink(target).catch(() => {}) }, AGENT_CLIPBOARD_ATTACHMENT_TTL_MS)
+  cleanup.unref()
+}
+
+const AGENT_CONSTITUTION = agentConstitution(SESSION_PREAMBLE)
+
+function providerAvailability(probes: readonly ProviderProbe[]): UnmuteAgentProviderAvailability[] {
+  return (['claude', 'codex'] as const).map((id) => {
+    const probe = probes.find((candidate) => candidate.provider === id)
+    return {
+      id,
+      label: id === 'claude' ? 'Claude Code CLI' : 'Codex CLI',
+      available: probe?.available === true,
+      ...(probe?.available === true ? {} : { reason: 'not-installed' as const }),
+    }
+  })
+}
+
+async function probeUnmuteAgentProviders(): Promise<UnmuteAgentProviderAvailability[]> {
+  const probes = await Promise.all((['claude', 'codex'] as const).map(async (provider) => ({
+    provider,
+    available: await probeCli(provider).catch(() => false),
+    reason: 'not-installed' as const,
+  })))
+  return providerAvailability(probes)
+}
+
+type UnmuteAgentActivityState = 'listening' | 'searching' | 'thinking' | 'confirming' | 'complete' | 'failed'
+
+interface UnmuteAgentActivitySnapshot {
+  state: UnmuteAgentActivityState
+  summary: string
+  interactionId?: string
+  agentRunId?: string
+  provider?: AgentProviderId
+}
+
+function presentUnmuteAgentActivity(activity: AgentInteractionActivity): UnmuteAgentActivitySnapshot {
+  const state: UnmuteAgentActivityState = activity.kind === 'searching-memory'
+    ? 'searching'
+    : activity.kind === 'waiting'
+      ? 'confirming'
+      : 'thinking'
+  return {
+    state,
+    summary: activity.summary,
+    interactionId: activity.interactionId,
+    agentRunId: activity.agentRunId,
+    ...(activity.provider ? { provider: activity.provider } : {}),
+  }
+}
+
+function broadcastUnmuteAgentActivity(activity: AgentInteractionActivity | UnmuteAgentActivitySnapshot): void {
+  const snapshot = 'state' in activity ? activity : presentUnmuteAgentActivity(activity)
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send('remote:agent-activity', snapshot)
+  }
+  notchClient?.send({ type: 'agentActivity', activity: snapshot })
+}
+
+async function submitUnmuteAgent(input: AgentInteractionInput): Promise<AgentInteractionResult> {
+  if (!unmuteAgentController) throw new Error('Unmute Agent is unavailable')
+  const focusedTaskId = input.currentContext?.activeTaskId
+    ? undefined
+    : notchController?.focusedComposerTaskId()
+  const focusedTask = focusedTaskId ? manager?.get(focusedTaskId) : undefined
+  const effectiveInput: AgentInteractionInput = focusedTaskId && focusedTask
+    ? {
+        ...input,
+        currentContext: {
+          ...input.currentContext,
+          activeTaskId: focusedTaskId,
+          ...(focusedTask.name ? { activeTaskName: focusedTask.name } : {}),
+        },
+      }
+    : input
+  broadcastUnmuteAgentActivity({
+    state: 'listening',
+    summary: 'Listening to Unmute Agent',
+    ...(input.priorRunId ? { agentRunId: input.priorRunId } : {}),
+  })
+  try {
+    const result = await unmuteAgentController.submit(effectiveInput)
+    if (result.presentation === 'task' && result.outcome === 'completed' && result.text?.trim()) {
+      await manager?.presentAgentResult({
+        agentRunId: result.agentRunId,
+        intent: input.transcript,
+        text: result.text,
+        provider: result.provider,
+      })
+    }
+    broadcastUnmuteAgentActivity({
+      state: result.outcome === 'completed' ? 'complete' : 'failed',
+      summary: result.outcome === 'completed'
+        ? (result.text?.trim() || 'Done')
+        : (result.error?.message || 'Unmute Agent could not complete that request'),
+      interactionId: result.interactionId,
+      agentRunId: result.agentRunId,
+      ...(result.provider ? { provider: result.provider } : {}),
+    })
+    return result
+  } catch (error) {
+    broadcastUnmuteAgentActivity({
+      state: 'failed',
+      summary: 'Unmute Agent could not complete that request.',
+    })
+    throw error
+  }
+}
+
+function disposeUnmuteAgent(): void {
+  unmuteAgentGeneration += 1
+  const supervisor = unmuteAgentSupervisor
+  const controller = unmuteAgentController
+  const index = unmuteAgentIndex
+  unmuteAgentSupervisor = null
+  unmuteAgentController = null
+  unmuteAgentTokens = null
+  unmuteAgentMemory = null
+  unmuteAgentRecords = null
+  unmuteAgentRegistry = new CapabilityRegistry([])
+  unmuteAgentIndex = null
+  unmuteAgentAvailability = { available: false, reason: 'disabled', providers: [] }
+  agentHookListeners.clear()
+  controller?.dispose()
+  void (supervisor?.dispose() ?? Promise.resolve())
+    .catch(() => {
+      log.warn('unmute agent shutdown failed', { code: 'shutdown-failed' })
+    })
+    .finally(() => {
+      try { index?.close() } catch { /* best effort during shutdown */ }
+    })
+}
+
+function disposeMcpServer(): void {
+  mcpServerGeneration += 1
+  try { mcpServer?.close() } catch { /* best effort during shutdown */ }
+  mcpServer = null
+}
+
+async function initializeUnmuteAgent(): Promise<void> {
+  const generation = ++unmuteAgentGeneration
+  const gate = settings.get('unmuteAgentAvailable') === true
+  if (!gate) {
+    unmuteAgentAvailability = { available: false, reason: 'disabled', providers: [] }
+    void probeUnmuteAgentProviders().then((providers) => {
+      if (generation === unmuteAgentGeneration) {
+        unmuteAgentAvailability = { available: false, reason: 'disabled', providers }
+      }
+    })
+    return
+  }
+  unmuteAgentAvailability = { available: false, reason: 'initializing', providers: [] }
+  const providers = await probeUnmuteAgentProviders()
+  if (generation !== unmuteAgentGeneration) return
+  unmuteAgentAvailability = { available: false, reason: 'initializing', providers }
+  const root = join(app.getPath('userData'), 'unmute-agent')
+  const memoryRoot = join(root, 'memory')
+  let pendingIndex: ReturnType<typeof openSqlCipherMemoryIndex> | null = null
+  let pendingSupervisor: AgentRunSupervisor | null = null
+  let pendingController: UnmuteAgentController | null = null
+  try {
+    const keyProvider = new SafeStorageKeyProvider({ root: memoryRoot, protectedValueStore: safeStorage })
+    const key = await keyProvider.getMasterKey()
+    if (generation !== unmuteAgentGeneration) { key.fill(0); return }
+    mkdirSync(join(memoryRoot, 'index'), { recursive: true, mode: 0o700 })
+    const crypto = new MemoryCrypto({ keyProvider })
+    const handles = new InteractionAttachmentHandles()
+    const records = new EncryptedRecordStore({ root: memoryRoot, crypto })
+    const attachments = new EncryptedAttachmentStore({ root: memoryRoot, crypto, handles })
+    let index: ReturnType<typeof openSqlCipherMemoryIndex>
+    try {
+      index = openSqlCipherMemoryIndex({
+        databasePath: join(memoryRoot, 'index', 'memory.sqlite'),
+        key,
+        recoverCorruption: true,
+      })
+    } finally {
+      key.fill(0)
+    }
+    pendingIndex = index
+    const memory = new MemoryService({
+      records,
+      attachments,
+      index,
+      audit: new JsonlMemoryAudit({ root: memoryRoot }),
+      journal: new DurableMemoryMutationJournal({ root: memoryRoot }),
+    })
+    await memory.initialize()
+    const tokens = new AgentTokenStore()
+    const journal = new AgentJournal({ root: join(root, 'runtime') })
+    const constitutionPath = join(root, 'runtime', 'constitution.md')
+    mkdirSync(dirname(constitutionPath), { recursive: true, mode: 0o700 })
+    writeFileSync(constitutionPath, AGENT_CONSTITUTION, { encoding: 'utf8', mode: 0o600 })
+    // hookEvents/executor are consumed only by the REPL driver; they stay wired
+    // so UNMUTE_AGENT_RUNTIME=repl is a pure environment change. Which driver
+    // is live is logged because the two fail in completely different ways.
+    const agentRuntime = agentRuntimeMode()
+    log.event('unmute-agent-runtime', { runtime: agentRuntime })
+    const claude = new ClaudeCodeProvider({
+      runtime: agentRuntime,
+      hookEvents: {
+        subscribe(listener) {
+          agentHookListeners.add(listener)
+          return () => agentHookListeners.delete(listener)
+        },
+      },
+      executor: { settingsPath: hookSettingsFile ?? undefined },
+    })
+    const codex = new CodexCliProvider()
+    const runtimeProviders = new Map<AgentProviderId, typeof claude | typeof codex>([
+      ['claude', claude],
+      ['codex', codex],
+    ])
+    const registry = new CapabilityRegistry([
+      new MemoryCapability(memory),
+      // WHAT THE USER ACTUALLY SAID, LATELY. The one thing a coding session
+      // cannot reach: it lives in Unmute's own archive, not on the filesystem.
+      // Read-only, and pasting reuses copyHistoryToClipboard — the same call
+      // the History panel's copy button makes, so text and attachments travel
+      // together exactly as they do today.
+      new HistoryCapability({
+        async recent(withinMs) {
+          const since = Date.now() - withinMs
+          return captureHistory.list()
+            .filter((entry) => entry.finalizedAt >= since)
+            .sort((a, b) => b.finalizedAt - a.finalizedAt)
+            .map((entry) => ({
+              id: entry.id,
+              lane: entry.kind,
+              at: entry.finalizedAt,
+              text: entry.text,
+              attachments: [...entry.attachments],
+              ...(entry.destination ? { destination: entry.destination } : {}),
+            }))
+        },
+        async copy(id) {
+          const entry = captureHistory.list().find((candidate) => candidate.id === id)
+          if (!entry) return false
+          const payload = clipboardPayload(entry)
+          return copyHistoryToClipboard(payload.text, payload.attachments)
+        },
+      }),
+      // What the user has been working on. Backed by the task manager, which
+      // already holds every session Unmute created — so v1 needs no filesystem
+      // scanner, and the Agent's OWN runs are excluded by construction because
+      // they are not tasks.
+      new SessionsCapability({
+        async list(query) {
+          const all = (manager?.list() ?? [])
+            .filter((task) => task.origin !== 'unmute-agent')
+            .map((task): IndexedSession => ({
+              id: task.id,
+              source: 'unmute',
+              startedAt: task.createdAt ?? 0,
+              updatedAt: task.updatedAt ?? task.createdAt ?? 0,
+              turns: task.conversation?.length ?? 0,
+              ...(task.cwd ? { project: basename(task.cwd) } : {}),
+              ...(task.intent ? { intent: task.intent, opening: task.intent } : {}),
+              ...(task.state ? { state: String(task.state) } : {}),
+              taskId: task.id,
+            }))
+          return selectSessions(all, query)
+        },
+        async read(sessionId) {
+          const task = manager?.get(sessionId)
+          if (!task || task.origin === 'unmute-agent') return null
+          // Lazily assembled from what the task already holds — still no model
+          // call. A richer summary can be generated and cached here later
+          // without changing the tool's contract.
+          const parts = [
+            task.intent ? `Intent: ${task.intent}` : '',
+            task.result?.summary ? `Outcome: ${task.result.summary}` : '',
+            task.result?.detail ?? '',
+          ].filter(Boolean)
+          return {
+            session: {
+              id: task.id, source: 'unmute' as const,
+              startedAt: task.createdAt ?? 0, updatedAt: task.updatedAt ?? 0,
+              turns: task.conversation?.length ?? 0,
+              ...(task.intent ? { intent: task.intent } : {}),
+            },
+            content: parts.join('\n\n') || 'Nothing was recorded for this session.',
+          }
+        },
+      }),
+      // Outside work is handed off, never refused and never attempted. The
+      // card carries its origin so the user can see the Agent made it.
+      new HandoffCapability({
+        async createTask(input) {
+          if (!manager) throw new Error('Unmute Remote is not initialized')
+          // The same dispatch the right-Option key uses. A hand-off is an
+          // ordinary Orchestrator task in every respect except that the card
+          // can say the Agent asked for it rather than the user (Law IV).
+          const seeded = input.sourceSessionIds?.length
+            ? `${input.intent}\n\nStart from these earlier sessions: ${input.sourceSessionIds.join(', ')}`
+            : input.intent
+          const taskId = await manager.dispatch(seeded, { kind: 'oneoff' })
+          manager.mergeAgentOrigin(taskId, input.agentRunId)
+          log.event('agent-handoff-created', {
+            taskId, agentRunId: input.agentRunId, sources: input.sourceSessionIds?.length ?? 0,
+          })
+          return { taskId }
+        },
+        async taskStatus(taskId) {
+          const task = manager?.get(taskId)
+          return task ? { state: String(task.state), intent: task.intent } : null
+        },
+      }),
+      new DeliveryCapability({
+        resolveAttachment: (principal, handle) => attachments.resolveForDelivery(principal, handle),
+        async copyText(text) {
+          let ownsClipboard = false
+          try {
+            try { beginOwnClipboardSequence(); ownsClipboard = true } catch { /* watcher may not be armed */ }
+            clipboard.writeText(text)
+            if (clipboard.readText() !== text) throw new DeliveryCapabilityError('delivery-failed')
+            // The delivery is NOT claimed beyond this write. The clipboard
+            // belongs to whatever touches it next, including the user's own
+            // next sentence — see the note in clipboard.ts injectOutput.
+          } catch (error) {
+            if (error instanceof DeliveryCapabilityError) throw error
+            throw new DeliveryCapabilityError('delivery-failed')
+          } finally {
+            if (ownsClipboard) {
+              try { endOwnClipboardSequence(Date.now()) } catch { /* watcher may have stopped */ }
+            }
+          }
+        },
+        async prepareTaskDraftText(taskId, text) {
+          if (!manager?.get(taskId)) throw new DeliveryCapabilityError('destination-unavailable')
+          const current = taskDrafts.get(taskId).text
+          const prepared = current ? `${current}\n\n${text}` : text
+          taskDrafts.setText(taskId, prepared)
+          if (taskDrafts.get(taskId).text !== prepared) {
+            throw new DeliveryCapabilityError('delivery-failed')
+          }
+          notchController?.refresh()
+        },
+        // Opening is not copying. The Agent holds no path — it hands back an
+        // opaque handle the app resolves here, so a composed path can never
+        // reach the shell.
+        async openAttachmentFile(metadata) {
+          return bufferedAttachmentDelivery(
+            metadata,
+            (data) => openAgentAttachment(root, metadata, data),
+          )
+        },
+        async stageAttachmentCopy(metadata) {
+          return bufferedAttachmentDelivery(
+            metadata,
+            (data) => copyAgentAttachment(root, metadata, data),
+          )
+        },
+        async stageTaskDraftAttachment(taskId, metadata) {
+          if (!manager?.get(taskId)) throw new DeliveryCapabilityError('destination-unavailable')
+          return bufferedAttachmentDelivery(metadata, async (data) => {
+            const accepted = await attachToTaskDraft({
+              taskId,
+              name: metadata.name,
+              mimeType: metadata.mimeType,
+              data,
+            })
+            if (!accepted) throw new DeliveryCapabilityError('destination-unavailable')
+          })
+        },
+      }),
+    ])
+    const supervisor = new AgentRunSupervisor({
+      providers: runtimeProviders,
+      tokenStore: tokens,
+      journal,
+      selectedProvider: () => settings.get('unmuteAgentProvider'),
+      maxActiveProcesses: settings.get('unmuteAgentMaxProcesses'),
+    })
+    pendingSupervisor = supervisor
+    const controller = new UnmuteAgentController({
+      supervisor,
+      tokens,
+      attachmentHandles: handles,
+      journal,
+      capabilities: registry,
+      selectedProvider: () => settings.get('unmuteAgentProvider'),
+      runtime: () => {
+        const endpoint = `http://127.0.0.1:${getKnobs().mcpPort}${MCP_PATH}`
+        return {
+          // THE AGENT'S OWN GROUND. It used to run in the user's home
+          // directory, which meant Claude filed every Agent transcript into
+          // ~/.claude/projects/-Users-<user>/ — the same folder as any session
+          // the user had ever started from home. Twenty-five files there, ten
+          // of them Agent turns, indistinguishable by location.
+          //
+          // That is fatal to session oversight: asked "what have we been
+          // working on?", the Agent would read its own turns back as the
+          // user's work, and "consolidate those" could consolidate its own
+          // answers. One file is written per turn, forever, so the pollution
+          // grows with use. Its own directory gives it its own slug.
+          cwd: dirname(constitutionPath),
+          constitutionPath,
+          environment: process.env,
+          mcp: {
+            endpoint,
+            config: JSON.stringify({
+              mcpServers: {
+                unmute: {
+                  type: 'http',
+                  url: endpoint,
+                  headers: { Authorization: 'Bearer ${UNMUTE_MCP_TOKEN}' },
+                },
+              },
+            }),
+          },
+        }
+      },
+      onActivity: broadcastUnmuteAgentActivity,
+    })
+    pendingController = controller
+    await supervisor.initialize()
+    if (generation !== unmuteAgentGeneration) {
+      index.close()
+      await supervisor.dispose()
+      return
+    }
+    unmuteAgentTokens = tokens
+    unmuteAgentRecords = records
+    unmuteAgentMemory = memory
+    unmuteAgentRegistry = registry
+    unmuteAgentSupervisor = supervisor
+    unmuteAgentController = controller
+    unmuteAgentIndex = index
+    pendingIndex = null
+    pendingSupervisor = null
+    pendingController = null
+    const selected = settings.get('unmuteAgentProvider')
+    const selectedReady = providers.find((provider) => provider.id === selected)?.available === true
+    unmuteAgentAvailability = {
+      available: selectedReady,
+      ...(selectedReady ? {} : { reason: 'provider-unavailable' as const }),
+      providers,
+    }
+    log.event('unmute-agent-initialized', { provider: selected, available: selectedReady })
+  } catch (error) {
+    pendingController?.dispose()
+    await pendingSupervisor?.dispose().catch(() => {})
+    try { pendingIndex?.close() } catch { /* failed initialization owns this projection */ }
+    if (generation !== unmuteAgentGeneration) return
+    let keychainAvailable = false
+    try { keychainAvailable = safeStorage.isEncryptionAvailable() } catch { /* fail closed */ }
+    unmuteAgentAvailability = {
+      available: false,
+      reason: keychainAvailable ? 'storage-unavailable' : 'keychain-unavailable',
+      providers,
+    }
+    log.warn('unmute agent unavailable', {
+      reason: unmuteAgentAvailability.reason,
+      code: initializationFailureCode(error),
+    })
+  }
+}
+
 /** Unsent replies are task-scoped, not owned by any one expanded surface. */
 const taskDrafts = new TaskDraftStore()
+
+registerTaskDraftAttachmentSink(async ({ taskId, name, mimeType, data }) => {
+  const taskManager = manager
+  if (!taskManager?.get(taskId)) return false
+  const extensionFromName = basename(name).includes('.') ? basename(name).split('.').pop() : undefined
+  const extensionFromMime = mimeType.split('/').pop()
+  const extension = (extensionFromName || extensionFromMime || 'bin').replace(/[^a-z0-9]/giu, '').slice(0, 16) || 'bin'
+  let ownedPath: string | null = null
+  try {
+    ownedPath = await taskManager.attachFile(taskId, data, extension)
+    if (!ownedPath) return false
+    const attachmentId = randomUUID()
+    taskDrafts.addAttachment(taskId, {
+      id: attachmentId,
+      path: ownedPath,
+      mimeType,
+      name,
+    })
+    const confirmed = taskDrafts.get(taskId).attachments.some((attachment) => attachment.id === attachmentId)
+    if (!confirmed) await fs.unlink(ownedPath).catch(() => {})
+    else notchController?.refresh()
+    return confirmed
+  } catch {
+    if (ownedPath) await fs.unlink(ownedPath).catch(() => {})
+    return false
+  }
+})
 
 async function persistTaskDraftImage(
   id: string,
@@ -1072,6 +1799,8 @@ function serializeTask(t: Task) {
   return {
     id: t.id,
     intent: t.intent,
+    origin: t.origin,
+    agentRunId: t.agentRunId,
     name: t.name ?? null,
     cwd: t.cwd,
     kind: t.kind ?? 'oneoff',
@@ -1782,7 +2511,22 @@ async function pushPillChips(taskId: string | null = null): Promise<void> {
     // could only be diagnosed by reading Swift: the engine logged the models it
     // read and the agent it switched to, and nothing about the payload between
     // them, so the one broken link was the only one not written down.
+    // NO PICKER IN THE AGENT LANE. A backend and model chooser at invocation
+    // reintroduces the one question the Agent exists to abstract away — "which
+    // session am I starting?" — and neither control does anything for it: its
+    // provider is a setting, chosen once. Blanked rather than skipped, because
+    // `push` MERGES and an absent key would leave the previous lane's chips on
+    // screen.
+    if (captureAddress === 'agent') {
+      chips.agent = 'Unmute Agent'
+      chips.agentOptions = []
+      chips.model = undefined
+      chips.modelOptions = []
+      chips.modelAxes = []
+      chips.modelEmpty = undefined
+    }
     log.event('pill-chips', {
+      lane: captureAddress === 'agent' ? 'agent' : 'orchestrator',
       agent: chips.agent ?? null,
       model: chips.model ?? null,
       axes: (chips.modelAxes ?? []).map((a) => `${a.axis}:${a.values.length}`),
@@ -1905,6 +2649,18 @@ function toScratchpadEntry(e: Entry): ScratchpadEntryP {
  *  A Discard that appeared to cancel a send would be lying about both. */
 function scratchpadPayload(s = snapshot()): ScratchpadPayloadP {
   const pad = heldForSurface(s)
+  // THE WHOLE DECISION, EVERY PUSH. Which buttons the panel drew, and the three
+  // inputs that decided them. Reading a wrong-destination report without this
+  // means inferring the origin from what happened afterwards, which is how an
+  // Agent utterance pasted at the cursor was first put down to the scratchpad.
+  log.event('scratchpad-state', {
+    armed: s.armed,
+    delivering: deliveryInFlight(),
+    padOrigin: pad?.origin ?? null,
+    padEntries: pad?.entries.length ?? 0,
+    focusedTask: orchestrateFocusId,
+    offers: pad?.origin === 'agent' ? ['agent'] : ['openTask?', 'newTask', 'cursor'],
+  })
   return {
     enabled: settings.get('scratchpadEnabled') !== false,
     armed: s.armed,
@@ -1969,8 +2725,13 @@ function discardScratchpad(): void {
  *  WHETHER IT MAY RUN AT ALL IS `gateDelivery`, in capture/, where it can be
  *  unit-tested. This handler owns the log line and the toast; the rule is not
  *  its to keep. */
-async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promise<string | null> {
-  const target: DeliveryTarget = dest === 'cursor' ? 'cursor' : dest === 'openTask' ? 'openTask' : 'newTask'
+async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask' | 'agent'): Promise<string | null> {
+  const target: DeliveryTarget = dest === 'cursor'
+    ? 'cursor'
+    : dest === 'agent' ? 'agent' : dest === 'openTask' ? 'openTask' : 'newTask'
+  log.event('scratchpad-deliver-requested', {
+    dest, target, padOrigin: heldForSurface(snapshot())?.origin ?? null,
+  })
 
   const gate = gateDelivery()
   if (gate !== 'ok') {
@@ -1987,7 +2748,16 @@ async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promi
   // this module, and its header records why that direction is one-way (a lazy
   // require of remote/init fails inside the bundled main, swallowed by a
   // fail-open catch). Importing it here would close exactly that loop.
-  const send = target === 'cursor'
+  // THE AGENT IS ITS OWN EXIT. dispatchFromCapture already routes an utterance
+  // to the Agent when the destination says so, so the pad hands it the same
+  // way an unheld Agent capture would have — the only difference being that
+  // the user chose the moment.
+  const send = target === 'agent'
+    ? async (text: string, attachments: readonly string[]): Promise<string | null> => {
+      log.event('scratchpad-deliver-agent', { chars: text.length, attachments: attachments.length })
+      return dispatchFromCapture(text, attachments, null, { destination: 'unmute-agent' })
+    }
+    : target === 'cursor'
     // The attachments ride along: at the cursor an image cannot be a path, so
     // the pasteboard hands the real bytes over after the text (injectOutput).
     // A task needs nothing extra — its rendering already names each file.
@@ -2468,7 +3238,39 @@ async function listClaudeSkillNames(): Promise<string[]> {
   return names
 }
 
-export async function dispatchFromCapture(rawTranscript: string, attachments: readonly string[] = [], targetTaskId?: string | null): Promise<string | null> {
+export interface CaptureDispatchOptions {
+  /** Explicit capture destination. Omitted is the existing task route. */
+  destination?: Extract<CaptureDestination, 'task' | 'unmute-agent'>
+  /** Present only when the user explicitly addressed an earlier Agent run. */
+  priorAgentRunId?: string
+}
+
+/** Who the live capture is addressed to. The rule, and the failure it exists
+ *  for, live in capture/captureAddress.ts where they are tested. */
+let captureAddress: CaptureAddress = 'task'
+function advanceCaptureAddress(event: CaptureAddressEvent): void {
+  captureAddress = nextCaptureAddress(captureAddress, event)
+}
+export function markCaptureAddressedToAgent(): void { advanceCaptureAddress('agent-start') }
+export function clearAgentAddressedCapture(): void { advanceCaptureAddress('remote-start') }
+
+export async function dispatchFromCapture(
+  rawTranscript: string,
+  attachments: readonly string[] = [],
+  targetTaskId?: string | null,
+  options: CaptureDispatchOptions = {},
+): Promise<string | null> {
+  // Read, not consumed, here — the addressed-task shortcut below needs to see it
+  // too. Cleared once the destination has actually been resolved.
+  if (captureAddress === 'agent') options = { ...options, destination: 'unmute-agent' }
+  // WHY THIS WENT WHERE IT WENT, recorded rather than left to inference. The
+  // failure that made this necessary looked exactly like a normal Agent turn
+  // in the logs, twelve seconds after a Remote key release.
+  log.event('capture-destination', {
+    address: captureAddress,
+    explicit: options.destination ?? null,
+    targetTaskId: targetTaskId ?? null,
+  })
   // Observe the routing phase for the wall's listening surface — the dispatch
   // logic itself (the inner function) is untouched. `finally` guarantees the
   // surface always returns to idle, whatever path the dispatch takes.
@@ -2476,7 +3278,7 @@ export async function dispatchFromCapture(rawTranscript: string, attachments: re
   pendingBeat = null
   let landed: string | null = null
   try {
-    landed = await dispatchFromCaptureInner(rawTranscript, attachments, targetTaskId)
+    landed = await dispatchFromCaptureInner(rawTranscript, attachments, targetTaskId, options)
     return landed
   } finally {
     broadcastCapturePhase('idle', landed)
@@ -2488,7 +3290,12 @@ export async function dispatchFromCapture(rawTranscript: string, attachments: re
   }
 }
 
-async function dispatchFromCaptureInner(rawTranscript: string, attachments: readonly string[] = [], targetTaskId?: string | null): Promise<string | null> {
+async function dispatchFromCaptureInner(
+  rawTranscript: string,
+  attachments: readonly string[] = [],
+  targetTaskId?: string | null,
+  options: CaptureDispatchOptions = {},
+): Promise<string | null> {
   if (!manager) {
     log.error('dispatchFromCapture before initRemote')
     return null
@@ -2500,7 +3307,18 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
   //    PURELY ADDITIVE: with nothing focused (orchestrateFocusId === null) the block
   //    is skipped and routing below is exactly as before. We reuse the SAME paths
   //    the router uses (answer a blocked task / followUp to continue) — no new send.
-  const addressedTaskId = targetTaskId ?? orchestrateFocusId
+  // AN EXPLICIT ADDRESS OUTRANKS A VISIBLE ONE.
+  //
+  // The deterministic path below delivers to the task in focus, and it used to
+  // run first — so a capture the user had explicitly addressed to the Agent by
+  // pressing its own key was handed to whatever task happened to be open, and
+  // returned before the destination was ever resolved. Observed in the field:
+  // the Agent key captured correctly, then dispatched as an ordinary task reply.
+  //
+  // Pressing the Agent key is a statement about WHO you are talking to. A task
+  // being on screen is not.
+  const addressedToAgent = captureAddress === 'agent' || options.destination === 'unmute-agent'
+  const addressedTaskId = addressedToAgent ? null : (targetTaskId ?? orchestrateFocusId)
   if (addressedTaskId && manager.list().some((t) => t.id === addressedTaskId)) {
     const fid = addressedTaskId
     // Hygiene: the deterministic path skips the router, so it must not skip
@@ -2567,6 +3385,92 @@ async function dispatchFromCaptureInner(rawTranscript: string, attachments: read
   if (!raw) {
     log.warn('empty transcript without an addressed task — not dispatching', { attachments: attachments.length })
     return null
+  }
+
+  // 0b. EXPLICIT UNMUTE AGENT destination. This is intentionally below the
+  // task-address short-circuit: a capture addressed at key-down remains a task
+  // follow-up even if its text happens to begin with "Unmute". Ordinary Remote
+  // speech still falls through to the unchanged router below, and ordinary
+  // dictation/Instruct never enter dispatchFromCapture at all.
+  const agentAddress = parseExplicitAgentAddress(raw)
+  const destination = resolveCaptureDestination({
+    captureMode: 'remote',
+    recordingMode: 'dictation',
+    addressedTaskId,
+    explicitDestination: options.destination,
+    transcript: raw,
+  })
+  advanceCaptureAddress('dispatched')
+  if (destination === 'unmute-agent') {
+    const transcript = agentAddress?.transcript ?? raw
+    if (!unmuteAgentController || !unmuteAgentAvailability.available) {
+      log.warn('explicit agent capture refused — Agent unavailable', {
+        reason: unmuteAgentAvailability.reason ?? 'not-initialized',
+        attachments: attachments.length,
+      })
+      pendingBeat = 'Unmute Agent is unavailable.'
+      return null
+    }
+
+    // Captured images stay in the established buffer as host-owned paths.
+    // The main-process controller converts each source into an opaque,
+    // interaction-scoped handle before a provider can see it.
+    const input: AgentInteractionInput = {
+      transcript,
+      attachments: attachments.map((path) => ({
+        path,
+        name: basename(path),
+        mimeType: 'image/png',
+      })),
+      // CONTINUITY FOLLOWS ATTENTION, NOT THE CLOCK. An explicit prior run
+      // still wins; otherwise the last conversation is resumed only if this
+      // utterance arrived shortly after it finished and it has not run long.
+      ...(options.priorAgentRunId
+        ? { priorRunId: options.priorAgentRunId }
+        : (() => {
+          const decision = nextConversation(lastAgentConversation, Date.now())
+          return decision.resume ? { priorRunId: decision.runId } : {}
+        })()),
+    }
+    const result = await submitUnmuteAgent(input)
+    log.event('agent-capture-complete', {
+      interactionId: result.interactionId,
+      agentRunId: result.agentRunId,
+      source: result.source,
+      outcome: result.outcome,
+      presentation: result.presentation,
+      attachments: attachments.length,
+      // Traces this run to its provider transcript (for Claude, the file in
+      // ~/.claude/projects). Without it the only way back to what the Agent
+      // actually did is to hunt for session files by modification time.
+      providerSessionId: result.providerSessionId ?? null,
+    })
+    // THE AGENT SPEAKS IN ONE LINE. The notch carries progress while a turn
+    // runs; the caption carries the conclusion. Two surfaces, never competing:
+    // one live, one final.
+    const spoken = result.outcome === 'completed'
+      ? (result.text?.trim() || 'Done.')
+      : (result.error?.message || 'That did not land.')
+    const fitted = fitCaption(spoken)
+    if (fitted.truncated) {
+      // Worth knowing: the model was asked to put detail where the user wanted
+      // it and say where it went, and instead wrote past the cap.
+      log.warn('agent caption clipped', { chars: spoken.length, cap: MAX_CAPTION_LENGTH })
+    }
+    if (fitted.text) {
+      notchClient?.send({ type: 'caption', text: fitted.text, dwellMs: captionDwellMs(fitted.text) })
+    }
+    // Remember where this conversation got to, so the next utterance can tell
+    // a follow-up from a new subject.
+    if (result.agentRunId) {
+      lastAgentConversation = {
+        runId: result.agentRunId,
+        turns: (lastAgentConversation?.runId === result.agentRunId ? lastAgentConversation.turns : 0) + 1,
+        endedAt: Date.now(),
+      }
+    }
+    pendingBeat = spoken
+    return result.agentRunId || null
   }
 
   // 1. ALL routing goes through the warm router — including answering a task that
@@ -3146,12 +4050,15 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // press the key, speak is the ordinary path into that window.
   hookSettingsFile = installHookSettingsSync(REMOTE_BASE_DIR, getKnobs().mcpPort, HOOK_TOKEN)
 
-  void startMcpServer({
+  const mcpGeneration = ++mcpServerGeneration
+  const startLocalMcp = () => startMcpServer({
     resolveCaller: (token) => {
       if (!token) return null
       const tid = mcpTokens.get(token)
-      return tid && !tid.startsWith('pending-') ? tid : null
+      if (tid && !tid.startsWith('pending-')) return { kind: 'task' as const, taskId: tid }
+      return unmuteAgentTokens?.resolve(token) ?? null
     },
+    capabilityContext: (principal) => unmuteAgentController?.interactionContext(principal) ?? {},
     createTask: mcpCreateTask,
     taskStatus: mcpTaskStatus,
     // THE OBSERVER'S INTAKE. Claude Code lifecycle hooks curl their event JSON
@@ -3162,6 +4069,9 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       const event = parseHookEvent(payload)
       if (!event) return // unknown/unparseable event: ignorable, never fatal
       manager?.onHookEvent(event)
+      for (const listener of agentHookListeners) {
+        try { listener(event) } catch { /* one observer cannot block the others */ }
+      }
     },
     // The OPTIONAL precision channel (unmute_status). A session that wants to be
     // exact overwrites what the observer inferred; nothing requires it to.
@@ -3177,7 +4087,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         ...(input.question ? { question: { text: input.question, kind: 'free_text' as const } } : {}),
       })
     },
-  }, getKnobs().mcpPort).catch((e) => log.warn('mcp server not started', { error: (e as Error).message }))
+  }, getKnobs().mcpPort, unmuteAgentRegistry)
+  void initializeUnmuteAgent()
+    .then(startLocalMcp)
+    .then((server) => {
+      if (mcpGeneration !== mcpServerGeneration) { server.close(); return }
+      mcpServer = server
+    })
+    .catch((e) => log.warn('mcp server not started', { error: (e as Error).message }))
   // Register the server in the user's Claude Code config (idempotent). The
   // header uses env expansion so each session presents ITS OWN token.
   execFile('claude', ['mcp', 'get', 'unmute'], { timeout: 10_000 }, (err) => {
@@ -3223,6 +4140,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     router: cuaLaneRouter,
   }).then((s) => { cuaServer = s }).catch((e) => log.warn('cua server not started', { error: (e as Error).message }))
   void applyAxRegistration(normalizePolicy(settings.get('computerUse')).enabled)
+  // AND TAKE IT BACK OUT OF CODEX. applyAxRegistration above registers with
+  // Claude Code, which is the only agent it was ever meant for. The ChatGPT
+  // desktop app's "import your Claude setup" then copies the whole thing —
+  // every MCP server plus CLAUDE.md into ~/.codex/AGENTS.md — so Codex ends up
+  // holding a computer-use server registered for a different agent, and a steer
+  // preferring it over its own.
+  //
+  // Unconditional, and not gated on the toggle: the toggle is about Claude Code
+  // and has never said anything about Codex. Removal only, never registration —
+  // Unmute must not become a second writer of another agent's config.
+  void pruneUnmuteFromCodex()
 
   // ── Notch shell (native Swift helper) ──
   // The single task/attention surface (spec 2026-07-24). Spawned by THIS signed
@@ -3292,7 +4220,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         setName: (id, name) => { if (name.trim()) mgr.setName(id, name.trim().slice(0, 48)) },
         setShelved: (id, on) => mgr.setShelved(id, on),
         setNote: (id, note) => mgr.setNote(id, note),
-        focus: (id) => { orchestrateFocusId = id },
+        focus: (id) => {
+          orchestrateFocusId = id
+          log.event('orchestrate-focus-set', { taskId: orchestrateFocusId, via: 'notch' })
+          // Same reason as the IPC setter: the pad's destinations are computed
+          // per push, so a focus change has to announce itself or the
+          // "Add to <task>" button never appears on an already-open pad.
+          try { broadcastScratchpad() } catch { /* nothing showing */ }
+        },
         opened: (id) => mgr.opened(id),
         remoteKey: () => getRemoteKey(),
         // THE IMPORT RAIL. Sessions this machine has and unmute does not.
@@ -3758,7 +4693,13 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // pipeline then calls dispatchFromCapture).
   deps.keyboardManager.on('keyboard', (e) => {
     if (e.type === 'remote-start') {
-      log.event('remote-key', { phase: 'start' })
+      // WHICH KEY, AND WHAT IT DECIDED. Every diagnosis on 18 August meant
+      // reconstructing ownership from timestamps; the address is now stated
+      // here, at key-down, where it is decided.
+      log.event('remote-key', { phase: 'start', lane: 'orchestrator', address: 'task' })
+      // This utterance is addressed at a task, not at the Agent. Say so now:
+      // a previous Agent capture that never dispatched must not speak for it.
+      clearAgentAddressedCapture()
       void router?.warm() // ensure the classifier is ready before the utterance lands (re-warms if it died)
       pauseOverlayEscape() // capture owns Escape (cancel) while recording
       // Snapshot the visible address now. Transcription completes later, during
@@ -3769,6 +4710,47 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         : null
       deps.sessionManager.startRemoteCapture(targetTaskId)
       broadcastCapturePhase('listening', targetTaskId) // ADDITIVE observer — the capture itself is untouched
+    } else if (e.type === 'agent-start') {
+      log.event('agent-key', { phase: 'start', lane: 'agent', address: 'agent' })
+      if (settings.get('unmuteAgentAvailable') !== true) {
+        log.event('agent-key', { phase: 'ignored', reason: 'not-available' })
+        return
+      }
+      void router?.warm()
+      pauseOverlayEscape()
+      // Addressed at the AGENT, not at whatever task happens to be in focus —
+      // that is the whole point of giving it its own key.
+      markCaptureAddressedToAgent()
+      // The session is stamped too, not just the module-level address: the pad
+      // reads its origin from the session at beginSegment, and the address
+      // alone is not visible there.
+      deps.sessionManager.startRemoteCapture(null, true)
+      broadcastCapturePhase('listening', null)
+    } else if (e.type === 'key-state') {
+      // THE SEQUENCE, IN FULL. Every key and the state it left behind, so a
+      // transition bug can be read straight off the log instead of inferred.
+      const k = e as unknown as Record<string, unknown>
+      log.event('key-state', {
+        trigger: k.trigger,
+        dictation: k.dictationActive, instruction: k.instructionActive,
+        remote: k.remoteActive, agent: k.agentActive,
+        agentHeld: k.agentHeld, agentSpoiled: k.agentSpoiled, agentPendingTap: k.agentPendingTap,
+      })
+    } else if (e.type === 'agent-ignored' || e.type === 'remote-ignored') {
+      log.event('key-ignored', {
+        lane: e.type === 'agent-ignored' ? 'agent' : 'orchestrator',
+        reason: (e as { reason?: string }).reason ?? 'unknown',
+      })
+    } else if (e.type === 'agent-stop') {
+      // ARMED MEANS PAUSE, NOT SUBMIT. holdIfArmed decides that downstream; this
+      // records what the key MEANT at the moment it was pressed, so a capture
+      // that vanished can be told apart from one that was parked on purpose.
+      let padArmed = false
+      try { padArmed = snapshot().armed } catch { padArmed = false }
+      log.event('agent-key', { phase: 'stop', armed: padArmed, meaning: padArmed ? 'pause' : 'submit' })
+      resumeOverlayEscape()
+      void deps.sessionManager.stopRemoteCapture()
+      broadcastCapturePhase('transcribing')
     } else if (e.type === 'remote-stop') {
       log.event('remote-key', { phase: 'stop' })
       resumeOverlayEscape() // give Escape back to a still-visible overlay
@@ -3923,6 +4905,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // none is left orphaned on the user's machine/plan (PRD §10.4).
   app.on('before-quit', () => {
     try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
+    // A running Agent turn must not survive us. Same failure as the notch
+    // process that outlived its parent and sat on screen with nothing driving
+    // it — force-quitting Unmute never touched it, because the process was
+    // named something else. A headless `claude` holding a model connection is
+    // the same shape.
+    try { reapHeadlessTurns() } catch (e) { log.warn('agent reap failed', { error: (e as Error).message }) }
+    disposeUnmuteAgent()
+    disposeMcpServer()
     try { cuaManager?.dispose(); cuaServer?.close(); void cuaArming.disposeAll() } catch (e) { log.warn('cua shutdown failed', { error: (e as Error).message }) }
     try { pillController?.hide() } catch { /* best-effort */ }
     try { notchController?.dispose(); notchClient?.dispose() } catch (e) { log.warn('notch shutdown failed', { error: (e as Error).message }) }
@@ -3954,6 +4944,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:set-orchestrate-focus', async (_e, id: string | null) => {
     orchestrateFocusId = id || null
     log.event('orchestrate-focus-set', { taskId: orchestrateFocusId })
+    // THE PAD'S DESTINATIONS ARE LIVE, NOT A SNAPSHOT. scratchpadDestinations()
+    // runs only inside a pad push, so without this the "Add to <task>" button
+    // reflected whichever task was focused the last time the PAD changed —
+    // expanding a task while a pad was already on screen added nothing.
+    try { broadcastScratchpad() } catch { /* nothing showing */ }
     // Opening a session on the wall is the same gesture as opening it in the
     // notch: if the quit switch closed its PTY, bring it back (no Resume tap).
     if (orchestrateFocusId) manager?.opened(orchestrateFocusId)
@@ -3967,6 +4962,19 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   })
   // Open the cockpit from the in-app Remote screen (the user-facing entry point;
   // ⌘⇧O stays as the power-user toggle).
+  // THE SWITCH THAT WAS MISSING. `unmuteAgentAvailable` was read in five places
+  // and written in none: initialised false, with no IPC, no setter and no
+  // control anywhere in the UI. The feature was complete behind a gate that
+  // nothing could open, which is why the Agent never appeared in the capture
+  // picker no matter what was configured.
+  ipcMain.handle('remote:get-unmute-agent-available', async () =>
+    settings.get('unmuteAgentAvailable') === true)
+  ipcMain.handle('remote:set-unmute-agent-available', async (_e, on: boolean) => {
+    settings.set('unmuteAgentAvailable', on === true)
+    log.event('unmute-agent-availability', { enabled: on === true })
+    return settings.get('unmuteAgentAvailable') === true
+  })
+
   ipcMain.handle('remote:open-orchestrate', async () => { openOrchestrateWindow(); return true })
   // Current terminal owner — lets a freshly-mounted overlay card learn it owns
   // nothing (or that the wall already owns its session) without waiting for an event.
@@ -4597,6 +5605,150 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     codexFullAccessConsent: settings.get('codexFullAccessConsent') === true,
     logFile: getRemoteLogFilePath(),
   }))
+
+  // ── Unmute Agent — independent provider, availability, and memory IPC ──
+  ipcMain.handle('remote:get-agent-settings', async () => ({
+    agentProvider: settings.get('unmuteAgentProvider'),
+    unmuteAgentAvailable: settings.get('unmuteAgentAvailable') === true,
+    unmuteAgentMaxProcesses: settings.get('unmuteAgentMaxProcesses'),
+  }))
+  ipcMain.handle('remote:set-unmute-agent-provider', async (_e, provider: unknown) => {
+    if (provider !== 'claude' && provider !== 'codex') return false
+    settings.set('unmuteAgentProvider', provider)
+    const selectedReady = unmuteAgentAvailability.providers
+      .find((candidate) => candidate.id === provider)?.available === true
+    if (settings.get('unmuteAgentAvailable') === true && unmuteAgentController) {
+      unmuteAgentAvailability = {
+        available: selectedReady,
+        ...(selectedReady ? {} : { reason: 'provider-unavailable' as const }),
+        providers: unmuteAgentAvailability.providers,
+      }
+    }
+    log.event('unmute-agent-provider-set', { provider, available: selectedReady })
+    return true
+  })
+  ipcMain.handle('remote:get-agent-availability', async () => structuredClone(unmuteAgentAvailability))
+  ipcMain.handle('remote:agent-submit', async (_e, input: AgentInteractionInput) => {
+    if (!unmuteAgentController) {
+      return {
+        interactionId: '',
+        agentRunId: '',
+        source: 'provider',
+        outcome: 'failed',
+        presentation: 'transient',
+        error: unavailableAgentError(unmuteAgentAvailability.reason),
+      }
+    }
+    return submitUnmuteAgent(input)
+  })
+  ipcMain.handle('remote:agent-cancel', async (_e, runId: unknown) => {
+    if (!unmuteAgentSupervisor || typeof runId !== 'string' || !runId) return false
+    try { await unmuteAgentSupervisor.interrupt(runId); return true } catch { return false }
+  })
+  ipcMain.handle('remote:list-memories', async (_e, query?: unknown) => {
+    if (!unmuteAgentMemory || !unmuteAgentRecords) return []
+    const needle = typeof query === 'string' ? query.trim().toLocaleLowerCase() : ''
+    return (await unmuteAgentRecords.list())
+      .filter((record) => !needle || [
+        record.title, record.kind, record.sensitivity, record.provenance.source,
+        ...record.tags, record.scope?.app, record.scope?.project, record.scope?.purpose,
+        record.deletedAt === undefined ? undefined : 'trash',
+      ].some((value) => value?.toLocaleLowerCase().includes(needle)))
+      .map((record) => {
+        const presented = presentMemoryRecord(record)
+        return {
+          id: presented.id,
+          kind: presented.kind,
+          title: presented.title,
+          tags: [...presented.tags],
+          ...(presented.scope ? { scope: { ...presented.scope } } : {}),
+          sensitivity: presented.sensitivity,
+          provenance: { source: presented.provenance.source },
+          attachmentCount: presented.attachments.length,
+          createdAt: presented.createdAt,
+          updatedAt: presented.updatedAt,
+          version: presented.version,
+          ...(presented.deletedAt === undefined ? {} : { deletedAt: presented.deletedAt }),
+        }
+      })
+  })
+  ipcMain.handle('remote:get-memory', async (_e, id: unknown, revealSensitive?: unknown) => {
+    if (!unmuteAgentMemory || !unmuteAgentRecords || typeof id !== 'string') return null
+    const now = Date.now()
+    const interactionId = randomUUID()
+    const principal = {
+      kind: 'unmute-agent' as const,
+      runId: `settings-${randomUUID()}`,
+      interactionId,
+      expiresAt: now + 60_000,
+    }
+    try {
+      const record = (await unmuteAgentRecords.list()).find((candidate) => candidate.id === id)
+      if (!record) return null
+      const view = await unmuteAgentMemory.get(
+        {
+          principal,
+          now,
+          ...(revealSensitive === true
+            ? { interaction: { id: interactionId, active: true, intents: ['memory.reveal-sensitive'] } }
+            : {}),
+        },
+        id,
+        { includeContent: true, includeDeleted: true },
+      )
+      return {
+        id: view.id,
+        kind: view.kind,
+        title: view.title,
+        tags: [...view.tags],
+        ...(view.scope ? { scope: { ...view.scope } } : {}),
+        sensitivity: view.sensitivity,
+        provenance: { source: view.provenance.source },
+        content: view.content,
+        attachmentCount: record.attachments.length,
+        createdAt: view.createdAt,
+        updatedAt: view.updatedAt,
+        version: view.version,
+        ...(view.deletedAt === undefined ? {} : { deletedAt: view.deletedAt }),
+      }
+    } catch { return null }
+  })
+  ipcMain.handle('remote:forget-memory', async (_e, id: unknown) => {
+    if (!unmuteAgentMemory || typeof id !== 'string') return false
+    const now = Date.now()
+    const interactionId = randomUUID()
+    const principal = {
+      kind: 'unmute-agent' as const,
+      runId: `settings-${randomUUID()}`,
+      interactionId,
+      expiresAt: now + 60_000,
+    }
+    try {
+      await unmuteAgentMemory.forget(
+        { principal, now, interaction: { id: interactionId, active: true, intents: ['memory.forget'] } },
+        id,
+      )
+      return true
+    } catch { return false }
+  })
+  ipcMain.handle('remote:restore-memory', async (_e, id: unknown) => {
+    if (!unmuteAgentMemory || typeof id !== 'string') return false
+    const now = Date.now()
+    const interactionId = randomUUID()
+    const principal = {
+      kind: 'unmute-agent' as const,
+      runId: `settings-${randomUUID()}`,
+      interactionId,
+      expiresAt: now + 60_000,
+    }
+    try {
+      await unmuteAgentMemory.restore(
+        { principal, now, interaction: { id: interactionId, active: true, intents: ['memory.restore'] } },
+        id,
+      )
+      return true
+    } catch { return false }
+  })
   // ── Onboarding / guided one-time setup (PRD §12) ──
   ipcMain.handle('remote:get-setup-status', async () => getSetupStatus())
   ipcMain.handle('remote:set-setup-confirmation', async (_e, key: string, done: boolean) => {
@@ -4795,6 +5947,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const cdp = await codexDriver.connect({ autoArm: true }).catch(() => null)
     const ok = !!cdp
     log.event('codex-connect-requested', { ok })
+    // CONNECTING IS WHAT BRINGS THE IMPORT BACK. Pressing this launches the
+    // ChatGPT app, and the app re-imports the user's Claude setup on the way
+    // up — every MCP server plus CLAUDE.md into AGENTS.md. Startup pruning
+    // cannot help: the pollution arrives seconds AFTER this returns, and would
+    // then survive until the next launch.
+    //
+    // Swept whether or not the connect succeeded. The import is the app
+    // starting, not the CDP handshake — the failure on 19 August still got the
+    // entries back fourteen seconds later.
+    sweepUnmuteFromCodexAfterConnect()
     if (!ok) return { ok: false, reason: 'arm-failed' }
 
     // CONNECTING IS ALSO WHEN THE APPROVAL CHANNEL GETS INSTALLED.
@@ -4908,6 +6070,8 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
 
 /** Test/teardown helper. */
 export function _resetForTest(): void {
+  disposeUnmuteAgent()
+  disposeMcpServer()
   try { manager?.stopMaintenance() } catch { /* ignore */ }
   manager = null
   completeFn = null

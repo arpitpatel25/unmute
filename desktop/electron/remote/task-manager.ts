@@ -124,6 +124,10 @@ export type UiTaskState = TaskState | 'stuck'
 export interface Task {
   id: string
   intent: string
+  /** Structured provenance for consequential work surfaced by Unmute Agent. */
+  origin?: 'unmute-agent'
+  /** Durable logical Agent run that produced this card. */
+  agentRunId?: string
   /** Short display name for the session (2-5 words), generated async just after
    *  dispatch. The UI shows this instead of the full intent; undefined until it
    *  lands (UI falls back to a truncated intent). */
@@ -898,6 +902,101 @@ export class TaskManager extends EventEmitter {
       this.transition(id, 'failed', { error: { reason: 'Could not start the task', detail: (e as Error).message } })
       if ((e as Error).message.startsWith('ATTACHMENT_DELIVERY_')) throw e
     }
+    return id
+  }
+
+  /**
+   * Materialize only a controller-classified consequential Agent result. The
+   * activity stream never calls this, so searches and other transient turns do
+   * not enter the task map. Repeated turns on one run update the same card.
+   */
+  /**
+   * Mark a task as having been created BY THE AGENT rather than by the user.
+   *
+   * Law IV: every object records how it came to exist. Without it, "what have
+   * we been working on?" cannot separate the user's own work from the Agent's
+   * side-effects, and a hand-off is indistinguishable from something they
+   * asked for directly.
+   */
+  mergeAgentOrigin(taskId: string, agentRunId: string): void {
+    const task = this.tasks.get(taskId)
+    if (!task) return
+    task.origin = 'unmute-agent'
+    task.agentRunId = agentRunId
+    this.mergeMeta(task, { origin: 'unmute-agent', agentRunId }, 'agent-handoff-origin')
+    this.emit('updated', task)
+  }
+
+  async presentAgentResult(input: {
+    agentRunId: string
+    intent: string
+    text: string
+    provider?: Extract<AgentKind, 'claude' | 'codex'>
+  }): Promise<string> {
+    const now = this.clock()
+    const summary = input.text.trim().replace(/\s+/gu, ' ').slice(0, 240) || 'Completed'
+    const existing = [...this.tasks.values()].find(
+      (task) => task.origin === 'unmute-agent' && task.agentRunId === input.agentRunId,
+    )
+    if (existing) {
+      existing.intent = input.intent
+      existing.state = 'done'
+      existing.updatedAt = now
+      existing.result = { summary, detail: input.text }
+      if (input.provider) existing.agent = input.provider
+      this.mergeMeta(existing, {
+        intent: input.intent,
+        state: 'done',
+        updatedAt: now,
+        result: existing.result,
+        origin: 'unmute-agent',
+        agentRunId: input.agentRunId,
+        ...(input.provider ? { agent: input.provider } : {}),
+      }, 'present-agent-result')
+      this.emit('updated', existing)
+      return existing.id
+    }
+
+    const id = randomUUID()
+    const dir = join(this.opts.baseDir, this.opts.userKey!, id)
+    const agent = input.provider ?? 'claude'
+    const task: Task = {
+      id,
+      intent: input.intent,
+      sessionId: input.agentRunId,
+      origin: 'unmute-agent',
+      agentRunId: input.agentRunId,
+      agent,
+      kind: 'oneoff',
+      state: 'done',
+      createdAt: now,
+      updatedAt: now,
+      cwd: dir,
+      home: dir,
+      statusPath: join(dir, 'status.json'),
+      recipeScratchPath: join(dir, 'recipe.json'),
+      lastMtimeMs: 0,
+      lastHeartbeatMs: now,
+      mode: 'managed',
+      result: { summary, detail: input.text },
+    }
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
+      id,
+      intent: input.intent,
+      sessionId: input.agentRunId,
+      origin: 'unmute-agent',
+      agentRunId: input.agentRunId,
+      agent,
+      kind: 'oneoff',
+      state: 'done',
+      createdAt: now,
+      updatedAt: now,
+      mode: 'managed',
+      result: task.result,
+    }))
+    this.tasks.set(id, task)
+    this.emit('created', task)
     return id
   }
 
@@ -2964,9 +3063,40 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation'] }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result'] }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
+      if (meta.origin === 'unmute-agent' && meta.agentRunId) {
+        const now0 = this.clock()
+        const task: Task = {
+          id,
+          intent: meta.intent,
+          name: meta.name,
+          sessionId: meta.agentRunId,
+          origin: 'unmute-agent',
+          agentRunId: meta.agentRunId,
+          agent: meta.agent === 'codex' ? 'codex' : 'claude',
+          kind: 'oneoff',
+          state: 'done',
+          createdAt: meta.createdAt ?? now0,
+          updatedAt: meta.updatedAt ?? meta.createdAt ?? now0,
+          cwd: dir,
+          home: dir,
+          statusPath: join(dir, 'status.json'),
+          recipeScratchPath: join(dir, 'recipe.json'),
+          lastMtimeMs: 0,
+          lastHeartbeatMs: meta.updatedAt ?? now0,
+          mode: 'managed',
+          result: meta.result,
+          shelved: meta.shelved || undefined,
+          note: meta.note || undefined,
+          group: meta.group || undefined,
+        }
+        this.tasks.set(id, task)
+        this.emit('created', task)
+        restored++
+        continue
+      }
       // EXTERNAL BACKEND: a Codex thread lives in Codex, so an Unmute restart
       // does not interrupt it — the work may well have finished while we were
       // gone. Rebuild the record and let the poller read the true state off the

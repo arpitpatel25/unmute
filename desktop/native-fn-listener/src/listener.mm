@@ -36,6 +36,14 @@
 static id g_globalMonitor = nil;
 static id g_localMonitor = nil;
 static NSEventModifierFlags g_previousFlags = 0;
+/** RAW flags, device bits intact. `g_previousFlags` is masked with
+ *  DeviceIndependentFlagsMask, which strips exactly the left/right bits we need
+ *  to tell one Command key from the other. */
+static NSEventModifierFlags g_previousRawFlags = 0;
+// Whether the RIGHT Command key specifically is down. NSEventModifierFlagCommand
+// cannot distinguish left from right, so the flagsChanged handler tracks it and
+// the keyDown handler reads it.
+static bool g_rightCommandDown = false;
 static Napi::ThreadSafeFunction g_tsfn;
 static bool g_started = false;
 
@@ -76,7 +84,55 @@ static void handle_flags_changed(NSEvent* event) {
     if (hadOpt && !hasOpt) emit_event("right-option-up");
   }
 
+  // Right Command specifically (keyCode 54) — the Unmute Agent key. Left
+  // Command (55) is ignored for the same reason left Option is: it is where
+  // every system shortcut lives, and claiming it would trample all of them.
+  //
+  // Command was chosen over the remaining modifiers because it composes NO
+  // character. Holding Option produces dead keys and accents; holding Shift
+  // or Control is load-bearing in editors and terminals. Held alone, Command
+  // does nothing on macOS — which is exactly what a push-to-talk key needs.
+  // RIGHT Command specifically, tested against the DEVICE-DEPENDENT bit rather
+  // than NSEventModifierFlagCommand.
+  //
+  // The shared flag cannot tell left from right, and that left a hole: press
+  // right Command, then left Command, then release RIGHT — the shared flag is
+  // still set because left is held, so the up branch never ran and
+  // g_rightCommandDown stayed true permanently. Every keystroke thereafter
+  // emitted right-command-chord, each one a BlockingCall onto the main thread.
+  // NX_DEVICERCMDKEYMASK (0x10) is set only while the right key itself is down,
+  // so the state cannot survive its own release.
+  const NSEventModifierFlags kRightCommand = 0x10;  // NX_DEVICERCMDKEYMASK
+  {
+    // RAW flags on both sides — the masked ones have this bit removed.
+    bool hadRight = (g_previousRawFlags & kRightCommand) != 0;
+    bool hasRight = (event.modifierFlags & kRightCommand) != 0;
+    if (!hadRight && hasRight) { g_rightCommandDown = true;  emit_event("right-command-down"); }
+    if (hadRight && !hasRight) { g_rightCommandDown = false; emit_event("right-command-up"); }
+
+    // A MODIFIER JOINING IS A CHORD TOO.
+    //
+    // handle_key_down below spoils the gesture when a KEY is pressed while
+    // right Command is held, which covers ⌘C. It cannot cover ⌘⇧4 or ⌘⌃⇧4:
+    // Shift, Control and Option arrive here through flagsChanged and never
+    // reach keyDown, so holding right Command and adding ⇧ produced no spoil
+    // signal at all — and the release then read as a clean single tap, which
+    // SUBMITTED the Agent capture the user was still speaking into. Taking a
+    // screenshot mid-utterance sent it.
+    //
+    // Emitting on every qualifying flags change is fine: the receiver treats
+    // the signal as a latch, so repeats are idempotent.
+    if (hasRight) {
+      const NSEventModifierFlags kOtherChord =
+        NSEventModifierFlagShift | NSEventModifierFlagControl | NSEventModifierFlagOption;
+      bool hadOther = (g_previousRawFlags & kOtherChord) != 0;
+      bool hasOther = (event.modifierFlags & kOtherChord) != 0;
+      if (!hadOther && hasOther) emit_event("right-command-chord");
+    }
+  }
+
   g_previousFlags = mods;
+  g_previousRawFlags = event.modifierFlags;
 }
 
 static void handle_key_down(NSEvent* event) {
@@ -91,6 +147,16 @@ static void handle_key_down(NSEvent* event) {
       (mods & NSEventModifierFlagCommand) != 0 &&
       (mods & otherChordModifiers) == 0) {
     emit_event("command-v");
+  }
+
+  // Any key pressed while right Command is held makes this a SHORTCUT, not a
+  // tap. The Agent gesture is a double-tap of right Command alone; without this
+  // signal there would be no way to tell ⌘C from someone invoking the Agent,
+  // and the only alternative is starting a capture speculatively on every ⌘
+  // press and cancelling it a moment later. Observation only — the event is
+  // still delivered, so the shortcut works exactly as before.
+  if (g_rightCommandDown) {
+    emit_event("right-command-chord");
   }
 }
 
