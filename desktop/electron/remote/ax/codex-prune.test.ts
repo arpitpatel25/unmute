@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { removeSteerBlock, removeUnmuteComputerServer } from './codex-prune'
+import {
+  CONNECT_SWEEP_DELAYS_MS,
+  removeSteerBlock,
+  removeUnmuteComputerServer,
+  sweepUnmuteFromCodexAfterConnect,
+} from './codex-prune'
 
 const REAL = `[mcp_servers.chrome-devtools]
 command = "npx"
@@ -83,4 +88,24 @@ test('a file that is only the block becomes empty, not a stray newline', () => {
 test('markdown without the block is untouched', () => {
   const md = '# My notes\n'
   assert.deepEqual(removeSteerBlock(md), { text: md, removed: false })
+})
+
+// THE GAP A SINGLE PASS LEAVES. The import lands AFTER connect returns —
+// measured at fourteen seconds on 19 August — so one prune on completion runs
+// before there is anything to remove, and the entry then survives until the
+// next launch.
+test('the connect sweep keeps checking past the moment the import lands', () => {
+  const scheduled: number[] = []
+  sweepUnmuteFromCodexAfterConnect('/nonexistent-home', (_fn, ms) => { scheduled.push(ms); return { unref() {} } })
+
+  assert.deepEqual(scheduled, [...CONNECT_SWEEP_DELAYS_MS])
+  assert.ok(scheduled.some((ms) => ms > 14_000), 'a pass must fall after the observed 14s delay')
+  assert.ok(scheduled.length >= 3, 'one retry is not a window')
+})
+
+test('the sweep never holds the process open', () => {
+  let unreffed = 0
+  sweepUnmuteFromCodexAfterConnect('/nonexistent-home', () => ({ unref() { unreffed += 1 } }))
+
+  assert.equal(unreffed, CONNECT_SWEEP_DELAYS_MS.length, 'every timer is unreffed')
 })

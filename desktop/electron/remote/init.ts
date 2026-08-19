@@ -125,7 +125,7 @@ import { Presence } from './presence'
 import { listImportableSessions, findSessionCwd } from './claude-cli-sessions'
 import { listImportableCodexSessions, findCodexSessionCwd } from './codex/cli-session'
 import { applyAxRegistration } from './ax/register'
-import { pruneUnmuteFromCodex } from './ax/codex-prune'
+import { pruneUnmuteFromCodex, sweepUnmuteFromCodexAfterConnect } from './ax/codex-prune'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
 import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
@@ -5919,6 +5919,16 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     const cdp = await codexDriver.connect({ autoArm: true }).catch(() => null)
     const ok = !!cdp
     log.event('codex-connect-requested', { ok })
+    // CONNECTING IS WHAT BRINGS THE IMPORT BACK. Pressing this launches the
+    // ChatGPT app, and the app re-imports the user's Claude setup on the way
+    // up — every MCP server plus CLAUDE.md into AGENTS.md. Startup pruning
+    // cannot help: the pollution arrives seconds AFTER this returns, and would
+    // then survive until the next launch.
+    //
+    // Swept whether or not the connect succeeded. The import is the app
+    // starting, not the CDP handshake — the failure on 19 August still got the
+    // entries back fourteen seconds later.
+    sweepUnmuteFromCodexAfterConnect()
     if (!ok) return { ok: false, reason: 'arm-failed' }
 
     // CONNECTING IS ALSO WHEN THE APPROVAL CHANNEL GETS INSTALLED.

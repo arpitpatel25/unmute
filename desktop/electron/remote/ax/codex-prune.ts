@@ -140,3 +140,32 @@ export async function pruneUnmuteFromCodex(home = homedir()): Promise<void> {
     log.warn('codex prune skipped', { error: String(error) })
   }
 }
+
+/**
+ * The same removal, repeated over a short window.
+ *
+ * WHY ONCE IS NOT ENOUGH. The import does not happen while Connect is running;
+ * it happens when the ChatGPT app comes up, which is AFTER the call returns.
+ * Measured 19 August: the connect attempt failed at 11:59:51 and config.toml
+ * was rewritten at 12:00:05 — fourteen seconds later. A single prune fired on
+ * completion would have run before there was anything to remove, and the entry
+ * would then have survived until the next launch, which is the whole gap this
+ * closes.
+ *
+ * A few cheap passes over a minute rather than a file watcher: this reads two
+ * small files and usually changes nothing, and a watcher on another app's
+ * config is a lot of machinery — and another thing to leak — for a case that
+ * happens when a person presses a button.
+ */
+export const CONNECT_SWEEP_DELAYS_MS = [1_000, 5_000, 15_000, 30_000, 60_000] as const
+
+export function sweepUnmuteFromCodexAfterConnect(
+  home = homedir(),
+  schedule: (fn: () => void, ms: number) => unknown = setTimeout,
+): void {
+  for (const delay of CONNECT_SWEEP_DELAYS_MS) {
+    const timer = schedule(() => { void pruneUnmuteFromCodex(home) }, delay)
+    // Never hold the process open for a cleanup pass.
+    ;(timer as { unref?: () => void })?.unref?.()
+  }
+}
