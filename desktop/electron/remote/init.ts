@@ -80,7 +80,6 @@ import { ClaudeCodeProvider } from './agent/providers/claude'
 import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-headless'
 import { agentConstitution } from './agent/constitution'
 import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
-import { noteAgentDelivery } from './capture/agentDelivery'
 import { nextConversation, type Conversation } from './agent/continuity'
 import { HandoffCapability } from './agent/capabilities/handoff'
 import { SessionsCapability } from './agent/capabilities/sessions'
@@ -986,11 +985,9 @@ async function initializeUnmuteAgent(): Promise<void> {
             try { beginOwnClipboardSequence(); ownsClipboard = true } catch { /* watcher may not be armed */ }
             clipboard.writeText(text)
             if (clipboard.readText() !== text) throw new DeliveryCapabilityError('delivery-failed')
-            // Claim it. Dictation delivers through this same pasteboard, so
-            // without this the user's next sentence erases the answer they
-            // just asked for — and reporting that requires speaking, which
-            // erases it again.
-            noteAgentDelivery(text, Date.now())
+            // The delivery is NOT claimed beyond this write. The clipboard
+            // belongs to whatever touches it next, including the user's own
+            // next sentence — see the note in clipboard.ts injectOutput.
           } catch (error) {
             if (error instanceof DeliveryCapabilityError) throw error
             throw new DeliveryCapabilityError('delivery-failed')

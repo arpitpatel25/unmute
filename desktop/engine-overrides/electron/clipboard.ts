@@ -344,7 +344,6 @@ function simulateViaOsascript(key: string, modifier: string): Promise<void> {
  */
 /** The last text WE pasted. Read by captureSelectedText so unmute's own output
  *  is never mistaken for something the user copied. */
-import { shouldRestoreAgentDelivery } from './paywall/remote/capture/agentDelivery'
 
 let lastDeliveredText: string | null = null
 export function noteDeliveredText(text: string): void { lastDeliveredText = text }
@@ -702,22 +701,27 @@ export async function injectOutput(text: string, images?: readonly string[]): Pr
     }
   }
 
-  // GIVE THE AGENT'S ANSWER BACK. Its only text channel is this same
-  // pasteboard, so without this a dictation destroys whatever the user just
-  // asked the Agent for — and reporting that requires speaking, which destroys
-  // it again. The dictation has already been pasted at the cursor by this
-  // point, so restoring costs the user nothing.
-  const restore = shouldRestoreAgentDelivery(Date.now())
-  if (restore.restore) {
-    try {
-      clipboard.writeText(restore.text)
-      noteOurWrite()
-      noteDeliveredText(restore.text)
-      console.log('[clipboard] restored the Agent delivery a dictation would have erased')
-    } catch (err) {
-      console.warn('[clipboard] could not restore the Agent delivery:', err instanceof Error ? err.message : err)
-    }
-  }
+  // NOTHING IS PUT BACK HERE, DELIBERATELY.
+  //
+  // There used to be a rule that an Agent clipboard delivery outranked the
+  // next 30 seconds of output: a dictation would paste its transcript and then
+  // rewrite the Agent's text over it. It was wrong twice over.
+  //
+  // It raced. Synthetic Cmd+V QUEUES a keystroke; the target app reads the
+  // pasteboard when it processes that event, milliseconds later. The rewrite
+  // landed 1ms after the keystroke, so the app read the restored text and the
+  // user's own words never arrived. Observed 19 August: two dictations in a
+  // row pasted an email address instead of the sentence just spoken, and it
+  // only stopped when the window expired.
+  //
+  // And it could not know when to stop. The rule was "protection is spent once
+  // the user pastes" — but a manual Cmd+V never reaches this process, so the
+  // condition was unobservable and the window always ran its full length, long
+  // after the user had what they wanted.
+  //
+  // The clipboard belongs to whatever wrote to it last. If an Agent answer is
+  // overwritten before it is used, that is the user's own next action, and
+  // guessing otherwise produces exactly the hidden behaviour above.
 }
 
 export function copyToClipboard(text: string): void {
