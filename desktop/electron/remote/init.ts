@@ -83,6 +83,7 @@ import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
 import { nextConversation, type Conversation } from './agent/continuity'
 import { HandoffCapability } from './agent/capabilities/handoff'
 import { SessionsCapability } from './agent/capabilities/sessions'
+import { HistoryCapability } from './agent/capabilities/history'
 import { selectSessions, type IndexedSession } from './agent/sessions/index'
 
 /** Where the Agent's last conversation got to. Memory is the durable
@@ -912,6 +913,33 @@ async function initializeUnmuteAgent(): Promise<void> {
     ])
     const registry = new CapabilityRegistry([
       new MemoryCapability(memory),
+      // WHAT THE USER ACTUALLY SAID, LATELY. The one thing a coding session
+      // cannot reach: it lives in Unmute's own archive, not on the filesystem.
+      // Read-only, and pasting reuses copyHistoryToClipboard — the same call
+      // the History panel's copy button makes, so text and attachments travel
+      // together exactly as they do today.
+      new HistoryCapability({
+        async recent(withinMs) {
+          const since = Date.now() - withinMs
+          return captureHistory.list()
+            .filter((entry) => entry.finalizedAt >= since)
+            .sort((a, b) => b.finalizedAt - a.finalizedAt)
+            .map((entry) => ({
+              id: entry.id,
+              lane: entry.kind,
+              at: entry.finalizedAt,
+              text: entry.text,
+              attachments: [...entry.attachments],
+              ...(entry.destination ? { destination: entry.destination } : {}),
+            }))
+        },
+        async copy(id) {
+          const entry = captureHistory.list().find((candidate) => candidate.id === id)
+          if (!entry) return false
+          const payload = clipboardPayload(entry)
+          return copyHistoryToClipboard(payload.text, payload.attachments)
+        },
+      }),
       // What the user has been working on. Backed by the task manager, which
       // already holds every session Unmute created — so v1 needs no filesystem
       // scanner, and the Agent's OWN runs are excluded by construction because
