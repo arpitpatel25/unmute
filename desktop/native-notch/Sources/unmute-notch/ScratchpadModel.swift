@@ -141,7 +141,7 @@ struct ScratchpadTaskRef: Decodable, Equatable {
 
 /// One destination button.
 struct ScratchpadDestination: Identifiable, Equatable {
-    let id: String        // "cursor" | "newTask" | "openTask"
+    let id: String        // "cursor" | "newTask" | "openTask" | "agent"
     let label: String
     let isPrimary: Bool
 }
@@ -169,8 +169,23 @@ struct ScratchpadDestinations: Decodable, Equatable {
     /// default: every alternative is one tap away and nothing is committed
     /// until a button is actually pressed.
     func ordered(origin: String) -> [ScratchpadDestination] {
+        // AN AGENT PAD HAS EXACTLY ONE EXIT.
+        //
+        // The utterance was addressed to the Agent when the key went down, and
+        // no other destination is a plausible reading of that. Offering
+        // "New task" and "Paste at cursor" here is what sent one to the cursor
+        // on 19 August — the Agent turn it belonged to never ran, and nothing
+        // on screen said so. Discard is drawn by the footer, so this list
+        // carries the send and nothing else.
+        if origin == "agent" {
+            return [ScratchpadDestination(id: "agent", label: "Send to Unmute Agent", isPrimary: true)]
+        }
         let taskIsPrimary = origin == "task"
         var out: [ScratchpadDestination] = []
+        // Present ONLY while a task is actually open. The payload is re-pushed
+        // whenever focus changes, so this appears and disappears as the user
+        // expands and collapses one, rather than reflecting whichever task
+        // happened to be focused when the pad last changed.
         if let t = openTask {
             out.append(ScratchpadDestination(id: "openTask", label: "Add to \(t.name)", isPrimary: taskIsPrimary))
         }

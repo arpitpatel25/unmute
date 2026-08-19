@@ -299,7 +299,9 @@ export interface ScratchpadPadP {
   id: string
   /** Where the capture that opened this pad was heading — the DEFAULT
    *  destination, never a commitment. */
-  origin: 'cursor' | 'task'
+  /** Where the capture was headed when it opened. The pad panel picks its
+   *  destination buttons from this, so 'agent' has to survive the wire. */
+  origin: 'cursor' | 'task' | 'agent'
   entries: ScratchpadEntryP[]
 }
 
@@ -432,7 +434,7 @@ export type NotchEvent =
   // deliberate acts on the pad itself, never a side effect of a mode switch.
   | { type: 'scratchpadArm'; on: boolean }
   | { type: 'scratchpadRemove'; id: string }
-  | { type: 'scratchpadDeliver'; dest: 'cursor' | 'newTask' | 'openTask' }
+  | { type: 'scratchpadDeliver'; dest: 'cursor' | 'newTask' | 'openTask' | 'agent' }
   | { type: 'scratchpadDiscard' }
 
 export interface NotchClientOpts {

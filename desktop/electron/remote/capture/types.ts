@@ -6,7 +6,16 @@ export type InsertKind = 'url' | 'path' | 'line' | 'block' | 'image'
 
 /** Where a pad is delivered. Set as a default by the trigger key that opened
  *  the capture; overridable on the pad. */
-export type Destination = 'cursor' | 'task'
+/**
+ * Where a capture is headed.
+ *
+ * 'agent' was missing for months, and its absence was not neutral: the Agent
+ * lane reuses the Remote pipeline, so a pad it filled resolved to 'cursor' and
+ * the panel offered "New task / Paste at cursor". On 19 August an utterance
+ * spoken to the Agent was pasted at the cursor instead, and the Agent turn it
+ * belonged to never happened at all.
+ */
+export type Destination = 'cursor' | 'task' | 'agent'
 
 // THE PAD'S CLOCK IS THE PAD'S OWN. Every `startMs`, `endMs` and `atMs` below
 // is milliseconds since `Pad.createdAt` — NOT since the capture the entry

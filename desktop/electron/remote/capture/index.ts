@@ -694,7 +694,9 @@ function dropLivePad(): void {
 /** Where the user chose to send it. Wider than `Destination` because "a new
  *  task" and "the task already on screen" are the same rendering but different
  *  deliveries. */
-export type DeliveryTarget = 'cursor' | 'newTask' | 'openTask'
+/** Where a held pad can be sent. 'agent' hands it to the Unmute Agent, which
+ *  is the only destination an Agent-addressed pad offers. */
+export type DeliveryTarget = 'cursor' | 'newTask' | 'openTask' | 'agent'
 
 /** Whether a delivery may proceed, and if not, why. */
 export type DeliveryGate = 'ok' | 'capture-in-progress' | 'nothing-showing' | 'live-slot-taken'

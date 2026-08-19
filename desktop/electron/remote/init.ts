@@ -170,7 +170,7 @@ import type { ScratchpadEntryP, ScratchpadPayloadP } from './notch/notch-client'
 // Accepted as opaque shapes (like paywall/main-extensions' OSSAdapter) so we
 // don't entangle with engine internals. main.ts passes its real instances.
 interface SessionManagerLike {
-  startRemoteCapture(targetTaskId?: string | null): void
+  startRemoteCapture(targetTaskId?: string | null, agentAddressed?: boolean): void
   stopRemoteCapture(): Promise<void>
   /** Fired from every ending the session has — dispatch, cancel, too-short,
    *  junk STT. Declared here so the lane locks can be cleared however a capture
@@ -2620,6 +2620,18 @@ function toScratchpadEntry(e: Entry): ScratchpadEntryP {
  *  A Discard that appeared to cancel a send would be lying about both. */
 function scratchpadPayload(s = snapshot()): ScratchpadPayloadP {
   const pad = heldForSurface(s)
+  // THE WHOLE DECISION, EVERY PUSH. Which buttons the panel drew, and the three
+  // inputs that decided them. Reading a wrong-destination report without this
+  // means inferring the origin from what happened afterwards, which is how an
+  // Agent utterance pasted at the cursor was first put down to the scratchpad.
+  log.event('scratchpad-state', {
+    armed: s.armed,
+    delivering: deliveryInFlight(),
+    padOrigin: pad?.origin ?? null,
+    padEntries: pad?.entries.length ?? 0,
+    focusedTask: orchestrateFocusId,
+    offers: pad?.origin === 'agent' ? ['agent'] : ['openTask?', 'newTask', 'cursor'],
+  })
   return {
     enabled: settings.get('scratchpadEnabled') !== false,
     armed: s.armed,
@@ -2684,8 +2696,13 @@ function discardScratchpad(): void {
  *  WHETHER IT MAY RUN AT ALL IS `gateDelivery`, in capture/, where it can be
  *  unit-tested. This handler owns the log line and the toast; the rule is not
  *  its to keep. */
-async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promise<string | null> {
-  const target: DeliveryTarget = dest === 'cursor' ? 'cursor' : dest === 'openTask' ? 'openTask' : 'newTask'
+async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask' | 'agent'): Promise<string | null> {
+  const target: DeliveryTarget = dest === 'cursor'
+    ? 'cursor'
+    : dest === 'agent' ? 'agent' : dest === 'openTask' ? 'openTask' : 'newTask'
+  log.event('scratchpad-deliver-requested', {
+    dest, target, padOrigin: heldForSurface(snapshot())?.origin ?? null,
+  })
 
   const gate = gateDelivery()
   if (gate !== 'ok') {
@@ -2702,7 +2719,16 @@ async function deliverScratchpad(dest: 'cursor' | 'newTask' | 'openTask'): Promi
   // this module, and its header records why that direction is one-way (a lazy
   // require of remote/init fails inside the bundled main, swallowed by a
   // fail-open catch). Importing it here would close exactly that loop.
-  const send = target === 'cursor'
+  // THE AGENT IS ITS OWN EXIT. dispatchFromCapture already routes an utterance
+  // to the Agent when the destination says so, so the pad hands it the same
+  // way an unheld Agent capture would have — the only difference being that
+  // the user chose the moment.
+  const send = target === 'agent'
+    ? async (text: string, attachments: readonly string[]): Promise<string | null> => {
+      log.event('scratchpad-deliver-agent', { chars: text.length, attachments: attachments.length })
+      return dispatchFromCapture(text, attachments, null, { destination: 'unmute-agent' })
+    }
+    : target === 'cursor'
     // The attachments ride along: at the cursor an image cannot be a path, so
     // the pasteboard hands the real bytes over after the text (injectOutput).
     // A task needs nothing extra — its rendering already names each file.
@@ -4154,7 +4180,14 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         setName: (id, name) => { if (name.trim()) mgr.setName(id, name.trim().slice(0, 48)) },
         setShelved: (id, on) => mgr.setShelved(id, on),
         setNote: (id, note) => mgr.setNote(id, note),
-        focus: (id) => { orchestrateFocusId = id },
+        focus: (id) => {
+          orchestrateFocusId = id
+          log.event('orchestrate-focus-set', { taskId: orchestrateFocusId, via: 'notch' })
+          // Same reason as the IPC setter: the pad's destinations are computed
+          // per push, so a focus change has to announce itself or the
+          // "Add to <task>" button never appears on an already-open pad.
+          try { broadcastScratchpad() } catch { /* nothing showing */ }
+        },
         opened: (id) => mgr.opened(id),
         remoteKey: () => getRemoteKey(),
         // THE IMPORT RAIL. Sessions this machine has and unmute does not.
@@ -4648,7 +4681,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       // Addressed at the AGENT, not at whatever task happens to be in focus —
       // that is the whole point of giving it its own key.
       markCaptureAddressedToAgent()
-      deps.sessionManager.startRemoteCapture(null)
+      // The session is stamped too, not just the module-level address: the pad
+      // reads its origin from the session at beginSegment, and the address
+      // alone is not visible there.
+      deps.sessionManager.startRemoteCapture(null, true)
       broadcastCapturePhase('listening', null)
     } else if (e.type === 'key-state') {
       // THE SEQUENCE, IN FULL. Every key and the state it left behind, so a
@@ -4666,7 +4702,12 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         reason: (e as { reason?: string }).reason ?? 'unknown',
       })
     } else if (e.type === 'agent-stop') {
-      log.event('agent-key', { phase: 'stop' })
+      // ARMED MEANS PAUSE, NOT SUBMIT. holdIfArmed decides that downstream; this
+      // records what the key MEANT at the moment it was pressed, so a capture
+      // that vanished can be told apart from one that was parked on purpose.
+      let padArmed = false
+      try { padArmed = snapshot().armed } catch { padArmed = false }
+      log.event('agent-key', { phase: 'stop', armed: padArmed, meaning: padArmed ? 'pause' : 'submit' })
       resumeOverlayEscape()
       void deps.sessionManager.stopRemoteCapture()
       broadcastCapturePhase('transcribing')
@@ -4863,6 +4904,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   ipcMain.handle('remote:set-orchestrate-focus', async (_e, id: string | null) => {
     orchestrateFocusId = id || null
     log.event('orchestrate-focus-set', { taskId: orchestrateFocusId })
+    // THE PAD'S DESTINATIONS ARE LIVE, NOT A SNAPSHOT. scratchpadDestinations()
+    // runs only inside a pad push, so without this the "Add to <task>" button
+    // reflected whichever task was focused the last time the PAD changed —
+    // expanding a task while a pad was already on screen added nothing.
+    try { broadcastScratchpad() } catch { /* nothing showing */ }
     // Opening a session on the wall is the same gesture as opening it in the
     // notch: if the quit switch closed its PTY, bring it back (no Resume tap).
     if (orchestrateFocusId) manager?.opened(orchestrateFocusId)
