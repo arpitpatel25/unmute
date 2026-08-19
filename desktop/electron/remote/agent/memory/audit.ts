@@ -8,16 +8,28 @@ const DIRECTORY_MODE = 0o700
 const FILE_MODE = 0o600
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
-export type MemoryAuditOperation =
-  | 'store'
-  | 'search'
-  | 'get'
-  | 'update'
-  | 'forget'
-  | 'restore'
-  | 'list'
-  | 'link'
-  | 'open-attachment'
+/**
+ * ONE list, used by both the type and the runtime check below.
+ *
+ * These were two lists once — a type union and a literal array inside
+ * writeRow — and adding an operation to the union alone compiled cleanly,
+ * typechecked cleanly, passed every unit test (which audit through a fake
+ * sink), and then rejected every real write at runtime. A second copy of a
+ * vocabulary is a second chance to be wrong about it.
+ */
+export const MEMORY_AUDIT_OPERATIONS = [
+  'store',
+  'search',
+  'get',
+  'update',
+  'forget',
+  'restore',
+  'list',
+  'link',
+  'open-attachment',
+] as const
+
+export type MemoryAuditOperation = typeof MEMORY_AUDIT_OPERATIONS[number]
 
 export type MemoryAuditOutcome = 'success' | 'failure'
 
@@ -116,8 +128,7 @@ export class JsonlMemoryAudit implements MemoryAuditSink {
         || !['task', 'unmute-agent'].includes(row.principalKind)
         || !/^[a-f0-9]{64}$/.test(row.principalIdHash)
         || !IDENTIFIER_PATTERN.test(row.memoryId)
-        || !['store', 'search', 'get', 'update', 'forget', 'restore', 'open-attachment']
-          .includes(row.operation)
+        || !(MEMORY_AUDIT_OPERATIONS as readonly string[]).includes(row.operation)
         || !Number.isSafeInteger(row.at) || row.at < 0
         || !['success', 'failure'].includes(row.outcome)
       ) throw new MemoryAuditError()

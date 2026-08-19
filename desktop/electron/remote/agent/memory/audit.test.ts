@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 
-import { JsonlMemoryAudit, principalIdHash } from './audit.ts'
+import { JsonlMemoryAudit, MEMORY_AUDIT_OPERATIONS, principalIdHash } from './audit.ts'
 import type { McpPrincipal } from '../types.ts'
 
 const roots: string[] = []
@@ -55,4 +55,29 @@ test('hashes each principal kind deterministically without conflating its identi
   assert.notEqual(first, principalIdHash({ ...agent, runId: 'other-run' }))
   assert.notEqual(first, principalIdHash({ kind: 'task', taskId: 'run-secret' }))
   assert.match(first, /^[a-f0-9]{64}$/)
+})
+
+// THE BUG THIS CATCHES. The operation vocabulary lived in two places — a type
+// union and a literal inside writeRow. Adding 'list' to the union alone
+// compiled, typechecked, and passed every test that audits through a fake
+// sink; the real sink then rejected every write. Only a smoke against the real
+// stack found it.
+test('every declared audit operation is actually writable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'unmute-memory-audit-'))
+  roots.push(root)
+  const audit = new JsonlMemoryAudit({ root })
+
+  for (const operation of MEMORY_AUDIT_OPERATIONS) {
+    await audit.write({
+      principal: { kind: 'unmute-agent', runId: 'run-1', interactionId: 'int-1', expiresAt: 1 },
+      memoryId: 'memory-1',
+      operation,
+      at: 1_000,
+      outcome: 'success',
+    })
+  }
+
+  const rows = (await readFile(join(root, 'audit', 'access.jsonl'), 'utf8'))
+    .trim().split('\n').map((line) => JSON.parse(line) as { operation: string })
+  assert.deepEqual(rows.map((row) => row.operation), [...MEMORY_AUDIT_OPERATIONS])
 })
