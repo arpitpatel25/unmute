@@ -33,6 +33,10 @@ export function codexHeadlessArgv(launch: AgentProcessLaunch, systemPrompt: stri
     '-c', 'mcp_servers.unmute.bearer_token_env_var="UNMUTE_MCP_TOKEN"',
     '-c', 'mcp_servers.unmute.enabled=true',
     '-c', 'mcp_servers.unmute.required=true',
+    // This process receives an interaction-scoped bearer token and only this
+    // MCP server. Approve its role-filtered capability set without trying to
+    // open an approval UI that a headless Agent cannot answer.
+    '-c', 'mcp_servers.unmute.default_tools_approval_mode="approve"',
     'exec',
     ...launch.argv,
     '--ignore-user-config',

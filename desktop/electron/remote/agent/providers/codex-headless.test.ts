@@ -37,7 +37,7 @@ test('Codex runs noninteractively without a repository trust prompt', () => {
   assert.equal(argv.at(-1), '-')
 })
 
-test('Codex sees only the Unmute MCP server while Claude configuration is left provider-specific', () => {
+test('Codex pre-approves only the Unmute Agent MCP server while Claude stays provider-specific', () => {
   const argv = codexHeadlessArgv(launch(), 'CONSTITUTION')
   assert.ok(argv.includes('--ignore-user-config'))
   assert.ok(argv.includes('--ignore-rules'))
@@ -47,6 +47,8 @@ test('Codex sees only the Unmute MCP server while Claude configuration is left p
   assert.ok(argv.includes('mcp_servers.unmute.url="http://127.0.0.1:42117/mcp"'))
   assert.ok(argv.includes('mcp_servers.unmute.bearer_token_env_var="UNMUTE_MCP_TOKEN"'))
   assert.ok(argv.includes('mcp_servers.unmute.required=true'))
+  assert.ok(argv.includes('mcp_servers.unmute.default_tools_approval_mode="approve"'))
+  assert.ok(!argv.includes('--dangerously-bypass-approvals-and-sandbox'))
   assert.ok(!argv.join(' ').includes('secret'), 'the bearer token must stay in the environment')
 })
 
