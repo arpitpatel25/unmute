@@ -274,7 +274,7 @@ struct StageView: View {
             .padding(.leading, 6)
             // 4 · VIEW
             if t.hasTerminal && t.alive {
-                KeyButton(label: model.stageTerminalOpen ? "Messages" : "Terminal",
+                KeyButton(label: model.stageTerminalOpen ? "Hide terminal" : "Terminal",
                           symbol: model.stageTerminalOpen ? "text.bubble" : "terminal") {
                     model.setStageTerminalVisible(!model.stageTerminalOpen)
                 }
