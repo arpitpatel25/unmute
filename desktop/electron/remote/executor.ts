@@ -33,6 +33,9 @@ export interface SpawnOpts {
    *  the most-recent one that bare `--continue` would grab. Mutually exclusive
    *  with forkFromSessionId and sessionId. */
   resumeSessionId?: string
+  /** Attach only to the already-running Unmute tmux session for taskId.
+   *  No provider command is built or launched and no input is submitted. */
+  attachExisting?: boolean
 }
 
 export interface AgentExecutor {
@@ -62,6 +65,10 @@ export interface AgentExecutor {
   onData(cb: (chunk: string) => void): void
   /** Kill the session immediately (PRD §10.4 instant kill switch). */
   kill(): void
+  /** Close only Unmute's PTY/tmux client, leaving the owned tmux session and
+   * provider process running. Optional for executors without a detachable
+   * runtime; callers must fall back to kill() there. */
+  detach?(): void
   /** True while the PTY process is alive. */
   readonly alive: boolean
 }

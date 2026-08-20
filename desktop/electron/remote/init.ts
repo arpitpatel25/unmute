@@ -2204,7 +2204,8 @@ function executorFactory(resume = false, forTask?: AgentKind, factoryOpts?: Exec
     // already baked into the thread by `thread/start`, so they are not repeated
     // here — see modelArgs in codex-executor.ts.
     if (factoryOpts?.codexRemote) return new CodexExecutor({ remote: factoryOpts.codexRemote })
-    return new CodexExecutor(codexCliSpawnArgs())
+    const tmux = tmuxBin ? { bin: tmuxBin, confPath: tmuxConfPath, cols: 120, rows: 40 } : undefined
+    return new CodexExecutor({ ...codexCliSpawnArgs(), tmux })
   }
   // PRD §10.1/§10.6 interaction: a sandbox is the "fenced yard" — when it's ON
   // we do NOT skip permissions globally (out-of-fence access still prompts via
@@ -4224,7 +4225,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         killAll: () => mgr.killAll(),
         resume: (id) => mgr.resume(id),
         rerun: (intent) => { void dispatchFromCapture(intent) },
-        setKind: (id, kind) => mgr.setKind(id, kind),
+        setKind: (id, kind) => mgr.setKind(id, kind, { pinned: kind === 'session' }),
         setName: (id, name) => { if (name.trim()) mgr.setName(id, name.trim().slice(0, 48)) },
         setShelved: (id, on) => mgr.setShelved(id, on),
         setNote: (id, note) => mgr.setNote(id, note),
@@ -4586,7 +4587,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // the on-disk meta + status files (they were never lost — just invisible once
   // the in-memory list reset on relaunch). Then start maintenance so the sweep
   // can purge any rehydrated rows that are too old.
-  void manager.rehydrate().finally(() => {
+  void manager.rehydrate().then(() => manager?.reattachPersistent()).finally(() => {
     // Auto-purge dead tasks (>24h): in-memory aged-out tasks AND orphan on-disk
     // dirs from past runs. Kills any leftover session + erases OUR scratch dir +
     // row. Runs once now then hourly. Never touches ~/.claude.
@@ -4909,10 +4910,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     curator.notifyCheckpoint(t.id) // kill/delete → whatever ran is a closed chapter, sweep-eligible
   })
 
-  // Master kill switch: closing Unmute terminates every Claude/tmux session so
-  // none is left orphaned on the user's machine/plan (PRD §10.4).
+  // Closing Unmute detaches persistent tmux clients so their work keeps moving;
+  // one-offs stay bounded and headless Agent turns are still reaped below.
   app.on('before-quit', () => {
-    try { manager?.killAll() } catch (e) { log.warn('before-quit killAll failed', { error: (e as Error).message }) }
+    try { manager?.shutdown() } catch (e) { log.warn('before-quit shutdown failed', { error: (e as Error).message }) }
     // A running Agent turn must not survive us. Same failure as the notch
     // process that outlived its parent and sat on screen with nothing driving
     // it — force-quitting Unmute never touched it, because the process was
@@ -5089,7 +5090,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
   // exempts it from idle-kill + purge; 'oneoff' re-arms normal lifecycle.
   ipcMain.handle('remote:set-kind', async (_e, id: string, kind: 'oneoff' | 'session') => {
     if (!manager || (kind !== 'oneoff' && kind !== 'session')) return false
-    manager.setKind(id, kind)
+    manager.setKind(id, kind, { pinned: kind === 'session' })
     return true
   })
   // Accept the pending route offer: erase the seconds-old mis-spawn and deliver

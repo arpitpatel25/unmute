@@ -16,7 +16,7 @@
 
 import { createLogger } from './log'
 import type { AgentExecutor, SpawnOpts } from './executor'
-import { sessionNameFor, buildCommand, tmuxNewSessionArgs, tmuxKillSessionArgs } from './tmux'
+import { sessionNameFor, buildCommand, tmuxNewSessionArgs, tmuxAttachArgs, tmuxKillSessionArgs } from './tmux'
 
 /** When set, the agent runs inside a tmux session (private socket) so it can be
  *  popped out to a real terminal as the SAME session. Session name is derived
@@ -90,6 +90,8 @@ export class CliAgentExecutor implements AgentExecutor {
   }
 
   async spawn(spawnOpts: SpawnOpts): Promise<void> {
+    this.exited = false
+    this.sawData = false
     this.taskId = spawnOpts.taskId
     const slog = log.child({ taskId: this.taskId, agent: this.cfg.label })
 
@@ -132,10 +134,17 @@ export class CliAgentExecutor implements AgentExecutor {
     if (this.cfg.tmux) {
       const session = sessionNameFor(this.taskId)
       this.tmuxSession = session
-      const command = buildCommand(this.cfg.bin, extraArgs)
       bin = this.cfg.tmux.bin
-      args = tmuxNewSessionArgs({ session, command, confPath: this.cfg.tmux.confPath, cols: this.cfg.tmux.cols, rows: this.cfg.tmux.rows, env: spawnOpts.extraEnv })
-      slog.event('tmux-wrap', { session, tmuxBin: this.cfg.tmux.bin, command })
+      if (spawnOpts.attachExisting) {
+        args = tmuxAttachArgs(session)
+        slog.event('tmux-attach-existing', { session, tmuxBin: this.cfg.tmux.bin })
+      } else {
+        const command = buildCommand(this.cfg.bin, extraArgs)
+        args = tmuxNewSessionArgs({ session, command, confPath: this.cfg.tmux.confPath, cols: this.cfg.tmux.cols, rows: this.cfg.tmux.rows, env: spawnOpts.extraEnv })
+        slog.event('tmux-wrap', { session, tmuxBin: this.cfg.tmux.bin, command })
+      }
+    } else if (spawnOpts.attachExisting) {
+      throw new Error('Persistent runtime reattach requires tmux')
     }
 
     // ── Interactive REPL only — NO -p / SDK (PRD §3.2) ──
@@ -281,6 +290,20 @@ export class CliAgentExecutor implements AgentExecutor {
       slog.event('pty-kill', {})
       try { this.pty.kill() } catch (e) { slog.error('kill threw', { error: (e as Error).message }) }
     }
+  }
+
+  /** Drop only this tmux client. The provider keeps running in the private
+   * Unmute tmux server and can be attached again after app relaunch. */
+  detach(): void {
+    const slog = log.child({ taskId: this.taskId, agent: this.cfg.label })
+    if (!this.cfg.tmux) { this.kill(); return }
+    const pty = this.pty
+    this.pty = null
+    this.exited = true
+    if (pty) {
+      try { pty.kill() } catch (e) { slog.error('tmux client detach failed', { error: (e as Error).message }) }
+    }
+    slog.event('tmux-client-detached', { session: this.tmuxSession })
   }
 }
 

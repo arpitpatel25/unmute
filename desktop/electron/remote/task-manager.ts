@@ -143,6 +143,9 @@ export interface Task {
    *  survives app restarts as interrupted-but-resumable (`--continue` restores
    *  full context). Default 'oneoff' (status quo). */
   kind?: 'oneoff' | 'session'
+  /** Explicit keep-alive override. Persistent sessions normally age out of the
+   * runtime after a week without user input; a pinned one never does. */
+  runtimePinned?: boolean
   /** WHICH BACKEND runs this task. Per-task, not a global setting: a user with
    *  both installed can fire one task at Claude Code and the next at Codex, and
    *  the cockpit shows both side by side. Absent ⇒ 'claude' (status quo).
@@ -466,6 +469,9 @@ export interface TaskManagerOpts {
   purgeAgeMs?: number
   /** How often the maintenance sweep runs. Default 1h. */
   purgeSweepMs?: number
+  /** Runtime-only retention for an unpinned persistent session. Its task card
+   * remains after expiry and can be resumed normally. Default seven days. */
+  persistentIdleMs?: number
   /** Best-effort reaper for an ORPHAN tmux session left by a past run (the app
    *  crashed/quit without killing it). Wired from init.ts (which owns the tmux
    *  bin + private socket). Omitted in tests. */
@@ -560,6 +566,7 @@ export class TaskManager extends EventEmitter {
    *  its PTY spawns, so this is what keeps a second call from building a second
    *  session in that window. */
   private resuming = new Set<string>()
+  private opening = new Set<string>()
   // Per-task chain serializing meta.json read-modify-writes. Two concurrent
   // merges (e.g. setShelved + setNote in one tick) would otherwise race the
   // read and the last write would silently drop the other's field.
@@ -608,6 +615,7 @@ export class TaskManager extends EventEmitter {
       detachGraceMs: opts.detachGraceMs ?? 1500,
       purgeAgeMs: opts.purgeAgeMs ?? 24 * 60 * 60_000, // 24h — "gone by end of day"
       purgeSweepMs: opts.purgeSweepMs ?? 60 * 60_000,  // hourly
+      persistentIdleMs: opts.persistentIdleMs ?? 7 * 24 * 60 * 60_000,
       approvalSweepMs: opts.approvalSweepMs ?? 1500,
       userKey: opts.userKey ?? 'local',
       librarian: opts.librarian,
@@ -704,7 +712,14 @@ export class TaskManager extends EventEmitter {
   }
 
   async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[] } = {}): Promise<string> {
-    const route = this.dispatchRoute(opts.agent)
+    // Persistent Codex sessions use the same per-task tmux runtime as Claude.
+    // The app-server transport is owned by the Unmute app process, so routing a
+    // persistent task through it would sever the work at quit—the exact
+    // lifecycle this feature exists to avoid. One-offs keep the richer shared
+    // app-server path unchanged.
+    const route = opts.agent === 'codex' && opts.kind === 'session'
+      ? null
+      : this.dispatchRoute(opts.agent)
     if (route) return route(intent, opts)
     // EXTERNAL BACKEND FORK (codex-desktop). Everything below this point — the
     // status file, the CLAUDE.md contract, the owned PTY, the trust prompt, the
@@ -759,7 +774,7 @@ export class TaskManager extends EventEmitter {
     // says later. Spread conditionally: an unresolvable model must leave the
     // field ABSENT, never present-and-empty (D6, §3).
     const task: Task = {
-      id, intent, sessionId, kind, state: 'processing', createdAt: now, updatedAt: now,
+      id, intent, sessionId, kind, runtimePinned: kind === 'session', state: 'processing', createdAt: now, updatedAt: now,
       cwd: runCwd, home: dir, statusPath, recipeScratchPath, lastMtimeMs: now, lastHeartbeatMs: now,
       surface, mode, injectedRecipes: [], lastUserInputAt: now,
       spawnedBy: opts.spawnedBy, agent,
@@ -799,7 +814,7 @@ export class TaskManager extends EventEmitter {
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, agent, createdAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}), ...(task.model ? { model: task.model } : {}) }))
+      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, runtimePinned: task.runtimePinned, agent, createdAt: now, lastUserInputAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}), ...(task.model ? { model: task.model } : {}) }))
       devEvent(tlog, 'dispatch-memory', { surface, mode, injectedRecipes: task.injectedRecipes })
 
       // Named, not left to the picker — see the task literal above. `browser`
@@ -2487,7 +2502,7 @@ export class TaskManager extends EventEmitter {
     const driver = this.opts.codexDriver
     if (!task?.codexThreadId || !driver) return false
     const tlog = log.child({ taskId: id })
-    task.lastUserInputAt = this.clock()
+    this.noteUserInput(task, 'codex-desktop-follow-up')
     task.followUps = (task.followUps ?? 0) + 1
     if (task.kind !== 'session' && task.followUps >= 2) {
       tlog.event('graduated-to-session', { followUps: task.followUps })
@@ -2816,7 +2831,7 @@ export class TaskManager extends EventEmitter {
     if (target && target.agent === 'codex' && this.opts.codexHub?.threadIdFor(id)) {
       tlog.ui('task-row.answer-submitted', { answer: userAnswer })
       target.conversation = [...(target.conversation ?? []), { role: 'user', text: userAnswer }]
-      target.lastUserInputAt = this.clock()
+      this.noteUserInput(target, 'codex-cli-answer')
       void this.opts.codexHub.send(id, userAnswer, { effort: this.opts.codexCliChoice?.().effort }).then((ok) => {
         if (!ok) tlog.warn('codex-cli reply not delivered', {})
       })
@@ -2866,7 +2881,7 @@ export class TaskManager extends EventEmitter {
       return true
     }
     const answered = this.tasks.get(id)
-    if (answered) answered.lastUserInputAt = this.clock() // consent clock
+    if (answered) this.noteUserInput(answered, 'terminal-answer') // consent clock
     tlog.ui('task-row.answer-submitted', { answer: userAnswer }) // user spoke/typed an answer
 
     // A CHOICE IS ANSWERED BY INDEX, NOT BY ITS LABEL.
@@ -3063,7 +3078,7 @@ export class TaskManager extends EventEmitter {
     for (const id of ids) {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
-      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result'] }
+      let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result'] }
       try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
       if (!meta.intent) continue // pre-receipt task or junk dir — skip
       if (meta.origin === 'unmute-agent' && meta.agentRunId) {
@@ -3192,14 +3207,11 @@ export class TaskManager extends EventEmitter {
       const terminal = status?.state === 'done' || status?.state === 'failed'
       // A PERSISTENT SESSION CLOSED BY THE QUIT SWITCH DID NOT FAIL.
       //
-      // Every session dies when the app quits (killAll on before-quit — the
-      // guard against leaving processes behind). For a one-off that lands as
-      // 'failed / interrupted', which is honest: its errand was cut short. For a
-      // working session it was a lie in red — nothing failed, you closed the
-      // laptop. It comes back as `ready` instead: terminal (so it never inflates
-      // the running count), ball-with-you, no error to explain away. Opening the
-      // card revives it (see `opened`). Sessions are exempt from the ready decay,
-      // so this cannot quietly settle to done either.
+      // One-offs still die with the app and rehydrate as interrupted. Session
+      // tasks are durable: startup first restores their cards, then
+      // reattachPersistent() reconnects to any tmux runtime that survived the
+      // app. A missing runtime remains a quiet, resumable `done` task rather
+      // than a red failure caused merely by closing the laptop.
       const isSession = (meta.kind ?? 'oneoff') === 'session'
       const task: Task = {
         id,
@@ -3237,6 +3249,8 @@ export class TaskManager extends EventEmitter {
         surface: meta.surface,
         mode: meta.mode ?? 'managed',
         injectedRecipes: meta.injectedRecipes ?? [],
+        runtimePinned: meta.runtimePinned ?? isSession,
+        lastUserInputAt: meta.lastUserInputAt ?? meta.updatedAt ?? meta.createdAt ?? now,
         // Restored so the chat strip is not empty after a relaunch — see
         // persistState(). Without it the card falls back to the short status
         // line where the exchange should be.
@@ -3251,6 +3265,59 @@ export class TaskManager extends EventEmitter {
       restored++
     }
     if (restored) log.event('rehydrated', { restored })
+  }
+
+  /** Attach UI clients to persistent tmux runtimes left alive by the previous
+   * app process. This never launches a provider command or submits input. */
+  async reattachPersistent(): Promise<void> {
+    const candidates = [...this.tasks.values()].filter((task) =>
+      task.kind === 'session'
+      && task.agent !== 'codex-desktop'
+      && task.agent !== 'claude-code-desktop'
+      && !this.executors.get(task.id)?.alive,
+    )
+    await Promise.all(candidates.map(async (task) => {
+      const lastUse = task.lastUserInputAt ?? task.updatedAt ?? task.createdAt
+      if (!task.runtimePinned && this.clock() - lastUse >= this.opts.persistentIdleMs) {
+        try { this.opts.reapSession?.(task.id) } catch { /* best-effort */ }
+        if (!TERMINAL.includes(task.state)) task.state = 'done'
+        task.error = undefined
+        await this.persistState(task)
+        this.emit('updated', task)
+        return
+      }
+      const tlog = log.child({ taskId: task.id })
+      try {
+        const ex = this.opts.executorFactory(false, task.agent ?? 'claude')
+        this.executors.set(task.id, ex)
+        this.outputBuffers.set(task.id, this.outputBuffers.get(task.id) ?? '')
+        ex.onData((chunk) => {
+          this.notePtyLiveness(task.id)
+          const cur = (this.outputBuffers.get(task.id) ?? '') + chunk
+          this.outputBuffers.set(task.id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
+          this.emit('output', { taskId: task.id, chunk })
+        })
+        await ex.spawn({ cwd: task.cwd, env: process.env, taskId: task.id, attachExisting: true })
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        if (!ex.alive) throw new Error('persistent tmux session is not running')
+        const status = await readStatus(task.statusPath)
+        const restoredState = normalizeState(status?.state) as UiTaskState | undefined
+        if (restoredState && !TERMINAL.includes(restoredState)) task.state = restoredState
+        if (!TERMINAL.includes(task.state)) this.startPolling(task.id)
+        task.error = undefined
+        task.resumeError = undefined
+        this.emit('updated', task)
+        tlog.event('persistent-runtime-reattached', {})
+      } catch (e) {
+        this.hardKill(task.id)
+        if (!TERMINAL.includes(task.state)) task.state = 'done'
+        task.error = undefined
+        task.resumeError = undefined
+        await this.persistState(task)
+        this.emit('updated', task)
+        tlog.event('persistent-runtime-missing', { error: (e as Error).message })
+      }
+    }))
   }
 
   /**
@@ -3449,7 +3516,7 @@ export class TaskManager extends EventEmitter {
       if (!driver?.answerConsent) return false
       log.child({ taskId: task.id }).event('codex-consent-answered', { threadId, choice: pick })
       void driver.answerConsent(threadId, pick)
-      task.lastUserInputAt = this.clock()
+      this.noteUserInput(task, 'codex-consent-answer')
       this.transition(task.id, 'processing')
       return true
     }
@@ -3461,7 +3528,7 @@ export class TaskManager extends EventEmitter {
     this.surfacedApprovals.delete(threadId)
     log.child({ taskId: task.id }).event('codex-approval-answered', { threadId, behavior: yes ? 'allow' : 'deny' })
     void decideApproval(threadId, yes ? 'allow' : 'deny')
-    task.lastUserInputAt = this.clock()
+    this.noteUserInput(task, 'codex-approval-answer')
     this.transition(task.id, 'processing')
     return true
   }
@@ -3481,7 +3548,23 @@ export class TaskManager extends EventEmitter {
     // Quieting is now the notch's job and it steps down a tier instead of off a
     // cliff (DEMAND_WINDOW_MS in notch-controller). Nothing here rewrites state
     // behind the user's back any more.
-    const cutoff = this.clock() - this.opts.purgeAgeMs
+    const now = this.clock()
+    const runtimeCutoff = now - this.opts.persistentIdleMs
+    // The task is durable; the live process is a cache. Stop an unpinned
+    // persistent runtime after a week without user input, keeping its card and
+    // provider transcript available for an ordinary Resume.
+    for (const task of this.tasks.values()) {
+      if (task.kind !== 'session' || task.runtimePinned || !this.executors.get(task.id)?.alive) continue
+      const lastUse = task.lastUserInputAt ?? task.updatedAt ?? task.createdAt
+      if (lastUse >= runtimeCutoff) continue
+      this.hardKill(task.id)
+      task.state = 'done'
+      task.error = undefined
+      await this.persistState(task)
+      this.emit('updated', task)
+      log.child({ taskId: task.id }).event('persistent-runtime-expired', { idleMs: now - lastUse })
+    }
+    const cutoff = now - this.opts.purgeAgeMs
     // 1. IN-MEMORY tasks that have aged out — remove() kills the live session too.
     //    PERSISTENT SESSIONS ARE EXEMPT: a multi-day working session is untouched
     //    "by updatedAt" for days by design — auto-purging it would delete the
@@ -3554,6 +3637,48 @@ export class TaskManager extends EventEmitter {
     log.event('kill-all', { count: ids.length })
   }
 
+  /** App shutdown is not the UI's destructive Kill All. Persistent CLI tasks
+   * detach their tmux client and continue running; one-offs keep the existing
+   * interrupted-and-killed behavior. */
+  shutdown(): void {
+    this.stopMaintenance()
+    const ids = [...new Set([...this.tasks.keys(), ...this.executors.keys(), ...this.timers.keys()])]
+    let detached = 0
+    let killed = 0
+    for (const id of ids) {
+      const task = this.tasks.get(id)
+      if (task?.kind === 'session') {
+        this.stopPolling(id)
+        const wt = this.warmTimers.get(id)
+        if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
+        this.typedBuffers.delete(id)
+        const ex = this.executors.get(id)
+        if (ex?.alive) {
+          if (ex.detach) { ex.detach(); detached++ }
+          else { ex.kill(); killed++ }
+        }
+        this.executors.delete(id)
+        this.mergeMeta(task, {
+          state: task.state,
+          updatedAt: task.updatedAt,
+          lastUserInputAt: task.lastUserInputAt,
+          runtimePinned: task.runtimePinned,
+        }, 'shutdown')
+        continue
+      }
+      if (task && !SETTLED.includes(task.state)) {
+        task.state = 'failed'
+        task.error = { reason: 'Interrupted by an app restart — resume to continue' }
+        task.updatedAt = this.clock()
+        this.emit('updated', task)
+        this.emit('failed', task)
+      }
+      this.hardKill(id)
+      killed++
+    }
+    log.event('shutdown', { detached, killed })
+  }
+
   /**
    * Continue a WARM (done/failed but still-alive) session with a follow-up
    * instruction (minimal continuation — the read-then-act case). Pipes the text
@@ -3571,6 +3696,12 @@ export class TaskManager extends EventEmitter {
       .catch((e) => log.child({ taskId: task.id }).warn(`${op}: meta persist failed`, { error: (e as Error).message }))
     this.metaChains.set(task.id, next)
     void next.finally(() => { if (this.metaChains.get(task.id) === next) this.metaChains.delete(task.id) })
+  }
+
+  /** Record durable user activity for the persistent-runtime idle policy. */
+  private noteUserInput(task: Task, op: string): void {
+    task.lastUserInputAt = this.clock()
+    this.mergeMeta(task, { lastUserInputAt: task.lastUserInputAt }, op)
   }
 
   /** For a FORKED spawn: discover the fork's real session id (Claude mints it;
@@ -3756,10 +3887,13 @@ export class TaskManager extends EventEmitter {
     return id
   }
 
-  setKind(id: string, kind: 'oneoff' | 'session'): void {
+  setKind(id: string, kind: 'oneoff' | 'session', options: { pinned?: boolean } = {}): void {
     const task = this.tasks.get(id)
-    if (!task || task.kind === kind) return
+    if (!task) return
+    const runtimePinned = kind === 'session' ? (options.pinned ?? false) : false
+    if (task.kind === kind && task.runtimePinned === runtimePinned) return
     task.kind = kind
+    task.runtimePinned = runtimePinned
     task.updatedAt = this.clock()
     if (kind === 'session') {
       const wt = this.warmTimers.get(id)
@@ -3770,8 +3904,8 @@ export class TaskManager extends EventEmitter {
       this.parkWarm(id)
     }
     this.emit('updated', task)
-    log.child({ taskId: id }).event('kind-changed', { kind })
-    this.mergeMeta(task, { kind }, 'setKind')
+    log.child({ taskId: id }).event('kind-changed', { kind, runtimePinned })
+    this.mergeMeta(task, { kind, runtimePinned }, 'setKind')
   }
 
   /** Shelve/unshelve (Orchestrate): preserved-but-out-of-the-way. Persists to
@@ -3845,7 +3979,7 @@ export class TaskManager extends EventEmitter {
     // at a busy session without fear — the thought is held, never lost, and
     // never derails the running turn.
     const wasBusy = task.state === 'processing'
-    task.lastUserInputAt = this.clock() // user spoke to this thread — consent clock
+    this.noteUserInput(task, 'follow-up') // user spoke to this thread — consent clock
     // Graduation (§5): the 2nd follow-up proves this is a THREAD, not an errand —
     // promote to a persistent session (one follow-up is a common quick correction).
     task.followUps = (task.followUps ?? 0) + 1
@@ -4137,7 +4271,7 @@ export class TaskManager extends EventEmitter {
       provenBy: rolloutTurnsBefore === null ? 'prompt-submitted-hook' : 'codex-rollout',
     })
     delete task.deliveryError
-    task.lastUserInputAt = this.clock()
+    this.noteUserInput(task, 'draft-submitted')
     task.state = 'processing'
     task.updatedAt = this.clock()
     task.conversation = [{ role: 'user', text }]
@@ -4324,11 +4458,10 @@ export class TaskManager extends EventEmitter {
   /**
    * The user OPENED this card — revive a persistent session that isn't running.
    *
-   * Quitting Unmute kills every session by design (killAll on before-quit), so a
-   * working session comes back on the next launch as a row with a dead PTY. The
-   * Resume tap that followed bought nothing: OPENING the card is already the
-   * intent, and nobody opens a working session to look at a "session ended"
-   * panel. So opening one resumes it.
+   * Startup normally reconnects to the detached runtime before the user gets
+   * here. This remains the fallback for a machine restart or a runtime that was
+   * deliberately aged out: OPENING the card is already the intent to resume,
+   * so it should not stop at a redundant "session ended" panel.
    *
    * Deliberately narrow, because the cost of being wrong is a spawned process:
    *  • PERSISTENT SESSIONS ONLY. A one-off is opened to READ its result — often
@@ -4336,8 +4469,8 @@ export class TaskManager extends EventEmitter {
    *    to resume anyway) — so it keeps the explicit Resume button.
    *  • EXTERNAL BACKENDS ARE SKIPPED. A Codex thread has no PTY and was never
    *    dead; resume() is a no-op for it (see the guard there).
-   *  • ALREADY ALIVE is a no-op, and an in-flight respawn is absorbed by
-   *    resume()'s own single-flight guard. Both surfaces re-announce the open on
+   *  • ALREADY ALIVE is a no-op, and an in-flight respawn is absorbed by the
+   *    open/resume single-flight guards. Both surfaces re-announce the open on
    *    every reconcile tick, so this is called repeatedly for one gesture and
    *    must stay idempotent.
    *
@@ -4349,12 +4482,14 @@ export class TaskManager extends EventEmitter {
     if (!task || (task.kind ?? 'oneoff') !== 'session') return
     if (isExternalAgent(task.agent)) return
     if (this.executors.get(id)?.alive) return
-    if (this.resuming.has(id)) return
+    if (this.resuming.has(id) || this.opening.has(id)) return
+    this.opening.add(id)
     const tlog = log.child({ taskId: id })
     tlog.event('auto-resume-on-open', {})
     void this.resume(id, { touchActivity: false })
       .then((ok) => { if (!ok) tlog.warn('auto-resume on open did not take', {}) })
       .catch((e) => tlog.error('auto-resume on open threw', { error: (e as Error).message }))
+      .finally(() => this.opening.delete(id))
   }
 
   /** Tasks currently BLOCKED on a needs-user question, newest first. The router
@@ -4429,7 +4564,11 @@ export class TaskManager extends EventEmitter {
     const ex = this.executors.get(id)
     if (!ex?.alive) return
     const t = this.tasks.get(id)
-    if (t) t.lastUserInputAt = this.clock() // typing into the terminal = consent
+    if (t) {
+      t.lastUserInputAt = this.clock() // typing into the terminal = consent
+      // Persist at the submission boundary, not on every keystroke.
+      if (data.includes('\r')) this.mergeMeta(t, { lastUserInputAt: t.lastUserInputAt }, 'typed-input')
+    }
     // A user typing into a parked-warm session means they want to keep working;
     // cancel the idle-kill so their hands-on session isn't reaped under them.
     const wt = this.warmTimers.get(id)

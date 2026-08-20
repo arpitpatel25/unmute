@@ -151,6 +151,30 @@ test('kill marks the session not-alive and calls pty.kill', async () => {
   assert.equal(fake.isKilled(), true)
 })
 
+test('attachExisting connects to the owned tmux session without launching an agent command', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({
+    ptyLoader: fake.loader,
+    tmux: { bin: '/tmp/tmux', confPath: '/tmp/unmute.conf' },
+  })
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 'task-1', attachExisting: true })
+  assert.equal(fake.calls.file, '/tmp/tmux')
+  assert.ok(fake.calls.args?.includes('attach-session'))
+  assert.ok(!fake.calls.args?.includes('new-session'))
+  assert.ok(!fake.calls.args?.includes('claude'), 'reattach does not construct a second agent command')
+})
+
+test('detach closes only the tmux client PTY, leaving the owned session alive', async () => {
+  const fake = makeFakePty()
+  const ex = new ClaudeCodeExecutor({
+    ptyLoader: fake.loader,
+    tmux: { bin: '/tmp/tmux', confPath: '/tmp/unmute.conf' },
+  })
+  await ex.spawn({ cwd: '/tmp/t', env: {}, taskId: 'task-1' })
+  ex.detach()
+  assert.equal(fake.isKilled(), true, 'local tmux client is closed')
+})
+
 test('interrupt sends Ctrl-C without killing the resumable provider resource', async () => {
   const fake = makeFakePty()
   const ex = new ClaudeCodeExecutor({ ptyLoader: fake.loader })
