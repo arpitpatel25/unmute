@@ -26,6 +26,22 @@ public enum WallViewMode: String, CaseIterable, Equatable {
     }
 }
 
+public struct WallLaunchState: Equatable {
+    public let view: WallViewMode
+    public let shouldEnableToday: Bool
+
+    public init(view: WallViewMode, shouldEnableToday: Bool) {
+        self.view = view
+        self.shouldEnableToday = shouldEnableToday
+    }
+}
+
+public enum WallLaunchPresentation {
+    public static func resolve(todayOnly: Bool?) -> WallLaunchState {
+        WallLaunchState(view: .today, shouldEnableToday: todayOnly != true)
+    }
+}
+
 public enum WallWorkspaceSelection: Equatable {
     case all
     case named(String)
@@ -62,5 +78,23 @@ public enum WallDisclosure {
 public enum WallCardLayout {
     public static func columnCount(surfaceFill: Double) -> Int {
         surfaceFill >= 0.895 ? 2 : 1
+    }
+}
+
+public enum WallGroupPreview {
+    public static let limit = 4
+
+    public static func canToggle(total: Int, view: WallViewMode,
+                                 workspace: WallWorkspaceSelection) -> Bool {
+        view == .allWork && workspace == .all && total > limit
+    }
+
+    public static func visibleCount(total: Int, view: WallViewMode,
+                                    workspace: WallWorkspaceSelection,
+                                    expanded: Bool) -> Int {
+        guard canToggle(total: total, view: view, workspace: workspace), !expanded else {
+            return total
+        }
+        return min(total, limit)
     }
 }

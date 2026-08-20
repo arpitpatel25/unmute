@@ -27,13 +27,16 @@ struct WallView: View {
     /// data, order, folds and Today query; these never mutate a task.
     @State private var selectedView: WallViewMode
     @State private var selectedWorkspace: WallWorkspaceSelection = .all
+    /// Local disclosure for the combined All work / All workspaces overview.
+    /// The engine still reveals its folded history; this only keeps each
+    /// workspace preview scannable until the user opens that one section.
+    @State private var expandedWorkspacePreviews: Set<String> = []
 
     init(model: NotchModel, topInset: CGFloat) {
         self.model = model
         self.topInset = topInset
-        // Preserve the engine's current Today setting when the wall opens.
-        // The redesign must not silently turn an existing filter on or off.
-        _selectedView = State(initialValue: model.cockpit?.todayOnly == true ? .today : .allWork)
+        _selectedView = State(initialValue:
+            WallLaunchPresentation.resolve(todayOnly: model.cockpit?.todayOnly).view)
     }
 
     private var data: CockpitData {
@@ -46,8 +49,7 @@ struct WallView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            topChrome
-            viewBar
+            headerChrome
             Rectangle().fill(Theme.hairlineSoft).frame(height: 1)
             HStack(alignment: .top, spacing: 0) {
                 workspaceRail
@@ -61,7 +63,7 @@ struct WallView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .topLeading) { hoverCard }
-        .onAppear { revealAllIfNeeded() }
+        .onAppear { activateLaunchView() }
         .onChange(of: data.hiddenTotal) { _ in revealAllIfNeeded() }
         .onChange(of: data.showingAll) { _ in revealAllIfNeeded() }
     }
@@ -107,38 +109,34 @@ struct WallView: View {
         }
     }
 
-    /// The surface-level identity. Older work is revealed automatically; the
-    /// four view choices below are the wall's only visible filters.
-    private var topChrome: some View {
+    /// One compact, cutout-safe header. `topInset` keeps this entire row below
+    /// a physical camera housing; the same row simply sits nearer the top on a
+    /// display without one.
+    private var headerChrome: some View {
         HStack(spacing: 10) {
+            UnMark(height: 13)
             SectionLabel(text: "Orchestrator")
+            HStack(spacing: 4) {
+                ForEach(WallViewMode.allCases, id: \.rawValue) { mode in
+                    wallViewButton(mode)
+                }
+            }
             Spacer(minLength: 0)
+            if data.groups.flatMap(\.cards).contains(where: { $0.status == .processing }) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        Dot(status: .processing, size: 6, breathing: true)
+                        Text("System moving").font(Theme.fCap).foregroundColor(Theme.textDim)
+                    }
+                    Dot(status: .processing, size: 6, breathing: true)
+                }
+            }
             if model.canGoBack { BackButton { model.onBack() } }
             CloseButton { model.emit(.collapsed) }
         }
         .padding(.horizontal, Theme.gutter)
         .padding(.top, topInset)
         .padding(.bottom, 9)
-    }
-
-    /// Today / Needs you / Finished / All work are one quiet segmented row,
-    /// not four unrelated chips. Today still uses the existing engine filter;
-    /// the other views only choose which already-received cards are presented.
-    private var viewBar: some View {
-        HStack(spacing: 4) {
-            ForEach(WallViewMode.allCases, id: \.rawValue) { mode in
-                wallViewButton(mode)
-            }
-            Spacer(minLength: 0)
-            if data.groups.flatMap(\.cards).contains(where: { $0.status == .processing }) {
-                HStack(spacing: 6) {
-                    Dot(status: .processing, size: 6, breathing: true)
-                    Text("System moving").font(Theme.fCap).foregroundColor(Theme.textDim)
-                }
-            }
-        }
-        .padding(.horizontal, Theme.gutter)
-        .padding(.vertical, 7)
         .background(Theme.railBg)
     }
 
@@ -159,6 +157,13 @@ struct WallView: View {
         selectedView = mode
         let today = mode == .today
         if (data.todayOnly ?? false) != today { model.emit(.today(on: today)) }
+        revealAllIfNeeded()
+    }
+
+    private func activateLaunchView() {
+        let launch = WallLaunchPresentation.resolve(todayOnly: data.todayOnly)
+        selectedView = launch.view
+        if launch.shouldEnableToday { model.emit(.today(on: true)) }
         revealAllIfNeeded()
     }
 
@@ -298,16 +303,36 @@ struct WallView: View {
     }
 
     private func groupSection(_ g: GroupP) -> some View {
-        VStack(alignment: .leading, spacing: selectedWorkspace.showsGroupHeadings ? 9 : 0) {
+        let groupKey = g.name.isEmpty ? "Ungrouped" : g.name
+        let expanded = expandedWorkspacePreviews.contains(groupKey)
+        let visibleCount = WallGroupPreview.visibleCount(
+            total: g.cards.count, view: selectedView,
+            workspace: selectedWorkspace, expanded: expanded
+        )
+        let shownCards = Array(g.cards.prefix(visibleCount))
+        let canToggle = WallGroupPreview.canToggle(
+            total: g.cards.count, view: selectedView, workspace: selectedWorkspace
+        )
+
+        return VStack(alignment: .leading, spacing: selectedWorkspace.showsGroupHeadings ? 9 : 0) {
             // In the all-workspaces view this heading identifies which cards
             // belong together. A selected workspace already has that identity
             // in the page title, so repeating it here only creates two titles.
             if selectedWorkspace.showsGroupHeadings {
                 HStack(spacing: 8) {
-                    Text(g.name.isEmpty ? "Ungrouped" : g.name)
+                    Text(groupKey)
                         .font(Theme.fHead)
                         .foregroundColor(g.name.isEmpty ? Theme.cNeeds.opacity(0.82) : Theme.text)
                     Spacer(minLength: 0)
+                    if canToggle {
+                        QuietButton(label: expanded ? "Show less" : "Show all · \(g.cards.count)") {
+                            if expanded {
+                                expandedWorkspacePreviews.remove(groupKey)
+                            } else {
+                                expandedWorkspacePreviews.insert(groupKey)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -315,7 +340,7 @@ struct WallView: View {
             // scan. The 90% surface has enough width that one row becomes mostly
             // empty space, so it uses a row-major two-column grid instead.
             LazyVGrid(columns: cardColumns, alignment: .leading, spacing: 8) {
-                ForEach(g.cards, id: \.id) { card($0) }
+                ForEach(shownCards, id: \.id) { card($0) }
             }
         }
     }

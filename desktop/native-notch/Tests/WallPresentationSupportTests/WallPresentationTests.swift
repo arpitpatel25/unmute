@@ -2,6 +2,16 @@ import XCTest
 @testable import WallPresentationSupport
 
 final class WallPresentationTests: XCTestCase {
+    func testWallAlwaysLaunchesInTodayAndActivatesTheEngineFilterWhenNeeded() {
+        let previouslyAllWork = WallLaunchPresentation.resolve(todayOnly: false)
+        XCTAssertEqual(previouslyAllWork.view, .today)
+        XCTAssertTrue(previouslyAllWork.shouldEnableToday)
+
+        let alreadyToday = WallLaunchPresentation.resolve(todayOnly: true)
+        XCTAssertEqual(alreadyToday.view, .today)
+        XCTAssertFalse(alreadyToday.shouldEnableToday)
+    }
+
     func testEachViewKeepsTheStatusesItsLabelPromises() {
         XCTAssertTrue(WallViewMode.today.includes(status: "processing"))
         XCTAssertTrue(WallViewMode.today.includes(status: "needs-user"))
@@ -60,5 +70,40 @@ final class WallPresentationTests: XCTestCase {
         XCTAssertEqual(WallCardLayout.columnCount(surfaceFill: 0.7), 1)
         XCTAssertEqual(WallCardLayout.columnCount(surfaceFill: 0.8), 1)
         XCTAssertEqual(WallCardLayout.columnCount(surfaceFill: 0.9), 2)
+    }
+
+    func testAllWorkAcrossAllWorkspacesPreviewsFourCardsPerWorkspace() {
+        XCTAssertEqual(
+            WallGroupPreview.visibleCount(total: 9, view: .allWork,
+                                          workspace: .all, expanded: false),
+            4
+        )
+        XCTAssertTrue(
+            WallGroupPreview.canToggle(total: 9, view: .allWork, workspace: .all)
+        )
+    }
+
+    func testExpandingOneWorkspaceRevealsItsWholeAllWorkList() {
+        XCTAssertEqual(
+            WallGroupPreview.visibleCount(total: 9, view: .allWork,
+                                          workspace: .all, expanded: true),
+            9
+        )
+    }
+
+    func testPreviewNeverTruncatesOtherViewsOrASelectedWorkspace() {
+        XCTAssertEqual(
+            WallGroupPreview.visibleCount(total: 9, view: .today,
+                                          workspace: .all, expanded: false),
+            9
+        )
+        XCTAssertEqual(
+            WallGroupPreview.visibleCount(total: 9, view: .allWork,
+                                          workspace: .named("cloud"), expanded: false),
+            9
+        )
+        XCTAssertFalse(
+            WallGroupPreview.canToggle(total: 4, view: .allWork, workspace: .all)
+        )
     }
 }
