@@ -140,7 +140,11 @@ test('the constitution is system context, never typed as a user turn', () => {
 // silence and the Agent reports a confident, wrong "I couldn't find it".
 test('the Unmute intercom is allowed so an unattended turn is not silently denied', () => {
   const argv = headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'CONSTITUTION')
-  assert.equal(argv[argv.indexOf('--allowedTools') + 1], 'mcp__unmute')
+  // Asserted as membership, not as the whole string: the grant now also carries
+  // the read tools, and pinning the exact text would make adding one a
+  // two-place edit — which is how a list and its test drift apart.
+  const allowed = (argv[argv.indexOf('--allowedTools') + 1] ?? '').split(',')
+  assert.ok(allowed.includes('mcp__unmute'), 'the intercom must be granted')
 })
 
 test('the allowlist is the only tool grant — no blanket permission bypass', () => {
@@ -468,12 +472,40 @@ test('a missing intercom config omits the flags rather than spawning a broken co
 //
 // A permission system that blocks one door and leaves another open does not
 // slow a capable model down; it redirects it.
-test('the built-in shell and filesystem tools are denied by name', () => {
+test('the shell, every writer, and the network are denied by name', () => {
   const argv = headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'CONSTITUTION')
-  const denied = argv[argv.indexOf('--disallowedTools') + 1] ?? ''
-  for (const tool of ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep']) {
-    assert.ok(denied.split(',').includes(tool), `${tool} must be denied to the Agent`)
+  const denied = (argv[argv.indexOf('--disallowedTools') + 1] ?? '').split(',')
+  // The incident above was a WRITE routed around a refusal. These are what
+  // make that reachable, plus the only two tools that can leave the machine.
+  for (const tool of ['Bash', 'BashOutput', 'KillShell', 'Write', 'Edit', 'NotebookEdit',
+                      'WebFetch', 'WebSearch']) {
+    assert.ok(denied.includes(tool), `${tool} must be denied to the Agent`)
   }
+})
+
+// READING IS DELIBERATELY ALLOWED, AND THAT IS A NARROWER LINE THAN IT WAS.
+//
+// The answer to "what have we been working on" is in ~/.claude/projects and
+// ~/.codex/sessions — hundreds of transcripts this app never wrote. Denying
+// Read left the Agent able to see only the tasks Unmute happened to start,
+// which is a fraction of the user's work, while Remote spawns Claude with
+// --dangerously-skip-permissions on the same machine. Strict here and open
+// there was build order, not a posture.
+//
+// Bash stays denied because it adds nothing to finding and reading a file —
+// Glob finds, Grep searches, Read opens — and everything to destroying one.
+test('reading is allowed, so the Agent can answer from the user\'s own work', () => {
+  const argv = headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'CONSTITUTION')
+  const allowed = (argv[argv.indexOf('--allowedTools') + 1] ?? '').split(',')
+  const denied = (argv[argv.indexOf('--disallowedTools') + 1] ?? '').split(',')
+
+  for (const tool of ['Read', 'Glob', 'Grep']) {
+    assert.ok(allowed.includes(tool), `${tool} must be available`)
+    assert.ok(!denied.includes(tool), `${tool} must not also be denied`)
+  }
+  assert.ok(allowed.includes('mcp__unmute'), 'the intercom stays')
+  // The exact thing reading must never become.
+  assert.ok(!allowed.includes('Bash'), 'reading must not smuggle a shell back in')
 })
 
 // The denial is worth nothing on its own — this is the half that closes the

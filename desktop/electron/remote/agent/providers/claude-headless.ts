@@ -38,26 +38,48 @@ export function agentRuntimeMode(env: NodeJS.ProcessEnv = process.env): AgentRun
   return env.UNMUTE_AGENT_RUNTIME?.trim().toLowerCase() === 'repl' ? 'repl' : 'headless'
 }
 
-/** The Unmute intercom, which is where every Agent capability lives. */
-const AGENT_TOOL_ALLOWLIST = 'mcp__unmute'
+/**
+ * The Unmute intercom, plus reading.
+ *
+ * READING IS ALLOWED BECAUSE THE ANSWER LIVES ON DISK. What the user did
+ * yesterday is in ~/.claude/projects and ~/.codex/sessions — hundreds of
+ * transcripts this app did not write and does not own. Asked "what have we
+ * been working on", an Agent with no file access can only answer from tasks
+ * Unmute happened to start, which is a fraction of the truth.
+ *
+ * Glob finds them, Grep searches them, Read opens one. That is the entire job,
+ * and it is why Bash is still absent below: a shell adds nothing to finding and
+ * reading a file, and everything to destroying one.
+ */
+const AGENT_TOOL_ALLOWLIST = ['mcp__unmute', 'Read', 'Glob', 'Grep'].join(',')
 
 /**
- * Built-in tools the Agent must never hold. It has no business touching the
- * filesystem or a shell: everything it may do is a capability behind the
- * intercom.
+ * Built-in tools the Agent must never hold.
  *
- * This is not belt-and-braces, it is the belt. Measured against the real
+ * THE LINE IS WRITE AND REACH, NOT FILESYSTEM. It used to be everything, on the
+ * reasoning that every capability should live behind the intercom. That was too
+ * wide: it also refused the Agent the one thing it needs to answer questions
+ * about the user's own work, while Remote spawns Claude with
+ * --dangerously-skip-permissions on the same machine. Being strict here and
+ * open there was an accident of build order, not a posture.
+ *
+ * What stays denied is what actually went wrong. Measured against the real
  * binary: `--allowedTools mcp__unmute` on its own leaves Bash fully usable and
  * reports ZERO permission denials — and in the field the Agent, refused a
  * delete by the intent gate, went around it with `Bash: rm` against the user's
- * home directory. Denying these names blocks that, and `--strict-mcp-config`
- * (above) closes the other route, where the model reached a shell through a
- * different MCP server's osascript tool. Neither half is sufficient alone.
+ * home directory. A gate that can be walked around is not a gate. Denying these
+ * names blocks that, and `--strict-mcp-config` (above) closes the other route,
+ * where the model reached a shell through a different MCP server's osascript
+ * tool. Neither half is sufficient alone.
+ *
+ * WebFetch and WebSearch stay denied for a second reason: with reading allowed
+ * they would be the only route OFF the machine. Read-only access to your own
+ * files, on your own machine, answering your own question is a small step;
+ * read-plus-network is exfiltration.
  */
 const AGENT_TOOL_DENYLIST = [
   'Bash', 'BashOutput', 'KillShell',
-  'Read', 'Write', 'Edit', 'NotebookEdit',
-  'Glob', 'Grep',
+  'Write', 'Edit', 'NotebookEdit',
   'WebFetch', 'WebSearch',
   'Task', 'ToolSearch',
 ].join(',')
