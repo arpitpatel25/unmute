@@ -816,6 +816,7 @@ export class TaskManager extends EventEmitter {
         // by the logger, which is exactly why three theories about why a session
         // dies could not be settled. Off unless UNMUTE_PTY_TAP=1.
         tapPtyForTask(id, 'out', Buffer.from(chunk), this.clock())
+        this.notePtyLiveness(id)
         const cur = (this.outputBuffers.get(id) ?? '') + chunk
         this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
         this.emit('output', { taskId: id, chunk })
@@ -1422,6 +1423,7 @@ export class TaskManager extends EventEmitter {
       this.executors.set(id, ex)
       this.outputBuffers.set(id, '')
       ex.onData((chunk) => guardPtyCallback(id, () => {
+        this.notePtyLiveness(id)
         const cur = (this.outputBuffers.get(id) ?? '') + chunk
         this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
         this.emit('output', { taskId: id, chunk })
@@ -2634,15 +2636,13 @@ export class TaskManager extends EventEmitter {
       isStale({ state: task.state as TaskState }, task.lastHeartbeatMs, this.clock(), this.opts.staleMs)
     ) {
       tlog.event('task-stuck', { lastHeartbeatMs: task.lastHeartbeatMs, staleMs: this.opts.staleMs })
-      // Cheap recovery before surfacing stuck: a task is sometimes just one Enter
-      // short of submitting/continuing (the same input quirk we confirm-Enter for
-      // at dispatch). Send ONE Enter — a no-op if it's genuinely busy. If it
-      // recovers, the next heartbeat transitions it back out of stuck.
-      const stuckEx = this.executors.get(id)
-      if (stuckEx?.alive) {
-        stuckEx.write('\r')
-        tlog.event('stuck-nudge-enter', {})
-      }
+      // NO NUDGE. We used to write one Enter here, on the theory that a task is
+      // sometimes a single keystroke short of continuing. That theory was built
+      // on a verdict we now know was usually wrong: with the terminal silent AND
+      // no hooks (see notePtyLiveness), `stuck` is rare and real — and typing
+      // into a session because we are unsure what it is doing is exactly the
+      // move that can turn "slow" into "answered the wrong prompt". Surface it
+      // to the user and let them decide (check / kill / retry).
       tlog.ui('task-row.stuck', { intent: task.intent }) // PRD §13.4 #2 + §6.3: offer check/kill/retry
       task.state = 'stuck'
       task.updatedAt = this.clock()
@@ -4072,6 +4072,13 @@ export class TaskManager extends EventEmitter {
       return outcome(false, 'cli-session-closed-before-delivery', { draftRetained: true })
     }
     emitTaskReplyStep(tlog, trace, 'executor-ready', 'succeeded')
+    // A REPLY IS A REASON TO LIVE. followUp() and sendInput() both disarm the
+    // idle-kill when the user speaks to a parked session; this path — the Right
+    // Option capture and the stage composer — did not, and that omission killed
+    // task b8388aec mid-turn on 2026-08-20 three minutes after the user replied
+    // to it. armWarmTimer's own re-check is the backstop; this is the fix.
+    const wt = this.warmTimers.get(id)
+    if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
     ex.writeDraftText(text)
     emitTaskReplyStep(tlog, trace, 'text-composed', 'succeeded', { chars: text.length })
     if (attachments.length) {
@@ -4253,6 +4260,7 @@ export class TaskManager extends EventEmitter {
         // by the logger, which is exactly why three theories about why a session
         // dies could not be settled. Off unless UNMUTE_PTY_TAP=1.
         tapPtyForTask(id, 'out', Buffer.from(chunk), this.clock())
+        this.notePtyLiveness(id)
         const cur = (this.outputBuffers.get(id) ?? '') + chunk
         this.outputBuffers.set(id, cur.length > TaskManager.OUTPUT_CAP ? cur.slice(-TaskManager.OUTPUT_CAP) : cur)
         this.emit('output', { taskId: id, chunk })
@@ -4539,13 +4547,78 @@ export class TaskManager extends EventEmitter {
     }
     const warmMs = this.warmMsFor(id)
     if (!ex?.alive || warmMs <= 0) { this.hardKill(id); return }
+    this.armWarmTimer(id, warmMs)
+    tlog.event('parked-warm', { warmMs })
+  }
+
+  /** Arm (or re-arm) the single idle-kill timer for a warm session. */
+  private armWarmTimer(id: string, warmMs: number): void {
+    const tlog = log.child({ taskId: id })
+    // NO ORPHANS. This used to `set()` over the previous entry without clearing
+    // it, so every re-park left a live timer that nothing could reach: the map
+    // holds one per task, and the cancel paths (followUp / sendInput / setKind)
+    // can only cancel the one it holds. Field record (2026-08-20): task
+    // 245d0a0b parked twice and fired `warm-idle-timeout` twice — the second
+    // shot came from a timer that had already been "cancelled".
+    const prev = this.warmTimers.get(id)
+    if (prev) clearTimeout(prev)
     const t = setTimeout(() => {
-      tlog.event('warm-idle-timeout', { warmMs })
+      // THE LAST CHECK BEFORE THE KILL.
+      //
+      // The warm window belongs to a task that has FINISHED — it is there so a
+      // follow-up doesn't pay for a cold start. It was never meant to reap a
+      // session that is working, and every cancel path is one more place that
+      // can forget to disarm it. One did: the Right-Option capture route
+      // (deliverDraft) delivered a message, the task went back to `processing`,
+      // and the timer armed before that message killed it mid-turn — reported to
+      // the user as "The session ended before the task finished", which was true
+      // and told them nothing about who ended it. It was us.
+      //
+      // So the decision is re-made at the moment it matters, from the task's
+      // actual state rather than from a promise made warmMs ago. If it is not
+      // settled, it is working: re-park and look again later. Correctness here
+      // does not depend on every present or future write path remembering to
+      // cancel — only on this one check.
+      const cur = this.tasks.get(id)
+      const stillAlive = this.executors.get(id)?.alive
+      if (cur && stillAlive && !TERMINAL.includes(cur.state)) {
+        // Re-arm ONLY. Going back through parkWarm would call stopPolling() on a
+        // task that is mid-turn, blinding the card that is watching it.
+        tlog.event('warm-idle-repark', { state: cur.state, warmMs })
+        this.armWarmTimer(id, warmMs)
+        return
+      }
+      tlog.event('warm-idle-timeout', { warmMs, state: cur?.state ?? null })
       this.hardKill(id)
     }, warmMs)
     t.unref?.() // don't block process exit on the warm window
     this.warmTimers.set(id, t)
-    tlog.event('parked-warm', { warmMs })
+  }
+
+  /**
+   * THE TERMINAL IS THE LIVENESS SIGNAL.
+   *
+   * `stuck` used to be inferred purely from a gap in hook events and status
+   * writes, so a turn that merely THINKS — or runs one long tool — for more than
+   * staleMs read as hung. Field record (2026-08-19/20, task 628700b8): nine
+   * `task-stuck` verdicts in one night, every one followed by `stuck-recovered
+   * {via: hook}`. It was working the whole time, and we were reading its spinner
+   * as we called it dead.
+   *
+   * Bytes arriving from the PTY are proof the process is alive and painting.
+   * They cost nothing (the stream is already flowing into outputBuffers), they
+   * work for every CLI agent rather than only the one that ships our hooks, and
+   * they are strictly fresher than any hook. This advances lastHeartbeatMs ONLY
+   * — never lastMtimeMs, which is the status read cursor (see poll()).
+   */
+  private notePtyLiveness(id: string): void {
+    const task = this.tasks.get(id)
+    if (!task) return
+    task.lastHeartbeatMs = this.clock()
+    if (task.state === 'stuck') {
+      log.child({ taskId: id }).event('stuck-recovered', { via: 'pty' })
+      this.transition(id, 'processing')
+    }
   }
 
   /** Hard close: stop polling, cancel warm timer, kill the PTY (PRD §4.5). */

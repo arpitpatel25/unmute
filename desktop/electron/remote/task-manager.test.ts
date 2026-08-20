@@ -1742,3 +1742,74 @@ test('an unchanged state is not news — the surface must not be re-triggered', 
   tm.applyHubPatch({ taskId: id, state: 'done' })
   assert.equal(tm.get(id)!.state, 'done')
 })
+
+// ── The warm window must never reap a session that is actually working ──
+//
+// Field failure (2026-08-20, task b8388aec): a one-off finished at 06:10:22 and
+// parked warm with an 8-minute idle-kill armed. The user sent it a follow-up at
+// 06:14:59 through the Right-Option capture path (deliverDraft), it went back to
+// `processing`, and at 06:18:22 the timer armed BEFORE that message fired anyway
+// and killed a session mid-work. The card read "The session ended before the
+// task finished", which was true and told the user nothing about who ended it.
+// It was us.
+
+test('deliverDraft cancels the armed warm-kill (Right-Option reply keeps the session)', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  let submitted: () => void = () => {}
+  const ex = Object.assign(fake, {
+    writeDraftText(_t: string) {},
+    submitDraft() { submitted() },
+  })
+  const tm = new TaskManager({ executorFactory: () => ex, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, verifyAfterMs: 20, pollMs: 25, warmMs: 120 })
+  const id = await tm.dispatch('analyse my transcripts')
+  const task = tm.get(id)!
+  submitted = () => tm.onHookEvent({ kind: 'prompt-submitted', sessionId: tm.get(id)!.sessionId })
+  const done = once(tm, 'done')
+  await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'first pass done' } })
+  await done // parked warm — the 120ms idle-kill is armed
+
+  assert.equal(await tm.deliverDraft(id, 'also check the codex ones', []), true)
+  await new Promise((r) => setTimeout(r, 250)) // well past the warm window
+  assert.equal(ex.alive, true, 'the reply defused the warm-kill')
+  tm.kill(id)
+})
+
+test('parking warm twice leaves NO orphan timer that can still reap the session', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 200 })
+  const id = await tm.dispatch('watch this')
+  const task = tm.get(id)!
+  // Park #1 — arms timer A.
+  await (async () => { const d = once(tm, 'done'); await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'a' } }); await d })()
+  await new Promise((r) => setTimeout(r, 60))
+  // Wake (the field path: a hook, not a poll — polling stops when parked), then
+  // finish again → park #2 arms timer B. Only B is remembered; A is unreachable.
+  tm.onHookEvent({ kind: 'prompt-submitted', sessionId: tm.get(id)!.sessionId })
+  await (async () => { const d = once(tm, 'done'); tm.onHookEvent({ kind: 'turn-ended', sessionId: tm.get(id)!.sessionId, lastMessage: 'b' }); await d })()
+  // Pinning cancels "the" warm timer — it must cancel the only one there is.
+  tm.setKind(id, 'session')
+  await new Promise((r) => setTimeout(r, 450)) // past BOTH windows
+  assert.equal(fake.alive, true, 'an orphaned timer from the first park reaped the session')
+  tm.kill(id)
+})
+
+test('the warm-kill re-parks instead of killing a task that went back to work', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 150 })
+  const id = await tm.dispatch('long job')
+  const task = tm.get(id)!
+  await (async () => { const d = once(tm, 'done'); await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'turn one' } }); await d })()
+  // Back to work by ANY route — the backstop must not care which one, and must
+  // not depend on that route having remembered to cancel the timer.
+  tm.onHookEvent({ kind: 'prompt-submitted', sessionId: tm.get(id)!.sessionId })
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(tm.get(id)!.state, 'processing', 'precondition: the session went back to work')
+  await new Promise((r) => setTimeout(r, 300)) // past the armed window
+  assert.equal(fake.alive, true, 'the idle-kill fired on a working session')
+  assert.equal(tm.get(id)!.state, 'processing')
+  tm.kill(id)
+})
+
