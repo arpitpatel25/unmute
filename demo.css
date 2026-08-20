@@ -358,7 +358,7 @@ html[data-theme="dark"] .demo-keyboard-note { color: rgba(236,236,236,.62); }
 }
 
 @media (max-width: 430px) {
-  .macbook { transform: translateX(-50%) scale(.55); margin-bottom: calc(-1 * 850px * .46); }
+  .macbook { transform: translateX(-50%) scale(.4); margin-bottom: -335px; }
   .demo-tab-number { display: none; }
   .guide-copy { grid-template-columns: 1fr; }.guide-copy .guide-step { grid-row: auto; justify-self: start; margin-bottom: 6px; }
 }
