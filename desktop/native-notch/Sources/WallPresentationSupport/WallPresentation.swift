@@ -39,4 +39,28 @@ public enum WallWorkspaceSelection: Equatable {
             return selected == normalized
         }
     }
+
+    public var showsGroupHeadings: Bool {
+        self == .all
+    }
+}
+
+public enum WallWorkspacePresentation {
+    public static func orderedNames(_ names: [String]) -> [String] {
+        let normalized = names.map { $0.isEmpty ? "Ungrouped" : $0 }
+        return normalized.filter { $0 != "Ungrouped" }
+            + normalized.filter { $0 == "Ungrouped" }
+    }
+}
+
+public enum WallDisclosure {
+    public static func shouldReveal(hiddenTotal: Int?, showingAll: Bool?) -> Bool {
+        (hiddenTotal ?? 0) > 0 && showingAll != true
+    }
+}
+
+public enum WallCardLayout {
+    public static func columnCount(surfaceFill: Double) -> Int {
+        surfaceFill >= 0.895 ? 2 : 1
+    }
 }
