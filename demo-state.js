@@ -83,6 +83,24 @@ function deliverPad(state) {
   });
 }
 
+export function actionToEvent(action, state) {
+  const events = {
+    fn: { type: 'FN_TAP' },
+    stop: { type: state.mode === 'remote' ? 'RIGHT_OPTION_TAP' : 'FN_TAP' },
+    'right-option': { type: 'RIGHT_OPTION_TAP' },
+    scratchpad: { type: 'TOGGLE_SCRATCHPAD' },
+    'capture-url': { type: 'CAPTURE_URL' },
+    'capture-screenshot': { type: 'CAPTURE_SCREENSHOT' },
+    'deliver-cursor': { type: 'DELIVER_SCRATCHPAD', destination: 'cursor' },
+    'deliver-task': { type: 'DELIVER_SCRATCHPAD', destination: 'task' },
+    'toggle-notch': { type: 'TOGGLE_NOTCH' },
+    'cycle-model': { type: 'CYCLE_MODEL' },
+    'discard-pad': { type: 'DISCARD_PAD' },
+    reset: { type: 'RESET' }
+  };
+  return events[action] ?? null;
+}
+
 export function transition(state, event) {
   if (!state || !event?.type) return state;
 
@@ -90,6 +108,9 @@ export function transition(state, event) {
     return DEMO_MODES.includes(event.mode) ? createDemoState(event.mode) : state;
   }
   if (event.type === 'RESET') return createDemoState(state.mode);
+  if (event.type === 'DISCARD_PAD' && ['scratchpad', 'capture'].includes(state.mode)) {
+    return createDemoState(state.mode);
+  }
   if (event.type === 'TOGGLE_NOTCH' && state.mode === 'remote' && state.notch.state !== 'idle') {
     return { ...state, notch: { ...state.notch, expanded: !state.notch.expanded } };
   }
@@ -172,6 +193,16 @@ export function transition(state, event) {
   }
 
   if (state.mode === 'remote') {
+    if (event.type === 'CYCLE_MODEL' && ['ready', 'recording'].includes(state.step)) {
+      return {
+        ...state,
+        remote: {
+          ...state.remote,
+          model: state.remote.model === 'Claude Sonnet 4.5' ? 'Codex GPT-5.6' : 'Claude Sonnet 4.5',
+          agent: state.remote.model === 'Claude Sonnet 4.5' ? 'Codex' : 'Claude Code'
+        }
+      };
+    }
     if (event.type === 'RIGHT_OPTION_TAP' && state.step === 'ready') {
       return withStep(state, 'recording', { pillPhase: 'recording' });
     }

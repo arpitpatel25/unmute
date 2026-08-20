@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDemoState, transition } from '../demo-state.js';
+import { actionToEvent, createDemoState, transition } from '../demo-state.js';
 
 test('switching modes clears the previous flow and restores its first instruction', () => {
   let state = createDemoState('dictation');
@@ -96,4 +96,39 @@ test('events that do not belong to the current flow are ignored', () => {
   const state = createDemoState('dictation');
   assert.deepEqual(transition(state, { type: 'RIGHT_OPTION_TAP' }), state);
   assert.deepEqual(transition(state, { type: 'CAPTURE_SCREENSHOT' }), state);
+});
+
+test('browser actions map to the correct tap-toggle events for each mode', () => {
+  assert.deepEqual(actionToEvent('fn', createDemoState('dictation')), { type: 'FN_TAP' });
+  assert.deepEqual(actionToEvent('stop', transition(createDemoState('dictation'), { type: 'FN_TAP' })), { type: 'FN_TAP' });
+  assert.deepEqual(actionToEvent('right-option', createDemoState('remote')), { type: 'RIGHT_OPTION_TAP' });
+  assert.deepEqual(actionToEvent('scratchpad', createDemoState('scratchpad')), { type: 'TOGGLE_SCRATCHPAD' });
+  assert.deepEqual(actionToEvent('capture-url', createDemoState('capture')), { type: 'CAPTURE_URL' });
+  assert.deepEqual(actionToEvent('capture-screenshot', createDemoState('capture')), { type: 'CAPTURE_SCREENSHOT' });
+  assert.deepEqual(actionToEvent('deliver-cursor', createDemoState('capture')), { type: 'DELIVER_SCRATCHPAD', destination: 'cursor' });
+  assert.deepEqual(actionToEvent('toggle-notch', createDemoState('remote')), { type: 'TOGGLE_NOTCH' });
+  assert.deepEqual(actionToEvent('cycle-model', createDemoState('remote')), { type: 'CYCLE_MODEL' });
+  assert.deepEqual(actionToEvent('discard-pad', createDemoState('scratchpad')), { type: 'DISCARD_PAD' });
+  assert.deepEqual(actionToEvent('reset', createDemoState('dictation')), { type: 'RESET' });
+});
+
+test('Remote model selection and scratchpad discard are real state changes', () => {
+  let remote = createDemoState('remote');
+  remote = transition(remote, { type: 'RIGHT_OPTION_TAP' });
+  remote = transition(remote, { type: 'CYCLE_MODEL' });
+  assert.equal(remote.remote.model, 'Codex GPT-5.6');
+  remote = transition(remote, { type: 'CYCLE_MODEL' });
+  assert.equal(remote.remote.model, 'Claude Sonnet 4.5');
+
+  let scratchpad = createDemoState('scratchpad');
+  for (const type of ['FN_TAP', 'TOGGLE_SCRATCHPAD', 'FN_TAP']) {
+    scratchpad = transition(scratchpad, { type });
+  }
+  scratchpad = transition(scratchpad, { type: 'DISCARD_PAD' });
+  assert.equal(scratchpad.step, 'ready');
+  assert.equal(scratchpad.scratchpad.entries.length, 0);
+});
+
+test('unknown browser actions do not create reducer events', () => {
+  assert.equal(actionToEvent('not-a-control', createDemoState('dictation')), null);
 });
