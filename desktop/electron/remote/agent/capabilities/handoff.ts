@@ -4,6 +4,7 @@ import type {
   ToolDefinition,
   ToolResult,
 } from '../types.ts'
+import type { ProviderId } from '../../providers.ts'
 
 /**
  * Handing outside work to the Orchestrator.
@@ -25,6 +26,9 @@ import type {
  */
 
 const MAX_INTENT_LENGTH = 2_000
+const TASK_KINDS = ['oneoff', 'session'] as const
+const PROVIDERS = ['claude', 'codex', 'codex-desktop', 'claude-code-desktop'] as const
+type TaskKind = typeof TASK_KINDS[number]
 
 const tools = [
   {
@@ -35,7 +39,7 @@ const tools = [
       + ' You do NOT do the work and you do NOT wait for it: say that you have made a task,'
       + ' never that the thing is done.',
     inputSchema: {
-      type: 'object', additionalProperties: false, required: ['intent'],
+      type: 'object', additionalProperties: false, required: ['intent', 'kind'],
       properties: {
         intent: {
           type: 'string', minLength: 1, maxLength: MAX_INTENT_LENGTH,
@@ -44,6 +48,18 @@ const tools = [
             + ' a one-sentence request becomes a one-sentence task. The session that picks'
             + ' this up is fully tooled, so every extra clause you invent is work it will'
             + ' actually go and do.',
+        },
+        kind: {
+          type: 'string', enum: TASK_KINDS,
+          description: 'Choose session for ongoing, conversational, or project work the user may'
+            + ' return to. Choose oneoff only for a fire-and-forget errand with no expected follow-up.',
+        },
+        provider: {
+          type: 'string', enum: PROVIDERS,
+          description: 'The provider the user explicitly requested. Use claude or codex for their'
+            + ' terminal CLIs, and the matching desktop value only when the user explicitly asks'
+            + ' for the desktop app. Omit only when the user named no provider; the task will then'
+            + ' inherit the provider running this Unmute Agent turn.',
         },
         sourceSessionIds: {
           type: 'array',
@@ -73,6 +89,8 @@ export interface HandoffAdapters {
    *  that the Agent made it and not the user (Law IV). */
   createTask(input: {
     intent: string
+    kind: TaskKind
+    provider: ProviderId
     agentRunId: string
     sourceSessionIds?: readonly string[]
   }): Promise<{ taskId: string }>
@@ -122,12 +140,26 @@ export class HandoffCapability implements CapabilityModule {
       if (tool === 'task_create') {
         const intent = typeof value.intent === 'string' ? value.intent.trim() : ''
         if (!intent || intent.length > MAX_INTENT_LENGTH) return fail('invalid-input')
+        const kind = typeof value.kind === 'string' && TASK_KINDS.includes(value.kind as TaskKind)
+          ? value.kind as TaskKind
+          : null
+        if (!kind) return fail('invalid-input')
+        const requestedProvider = value.provider
+        if (
+          requestedProvider !== undefined
+          && (typeof requestedProvider !== 'string'
+            || !PROVIDERS.includes(requestedProvider as ProviderId))
+        ) return fail('invalid-input')
+        const provider = requestedProvider as ProviderId | undefined ?? ctx.principal.provider
+        if (!provider) return fail('invalid-input')
         const sources = value.sourceSessionIds
         if (sources !== undefined && (!Array.isArray(sources) || sources.some((s) => typeof s !== 'string' || !s))) {
           return fail('invalid-input')
         }
         const created = await this.adapters.createTask({
           intent,
+          kind,
+          provider,
           agentRunId: ctx.principal.runId,
           ...(sources ? { sourceSessionIds: sources as string[] } : {}),
         })

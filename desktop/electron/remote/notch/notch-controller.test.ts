@@ -583,6 +583,28 @@ test('EVERY card names its backend — absent must not mean "the default one"', 
   assert.equal(card('k1').terminal, true)
 })
 
+test('Agent origin is provenance only and never suppresses provider capabilities', () => {
+  const h = setup()
+  put(h, makeTask({
+    id: 'agent-codex', state: 'done', kind: 'session', agent: 'codex', alive: true,
+    origin: 'unmute-agent', agentRunId: 'agent-run-1',
+  }))
+  h.client.fire({ type: 'openDashboard' })
+  const cards = h.client.last('setCockpit')!.data.groups.flatMap((g) => g.cards)
+  const card = cards.find((candidate) => candidate.id === 'agent-codex')!
+  assert.equal(card.origin, 'unmute-agent')
+  assert.equal(card.backend, 'codex')
+  assert.equal(card.terminal, true)
+
+  h.client.fire({ type: 'focusTask', id: 'agent-codex' })
+  h.flush()
+  const detail = h.client.last('stageDetail')!.task
+  assert.equal(detail.terminal, true)
+  assert.equal(detail.resumable, true)
+  assert.equal(detail.owned, true)
+  assert.equal(detail.alive, true)
+})
+
 test('the transcript reaches the surface as items, not one flattened blob', () => {
   const h = setup()
   put(h, makeTask({

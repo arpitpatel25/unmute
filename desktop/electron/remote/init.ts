@@ -995,10 +995,17 @@ async function initializeUnmuteAgent(): Promise<void> {
           const seeded = input.sourceSessionIds?.length
             ? `${input.intent}\n\nStart from these earlier sessions: ${input.sourceSessionIds.join(', ')}`
             : input.intent
-          const taskId = await manager.dispatch(seeded, { kind: 'oneoff' })
+          const taskId = await manager.dispatch(seeded, {
+            kind: input.kind,
+            agent: input.provider,
+          })
           manager.mergeAgentOrigin(taskId, input.agentRunId)
           log.event('agent-handoff-created', {
-            taskId, agentRunId: input.agentRunId, sources: input.sourceSessionIds?.length ?? 0,
+            taskId,
+            agentRunId: input.agentRunId,
+            kind: input.kind,
+            provider: input.provider,
+            sources: input.sourceSessionIds?.length ?? 0,
           })
           return { taskId }
         },

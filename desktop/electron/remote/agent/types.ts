@@ -1,6 +1,15 @@
+import type { AgentProviderId } from './provider'
+
 export type McpPrincipal =
   | { kind: 'task'; taskId: string }
-  | { kind: 'unmute-agent'; runId: string; interactionId: string; expiresAt: number }
+  | {
+    kind: 'unmute-agent'
+    runId: string
+    interactionId: string
+    expiresAt: number
+    /** Provider actually running this Agent turn. Present on authenticated MCP calls. */
+    provider?: AgentProviderId
+  }
 
 export type ConsequenceClass =
   | 'read'

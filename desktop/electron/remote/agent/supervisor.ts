@@ -30,7 +30,7 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 export type AgentRun = JournalAgentRun
 
 export interface AgentRunTokenStore {
-  mint(runId: string, interactionId: string, ttlMs: number): string
+  mint(runId: string, interactionId: string, provider: AgentProviderId, ttlMs: number): string
   closeRun(runId: string): void
   sweep(): void
 }
@@ -398,6 +398,7 @@ export class AgentRunSupervisor {
     const token = this.options.tokenStore.mint(
       run.id,
       input.interactionId,
+      run.provider,
       positiveInteger(input.tokenTtlMs, this.tokenTtlMs),
     )
     const tokenExpiresAt = this.now() + positiveInteger(input.tokenTtlMs, this.tokenTtlMs)
