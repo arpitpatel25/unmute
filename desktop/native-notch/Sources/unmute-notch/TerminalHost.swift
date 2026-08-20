@@ -28,6 +28,26 @@ struct TerminalPanel: View {
     static let minRows = 14
     static let floorHeight: CGFloat = CGFloat(minRows) * 15.5 + 30
 
+    /// Give the caret to the terminal itself.
+    ///
+    /// Walks to the mounted TerminalView rather than holding a reference: the
+    /// host is an NSViewRepresentable, so the view is created and destroyed by
+    /// SwiftUI and a stored one would outlive its panel.
+    private func focusTerminal() {
+        guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }),
+              let terminal = Self.firstTerminalView(in: window.contentView) else { return }
+        window.makeFirstResponder(terminal)
+    }
+
+    private static func firstTerminalView(in view: NSView?) -> TerminalView? {
+        guard let view else { return nil }
+        if let tv = view as? TerminalView { return tv }
+        for child in view.subviews {
+            if let found = firstTerminalView(in: child) { return found }
+        }
+        return nil
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // A pinned header over scrolling content is exactly where the HARD
@@ -55,6 +75,23 @@ struct TerminalPanel: View {
             .overlay(Rectangle().fill(Theme.hairlineSoft).frame(height: 1), alignment: .bottom)
 
             TerminalHost(model: model, taskId: taskId)
+                // TAKING OVER IS A CLICK, AND THE CLICK HAS TO SAY SO.
+                //
+                // SwiftTerm's TerminalView handles the mouse itself — scrolling,
+                // drag-selection and auto-copy all worked — but a view only
+                // receives KEY events as first responder, and nothing ever made
+                // it one. Worse, the surface's background tap calls
+                // NotchFocus.release() → makeFirstResponder(nil) whenever the
+                // panel is expanded, so a click on the terminal actively left the
+                // window with NO responder: every keystroke fell off the end of
+                // the chain and macOS beeped. The header has said "type to take
+                // over" the whole time.
+                //
+                // Claiming it here rather than widening the background rule keeps
+                // that rule intact — a click on empty surface still gives the
+                // caret back — and makes the promise literal: click the terminal,
+                // it takes the keyboard.
+                .onTapGesture { focusTerminal() }
         }
         .frame(maxWidth: .infinity, minHeight: Self.floorHeight, maxHeight: .infinity)
         // The terminal is CONTENT, not chrome: opaque, flat, and never glass.
