@@ -367,6 +367,29 @@ for (const kind of ['claude', 'codex'] as const) {
   })
 }
 
+test('codex: a fresh headless turn can learn its handle only after prompt submission', async () => {
+  const processes: FakeProcess[] = []
+  const provider = new CodexCliProvider({
+    handleTimeoutMs: 50,
+    runtime: 'repl',
+    submitBeforeFreshHandle: true,
+    processFactory: () => {
+      const process = new FakeProcess()
+      process.submitUserTurn = async (text: string) => {
+        process.submitted.push(text)
+        process.events.emit({ type: 'handle', sessionId: CODEX_ID })
+      }
+      processes.push(process)
+      return process
+    },
+  })
+
+  const session = await provider.start(input('prompt-first'))
+  assert.equal(session.handle.opaqueId, CODEX_ID)
+  assert.deepEqual(processes[0].submitted, ['help with prompt-first'])
+  await provider.close(session.handle)
+})
+
 test('both providers receive the same generated constitution through the system channel', async () => {
   const claude = harness('claude')
   const codex = harness('codex')
