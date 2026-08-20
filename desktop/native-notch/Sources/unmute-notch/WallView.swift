@@ -1,4 +1,5 @@
 import SwiftUI
+import WallPresentationSupport
 
 // The Orchestrator wall — group sections of cards plus the sidebar (queue /
 // one-offs / skills / shelf), the away digest, doorbell and the
@@ -22,6 +23,21 @@ struct WallView: View {
     @State private var importOpen = true
     /// Backends whose full list the user asked for.
     @State private var importExpanded: Set<String> = []
+    /// Presentation-only views over the wall. The engine still owns the task
+    /// data, order, folds and Today query; these never mutate a task.
+    @State private var selectedView: WallViewMode
+    @State private var selectedWorkspace: WallWorkspaceSelection = .all
+    /// Local disclosure for the combined All work / All workspaces overview.
+    /// The engine still reveals its folded history; this only keeps each
+    /// workspace preview scannable until the user opens that one section.
+    @State private var expandedWorkspacePreviews: Set<String> = []
+
+    init(model: NotchModel, topInset: CGFloat) {
+        self.model = model
+        self.topInset = topInset
+        _selectedView = State(initialValue:
+            WallLaunchPresentation.resolve(todayOnly: model.cockpit?.todayOnly).view)
+    }
 
     private var data: CockpitData {
         model.cockpit ?? CockpitData(groups: [], hiddenTotal: 0, showingAll: false, todayOnly: false,
@@ -32,20 +48,24 @@ struct WallView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            // THE FLOATING CHROME BELONGS TO THE MAIN COLUMN, NOT THE SURFACE.
-            //
-            // Overlaying it on the whole HStack floated the route offer and the
-            // doorbell across the sidebar, where they landed on top of the
-            // skills list and each other. Scoping the overlay to `main` keeps
-            // them over the wall — which is what they describe — and leaves the
-            // rail's own rows reachable all the way down.
-            main
-                .overlay(alignment: .bottom) { bottomChrome }
-            rail
+        VStack(spacing: 0) {
+            headerChrome
+            Rectangle().fill(Theme.hairlineSoft).frame(height: 1)
+            HStack(alignment: .top, spacing: 0) {
+                workspaceRail
+                // THE FLOATING CHROME BELONGS TO THE MAIN COLUMN, NOT THE
+                // SURFACE. It describes the work in the centre, while the
+                // activity rail keeps its own rows reachable all the way down.
+                main
+                    .overlay(alignment: .bottom) { bottomChrome }
+                rail
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .topLeading) { hoverCard }
+        .onAppear { activateLaunchView() }
+        .onChange(of: data.hiddenTotal) { _ in revealAllIfNeeded() }
+        .onChange(of: data.showingAll) { _ in revealAllIfNeeded() }
     }
 
     // MARK: main column
@@ -53,14 +73,14 @@ struct WallView: View {
     private var main: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                header
+                wallTitle
 
                 if let digest = data.digest { digestBanner(digest) }
 
                 // "Nothing here" means nothing EXISTS — not "everything is
                 // folded", which is a different thing with a way out.
-                if data.groups.allSatisfy({ $0.cards.isEmpty }) && (data.hiddenTotal ?? 0) == 0 {
-                    Text("No sessions — speak to spawn one")
+                if visibleGroups.isEmpty {
+                    Text(emptyMessage)
                         .font(Theme.fBody).foregroundColor(Theme.textFaint)
                         .padding(.top, 34).frame(maxWidth: .infinity, alignment: .center)
                 }
@@ -69,12 +89,12 @@ struct WallView: View {
                 // Skipping empty groups silently deleted whole groups from the
                 // wall once folding arrived, taking their "show all" with them
                 // and making those tasks unreachable by any gesture.
-                ForEach(Array(data.groups.enumerated()), id: \.offset) { _, group in
-                    if !group.cards.isEmpty || (group.hidden ?? 0) > 0 { groupSection(group) }
+                ForEach(Array(visibleGroups.enumerated()), id: \.offset) { _, group in
+                    groupSection(group)
                 }
             }
             .padding(.horizontal, Theme.gutter)
-            .padding(.top, topInset + 4)
+            .padding(.top, 18)
             .padding(.bottom, 60)
         }
         .scrollEdge(topInset + 18)
@@ -89,67 +109,176 @@ struct WallView: View {
         }
     }
 
-    private var header: some View {
+    /// One compact, cutout-safe header. `topInset` keeps this entire row below
+    /// a physical camera housing; the same row simply sits nearer the top on a
+    /// display without one.
+    private var headerChrome: some View {
         HStack(spacing: 10) {
+            UnMark(height: 13)
             SectionLabel(text: "Orchestrator")
-            // TODAY — a straight 24-hour filter over the wall. Grouping and
-            // order are untouched; older cards simply are not there. It is not
-            // the fold beside it: that unfolds one group's stale tail, this
-            // hides everything old everywhere, and the two must never be
-            // mistaken for each other.
-            //
-            // While it is on the fold is deliberately absent. A filter with an
-            // escape hatch is just a fold wearing a filter's name — turning
-            // Today off IS the way back.
-            Button { model.emit(.today(on: !(data.todayOnly ?? false))) } label: {
-                // ON HAS TO LOOK ON. The first cut separated the two states by a
-                // 5.5%-white fill and a near-white stroke — and `Theme.accent`
-                // carries no hue at all (white at 93%), by design, because the
-                // primary action is meant to be quiet. On a black ground that
-                // left "filtering" and "not filtering" looking alike, which is
-                // the one thing a filter must never do: you cannot trust a wall
-                // if you cannot tell whether something is being hidden from it.
-                //
-                // Teal, because it is already the app's affirmative — armed on
-                // the pill, edited on the stage, new in the skill list. A new
-                // hue for one toggle would be a second vocabulary.
-                let on = data.todayOnly == true
-                Text("Today")
-                    .font(.system(size: 10.5, weight: on ? .semibold : .medium))
-                    .foregroundColor(on ? Theme.cReady : Theme.textDim)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 6)
-                        .fill(on ? Theme.cReady.opacity(0.18) : Color.clear))
-                    .overlay(RoundedRectangle(cornerRadius: 6)
-                        .stroke(on ? Theme.cReady.opacity(0.70) : Theme.hairline,
-                                lineWidth: on ? 0.75 : 0.5))
-            }
-            .buttonStyle(.plain)
-            .help("Only what has moved in the last 24 hours")
-            Spacer(minLength: 0)
-            // The wall-level way back. Deliberately not dependent on any group
-            // rendering its own header — that dependency is what made folded
-            // work unreachable.
-            if data.todayOnly == true {
-                EmptyView()
-            } else if data.showingAll == true {
-                QuietButton(label: "Hide older everywhere") {
-                    model.emit(.showAll(group: nil, on: false))
+            HStack(spacing: 4) {
+                ForEach(WallViewMode.allCases, id: \.rawValue) { mode in
+                    wallViewButton(mode)
                 }
-            } else if let n = data.hiddenTotal, n > 0 {
-                // NO HUE ON A DISCLOSURE. cReady (teal) is the ON colour, and
-                // spending it here put a coloured link beside every group
-                // heading while nothing was actually on — so the one control
-                // that IS stateful, the Today chip, no longer stood out from
-                // the ones that merely reveal rows. QuietButton's default is
-                // Theme.textDim; letting it apply is the whole fix.
-                QuietButton(label: "Show all · \(n) older") {
-                    model.emit(.showAll(group: nil, on: true))
+            }
+            Spacer(minLength: 0)
+            if data.groups.flatMap(\.cards).contains(where: { $0.status == .processing }) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        Dot(status: .processing, size: 6, breathing: true)
+                        Text("System moving").font(Theme.fCap).foregroundColor(Theme.textDim)
+                    }
+                    Dot(status: .processing, size: 6, breathing: true)
                 }
             }
             if model.canGoBack { BackButton { model.onBack() } }
             CloseButton { model.emit(.collapsed) }
         }
+        .padding(.horizontal, Theme.gutter)
+        .padding(.top, topInset)
+        .padding(.bottom, 9)
+        .background(Theme.railBg)
+    }
+
+    private func wallViewButton(_ mode: WallViewMode) -> some View {
+        let selected = selectedView == mode
+        return Button(action: { selectView(mode) }) {
+            Text(mode.title)
+                .font(.system(size: 11.5, weight: selected ? .semibold : .medium))
+                .foregroundColor(selected ? Theme.text : Theme.textDim)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: Theme.controlRadius)
+                    .fill(selected ? Theme.raised : Color.clear))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectView(_ mode: WallViewMode) {
+        selectedView = mode
+        let today = mode == .today
+        if (data.todayOnly ?? false) != today { model.emit(.today(on: today)) }
+        revealAllIfNeeded()
+    }
+
+    private func activateLaunchView() {
+        let launch = WallLaunchPresentation.resolve(todayOnly: data.todayOnly)
+        selectedView = launch.view
+        if launch.shouldEnableToday { model.emit(.today(on: true)) }
+        revealAllIfNeeded()
+    }
+
+    private func revealAllIfNeeded() {
+        if WallDisclosure.shouldReveal(hiddenTotal: data.hiddenTotal,
+                                       showingAll: data.showingAll) {
+            model.emit(.showAll(group: nil, on: true))
+        }
+    }
+
+    private var wallTitle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(selectedWorkspaceTitle == "All workspaces"
+                 ? selectedView.title : selectedWorkspaceTitle)
+                .font(Theme.fTitle).foregroundColor(Theme.text)
+            Text(wallSubtitle).font(Theme.fSub).foregroundColor(Theme.textDim)
+        }
+    }
+
+    private var wallSubtitle: String {
+        let place = selectedWorkspaceTitle == "All workspaces"
+            ? "across your workspaces" : "in \(selectedWorkspaceTitle)"
+        switch selectedView {
+        case .today: return "Work moving \(place) today."
+        case .needsYou: return "Work waiting for your decision \(place)."
+        case .finished: return "Recently finished work \(place)."
+        case .allWork: return "All visible work \(place)."
+        }
+    }
+
+    private var emptyMessage: String {
+        switch selectedView {
+        case .needsYou: return "Nothing needs you here"
+        case .finished: return "No finished work here"
+        default: return "No sessions — speak to spawn one"
+        }
+    }
+
+    private var selectedWorkspaceTitle: String {
+        switch selectedWorkspace {
+        case .all: return "All workspaces"
+        case .named(let name): return name
+        }
+    }
+
+    private var visibleGroups: [GroupP] {
+        data.groups.compactMap { group in
+            guard selectedWorkspace.includes(group: group.name) else { return nil }
+            let cards = group.cards.filter { selectedView.includes(status: $0.status.rawValue) }
+            let mayShowFold = selectedView == .today || selectedView == .allWork
+            guard !cards.isEmpty || (mayShowFold && (group.hidden ?? 0) > 0) else { return nil }
+            return GroupP(name: group.name, cards: cards,
+                          hidden: mayShowFold ? group.hidden : 0,
+                          expanded: group.expanded)
+        }
+    }
+
+    // MARK: workspace rail
+
+    private var workspaceRail: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 3) {
+                SectionLabel(text: "Workspaces").padding(.horizontal, 8).padding(.bottom, 5)
+                workspaceButton(.all, title: "All workspaces", count: data.groups.count,
+                                active: data.groups.contains { $0.cards.contains { $0.status == .processing } })
+                ForEach(Array(orderedWorkspaceGroups.enumerated()), id: \.offset) { _, group in
+                    let title = group.name.isEmpty ? "Ungrouped" : group.name
+                    workspaceButton(.named(title), title: title,
+                                    count: group.cards.count + (group.hidden ?? 0),
+                                    active: group.cards.contains { $0.status == .processing },
+                                    ungrouped: group.name.isEmpty)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 14)
+            .padding(.bottom, 44)
+        }
+        .frame(width: 174)
+        .background(Theme.railBg)
+        .overlay(Rectangle().fill(Theme.hairlineSoft).frame(width: 1), alignment: .trailing)
+    }
+
+    private var orderedWorkspaceGroups: [GroupP] {
+        let names = WallWorkspacePresentation.orderedNames(data.groups.map(\.name))
+        return names.compactMap { title in
+            data.groups.first { ($0.name.isEmpty ? "Ungrouped" : $0.name) == title }
+        }
+    }
+
+    private func workspaceButton(_ selection: WallWorkspaceSelection,
+                                 title: String, count: Int, active: Bool,
+                                 ungrouped: Bool = false) -> some View {
+        let selected = selectedWorkspace == selection
+        let marker = ungrouped ? Theme.cNeeds.opacity(0.78) : Theme.accent
+        return Button(action: { selectedWorkspace = selection }) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(ungrouped || active ? marker : Color.clear)
+                    .overlay(Circle().stroke(ungrouped || active ? marker : Theme.textFaint,
+                                             lineWidth: 0.75))
+                    .frame(width: 6, height: 6)
+                Text(title).font(Theme.fSub).foregroundColor(selected ? Theme.text : Theme.textDim)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                NumText(text: "\(count)")
+            }
+            .padding(.horizontal, 8).padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: Theme.controlRadius)
+                .fill(selected && ungrouped
+                      ? Theme.cNeeds.opacity(0.08)
+                      : (selected ? Theme.raised : Color.clear)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func digestBanner(_ digest: String) -> some View {
@@ -174,34 +303,51 @@ struct WallView: View {
     }
 
     private func groupSection(_ g: GroupP) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            // ALWAYS a heading, including for the ungrouped bucket. Without one
-            // its cards rendered under the previous group's title — so the
-            // newest task looked like it belonged to someone else's group and a
-            // correctly-sorted wall looked scrambled.
-            HStack(spacing: 8) {
-                Text(g.name.isEmpty ? "Ungrouped" : g.name)
-                    .font(Theme.fHead)
-                    .foregroundColor(g.name.isEmpty ? Theme.textDim : Theme.text)
-                if !g.name.isEmpty { Badge(text: "group") }
-                // SAY that cards are folded away — a group silently missing half
-                // its tasks reads as a group that lost them. Acts on THIS group:
-                // a control in a group header that expanded the whole wall, and
-                // then offered no way to collapse, was the complaint.
-                if g.expanded == true {
-                    QuietButton(label: "Show less") { model.emit(.showAll(group: g.name, on: false)) }
-                } else if let n = g.hidden, n > 0 {
-                    QuietButton(label: "Show all · \(n)") {
-                        model.emit(.showAll(group: g.name, on: true))
+        let groupKey = g.name.isEmpty ? "Ungrouped" : g.name
+        let expanded = expandedWorkspacePreviews.contains(groupKey)
+        let visibleCount = WallGroupPreview.visibleCount(
+            total: g.cards.count, view: selectedView,
+            workspace: selectedWorkspace, expanded: expanded
+        )
+        let shownCards = Array(g.cards.prefix(visibleCount))
+        let canToggle = WallGroupPreview.canToggle(
+            total: g.cards.count, view: selectedView, workspace: selectedWorkspace
+        )
+
+        return VStack(alignment: .leading, spacing: selectedWorkspace.showsGroupHeadings ? 9 : 0) {
+            // In the all-workspaces view this heading identifies which cards
+            // belong together. A selected workspace already has that identity
+            // in the page title, so repeating it here only creates two titles.
+            if selectedWorkspace.showsGroupHeadings {
+                HStack(spacing: 8) {
+                    Text(groupKey)
+                        .font(Theme.fHead)
+                        .foregroundColor(g.name.isEmpty ? Theme.cNeeds.opacity(0.82) : Theme.text)
+                    Spacer(minLength: 0)
+                    if canToggle {
+                        QuietButton(label: expanded ? "Show less" : "Show all · \(g.cards.count)") {
+                            if expanded {
+                                expandedWorkspacePreviews.remove(groupKey)
+                            } else {
+                                expandedWorkspacePreviews.insert(groupKey)
+                            }
+                        }
                     }
                 }
-                Spacer(minLength: 0)
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 224), spacing: 8)],
-                      alignment: .leading, spacing: 8) {
-                ForEach(g.cards, id: \.id) { card($0) }
+
+            // At the two smaller surface sizes, preserve the calm single-column
+            // scan. The 90% surface has enough width that one row becomes mostly
+            // empty space, so it uses a row-major two-column grid instead.
+            LazyVGrid(columns: cardColumns, alignment: .leading, spacing: 8) {
+                ForEach(shownCards, id: \.id) { card($0) }
             }
         }
+    }
+
+    private var cardColumns: [GridItem] {
+        let count = WallCardLayout.columnCount(surfaceFill: Double(model.selectedSurfaceFill))
+        return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: count)
     }
 
     // MARK: card

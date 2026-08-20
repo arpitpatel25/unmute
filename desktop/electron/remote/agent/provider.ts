@@ -212,6 +212,8 @@ export interface CliProviderRuntimeOptions {
   freshHandle?: () => string
   argv(session: AgentProcessLaunch['session']): string[]
   learnsFreshHandle: boolean
+  /** Some noninteractive CLIs mint their session only after stdin is submitted. */
+  submitBeforeFreshHandle?: boolean
   handleTimeoutMs?: number
 }
 
@@ -320,6 +322,17 @@ export class CliProviderRuntime implements AgentProvider {
     }
     void this.consume(live)
 
+    let submitted = false
+    if (!handle && this.options.submitBeforeFreshHandle) {
+      try {
+        await driver.submitUserTurn(input.transcript)
+        submitted = true
+      } catch {
+        await this.closeDriver(live)
+        throw new AgentProviderError('provider-unavailable')
+      }
+    }
+
     let learned: AgentSessionHandle
     try {
       learned = await withTimeout(
@@ -337,12 +350,14 @@ export class CliProviderRuntime implements AgentProvider {
     }
     this.active.set(key, live)
 
-    try {
-      await driver.submitUserTurn(input.transcript)
-    } catch {
-      this.active.delete(key)
-      await this.closeDriver(live)
-      throw new AgentProviderError('provider-unavailable')
+    if (!submitted) {
+      try {
+        await driver.submitUserTurn(input.transcript)
+      } catch {
+        this.active.delete(key)
+        await this.closeDriver(live)
+        throw new AgentProviderError('provider-unavailable')
+      }
     }
     return { handle: learned, activity, completion: live.completion.promise }
   }

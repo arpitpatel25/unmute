@@ -1661,7 +1661,7 @@ export class NotchController {
       backend: t.agent ?? 'claude',
       /** Does it own a terminal? A capability, so the mark's terminal glyph
        *  follows the registry rather than a list of backend names. */
-      terminal: t.origin === 'unmute-agent' ? false : providerOf(t.agent).hasTerminal,
+      terminal: providerOf(t.agent).hasTerminal,
       project: t.agent === 'codex-desktop' ? (t.codexProject ?? undefined) : undefined,
       // Absent stays absent (D6) — the card renders the agent alone.
       model: t.model || undefined,
@@ -1672,9 +1672,7 @@ export class NotchController {
       // deletes it there. Reporting false is what put a finished Codex chat
       // behind "resume — continue with full context" / "re-run fresh", offering
       // to revive something that had never stopped.
-      alive: t.origin === 'unmute-agent'
-        ? false
-        : providerOf(t.agent).transport === 'driver' ? true : (t.alive ?? false),
+      alive: providerOf(t.agent).transport === 'driver' ? true : (t.alive ?? false),
     }
   }
 
@@ -1696,7 +1694,7 @@ export class NotchController {
       // 'claude-code-desktop' that does not exist in AgentKind — and this is
       // what picks the expanded surface's share of the screen (80% for a
       // terminal, 60% for a conversation). One registry, one answer.
-      terminal: t.origin === 'unmute-agent' ? false : providerOf(t.agent).hasTerminal,
+      terminal: providerOf(t.agent).hasTerminal,
       // CAPABILITIES, NOT A NAME. Nine places in Swift still asked
       // `backend == "codex-desktop"` to decide whether to offer Resume, whether
       // the destructive button says Kill or Remove, whether there is a process
@@ -1704,13 +1702,13 @@ export class NotchController {
       // silently mis-answers for the next backend to arrive — which is exactly
       // how the Codex CLI model picker shipped empty. The registry already
       // knows; it just was not being told to the view.
-      resumable: t.origin === 'unmute-agent' ? false : providerOf(t.agent).canResume,
+      resumable: providerOf(t.agent).canResume,
       resuming: t.resuming ?? false,
       ...(t.resumeError ? { resumeError: t.resumeError } : {}),
       /** True when Unmute spawned the process — so killing it is ours to do.
        *  A driver-backed task has nothing of ours to kill; the card offers
        *  Remove instead, which forgets it without touching the user's app. */
-      owned: t.origin === 'unmute-agent' ? false : providerOf(t.agent).transport === 'pty',
+      owned: providerOf(t.agent).transport === 'pty',
       // THE CONVERSATION IS SENT FOR EVERY BACKEND NOW.
       //
       // It used to be gated on `external`, because it was conceived as "what a
@@ -1737,7 +1735,7 @@ export class NotchController {
       ...(external && t.codexProject ? { project: t.codexProject } : {}),
       status: t.state,
       kind: t.kind ?? 'oneoff',
-      alive: t.origin === 'unmute-agent' ? false : external ? true : (t.alive ?? false),
+      alive: external ? true : (t.alive ?? false),
       shelved: t.shelved ?? false,
       dir: this.dirLabel(t),
       age: relativeAge(t.updatedAt, now),

@@ -18,6 +18,8 @@ import {
   type ProbeBinary,
   type ProviderEventObserver,
 } from '../provider'
+import { agentRuntimeMode, type AgentRuntimeMode } from './claude-headless'
+import { CodexHeadlessProcess } from './codex-headless'
 
 export interface CodexCliProviderOptions {
   binary?: string
@@ -27,6 +29,9 @@ export interface CodexCliProviderOptions {
   executor?: Omit<CodexExecutorOpts, 'codexBin' | 'developerInstructions' | 'extraArgs' | 'remote'>
   rollout?: CodexRolloutObserverOptions
   handleTimeoutMs?: number
+  runtime?: AgentRuntimeMode
+  /** Required only for injected drivers whose fresh handle follows submission. */
+  submitBeforeFreshHandle?: boolean
 }
 
 export interface CodexRolloutObserverOptions {
@@ -38,10 +43,12 @@ export interface CodexRolloutObserverOptions {
 
 /** Codex CLI adapter; fresh handles are learned from its structured rollout. */
 export class CodexCliProvider extends CliProviderRuntime {
+  readonly createProcess: AgentProcessFactory
+
   constructor(options: CodexCliProviderOptions = {}) {
     const binary = options.binary ?? 'codex'
     const observe = options.observe ?? codexRolloutObserver(options.rollout)
-    const processFactory = options.processFactory ?? (() => new ExecutorBackedAgentProcess({
+    const replFactory: AgentProcessFactory = () => new ExecutorBackedAgentProcess({
       createExecutor: async (launch) => new CodexExecutor({
         ...options.executor,
         codexBin: binary,
@@ -50,16 +57,22 @@ export class CodexCliProvider extends CliProviderRuntime {
         remote: undefined,
       }),
       observe,
-    }))
+    })
+    const runtime = options.runtime ?? agentRuntimeMode()
+    const processFactory = options.processFactory
+      ?? (runtime === 'headless' ? () => new CodexHeadlessProcess() : replFactory)
     super({
       id: 'codex',
       binary,
       processFactory,
       probeBinary: options.probeBinary ?? probeCli,
       learnsFreshHandle: true,
+      submitBeforeFreshHandle: options.submitBeforeFreshHandle
+        ?? (options.processFactory ? false : runtime === 'headless'),
       handleTimeoutMs: options.handleTimeoutMs,
       argv: (session) => session.kind === 'resume' ? ['resume', session.id!] : [],
     })
+    this.createProcess = processFactory
   }
 }
 

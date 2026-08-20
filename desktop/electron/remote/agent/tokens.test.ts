@@ -20,17 +20,17 @@ function createTokens() {
 test('mints a token that resolves to its active interaction principal', () => {
   const { tokens } = createTokens()
 
-  const token = tokens.mint('run-a', 'ix-1', 60_000)
+  const token = tokens.mint('run-a', 'ix-1', 'codex', 60_000)
 
   assert.deepEqual(tokens.resolve(token), {
-    kind: 'unmute-agent', runId: 'run-a', interactionId: 'ix-1', expiresAt: 61_000,
+    kind: 'unmute-agent', runId: 'run-a', interactionId: 'ix-1', provider: 'codex', expiresAt: 61_000,
   })
   assert.equal(tokens.resolve('wrong-token'), null)
 })
 
 test('does not resolve a token at or after its expiry', () => {
   const { tokens, setNow } = createTokens()
-  const token = tokens.mint('run-a', 'ix-1', 60_000)
+  const token = tokens.mint('run-a', 'ix-1', 'claude', 60_000)
 
   setNow(61_000)
 
@@ -39,17 +39,18 @@ test('does not resolve a token at or after its expiry', () => {
 
 test('rotating a run invalidates its prior interaction token', () => {
   const { tokens } = createTokens()
-  const first = tokens.mint('run-a', 'ix-1', 60_000)
-  const second = tokens.mint('run-a', 'ix-2', 60_000)
+  const first = tokens.mint('run-a', 'ix-1', 'claude', 60_000)
+  const second = tokens.mint('run-a', 'ix-2', 'codex', 60_000)
 
   assert.equal(tokens.resolve(first), null)
   assert.equal(tokens.resolve(second)?.runId, 'run-a')
   assert.equal(tokens.resolve(second)?.interactionId, 'ix-2')
+  assert.equal(tokens.resolve(second)?.provider, 'codex')
 })
 
 test('closing a run invalidates its active token', () => {
   const { tokens } = createTokens()
-  const token = tokens.mint('run-a', 'ix-1', 60_000)
+  const token = tokens.mint('run-a', 'ix-1', 'claude', 60_000)
 
   tokens.closeRun('run-a')
 
@@ -58,8 +59,8 @@ test('closing a run invalidates its active token', () => {
 
 test('keeps tokens isolated between runs', () => {
   const { tokens } = createTokens()
-  const runA = tokens.mint('run-a', 'ix-a', 60_000)
-  const runB = tokens.mint('run-b', 'ix-b', 60_000)
+  const runA = tokens.mint('run-a', 'ix-a', 'claude', 60_000)
+  const runB = tokens.mint('run-b', 'ix-b', 'codex', 60_000)
 
   tokens.closeRun('run-a')
 
@@ -69,8 +70,8 @@ test('keeps tokens isolated between runs', () => {
 
 test('sweep removes expired tokens without affecting active runs', () => {
   const { tokens, setNow } = createTokens()
-  const expired = tokens.mint('run-a', 'ix-a', 1)
-  const active = tokens.mint('run-b', 'ix-b', 60_000)
+  const expired = tokens.mint('run-a', 'ix-a', 'claude', 1)
+  const active = tokens.mint('run-b', 'ix-b', 'codex', 60_000)
 
   setNow(1_001)
   tokens.sweep()

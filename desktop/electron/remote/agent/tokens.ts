@@ -1,6 +1,7 @@
 import { createHash, randomBytes as nodeRandomBytes } from 'node:crypto'
 
 import type { McpPrincipal } from './types'
+import type { AgentProviderId } from './provider'
 
 export interface AgentTokenStoreOptions {
   now?: () => number
@@ -13,6 +14,7 @@ export interface AgentTokenStoreOptions {
 interface TokenRecord {
   runId: string
   interactionId: string
+  provider: AgentProviderId
   expiresAt: number
 }
 
@@ -37,12 +39,12 @@ export class AgentTokenStore {
     ).toString('base64url'))
   }
 
-  mint(runId: string, interactionId: string, ttlMs: number): string {
+  mint(runId: string, interactionId: string, provider: AgentProviderId, ttlMs: number): string {
     this.closeRun(runId)
 
     const token = this.randomToken()
     const hash = tokenHash(token)
-    const record = { runId, interactionId, expiresAt: this.now() + ttlMs }
+    const record = { runId, interactionId, provider, expiresAt: this.now() + ttlMs }
 
     this.recordsByHash.set(hash, record)
     this.activeHashByRun.set(runId, hash)

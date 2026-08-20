@@ -78,6 +78,7 @@ import {
 } from './agent/controller'
 import { ClaudeCodeProvider } from './agent/providers/claude'
 import { agentRuntimeMode, reapHeadlessTurns } from './agent/providers/claude-headless'
+import { reapCodexHeadlessTurns } from './agent/providers/codex-headless'
 import { agentConstitution } from './agent/constitution'
 import { MAX_CAPTION_LENGTH, captionDwellMs, fitCaption } from './agent/caption'
 import { nextConversation, type Conversation } from './agent/continuity'
@@ -906,7 +907,7 @@ async function initializeUnmuteAgent(): Promise<void> {
       },
       executor: { settingsPath: hookSettingsFile ?? undefined },
     })
-    const codex = new CodexCliProvider()
+    const codex = new CodexCliProvider({ runtime: agentRuntime })
     const runtimeProviders = new Map<AgentProviderId, typeof claude | typeof codex>([
       ['claude', claude],
       ['codex', codex],
@@ -994,10 +995,17 @@ async function initializeUnmuteAgent(): Promise<void> {
           const seeded = input.sourceSessionIds?.length
             ? `${input.intent}\n\nStart from these earlier sessions: ${input.sourceSessionIds.join(', ')}`
             : input.intent
-          const taskId = await manager.dispatch(seeded, { kind: 'oneoff' })
+          const taskId = await manager.dispatch(seeded, {
+            kind: input.kind,
+            agent: input.provider,
+          })
           manager.mergeAgentOrigin(taskId, input.agentRunId)
           log.event('agent-handoff-created', {
-            taskId, agentRunId: input.agentRunId, sources: input.sourceSessionIds?.length ?? 0,
+            taskId,
+            agentRunId: input.agentRunId,
+            kind: input.kind,
+            provider: input.provider,
+            sources: input.sourceSessionIds?.length ?? 0,
           })
           return { taskId }
         },
@@ -4911,6 +4919,7 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     // named something else. A headless `claude` holding a model connection is
     // the same shape.
     try { reapHeadlessTurns() } catch (e) { log.warn('agent reap failed', { error: (e as Error).message }) }
+    try { reapCodexHeadlessTurns() } catch (e) { log.warn('codex agent reap failed', { error: (e as Error).message }) }
     disposeUnmuteAgent()
     disposeMcpServer()
     try { cuaManager?.dispose(); cuaServer?.close(); void cuaArming.disposeAll() } catch (e) { log.warn('cua shutdown failed', { error: (e as Error).message }) }

@@ -173,7 +173,8 @@ struct Badge: View {
 // Emphasis comes from grouping and one tinted primary — never from stacking
 // extra borders and fills, which the new system explicitly asks us to remove.
 
-/// Dense control — the default. Rounded rect, 7pt.
+/// Dense control — the default. Quiet enough to sit in a task toolbar without
+/// turning every available action into a row of oversized pills.
 struct KeyButton: View {
     let label: String
     var danger: Bool = false
@@ -183,15 +184,15 @@ struct KeyButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                if let symbol { Image(systemName: symbol).font(.system(size: 10.5, weight: .medium)) }
-                Text(label).font(Theme.fSub)
+            HStack(spacing: 3.5) {
+                if let symbol { Image(systemName: symbol).font(.system(size: 9.5, weight: .medium)) }
+                Text(label).font(.system(size: 11, weight: .medium))
             }
             .foregroundColor(danger ? Theme.cError : Theme.text)
-            .padding(.horizontal, 11).padding(.vertical, 4.5)
-            .background(RoundedRectangle(cornerRadius: Theme.controlRadius)
+            .padding(.horizontal, 9).padding(.vertical, 3.5)
+            .background(RoundedRectangle(cornerRadius: 6)
                 .fill(hovering ? Theme.raisedHover : Theme.raised))
-            .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius)
+            .overlay(RoundedRectangle(cornerRadius: 6)
                 .stroke(danger ? Theme.cError.opacity(0.30) : Theme.hairline, lineWidth: 0.5))
         }
         .buttonStyle(.plain)
@@ -200,8 +201,8 @@ struct KeyButton: View {
     }
 }
 
-/// Large control — capsule. `go` marks the ONE primary action on a surface and
-/// is the only thing that carries the accent tint.
+/// Primary control. It remains the strongest action, but shares the compact
+/// toolbar scale instead of becoming a large call-to-action inside the notch.
 struct ActButton: View {
     let label: String
     var danger: Bool = false
@@ -212,13 +213,13 @@ struct ActButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                if let symbol { Image(systemName: symbol).font(.system(size: 11, weight: .semibold)) }
-                Text(label).font(.system(size: 13, weight: go ? .semibold : .regular))
+            HStack(spacing: 4) {
+                if let symbol { Image(systemName: symbol).font(.system(size: 10, weight: .semibold)) }
+                Text(label).font(.system(size: 11.5, weight: go ? .semibold : .medium))
             }
             // The primary's fill is near-white, so its label is dark.
             .foregroundColor(go ? Theme.accentInk : (danger ? Theme.cError : Theme.text))
-            .padding(.horizontal, 16).padding(.vertical, 6)
+            .padding(.horizontal, 12).padding(.vertical, 4.5)
             .background(
                 Capsule().fill(go ? Theme.accent.opacity(hovering ? 0.86 : 1)
                                   : (hovering ? Theme.raisedHover : Theme.raised))

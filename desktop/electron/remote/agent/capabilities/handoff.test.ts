@@ -4,7 +4,9 @@ import { HandoffCapability, type HandoffAdapters } from './handoff.ts'
 import type { CapabilityCallContext, McpPrincipal, ToolResult } from '../types.ts'
 
 const NOW = 10_000
-const agent: McpPrincipal = { kind: 'unmute-agent', runId: 'run-1', interactionId: 'ix-1', expiresAt: 20_000 }
+const agent: McpPrincipal = {
+  kind: 'unmute-agent', runId: 'run-1', interactionId: 'ix-1', expiresAt: 20_000, provider: 'codex',
+}
 const ctx: CapabilityCallContext = {
   principal: agent, now: NOW, interaction: { id: 'ix-1', active: true, transcript: 'send it to Rishi' },
 }
@@ -22,10 +24,23 @@ function adapters(overrides: Partial<HandoffAdapters> = {}): HandoffAdapters & {
 
 test('outside work becomes a task, and the run that caused it is recorded', async () => {
   const a = adapters()
-  const result = await new HandoffCapability(a).call(ctx, 'task_create', { intent: 'send the resume to Rishi' })
+  const result = await new HandoffCapability(a).call(ctx, 'task_create', {
+    intent: 'send the resume to Rishi', kind: 'oneoff',
+  })
   assert.deepEqual(parse(result), { ok: true, result: { taskId: 'task-9', status: 'created' } })
   assert.equal(a.created[0].intent, 'send the resume to Rishi')
   assert.equal(a.created[0].agentRunId, 'run-1', 'Law IV: the card must be able to show who made it')
+  assert.equal(a.created[0].kind, 'oneoff')
+  assert.equal(a.created[0].provider, 'codex', 'omitted provider inherits the Agent provider')
+})
+
+test('an explicit provider overrides the Agent provider', async () => {
+  const a = adapters()
+  await new HandoffCapability(a).call(ctx, 'task_create', {
+    intent: 'continue this in Claude', kind: 'session', provider: 'claude',
+  })
+  assert.equal(a.created[0].kind, 'session')
+  assert.equal(a.created[0].provider, 'claude')
 })
 
 // Consolidation is task_create with sources, not its own verb — the output of
@@ -34,14 +49,22 @@ test('outside work becomes a task, and the run that caused it is recorded', asyn
 test('a consolidation is a task seeded from prior sessions', async () => {
   const a = adapters()
   await new HandoffCapability(a).call(ctx, 'task_create', {
-    intent: 'consolidate the Meta ads work', sourceSessionIds: ['s1', 's2', 's3'],
+    intent: 'consolidate the Meta ads work', kind: 'session', sourceSessionIds: ['s1', 's2', 's3'],
   })
   assert.deepEqual(a.created[0].sourceSessionIds, ['s1', 's2', 's3'])
 })
 
 test('an empty or oversized intent never reaches the Orchestrator', async () => {
   const a = adapters()
-  for (const bad of [{}, { intent: '   ' }, { intent: 'x'.repeat(2_001) }, { intent: 'ok', sourceSessionIds: [''] }]) {
+  for (const bad of [
+    {},
+    { intent: '   ', kind: 'oneoff' },
+    { intent: 'x'.repeat(2_001), kind: 'oneoff' },
+    { intent: 'ok' },
+    { intent: 'ok', kind: 'other' },
+    { intent: 'ok', kind: 'oneoff', provider: 'other' },
+    { intent: 'ok', kind: 'oneoff', sourceSessionIds: [''] },
+  ]) {
     assert.equal((await new HandoffCapability(a).call(ctx, 'task_create', bad)).isError, true)
   }
   assert.deepEqual(a.created, [])
@@ -53,7 +76,7 @@ test('an empty or oversized intent never reaches the Orchestrator', async () => 
 test('without a live interaction nothing can be created', async () => {
   const a = adapters()
   const stale: CapabilityCallContext = { principal: agent, now: NOW, interaction: { id: 'ix-1', active: false } }
-  assert.equal((await new HandoffCapability(a).call(stale, 'task_create', { intent: 'x' })).isError, true)
+  assert.equal((await new HandoffCapability(a).call(stale, 'task_create', { intent: 'x', kind: 'oneoff' })).isError, true)
   assert.deepEqual(a.created, [])
 })
 
@@ -66,7 +89,7 @@ test('status is readable and a missing task says so', async () => {
 
 test('a failure to create is reported without leaking why', async () => {
   const a = adapters({ async createTask() { throw new Error('/private/path/exploded') } })
-  const result = await new HandoffCapability(a).call(ctx, 'task_create', { intent: 'x' })
+  const result = await new HandoffCapability(a).call(ctx, 'task_create', { intent: 'x', kind: 'oneoff' })
   assert.equal(parse(result).error.code, 'handoff-failed')
   assert.equal(String(result.content[0]!.text).includes('/private'), false)
 })
