@@ -151,6 +151,10 @@ struct TaskDetail: Codable {
     /// Did Unmute spawn the process? Decides Kill (ours to stop) versus Remove
     /// (forget the card, leave the user's app alone).
     let owned: Bool?
+    /// The CLI process is being restored for this conversation.
+    let resuming: Bool?
+    /// Why the latest restore attempt failed, when it did.
+    let resumeError: String?
 
     /// Fallback for an engine older than the `terminal` field, and ONLY that.
     /// Do not add backends here — add them to providers.ts.

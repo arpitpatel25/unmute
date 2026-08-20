@@ -1118,6 +1118,7 @@ test('opening a persistent session revives it with no Resume tap; a one-off is l
   })
   await tm.rehydrate()
   assert.equal(tm.isAlive(sid), false, 'rehydrate never re-attaches')
+  const activityBeforeOpen = tm.get(sid)!.updatedAt
 
   tm.opened(sid)
   await waitFor(() => tm.isAlive(sid))
@@ -1125,6 +1126,8 @@ test('opening a persistent session revives it with no Resume tap; a one-off is l
   // The session is BACK, not restarted. Resume no longer nudges it into
   // 'processing' — nothing has been said to it, so nothing is in flight.
   assert.equal(tm.isAlive(sid), true, 'reachable again, which is all resume promises')
+  assert.equal(tm.get(sid)!.updatedAt, activityBeforeOpen,
+    'automatic relaunch is liveness, not new task activity')
 
   // A one-off is opened to READ its result — resuming it would spawn a REPL
   // behind the user's back (and after a purge there is nothing to resume).
@@ -1132,6 +1135,25 @@ test('opening a persistent session revives it with no Resume tap; a one-off is l
   await new Promise((r) => setTimeout(r, 120))
   assert.equal(spawns, 1, 'one-off keeps its explicit Resume button')
   assert.equal(tm.isAlive(oid), false)
+  tm.killAll()
+})
+
+test('a failed automatic relaunch reports the error without rewriting task activity', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const sid = await seedInterrupted(baseDir, 'session')
+  const tm = new TaskManager({
+    executorFactory: () => { throw new Error('PTY_RELAUNCH_FAILED') },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  await tm.rehydrate()
+  const activityBeforeOpen = tm.get(sid)!.updatedAt
+
+  tm.opened(sid)
+  await waitFor(() => !!tm.get(sid)!.resumeError)
+
+  assert.match(tm.get(sid)!.resumeError ?? '', /PTY_RELAUNCH_FAILED/)
+  assert.equal(tm.get(sid)!.updatedAt, activityBeforeOpen,
+    'a process failure is visible, but opening still is not new task activity')
   tm.killAll()
 })
 
@@ -1812,4 +1834,3 @@ test('the warm-kill re-parks instead of killing a task that went back to work', 
   assert.equal(tm.get(id)!.state, 'processing')
   tm.kill(id)
 })
-

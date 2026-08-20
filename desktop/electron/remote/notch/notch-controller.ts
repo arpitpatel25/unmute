@@ -50,6 +50,10 @@ export interface TaskLite {
   deliveryError?: string
   /** A message is in flight to the agent. */
   sending?: boolean
+  /** The CLI session is being brought back after its process went away. */
+  resuming?: boolean
+  /** Why the most recent relaunch attempt failed, when it did. */
+  resumeError?: string | null
   /** Codex's label for this thread's model/effort, e.g. "5.6 Terra High".
    *  NOT persisted: set at creation and gone after a restart. Prefer `model`. */
   codexModelLabel?: string
@@ -1340,24 +1344,14 @@ export class NotchController {
     if (!this.frozenOrder) this.frozenOrder = this.pocketList().map((t) => t.id)
   }
 
-  /**
-   * OPENING A TASK CHANGES NOTHING ABOUT IT.
-   *
-   * This did two things that both moved a task you were only reading. It
-   * stamped engagement, so the task appeared in the pocket. And it called
-   * `opened()`, which auto-resumes a dead session — and a resume transitions
-   * the task, which sets `updatedAt = now`, which is what Today filters on and
-   * what the wall sorts by. So opening a five-day-old session rewrote its clock
-   * to this instant and it jumped into Today, to the top of the wall, and said
-   * "Working".
-   *
-   * Reading is not interacting. The session comes back when you actually send
-   * it something (see TaskManager.answer), which is the moment there is a real
-   * update to record.
-   */
+  /** Opening a persistent session makes it reachable without counting as work.
+   * TaskManager.opened owns both constraints: one-offs stay read-only, and an
+   * automatic relaunch preserves updatedAt so the wall never reorders merely
+   * because the user looked at an old thread. */
   private onFocusTask(id: string): void {
     this.engaged = 'cockpit'
     this.setFocus(id)
+    this.deps.opened?.(id)
     this.reconcile()
   }
 
@@ -1711,6 +1705,8 @@ export class NotchController {
       // how the Codex CLI model picker shipped empty. The registry already
       // knows; it just was not being told to the view.
       resumable: t.origin === 'unmute-agent' ? false : providerOf(t.agent).canResume,
+      resuming: t.resuming ?? false,
+      ...(t.resumeError ? { resumeError: t.resumeError } : {}),
       /** True when Unmute spawned the process — so killing it is ours to do.
        *  A driver-backed task has nothing of ours to kill; the card offers
        *  Remove instead, which forgets it without touching the user's app. */

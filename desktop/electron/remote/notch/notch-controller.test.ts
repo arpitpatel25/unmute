@@ -96,6 +96,7 @@ function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
     setShelved: rec('setShelved'),
     setNote: rec('setNote'),
     focus: rec('focus'),
+    opened: rec('opened'),
     getOutput: (id) => `replay:${id}`,
     sendInput: rec('sendInput'),
     resizeTerm: rec('resizeTerm'),
@@ -448,6 +449,15 @@ test('interacting with a muted task (focus) ends its mute episode', () => {
   assert.equal(h.client.last('setState')!.state, 'dormant')
 })
 
+test('opening a dashboard card announces it to the runtime so a sleeping session can relaunch', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'sleeping', state: 'done', kind: 'session', alive: false }))
+
+  h.client.fire({ type: 'focusTask', id: 'sleeping' })
+
+  assert.deepEqual(h.calls.opened?.at(-1), ['sleeping'])
+})
+
 test('opening then closing a BLOCKED task acknowledges the episode without resolving it', () => {
   const h = setup()
   put(h, makeTask({ id: 'b1', state: 'needs-user', alive: true, question: { text: 'q' } }))
@@ -672,6 +682,18 @@ test('a delivery error reaches the surface without settling the task', () => {
   const d = h.client.last('stageDetail')!.task
   assert.equal(d.deliveryError, 'Could not find that chat in Codex')
   assert.equal(d.status, 'done', 'the task itself is untouched')
+})
+
+test('the native stage receives relaunch progress instead of inferring it from liveness', () => {
+  const h = setup()
+  put(h, makeTask({ id: 'waking', state: 'done', kind: 'session', alive: false,
+    resuming: true, resumeError: 'previous attempt failed' }))
+
+  h.client.fire({ type: 'focusTask', id: 'waking' })
+
+  const detail = h.client.last('stageDetail')!.task
+  assert.equal(detail.resuming, true)
+  assert.equal(detail.resumeError, 'previous attempt failed')
 })
 
 test('the WHOLE conversation reaches the surface, not a tail', () => {
@@ -1528,12 +1550,11 @@ test('the pocket runs demanding first, then what you have worked in', () => {
   assert.equal(pocketOf(h)!.waiting, 1, 'only the demanding one is ever counted at you')
 })
 
-test('opening a task from the dashboard puts it nowhere and moves nothing', () => {
+test('opening an old task relaunches it without putting it in Today or the pocket', () => {
   // THE FIELD REPORT: open an old finished task just to read it, and it landed
-  // in the pocket. Two causes, both on this path — it stamped engagement, and
-  // it auto-resumed the session, which rewrote `updatedAt` to now and threw the
-  // task into Today at the top of the wall saying "Working". Reading is not
-  // interacting.
+  // in the pocket. Relaunch is now allowed because opening a persistent thread
+  // means using it, but TaskManager.opened preserves its activity clock: making
+  // a process reachable is not new work and must not reorder the wall.
   const h = setup()
   const old = Date.now() - 5 * 24 * 60 * 60 * 1000
   put(h, makeTask({ id: 'ancient', state: 'done', kind: 'session', name: 'Five days ago', createdAt: old, updatedAt: old }))
@@ -1542,7 +1563,7 @@ test('opening a task from the dashboard puts it nowhere and moves nothing', () =
   h.client.fire({ type: 'pocketOpen' })
   assert.ok(!(pocketOf(h)?.slots ?? []).some((sl) => sl.id === 'ancient'), 'not in the pocket')
   assert.equal(h.tasks.get('ancient')!.updatedAt, old, 'and its clock was not touched')
-  assert.equal((h.calls.opened ?? []).length, 0, 'no auto-resume — that is what moved the clock')
+  assert.deepEqual(h.calls.opened, [['ancient']], 'the sleeping session is made reachable')
 })
 
 // ── ordering: what YOU touched, not what happened ──────────────────────────

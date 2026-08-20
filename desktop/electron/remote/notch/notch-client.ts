@@ -124,6 +124,10 @@ export interface TaskDetailP {
   resumable?: boolean
   /** Did Unmute spawn the process? Decides Kill versus Remove. */
   owned?: boolean
+  /** The CLI process is currently being restored for this conversation. */
+  resuming?: boolean
+  /** Visible reason when restoring the CLI process failed. */
+  resumeError?: string
   shelved?: boolean
   dir?: string
   age?: string

@@ -1,4 +1,5 @@
 import SwiftUI
+import StageSupport
 
 // The focused Stage inside the cockpit — split (stage + sessions minirail) or
 // full (terminal edge-to-edge). Header carries every per-task action: rename,
@@ -47,7 +48,7 @@ struct StageView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let t {
                 header(t)
-                if terminalMode(t) {
+                if stageMode(t) == .terminal {
                     // ONE EXCEPTION TO "TERMINAL ONLY": AN ASK YOU MUST ANSWER.
                     // Codex CLI approvals arrive over the App Server, so the TUI
                     // never shows them — hiding the block would leave a terminal
@@ -91,7 +92,12 @@ struct StageView: View {
     ///
     /// `hasTerminal` comes from the provider registry via the engine — a backend
     /// with no PTY has no terminal to show and no toggle to offer.
-    private func terminalMode(_ t: TaskDetail) -> Bool { t.hasTerminal && model.stageTerminalOpen }
+    private func stageMode(_ t: TaskDetail) -> StageBodyMode {
+        stageBodyMode(hasTerminal: t.hasTerminal,
+                      terminalRequested: model.stageTerminalOpen,
+                      alive: t.alive,
+                      resuming: t.resuming ?? false)
+    }
 
     /// Has this task actually finished for good?
     ///
@@ -136,7 +142,15 @@ struct StageView: View {
             QuestionBlock(model: model, taskId: t.id, question: q,
                           terminalOpen: stageTerminalBinding).padding(.top, 10)
         }
-        if ended(t) {
+        if t.resuming == true {
+            relaunchingRow
+        } else if let reason = t.resumeError, !reason.isEmpty {
+            SessionNotRunning(model: model, taskId: t.id, reason: reason)
+                .padding(.top, 9)
+        } else if t.hasTerminal && !t.alive {
+            SessionNotRunning(model: model, taskId: t.id, reason: nil)
+                .padding(.top, 9)
+        } else if ended(t) {
             DeadPanel(model: model, t: t).padding(.top, 10)
         } else {
             StageComposer(placeholder: "Reply — or hold right ⌥ and speak",
@@ -146,6 +160,18 @@ struct StageView: View {
                           draft: t.draft)
                 .padding(.top, 9)
         }
+    }
+
+    private var relaunchingRow: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Relaunching session…")
+                .font(Theme.fSub).foregroundColor(Theme.textDim)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 11).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: Theme.controlRadius).fill(Theme.sunken))
+        .padding(.top, 9)
     }
 
     private func warmupStrip(_ warm: String) -> some View {
@@ -223,6 +249,12 @@ struct StageView: View {
                     KeyButton(label: "Open in \(t.foreignAppName)", symbol: "arrow.up.forward.app") {
                         model.emit(.openInTerminal(id: t.id))
                     }
+                } else if t.resuming == true {
+                    HStack(spacing: 5) {
+                        ProgressView().controlSize(.mini)
+                        Text("Relaunching…").font(Theme.fCap).foregroundColor(Theme.textDim)
+                    }
+                    .padding(.horizontal, 8)
                 } else if t.alive {
                     KeyButton(label: "Kill", danger: true, symbol: "stop.circle") {
                         model.emit(.kill(id: t.id))
@@ -241,15 +273,25 @@ struct StageView: View {
             }
             .padding(.leading, 6)
             // 4 · VIEW
+            if t.hasTerminal && t.alive {
+                KeyButton(label: model.stageTerminalOpen ? "Messages" : "Terminal",
+                          symbol: model.stageTerminalOpen ? "text.bubble" : "terminal") {
+                    model.setStageTerminalVisible(!model.stageTerminalOpen)
+                }
+                .padding(.leading, 6)
+            }
             KeyButton(label: model.stageFull ? "Split" : "Full",
                       symbol: model.stageFull ? "rectangle.split.2x1" : "rectangle") {
-                model.stageFull.toggle()
+                model.stageFull = stageFullState(current: model.stageFull, action: .toggle)
             }
             .padding(.leading, 6)
             // THE ONE TINTED PRIMARY.
             ActButton(label: "Next", go: true, symbol: "arrow.right") { model.emit(.next) }
                 .padding(.leading, 6)
-            CloseButton { model.stageFull = false; model.emit(.closeStage) }
+            CloseButton {
+                model.stageFull = stageFullState(current: model.stageFull, action: .close)
+                model.emit(.closeStage)
+            }
         }
     }
 

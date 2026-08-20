@@ -5,6 +5,7 @@ import HoverStateSupport
 import SurfaceSizeSupport
 import SurfaceTransitionSupport
 import SurfaceStateSupport
+import StageSupport
 
 // Owns the ONE panel + view model; translates commands into observable state,
 // user gestures into events, and keeps the surface on the PRIMARY display.
@@ -914,9 +915,11 @@ final class AppController: NSObject, NotchResizing {
         case .focusTask(let id):
             model.focusedId = id
             model.stageTask = nil // stageDetail arrives from main
+            model.stageFull = stageFullState(current: model.stageFull, action: .focusTask)
         case .closeStage:
             model.focusedId = nil
             model.stageTask = nil
+            model.stageFull = stageFullState(current: model.stageFull, action: .close)
         case .suggestionAccept, .suggestionReject:
             model.proposal = nil
             model.convLog = ""

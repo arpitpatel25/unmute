@@ -4157,7 +4157,7 @@ export class TaskManager extends EventEmitter {
    * comes back alive + warm (re-attachable terminal, ready for a follow-up).
    * Returns false if the task is unknown, already alive, or its dir was removed.
    */
-  async resume(id: string): Promise<boolean> {
+  async resume(id: string, opts: { touchActivity?: boolean } = {}): Promise<boolean> {
     const tlog = log.child({ taskId: id })
     const task = this.tasks.get(id)
     if (!task) { tlog.warn('resume: no such task'); return false }
@@ -4292,7 +4292,7 @@ export class TaskManager extends EventEmitter {
       // terminal and decide, which is the whole reason we show it to them.
       //
       // The nudge builder stays in dispatch-prompt for now; nothing calls it.
-      task.updatedAt = this.clock()
+      if (opts.touchActivity !== false) task.updatedAt = this.clock()
       // The "interrupted" reason is stale the moment the session is back — the
       // card should not keep explaining a failure that no longer applies.
       task.error = undefined
@@ -4309,7 +4309,7 @@ export class TaskManager extends EventEmitter {
       // (`void api().remoteResume?.(id)`), so this event and `resumeError` are
       // the only ways the user ever learns the session did not come back.
       task.resumeError = error
-      task.updatedAt = this.clock()
+      if (opts.touchActivity !== false) task.updatedAt = this.clock()
       this.emit('resume-failed', { taskId: id, error })
       this.emit('updated', task)
       return false
@@ -4352,7 +4352,7 @@ export class TaskManager extends EventEmitter {
     if (this.resuming.has(id)) return
     const tlog = log.child({ taskId: id })
     tlog.event('auto-resume-on-open', {})
-    void this.resume(id)
+    void this.resume(id, { touchActivity: false })
       .then((ok) => { if (!ok) tlog.warn('auto-resume on open did not take', {}) })
       .catch((e) => tlog.error('auto-resume on open threw', { error: (e as Error).message }))
   }
