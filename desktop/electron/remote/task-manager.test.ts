@@ -18,7 +18,9 @@ function makeFakeExecutor(opts: { onSpawn?: (o: SpawnOpts) => void } = {}) {
   const raw: string[] = []
   const resizes: Array<[number, number]> = []
   let aliveFlag = true
-  const ex: AgentExecutor & { writes: string[]; raw: string[]; resizes: Array<[number, number]> } = {
+  let detached = 0
+  let killed = 0
+  const ex: AgentExecutor & { writes: string[]; raw: string[]; resizes: Array<[number, number]>; detached: () => number; killed: () => number } = {
     writes,
     raw,
     resizes,
@@ -29,7 +31,10 @@ function makeFakeExecutor(opts: { onSpawn?: (o: SpawnOpts) => void } = {}) {
     write(d) { raw.push(d) },
     resize(c, r) { resizes.push([c, r]) },
     onData() {},
-    kill() { aliveFlag = false },
+    detach() { detached++; aliveFlag = false },
+    kill() { killed++; aliveFlag = false },
+    detached: () => detached,
+    killed: () => killed,
   }
   return ex
 }
@@ -568,6 +573,25 @@ test('killAll terminates every session and marks running tasks stopped (PRD §10
   assert.equal(tm.activeCount(), 0)
 })
 
+test('shutdown detaches persistent runtimes but still terminates one-off work', async () => {
+  const baseDir = await tmpBase()
+  const fakes: ReturnType<typeof makeFakeExecutor>[] = []
+  const tm = new TaskManager({
+    executorFactory: () => { const fake = makeFakeExecutor(); fakes.push(fake); return fake },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  const persistent = await tm.dispatch('keep this runtime', { kind: 'session' })
+  const oneoff = await tm.dispatch('finish this errand')
+
+  tm.shutdown()
+
+  assert.equal(fakes[0].detached(), 1, 'persistent runtime client detaches from tmux')
+  assert.equal(fakes[0].killed(), 0, 'persistent tmux session is not killed')
+  assert.equal(tm.get(persistent)!.state, 'processing', 'live task state survives app shutdown')
+  assert.equal(fakes[1].killed(), 1, 'one-off lifecycle remains destructive on shutdown')
+  assert.equal(tm.get(oneoff)!.state, 'failed', 'interrupted one-off stays honest')
+})
+
 // ── Memory injection: REMOVED (2026-08-06) ───────────────────────────────────
 //
 // Dispatch used to copy graduated skills into the cwd, write a PROFILE.md, and
@@ -669,6 +693,29 @@ test('dispatch persists kind in meta.json; defaults to oneoff with home === cwd'
   assert.equal(tm.get(session)!.kind, 'session')
   const meta = JSON.parse(await fs.readFile(path.join(tm.get(session)!.home, 'meta.json'), 'utf8'))
   assert.equal(meta.kind, 'session', 'kind persisted in the receipt')
+  tm.killAll()
+})
+
+test('persistent Codex work uses the detachable per-task executor, while one-offs keep the app-server path', async () => {
+  const baseDir = await tmpBase()
+  let hubStarts = 0
+  const hub = {
+    async startThread() { hubStarts++; return { threadId: 'codex-thread', url: 'ws://127.0.0.1:1' } },
+    async send() { return true },
+    threadIdFor() { return undefined },
+  }
+  const agents: Array<AgentKind | undefined> = []
+  const tm = new TaskManager({
+    executorFactory: (_resume, agent) => { agents.push(agent); return makeFakeExecutor() },
+    codexHub: hub as never,
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+
+  const persistent = await tm.dispatch('long Codex thread', { agent: 'codex', kind: 'session' })
+
+  assert.equal(hubStarts, 0, 'app-owned server is not the runtime boundary for persistent work')
+  assert.equal(agents[0], 'codex')
+  assert.equal(tm.get(persistent)!.agent, 'codex')
   tm.killAll()
 })
 
@@ -922,6 +969,14 @@ test('lastUserInputAt: set at dispatch, advanced by followUp/answer/typed input 
   t = 1_800_000
   tm.sendInput(id, 'ls\r')
   assert.equal(tm.get(id)!.lastUserInputAt, 1_800_000, 'typed input is consent')
+  const metaPath = path.join(tm.get(id)!.home, 'meta.json')
+  let persistedActivity = 0
+  for (let attempt = 0; attempt < 40 && persistedActivity !== 1_800_000; attempt++) {
+    persistedActivity = JSON.parse(await fs.readFile(metaPath, 'utf8')).lastUserInputAt ?? 0
+    if (persistedActivity !== 1_800_000) await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  assert.equal(persistedActivity, 1_800_000,
+    'the idle-policy clock survives an app restart')
   tm.killAll()
 })
 
@@ -1135,6 +1190,75 @@ test('opening a persistent session revives it with no Resume tap; a one-off is l
   await new Promise((r) => setTimeout(r, 120))
   assert.equal(spawns, 1, 'one-off keeps its explicit Resume button')
   assert.equal(tm.isAlive(oid), false)
+  tm.killAll()
+})
+
+test('startup reattaches a persistent tmux runtime without typing or resubmitting a turn', async () => {
+  const baseDir = await tmpBase()
+  const sid = await seedInterrupted(baseDir, 'session', { agent: 'claude', runtimePinned: true })
+  let spawned: SpawnOpts | null = null
+  const fake = makeFakeExecutor({ onSpawn: (o) => { spawned = o } })
+  const tm = new TaskManager({
+    executorFactory: () => fake,
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  await tm.rehydrate()
+
+  await tm.reattachPersistent()
+
+  assert.equal(spawned?.attachExisting, true, 'startup attaches the existing tmux session')
+  assert.deepEqual(fake.writes, [], 'reattachment never presses Enter or creates a user turn')
+  assert.equal(tm.isAlive(sid), true)
+  tm.killAll()
+})
+
+test('startup never restarts a missing persistent runtime; it keeps the task resumable', async () => {
+  const baseDir = await tmpBase()
+  const sid = await seedInterrupted(baseDir, 'session', { agent: 'claude', runtimePinned: true })
+  let attempts = 0
+  const tm = new TaskManager({
+    executorFactory: () => ({
+      ...makeFakeExecutor(),
+      spawn: async (opts) => {
+        attempts++
+        assert.equal(opts.attachExisting, true)
+        throw new Error('tmux session not found')
+      },
+    }),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  await tm.rehydrate()
+
+  await tm.reattachPersistent()
+
+  assert.equal(attempts, 1)
+  assert.equal(tm.isAlive(sid), false)
+  assert.equal(tm.get(sid)!.state, 'done', 'the ticket remains available for explicit Resume')
+  assert.equal(tm.get(sid)!.resumeError, undefined, 'a normal machine restart is not shown as a task failure')
+})
+
+test('an unpinned persistent runtime expires after seven idle days but its task remains resumable', async () => {
+  const baseDir = await tmpBase()
+  let now = 1_000_000
+  const fakes: ReturnType<typeof makeFakeExecutor>[] = []
+  const tm = new TaskManager({
+    executorFactory: () => { const fake = makeFakeExecutor(); fakes.push(fake); return fake },
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+    persistentIdleMs: 7 * 24 * 60 * 60_000,
+    now: () => now,
+  })
+  const expiring = await tm.dispatch('a thread that graduated')
+  tm.setKind(expiring, 'session') // automatic graduation: persistent, not explicitly pinned
+  const pinned = await tm.dispatch('a user-pinned thread')
+  tm.setKind(pinned, 'session', { pinned: true })
+  now += 7 * 24 * 60 * 60_000 + 1
+
+  await tm.purgeStale()
+
+  assert.equal(fakes[0].killed(), 1, 'expired runtime is actually stopped')
+  assert.ok(tm.get(expiring), 'task/ticket is retained')
+  assert.equal(tm.get(expiring)!.state, 'done', 'retained task can be resumed later')
+  assert.equal(fakes[1].killed(), 0, 'explicitly pinned runtime has no idle expiry')
   tm.killAll()
 })
 

@@ -9,7 +9,7 @@
 // Portability target is OTHER CLI CODING AGENTS ONLY — explicitly NOT raw API
 // billing (PRD §11.2). Codex is driven in its interactive REPL, never headless.
 
-import { CliAgentExecutor, type CliAgentConfig } from './pty-session'
+import { CliAgentExecutor, type CliAgentConfig, type TmuxConfig } from './pty-session'
 import type { SpawnOpts } from './executor'
 import { providerOf, type ProviderId } from './providers'
 
@@ -25,6 +25,8 @@ export interface CodexExecutorOpts {
   remote?: { url: string; threadId: string }
   extraArgs?: string[]
   ptyLoader?: NodePtyLoader
+  /** Private Unmute tmux runtime, shared with the Claude adapter. */
+  tmux?: TmuxConfig
   /** Model to run on, e.g. 'gpt-5.6-terra'. Codex takes it as TOML config, not
    *  a flag. Verified against `codex config.toml`, key `model`. */
   model?: string
@@ -103,6 +105,7 @@ export class CodexExecutor extends CliAgentExecutor {
       // Keep Codex on the subscription/login pool, not API billing.
       stripEnvVars: ['OPENAI_API_KEY', 'OPENAI_API_BASE'],
       ptyLoader: opts.ptyLoader,
+      tmux: opts.tmux,
       interruptSequence: '\x1b',
       label: 'codex',
     })
