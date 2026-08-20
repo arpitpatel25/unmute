@@ -77,6 +77,15 @@ let package = Package(
             name: "StageSupport",
             path: "Sources/StageSupport"
         ),
+        .target(
+            name: "WallPresentationSupport",
+            path: "Sources/WallPresentationSupport"
+        ),
+        .testTarget(
+            name: "WallPresentationSupportTests",
+            dependencies: ["WallPresentationSupport"],
+            path: "Tests/WallPresentationSupportTests"
+        ),
         .testTarget(
             name: "StageSupportTests",
             dependencies: ["StageSupport"],
@@ -121,6 +130,7 @@ let package = Package(
                 "MarkdownSupport",
                 "ConversationSupport",
                 "StageSupport",
+                "WallPresentationSupport",
                 "HoverStateSupport",
                 "ComposerSupport",
                 "SurfaceSizeSupport",
