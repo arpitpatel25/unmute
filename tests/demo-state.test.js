@@ -2,133 +2,97 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { actionToEvent, createDemoState, transition } from '../demo-state.js';
 
-test('switching modes clears the previous flow and restores its first instruction', () => {
-  let state = createDemoState('dictation');
-  state = transition(state, { type: 'FN_TAP' });
-  state = transition(state, { type: 'SELECT_MODE', mode: 'remote' });
+function recordAndStop(state) {
+  const type = state.mode === 'remote' ? 'RIGHT_OPTION_TAP' : 'FN_TAP';
+  state = transition(state, { type });
+  return transition(state, { type });
+}
 
-  assert.equal(state.mode, 'remote');
-  assert.equal(state.step, 'ready');
-  assert.equal(state.pillPhase, 'hidden');
-  assert.equal(state.note.blocks.length, 0);
-  assert.equal(state.guide.action, 'Tap Right Option');
-});
-
-test('two Fn taps record and deliver dictation to Notes after processing completes', () => {
-  let state = createDemoState('dictation');
-  state = transition(state, { type: 'FN_TAP' });
-  assert.equal(state.pillPhase, 'recording');
-
-  state = transition(state, { type: 'FN_TAP' });
-  assert.equal(state.pillPhase, 'processing');
-  assert.equal(state.note.blocks.length, 0);
-
-  state = transition(state, { type: 'PROCESSING_DONE' });
+test('dictation delivers only the transcript returned by the server', () => {
+  let state = recordAndStop(createDemoState('dictation'));
+  assert.equal(state.step, 'processing');
+  assert.deepEqual(state.note.blocks, []);
+  state = transition(state, { type: 'TRANSCRIPTION_SUCCEEDED', text: 'These are the words I actually said.', attemptsUsed: 1, attemptLimit: 5 });
+  assert.deepEqual(state.note.blocks, [{ type: 'text', content: 'These are the words I actually said.' }]);
+  assert.deepEqual(state.attempts, { used: 1, limit: 5, remaining: 4 });
   assert.equal(state.pillPhase, 'output');
-  assert.deepEqual(state.note.blocks, [{ type: 'text', content: 'Turn these rough thoughts into a clear launch note.' }]);
 });
 
-test('an armed scratchpad pauses instead of delivering and resumes the same pad', () => {
+test('failed transcription returns to a retryable state without invented text', () => {
+  let state = recordAndStop(createDemoState('dictation'));
+  state = transition(state, { type: 'TRANSCRIPTION_FAILED', message: 'The connection dropped.' });
+  assert.equal(state.step, 'error');
+  assert.equal(state.error, 'The connection dropped.');
+  assert.deepEqual(state.note.blocks, []);
+  state = transition(state, { type: 'RETRY' });
+  assert.equal(state.step, 'ready');
+  assert.equal(state.error, '');
+});
+
+test('scratchpad accumulates real transcribed segments across pauses', () => {
   let state = createDemoState('scratchpad');
   state = transition(state, { type: 'FN_TAP' });
   state = transition(state, { type: 'TOGGLE_SCRATCHPAD' });
   state = transition(state, { type: 'FN_TAP' });
-
-  assert.equal(state.pillPhase, 'paused');
-  assert.equal(state.scratchpad.armed, true);
-  assert.equal(state.scratchpad.entries.length, 1);
-  assert.equal(state.note.blocks.length, 0);
-
+  state = transition(state, { type: 'TRANSCRIPTION_SUCCEEDED', text: 'First real thought.', attemptsUsed: 1, attemptLimit: 5 });
+  assert.equal(state.step, 'paused');
+  assert.deepEqual(state.scratchpad.entries.map((entry) => entry.content), ['First real thought.']);
   state = transition(state, { type: 'FN_TAP' });
-  assert.equal(state.pillPhase, 'recording');
   state = transition(state, { type: 'FN_TAP' });
-  assert.equal(state.scratchpad.entries.length, 2);
-
+  state = transition(state, { type: 'TRANSCRIPTION_SUCCEEDED', text: 'Second real thought.', attemptsUsed: 2, attemptLimit: 5 });
   state = transition(state, { type: 'DELIVER_SCRATCHPAD', destination: 'cursor' });
-  assert.equal(state.pillPhase, 'output');
-  assert.equal(state.scratchpad.entries.length, 0);
-  assert.deepEqual(state.note.blocks.map((block) => block.content), [
-    'The launch note should lead with speed, not features.',
-    'Then explain that your words survive bad internet.'
-  ]);
+  assert.deepEqual(state.note.blocks.map((block) => block.content), ['First real thought.', 'Second real thought.']);
 });
 
-test('capture keeps copied links and screenshots between speech segments in event order', () => {
+test('capture keeps pasted image data in order with real speech', () => {
   let state = createDemoState('capture');
   state = transition(state, { type: 'FN_TAP' });
   state = transition(state, { type: 'TOGGLE_SCRATCHPAD' });
-  state = transition(state, { type: 'CAPTURE_URL' });
-  state = transition(state, { type: 'CAPTURE_SCREENSHOT' });
   state = transition(state, { type: 'FN_TAP' });
-
-  assert.deepEqual(state.scratchpad.entries.map((entry) => entry.kind), ['segment', 'url', 'image']);
-
+  state = transition(state, { type: 'TRANSCRIPTION_SUCCEEDED', text: 'Use this screenshot.', attemptsUsed: 1, attemptLimit: 5 });
+  state = transition(state, { type: 'IMAGE_PASTED', id: 'image-1', url: 'blob:real-image', name: 'Screenshot.png' });
+  assert.deepEqual(state.scratchpad.entries.map((entry) => entry.kind), ['segment', 'image']);
+  assert.equal(state.scratchpad.entries[1].url, 'blob:real-image');
   state = transition(state, { type: 'DELIVER_SCRATCHPAD', destination: 'cursor' });
-  assert.deepEqual(state.note.blocks.map((block) => block.type), ['text', 'link', 'image']);
-  assert.equal(state.note.blocks[1].content, 'https://conductor.build');
-  assert.equal(state.note.blocks[2].content, 'unmute-demo-capture.png');
+  assert.deepEqual(state.note.blocks, [
+    { type: 'text', content: 'Use this screenshot.' },
+    { type: 'image', content: 'Screenshot.png', url: 'blob:real-image' }
+  ]);
 });
 
-test('Remote is tap-toggle and moves the task from the pill into the notch', () => {
-  let state = createDemoState('remote');
-  state = transition(state, { type: 'RIGHT_OPTION_TAP' });
-  assert.equal(state.pillPhase, 'recording');
-  assert.equal(state.remote.model, 'Claude Sonnet 4.5');
+test('the fifth server-reported attempt prevents another recording', () => {
+  let state = recordAndStop(createDemoState('dictation'));
+  state = transition(state, { type: 'TRANSCRIPTION_SUCCEEDED', text: 'Final try.', attemptsUsed: 5, attemptLimit: 5 });
+  state = transition(state, { type: 'RESET' });
+  assert.equal(state.attempts.remaining, 0);
+  assert.equal(state.step, 'quota');
+  assert.deepEqual(transition(state, { type: 'FN_TAP' }), state);
+});
 
-  state = transition(state, { type: 'RIGHT_OPTION_TAP' });
-  assert.equal(state.pillPhase, 'processing');
+test('Remote uses the real transcript as the notch task prompt', () => {
+  let state = recordAndStop(createDemoState('remote'));
+  state = transition(state, { type: 'TRANSCRIPTION_SUCCEEDED', text: 'Email Maya and say the beta opens Friday.', attemptsUsed: 1, attemptLimit: 5 });
   assert.equal(state.notch.state, 'working');
-  assert.equal(state.notch.title, 'Send launch update');
-
-  state = transition(state, { type: 'REMOTE_CREATED' });
-  assert.equal(state.pillPhase, 'output');
-  assert.equal(state.notch.state, 'working');
-
-  state = transition(state, { type: 'REMOTE_COMPLETE' });
-  assert.equal(state.notch.state, 'done');
-  assert.equal(state.notch.result, 'Email sent successfully');
-
-  state = transition(state, { type: 'TOGGLE_NOTCH' });
-  assert.equal(state.notch.expanded, true);
+  assert.equal(state.remote.transcript, 'Email Maya and say the beta opens Friday.');
+  assert.equal(state.notch.title, 'New Unmute task');
+  state = transition(state, { type: 'REMOTE_COMPLETE', result: 'Task demonstration complete' });
+  assert.equal(state.notch.result, 'Task demonstration complete');
 });
 
-test('events that do not belong to the current flow are ignored', () => {
-  const state = createDemoState('dictation');
-  assert.deepEqual(transition(state, { type: 'RIGHT_OPTION_TAP' }), state);
-  assert.deepEqual(transition(state, { type: 'CAPTURE_SCREENSHOT' }), state);
+test('mode changes preserve server quota but clear transient content', () => {
+  let state = recordAndStop(createDemoState('dictation'));
+  state = transition(state, { type: 'TRANSCRIPTION_SUCCEEDED', text: 'One.', attemptsUsed: 1, attemptLimit: 5 });
+  state = transition(state, { type: 'SELECT_MODE', mode: 'capture' });
+  assert.equal(state.mode, 'capture');
+  assert.equal(state.attempts.used, 1);
+  assert.deepEqual(state.note.blocks, []);
 });
 
-test('browser actions map to the correct tap-toggle events for each mode', () => {
+test('browser controls map to tap-toggle, retry, and reset events', () => {
   assert.deepEqual(actionToEvent('fn', createDemoState('dictation')), { type: 'FN_TAP' });
-  assert.deepEqual(actionToEvent('stop', transition(createDemoState('dictation'), { type: 'FN_TAP' })), { type: 'FN_TAP' });
-  assert.deepEqual(actionToEvent('right-option', createDemoState('remote')), { type: 'RIGHT_OPTION_TAP' });
-  assert.deepEqual(actionToEvent('scratchpad', createDemoState('scratchpad')), { type: 'TOGGLE_SCRATCHPAD' });
-  assert.deepEqual(actionToEvent('capture-url', createDemoState('capture')), { type: 'CAPTURE_URL' });
-  assert.deepEqual(actionToEvent('capture-screenshot', createDemoState('capture')), { type: 'CAPTURE_SCREENSHOT' });
-  assert.deepEqual(actionToEvent('deliver-cursor', createDemoState('capture')), { type: 'DELIVER_SCRATCHPAD', destination: 'cursor' });
-  assert.deepEqual(actionToEvent('toggle-notch', createDemoState('remote')), { type: 'TOGGLE_NOTCH' });
-  assert.deepEqual(actionToEvent('cycle-model', createDemoState('remote')), { type: 'CYCLE_MODEL' });
-  assert.deepEqual(actionToEvent('discard-pad', createDemoState('scratchpad')), { type: 'DISCARD_PAD' });
+  assert.deepEqual(actionToEvent('stop', createDemoState('remote')), { type: 'RIGHT_OPTION_TAP' });
+  assert.deepEqual(actionToEvent('scratchpad', createDemoState('capture')), { type: 'TOGGLE_SCRATCHPAD' });
+  assert.deepEqual(actionToEvent('retry', createDemoState('dictation')), { type: 'RETRY' });
   assert.deepEqual(actionToEvent('reset', createDemoState('dictation')), { type: 'RESET' });
-});
-
-test('Remote model selection and scratchpad discard are real state changes', () => {
-  let remote = createDemoState('remote');
-  remote = transition(remote, { type: 'RIGHT_OPTION_TAP' });
-  remote = transition(remote, { type: 'CYCLE_MODEL' });
-  assert.equal(remote.remote.model, 'Codex GPT-5.6');
-  remote = transition(remote, { type: 'CYCLE_MODEL' });
-  assert.equal(remote.remote.model, 'Claude Sonnet 4.5');
-
-  let scratchpad = createDemoState('scratchpad');
-  for (const type of ['FN_TAP', 'TOGGLE_SCRATCHPAD', 'FN_TAP']) {
-    scratchpad = transition(scratchpad, { type });
-  }
-  scratchpad = transition(scratchpad, { type: 'DISCARD_PAD' });
-  assert.equal(scratchpad.step, 'ready');
-  assert.equal(scratchpad.scratchpad.entries.length, 0);
-});
-
-test('unknown browser actions do not create reducer events', () => {
   assert.equal(actionToEvent('not-a-control', createDemoState('dictation')), null);
 });
