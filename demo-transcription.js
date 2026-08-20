@@ -6,7 +6,7 @@ export class TranscriptionError extends Error {
   }
 }
 
-export function createTranscriptionClient({ endpoint, fetchImpl = globalThis.fetch } = {}) {
+export function createTranscriptionClient({ endpoint, fetchImpl = globalThis.fetch, storage = globalThis.localStorage } = {}) {
   if (!endpoint) throw new Error('A demo transcription endpoint is required.');
   if (!fetchImpl) throw new Error('Fetch is not available in this browser.');
 
@@ -16,9 +16,16 @@ export function createTranscriptionClient({ endpoint, fetchImpl = globalThis.fet
     form.append('duration_seconds', String(durationSeconds));
     form.append('flow_type', flowType || 'dictation');
 
+    let sessionToken = '';
+    try { sessionToken = storage?.getItem('unmute-demo-session') || ''; } catch { /* storage can be blocked */ }
+
     let response;
     try {
-      response = await fetchImpl(endpoint, { method: 'POST', body: form, credentials: 'include' });
+      response = await fetchImpl(endpoint, {
+        method: 'POST',
+        body: form,
+        headers: sessionToken ? { 'X-Unmute-Demo-Session': sessionToken } : undefined
+      });
     } catch {
       throw new TranscriptionError('Could not reach Unmute. Check your connection and try again.');
     }
@@ -28,6 +35,10 @@ export function createTranscriptionClient({ endpoint, fetchImpl = globalThis.fet
       body = await response.json();
     } catch {
       throw new TranscriptionError('Unmute returned an unreadable response.', response.status);
+    }
+    const issuedToken = body?.demo?.session_token;
+    if (issuedToken) {
+      try { storage?.setItem('unmute-demo-session', issuedToken); } catch { /* quota still works by network */ }
     }
     if (!response.ok || body?.ok === false) {
       throw new TranscriptionError(body?.message || 'Unmute could not transcribe this recording.', response.status);

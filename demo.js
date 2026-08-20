@@ -1,54 +1,130 @@
 import { actionToEvent, createDemoState, transition } from './demo-state.js';
+import { createRecorder } from './demo-recorder.js';
+import { createTranscriptionClient } from './demo-transcription.js';
 import { renderDemo } from './demo-view.js';
 
 const root = document.querySelector('[data-demo-root]');
 
 if (root) {
   let state = createDemoState('dictation');
-  let timers = [];
+  const recorder = createRecorder();
+  const endpoint = root.dataset.sttEndpoint || '/v1/demo/stt';
+  const transcription = createTranscriptionClient({ endpoint });
+  const imageUrls = new Set();
+  let remoteTimer = null;
+  let busy = false;
 
-  const clearTimers = () => {
-    timers.forEach((timer) => window.clearTimeout(timer));
-    timers = [];
-  };
+  const render = () => { root.innerHTML = renderDemo(state); };
+  const reduce = (event) => { state = transition(state, event); render(); };
 
-  const later = (event, delay) => {
-    timers.push(window.setTimeout(() => {
-      state = transition(state, event);
-      render();
-    }, delay));
-  };
+  function clearRemoteTimer() {
+    if (remoteTimer) window.clearTimeout(remoteTimer);
+    remoteTimer = null;
+  }
 
-  const scheduleAutomaticStates = (event) => {
-    if (event.type === 'FN_TAP' && state.mode === 'dictation' && state.step === 'processing') {
-      later({ type: 'PROCESSING_DONE' }, 850);
+  function revokeImages() {
+    imageUrls.forEach((url) => URL.revokeObjectURL(url));
+    imageUrls.clear();
+  }
+
+  async function enableMicrophone() {
+    if (busy) return;
+    busy = true;
+    try {
+      await recorder.requestPermission();
+      recorder.cancel();
+      reduce({ type: 'PERMISSION_GRANTED' });
+    } catch (error) {
+      reduce({ type: 'PERMISSION_DENIED', message: error?.name === 'NotAllowedError'
+        ? 'Microphone access was blocked. Allow it in your browser settings, then retry.'
+        : error?.message });
+    } finally {
+      busy = false;
     }
-    if (event.type === 'RIGHT_OPTION_TAP' && state.mode === 'remote' && state.step === 'working') {
-      later({ type: 'REMOTE_CREATED' }, 650);
-      later({ type: 'REMOTE_COMPLETE' }, 2600);
-    }
-  };
+  }
 
-  const dispatch = (event) => {
-    if (!event) return;
-    if (event.type === 'SELECT_MODE' || event.type === 'RESET') clearTimers();
+  async function beginRecording(event) {
+    if (busy || state.attempts.remaining === 0) return;
+    const next = transition(state, event);
+    if (next.step !== 'recording' || state.step === 'recording') return;
+    state = next;
+    render();
+    busy = true;
+    try {
+      await recorder.start();
+    } catch (error) {
+      reduce({ type: 'PERMISSION_DENIED', message: error?.name === 'NotAllowedError'
+        ? 'Microphone access was blocked. Allow it in your browser settings, then retry.'
+        : error?.message });
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function stopAndTranscribe(event) {
+    if (busy || state.step !== 'recording') return;
     state = transition(state, event);
     render();
-    scheduleAutomaticStates(event);
-  };
+    busy = true;
+    try {
+      const recording = await recorder.stop();
+      const result = await transcription.transcribe({
+        ...recording,
+        flowType: state.mode
+      });
+      reduce({ type: 'TRANSCRIPTION_SUCCEEDED', ...result });
+      if (state.mode === 'remote' && state.step === 'working') {
+        remoteTimer = window.setTimeout(() => {
+          reduce({ type: 'REMOTE_COMPLETE', result: 'Task demonstration complete' });
+        }, 2400);
+      }
+    } catch (error) {
+      reduce({ type: 'TRANSCRIPTION_FAILED', message: error?.message });
+    } finally {
+      busy = false;
+    }
+  }
 
-  const render = () => {
-    root.innerHTML = renderDemo(state);
-  };
+  async function activate(event) {
+    if (!event) return;
+    if (event.type === 'FN_TAP' || event.type === 'RIGHT_OPTION_TAP') {
+      if (state.step === 'recording') await stopAndTranscribe(event);
+      else await beginRecording(event);
+      return;
+    }
+    if (event.type === 'RESET' || event.type === 'DISCARD_PAD') revokeImages();
+    reduce(event);
+  }
 
-  root.addEventListener('click', (event) => {
+  function acceptImage(file) {
+    if (state.mode !== 'capture' || !file?.type?.startsWith('image/')) return false;
+    const url = URL.createObjectURL(file);
+    imageUrls.add(url);
+    reduce({
+      type: 'IMAGE_PASTED',
+      id: globalThis.crypto?.randomUUID?.() || `image-${Date.now()}`,
+      url,
+      name: file.name || 'Pasted screenshot'
+    });
+    return true;
+  }
+
+  root.addEventListener('click', async (event) => {
     const mode = event.target.closest('[data-demo-mode]');
     if (mode) {
-      dispatch({ type: 'SELECT_MODE', mode: mode.dataset.demoMode });
+      clearRemoteTimer();
+      recorder.cancel();
+      revokeImages();
+      reduce({ type: 'SELECT_MODE', mode: mode.dataset.demoMode });
       return;
     }
     const control = event.target.closest('[data-action]');
-    if (control) dispatch(actionToEvent(control.dataset.action, state));
+    if (!control) return;
+    if (control.dataset.action === 'enable-mic') {
+      await enableMicrophone();
+      return;
+    }
+    await activate(actionToEvent(control.dataset.action, state));
   });
 
   root.addEventListener('keydown', (event) => {
@@ -58,21 +134,41 @@ if (root) {
     const delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
     if (!delta) return;
     event.preventDefault();
-    const next = tabs[(index + delta + tabs.length) % tabs.length];
-    dispatch({ type: 'SELECT_MODE', mode: next.dataset.demoMode });
-    root.querySelector(`[data-demo-mode="${next.dataset.demoMode}"]`)?.focus();
+    tabs[(index + delta + tabs.length) % tabs.length]?.click();
   });
 
-  document.addEventListener('keydown', (event) => {
-    if (event.repeat || event.metaKey || event.ctrlKey || event.target.matches('input, textarea, [contenteditable]')) return;
+  document.addEventListener('keydown', async (event) => {
+    if (event.repeat || event.metaKey || event.ctrlKey || state.permission !== 'granted') return;
+    if (event.target.matches('input, textarea, [contenteditable]')) return;
     if (state.mode !== 'remote' && event.key.toLowerCase() === 'f') {
       event.preventDefault();
-      dispatch({ type: 'FN_TAP' });
-    }
-    if (state.mode === 'remote' && event.key === 'Alt') {
+      await activate({ type: 'FN_TAP' });
+    } else if (state.mode === 'remote' && event.key === 'Alt' && event.location === 2) {
       event.preventDefault();
-      dispatch({ type: 'RIGHT_OPTION_TAP' });
+      await activate({ type: 'RIGHT_OPTION_TAP' });
     }
+  });
+
+  document.addEventListener('paste', (event) => {
+    const file = [...(event.clipboardData?.files || [])].find((item) => item.type.startsWith('image/'));
+    if (acceptImage(file)) event.preventDefault();
+  });
+
+  root.addEventListener('dragover', (event) => {
+    if (state.mode === 'capture' && [...(event.dataTransfer?.items || [])].some((item) => item.type.startsWith('image/'))) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    }
+  });
+
+  root.addEventListener('drop', (event) => {
+    const file = [...(event.dataTransfer?.files || [])].find((item) => item.type.startsWith('image/'));
+    if (acceptImage(file)) event.preventDefault();
+  });
+
+  window.addEventListener('beforeunload', () => {
+    recorder.cancel();
+    revokeImages();
   });
 
   render();

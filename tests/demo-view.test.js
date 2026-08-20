@@ -3,26 +3,19 @@ import assert from 'node:assert/strict';
 import { createDemoState, transition } from '../demo-state.js';
 import { renderDemo } from '../demo-view.js';
 
-test('the initial demo exposes four modes, one MacBook, Notes, and accessible controls', () => {
+test('the initial demo asks for microphone access and explains the exact permission boundary', () => {
   const html = renderDemo(createDemoState('dictation'));
-
-  assert.match(html, /role="tablist"/);
-  assert.equal((html.match(/role="tab"/g) ?? []).length, 4);
-  assert.equal((html.match(/class="macbook"/g) ?? []).length, 1);
-  assert.match(html, /data-surface="notes"/);
-  assert.match(html, /data-surface="notch"/);
-  assert.match(html, /aria-label="Unmute notch"/);
-  assert.match(html, /data-surface="pill"/);
-  assert.match(html, /data-surface="scratchpad"/);
-  assert.match(html, /data-action="fn"/);
-  assert.match(html, /aria-live="polite"/);
-  assert.doesNotMatch(html, /<h3>/);
+  assert.match(html, /data-action="enable-mic"/);
+  assert.match(html, /Enable microphone/);
+  assert.match(html, /Audio is sent to Unmute only when you record/);
+  assert.match(html, /5 free transcriptions left/);
+  assert.doesNotMatch(html, /Screenshot permission|Screen sharing|clipboard permission/i);
 });
 
-test('recording renders the native wordless anatomy instead of an invented listening label', () => {
-  const state = transition(createDemoState('dictation'), { type: 'FN_TAP' });
+test('a granted demo exposes the real recording control and native wordless pill', () => {
+  let state = transition(createDemoState('dictation'), { type: 'PERMISSION_GRANTED' });
+  state = transition(state, { type: 'FN_TAP' });
   const html = renderDemo(state);
-
   assert.match(html, /data-pill-phase="recording"/);
   assert.match(html, /class="record-dot"/);
   assert.match(html, /class="waveform"/);
@@ -30,54 +23,61 @@ test('recording renders the native wordless anatomy instead of an invented liste
   assert.doesNotMatch(html, />Listening</);
 });
 
-test('a paused scratchpad is paper beside the bottom pill with deliberate destinations', () => {
-  let state = createDemoState('scratchpad');
+test('processing and errors tell the truth without substituting demo copy', () => {
+  let state = transition(createDemoState('dictation'), { type: 'PERMISSION_GRANTED' });
+  state = transition(state, { type: 'FN_TAP' });
+  state = transition(state, { type: 'FN_TAP' });
+  assert.match(renderDemo(state), /Transcribing/);
+
+  state = transition(state, { type: 'TRANSCRIPTION_FAILED', message: 'Could not reach Unmute.' });
+  const html = renderDemo(state);
+  assert.match(html, /role="alert"/);
+  assert.match(html, /Could not reach Unmute/);
+  assert.match(html, /data-action="retry"/);
+  assert.doesNotMatch(html, /Turn these rough thoughts/);
+});
+
+test('capture invites explicit paste or drop and renders the visitor image', () => {
+  let state = createDemoState('capture');
+  state = transition(state, { type: 'IMAGE_PASTED', id: 'image-1', url: 'blob:visitor-shot', name: 'Screenshot 1.png' });
+  const html = renderDemo(state);
+  assert.match(html, /data-paste-zone/);
+  assert.match(html, /Paste with ⌘V or drop a screenshot/);
+  assert.match(html, /src="blob:visitor-shot"/);
+  assert.match(html, /Screenshot 1\.png/);
+  assert.doesNotMatch(html, /unmute-demo-capture\.png/);
+});
+
+test('real scratchpad segments render as paper beside the bottom pill', () => {
+  let state = transition(createDemoState('scratchpad'), { type: 'PERMISSION_GRANTED' });
   state = transition(state, { type: 'FN_TAP' });
   state = transition(state, { type: 'TOGGLE_SCRATCHPAD' });
   state = transition(state, { type: 'FN_TAP' });
+  state = transition(state, { type: 'TRANSCRIPTION_SUCCEEDED', text: 'A real held thought.', attemptsUsed: 1, attemptLimit: 5 });
   const html = renderDemo(state);
-
-  assert.match(html, /data-pill-phase="paused"/);
-  assert.match(html, />Paused</);
   assert.match(html, /class="scratchpad-paper"/);
+  assert.match(html, /A real held thought/);
   assert.match(html, />Paste at cursor</);
-  assert.match(html, />New task</);
   assert.doesNotMatch(html, /Unmute · Orchestrator/);
 });
 
-test('captured context renders as structured URL and image rows', () => {
-  let state = createDemoState('capture');
-  for (const type of ['FN_TAP', 'TOGGLE_SCRATCHPAD', 'CAPTURE_URL', 'CAPTURE_SCREENSHOT']) {
-    state = transition(state, { type });
-  }
+test('Remote notch displays the visitor transcript and labels the result as a demonstration', () => {
+  let state = transition(createDemoState('remote'), { type: 'PERMISSION_GRANTED' });
+  state = transition(state, { type: 'RIGHT_OPTION_TAP' });
+  state = transition(state, { type: 'RIGHT_OPTION_TAP' });
+  state = transition(state, { type: 'TRANSCRIPTION_SUCCEEDED', text: 'Sort my downloads by project.', attemptsUsed: 1, attemptLimit: 5 });
+  state = transition(state, { type: 'TOGGLE_NOTCH' });
   const html = renderDemo(state);
-
-  assert.match(html, /data-entry-kind="url"/);
-  assert.match(html, /conductor\.build/);
-  assert.match(html, /data-entry-kind="image"/);
-  assert.match(html, /unmute-demo-capture\.png/);
+  assert.match(html, /Sort my downloads by project/);
+  assert.match(html, /Task demonstration/);
+  assert.doesNotMatch(html, /Email Maya/);
 });
 
-test('Remote recording includes one joined agent and model control', () => {
-  const state = transition(createDemoState('remote'), { type: 'RIGHT_OPTION_TAP' });
+test('quota state disables recording while preserving deliverable Scratchpad content', () => {
+  let state = createDemoState('scratchpad');
+  state = { ...state, attempts: { used: 5, limit: 5, remaining: 0 }, step: 'quota' };
   const html = renderDemo(state);
-
-  assert.match(html, /data-action="right-option"/);
-  assert.equal((html.match(/class="agent-model-control"/g) ?? []).length, 1);
-  assert.match(html, />Claude Code</);
-  assert.match(html, />Claude Sonnet 4\.5</);
-  assert.match(html, /class="remote-glyph"/);
-});
-
-test('completed Remote work stays in an expandable notch task surface', () => {
-  let state = createDemoState('remote');
-  for (const type of ['RIGHT_OPTION_TAP', 'RIGHT_OPTION_TAP', 'REMOTE_COMPLETE', 'TOGGLE_NOTCH']) {
-    state = transition(state, { type });
-  }
-  const html = renderDemo(state);
-
-  assert.match(html, /data-notch-state="done"/);
-  assert.match(html, /class="notch-task-surface"/);
-  assert.match(html, /Email sent successfully/);
-  assert.doesNotMatch(html, /class="orchestrator-window"/);
+  assert.match(html, /0 free transcriptions left/);
+  assert.match(html, /Demo limit reached/);
+  assert.doesNotMatch(html, /data-action="fn"/);
 });
