@@ -879,6 +879,7 @@ export class TaskManager extends EventEmitter {
         forkFromSessionId: opts.forkFromSessionId,
       })
       await ex.isReady()
+      if (!ex.alive) throw new Error(`${agent} CLI exited before task dispatch`)
 
       // Drive past Claude Code's folder-trust prompt (and any boot prompts) using
       // ONLY Enter, gated on OBSERVED output — never a timer, never Esc. The trust
@@ -895,12 +896,15 @@ export class TaskManager extends EventEmitter {
       // executor) dispatch instantly; production keeps the default (>0).
       if (this.opts.trustAcceptMs > 0) {
         await settleRepl({
+          agent,
           getOutput: () => this.outputBuffers.get(id) ?? '',
           isAlive: () => ex.alive,
           sendEnter: () => ex.write('\r'),
+          sendRaw: (input) => ex.write(input),
           onEvent: (event, fields) => tlog.event(event, fields),
         })
       }
+      if (!ex.alive) throw new Error(`${agent} CLI exited before task dispatch`)
       tlog.event('folder-trust-accepted', {})
 
       if (opts.attachments?.length) {

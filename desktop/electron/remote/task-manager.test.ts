@@ -78,6 +78,35 @@ test('dispatch → scaffolds status, types ONLY the intent, writes nothing into 
   tm.kill(id) // stop polling
 })
 
+test('dispatch fails truthfully and never writes the intent when the CLI exits during startup', async () => {
+  const baseDir = await tmpBase()
+  const writes: string[] = []
+  let alive = true
+  const exitedDuringReady: AgentExecutor = {
+    get alive() { return alive },
+    async spawn() {},
+    async isReady() { alive = false },
+    writeStdin(text) { writes.push(text) },
+    write() {},
+    resize() {},
+    onData() {},
+    kill() { alive = false },
+  }
+  const tm = new TaskManager({
+    executorFactory: () => exitedDuringReady,
+    baseDir,
+    trustAcceptMs: 0,
+    submitConfirmMs: 0,
+    pollMs: 9999,
+  })
+
+  const id = await tm.dispatch('research the new feature', { agent: 'codex' })
+
+  assert.deepEqual(writes, [], 'a dead CLI must never receive or claim to dispatch the user prompt')
+  assert.equal(tm.get(id)!.state, 'failed', 'the card must not remain falsely Working')
+  assert.match(tm.get(id)!.error?.detail ?? '', /exited before task dispatch/i)
+})
+
 test('resume brings an interrupted task back WITHOUT speaking for the user', () => {
   // THIS ASSERTED THE OPPOSITE, and the behaviour it pinned was the bug: an
   // interrupted task was re-grounded by typing the original intent back into

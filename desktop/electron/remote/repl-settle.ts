@@ -21,14 +21,19 @@ export function stripTui(s: string): string {
 // "REPL is ready, dispatch now" signal. Trust-dialog markers are for logging.
 export const REPL_READY_RE = /bypasspermissions/
 export const TRUST_DIALOG_RE = /trustthisfolder|no,exit|esctocancel/
+export const CODEX_UPDATE_RE = /updateavailable!.*updatenow.*skip.*skipuntilnextversion.*pressentertocontinue/
 
 export interface SettleReplOpts {
+  /** Provider whose startup screens are being settled. */
+  agent?: string
   /** The full accumulated raw output of the session so far. */
   getOutput: () => string
   /** Is the PTY still alive? */
   isAlive: () => boolean
   /** Send a single Enter (raw `\r`, NEVER Esc). */
   sendEnter: () => void
+  /** Send provider-specific raw input without an appended Enter. */
+  sendRaw?: (input: string) => void
   /** Optional structured logging hook. */
   onEvent?: (event: string, fields: Record<string, unknown>) => void
   quietMs?: number
@@ -47,6 +52,7 @@ export async function settleRepl(o: SettleReplOpts): Promise<void> {
 
   const t0 = Date.now()
   let enters = 0
+  let codexUpdateHandled = false
   let lastLen = -1
   let lastChange = Date.now()
   while (Date.now() - t0 < MAX_WAIT_MS && o.isAlive()) {
@@ -59,6 +65,18 @@ export async function settleRepl(o: SettleReplOpts): Promise<void> {
     if (raw.length === 0) { emit('repl-settled', { enters, reason: 'no-output' }); return }
     const out = stripTui(raw.slice(-4000))
     if (REPL_READY_RE.test(out)) { emit('repl-settled', { enters }); return }
+    // Codex occasionally pauses startup on its self-update chooser. Accepting
+    // the default would mutate the user's global installation and then exit,
+    // so choose the non-mutating "Skip" row explicitly (Down + Enter).
+    if (o.agent === 'codex' && CODEX_UPDATE_RE.test(out) && o.sendRaw) {
+      if (!codexUpdateHandled) {
+        o.sendRaw('\x1b[B\r')
+        codexUpdateHandled = true
+        emit('codex-update-skipped', {})
+      }
+      lastChange = Date.now()
+      continue
+    }
     if (enters < MAX_ENTERS) {
       o.sendEnter() // Enter = accept trust / no-op on empty prompt; NEVER Esc
       enters += 1
