@@ -1030,6 +1030,12 @@ export class NotchController {
     }
 
     this.engaged = 'none'
+    // Compact active has two pieces of copy: "Working" and the task title.
+    // They must come from the same snapshot. `showTask` used to be sent only
+    // for attention/expanded surfaces, leaving the native helper free to reuse
+    // whichever task had last been opened even after it finished.
+    const activeTask = this.soleWorking()
+    if (activeTask) this.sendDetail('showTask', activeTask)
     this.client.send({ type: 'setState', state: working > 0 ? 'active' : 'dormant', attention: 0, working })
   }
 

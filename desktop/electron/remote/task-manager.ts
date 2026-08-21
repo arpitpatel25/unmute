@@ -3240,6 +3240,20 @@ export class TaskManager extends EventEmitter {
       // app. A missing runtime remains a quiet, resumable `done` task rather
       // than a red failure caused merely by closing the laptop.
       const isSession = (meta.kind ?? 'oneoff') === 'session'
+      // State authority follows the execution mode, not merely the provider.
+      // Persistent Codex CLI sessions own their lifecycle in the rollout/meta
+      // receipt because status.json is only their launch scaffold. Codex
+      // one-offs run through the app server, which writes their completed
+      // status.json; trusting stale `meta.state=processing` there resurrected
+      // finished errands as phantom Working tasks after every relaunch.
+      const persistedState = normalizeState(meta.state) as UiTaskState | undefined
+      const recoveredState = meta.agent === 'codex' && isSession
+        ? persistedState ?? (terminal ? status!.state : 'done')
+        : terminal
+          ? status!.state
+          : isSession
+            ? 'done'
+            : 'failed'
       const task: Task = {
         id,
         intent: meta.intent,
@@ -3258,10 +3272,7 @@ export class TaskManager extends EventEmitter {
         // A non-terminal task whose session died with the app is, to the user,
         // interrupted — surface it as failed (still resumable) rather than a
         // forever-spinning 'processing'. Sessions get `ready` instead (above).
-        state: ((meta.agent === 'codex'
-          ? normalizeState(meta.state)
-          : undefined) as UiTaskState | undefined)
-          ?? (terminal ? status!.state : (isSession ? 'done' : 'failed')),
+        state: recoveredState,
         createdAt: meta.createdAt ?? now,
         updatedAt: (await statusMtimeMs(statusPath)) ?? meta.createdAt ?? now,
         // Project-bound sessions ran in the user's real dir (meta.cwd); resume
@@ -3292,6 +3303,7 @@ export class TaskManager extends EventEmitter {
       }
       this.tasks.set(id, task)
       this.emit('created', task)
+      if (persistedState !== recoveredState) await this.persistState(task)
       restored++
     }
     if (restored) log.event('rehydrated', { restored })

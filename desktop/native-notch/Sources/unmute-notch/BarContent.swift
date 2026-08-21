@@ -230,7 +230,7 @@ struct BarContent: Equatable {
             // Left is the count; right is what is actually happening. Hovering a
             // running task shows its NAME, which is the one thing the activity
             // line does not carry.
-            if let t = m.task {
+            if m.working == 1, let t = m.task, t.status == .processing {
                 c.right = hovering ? t.title : (t.activity ?? t.title)
             }
             return c

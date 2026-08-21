@@ -1259,6 +1259,30 @@ test('reattaching a completed Codex runtime does not revive stale scaffold proce
   assert.equal(tm.isAlive(sid), true, 'the terminal runtime remains natively reachable')
 })
 
+test('rehydrate trusts completed status for Codex one-offs and repairs stale metadata', async (t) => {
+  const baseDir = await tmpBase()
+  const id = await seedInterrupted(baseDir, 'oneoff', {
+    agent: 'codex',
+    state: 'processing',
+  })
+  const dir = path.join(baseDir, 'local', id)
+  await claudeWrites(path.join(dir, 'status.json'), {
+    state: 'done',
+    result: { summary: 'Message sent.' },
+  })
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  t.after(() => tm.killAll())
+
+  await tm.rehydrate()
+
+  assert.equal(tm.get(id)!.state, 'done', 'a completed one-off must not return as Working')
+  const repaired = JSON.parse(await fs.readFile(path.join(dir, 'meta.json'), 'utf8'))
+  assert.equal(repaired.state, 'done', 'the canonical state must replace stale metadata on disk')
+})
+
 test('startup never restarts a missing persistent runtime; it keeps the task resumable', async () => {
   const baseDir = await tmpBase()
   const sid = await seedInterrupted(baseDir, 'session', { agent: 'claude', runtimePinned: true })

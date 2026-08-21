@@ -159,6 +159,22 @@ test('classify maps only your-move states', () => {
   assert.equal(classify('done'), null)
 })
 
+test('compact active state binds its title to the sole processing task', () => {
+  const h = setup()
+  const finished = makeTask({ id: 'finished', name: 'Counting loop', state: 'needs-user' })
+  put(h, finished)
+  assert.equal(h.client.last('showTask')?.task.id, 'finished')
+
+  put(h, { ...finished, state: 'done', alive: false })
+  put(h, makeTask({ id: 'live', name: 'WhatsApp Rishi message', state: 'processing' }))
+
+  assert.deepEqual(h.client.last('setState'), {
+    type: 'setState', state: 'active', attention: 0, working: 1,
+  })
+  assert.equal(h.client.last('showTask')?.task.id, 'live',
+    'Working and the compact title must describe the same task')
+})
+
 test('relativeAge formats compactly', () => {
   const now = 1_000_000_000_000
   assert.equal(relativeAge(now - 5_000, now), '5s')

@@ -203,6 +203,14 @@ final class AppController: NSObject, NotchResizing {
             NotchLog.log("CMD setState \(state.rawValue) attention=\(attention) working=\(working)")
             model.attention = attention
             model.working = working
+            // A cached detail is not evidence that the task is still running.
+            // Compact active may name a task only when there is exactly one
+            // worker and the freshly supplied detail agrees. This also drops
+            // stale expanded-task identity when the system goes idle.
+            if state == .dormant || (state == .active &&
+                (working != 1 || model.task?.status != .processing)) {
+                model.task = nil
+            }
             commandedState = state
             switch departureTransition.receive(isExpanded: isExpanded(state)) {
             case .applyNormally:
