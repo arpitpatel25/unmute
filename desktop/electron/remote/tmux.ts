@@ -94,6 +94,23 @@ export function tmuxKillSessionArgs(session: string): string[] {
   return ['-L', TMUX_SOCKET, 'kill-session', '-t', session]
 }
 
+/** One bounded query for every runtime that genuinely exists on our private
+ * tmux server. Tickets on disk are history; this list is runtime liveness. */
+export function tmuxListSessionNamesArgs(): string[] {
+  return ['-L', TMUX_SOCKET, 'list-sessions', '-F', '#{session_name}']
+}
+
+/** Convert tmux's newline-delimited session names back to Unmute task ids.
+ * Ignore sessions not owned by Unmute even on the private socket. */
+export function taskIdsFromTmuxSessionList(stdout: string): ReadonlySet<string> {
+  const prefix = 'unmute-'
+  return new Set(stdout
+    .split(/\r?\n/)
+    .map((name) => name.trim())
+    .filter((name) => name.startsWith(prefix) && name.length > prefix.length)
+    .map((name) => name.slice(prefix.length)))
+}
+
 // NOTE (terminal rendering): we deliberately do NOT capture-pane to reconstruct
 // the screen. Our owned node-pty is a tmux client, so the pane's RAW output
 // stream (escape sequences intact) already reaches us via pty.onData — xterm

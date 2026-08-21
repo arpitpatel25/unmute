@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   sessionNameFor, shellQuote, buildCommand, tmuxNewSessionArgs,
-  tmuxAttachArgs, tmuxKillSessionArgs, resolveTmuxBin, TMUX_SOCKET,
+  tmuxAttachArgs, tmuxKillSessionArgs, tmuxListSessionNamesArgs,
+  taskIdsFromTmuxSessionList, resolveTmuxBin, TMUX_SOCKET,
 } from './tmux.ts'
 
 test('sessionNameFor is deterministic per task', () => {
@@ -34,6 +35,19 @@ test('tmuxNewSessionArgs uses the private socket, -A, fixed size, command last',
 test('attach + kill target the same session on the private socket', () => {
   assert.deepEqual(tmuxAttachArgs('unmute-x'), ['-L', TMUX_SOCKET, 'attach-session', '-t', 'unmute-x'])
   assert.deepEqual(tmuxKillSessionArgs('unmute-x'), ['-L', TMUX_SOCKET, 'kill-session', '-t', 'unmute-x'])
+})
+
+test('runtime discovery lists only the private tmux server session names', () => {
+  assert.deepEqual(tmuxListSessionNamesArgs(), [
+    '-L', TMUX_SOCKET, 'list-sessions', '-F', '#{session_name}',
+  ])
+})
+
+test('runtime discovery maps only Unmute tmux sessions back to task ids', () => {
+  assert.deepEqual(
+    [...taskIdsFromTmuxSessionList('unmute-live-1\nunrelated\n\nunmute-live-2\n')],
+    ['live-1', 'live-2'],
+  )
 })
 
 test('resolveTmuxBin returns first existing candidate, else null', () => {

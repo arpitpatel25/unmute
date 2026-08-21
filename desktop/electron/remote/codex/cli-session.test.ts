@@ -9,6 +9,7 @@ import {
   findCodexSessionCwd,
   findRollout,
   listImportableCodexSessions,
+  isRolloutIntegrityError,
   readRolloutEvents,
   readRolloutSnapshot,
 } from './cli-session'
@@ -44,6 +45,18 @@ test('a half-written trailing line is normal, not a parse failure', async () => 
   await fs.writeFile(p, meta('/repo', UUID_A, '2026-08-09T10:00:00.000Z') + '\n{"type":"event_msg","pay')
   const events = await readRolloutEvents(p)
   assert.equal(events.length, 1, 'the good line survives; the fragment is dropped')
+})
+
+test('rollout integrity failures are typed so polling can stop the error loop', async () => {
+  const h = await home()
+  const p = join(h, '.codex/sessions/2026/08/09', `rollout-x-${UUID_A}.jsonl`)
+  await fs.writeFile(p, '{"type":"event_msg","payload":{}}\nnot-json\n')
+
+  await assert.rejects(readRolloutEvents(p), (error: unknown) => {
+    assert.equal(isRolloutIntegrityError(error), true)
+    return true
+  })
+  assert.equal(isRolloutIntegrityError(new Error('ordinary read failure')), false)
 })
 
 test('rollout reads never disguise storage failures as an empty history', async () => {

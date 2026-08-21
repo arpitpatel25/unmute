@@ -130,7 +130,10 @@ import { applyAxRegistration } from './ax/register'
 import { pruneUnmuteFromCodex, sweepUnmuteFromCodexAfterConnect } from './ax/codex-prune'
 import { normalizePolicy, type AxPolicy } from './ax/policy'
 import { locateTranscript } from './trace-reducer'
-import { resolveTmuxBin, sessionNameFor, tmuxAttachArgs, tmuxKillSessionArgs, TMUX_CONF } from './tmux'
+import {
+  resolveTmuxBin, sessionNameFor, taskIdsFromTmuxSessionList,
+  tmuxAttachArgs, tmuxKillSessionArgs, tmuxListSessionNamesArgs, TMUX_CONF,
+} from './tmux'
 import { planGardening, applyGardening, cleanupMemory, memoryUsage, type CleanupResult } from './gardening'
 import { Curator, makeRunSweep, ProposalConversation, type SessionInfo } from './curator'
 import { buildCuratedIndexFrom } from './curator-index'
@@ -4023,6 +4026,17 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
     reapSession: (id) => {
       if (!tmuxBin) return
       try { execFile(tmuxBin, tmuxKillSessionArgs(sessionNameFor(id)), () => {}) } catch { /* best-effort */ }
+    },
+    listLiveRuntimeIds: async () => {
+      if (!tmuxBin) return new Set<string>()
+      return await new Promise<ReadonlySet<string>>((resolve) => {
+        execFile(tmuxBin!, tmuxListSessionNamesArgs(), { timeout: 2_000 }, (error, stdout) => {
+          // tmux exits 1 when its private server has no sessions. That is a
+          // healthy empty registry, not a reason to probe every saved ticket.
+          if (error) return resolve(new Set<string>())
+          resolve(taskIdsFromTmuxSessionList(String(stdout)))
+        })
+      })
     },
   })
   // ── The Unmute MCP: identity injection + server + registration ──

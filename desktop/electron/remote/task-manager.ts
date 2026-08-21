@@ -90,7 +90,7 @@ import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import { resolveTranscriptById, locateTranscript } from './trace-reducer'
 import { rollupCodexEvents, conversationFromCodexEvents } from './codex/cli-observer'
-import { discoverSessionId, findRollout, readRolloutEvents } from './codex/cli-session'
+import { discoverSessionId, findRollout, isRolloutIntegrityError, readRolloutEvents } from './codex/cli-session'
 import { projectSlug } from './projects'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
@@ -476,6 +476,9 @@ export interface TaskManagerOpts {
    *  crashed/quit without killing it). Wired from init.ts (which owns the tmux
    *  bin + private socket). Omitted in tests. */
   reapSession?: (taskId: string) => void
+  /** Runtime liveness registry. A persisted task is only reattached when its
+   * id is present here; historical tickets remain visible and resumable. */
+  listLiveRuntimeIds?: () => Promise<ReadonlySet<string>>
   /** The true cwd of a Claude session, by id — the recovery half of resume().
    *  Injected so this module stays free of the transcript layout. */
   resolveSessionCwd?: (sessionId: string) => Promise<string | null>
@@ -512,6 +515,9 @@ export class TaskManager extends EventEmitter {
   private tasks = new Map<string, Task>()
   private executors = new Map<string, AgentExecutor>()
   private timers = new Map<string, ReturnType<typeof setInterval>>()
+  /** Prevent async interval ticks from overlapping when a disk read takes
+   * longer than pollMs. Without this, one damaged rollout multiplies fs work. */
+  private pollsInFlight = new Set<string>()
   // Idle-kill timers for WARM sessions (kept alive after done for follow-ups).
   private warmTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Background auto-purge sweep (null until startMaintenance()).
@@ -575,8 +581,8 @@ export class TaskManager extends EventEmitter {
   private outputBuffers = new Map<string, string>()
   private static readonly OUTPUT_CAP = 200_000 // chars kept per task
   private readonly opts:
-    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice'>> &
-    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice'>
+    Required<Omit<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice'>> &
+    Pick<TaskManagerOpts, 'userKey' | 'now' | 'librarian' | 'reapSession' | 'listLiveRuntimeIds' | 'codexDriver' | 'claudeDesktopDriver' | 'claudeDesktopAx' | 'claudeActuator' | 'permissionMode' | 'codexReasoning' | 'resolveSessionCwd' | 'codexHub' | 'sandboxRoots' | 'codexFullAccess' | 'codexCliChoice'>
 
   constructor(opts: TaskManagerOpts) {
     super()
@@ -626,6 +632,7 @@ export class TaskManager extends EventEmitter {
       permissionMode: opts.permissionMode,
       codexReasoning: opts.codexReasoning,
       reapSession: opts.reapSession,
+      listLiveRuntimeIds: opts.listLiveRuntimeIds,
       now: opts.now,
     }
   }
@@ -2563,7 +2570,19 @@ export class TaskManager extends EventEmitter {
     const prev = this.timers.get(id)
     if (prev) clearInterval(prev)
     const timer = setInterval(() => {
-      void this.poll(id).catch((e) => tlog.error('poll error', { error: (e as Error).message }))
+      if (this.pollsInFlight.has(id)) return
+      this.pollsInFlight.add(id)
+      void this.poll(id).catch((e) => {
+        if (isRolloutIntegrityError(e)) {
+          // Corruption is deterministic, not transient. Keep the tmux runtime
+          // attached and visible, but stop the rollout reader that would throw
+          // forever and overload Electron's main process.
+          this.stopPolling(id)
+          tlog.error('polling stopped: rollout integrity failure', { error: (e as Error).message })
+          return
+        }
+        tlog.error('poll error', { error: (e as Error).message })
+      }).finally(() => this.pollsInFlight.delete(id))
     }, this.opts.pollMs)
     this.timers.set(id, timer)
     tlog.event('polling-started', { pollMs: this.opts.pollMs, staleMs: this.opts.staleMs })
@@ -3270,12 +3289,27 @@ export class TaskManager extends EventEmitter {
   /** Attach UI clients to persistent tmux runtimes left alive by the previous
    * app process. This never launches a provider command or submits input. */
   async reattachPersistent(): Promise<void> {
+    // Fail closed: if tmux cannot tell us which runtimes exist, preserve every
+    // ticket but attach none. Probing every historical task is exactly the
+    // restart fan-out that previously overloaded Electron's main process.
+    let liveRuntimeIds: ReadonlySet<string>
+    try {
+      liveRuntimeIds = await this.opts.listLiveRuntimeIds?.() ?? new Set<string>()
+    } catch (error) {
+      log.warn('persistent runtime discovery failed', { error: (error as Error).message })
+      return
+    }
     const candidates = [...this.tasks.values()].filter((task) =>
       task.kind === 'session'
       && task.agent !== 'codex-desktop'
       && task.agent !== 'claude-code-desktop'
+      && liveRuntimeIds.has(task.id)
       && !this.executors.get(task.id)?.alive,
     )
+    log.event('persistent-runtime-discovered', {
+      live: liveRuntimeIds.size,
+      matched: candidates.length,
+    })
     await Promise.all(candidates.map(async (task) => {
       const lastUse = task.lastUserInputAt ?? task.updatedAt ?? task.createdAt
       if (!task.runtimePinned && this.clock() - lastUse >= this.opts.persistentIdleMs) {
@@ -4650,6 +4684,7 @@ export class TaskManager extends EventEmitter {
   private stopPolling(id: string): void {
     const timer = this.timers.get(id)
     if (timer) { clearInterval(timer); this.timers.delete(id) }
+    this.pollsInFlight.delete(id)
   }
 
   /** Warm window for a task, by category. navigate gets a shorter window

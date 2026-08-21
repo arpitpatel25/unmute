@@ -6,6 +6,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { TaskManager } from './task-manager.ts'
+import { readRolloutEvents } from './codex/cli-session.ts'
 import { writeRecipe } from './recipe-store.ts'
 import { providerOf } from './providers.ts'
 import type { AgentExecutor, SpawnOpts } from './executor.ts'
@@ -1200,6 +1201,7 @@ test('startup reattaches a persistent tmux runtime without typing or resubmittin
   const fake = makeFakeExecutor({ onSpawn: (o) => { spawned = o } })
   const tm = new TaskManager({
     executorFactory: () => fake,
+    listLiveRuntimeIds: async () => new Set([sid]),
     baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
   })
   await tm.rehydrate()
@@ -1225,16 +1227,65 @@ test('startup never restarts a missing persistent runtime; it keeps the task res
         throw new Error('tmux session not found')
       },
     }),
+    listLiveRuntimeIds: async () => new Set(),
     baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
   })
   await tm.rehydrate()
 
   await tm.reattachPersistent()
 
-  assert.equal(attempts, 1)
+  assert.equal(attempts, 0, 'a historical ticket is not probed as though it were a live runtime')
   assert.equal(tm.isAlive(sid), false)
   assert.equal(tm.get(sid)!.state, 'done', 'the ticket remains available for explicit Resume')
   assert.equal(tm.get(sid)!.resumeError, undefined, 'a normal machine restart is not shown as a task failure')
+})
+
+test('startup reattaches only task ids reported by the live tmux runtime registry', async () => {
+  const baseDir = await tmpBase()
+  const live = await seedInterrupted(baseDir, 'session', { agent: 'claude', runtimePinned: true })
+  const historical = await seedInterrupted(baseDir, 'session', { agent: 'claude', runtimePinned: true })
+  const attached: string[] = []
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor({ onSpawn: (opts) => attached.push(opts.taskId) }),
+    listLiveRuntimeIds: async () => new Set([live]),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  await tm.rehydrate()
+
+  await tm.reattachPersistent()
+
+  assert.deepEqual(attached, [live])
+  assert.equal(tm.isAlive(live), true)
+  assert.equal(tm.isAlive(historical), false)
+  assert.equal(tm.get(historical)!.state, 'done')
+  tm.killAll()
+})
+
+test('a corrupt Codex rollout stops its poller instead of retrying forever', async () => {
+  const baseDir = await tmpBase()
+  const rollout = path.join(baseDir, 'corrupt-rollout.jsonl')
+  await fs.writeFile(rollout, 'not-json\n')
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 5,
+  })
+  let calls = 0
+  const internals = tm as unknown as {
+    poll: (id: string) => Promise<void>
+    startPolling: (id: string) => void
+    timers: Map<string, ReturnType<typeof setInterval>>
+  }
+  internals.poll = async () => {
+    calls++
+    await readRolloutEvents(rollout)
+  }
+
+  internals.startPolling('corrupt-task')
+  await waitFor(() => calls === 1)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+
+  assert.equal(calls, 1, 'the deterministic error is not retried on every tick')
+  assert.equal(internals.timers.has('corrupt-task'), false)
 })
 
 test('an unpinned persistent runtime expires after seven idle days but its task remains resumable', async () => {

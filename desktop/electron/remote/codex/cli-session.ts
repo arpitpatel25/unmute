@@ -212,8 +212,19 @@ function rolloutSessionId(path: string, events: readonly RolloutEvent[]): string
   return filenameId
 }
 
+const ROLLOUT_INTEGRITY_ERROR = 'CODEX_ROLLOUT_INTEGRITY'
+
 function rolloutIntegrityError(): Error {
-  return new Error('Codex rollout integrity check failed')
+  return Object.assign(new Error('Codex rollout integrity check failed'), {
+    code: ROLLOUT_INTEGRITY_ERROR,
+  })
+}
+
+/** Stable discriminator for a corrupt or identity-mismatched rollout. The
+ * reader deliberately throws; callers that poll must stop retrying the same
+ * immutable corruption on every timer tick. */
+export function isRolloutIntegrityError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === ROLLOUT_INTEGRITY_ERROR
 }
 
 function missingPath(error: unknown): boolean {
