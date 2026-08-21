@@ -746,14 +746,9 @@ export class TaskManager extends EventEmitter {
   }
 
   async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[] } = {}): Promise<string> {
-    // Terminal-backed Codex work uses the same per-task tmux runtime as Claude.
-    // The app-server transport is owned by the Unmute app process, so routing a
-    // terminal task through it would sever the work at quit. `kind` controls
-    // retention after completion; it must not decide whether active work
-    // survives the app UI closing.
-    const route = opts.agent === 'codex'
-      ? null
-      : this.dispatchRoute(opts.agent)
+    // Provider-native routes own dispatch acknowledgement. Codex must not fall
+    // through to Claude's PTY submit-and-verify path, which can resend prompts.
+    const route = this.dispatchRoute(opts.agent)
     if (route) return route(intent, opts)
     // EXTERNAL BACKEND FORK (codex-desktop). Everything below this point — the
     // status file, the CLAUDE.md contract, the owned PTY, the trust prompt, the
@@ -950,7 +945,9 @@ export class TaskManager extends EventEmitter {
       // is why this no longer skips project-bound spawns: they get the same
       // hooks as any other session, so the verifier finally protects the
       // long-lived sessions it used to be disabled for.
-      void this.verifyDispatch(id, ex, payload, dispatchedAt)
+      if (opts.agent === 'claude' || opts.agent === undefined) {
+        void this.verifyDispatch(id, ex, payload, dispatchedAt)
+      }
     } catch (e) {
       tlog.error('dispatch failed before polling', { error: (e as Error).message })
       this.transition(id, 'failed', { error: { reason: 'Could not start the task', detail: (e as Error).message } })
@@ -1113,7 +1110,7 @@ export class TaskManager extends EventEmitter {
     // The dispatch side is already guarded by construction (dispatch() forks to
     // the drivers before any of this code runs). This is the same guarantee on
     // the way IN, and it belongs here rather than at each call site.
-    const mine = (t: Task) => !isExternalAgent(t.agent)
+    const mine = (t: Task) => t.agent === 'claude' || t.agent === undefined
     for (const t of this.tasks.values()) if (mine(t) && t.sessionId === sessionId) return t
     if (!cwd) return undefined
     // Newest match wins: several tasks can share a project cwd.

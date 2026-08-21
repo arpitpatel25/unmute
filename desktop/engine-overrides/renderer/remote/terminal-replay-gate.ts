@@ -4,10 +4,14 @@ export interface TerminalInputGate {
   disable(): void
 }
 
+export function isTerminalDeviceReply(data: string): boolean {
+  return /^(?:\x1b\[|\u009b)(?:[?>]?[0-9;]*c|[0-9]+;[0-9]+R|[0-9]+n)$/.test(data)
+}
+
 export function createTerminalInputGate(send: (data: string) => void): TerminalInputGate {
   let enabled = false
   return {
-    forward(data) { if (enabled) send(data) },
+    forward(data) { if (enabled && !isTerminalDeviceReply(data)) send(data) },
     enable() { enabled = true },
     disable() { enabled = false },
   }

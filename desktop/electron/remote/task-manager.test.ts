@@ -727,12 +727,16 @@ test('dispatch persists kind in meta.json; defaults to oneoff with home === cwd'
   tm.killAll()
 })
 
-test('terminal-backed Codex work always uses a detachable per-task executor', async () => {
+test('Codex work dispatches exactly once through the native hub', async () => {
   const baseDir = await tmpBase()
   let hubStarts = 0
+  const hubSends: string[] = []
   const hub = {
-    async startThread() { hubStarts++; return { threadId: 'codex-thread', url: 'ws://127.0.0.1:1' } },
-    async send() { return true },
+    async startThread() {
+      hubStarts++
+      return { threadId: `codex-thread-${hubStarts}`, url: 'ws://127.0.0.1:1' }
+    },
+    async send(_threadId: string, intent: string) { hubSends.push(intent); return true },
     threadIdFor() { return undefined },
   }
   const agents: Array<AgentKind | undefined> = []
@@ -745,7 +749,8 @@ test('terminal-backed Codex work always uses a detachable per-task executor', as
   const persistent = await tm.dispatch('long Codex thread', { agent: 'codex', kind: 'session' })
   const oneoff = await tm.dispatch('quick Codex errand', { agent: 'codex', kind: 'oneoff' })
 
-  assert.equal(hubStarts, 0, 'the app-owned server is not the runtime boundary for terminal work')
+  assert.equal(hubStarts, 2)
+  assert.deepEqual(hubSends, ['long Codex thread', 'quick Codex errand'])
   assert.deepEqual(agents, ['codex', 'codex'])
   assert.equal(tm.get(persistent)!.agent, 'codex')
   assert.equal(tm.get(oneoff)!.agent, 'codex')

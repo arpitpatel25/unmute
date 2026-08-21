@@ -17,6 +17,11 @@ test('terminal device replies generated while replaying history never reach the 
   assert.deepEqual(sent, [], 'xterm-generated replay responses stay local')
 
   writeDone?.()
+  gate.forward('\x1b[?65;20;1c')
+  gate.forward('\x1b[0n')
+  gate.forward('\x1b[12;34R')
+  gate.forward('\u009b?65;20;1c')
+  gate.forward('\x1b')
   gate.forward('hello')
-  assert.deepEqual(sent, ['hello'], 'real input is forwarded after replay completes')
+  assert.deepEqual(sent, ['\x1b', 'hello'], 'device replies stay local while real input is forwarded')
 })
