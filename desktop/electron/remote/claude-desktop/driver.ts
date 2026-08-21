@@ -62,6 +62,7 @@ export class ClaudeDesktopDriver {
   private readonly appPath: string
   private readonly sessionsDir: string
   private readonly projectsDir: string
+  private taskCache: { at: number; tasks: ClaudeDesktopTask[] } | null = null
 
   constructor(private readonly deps: ClaudeDriverDeps = {}) {
     this.appPath = deps.appPath ?? CLAUDE_APP_PATH
@@ -103,7 +104,11 @@ export class ClaudeDesktopDriver {
    *  files. That is what makes "see my Claude Desktop chats in Unmute"
    *  possible at all. */
   async list(): Promise<ClaudeDesktopTask[]> {
-    return listTasks(this.sessionsDir)
+    const now = Date.now()
+    if (this.taskCache && now - this.taskCache.at < 5_000) return this.taskCache.tasks
+    const tasks = await listTasks(this.sessionsDir)
+    this.taskCache = { at: now, tasks }
+    return tasks
   }
 
   /**

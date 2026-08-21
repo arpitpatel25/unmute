@@ -1387,7 +1387,7 @@ test('a corrupt Codex rollout stops its poller instead of retrying forever', asy
   const internals = tm as unknown as {
     poll: (id: string) => Promise<void>
     startPolling: (id: string) => void
-    timers: Map<string, ReturnType<typeof setInterval>>
+    scheduler: { keys: () => IterableIterator<string> }
   }
   internals.poll = async () => {
     calls++
@@ -1399,7 +1399,7 @@ test('a corrupt Codex rollout stops its poller instead of retrying forever', asy
   await new Promise((resolve) => setTimeout(resolve, 30))
 
   assert.equal(calls, 1, 'the deterministic error is not retried on every tick')
-  assert.equal(internals.timers.has('corrupt-task'), false)
+  assert.equal([...internals.scheduler.keys()].includes('corrupt-task'), false)
 })
 
 test('an unpinned persistent runtime expires after seven idle days but its task remains resumable', async () => {

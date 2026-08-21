@@ -165,7 +165,7 @@ export async function readRolloutSnapshot(path: string): Promise<RolloutSnapshot
   }
 }
 
-function parseRolloutJsonl(text: string): RolloutEvent[] {
+export function parseRolloutJsonl(text: string): RolloutEvent[] {
   if (!text) return []
   const terminated = text.endsWith('\n')
   const lines = text.split('\n')

@@ -4039,6 +4039,11 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
       })
     },
   })
+  // File watchers are best-effort across macOS sleep and renderer suspension.
+  // One immediate, serialized reconciliation on wake/activation repairs any
+  // coalesced event without restoring high-frequency background polling.
+  powerMonitor.on('resume', () => manager?.reconcileNow())
+  app.on('activate', () => manager?.reconcileNow())
   // ── The Unmute MCP: identity injection + server + registration ──
   // Every dispatched session gets a per-task intercom identity. Wrapping
   // dispatch here (rather than teaching TaskManager about MCP) keeps the
@@ -4376,7 +4381,10 @@ export function initRemote(deps: RemoteInitDeps): TaskManager {
         scratchpadArm: (on) => { armScratchpadFrom(on) },
         scratchpadRemove: (id) => removeScratchpadEntry(id),
         scratchpadDeliver: (dest) => { void deliverScratchpad(dest) },
-        loadBlocks: async (taskId) => { await manager?.loadBlocksFor(taskId) },
+        loadBlocks: async (taskId) => {
+          await manager?.loadBlocksFor(taskId)
+          manager?.reconcileNow(taskId)
+        },
         scratchpadDiscard: () => discardScratchpad(),
         // (pill deps are wired separately, below — see PillController)
       },

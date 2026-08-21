@@ -36,6 +36,7 @@
 // state, not an error.
 
 import { promises as fs, type Dirent } from 'node:fs'
+import { AppendFileCache } from '../append-file-cache'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -389,11 +390,23 @@ export async function readTranscript(
   const path = await findTranscript(task, projectsDir)
   if (!path) return EMPTY_SNAPSHOT
   try {
-    return parseTranscript(await fs.readFile(path, 'utf8'), turnLimit)
+    const read = await transcriptFiles.read(path)
+    if (read.missing) return EMPTY_SNAPSHOT
+    const hit = transcriptSnapshots.get(path)
+    if (!read.changed && hit?.limit === turnLimit) return hit.snapshot
+    const snapshot = parseTranscript(read.text, turnLimit)
+    transcriptSnapshots.set(path, { limit: turnLimit, snapshot })
+    if (transcriptSnapshots.size > 64) {
+      transcriptSnapshots.delete(transcriptSnapshots.keys().next().value as string)
+    }
+    return snapshot
   } catch {
     return EMPTY_SNAPSHOT
   }
 }
+
+const transcriptFiles = new AppendFileCache()
+const transcriptSnapshots = new Map<string, { limit: number; snapshot: ClaudeSnapshot }>()
 
 const EMPTY_SNAPSHOT: ClaudeSnapshot = {
   lastAgentMessage: null,

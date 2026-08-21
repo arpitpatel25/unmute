@@ -20,10 +20,12 @@
 import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { promises as fs } from 'node:fs'
+import { promises as fs, watch as fsWatch } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { createLogger, remoteLogDir } from './log'
 import { tapPty } from './pty-tap'
+import { ReconcileScheduler } from './reconcile-scheduler'
+import { AppendFileCache } from './append-file-cache'
 
 /** Tap a task's PTY bytes next to the run logs. No-op unless the tap is on. */
 function tapPtyForTask(taskId: string, dir: 'in' | 'out', bytes: Buffer, atMs: number): void {
@@ -90,7 +92,7 @@ import { browserFor } from './session-policy'
 import { detectMcpGap, type McpGap } from './mcp-gap'
 import { resolveTranscriptById, locateTranscript } from './trace-reducer'
 import { rollupCodexEvents, conversationFromCodexEvents } from './codex/cli-observer'
-import { discoverSessionId, findRollout, isRolloutIntegrityError, readRolloutEvents } from './codex/cli-session'
+import { discoverSessionId, findRollout, isRolloutIntegrityError, parseRolloutJsonl, readRolloutEvents } from './codex/cli-session'
 import { projectSlug } from './projects'
 import type { Librarian } from './librarian'
 import type { AgentExecutor, ExecutorFactory } from './executor'
@@ -420,6 +422,12 @@ export interface TaskManagerOpts {
   baseDir?: string
   /** poll interval for the status file (ms). */
   pollMs?: number
+  /** Slow correctness fallback while a task is actively producing events. */
+  activeReconcileMs?: number
+  /** Runtime liveness fallback for an attached but idle persistent session. */
+  idleRuntimeReconcileMs?: number
+  /** Fallback for a settled conversation owned by another desktop app. */
+  dormantReconcileMs?: number
   /** staleness threshold (ms) — generous (PRD §6.3). Default 4 min. */
   staleMs?: number
   /** Frozen mid-tool-call Codex turn ⇒ SUSPECTED after this long (then the
@@ -514,10 +522,11 @@ function cleanTranscriptTail(raw: string, maxChars = 4000): string {
 export class TaskManager extends EventEmitter {
   private tasks = new Map<string, Task>()
   private executors = new Map<string, AgentExecutor>()
-  private timers = new Map<string, ReturnType<typeof setInterval>>()
-  /** Prevent async interval ticks from overlapping when a disk read takes
-   * longer than pollMs. Without this, one damaged rollout multiplies fs work. */
-  private pollsInFlight = new Set<string>()
+  /** One heartbeat for every task. Provider events use trigger() and the
+   * heartbeat only repairs missed events / sleep gaps. */
+  private readonly scheduler: ReconcileScheduler
+  /** Provider transcript bytes are read once, then only the appended suffix. */
+  private readonly transcriptFiles = new AppendFileCache()
   // Idle-kill timers for WARM sessions (kept alive after done for follow-ups).
   private warmTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Background auto-purge sweep (null until startMaintenance()).
@@ -528,8 +537,6 @@ export class TaskManager extends EventEmitter {
   private claudeAdoptTimer: ReturnType<typeof setInterval> | null = null
   /** threadId → the request we have already surfaced, so we transition once. */
   private surfacedApprovals = new Map<string, number>()
-  /** Poll decimation for settled Codex tasks (see pollCodexDesktop). */
-  private codexIdleTicks = new Map<string, number>()
   /** taskId → newest rollout timestamp we have already seen, so a poll can tell
    *  "the file grew" from "the file is merely non-empty". */
   private codexLastSeenAt = new Map<string, number>()
@@ -542,9 +549,11 @@ export class TaskManager extends EventEmitter {
   /** Same three, for Claude desktop. Kept separate rather than shared: the two
    *  backends key on different ids (Codex thread vs Claude sessionId) and a
    *  single map would silently collide the day the id spaces overlap. */
-  private claudeIdleTicks = new Map<string, number>()
   private claudeLastSeenAt = new Map<string, number>()
   private claudeWatchers = new Map<string, () => void>()
+  /** CLI transcript watcher disposers. They are latency shortcuts only; the
+   * shared scheduler remains the missed-event and sleep/wake backstop. */
+  private transcriptWatchers = new Map<string, { path: string; stop: () => void }>()
   /**
    * Claude Desktop conversations the user has DISMISSED from the wall.
    *
@@ -594,6 +603,9 @@ export class TaskManager extends EventEmitter {
       codexCliChoice: opts.codexCliChoice,
       baseDir: opts.baseDir ?? join(homedir(), '.unmute', 'remote'),
       pollMs: opts.pollMs ?? 1000,
+      activeReconcileMs: opts.activeReconcileMs ?? (opts.pollMs !== undefined ? opts.pollMs : 30_000),
+      idleRuntimeReconcileMs: opts.idleRuntimeReconcileMs ?? (opts.pollMs !== undefined ? opts.pollMs : 60_000),
+      dormantReconcileMs: opts.dormantReconcileMs ?? (opts.pollMs !== undefined ? opts.pollMs : 5 * 60_000),
       resolveSessionCwd: opts.resolveSessionCwd,
       staleMs: opts.staleMs ?? 4 * 60_000,
       // How long a frozen, mid-tool-call Codex turn must sit before we call it
@@ -635,6 +647,10 @@ export class TaskManager extends EventEmitter {
       listLiveRuntimeIds: opts.listLiveRuntimeIds,
       now: opts.now,
     }
+    this.scheduler = new ReconcileScheduler({
+      tickMs: Math.min(this.opts.pollMs, 1_000),
+      onError: (id, error) => this.handlePollError(id, error),
+    })
   }
 
   private clock(): number {
@@ -647,6 +663,17 @@ export class TaskManager extends EventEmitter {
 
   get(id: string): Task | undefined {
     return this.tasks.get(id)
+  }
+
+  /** Repair immediately after app activation or system wake. Provider events
+   * remain primary; this closes the known gap where fs.watch coalesces changes
+   * while macOS is asleep. */
+  reconcileNow(id?: string): void {
+    if (id) {
+      this.scheduler.trigger(id)
+      return
+    }
+    for (const taskId of this.scheduler.keys()) this.scheduler.trigger(taskId)
   }
 
   /** Recent buffered PTY output for a task (render-on-demand, PRD §13.4#8). */
@@ -1109,6 +1136,10 @@ export class TaskManager extends EventEmitter {
     // and this is the silence ending. Advances lastHeartbeatMs only — never
     // lastMtimeMs, which is the status read cursor (see poll()).
     task.lastHeartbeatMs = at
+    // Hooks are the primary Claude CLI state signal. Reconcile immediately so
+    // the status file and transcript reach every UI projection in the same
+    // turn; the scheduler heartbeat is only a repair path.
+    this.scheduler.trigger(task.id)
     if (task.state === 'stuck') {
       tlog.event('stuck-recovered', { via: 'hook' })
       this.transition(task.id, 'processing')
@@ -1976,7 +2007,7 @@ export class TaskManager extends EventEmitter {
    * prompt actually exists; this poller stays quiet until that lands rather
    * than inventing a state it cannot support.
    */
-  private async pollClaudeDesktop(id: string, force = false): Promise<void> {
+  private async pollClaudeDesktop(id: string): Promise<void> {
     const task = this.tasks.get(id)
     // A DONE THREAD IS NOT A CLOSED THREAD.
 
@@ -1993,33 +2024,12 @@ export class TaskManager extends EventEmitter {
     if (!driver) return
     const tlog = log.child({ taskId: id })
 
-    // Back off hard once settled. Reading is cheap but not free, and a wall of
-    // finished cards re-reading their transcripts every second is the same
-    // waste that was measured on the Codex side in the field.
-    //
-    // But NEVER before the first read. Adoption starts a card at `ready` (it has
-    // not been looked at yet), so applying the decimation immediately made the
-    // first nine polls no-ops — a conversation that was actively moving when we
-    // adopted it sat untouched for ~10 ticks before anyone read the file. The
-    // Codex poller never hit this because its tasks start `processing`.
-    if (!force && task.state === 'done' && this.claudeLastSeenAt.has(id)) {
-      const n = (this.claudeIdleTicks.get(id) ?? 0) + 1
-      this.claudeIdleTicks.set(id, n)
-      if (n % 10 !== 0) return
-    } else {
-      this.claudeIdleTicks.delete(id)
-    }
-
     // Latency shortcut, attached lazily once a transcript exists. fs.watch
     // coalesces and can miss events, so the poll above stays the correctness
     // backstop and this never becomes the only path.
     if (!this.claudeWatchers.has(id)) {
       this.claudeWatchers.set(id, () => {})   // claim the slot; no double-attach
-      // force: a watcher event is PROOF the file changed, so it must never be
-      // dropped by the idle decimation above. Without this the shortcut was
-      // useless exactly when it mattered — a chat continued inside Claude
-      // Desktop woke us and we skipped the read anyway.
-      void driver.watch(task.claudeDesktopSessionId, () => { void this.pollClaudeDesktop(id, true) })
+      void driver.watch(task.claudeDesktopSessionId, () => { this.scheduler.trigger(id) })
         .then((stop) => {
           if (this.tasks.has(id)) this.claudeWatchers.set(id, stop)
           else stop()
@@ -2170,7 +2180,10 @@ export class TaskManager extends EventEmitter {
 
     const path = await findRollout(task.codexRolloutId)
     if (!path) return                          // archived mid-read, or gone
-    const events = await readRolloutEvents(path)
+    this.ensureTranscriptWatcher(id, path)
+    const read = await this.transcriptFiles.read(path)
+    if (read.missing || !read.changed) return
+    const events = parseRolloutJsonl(read.text)
     const { status, lastActivityAt } = rollupCodexEvents(events, {
       now: new Date(this.clock()).toISOString(),
       kind: (task.kind ?? 'oneoff') === 'session' ? 'session' : 'oneoff',
@@ -2180,7 +2193,7 @@ export class TaskManager extends EventEmitter {
     // is also what makes a rehydrated session readable: the rollout outlives
     // the app, so a task resumed after a restart shows its history immediately.
     // Same file, richer reading — see refreshCodexBlocks.
-    await this.refreshCodexBlocks(task)
+    await this.refreshCodexBlocks(task, path, read.text)
     const turns = conversationFromCodexEvents(events)
     if (turns.length) {
       const changed = turns.length !== (task.conversation?.length ?? 0)
@@ -2239,19 +2252,25 @@ export class TaskManager extends EventEmitter {
     // to this task and nothing else.
     const path = (task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null)
       ?? await locateTranscript(task.cwd)
-    if (path) await this.refreshClaudeBlocks(task, path, log.child({ taskId: id }))
+    if (path) {
+      this.ensureTranscriptWatcher(id, path)
+      await this.refreshClaudeBlocks(task, path, log.child({ taskId: id }))
+    }
   }
 
   /** Refresh a Claude Code task's chat blocks from its transcript. */
   private async refreshClaudeBlocks(task: Task, path: string, tlog: ReturnType<typeof log.child>): Promise<void> {
-    let text: string
-    try { text = await fs.readFile(path, 'utf8') } catch { return }
-    const { blocks, usage } = blocksFromClaudeTranscript(text)
+    const read = await this.transcriptFiles.read(path)
+    if (read.missing || !read.changed) return
+    const { blocks, usage } = blocksFromClaudeTranscript(read.text)
     if (!blocks.length) return
     if (!blocksChanged(task.blocks, blocks)) return
     task.blocks = blocks
     if (usage) task.usage = usage
-    tlog.event('blocks-refreshed', { blocks: blocks.length, agent: task.agent })
+    tlog.event('blocks-refreshed', {
+      blocks: blocks.length, agent: task.agent,
+      bytesRead: read.bytesRead, recovered: read.recovered,
+    })
     this.emit('updated', task)
     void this.persistState(task).catch(() => {})
   }
@@ -2265,13 +2284,18 @@ export class TaskManager extends EventEmitter {
    * app-server. When the hub DOES own the thread its pushed blocks are richer
    * (streaming deltas, live plan) and win, so this never overwrites them.
    */
-  private async refreshCodexBlocks(task: Task): Promise<void> {
+  private async refreshCodexBlocks(task: Task, knownPath?: string, knownText?: string): Promise<void> {
     const rolloutId = task.codexRolloutId ?? task.codexThreadId ?? task.sessionId
     if (!rolloutId) return
-    const path = await findRollout(rolloutId)
+    const path = knownPath ?? await findRollout(rolloutId)
     if (!path) return
-    let text: string
-    try { text = await fs.readFile(path, 'utf8') } catch { return }
+    this.ensureTranscriptWatcher(task.id, path)
+    let text = knownText
+    if (text === undefined) {
+      const read = await this.transcriptFiles.read(path)
+      if (read.missing || !read.changed) return
+      text = read.text
+    }
     const { blocks, usage } = blocksFromRollout(text)
     if (!blocks.length) return
     if (!blocksChanged(task.blocks, blocks)) return
@@ -2312,14 +2336,6 @@ export class TaskManager extends EventEmitter {
     // reading the rollout off disk once a second, forever, for every finished
     // task on the wall (seen in the field on dev.34). Back off hard; a task that
     // is actually working still polls at full rate.
-    if (task.state === 'done') {
-      const n = (this.codexIdleTicks.get(id) ?? 0) + 1
-      this.codexIdleTicks.set(id, n)
-      if (n % 10 !== 0) return
-    } else {
-      this.codexIdleTicks.delete(id)
-    }
-
     // Latency shortcut, attached lazily on the first poll that finds a
     // transcript: Codex appending wakes us immediately instead of waiting for
     // the next tick — which for a `ready` task is up to 10s away because of the
@@ -2328,7 +2344,7 @@ export class TaskManager extends EventEmitter {
     // so this never becomes the only path.
     if (!this.codexWatchers.has(id) && driver.watch) {
       this.codexWatchers.set(id, () => {})   // claim the slot; no double-attach
-      void driver.watch(task.codexThreadId, () => { void this.pollCodexDesktop(id) })
+      void driver.watch(task.codexThreadId, () => { this.scheduler.trigger(id) })
         .then((stop) => {
           if (this.tasks.has(id)) this.codexWatchers.set(id, stop)
           else stop()                        // task died while we were attaching
@@ -2566,29 +2582,39 @@ export class TaskManager extends EventEmitter {
 
   private startPolling(id: string): void {
     const tlog = log.child({ taskId: id })
-    // Idempotent: a follow-up into a still-processing task calls this while a
-    // poll interval already runs — overwriting the map entry without clearing
-    // the old interval leaked it forever (found by the queued-follow-up test:
-    // the orphaned timer kept the process alive).
-    const prev = this.timers.get(id)
-    if (prev) clearInterval(prev)
-    const timer = setInterval(() => {
-      if (this.pollsInFlight.has(id)) return
-      this.pollsInFlight.add(id)
-      void this.poll(id).catch((e) => {
-        if (isRolloutIntegrityError(e)) {
-          // Corruption is deterministic, not transient. Keep the tmux runtime
-          // attached and visible, but stop the rollout reader that would throw
-          // forever and overload Electron's main process.
-          this.stopPolling(id)
-          tlog.error('polling stopped: rollout integrity failure', { error: (e as Error).message })
-          return
-        }
-        tlog.error('poll error', { error: (e as Error).message })
-      }).finally(() => this.pollsInFlight.delete(id))
-    }, this.opts.pollMs)
-    this.timers.set(id, timer)
-    tlog.event('polling-started', { pollMs: this.opts.pollMs, staleMs: this.opts.staleMs })
+    // Idempotent registration replaces the job under the same key. Unlike the
+    // former Map<task,setInterval>, this never creates a second native timer.
+    this.scheduler.register(id, () => this.poll(id), () => this.reconcileMsFor(id))
+    tlog.event('polling-started', {
+      mode: 'event-first', reconcileMs: this.reconcileMsFor(id), staleMs: this.opts.staleMs,
+    })
+  }
+
+  private reconcileMsFor(id: string): number {
+    const task = this.tasks.get(id)
+    if (!task) return this.opts.dormantReconcileMs
+    // Session discovery is the one phase that has neither a provider event nor
+    // a watchable file. Keep the former 1s cadence only for this short window;
+    // once the durable id exists the provider watcher becomes primary.
+    if (task.agent === 'codex' && !task.codexRolloutId && !this.opts.codexHub?.threadIdFor(id)) {
+      return this.opts.pollMs
+    }
+    if (isExternalAgent(task.agent) && TERMINAL.includes(task.state)) return this.opts.dormantReconcileMs
+    if (task.kind === 'session' && task.state !== 'processing') return this.opts.idleRuntimeReconcileMs
+    return this.opts.activeReconcileMs
+  }
+
+  private handlePollError(id: string, error: unknown): void {
+    const tlog = log.child({ taskId: id })
+    if (isRolloutIntegrityError(error)) {
+      // Corruption is deterministic, not transient. Keep the tmux runtime
+      // attached and visible, but stop the rollout reader that would throw
+      // forever and overload Electron's main process.
+      this.stopPolling(id)
+      tlog.error('polling stopped: rollout integrity failure', { error: (error as Error).message })
+      return
+    }
+    tlog.error('poll error', { error: error instanceof Error ? error.message : String(error) })
   }
 
   private async poll(id: string): Promise<void> {
@@ -3709,7 +3735,7 @@ export class TaskManager extends EventEmitter {
     // Union of PTY-backed and external-backend tasks. Keying on `executors`
     // alone leaked the poll interval of every codex-desktop task (no executor
     // ⇒ never visited ⇒ setInterval outlived the manager).
-    const ids = [...new Set([...this.executors.keys(), ...this.timers.keys()])]
+    const ids = [...new Set([...this.executors.keys(), ...this.scheduler.keys()])]
     for (const id of ids) {
       const task = this.tasks.get(id)
       if (task && !SETTLED.includes(task.state)) {
@@ -3728,7 +3754,7 @@ export class TaskManager extends EventEmitter {
    * runtime detaches and continues; `kind` only controls its later retention. */
   shutdown(): void {
     this.stopMaintenance()
-    const ids = [...new Set([...this.tasks.keys(), ...this.executors.keys(), ...this.timers.keys()])]
+    const ids = [...new Set([...this.tasks.keys(), ...this.executors.keys(), ...this.scheduler.keys()])]
     let detached = 0
     let killed = 0
     for (const id of ids) {
@@ -4739,9 +4765,39 @@ export class TaskManager extends EventEmitter {
   }
 
   private stopPolling(id: string): void {
-    const timer = this.timers.get(id)
-    if (timer) { clearInterval(timer); this.timers.delete(id) }
-    this.pollsInFlight.delete(id)
+    this.scheduler.unregister(id)
+    this.claudeWatchers.get(id)?.()
+    this.claudeWatchers.delete(id)
+    this.codexWatchers.get(id)?.()
+    this.codexWatchers.delete(id)
+    const watched = this.transcriptWatchers.get(id)
+    if (watched) {
+      watched.stop()
+      this.transcriptWatchers.delete(id)
+      this.transcriptFiles.forget(watched.path)
+    }
+  }
+
+  /** Attach one append watcher to a CLI transcript. Replacing the path is
+   * expected during rollout rotation; the cache recovers from the new inode. */
+  private ensureTranscriptWatcher(id: string, path: string): void {
+    const current = this.transcriptWatchers.get(id)
+    if (current?.path === path) return
+    if (current) current.stop()
+    try {
+      let debounce: ReturnType<typeof setTimeout> | null = null
+      const watcher = fsWatch(path, () => {
+        if (debounce) clearTimeout(debounce)
+        debounce = setTimeout(() => this.scheduler.trigger(id), 120)
+      })
+      const stop = () => {
+        if (debounce) clearTimeout(debounce)
+        watcher.close()
+      }
+      this.transcriptWatchers.set(id, { path, stop })
+    } catch {
+      // Best effort. The shared scheduler will retry discovery/reconciliation.
+    }
   }
 
   /** Warm window for a task, by category. navigate gets a shorter window
@@ -4861,14 +4917,12 @@ export class TaskManager extends EventEmitter {
     // Per-task Codex poll bookkeeping dies with the task, never during polling:
     // clearing codexLastSeenAt on a live task makes every poll look like the
     // rollout advanced, which silently disables the blocked-turn detection.
-    this.codexIdleTicks.delete(id)
     this.codexLastSeenAt.delete(id)
     const unwatch = this.codexWatchers.get(id)
     if (unwatch) { unwatch(); this.codexWatchers.delete(id) }
     // Same for Claude desktop, and for the same reason the Codex leak was
     // fixed: an fs.watch handle outliving its task keeps the event loop alive
     // forever. Omitting this hung the test run with no output at all.
-    this.claudeIdleTicks.delete(id)
     this.claudeLastSeenAt.delete(id)
     const unwatchClaude = this.claudeWatchers.get(id)
     if (unwatchClaude) { unwatchClaude(); this.claudeWatchers.delete(id) }

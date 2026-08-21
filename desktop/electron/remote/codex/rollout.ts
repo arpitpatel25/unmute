@@ -34,6 +34,7 @@
 // DOM for the mounted thread.
 
 import { promises as fs } from 'node:fs'
+import { AppendFileCache } from '../append-file-cache'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -457,7 +458,8 @@ export function threadIdFromRolloutName(name: string): string | null {
  * work is entirely wasted. Keyed on (size, mtime), which is exactly what
  * changes when Codex appends.
  */
-const parseCache = new Map<string, { size: number; mtimeMs: number; limit: number; snap: CodexSnapshot }>()
+const parseCache = new Map<string, { limit: number; snap: CodexSnapshot }>()
+const rolloutFiles = new AppendFileCache()
 
 const EMPTY = (): CodexSnapshot =>
   ({ state: 'processing', lastAgentMessage: null, turns: [], updatedAt: 0, turnsStarted: 0,
@@ -467,17 +469,16 @@ export async function readThread(threadId: string, sessionsDir = DEFAULT_SESSION
   const path = await findRolloutPath(threadId, sessionsDir)
   if (!path) return EMPTY()
 
-  let stat: { size: number; mtimeMs: number } | null = null
-  try { stat = await fs.stat(path) } catch { return EMPTY() }
-
+  const read = await rolloutFiles.read(path)
+  if (read.missing) return EMPTY()
   const hit = parseCache.get(path)
-  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs && hit.limit === turnLimit) return hit.snap
+  if (!read.changed && hit?.limit === turnLimit) return hit.snap
 
-  let text = ''
-  try { text = await fs.readFile(path, 'utf8') } catch { return EMPTY() }
-  const snap = parseRollout(text, turnLimit)
-  if (!snap.updatedAt) snap.updatedAt = stat.mtimeMs
-  parseCache.set(path, { size: stat.size, mtimeMs: stat.mtimeMs, limit: turnLimit, snap })
+  const snap = parseRollout(read.text, turnLimit)
+  if (!snap.updatedAt) {
+    try { snap.updatedAt = (await fs.stat(path)).mtimeMs } catch { /* keep zero */ }
+  }
+  parseCache.set(path, { limit: turnLimit, snap })
   // Bounded: one entry per thread we have ever polled, dropped oldest-first.
   if (parseCache.size > 64) parseCache.delete(parseCache.keys().next().value as string)
   return snap
