@@ -1214,6 +1214,51 @@ test('startup reattaches a persistent tmux runtime without typing or resubmittin
   tm.killAll()
 })
 
+test('a discovered Codex rollout handle is persisted for restart reattachment', async (t) => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  const id = await tm.dispatch('keep this Codex thread attached', { agent: 'codex', kind: 'session' })
+  t.after(() => tm.killAll())
+  const task = tm.get(id)!
+  const rolloutId = randomUUID()
+
+  // Codex mints this identity after spawn. Persisting only state/conversation
+  // leaves a surviving tmux process addressable but its structured transcript
+  // anonymous after Unmute restarts.
+  task.codexRolloutId = rolloutId
+  const internals = tm as unknown as { persistState: (task: typeof task) => Promise<void> }
+  await internals.persistState(task)
+
+  const meta = JSON.parse(await fs.readFile(path.join(task.home, 'meta.json'), 'utf8'))
+  assert.equal(meta.codexRolloutId, rolloutId, 'the provider transcript identity survives restart')
+})
+
+test('reattaching a completed Codex runtime does not revive stale scaffold processing state', async (t) => {
+  const baseDir = await tmpBase()
+  const sid = await seedInterrupted(baseDir, 'session', {
+    agent: 'codex',
+    runtimePinned: true,
+    codexRolloutId: randomUUID(),
+    state: 'done',
+  })
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(),
+    listLiveRuntimeIds: async () => new Set([sid]),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  t.after(() => tm.killAll())
+  await tm.rehydrate()
+  assert.equal(tm.get(sid)!.state, 'done', 'the durable task state is complete before attachment')
+
+  await tm.reattachPersistent()
+
+  assert.equal(tm.get(sid)!.state, 'done', 'a stale Codex status scaffold must not make an idle thread Working')
+  assert.equal(tm.isAlive(sid), true, 'the terminal runtime remains natively reachable')
+})
+
 test('startup never restarts a missing persistent runtime; it keeps the task resumable', async () => {
   const baseDir = await tmpBase()
   const sid = await seedInterrupted(baseDir, 'session', { agent: 'claude', runtimePinned: true })

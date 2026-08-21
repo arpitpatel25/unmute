@@ -368,7 +368,22 @@ async function discoverSessionIdFrom(
   for (const r of await allRollouts(home, strict)) {
     if (r.mtimeMs + graceMs < sinceMs) break        // sorted newest-first: older still
     if (excludedSessionIds.has(r.sessionId)) continue
-    const snapshot = await readRolloutSnapshot(r.path)
+    let snapshot: RolloutSnapshot
+    try {
+      snapshot = await readRolloutSnapshot(r.path)
+    } catch (error) {
+      // Recovery scans every recent Codex session before it can identify the
+      // one belonging to this task. One malformed, unrelated rollout must not
+      // make every surviving task undiscoverable after an app restart. The
+      // agent bootstrap uses strict discovery and still fails closed.
+      if (!strict && isRolloutIntegrityError(error)) {
+        log.event('codex-cli-discovery-skipped-corrupt-rollout', {
+          sessionId: r.sessionId,
+        })
+        continue
+      }
+      throw error
+    }
     if (snapshot.status === 'missing' || !snapshot.stable) continue
     const events = snapshot.events
     const meta = events.find((e) => e.type === 'session_meta')?.payload as

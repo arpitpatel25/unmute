@@ -1491,7 +1491,8 @@ export class TaskManager extends EventEmitter {
   applyHubPatch(p: HubPatch): void {
     const task = this.tasks.get(p.taskId)
     if (!task) return
-    if (p.threadId && !task.codexRolloutId) task.codexRolloutId = p.threadId
+    const learnedRolloutId = !!p.threadId && !task.codexRolloutId
+    if (learnedRolloutId) task.codexRolloutId = p.threadId
     if (p.name && !task.name) task.name = p.name
     if (p.assistantText) {
       task.conversation = [...(task.conversation ?? []), { role: 'assistant', text: p.assistantText }]
@@ -1540,6 +1541,7 @@ export class TaskManager extends EventEmitter {
         // about what an open chat view should be showing. Emit without
         // transitioning, so the card updates and the wall does not re-sort.
         if (p.blocks) this.emit('updated', task)
+        if (learnedRolloutId) void this.persistState(task)
         return
       }
       this.transition(p.taskId, p.state, status, this.clock())
@@ -1564,6 +1566,7 @@ export class TaskManager extends EventEmitter {
     }
     task.updatedAt = this.clock()
     this.emit('updated', task)
+    if (learnedRolloutId || p.assistantText) void this.persistState(task)
   }
 
   /**
@@ -2763,7 +2766,7 @@ export class TaskManager extends EventEmitter {
         // written still works for this run, it just forgets across a restart.
         // (Inherited from the `ready` case when the two merged — a finish is a
         // finish, and it is exactly the transition worth persisting.)
-        if (isExternalAgent(task.agent)) void this.persistState(task)
+        if (task.agent === 'codex' || isExternalAgent(task.agent)) void this.persistState(task)
         break
       case 'failed': {
         // PRD §13.4 #4: surface WHY.
@@ -3004,7 +3007,8 @@ export class TaskManager extends EventEmitter {
     await fs.writeFile(path, JSON.stringify({ ...meta, cwd: task.cwd }, null, 2))
   }
 
-  /** Merge the observed state + its timestamp into the task's meta.json. */
+  /** Merge the observed provider identity, state, timestamp and conversation
+   *  into the task's meta.json. */
   private async persistState(task: Task): Promise<void> {
     const path = join(task.home, 'meta.json')
     try {
@@ -3012,7 +3016,9 @@ export class TaskManager extends EventEmitter {
       const meta = JSON.parse(raw) as Record<string, unknown>
       const convo = task.conversation ?? []
       const sameConvo = JSON.stringify(meta.conversation ?? []) === JSON.stringify(convo)
-      if (meta.state === task.state && meta.updatedAt === task.updatedAt && sameConvo) return
+      const sameRolloutId = meta.codexRolloutId === task.codexRolloutId
+      const sameSessionId = meta.sessionId === task.sessionId
+      if (meta.state === task.state && meta.updatedAt === task.updatedAt && sameConvo && sameRolloutId && sameSessionId) return
       // THE CONVERSATION HAS TO SURVIVE A RESTART. It lived only in memory, so
       // every relaunch emptied the chat strip for every existing task and left
       // the short status line standing where the exchange should be — which is
@@ -3020,6 +3026,8 @@ export class TaskManager extends EventEmitter {
       // status.json already persists; this is the other half.
       await fs.writeFile(path, JSON.stringify({
         ...meta, state: task.state, updatedAt: task.updatedAt,
+        ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+        ...(task.codexRolloutId ? { codexRolloutId: task.codexRolloutId } : {}),
         ...(convo.length ? { conversation: convo } : {}),
       }))
     } catch { /* absent or unreadable — nothing to keep in sync */ }
@@ -3250,7 +3258,10 @@ export class TaskManager extends EventEmitter {
         // A non-terminal task whose session died with the app is, to the user,
         // interrupted — surface it as failed (still resumable) rather than a
         // forever-spinning 'processing'. Sessions get `ready` instead (above).
-        state: terminal ? status!.state : (isSession ? 'done' : 'failed'),
+        state: ((meta.agent === 'codex'
+          ? normalizeState(meta.state)
+          : undefined) as UiTaskState | undefined)
+          ?? (terminal ? status!.state : (isSession ? 'done' : 'failed')),
         createdAt: meta.createdAt ?? now,
         updatedAt: (await statusMtimeMs(statusPath)) ?? meta.createdAt ?? now,
         // Project-bound sessions ran in the user's real dir (meta.cwd); resume
@@ -3336,7 +3347,12 @@ export class TaskManager extends EventEmitter {
         if (!ex.alive) throw new Error('persistent tmux session is not running')
         const status = await readStatus(task.statusPath)
         const restoredState = normalizeState(status?.state) as UiTaskState | undefined
-        if (restoredState && !TERMINAL.includes(restoredState)) task.state = restoredState
+        // Codex CLI's status file is only a launch scaffold; its real state is
+        // persisted from the rollout. Replaying that stale `processing` value
+        // after tmux reattachment turns an idle, completed thread back into a
+        // fake Working task. Claude owns and updates its status file, so its
+        // existing restore path remains authoritative.
+        if (task.agent !== 'codex' && restoredState && !TERMINAL.includes(restoredState)) task.state = restoredState
         if (!TERMINAL.includes(task.state)) this.startPolling(task.id)
         task.error = undefined
         task.resumeError = undefined

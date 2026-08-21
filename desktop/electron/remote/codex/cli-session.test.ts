@@ -16,6 +16,7 @@ import {
 
 const UUID_A = '019fccd9-d64b-7142-bf79-f721387b9e97'
 const UUID_B = '019fccd9-aaaa-7142-bf79-f721387b9e98'
+const UUID_C = '019fccd9-bbbb-7142-bf79-f721387b9e99'
 
 async function home(): Promise<string> {
   const h = join(tmpdir(), 'codex-home-' + randomUUID())
@@ -121,6 +122,24 @@ test('discovery needs BOTH the cwd and a start after our spawn', async () => {
   const ours = join(dir, `rollout-new-${UUID_A}.jsonl`)
   await fs.writeFile(ours, meta('/repo', UUID_A, '2026-08-09T10:00:05.000Z') + '\n')
   assert.equal(await discoverSessionId('/repo', spawnedAt, h), UUID_A)
+})
+
+test('task recovery skips an unrelated corrupt rollout and still finds its own session', async () => {
+  const h = await home()
+  const dir = join(h, '.codex/sessions/2026/08/09')
+  const spawnedAt = Date.parse('2026-08-09T10:00:00.000Z')
+  const ours = join(dir, `rollout-good-${UUID_A}.jsonl`)
+  const corrupt = join(dir, `rollout-newer-${UUID_C}.jsonl`)
+  await fs.writeFile(ours, meta('/repo', UUID_A, '2026-08-09T10:00:05.000Z') + '\n')
+  await fs.writeFile(corrupt, 'not-json\n')
+  await fs.utimes(ours, new Date('2026-08-09T10:00:05Z'), new Date('2026-08-09T10:00:05Z'))
+  await fs.utimes(corrupt, new Date('2026-08-09T10:00:10Z'), new Date('2026-08-09T10:00:10Z'))
+
+  assert.equal(
+    await discoverSessionId('/repo', spawnedAt, h),
+    UUID_A,
+    'another session cannot break recovery of this task',
+  )
 })
 
 test('a session in a DIFFERENT directory is never adopted', async () => {
