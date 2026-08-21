@@ -719,12 +719,12 @@ export class TaskManager extends EventEmitter {
   }
 
   async dispatch(intent: string, opts: { surface?: string; mode?: 'managed' | 'raw'; kind?: 'oneoff' | 'session'; cwd?: string; spawnedBy?: string; extraEnv?: Record<string, string>; forkFromSessionId?: string; agent?: AgentKind; project?: string | null; model?: string; attachments?: readonly string[] } = {}): Promise<string> {
-    // Persistent Codex sessions use the same per-task tmux runtime as Claude.
+    // Terminal-backed Codex work uses the same per-task tmux runtime as Claude.
     // The app-server transport is owned by the Unmute app process, so routing a
-    // persistent task through it would sever the work at quit—the exact
-    // lifecycle this feature exists to avoid. One-offs keep the richer shared
-    // app-server path unchanged.
-    const route = opts.agent === 'codex' && opts.kind === 'session'
+    // terminal task through it would sever the work at quit. `kind` controls
+    // retention after completion; it must not decide whether active work
+    // survives the app UI closing.
+    const route = opts.agent === 'codex'
       ? null
       : this.dispatchRoute(opts.agent)
     if (route) return route(intent, opts)
@@ -3232,20 +3232,17 @@ export class TaskManager extends EventEmitter {
       const status = await readStatus(statusPath)
       const now = this.clock()
       const terminal = status?.state === 'done' || status?.state === 'failed'
-      // A PERSISTENT SESSION CLOSED BY THE QUIT SWITCH DID NOT FAIL.
+      // A LIVE TERMINAL RUNTIME CLOSED BY THE QUIT SWITCH DID NOT FAIL.
       //
-      // One-offs still die with the app and rehydrate as interrupted. Session
-      // tasks are durable: startup first restores their cards, then
-      // reattachPersistent() reconnects to any tmux runtime that survived the
-      // app. A missing runtime remains a quiet, resumable `done` task rather
-      // than a red failure caused merely by closing the laptop.
+      // Startup first restores cards conservatively, then reattachPersistent()
+      // reconnects any tmux runtime that actually survived the app. A missing
+      // one-off remains interrupted/resumable; a missing durable session is a
+      // quiet `done` ticket.
       const isSession = (meta.kind ?? 'oneoff') === 'session'
       // State authority follows the execution mode, not merely the provider.
       // Persistent Codex CLI sessions own their lifecycle in the rollout/meta
       // receipt because status.json is only their launch scaffold. Codex
-      // one-offs run through the app server, which writes their completed
-      // status.json; trusting stale `meta.state=processing` there resurrected
-      // finished errands as phantom Working tasks after every relaunch.
+      // one-offs use status.json to repair completed historical receipts.
       const persistedState = normalizeState(meta.state) as UiTaskState | undefined
       const recoveredState = meta.agent === 'codex' && isSession
         ? persistedState ?? (terminal ? status!.state : 'done')
@@ -3309,7 +3306,7 @@ export class TaskManager extends EventEmitter {
     if (restored) log.event('rehydrated', { restored })
   }
 
-  /** Attach UI clients to persistent tmux runtimes left alive by the previous
+  /** Attach UI clients to live tmux runtimes left alive by the previous
    * app process. This never launches a provider command or submits input. */
   async reattachPersistent(): Promise<void> {
     // Fail closed: if tmux cannot tell us which runtimes exist, preserve every
@@ -3323,8 +3320,7 @@ export class TaskManager extends EventEmitter {
       return
     }
     const candidates = [...this.tasks.values()].filter((task) =>
-      task.kind === 'session'
-      && task.agent !== 'codex-desktop'
+      task.agent !== 'codex-desktop'
       && task.agent !== 'claude-code-desktop'
       && liveRuntimeIds.has(task.id)
       && !this.executors.get(task.id)?.alive,
@@ -3335,7 +3331,10 @@ export class TaskManager extends EventEmitter {
     })
     await Promise.all(candidates.map(async (task) => {
       const lastUse = task.lastUserInputAt ?? task.updatedAt ?? task.createdAt
-      if (!task.runtimePinned && this.clock() - lastUse >= this.opts.persistentIdleMs) {
+      const expiredSession = task.kind === 'session'
+        && !task.runtimePinned
+        && this.clock() - lastUse >= this.opts.persistentIdleMs
+      if (expiredSession) {
         try { this.opts.reapSession?.(task.id) } catch { /* best-effort */ }
         if (!TERMINAL.includes(task.state)) task.state = 'done'
         task.error = undefined
@@ -3359,15 +3358,41 @@ export class TaskManager extends EventEmitter {
         if (!ex.alive) throw new Error('persistent tmux session is not running')
         const status = await readStatus(task.statusPath)
         const restoredState = normalizeState(status?.state) as UiTaskState | undefined
-        // Codex CLI's status file is only a launch scaffold; its real state is
-        // persisted from the rollout. Replaying that stale `processing` value
-        // after tmux reattachment turns an idle, completed thread back into a
-        // fake Working task. Claude owns and updates its status file, so its
-        // existing restore path remains authoritative.
-        if (task.agent !== 'codex' && restoredState && !TERMINAL.includes(restoredState)) task.state = restoredState
+        // A live one-off may have been restored conservatively as interrupted
+        // before runtime discovery. Its status scaffold is safe to trust here
+        // because tmux has proved that exact runtime still exists. Persistent
+        // Codex sessions continue to use rollout/meta authority so a stale
+        // scaffold cannot resurrect an idle thread as fake Working work.
+        if ((task.agent !== 'codex' || task.kind === 'oneoff') && restoredState && !TERMINAL.includes(restoredState)) {
+          task.state = restoredState
+        }
+        const oneoffWarmMs = task.kind === 'oneoff' ? this.warmMsFor(task.id) : null
+        const oneoffWarmRemaining = oneoffWarmMs === null
+          ? null
+          : oneoffWarmMs - (this.clock() - task.updatedAt)
+        // Rehydration pessimistically labels an unproven one-off interrupted.
+        // Never use that temporary state to reap it: a live runtime plus a
+        // processing status means the turn is genuinely still running. Only a
+        // provider-terminal status is eligible for the existing warm expiry.
+        const completedOneoffExpired = task.kind === 'oneoff'
+          && restoredState !== undefined
+          && TERMINAL.includes(restoredState)
+          && oneoffWarmRemaining !== null
+          && oneoffWarmRemaining <= 0
+        if (completedOneoffExpired) {
+          this.hardKill(task.id)
+          task.error = undefined
+          task.resumeError = undefined
+          await this.persistState(task)
+          this.emit('updated', task)
+          tlog.event('warm-idle-timeout', { warmMs: oneoffWarmMs, state: restoredState, recovered: true })
+          return
+        }
         if (!TERMINAL.includes(task.state)) this.startPolling(task.id)
+        else if (task.kind === 'oneoff' && oneoffWarmRemaining !== null) this.armWarmTimer(task.id, oneoffWarmRemaining)
         task.error = undefined
         task.resumeError = undefined
+        await this.persistState(task)
         this.emit('updated', task)
         tlog.event('persistent-runtime-reattached', {})
       } catch (e) {
@@ -3699,9 +3724,8 @@ export class TaskManager extends EventEmitter {
     log.event('kill-all', { count: ids.length })
   }
 
-  /** App shutdown is not the UI's destructive Kill All. Persistent CLI tasks
-   * detach their tmux client and continue running; one-offs keep the existing
-   * interrupted-and-killed behavior. */
+  /** App shutdown is not the UI's destructive Kill All. Every live terminal
+   * runtime detaches and continues; `kind` only controls its later retention. */
   shutdown(): void {
     this.stopMaintenance()
     const ids = [...new Set([...this.tasks.keys(), ...this.executors.keys(), ...this.timers.keys()])]
@@ -3709,12 +3733,17 @@ export class TaskManager extends EventEmitter {
     let killed = 0
     for (const id of ids) {
       const task = this.tasks.get(id)
-      if (task?.kind === 'session') {
+      const ex = this.executors.get(id)
+      const detachable = task
+        && task.agent !== 'codex-desktop'
+        && task.agent !== 'claude-code-desktop'
+        && ex?.alive
+        && ex.detach
+      if (task?.kind === 'session' || detachable) {
         this.stopPolling(id)
         const wt = this.warmTimers.get(id)
         if (wt) { clearTimeout(wt); this.warmTimers.delete(id) }
         this.typedBuffers.delete(id)
-        const ex = this.executors.get(id)
         if (ex?.alive) {
           if (ex.detach) { ex.detach(); detached++ }
           else { ex.kill(); killed++ }

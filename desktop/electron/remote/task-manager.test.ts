@@ -574,7 +574,7 @@ test('killAll terminates every session and marks running tasks stopped (PRD §10
   assert.equal(tm.activeCount(), 0)
 })
 
-test('shutdown detaches persistent runtimes but still terminates one-off work', async () => {
+test('shutdown detaches every live terminal runtime, including one-off work', async () => {
   const baseDir = await tmpBase()
   const fakes: ReturnType<typeof makeFakeExecutor>[] = []
   const tm = new TaskManager({
@@ -589,8 +589,9 @@ test('shutdown detaches persistent runtimes but still terminates one-off work', 
   assert.equal(fakes[0].detached(), 1, 'persistent runtime client detaches from tmux')
   assert.equal(fakes[0].killed(), 0, 'persistent tmux session is not killed')
   assert.equal(tm.get(persistent)!.state, 'processing', 'live task state survives app shutdown')
-  assert.equal(fakes[1].killed(), 1, 'one-off lifecycle remains destructive on shutdown')
-  assert.equal(tm.get(oneoff)!.state, 'failed', 'interrupted one-off stays honest')
+  assert.equal(fakes[1].detached(), 1, 'active one-off client also detaches from tmux')
+  assert.equal(fakes[1].killed(), 0, 'closing Unmute does not kill active one-off work')
+  assert.equal(tm.get(oneoff)!.state, 'processing', 'active one-off state survives app shutdown')
 })
 
 // ── Memory injection: REMOVED (2026-08-06) ───────────────────────────────────
@@ -697,7 +698,7 @@ test('dispatch persists kind in meta.json; defaults to oneoff with home === cwd'
   tm.killAll()
 })
 
-test('persistent Codex work uses the detachable per-task executor, while one-offs keep the app-server path', async () => {
+test('terminal-backed Codex work always uses a detachable per-task executor', async () => {
   const baseDir = await tmpBase()
   let hubStarts = 0
   const hub = {
@@ -713,10 +714,12 @@ test('persistent Codex work uses the detachable per-task executor, while one-off
   })
 
   const persistent = await tm.dispatch('long Codex thread', { agent: 'codex', kind: 'session' })
+  const oneoff = await tm.dispatch('quick Codex errand', { agent: 'codex', kind: 'oneoff' })
 
-  assert.equal(hubStarts, 0, 'app-owned server is not the runtime boundary for persistent work')
-  assert.equal(agents[0], 'codex')
+  assert.equal(hubStarts, 0, 'the app-owned server is not the runtime boundary for terminal work')
+  assert.deepEqual(agents, ['codex', 'codex'])
   assert.equal(tm.get(persistent)!.agent, 'codex')
+  assert.equal(tm.get(oneoff)!.agent, 'codex')
   tm.killAll()
 })
 
@@ -1212,6 +1215,48 @@ test('startup reattaches a persistent tmux runtime without typing or resubmittin
   assert.deepEqual(fake.writes, [], 'reattachment never presses Enter or creates a user turn')
   assert.equal(tm.isAlive(sid), true)
   tm.killAll()
+})
+
+test('startup reattaches a live one-off runtime without restarting its turn', async () => {
+  const baseDir = await tmpBase()
+  const id = await seedInterrupted(baseDir, 'oneoff', { agent: 'codex', state: 'processing' })
+  let spawned: SpawnOpts | null = null
+  const fake = makeFakeExecutor({ onSpawn: (o) => { spawned = o } })
+  const tm = new TaskManager({
+    executorFactory: () => fake,
+    listLiveRuntimeIds: async () => new Set([id]),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999,
+  })
+  await tm.rehydrate()
+
+  await tm.reattachPersistent()
+
+  assert.equal(spawned?.attachExisting, true)
+  assert.deepEqual(fake.writes, [], 'reattachment never resubmits the one-off prompt')
+  assert.equal(tm.isAlive(id), true)
+  assert.equal(tm.get(id)!.state, 'processing', 'a live one-off remains in flight after relaunch')
+  assert.equal(tm.get(id)!.error, undefined)
+  tm.killAll()
+})
+
+test('a completed one-off reattached after relaunch still expires on its warm timer', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const id = await seedInterrupted(baseDir, 'oneoff', { agent: 'codex', state: 'done' })
+  const dir = path.join(baseDir, 'local', id)
+  await claudeWrites(path.join(dir, 'status.json'), { state: 'done', result: { summary: 'finished' } })
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({
+    executorFactory: () => fake,
+    listLiveRuntimeIds: async () => new Set([id]),
+    baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999, warmMs: 80,
+  })
+  await tm.rehydrate()
+
+  await tm.reattachPersistent()
+
+  assert.equal(tm.isAlive(id), true, 'the remaining follow-up window survives relaunch')
+  await new Promise((resolve) => setTimeout(resolve, 140))
+  assert.equal(tm.isAlive(id), false, 'the ordinary one-off warm expiry remains authoritative')
 })
 
 test('a discovered Codex rollout handle is persisted for restart reattachment', async (t) => {
