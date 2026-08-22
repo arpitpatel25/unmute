@@ -1873,6 +1873,23 @@ test('a finished one-off with no process stays out — it is genuinely over', ()
   assert.ok(ids.includes('thread'))
 })
 
+test('a finished CODEX one-off with no process STAYS IN — it always has a rollout to resume', () => {
+  // "Genuinely over" was written for the case where a dead one-off truly has
+  // nothing left — true for a plain PTY errand, but never true for Codex: it
+  // mints a rollout on disk for every thread, one-off or not, so resume()
+  // brings it straight back (findRollout(codexRolloutId)). A quick Codex Q&A
+  // whose process died (its App Server connection didn't survive the app
+  // quit — see task-manager.ts) still has a "Resume" button that works; the
+  // pocket dropping it anyway is the bug, not the process being dead.
+  const h = setup()
+  put(h, makeTask({ id: 'codex-errand', state: 'done', kind: 'oneoff', name: 'Codex errand', agent: 'codex', alive: false }))
+  put(h, makeTask({ id: 'claude-errand', state: 'done', kind: 'oneoff', name: 'Claude errand', agent: 'claude', alive: false }))
+  h.client.fire({ type: 'pocketOpen' })
+  const ids = (pocketOf(h)?.slots ?? []).map((s) => s.id)
+  assert.ok(ids.includes('codex-errand'), 'Codex always has a thread to resume, dead process or not')
+  assert.ok(!ids.includes('claude-errand'), 'unrelated to the Codex fix — still genuinely over for a plain PTY errand')
+})
+
 test('the wall holds its order while you are reading it', async () => {
   // Cards are keyed by id, so a re-sort MOVES them on screen. Three tasks
   // polling once a second re-sorted the wall several times a second — the

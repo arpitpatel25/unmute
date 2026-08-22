@@ -823,6 +823,14 @@ export class NotchController {
     // A session sleeps; it does not die. A finished ONE-OFF with no process is
     // genuinely over — there is no thread to continue and nothing to say to it.
     if ((t.kind ?? 'oneoff') === 'session') return true
+    // CODEX IS NEVER "GENUINELY OVER" EITHER, one-off or not: every thread
+    // mints a rollout on disk, so a dead process still has resume() to bring
+    // it straight back (findRollout(codexRolloutId)) — the same "asleep, not
+    // dead" guarantee a session gets. This only came up because one-off Codex
+    // tasks now run in a real (tmux-detachable) PTY, so they can be `alive:
+    // false` after a quit exactly like a session can — dropping one from the
+    // pocket contradicts the "Resume" button sitting right there.
+    if (t.agent === 'codex') return true
     return t.alive !== false
   }
 
