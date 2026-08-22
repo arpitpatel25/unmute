@@ -34,6 +34,12 @@ describe('meeting tab URL matching', () => {
   test('matches a Teams web URL', () => {
     assert.equal(isMeetingTabUrl('https://teams.microsoft.com/l/meetup-join/abc'), true)
   })
+  test('matches a Webex personal-room URL', () => {
+    assert.equal(isMeetingTabUrl('https://acme.webex.com/meet/username'), true)
+  })
+  test('matches a Webex scheduled-meeting join-link URL', () => {
+    assert.equal(isMeetingTabUrl('https://acme.webex.com/acme/j.php?MTID=abc123'), true)
+  })
   test('does not match the Meet marketing homepage query-less root', () => {
     assert.equal(isMeetingTabUrl('https://meet.google.com/'), false)
   })

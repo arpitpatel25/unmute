@@ -30,6 +30,7 @@ export const MEETING_TAB_URL_PATTERNS: readonly RegExp[] = [
   /^https:\/\/([a-z0-9-]+\.)?zoom\.us\/(j|wc)\//i,
   /^https:\/\/teams\.microsoft\.com\/l\/meetup-join\//i,
   /^https:\/\/([a-z0-9-]+\.)?webex\.com\/(meet|join)\//i,
+  /^https:\/\/[a-z0-9-]+\.webex\.com\/[a-z0-9-]+\/j\.php/i,
 ]
 
 export function isMeetingTabUrl(url: string | undefined): boolean {
