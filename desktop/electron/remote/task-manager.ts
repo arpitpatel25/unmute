@@ -3158,6 +3158,7 @@ export class TaskManager extends EventEmitter {
         void writeFileAtomic(join(dir, 'meta.json'), JSON.stringify(meta))
           .catch((e) => log.child({ taskId: id }).warn('rehydrate: could not persist recovered meta.json', { error: (e as Error).message }))
       }
+      if (!meta.intent) continue // unreachable after the reconstruction above, but keeps `meta.intent` narrowed to `string` below
       if (meta.origin === 'unmute-agent' && meta.agentRunId) {
         const now0 = this.clock()
         const task: Task = {

@@ -2206,8 +2206,19 @@ function executorFactory(resume = false, forTask?: AgentKind, factoryOpts?: Exec
     // is then a VIEW of that thread, not a second one. The model/effort are
     // already baked into the thread by `thread/start`, so they are not repeated
     // here — see modelArgs in codex-executor.ts.
-    if (factoryOpts?.codexRemote) return new CodexExecutor({ remote: factoryOpts.codexRemote })
+    //
+    // TMUX-WRAP THIS VIEW TOO. `remote` (which protocol carries the prompt —
+    // avoids the PTY-typing paste race) and `tmux` (whether the PTY survives
+    // an app quit) are independent knobs on the same executor; this used to
+    // pass only `remote`, so a one-off Codex task's terminal was always
+    // hard-killed on quit while every other Codex/Claude task detached and
+    // came back. Reattachment on relaunch falls back to a plain
+    // `codex resume <threadId>` (see resume()/reattachPersistent()) — the
+    // App Server itself is an ordinary child process and does not survive a
+    // quit, but the thread's own rollout on disk does, which is all resume
+    // needs.
     const tmux = tmuxBin ? { bin: tmuxBin, confPath: tmuxConfPath, cols: 120, rows: 40 } : undefined
+    if (factoryOpts?.codexRemote) return new CodexExecutor({ remote: factoryOpts.codexRemote, tmux })
     return new CodexExecutor({ ...codexCliSpawnArgs(), tmux })
   }
   // PRD §10.1/§10.6 interaction: a sandbox is the "fenced yard" — when it's ON
