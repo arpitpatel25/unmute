@@ -68,8 +68,13 @@ export interface TaskLite {
   state: TaskStatusName
   /** This `done` is a scheduled pause in an autonomous multi-task run, not a
    *  real stop — see Task.checkpoint. Suppresses the demanding/auto-expand
-   *  treatment a session's `done` would otherwise get. */
+   *  treatment a session's `done` would otherwise get, but only until... */
   checkpoint?: boolean
+  /** ...this passes. Past it with no new prompt, the loop's own promised
+   *  wakeup never arrived — demanding() stops trusting `checkpoint` so a
+   *  truly abandoned session still eventually re-demands, same as any other
+   *  stuck task. See Task.checkpointExpiresAt. */
+  checkpointExpiresAt?: number
   step?: string | null
   createdAt?: number
   updatedAt?: number
@@ -720,7 +725,18 @@ export class NotchController {
     // finish. Without this, a busy session pops the notch open on every one
     // of those boundaries: "it just keeps popping up again and again" from a
     // session that never actually stopped. See Task.checkpoint.
-    if (t.state === 'done' && (t.kind ?? 'oneoff') === 'session') return fresh && !t.checkpoint
+    //
+    // BUT NOT PAST ITS OWN PROMISE. The loop said when it expects to be back
+    // (checkpointExpiresAt, its `delaySeconds` plus grace) — if that time
+    // passes with no new prompt, the continuation never happened (app quit,
+    // crashed, lost), and this is now exactly as stuck as any other abandoned
+    // session-done. Trusting `checkpoint` forever would make a genuinely
+    // dead loop invisible instead of eventually re-flagging like everything
+    // else does.
+    if (t.state === 'done' && (t.kind ?? 'oneoff') === 'session') {
+      const checkpointActive = t.checkpoint && (t.checkpointExpiresAt === undefined || Date.now() < t.checkpointExpiresAt)
+      return fresh && !checkpointActive
+    }
     return false
   }
 

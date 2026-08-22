@@ -5,7 +5,7 @@ import {
   parseTranscript,
   lastAssistantText,
   hadSideEffects,
-  endedOnSelfContinuation,
+  selfContinuationDelaySeconds,
   urlsIn,
   parseTurnLine,
   parseTurns,
@@ -61,26 +61,26 @@ test('hadSideEffects: reading is info, writing is act', () => {
   }
 })
 
-test('endedOnSelfContinuation: true when THIS turn scheduled its own wakeup', () => {
+test('selfContinuationDelaySeconds: reads the wakeup tool\'s own delaySeconds when THIS turn scheduled it', () => {
   const raw = [
     userStr('start the plan'),
     assistant([{ type: 'tool_use', name: 'Agent', input: { description: 'Task 2' } }]),
     assistant([{ type: 'tool_use', name: 'ScheduleWakeup', input: { delaySeconds: 400 } }]),
     assistant([{ type: 'text', text: 'Continuing autonomously — reviewing now.' }]),
   ].join('\n')
-  assert.equal(endedOnSelfContinuation(raw), true)
+  assert.equal(selfContinuationDelaySeconds(raw), 400)
 })
 
-test('endedOnSelfContinuation: false for an ordinary finished turn', () => {
+test('selfContinuationDelaySeconds: null for an ordinary finished turn', () => {
   const raw = [
     userStr('what does this function do'),
     assistant([{ type: 'tool_use', name: 'Read', input: {} }]),
     assistant([{ type: 'text', text: 'It parses the config file.' }]),
   ].join('\n')
-  assert.equal(endedOnSelfContinuation(raw), false)
+  assert.equal(selfContinuationDelaySeconds(raw), null)
 })
 
-test('endedOnSelfContinuation: scoped to the CURRENT turn — an earlier loop iteration must not haunt a later, real finish', () => {
+test('selfContinuationDelaySeconds: scoped to the CURRENT turn — an earlier loop iteration must not haunt a later, real finish', () => {
   const raw = [
     userStr('start the plan'),
     assistant([{ type: 'tool_use', name: 'ScheduleWakeup', input: { delaySeconds: 400 } }]),
@@ -89,11 +89,22 @@ test('endedOnSelfContinuation: scoped to the CURRENT turn — an earlier loop it
     assistant([{ type: 'tool_use', name: 'Write', input: {} }]),
     assistant([{ type: 'text', text: 'All done — the feature is fully implemented.' }]),
   ].join('\n')
-  assert.equal(endedOnSelfContinuation(raw), false)
+  assert.equal(selfContinuationDelaySeconds(raw), null)
 })
 
-test('endedOnSelfContinuation: no transcript yet is not a checkpoint', () => {
-  assert.equal(endedOnSelfContinuation(''), false)
+test('selfContinuationDelaySeconds: no transcript yet is not a checkpoint', () => {
+  assert.equal(selfContinuationDelaySeconds(''), null)
+})
+
+test('selfContinuationDelaySeconds: a missing or invalid delaySeconds falls back to a conservative ceiling, never immediate and never forever', () => {
+  const missing = [userStr('go'), assistant([{ type: 'tool_use', name: 'ScheduleWakeup', input: {} }])].join('\n')
+  assert.equal(selfContinuationDelaySeconds(missing), 3600)
+
+  const negative = [userStr('go'), assistant([{ type: 'tool_use', name: 'ScheduleWakeup', input: { delaySeconds: -5 } }])].join('\n')
+  assert.equal(selfContinuationDelaySeconds(negative), 3600)
+
+  const notANumber = [userStr('go'), assistant([{ type: 'tool_use', name: 'ScheduleWakeup', input: { delaySeconds: 'soon' } }])].join('\n')
+  assert.equal(selfContinuationDelaySeconds(notANumber), 3600)
 })
 
 test('urlsIn: de-duplicated, in order, without the sentence punctuation', () => {

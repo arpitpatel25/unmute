@@ -71,7 +71,7 @@ import {
 import { buildDispatch } from './dispatch-prompt'
 import { detectSurface } from './surface'
 import { deriveStatus, isAnswerable, type HookEvent, type AskQuestion } from './observer'
-import { readTranscript, readTranscriptRaw, hadSideEffects, endedOnSelfContinuation, readLatestExchange } from './transcript'
+import { readTranscript, readTranscriptRaw, hadSideEffects, selfContinuationDelaySeconds, readLatestExchange } from './transcript'
 import type { Block } from './blocks'
 import { blocksFromClaudeTranscript } from './blocks-claude'
 import { blocksFromRollout } from './codex/blocks-rollout'
@@ -327,12 +327,21 @@ export interface Task {
   /** Executor self-classification (drives presentation + lifecycle). */
   category?: StatusPayload['category']
   /** This turn's `done` is a scheduled pause (the loop is about to re-prompt
-   *  itself), not a real stop — see endedOnSelfContinuation(). Sessions in an
-   *  autonomous multi-task run flip done→processing every turn boundary that
-   *  hooks alone cannot tell apart from actually finishing; this is the flag
-   *  that lets the notch stop treating each one as news. Cleared the moment a
-   *  new prompt is submitted, never persisted — recomputed fresh every turn. */
+   *  itself), not a real stop — see selfContinuationDelaySeconds(). Sessions
+   *  in an autonomous multi-task run flip done→processing every turn boundary
+   *  that hooks alone cannot tell apart from actually finishing; this is the
+   *  flag that lets the notch stop treating each one as news. Cleared the
+   *  moment a new prompt is submitted, never persisted — recomputed fresh
+   *  every turn. */
   checkpoint?: boolean
+  /** When this checkpoint's own promised wakeup should have arrived by — the
+   *  tool call's `delaySeconds` plus grace, added to this.clock() at the
+   *  moment the turn ended. Past this with no new prompt means the loop's own
+   *  continuation never happened (app quit, crashed, lost); demanding() must
+   *  stop trusting `checkpoint` once this passes, or a truly abandoned
+   *  session goes silent forever instead of eventually re-flagging like any
+   *  other stuck task. */
+  checkpointExpiresAt?: number
   /** Latest short progress label the executor wrote ("Editing X · 12/18 tests").
    *  Surfaced on running tasks in the overlay; purely informational. */
   step?: string
@@ -513,6 +522,12 @@ const TERMINAL: UiTaskState[] = ['done', 'failed']
  *  off, nothing awaits anyone. NOT 'ready' (killing a ready task must mark it
  *  stopped, or a dead task would sit in the your-move queue forever). */
 const SETTLED: UiTaskState[] = ['done', 'failed']
+
+/** Slack added on top of a self-continuation tool call's own `delaySeconds`
+ *  before its checkpoint expires — scheduling jitter, not a second policy
+ *  decision. The loop's own number is the real budget; this just keeps a
+ *  wakeup landing one second late from being treated as abandoned. */
+const CHECKPOINT_GRACE_MS = 60_000
 
 /** Strip the TUI's ANSI/OSC/control noise from a raw PTY buffer and keep a
  *  readable tail — enough for the librarian to see what the doer actually did
@@ -1216,17 +1231,27 @@ export class TaskManager extends EventEmitter {
     if (event.kind === 'prompt-submitted') {
       // A new turn starting means whatever checkpoint the LAST turn ended on
       // is over — this is a fresh turn, and it deserves its own, unbiased
-      // judgment when it too ends.
+      // judgment when it too ends. The new prompt IS the proof the
+      // continuation happened, so there is nothing left to time out.
       task.checkpoint = false
+      task.checkpointExpiresAt = undefined
     }
     if (event.kind === 'turn-ended') {
       const path = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
       sideEffects = hadSideEffects(await readTranscript(path))
       // Is this `done` a real stop, or the loop scheduling its own next turn?
-      // See endedOnSelfContinuation()'s own doc comment for the reasoning —
-      // this is what stops a busy autonomous session from popping the notch
-      // open on every turn boundary while it is still mid-plan.
-      task.checkpoint = endedOnSelfContinuation(await readTranscriptRaw(path))
+      // See selfContinuationDelaySeconds()'s own doc comment for the
+      // reasoning — this is what stops a busy autonomous session from
+      // popping the notch open on every turn boundary while it is still
+      // mid-plan. Bounded by the loop's own promised wakeup time (plus
+      // grace): if that time passes with no new prompt, the continuation
+      // never happened, and demanding() must stop trusting this checkpoint —
+      // see Task.checkpointExpiresAt.
+      const delaySeconds = selfContinuationDelaySeconds(await readTranscriptRaw(path))
+      task.checkpoint = delaySeconds !== null
+      task.checkpointExpiresAt = delaySeconds !== null
+        ? this.clock() + delaySeconds * 1000 + CHECKPOINT_GRACE_MS
+        : undefined
 
       // THE REPLY COMES FROM THE EVENT, NOT THE TRANSCRIPT.
       //

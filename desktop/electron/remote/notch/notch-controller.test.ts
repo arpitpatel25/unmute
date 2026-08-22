@@ -1528,7 +1528,10 @@ test('a session done on its own scheduled continuation does not demand attention
   // notch open dozens of times an hour: exactly the "it just keeps popping up
   // again and again" field report this guards against.
   const h = setup()
-  put(h, makeTask({ id: 'loop', state: 'done', kind: 'session', alive: true, checkpoint: true, name: 'Autonomous plan' }))
+  put(h, makeTask({
+    id: 'loop', state: 'done', kind: 'session', alive: true, name: 'Autonomous plan',
+    checkpoint: true, checkpointExpiresAt: Date.now() + 5 * 60_000, // wakeup due in 5 min
+  }))
   assert.equal(h.client.last('setState')!.attention, 0, 'a scheduled pause is not news')
   h.client.fire({ type: 'pocketOpen' })
   assert.ok(pocketOf(h)!.slots.some((sl) => sl.id === 'loop'), 'still reachable — just not demanding')
@@ -1540,6 +1543,22 @@ test('a session done on its own scheduled continuation does not demand attention
   const h2 = setup()
   put(h2, makeTask({ id: 'real', state: 'done', kind: 'session', alive: true, checkpoint: false, name: 'Real finish' }))
   assert.equal(h2.client.last('setState')!.attention, 1, 'a real stop still demands attention as before')
+})
+
+test('a checkpoint past its own promised wakeup re-demands — an abandoned loop must not go silent forever', () => {
+  // The loop said "wake me in N seconds" and never did — app quit, crashed,
+  // whatever. Task.checkpointExpiresAt is that promise plus grace; past it,
+  // this is exactly as stuck as any other abandoned session-done, and must
+  // eventually surface again rather than staying invisible because it once,
+  // correctly, suppressed itself for a turn that never actually resumed.
+  const h = setup()
+  put(h, makeTask({
+    id: 'stuck', state: 'done', kind: 'session', alive: true, name: 'Never came back',
+    checkpoint: true, checkpointExpiresAt: Date.now() - 1000, // its own promised wakeup already passed
+  }))
+  assert.equal(h.client.last('setState')!.attention, 1, 'the expired checkpoint no longer suppresses attention')
+  h.client.fire({ type: 'pocketOpen' })
+  assert.equal(pocketOf(h)!.slots.find((sl) => sl.id === 'stuck')!.demanding, true)
 })
 
 
