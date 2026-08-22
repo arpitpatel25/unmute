@@ -572,6 +572,12 @@ export const remotePreloadExtensions = {
   remoteOnCaptureKind: (cb: (kind: 'dictation' | 'remote') => void) =>
     ipcRenderer.on('recording:start', (_e, _mode, _sessionId, kind) =>
       cb(kind === 'remote' ? 'remote' : 'dictation')),
+
+  // ── Meeting Notetaker floating widget (bottom-left) ──
+  /** User clicked the widget, then confirmed Cancel — tells main to stop the
+   *  note-taking session (spec §6: stop is never a single, direct action;
+   *  the confirm already happened in the renderer by the time this fires). */
+  notetakerCancelRequested: (): void => ipcRenderer.send('notetaker:cancel-requested'),
 }
 
 export type RemoteAPI = typeof remotePreloadExtensions
