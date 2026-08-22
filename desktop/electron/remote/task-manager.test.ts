@@ -914,6 +914,55 @@ test('purgeStale never touches persistent sessions — in memory or as on-disk r
   tm.killAll()
 })
 
+// A finished one-off left untouched should not have to wait out the 24h
+// purgeAgeMs backstop to disappear — that backstop exists for the rare
+// pathological case (e.g. a stuck 'processing' task nobody ever answered),
+// not for the ordinary "errand finished, nobody followed up" case, which has
+// its own much shorter rule (warmMs). This is the SAME startup+hourly sweep
+// (purgeStale, via startMaintenance) that already reclaims orphan dirs — it
+// now also catches an already-terminal one-off using the shorter window,
+// instead of loading it back in as a zombie record for the pocket/cockpit/
+// dashboard to disagree about for up to a day.
+test('purgeStale erases a TERMINAL one-off past warmMs, well before the 24h purgeAgeMs backstop', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0,
+    pollMs: 9999, warmMs: 100, purgeAgeMs: 60_000_000, // purgeAgeMs deliberately huge — only warmMs should catch this
+  })
+  const id = await tm.dispatch('quick errand nobody follows up on')
+  const task = tm.get(id)!
+  task.state = 'done'
+  task.updatedAt = Date.now() - 500 // past warmMs, nowhere near purgeAgeMs
+  const home = task.home
+
+  await tm.purgeStale()
+
+  assert.equal(tm.get(id), undefined, 'finished one-off erased on the ordinary maintenance sweep, not just its own live timer')
+  await assert.rejects(fs.access(home), 'its on-disk record is gone too')
+  tm.kill(id) // no-op once erased; guards against a leaked poll interval if this regresses
+})
+
+// The SAME age, but still working (or left ambiguously interrupted) — the
+// short window must never apply here. A one-off gets to keep running (or
+// stay resumable-as-interrupted) until the full purgeAgeMs backstop, exactly
+// as before this change.
+test('purgeStale leaves a NON-terminal one-off alone at the same age — only the full purgeAgeMs backstop applies', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({
+    executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0,
+    pollMs: 9999, warmMs: 100, purgeAgeMs: 60_000_000,
+  })
+  const id = await tm.dispatch('still working on it')
+  const task = tm.get(id)!
+  assert.equal(task.state, 'processing', 'precondition: not finished yet')
+  task.updatedAt = Date.now() - 500 // past warmMs — but warmMs must not apply to non-terminal work
+
+  await tm.purgeStale()
+
+  assert.ok(tm.get(id), 'a task still in progress is never erased by the one-off short window')
+  tm.kill(id)
+})
+
 test('rehydrate restores kind, name, and a project cwd from the receipt', async () => {
   const baseDir = await tmpBase()
   const id = randomUUID()

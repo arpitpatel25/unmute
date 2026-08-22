@@ -3715,12 +3715,25 @@ export class TaskManager extends EventEmitter {
       log.child({ taskId: task.id }).event('persistent-runtime-expired', { idleMs: now - lastUse })
     }
     const cutoff = now - this.opts.purgeAgeMs
+    // A FINISHED one-off doesn't need the full purgeAgeMs backstop — it has its
+    // own much shorter rule (warmMs), the same one armWarmTimer already enforces
+    // live. Without this, a one-off that finished between maintenance sweeps (or
+    // was reloaded by rehydrate from a previous run) sat as a real record for up
+    // to a day, for the pocket/cockpit/dashboard to each independently decide how
+    // long to keep showing something that was already over. purgeAgeMs remains
+    // the backstop for everything ELSE a one-off can be — still working, or left
+    // ambiguously interrupted — where guessing "abandoned" from age alone would
+    // be wrong.
+    const oneoffCutoff = now - this.opts.warmMs
     // 1. IN-MEMORY tasks that have aged out — remove() kills the live session too.
     //    PERSISTENT SESSIONS ARE EXEMPT: a multi-day working session is untouched
     //    "by updatedAt" for days by design — auto-purging it would delete the
     //    user's living workspace. Sessions die only by explicit kill/remove.
     //    SHELVED tasks are exempt too — shelving IS the "keep this" gesture.
-    const stale = [...this.tasks.values()].filter((t) => t.updatedAt < cutoff && t.kind !== 'session' && !t.shelved)
+    const stale = [...this.tasks.values()].filter((t) => {
+      if (t.kind === 'session' || t.shelved) return false
+      return t.updatedAt < (TERMINAL.includes(t.state) ? oneoffCutoff : cutoff)
+    })
     if (stale.length) {
       log.event('purge-sweep', { count: stale.length })
       for (const t of stale) await this.remove(t.id)
