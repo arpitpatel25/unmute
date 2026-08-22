@@ -86,4 +86,24 @@ describe('NotetakerSession', () => {
     session.start(4242)
     assert.throws(() => session.start(4242))
   })
+
+  test('start() resets isActive to false if native startCapture throws synchronously, and a retry is possible', () => {
+    let shouldThrow = true
+    const throwingTap = {
+      startCapture: (_pid: number, _onChunk: (c: { samples: Float32Array; sampleRate: number; timestampMs: number }) => void) => {
+        if (shouldThrow) {
+          throw new Error('AudioDeviceStart failed (TCC permission not yet granted)')
+        }
+      },
+      stopCapture: () => {},
+    }
+    const session = new NotetakerSession(throwingTap, () => {})
+    assert.throws(() => session.start(4242))
+    assert.equal(session.isActive, false)
+    // Retry after the failure (e.g. once the user grants the TCC permission) must not hit
+    // the "already active" guard.
+    shouldThrow = false
+    assert.doesNotThrow(() => session.start(4242))
+    assert.equal(session.isActive, true)
+  })
 })

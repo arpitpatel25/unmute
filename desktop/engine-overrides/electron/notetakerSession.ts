@@ -39,11 +39,16 @@ export class NotetakerSession {
     if (this.active) {
       throw new Error('NotetakerSession already active — call stop() first')
     }
-    this.active = true
-    this.nativeAudioTap.startCapture(targetPid, (c) => {
-      if (!this.active) return
-      this.onChunk({ source: 'system', samples: c.samples, sampleRate: c.sampleRate, timestampMs: c.timestampMs })
-    })
+    try {
+      this.nativeAudioTap.startCapture(targetPid, (c) => {
+        if (!this.active) return
+        this.onChunk({ source: 'system', samples: c.samples, sampleRate: c.sampleRate, timestampMs: c.timestampMs })
+      })
+      this.active = true
+    } catch (err) {
+      this.active = false
+      throw err
+    }
   }
 
   feedMicChunk(samples: Float32Array, sampleRate: number, timestampMs: number): void {
