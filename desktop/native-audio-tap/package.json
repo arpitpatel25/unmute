@@ -1,0 +1,19 @@
+{
+  "name": "unmute-native-audio-tap",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Background macOS system-audio capture via Core Audio Process Taps (macOS 14.2+), loaded in-process from the main Electron process so it inherits the signed .app bundle's TCC System Audio Recording grant — same in-process lesson as unmute-native-paste and unmute-native-ax: child binaries get their own TCC identity and silently fail.",
+  "main": "index.js",
+  "scripts": {
+    "install": "node-gyp rebuild --release",
+    "rebuild": "node-gyp rebuild --release",
+    "smoke": "node smoke.js"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.1.1"
+  },
+  "gypfile": true,
+  "engines": {
+    "node": ">=18"
+  }
+}
