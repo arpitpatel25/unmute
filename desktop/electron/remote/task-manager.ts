@@ -731,9 +731,20 @@ export class TaskManager extends EventEmitter {
       case 'codex-desktop':
         return (intent, opts) => this.dispatchCodexDesktop(intent, opts ?? {})
       case 'codex':
-        // Only when a hub is wired. Without one, Codex CLI falls to the PTY +
-        // rollout path, so a Codex too old for `app-server` still runs.
-        return this.opts.codexHub ? (intent, opts) => this.dispatchCodexCli(intent, opts ?? {}) : null
+        // ALWAYS the PTY + rollout path now — never the hub, even when one is
+        // wired. That path was originally just the fallback for a Codex too
+        // old for `app-server`; it is a complete, already-proven implementation
+        // (tmux-wrapped, settleRepl-navigated, rollout-polled, verified-composer
+        // delivery — the same mechanism Claude and every reply/attachment
+        // already use), so it is now the ONLY path. The hub/App Server process
+        // is an ordinary child process that dies with the app on every quit,
+        // taking the Codex process with it a moment later — which meant every
+        // fresh Codex task, one-off or session, was the only kind of task that
+        // never survived a restart. See dispatchCodexCli's doc comment for what
+        // the hub protocol still buys (`answer()`/attachments still use it for
+        // as long as a hub thread happens to exist — e.g. a task imported from
+        // elsewhere); it is simply never CREATED for fresh dispatch anymore.
+        return null
       case 'claude':
       case undefined:
         return null                       // the owned-PTY path below, deliberately

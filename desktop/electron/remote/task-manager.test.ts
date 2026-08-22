@@ -812,16 +812,32 @@ test('dispatch persists kind in meta.json; defaults to oneoff with home === cwd'
   tm.killAll()
 })
 
-test('Codex work dispatches exactly once through the native hub', async () => {
+test('Codex work never touches the App Server hub, even when one is wired — it always gets the persistent PTY path', async () => {
+  // THE BUG THIS EXISTS FOR. Routing fresh Codex dispatch through the hub
+  // whenever one was available meant every Codex task's terminal depended on
+  // the hub's own App Server process — an ordinary child process that dies
+  // with the app on every quit, taking the Codex process with it a moment
+  // later (its --remote connection breaks). Claude never had that dependency
+  // and always survived a quit; Codex, one-off or session, never did.
+  //
+  // The hub/App Server protocol's actual benefit — delivering the very first
+  // prompt without typing into the PTY (no paste race) — is real, but the
+  // SAME "verified composer" delivery (writeDraftText + submitDraft, retried
+  // against the rollout's own turn count) already used for every reply and
+  // for attachments is proven reliable for a cold start too (validated
+  // directly against the real codex binary: the first Enter is swallowed on
+  // a fresh launch essentially every time, and the existing unconditional
+  // second Enter — the same "submit-confirm-enter" this generic path already
+  // sends — recovers it). So Codex now always takes the same tmux-wrapped,
+  // rollout-backed path Claude does, regardless of kind or hub availability.
   const baseDir = await tmpBase()
   let hubStarts = 0
-  const hubSends: string[] = []
   const hub = {
     async startThread() {
       hubStarts++
       return { threadId: `codex-thread-${hubStarts}`, url: 'ws://127.0.0.1:1' }
     },
-    async send(_threadId: string, intent: string) { hubSends.push(intent); return true },
+    async send() { return true },
     threadIdFor() { return undefined },
   }
   const agents: Array<AgentKind | undefined> = []
@@ -834,11 +850,14 @@ test('Codex work dispatches exactly once through the native hub', async () => {
   const persistent = await tm.dispatch('long Codex thread', { agent: 'codex', kind: 'session' })
   const oneoff = await tm.dispatch('quick Codex errand', { agent: 'codex', kind: 'oneoff' })
 
-  assert.equal(hubStarts, 2)
-  assert.deepEqual(hubSends, ['long Codex thread', 'quick Codex errand'])
-  assert.deepEqual(agents, ['codex', 'codex'])
+  assert.equal(hubStarts, 0, 'the hub must never be asked to start a thread for fresh Codex work')
+  assert.deepEqual(agents, ['codex', 'codex'], 'both still spawn a real, owned Codex PTY')
   assert.equal(tm.get(persistent)!.agent, 'codex')
   assert.equal(tm.get(oneoff)!.agent, 'codex')
+  // codexRolloutId is learned later, from the rollout itself, once Codex
+  // mints it — never synchronously at dispatch (see pollCodexCli).
+  assert.equal(tm.get(persistent)!.codexRolloutId, undefined)
+  assert.equal(tm.get(oneoff)!.codexRolloutId, undefined)
   tm.killAll()
 })
 
