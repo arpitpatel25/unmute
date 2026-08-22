@@ -24,6 +24,7 @@ import { promises as fs, watch as fsWatch } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { createLogger, remoteLogDir } from './log'
 import { writeFileAtomic } from './atomic-file'
+import { reconstructTaskMeta } from './meta-reconstruct'
 import { tapPty } from './pty-tap'
 import { ReconcileScheduler } from './reconcile-scheduler'
 import { AppendFileCache } from './append-file-cache'
@@ -3134,8 +3135,29 @@ export class TaskManager extends EventEmitter {
       if (this.tasks.has(id)) continue
       const dir = join(root, id)
       let meta: { intent?: string; sessionId?: string; name?: string; kind?: 'oneoff' | 'session'; runtimePinned?: boolean; lastUserInputAt?: number; cwd?: string; createdAt?: number; state?: string; updatedAt?: number; surface?: string; mode?: 'managed' | 'raw'; injectedRecipes?: Array<{ name: string; tier: 'nursery' | 'skill'; surface: string }>; shelved?: boolean; note?: string; spawnedBy?: string; group?: string; agent?: AgentKind; model?: string; codexThreadId?: string; codexRolloutId?: string; codexDomThreadId?: string; codexProject?: string | null; claudeDesktopSessionId?: string; conversation?: Task['conversation']; origin?: 'unmute-agent'; agentRunId?: string; result?: StatusPayload['result'] }
-      try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { continue }
-      if (!meta.intent) continue // pre-receipt task or junk dir — skip
+      try { meta = JSON.parse(await fs.readFile(join(dir, 'meta.json'), 'utf8')) } catch { meta = {} }
+      if (!meta.intent) {
+        // meta.json is missing, empty, or unparseable — see atomic-file.ts for
+        // the write-side bug that can cause this. Before giving up, try to
+        // rebuild it from the durable sources it only ever mirrored (the
+        // agent's own transcript, or at minimum status.json) — see
+        // meta-reconstruct.ts. A genuine pre-receipt/junk dir still has
+        // nothing to recover from and is skipped exactly as before.
+        const recovered = await reconstructTaskMeta(dir)
+        if (!recovered) continue
+        meta = {
+          ...meta,
+          intent: recovered.intent,
+          ...(recovered.agent ? { agent: recovered.agent } : {}),
+          ...(recovered.sessionId ? { sessionId: recovered.sessionId } : {}),
+          ...(recovered.state ? { state: recovered.state } : {}),
+        }
+        // Self-heal: persist the recovered record so future launches don't
+        // have to redo this scan. Best-effort — the task still shows even if
+        // this write fails.
+        void writeFileAtomic(join(dir, 'meta.json'), JSON.stringify(meta))
+          .catch((e) => log.child({ taskId: id }).warn('rehydrate: could not persist recovered meta.json', { error: (e as Error).message }))
+      }
       if (meta.origin === 'unmute-agent' && meta.agentRunId) {
         const now0 = this.clock()
         const task: Task = {

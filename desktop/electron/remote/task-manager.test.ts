@@ -288,6 +288,91 @@ test('rehydrate preserves each CLI provider for inactive cards and resume', asyn
   tm.stopMaintenance()
 })
 
+test('rehydrate self-heals a task whose meta.json was truncated to empty, by reconstructing it from the matching codex rollout', async () => {
+  const baseDir = await tmpBase()
+  const root = path.join(baseDir, 'local')
+  const id = randomUUID()
+  const dir = path.join(root, id)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), '') // exactly the atomic-file.ts failure mode
+  await fs.writeFile(path.join(dir, 'status.json'), JSON.stringify({ state: 'done', updated_at: new Date().toISOString() }))
+
+  // Isolated HOME so reconstruction's rollout scan can't see the real machine.
+  const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'fake-home-'))
+  await fs.mkdir(path.join(fakeHome, '.codex', 'sessions', '2026', '08', '22'), { recursive: true })
+  const rolloutPath = path.join(fakeHome, '.codex', 'sessions', '2026', '08', '22', `rollout-${randomUUID()}.jsonl`)
+  await fs.writeFile(rolloutPath, [
+    JSON.stringify({ type: 'session_meta', payload: { session_id: 'recovered-session', cwd: dir } }),
+    JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'the recovered question' } }),
+  ].join('\n') + '\n')
+
+  const prevHome = process.env.HOME
+  process.env.HOME = fakeHome
+  try {
+    const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+    await tm.rehydrate()
+    const task = tm.get(id)
+    assert.equal(task?.intent, 'the recovered question', 'the dashboard shows the real original question, not nothing')
+    assert.equal(task?.sessionId, 'recovered-session')
+    assert.equal(task?.agent, 'codex')
+    tm.stopMaintenance()
+  } finally {
+    process.env.HOME = prevHome
+    await fs.rm(fakeHome, { recursive: true, force: true })
+  }
+
+  const healed = JSON.parse(await fs.readFile(path.join(dir, 'meta.json'), 'utf8'))
+  assert.equal(healed.intent, 'the recovered question', 'the repair is written back so future launches skip the scan')
+})
+
+test('rehydrate falls back to a DEGRADED but visible record when no session matches — status.json alone beats invisible', async () => {
+  const baseDir = await tmpBase()
+  const root = path.join(baseDir, 'local')
+  const id = randomUUID()
+  const dir = path.join(root, id)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), '')
+  await fs.writeFile(path.join(dir, 'status.json'), JSON.stringify({
+    state: 'done', updated_at: new Date().toISOString(), result: { summary: 'the recovered answer text' },
+  }))
+
+  const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'fake-home-empty-'))
+  const prevHome = process.env.HOME
+  process.env.HOME = fakeHome
+  try {
+    const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+    await tm.rehydrate()
+    const task = tm.get(id)
+    assert.equal(task?.intent, 'the recovered answer text', 'still shows on the dashboard, degraded rather than invisible')
+    tm.stopMaintenance()
+  } finally {
+    process.env.HOME = prevHome
+    await fs.rm(fakeHome, { recursive: true, force: true })
+  }
+})
+
+test('rehydrate still skips a dir with nothing recoverable at all — no meta.json content, no status.json, no session', async () => {
+  const baseDir = await tmpBase()
+  const root = path.join(baseDir, 'local')
+  const id = randomUUID()
+  const dir = path.join(root, id)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, 'meta.json'), '')
+
+  const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'fake-home-nothing-'))
+  const prevHome = process.env.HOME
+  process.env.HOME = fakeHome
+  try {
+    const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+    await tm.rehydrate()
+    assert.equal(tm.get(id), undefined, 'a genuinely unrecoverable dir is skipped exactly as before')
+    tm.stopMaintenance()
+  } finally {
+    process.env.HOME = prevHome
+    await fs.rm(fakeHome, { recursive: true, force: true })
+  }
+})
+
 test('done status transition emits done with inline result (PRD §13.4 #3, §13.6)', { timeout: 5000 }, async () => {
   const baseDir = await tmpBase()
   const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25 })
