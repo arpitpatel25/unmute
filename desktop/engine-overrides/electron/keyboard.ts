@@ -41,7 +41,21 @@ export type ActivationMode = 'tap-toggle' | 'push-to-talk' | 'double-tap-push'
 // Double-tap-push state machine states
 type DualModeState = 'idle' | 'held' | 'awaiting-second' | 'push-recording' | 'hands-free'
 
-class KeyboardManager extends EventEmitter {
+// ─── Meeting Notetaker chord (Task 6) ───
+// keyListener.ts's exported `KeyEvent` union has not been extended yet for
+// these two native-layer events (they are emitted by native-fn-listener —
+// see desktop/native-fn-listener/src/listener.mm — as of the commit that
+// added them, but the TS-level KeyEvent type in keyListener.ts is a
+// separate file, out of this task's scope, and still only lists the
+// pre-existing keys). The values ARE what arrives at runtime; this local
+// union just lets handleKey's switch compare against them without widening
+// keyListener's exported type. Whoever finishes wiring the notetaker
+// end-to-end should fold these into KeyEvent for real type safety.
+type NotesChordKeyEvent = 'left-control-down' | 'left-control-up' | 'left-option-down' | 'left-option-up'
+
+// Exported (was module-private) so tests can construct an isolated instance
+// instead of sharing the process-wide `keyboardManager` singleton below.
+export class KeyboardManager extends EventEmitter {
   private dictationActive = false
   private instructionActive = false
   private agentActive = false
@@ -80,6 +94,20 @@ class KeyboardManager extends EventEmitter {
   // Chain tracking
   private _chainPending = false
   private _chainMode: SessionMode | null = null
+
+  // ─── Meeting Notetaker chord (left-Control + left-Option, double-tap) ───
+  // DELIBERATELY NOT part of the dictation/instruction/agent/remote lock
+  // group above, and DELIBERATELY not read or written by any of their
+  // mutual-exclusion guards. Notes must never block, and never be blocked
+  // by, those four lanes (spec §5) — so its state lives in its own section,
+  // and stopping is never direct (spec §6): a second double-tap while
+  // active only requests confirmation; `confirmNotesStop()` is the sole
+  // writer that clears `notesActive` back to false.
+  private notesActive = false
+  private leftControlHeld = false
+  private leftOptionHeld = false
+  /** When the first tap of a pending chord pair landed. 0 = none. */
+  private lastNotesChordTapAt = 0
 
   start(): void {
     keyListener.on('key', (event: KeyEvent) => this.handleKey(event))
@@ -209,7 +237,8 @@ class KeyboardManager extends EventEmitter {
 
   handleKey(event: KeyEvent): void {
     console.log('[keyboard] Raw key event:', event, '| dictationActive:', this.dictationActive, '| instructionActive:', this.instructionActive)
-    switch (event) {
+    // See NotesChordKeyEvent above for why this cast exists.
+    switch (event as KeyEvent | NotesChordKeyEvent) {
       case 'fn-down':
         // fn is either the dictation key OR (when right-option is dictation)
         // the derived Remote key. The non-dictation branch is ADDITIVE — it
@@ -246,6 +275,21 @@ class KeyboardManager extends EventEmitter {
         // on each physical press (reflecting LED state, not press/release).
         // So both events represent a physical key press → treat both as toggle.
         this.handleInstructionToggle()
+        break
+      // ─── Meeting Notetaker chord — independent of every lane above ───
+      case 'left-control-down':
+        this.leftControlHeld = true
+        this.maybeHandleNotesChordDown()
+        break
+      case 'left-control-up':
+        this.leftControlHeld = false
+        break
+      case 'left-option-down':
+        this.leftOptionHeld = true
+        this.maybeHandleNotesChordDown()
+        break
+      case 'left-option-up':
+        this.leftOptionHeld = false
         break
     }
     // AFTER the handlers have run: exactly what the NEXT key will see.
@@ -381,6 +425,60 @@ class KeyboardManager extends EventEmitter {
   private handleRemoteKeyUp(): void {
     // Tap-toggle ignores key-up — the capture ends on the SECOND tap or on
     // Escape, never on release. (Mirrors dictation tap-toggle.)
+  }
+
+  // ─── Meeting Notetaker — chord double-tap (left-Control + left-Option) ───
+  //
+  // Both native events (left-control-down, left-option-down) call this;
+  // it bails until BOTH modifiers are held together, so it's direction-
+  // independent (either key can complete the chord).
+  //
+  // Pairing mirrors feedAgentGesture's own tap-pairing above, including the
+  // part the brief for this task's sketch got wrong: `lastNotesChordTapAt`
+  // must be RESET to 0 once a pair has been consumed into a toggle, not set
+  // to `now`. Leaving it set to `now` after a toggle makes the very next
+  // chord-engage (e.g. the next double-tap the user performs) pair against
+  // the toggle that just fired, rather than starting a fresh pair — which
+  // in a synchronous test (or just fast typing) turns one double-tap into
+  // two toggles. `feedAgentGesture` already avoids this (`lastAgentTapAt = 0`
+  // right before it acts); this follows the same shape.
+  //
+  // NO EXCLUSION CHECK, ON PURPOSE (spec §5): dictationActive/
+  // instructionActive/agentActive/remoteActive are never read here, and
+  // notesActive is never read by their guards either — the note-taker is a
+  // fully independent lane.
+  private maybeHandleNotesChordDown(): void {
+    if (!this.leftControlHeld || !this.leftOptionHeld) return // both must be down together
+    const now = Date.now()
+
+    const paired = this.lastNotesChordTapAt > 0 && now - this.lastNotesChordTapAt <= DOUBLE_TAP_WINDOW_MS
+    if (!paired) {
+      this.lastNotesChordTapAt = now
+      return
+    }
+    this.lastNotesChordTapAt = 0
+
+    if (this.notesActive) {
+      // Spec §6: never stop directly — the confirm-dialog flow (owned
+      // elsewhere, out of scope for this task) decides whether to call
+      // confirmNotesStop().
+      console.log('[keyboard] Notes chord double-tap while active — requesting stop confirmation')
+      this.emit('notes-stop-confirm-requested')
+      return
+    }
+
+    this.notesActive = true
+    console.log('[keyboard] Notes chord double-tap — START')
+    this.emit('notes-start-requested')
+  }
+
+  /** Called by the owning module once the user has confirmed they want to
+   *  stop (spec §6). The ONLY place `notesActive` is cleared back to false —
+   *  a double-tap while active never clears it directly. */
+  confirmNotesStop(): void {
+    this.notesActive = false
+    console.log('[keyboard] Notes STOPPED (confirmed)')
+    this.emit('notes-stopped')
   }
 
   // ─── Dictation key-down/up dispatchers ───
