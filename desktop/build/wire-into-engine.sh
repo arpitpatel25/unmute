@@ -492,6 +492,37 @@ import { initRemote } from './paywall/remote/init'
     fi
   fi
 
+  # ─── Meeting Notetaker: init wiring (INDEPENDENT of the initPaywall guard,
+  # same reasoning as initRemote just above) ───
+  #
+  # notetakerInit.ts (engine-overrides/electron/, landed at the OSS engine's
+  # electron ROOT by the engine-overrides copy above) owns MeetingWatcher +
+  # NotetakerSession + NotetakerController + the keyboard chord wiring; it
+  # cannot reach the floating widget itself (a closed-source paywall-tree
+  # file, desktop/electron/remote/notetakerWidget.ts) so its show()/hide()
+  # are injected here as hooks — see notetakerInit.ts's own file header for
+  # why this lives in main.ts rather than in paywall/remote/init.ts.
+  if ! grep -q 'initNotetaker' "$main_ts"; then
+    sed -i.bak "/^import { initRemote } from '\.\/paywall\/remote\/init'/a\\
+import { initNotetaker } from './notetakerInit'\\
+import { showNotetakerWidget, hideNotetakerWidget } from './paywall/notetakerWidget'
+" "$main_ts"
+    rm -f "$main_ts.bak"
+    node -e "
+      const fs = require('fs'); const p = '$main_ts'; let s = fs.readFileSync(p, 'utf-8')
+      if (!s.includes('initNotetaker({')) {
+        s = s.replace(
+          'initRemote({ sessionManager, keyboardManager })\n',
+          'initRemote({ sessionManager, keyboardManager })\n  initNotetaker({ onSessionStart: showNotetakerWidget, onSessionStop: hideNotetakerWidget })\n'
+        )
+      }
+      fs.writeFileSync(p, s)
+    "
+    if ! grep -q 'initNotetaker({' "$main_ts"; then
+      log "WARN: initNotetaker call injection did not land in main.ts"
+    fi
+  fi
+
   # 2) preload.ts: merge paywall API into electronAPI
   local preload="$engine/electron/preload.ts"
   if ! grep -q 'paywallPreloadExtensions' "$preload"; then
@@ -561,6 +592,16 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
   fi
   if ! grep -q 'remotePreloadExtensions' "$engine/electron/preload.ts"; then
     log "WARN: preload.ts missing remotePreloadExtensions — renderer Remote API absent"
+  fi
+  # ─── Meeting Notetaker wiring checks (ADDITIVE) ───
+  if [[ ! -f "$engine/electron/notetakerInit.ts" ]]; then
+    log "WARN: notetakerInit.ts not copied into engine — meeting notetaker will not initialise"
+  fi
+  if ! grep -q 'initNotetaker' "$engine/electron/main.ts"; then
+    log "WARN: main.ts missing initNotetaker — meeting notetaker will not start"
+  fi
+  if [[ ! -f "$engine/electron/paywall/notetakerWidget.ts" ]]; then
+    log "WARN: notetakerWidget.ts not copied into engine — meeting notetaker widget will not initialise"
   fi
 
   # ─── HUD/widget window tightening ─────────────────────────────
