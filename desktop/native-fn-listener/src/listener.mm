@@ -74,8 +74,7 @@ static void handle_flags_changed(NSEvent* event) {
   if (!hadCaps && hasCaps) emit_event("caps-down");
   if (hadCaps && !hasCaps) emit_event("caps-up");
 
-  // Right Option specifically (keyCode 61). Left Option (58) is ignored
-  // so we don't trample on system-level shortcuts. This matches the OSS
+  // Right Option specifically (keyCode 61). This matches the OSS
   // globe-listener behavior.
   if (event.keyCode == 61) {
     bool hadOpt = (g_previousFlags & NSEventModifierFlagOption) != 0;
@@ -84,9 +83,27 @@ static void handle_flags_changed(NSEvent* event) {
     if (hadOpt && !hasOpt) emit_event("right-option-up");
   }
 
+  // Left Option specifically (keyCode 58) — part of the meeting notetaker's
+  // left-Control+left-Option double-tap chord trigger.
+  if (event.keyCode == 58) {
+    bool hadOpt = (g_previousFlags & NSEventModifierFlagOption) != 0;
+    bool hasOpt = (mods & NSEventModifierFlagOption) != 0;
+    if (!hadOpt && hasOpt) emit_event("left-option-down");
+    if (hadOpt && !hasOpt) emit_event("left-option-up");
+  }
+
+  // Left Control specifically (keyCode 59) — the other half of the meeting
+  // notetaker's left-Control+left-Option double-tap chord trigger.
+  if (event.keyCode == 59) {
+    bool hadCtrl = (g_previousFlags & NSEventModifierFlagControl) != 0;
+    bool hasCtrl = (mods & NSEventModifierFlagControl) != 0;
+    if (!hadCtrl && hasCtrl) emit_event("left-control-down");
+    if (hadCtrl && !hasCtrl) emit_event("left-control-up");
+  }
+
   // Right Command specifically (keyCode 54) — the Unmute Agent key. Left
-  // Command (55) is ignored for the same reason left Option is: it is where
-  // every system shortcut lives, and claiming it would trample all of them.
+  // Command (55) is ignored because it is where every system shortcut
+  // lives, and claiming it would trample all of them.
   //
   // Command was chosen over the remaining modifiers because it composes NO
   // character. Holding Option produces dead keys and accents; holding Shift
