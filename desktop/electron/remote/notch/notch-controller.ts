@@ -1512,8 +1512,12 @@ export class NotchController {
 
   private onTermOpen(id: string): void {
     this.openTerms.add(id)
+    // ALWAYS send, even when there's nothing buffered yet: this is the one
+    // definitive "replay is done" signal SwiftTerm's replay gate has to key
+    // off, so a brand-new task with an empty history still gets told it's
+    // safe to go live — see TerminalReplayGate.swift.
     const replay = this.deps.getOutput(id)
-    if (replay) this.client.send({ type: 'termData', id, data: Buffer.from(replay, 'utf8').toString('base64') })
+    this.client.send({ type: 'termData', id, data: Buffer.from(replay, 'utf8').toString('base64') })
   }
 
   // ── curator popup ──────────────────────────────────────────────────────────

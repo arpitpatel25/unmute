@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto'
 import { promises as fs, watch as fsWatch } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { createLogger, remoteLogDir } from './log'
+import { writeFileAtomic } from './atomic-file'
 import { tapPty } from './pty-tap'
 import { ReconcileScheduler } from './reconcile-scheduler'
 import { AppendFileCache } from './append-file-cache'
@@ -843,7 +844,7 @@ export class TaskManager extends EventEmitter {
       // intent (what the user asked) lives only in memory + here — status.json
       // holds the result, never the original ask. rehydrate() reads it on launch.
       // Written AFTER injectedRecipes is computed so the persisted value is correct.
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, runtimePinned: task.runtimePinned, agent, createdAt: now, lastUserInputAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}), ...(task.model ? { model: task.model } : {}) }))
+      await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({ id, intent, sessionId, kind, runtimePinned: task.runtimePinned, agent, createdAt: now, lastUserInputAt: now, surface, mode, injectedRecipes: task.injectedRecipes, ...(external ? { cwd: runCwd } : {}), ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}), ...(task.model ? { model: task.model } : {}) }))
       devEvent(tlog, 'dispatch-memory', { surface, mode, injectedRecipes: task.injectedRecipes })
 
       // Named, not left to the picker — see the task literal above. `browser`
@@ -1032,7 +1033,7 @@ export class TaskManager extends EventEmitter {
       result: { summary, detail: input.text },
     }
     await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
+    await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({
       id,
       intent: input.intent,
       sessionId: input.agentRunId,
@@ -1369,7 +1370,7 @@ export class TaskManager extends EventEmitter {
     } as Task
     this.tasks.set(id, task)
 
-    await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
+    await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({
       id, intent, sessionId: created.threadId, kind, createdAt: now, surface, mode: 'managed',
       agent: 'codex-desktop', codexThreadId: created.threadId,
       codexDomThreadId: created.domThreadId, codexProject: opts.project ?? null,
@@ -1460,7 +1461,7 @@ export class TaskManager extends EventEmitter {
       ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
     } as Task
     this.tasks.set(id, task)
-    await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
+    await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({
       id, intent, sessionId: threadId, kind, createdAt: now, surface, mode: 'managed',
       agent: 'codex', codexRolloutId: threadId, state: 'processing', updatedAt: now,
       ...(opts.spawnedBy ? { spawnedBy: opts.spawnedBy } : {}),
@@ -1753,7 +1754,7 @@ export class TaskManager extends EventEmitter {
       } as Task
       this.tasks.set(id, task)
 
-      await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
+      await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({
         id, intent: task.intent, sessionId: meta.sessionId, kind: 'session',
         createdAt: task.createdAt, mode: 'managed',
         agent: 'claude-code-desktop', claudeDesktopSessionId: meta.sessionId,
@@ -3031,7 +3032,7 @@ export class TaskManager extends EventEmitter {
   private async persistCwd(task: Task): Promise<void> {
     const path = join(task.home, 'meta.json')
     const meta = JSON.parse(await fs.readFile(path, 'utf8')) as Record<string, unknown>
-    await fs.writeFile(path, JSON.stringify({ ...meta, cwd: task.cwd }, null, 2))
+    await writeFileAtomic(path, JSON.stringify({ ...meta, cwd: task.cwd }, null, 2))
   }
 
   /** Merge the observed provider identity, state, timestamp and conversation
@@ -3051,7 +3052,7 @@ export class TaskManager extends EventEmitter {
       // the short status line standing where the exchange should be — which is
       // exactly what a surface meant to replace reading the terminal cannot do.
       // status.json already persists; this is the other half.
-      await fs.writeFile(path, JSON.stringify({
+      await writeFileAtomic(path, JSON.stringify({
         ...meta, state: task.state, updatedAt: task.updatedAt,
         ...(task.sessionId ? { sessionId: task.sessionId } : {}),
         ...(task.codexRolloutId ? { codexRolloutId: task.codexRolloutId } : {}),
@@ -3810,7 +3811,7 @@ export class TaskManager extends EventEmitter {
     const prev = this.metaChains.get(task.id) ?? Promise.resolve()
     const next = prev
       .then(() => fs.readFile(metaPath, 'utf8'))
-      .then((raw) => fs.writeFile(metaPath, JSON.stringify({ ...JSON.parse(raw), ...patch })))
+      .then((raw) => writeFileAtomic(metaPath, JSON.stringify({ ...JSON.parse(raw), ...patch })))
       .catch((e) => log.child({ taskId: task.id }).warn(`${op}: meta persist failed`, { error: (e as Error).message }))
     this.metaChains.set(task.id, next)
     void next.finally(() => { if (this.metaChains.get(task.id) === next) this.metaChains.delete(task.id) })
@@ -3944,7 +3945,7 @@ export class TaskManager extends EventEmitter {
             const path = join(t.home, 'meta.json')
             try {
               const meta = JSON.parse(await fs.readFile(path, 'utf8')) as Record<string, unknown>
-              await fs.writeFile(path, JSON.stringify({ ...meta, cwd: t.cwd, group: t.group }, null, 2))
+              await writeFileAtomic(path, JSON.stringify({ ...meta, cwd: t.cwd, group: t.group }, null, 2))
             } catch (e) {
               log.child({ taskId: t.id }).warn('cwd repair not persisted', { error: (e as Error).message })
             }
@@ -3992,7 +3993,7 @@ export class TaskManager extends EventEmitter {
       mode: 'managed' as const,
     } as Task
     this.tasks.set(id, task)
-    await fs.writeFile(join(dir, 'meta.json'), JSON.stringify({
+    await writeFileAtomic(join(dir, 'meta.json'), JSON.stringify({
       id, intent: task.intent, name: task.name, sessionId: input.sessionId,
       kind: 'session', agent: input.agent ?? 'claude', state: 'done',
       ...(input.group ? { group: input.group } : {}),

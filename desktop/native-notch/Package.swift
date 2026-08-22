@@ -122,6 +122,15 @@ let package = Package(
             dependencies: ["ConversationSupport"],
             path: "Tests/ConversationSupportTests"
         ),
+        .target(
+            name: "TerminalReplaySupport",
+            path: "Sources/TerminalReplaySupport"
+        ),
+        .testTarget(
+            name: "TerminalReplaySupportTests",
+            dependencies: ["TerminalReplaySupport"],
+            path: "Tests/TerminalReplaySupportTests"
+        ),
         .executableTarget(
             name: "unmute-notch",
             dependencies: [
@@ -136,7 +145,8 @@ let package = Package(
                 "SurfaceSizeSupport",
                 "SurfaceTransitionSupport",
                 "SurfaceStateSupport",
-                "LifecycleSupport"
+                "LifecycleSupport",
+                "TerminalReplaySupport"
             ],
             path: "Sources/unmute-notch"
         )

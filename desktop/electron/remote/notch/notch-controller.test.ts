@@ -71,7 +71,7 @@ function makeTask(partial: Partial<TaskLite> & { id: string }): TaskLite {
   }
 }
 
-function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
+function setup(opts: { proposals?: ProposalLite[]; getOutput?: (id: string) => string } = {}): Harness {
   const events = new EventEmitter()
   const client = new FakeClient()
   const tasks = new Map<string, TaskLite>()
@@ -97,7 +97,7 @@ function setup(opts: { proposals?: ProposalLite[] } = {}): Harness {
     setNote: rec('setNote'),
     focus: rec('focus'),
     opened: rec('opened'),
-    getOutput: (id) => `replay:${id}`,
+    getOutput: opts.getOutput ?? ((id) => `replay:${id}`),
     sendInput: rec('sendInput'),
     resizeTerm: rec('resizeTerm'),
     openInTerminal: rec('openInTerminal'),
@@ -299,6 +299,14 @@ test('termOpen replays buffered output and streams live chunks; close stops', ()
   h.client.fire({ type: 'termClose', id: 't1' })
   h.events.emit('output', { taskId: 't1', chunk: 'after-close' })
   assert.equal(h.client.ofType('termData').length, 2)
+})
+
+test('termOpen emits termData even when there is no buffered output — SwiftTerm needs a definitive replay-boundary signal to know when it is safe to start forwarding keystrokes/replies', () => {
+  const h = setup({ getOutput: () => '' })
+  put(h, makeTask({ id: 't1', state: 'processing' }))
+  h.client.fire({ type: 'termOpen', id: 't1' })
+  assert.equal(h.client.ofType('termData').length, 1)
+  assert.equal(h.client.ofType('termData')[0].data, '')
 })
 
 test('termInput decodes base64 to PTY stdin; termResize passes through', () => {

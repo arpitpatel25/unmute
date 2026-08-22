@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import SwiftTerm
+import TerminalReplaySupport
 
 // The live PTY terminal — SwiftTerm's emulator wrapped for SwiftUI.
 //
@@ -139,6 +140,12 @@ struct TerminalHost: NSViewRepresentable {
         var taskId: String
         private weak var view: TerminalView?
         private var sub: AnyCancellable?
+        // Electron always sends a termData chunk in direct response to our
+        // termOpen (even an empty one — see notch-controller.ts) BEFORE any
+        // live output for this task can be enqueued, so the first chunk this
+        // sink sees after a fresh attach is exactly the replay boundary.
+        private var seenFirstChunk = false
+        private let replayGate = TerminalReplayGate(schedule: { DispatchQueue.main.async(execute: $0) })
 
         init(model: NotchModel, taskId: String) {
             self.model = model
@@ -151,12 +158,25 @@ struct TerminalHost: NSViewRepresentable {
             sub = model.termBytes.sink { [weak self] (id, bytes) in
                 guard let self, id == self.taskId, let v = self.view else { return }
                 v.feed(byteArray: bytes[...])
+                if !self.seenFirstChunk {
+                    self.seenFirstChunk = true
+                    // `feed` parses synchronously — any reply SwiftTerm was
+                    // going to auto-generate from these (possibly old,
+                    // replayed) bytes has already been delivered to `send`
+                    // below by the time this line runs.
+                    self.replayGate.markReplayDone()
+                }
             }
         }
-        func detach() { sub?.cancel(); sub = nil; view = nil }
+        func detach() { sub?.cancel(); sub = nil; view = nil; replayGate.dispose() }
 
         // MARK: TerminalViewDelegate
         func send(source: TerminalView, data: ArraySlice<UInt8>) {
+            // Drops SwiftTerm's own auto-generated capability-query replies
+            // (device attributes, window-size reports) parsed out of REPLAYED
+            // history — see TerminalReplayGate. Real keystrokes typed after
+            // the terminal is live are never affected.
+            guard replayGate.shouldForward() else { return }
             let b64 = Data(data).base64EncodedString()
             model.emit(.termInput(id: taskId, dataB64: b64))
         }
