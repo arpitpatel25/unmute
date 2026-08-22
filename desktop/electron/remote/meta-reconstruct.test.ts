@@ -9,6 +9,7 @@ import {
   findClaudeSessionByCwd,
   readStatusSnapshot,
   reconstructTaskMeta,
+  sniffLiveAgent,
   __readBoundedPrefix,
 } from './meta-reconstruct'
 
@@ -174,5 +175,41 @@ test('with nothing recoverable anywhere — no rollout, no transcript, no status
   const h = await home()
   const dir = join(h, '.unmute', 'remote', 'local', 'truly-gone')
   await fs.mkdir(dir, { recursive: true })
-  assert.equal(await reconstructTaskMeta(dir, h), null)
+  assert.equal(await reconstructTaskMeta(dir, h, async () => null), null)
+})
+
+// ── sniffLiveAgent ───────────────────────────────────────────────────────────
+// THE BUG THIS EXISTS FOR. Without this, a degraded reconstruction leaves
+// `agent` unset, and the generic rehydrate path defaults a missing agent to
+// 'claude' — mislabeling a task that is provably, right now, running Codex,
+// because its tmux runtime survived and is still live. That runtime is the
+// one fully-certain signal left once meta.json is gone.
+
+test('sniffLiveAgent identifies codex from the live pane start command', async () => {
+  const result = await sniffLiveAgent('task-1', async (_bin, args) => {
+    assert.ok(args.includes('unmute-task-1'), 'must query the exact session for this task')
+    return 'codex resume 01a027b9-37f4-72a3-8108-6aeb18843445 -c \'model="gpt-5.6-terra"\'\n'
+  })
+  assert.equal(result, 'codex')
+})
+
+test('sniffLiveAgent identifies claude from the live pane start command', async () => {
+  const result = await sniffLiveAgent('task-1', async () => 'claude --model default --chrome\n')
+  assert.equal(result, 'claude')
+})
+
+test('sniffLiveAgent returns null when there is no live session for this task', async () => {
+  assert.equal(await sniffLiveAgent('task-1', async () => ''), null)
+})
+
+// ── reconstructTaskMeta: live agent as the last resort before degrading fully ──
+
+test('reconstructTaskMeta correctly labels a still-running task even with no cwd match — a live Codex task must never come back mislabeled Claude', async () => {
+  const h = await home()
+  const dir = join(h, '.unmute', 'remote', 'local', 'still-alive-task')
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(join(dir, 'status.json'), JSON.stringify({ state: 'processing', updated_at: 'x' }))
+
+  const result = await reconstructTaskMeta(dir, h, async () => 'codex')
+  assert.deepEqual(result, { intent: 'Recovered task', agent: 'codex', state: 'processing', degraded: true })
 })

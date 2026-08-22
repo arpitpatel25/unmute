@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   sessionNameFor, shellQuote, buildCommand, tmuxNewSessionArgs,
   tmuxAttachArgs, tmuxKillSessionArgs, tmuxListSessionNamesArgs,
-  taskIdsFromTmuxSessionList, resolveTmuxBin, TMUX_SOCKET,
+  tmuxPaneStartCommandArgs, taskIdsFromTmuxSessionList, resolveTmuxBin, TMUX_SOCKET,
 } from './tmux.ts'
 
 test('sessionNameFor is deterministic per task', () => {
@@ -40,6 +40,12 @@ test('attach + kill target the same session on the private socket', () => {
 test('runtime discovery lists only the private tmux server session names', () => {
   assert.deepEqual(tmuxListSessionNamesArgs(), [
     '-L', TMUX_SOCKET, 'list-sessions', '-F', '#{session_name}',
+  ])
+})
+
+test('pane-start-command query targets the exact session, on the private socket', () => {
+  assert.deepEqual(tmuxPaneStartCommandArgs('unmute-x'), [
+    '-L', TMUX_SOCKET, 'list-panes', '-t', 'unmute-x', '-F', '#{pane_start_command}',
   ])
 })
 

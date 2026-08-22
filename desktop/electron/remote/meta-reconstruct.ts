@@ -1,7 +1,9 @@
-import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { promises as fs, existsSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { projectSlug } from './projects'
+import { resolveTmuxBin, sessionNameFor, tmuxPaneStartCommandArgs } from './tmux'
 
 // Self-heals a task whose meta.json got truncated/lost (see atomic-file.ts for
 // the write-side bug this is a safety net for). meta.json is only Unmute's own
@@ -178,17 +180,55 @@ export async function readStatusSnapshot(dir: string): Promise<StatusSnapshot | 
   return { state: parsed.state, updatedAt: parsed.updated_at, summary: parsed.result?.summary }
 }
 
+function defaultRunTmux(bin: string, args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(bin, args, { timeout: 2_000 }, (error, stdout) => {
+      if (error) return resolve('') // no such session (or tmux server not running) — not an error to surface
+      resolve(String(stdout))
+    })
+  })
+}
+
+/**
+ * The one fully-certain "which agent is this" signal left once meta.json is
+ * gone but a task's runtime happens to have survived: what tmux actually
+ * started that pane with. THE BUG THIS EXISTS FOR — without it, a degraded
+ * reconstruction leaves `agent` unset, and the generic rehydrate path
+ * defaults a missing agent to 'claude'. That's fine for a genuinely ancient
+ * pre-agent-field receipt (the original reason for that default); it is
+ * simply wrong for a task that is, right now, provably running Codex.
+ * Returns null for a dead runtime — nothing left to ask.
+ */
+export async function sniffLiveAgent(
+  taskId: string,
+  run: (bin: string, args: string[]) => Promise<string> = defaultRunTmux,
+): Promise<'codex' | 'claude' | null> {
+  const bin = resolveTmuxBin(existsSync)
+  if (!bin) return null
+  const out = await run(bin, tmuxPaneStartCommandArgs(sessionNameFor(taskId)))
+  const cmd = (out.trim().split('\n')[0] ?? '').toLowerCase()
+  if (/(^|[\s'"])codex(\s|$)/.test(cmd)) return 'codex'
+  if (/(^|[\s'"])claude(\s|$)/.test(cmd)) return 'claude'
+  return null
+}
+
 /**
  * Rebuild what meta.json would have held for one task directory, when
  * meta.json itself is missing, empty, or unparseable.
  *
- * `dir` doubles as the candidate cwd: this only recovers the "scratch"
- * dispatch shape (home === cwd). A project-bound session's real cwd is gone
- * once meta.json is, and there's no other durable pointer to it — that case
- * falls through to the DEGRADED status-only record. Returns null only when
- * NOTHING survived at all (no session match, no status.json either).
+ * `dir` doubles as the candidate cwd: full recovery (agent + sessionId +
+ * real intent) only works for the "scratch" dispatch shape (home === cwd). A
+ * project-bound session's real cwd is gone once meta.json is, and there's no
+ * other durable pointer to it. Before fully degrading, still check whether
+ * the task's own runtime survived — if so, at least label it with the agent
+ * it is provably running, rather than guessing. Returns null only when
+ * NOTHING survived at all: no session match, no live runtime, no status.json.
  */
-export async function reconstructTaskMeta(dir: string, home = homedir()): Promise<ReconstructedMeta | null> {
+export async function reconstructTaskMeta(
+  dir: string,
+  home = homedir(),
+  sniffAgent: (taskId: string) => Promise<'codex' | 'claude' | null> = sniffLiveAgent,
+): Promise<ReconstructedMeta | null> {
   const status = await readStatusSnapshot(dir)
 
   const codex = await findCodexSessionByCwd(dir, home)
@@ -196,6 +236,9 @@ export async function reconstructTaskMeta(dir: string, home = homedir()): Promis
 
   const claude = await findClaudeSessionByCwd(dir, home)
   if (claude) return { intent: claude.intent, agent: 'claude', sessionId: claude.sessionId, state: status?.state, degraded: false }
+
+  const liveAgent = await sniffAgent(basename(dir))
+  if (liveAgent) return { intent: status?.summary ?? 'Recovered task', agent: liveAgent, state: status?.state, degraded: true }
 
   if (status) return { intent: status.summary ?? 'Recovered task', state: status.state, degraded: true }
 

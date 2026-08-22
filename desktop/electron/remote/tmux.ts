@@ -100,6 +100,13 @@ export function tmuxListSessionNamesArgs(): string[] {
   return ['-L', TMUX_SOCKET, 'list-sessions', '-F', '#{session_name}']
 }
 
+/** What tmux actually started a pane with — the one fully-certain "which
+ *  agent is this" signal left once a task's meta.json is gone but its
+ *  runtime is still alive (see meta-reconstruct.ts). */
+export function tmuxPaneStartCommandArgs(session: string): string[] {
+  return ['-L', TMUX_SOCKET, 'list-panes', '-t', session, '-F', '#{pane_start_command}']
+}
+
 /** Convert tmux's newline-delimited session names back to Unmute task ids.
  * Ignore sessions not owned by Unmute even on the private socket. */
 export function taskIdsFromTmuxSessionList(stdout: string): ReadonlySet<string> {
