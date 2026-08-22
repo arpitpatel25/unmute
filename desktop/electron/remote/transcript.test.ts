@@ -5,6 +5,7 @@ import {
   parseTranscript,
   lastAssistantText,
   hadSideEffects,
+  endedOnSelfContinuation,
   urlsIn,
   parseTurnLine,
   parseTurns,
@@ -58,6 +59,41 @@ test('hadSideEffects: reading is info, writing is act', () => {
     const t = parseTranscript(assistant([{ type: 'tool_use', name: tool, input: {} }]))
     assert.equal(hadSideEffects(t), true, `${tool} should count as a side effect`)
   }
+})
+
+test('endedOnSelfContinuation: true when THIS turn scheduled its own wakeup', () => {
+  const raw = [
+    userStr('start the plan'),
+    assistant([{ type: 'tool_use', name: 'Agent', input: { description: 'Task 2' } }]),
+    assistant([{ type: 'tool_use', name: 'ScheduleWakeup', input: { delaySeconds: 400 } }]),
+    assistant([{ type: 'text', text: 'Continuing autonomously — reviewing now.' }]),
+  ].join('\n')
+  assert.equal(endedOnSelfContinuation(raw), true)
+})
+
+test('endedOnSelfContinuation: false for an ordinary finished turn', () => {
+  const raw = [
+    userStr('what does this function do'),
+    assistant([{ type: 'tool_use', name: 'Read', input: {} }]),
+    assistant([{ type: 'text', text: 'It parses the config file.' }]),
+  ].join('\n')
+  assert.equal(endedOnSelfContinuation(raw), false)
+})
+
+test('endedOnSelfContinuation: scoped to the CURRENT turn — an earlier loop iteration must not haunt a later, real finish', () => {
+  const raw = [
+    userStr('start the plan'),
+    assistant([{ type: 'tool_use', name: 'ScheduleWakeup', input: { delaySeconds: 400 } }]),
+    assistant([{ type: 'text', text: 'Continuing autonomously.' }]),
+    userStr('keep going'),
+    assistant([{ type: 'tool_use', name: 'Write', input: {} }]),
+    assistant([{ type: 'text', text: 'All done — the feature is fully implemented.' }]),
+  ].join('\n')
+  assert.equal(endedOnSelfContinuation(raw), false)
+})
+
+test('endedOnSelfContinuation: no transcript yet is not a checkpoint', () => {
+  assert.equal(endedOnSelfContinuation(''), false)
 })
 
 test('urlsIn: de-duplicated, in order, without the sentence punctuation', () => {

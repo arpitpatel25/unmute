@@ -94,6 +94,34 @@ export function hadSideEffects(messages: readonly AssistantMessage[]): boolean {
   return messages.some((m) => m.tools.some((t) => MUTATING_TOOLS.has(t) || t.startsWith('mcp__')))
 }
 
+/** Tool names whose use means the turn ended because the session scheduled its
+ *  own continuation, not because it is actually finished — the autonomous-loop
+ *  skill's own "wake me again later" declaration. Add here if another
+ *  self-continuation mechanism appears; this is a maintained list, not a
+ *  guess from prose. */
+const SELF_CONTINUATION_TOOLS = new Set(['ScheduleWakeup'])
+
+/** Did THIS TURN — the assistant messages since the last real user prompt —
+ *  call a self-continuation tool? Scoped to the current turn on purpose,
+ *  unlike `hadSideEffects`: a loop used two turns ago must not keep marking
+ *  every later, genuinely-finished turn as a checkpoint forever. Reads the
+ *  raw transcript directly because turn boundaries need the interleaved user
+ *  lines that `AssistantMessage[]` alone has already dropped. */
+export function endedOnSelfContinuation(raw: string): boolean {
+  const lines = raw.split('\n')
+  let lastUserLine = -1
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].trim()) continue
+    if (parseTurnLine(lines[i])?.role === 'user') lastUserLine = i
+  }
+  for (let i = lastUserLine + 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue
+    const m = parseAssistantLine(lines[i])
+    if (m?.tools.some((t) => SELF_CONTINUATION_TOOLS.has(t))) return true
+  }
+  return false
+}
+
 /** URLs the session's own prose mentions, de-duplicated, in order. Used as
  *  `result.artifacts` for navigate/watch/consume without the model being told
  *  to report them. Trailing punctuation is trimmed — prose ends sentences. */
@@ -108,6 +136,18 @@ export function urlsIn(text: string): string[] {
     out.push(url)
   }
   return out
+}
+
+/** The transcript file's raw bytes. Missing/unreadable ⇒ '' (never throws): a
+ *  freshly-spawned session has no transcript yet, which is not an error. The
+ *  one tolerant read every reader below is built on. */
+export async function readTranscriptRaw(path: string | null): Promise<string> {
+  if (!path) return ''
+  try {
+    return await fs.readFile(path, 'utf8')
+  } catch {
+    return ''
+  }
 }
 
 /** Read + parse a transcript file. Missing/unreadable ⇒ [] (never throws): a

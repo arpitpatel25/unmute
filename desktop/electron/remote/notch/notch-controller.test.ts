@@ -1521,6 +1521,27 @@ test('closing quiets the current attention episode without removing its task', (
   assert.ok(pocketOf(h2)!.slots.some((sl) => sl.id === 'q'), 'the unresolved question stays reachable')
 })
 
+test('a session done on its own scheduled continuation does not demand attention', () => {
+  // An autonomous multi-task session flips done->processing on every turn
+  // boundary its own loop drives — Task.checkpoint marks the ones that are a
+  // scheduled pause, not a real stop. Without this, a busy session pops the
+  // notch open dozens of times an hour: exactly the "it just keeps popping up
+  // again and again" field report this guards against.
+  const h = setup()
+  put(h, makeTask({ id: 'loop', state: 'done', kind: 'session', alive: true, checkpoint: true, name: 'Autonomous plan' }))
+  assert.equal(h.client.last('setState')!.attention, 0, 'a scheduled pause is not news')
+  h.client.fire({ type: 'pocketOpen' })
+  assert.ok(pocketOf(h)!.slots.some((sl) => sl.id === 'loop'), 'still reachable — just not demanding')
+  assert.equal(pocketOf(h)!.slots.find((sl) => sl.id === 'loop')!.demanding, false)
+
+  // The very next turn genuinely finishing (checkpoint cleared) must demand
+  // attention exactly as an ordinary session-done already does — this flag
+  // must never leak forward and silence a real finish.
+  const h2 = setup()
+  put(h2, makeTask({ id: 'real', state: 'done', kind: 'session', alive: true, checkpoint: false, name: 'Real finish' }))
+  assert.equal(h2.client.last('setState')!.attention, 1, 'a real stop still demands attention as before')
+})
+
 
 // ── the state collapse: what wants you, and why ────────────────────────────
 //

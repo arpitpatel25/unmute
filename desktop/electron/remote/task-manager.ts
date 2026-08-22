@@ -71,7 +71,7 @@ import {
 import { buildDispatch } from './dispatch-prompt'
 import { detectSurface } from './surface'
 import { deriveStatus, isAnswerable, type HookEvent, type AskQuestion } from './observer'
-import { readTranscript, hadSideEffects, readLatestExchange } from './transcript'
+import { readTranscript, readTranscriptRaw, hadSideEffects, endedOnSelfContinuation, readLatestExchange } from './transcript'
 import type { Block } from './blocks'
 import { blocksFromClaudeTranscript } from './blocks-claude'
 import { blocksFromRollout } from './codex/blocks-rollout'
@@ -326,6 +326,13 @@ export interface Task {
   promptSubmittedAt?: number
   /** Executor self-classification (drives presentation + lifecycle). */
   category?: StatusPayload['category']
+  /** This turn's `done` is a scheduled pause (the loop is about to re-prompt
+   *  itself), not a real stop — see endedOnSelfContinuation(). Sessions in an
+   *  autonomous multi-task run flip done→processing every turn boundary that
+   *  hooks alone cannot tell apart from actually finishing; this is the flag
+   *  that lets the notch stop treating each one as news. Cleared the moment a
+   *  new prompt is submitted, never persisted — recomputed fresh every turn. */
+  checkpoint?: boolean
   /** Latest short progress label the executor wrote ("Editing X · 12/18 tests").
    *  Surfaced on running tasks in the overlay; purely informational. */
   step?: string
@@ -1206,9 +1213,20 @@ export class TaskManager extends EventEmitter {
     // did this session actually change anything? Read from its own transcript,
     // and only when a turn ended (the sole event where category is decided).
     let sideEffects = false
+    if (event.kind === 'prompt-submitted') {
+      // A new turn starting means whatever checkpoint the LAST turn ended on
+      // is over — this is a fresh turn, and it deserves its own, unbiased
+      // judgment when it too ends.
+      task.checkpoint = false
+    }
     if (event.kind === 'turn-ended') {
       const path = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
       sideEffects = hadSideEffects(await readTranscript(path))
+      // Is this `done` a real stop, or the loop scheduling its own next turn?
+      // See endedOnSelfContinuation()'s own doc comment for the reasoning —
+      // this is what stops a busy autonomous session from popping the notch
+      // open on every turn boundary while it is still mid-plan.
+      task.checkpoint = endedOnSelfContinuation(await readTranscriptRaw(path))
 
       // THE REPLY COMES FROM THE EVENT, NOT THE TRANSCRIPT.
       //

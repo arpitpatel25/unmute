@@ -66,6 +66,10 @@ export interface TaskLite {
   spawnedBy?: string | null
   group?: string | null
   state: TaskStatusName
+  /** This `done` is a scheduled pause in an autonomous multi-task run, not a
+   *  real stop — see Task.checkpoint. Suppresses the demanding/auto-expand
+   *  treatment a session's `done` would otherwise get. */
+  checkpoint?: boolean
   step?: string | null
   createdAt?: number
   updatedAt?: number
@@ -710,7 +714,13 @@ export class NotchController {
     if (t.state === 'needs-user' || t.state === 'stuck') return true
     const fresh = this.presence.awakeMs() - this.demandSince(t) < DEMAND_WINDOW_MS
     if (t.state === 'failed') return fresh
-    if (t.state === 'done' && (t.kind ?? 'oneoff') === 'session') return fresh
+    // A CHECKPOINT IS NOT A STOP. An autonomous multi-task session flips
+    // done->processing on every turn boundary its own loop drives — hooks
+    // alone cannot tell that turn-boundary "done" apart from a genuine
+    // finish. Without this, a busy session pops the notch open on every one
+    // of those boundaries: "it just keeps popping up again and again" from a
+    // session that never actually stopped. See Task.checkpoint.
+    if (t.state === 'done' && (t.kind ?? 'oneoff') === 'session') return fresh && !t.checkpoint
     return false
   }
 

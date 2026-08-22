@@ -1853,6 +1853,9 @@ function serializeTask(t: Task) {
     usage: t.usage ?? null,
     state: t.state,
     category: t.category ?? null,
+    // Is this `done` a real stop, or an autonomous loop's own scheduled
+    // continuation? See Task.checkpoint's doc comment.
+    checkpoint: t.checkpoint ?? false,
     step: t.step ?? null,
     // WHAT IT IS DOING RIGHT NOW. Carried as the structured Activity rather
     // than a pre-rendered sentence so the surface can style it (and one day
