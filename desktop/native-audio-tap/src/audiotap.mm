@@ -107,6 +107,18 @@ void TeardownLocked() {
     AudioHardwareDestroyProcessTap(gTapID);
     gTapID = kAudioObjectUnknown;
   }
+  // Release the ThreadSafeFunction here too so every path that tears down
+  // the Core Audio objects (both StartCapture's own failure branches and
+  // StopCapture) also releases gTSFN — a caller can't reach a cleanup path
+  // that forgets it. Napi::ThreadSafeFunction::Release() does not clear the
+  // wrapper's internal handle itself, so gTSFN is explicitly reset to a
+  // fresh (null) instance afterward; that keeps the `gTSFN != nullptr`
+  // check further down (in StopCapture, left untouched) false, which is
+  // what prevents a double Release() there.
+  if (gTSFN != nullptr) {
+    gTSFN.Release();
+    gTSFN = Napi::ThreadSafeFunction();
+  }
   gCapturing.store(false);
 }
 
@@ -181,6 +193,15 @@ Napi::Value StartCapture(const Napi::CallbackInfo& info) {
     return env.Undefined();
   }
 
+  // Defensive: gTSFN should always be null here (TeardownLocked releases
+  // and resets it on every failure/stop path below), but guard against
+  // overwriting a still-populated handle from any future code path that
+  // might otherwise skip that cleanup — reassigning gTSFN without
+  // releasing the old one first would leak a ThreadSafeFunction.
+  if (gTSFN != nullptr) {
+    gTSFN.Release();
+    gTSFN = Napi::ThreadSafeFunction();
+  }
   gTSFN = Napi::ThreadSafeFunction::New(env, info[1].As<Napi::Function>(), "NotetakerAudioChunk", 0, 1);
 
   status = AudioDeviceCreateIOProcID(gAggregateDeviceID, TapIOProc, nullptr, &gIOProcID);
