@@ -32,10 +32,17 @@
 // hooks in is a one-line addition to wire-into-engine.sh's existing sed
 // patcher, exactly parallel to how `initRemote({ sessionManager,
 // keyboardManager })` is already injected into the OSS engine's real
-// main.ts:
+// main.ts. Note the import path below is './paywall/remote/notetakerWidget'
+// — NOT './paywall/notetakerWidget' — because `desktop/electron/remote/`
+// (which notetakerWidget.ts lives in, alongside init.ts) is copied wholesale
+// onto `$engine/electron/paywall/`, landing the widget at
+// electron/paywall/remote/notetakerWidget.ts, same as init.ts itself
+// (electron/paywall/remote/init.ts) — this bit an earlier draft of this
+// wiring (wrong path, silently-undefined hooks) and is now covered by two
+// dedicated grep checks in wire-into-engine.sh:
 //
 //   import { initNotetaker } from './notetakerInit'
-//   import { showNotetakerWidget, hideNotetakerWidget } from './paywall/notetakerWidget'
+//   import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notetakerWidget'
 //   initNotetaker({ onSessionStart: showNotetakerWidget, onSessionStop: hideNotetakerWidget })
 //
 // Per docs/superpowers/specs/2026-08-23-meeting-notetaker-detection-capture.md.
@@ -172,15 +179,22 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
   // Widget visibility must always match REAL capture state (not the
   // controller's detection/confirm logic), so it is wired here, at the one
-  // place start()/stop() actually run — never from the controller.
+  // place start()/stop() actually run — never from the controller. Guarded
+  // by `isActive` BEFORE calling super so the hook only fires on a REAL
+  // transition: NotetakerSession.stop() early-returns as a no-op when
+  // already inactive, and a firing hook on a no-op would break the
+  // "hook == real transition" invariant (harmless today since
+  // hideNotetakerWidget() is itself idempotent, but not something to rely
+  // on staying harmless).
   class HookedNotetakerSession extends NotetakerSession {
     start(pid: number): void {
       super.start(pid)
       hooks.onSessionStart?.()
     }
     stop(): void {
+      const wasActive = this.isActive
       super.stop()
-      hooks.onSessionStop?.()
+      if (wasActive) hooks.onSessionStop?.()
     }
   }
   // Captured chunks have no downstream consumer yet — Tasks 1-9 built
@@ -198,9 +212,32 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
   // ── Manual chord trigger (Task 7's KeyboardManager events) ──
   keyboardManager.on('notes-start-requested', () => {
-    controller.onNotesStartRequested().catch((e) => {
-      console.warn('[notetaker] start failed:', (e as Error).message)
-    })
+    controller
+      .onNotesStartRequested()
+      .catch((e) => {
+        // The single most likely real-world failure here is a TCC
+        // ("System Audio Recording Only") denial from session.start() —
+        // silent otherwise, so the user gets no explanation for why nothing
+        // happened. The no-resolvable-pid case already gets its own
+        // notification from inside the controller; this covers the throw
+        // path the controller deliberately does not catch.
+        console.warn('[notetaker] start failed:', (e as Error).message)
+        showNotetakerNotification({
+          title: 'Notetaker',
+          body: 'Could not start note-taking (permission denied, or capture failed to start).',
+        })
+      })
+      .finally(() => {
+        // keyboard.ts sets notesActive = true BEFORE emitting
+        // notes-start-requested (see maybeHandleNotesChordDown) — if
+        // resolveTargetPid came back null, or session.start() threw,
+        // capture never actually began. Resync the chord's own state back
+        // to false so the NEXT double-tap starts a fresh attempt instead of
+        // raising a "Stop note-taking?" dialog for a capture that never
+        // existed. (When start DID succeed, session.isActive is true here
+        // and this is correctly a no-op.)
+        if (!session.isActive) keyboardManager.confirmNotesStop()
+      })
   })
   keyboardManager.on('notes-stop-confirm-requested', () => {
     controller
@@ -223,6 +260,33 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     if (!session.isActive) return
     session.stop()
     keyboardManager.confirmNotesStop()
+  })
+
+  // ── Capture-active gate for the poll loop below ──
+  // Heavy main-process work while a capture is hot corrupts audio — the same
+  // constraint sessionManager.ts's own pauseForCapture() call site documents
+  // ("heavy main-process work while the microphone is hot corrupts the
+  // audio... deliberately NOT awaited"). Nothing in this codebase exposes a
+  // pollable "is a capture active right now" getter (sessionManager.ts has
+  // exactly one public getter, `processing`, which means something
+  // different — API calls in flight AFTER capture stops); the actual
+  // existing signal is keyboardManager's own 'keyboard' channel, which
+  // already emits a full 'key-state' snapshot (dictationActive/
+  // instructionActive/remoteActive/agentActive) after every key event — the
+  // same channel this file already listens to nothing on yet. Reusing that,
+  // rather than adding a new getter to sessionManager.ts or inventing a
+  // fresh signal.
+  let otherCaptureActive = false
+  keyboardManager.on('keyboard', (e) => {
+    const k = e as unknown as {
+      type?: string
+      dictationActive?: boolean
+      instructionActive?: boolean
+      remoteActive?: boolean
+      agentActive?: boolean
+    }
+    if (k.type !== 'key-state') return
+    otherCaptureActive = !!(k.dictationActive || k.instructionActive || k.remoteActive || k.agentActive)
   })
 
   // ── Detection (MeetingWatcher, Task 3) ──
@@ -263,7 +327,18 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // 3s: frequent enough that the watcher's 1.5s debounce settles within a
   // couple of polls, infrequent enough not to hammer osascript/native-ax on
   // every tick.
-  async function pollMeetingSignal(): Promise<void> {
+  //
+  // An arrow function assigned to `const`, not a hoisted `function`
+  // declaration — TypeScript's control-flow narrowing of `const ax` (from
+  // the `if (!nativeAudioTap || !ax) return` guard above) does not carry
+  // into a hoisted function's body (confirmed with `tsc --strict`: `ax`
+  // reads back as `NativeAx | null` inside a `function` here), but does
+  // carry into a `const` arrow function defined after the narrowing point.
+  const pollMeetingSignal = async (): Promise<void> => {
+    // NEVER do this work while a capture is hot (see the otherCaptureActive
+    // comment above) — skip this tick entirely rather than delay it, the
+    // next tick 3s later is not worth the risk of corrupting live audio.
+    if (otherCaptureActive) return
     try {
       const np = await readNowPlaying()
       let activeTabUrl: string | undefined

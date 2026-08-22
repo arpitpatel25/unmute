@@ -14,8 +14,12 @@
 // tested. The real wiring — real Notification, a real confirm dialog, the
 // real NotetakerSession backed by unmute-native-audio-tap, and real
 // MeetingWatcher/KeyboardManager event plumbing — lives in
-// desktop/electron/remote/init.ts (Electron glue, not unit-tested, exactly
-// like every other feature wired in there).
+// desktop/engine-overrides/electron/notetakerInit.ts (Electron glue, not
+// unit-tested, exactly like every other feature wired in there). NOT
+// desktop/electron/remote/init.ts — see notetakerInit.ts's own file header
+// for why (that file's opaque-injected-dependency design + the copy-time
+// directory layout make a direct cross-tree import from init.ts
+// unresolvable both locally and after the build's engine-overrides copy).
 
 import type { NotetakerSession } from './notetakerSession'
 

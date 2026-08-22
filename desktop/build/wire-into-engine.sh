@@ -499,13 +499,18 @@ import { initRemote } from './paywall/remote/init'
   # electron ROOT by the engine-overrides copy above) owns MeetingWatcher +
   # NotetakerSession + NotetakerController + the keyboard chord wiring; it
   # cannot reach the floating widget itself (a closed-source paywall-tree
-  # file, desktop/electron/remote/notetakerWidget.ts) so its show()/hide()
+  # file, desktop/electron/remote/notetakerWidget.ts — which the `cp -R
+  # $ROOT/electron/. $engine/electron/paywall/` step above lands at
+  # $engine/electron/paywall/remote/notetakerWidget.ts, note the extra
+  # `remote/` — SAME directory `desktop/electron/remote/init.ts` lands in,
+  # which is exactly why the sibling `initRemote` import just above this one
+  # reads './paywall/remote/init', not './paywall/init') so its show()/hide()
   # are injected here as hooks — see notetakerInit.ts's own file header for
   # why this lives in main.ts rather than in paywall/remote/init.ts.
   if ! grep -q 'initNotetaker' "$main_ts"; then
     sed -i.bak "/^import { initRemote } from '\.\/paywall\/remote\/init'/a\\
 import { initNotetaker } from './notetakerInit'\\
-import { showNotetakerWidget, hideNotetakerWidget } from './paywall/notetakerWidget'
+import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notetakerWidget'
 " "$main_ts"
     rm -f "$main_ts.bak"
     node -e "
@@ -597,11 +602,27 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
   if [[ ! -f "$engine/electron/notetakerInit.ts" ]]; then
     log "WARN: notetakerInit.ts not copied into engine — meeting notetaker will not initialise"
   fi
+  # Two SEPARATE checks on purpose: the first matches even when only the
+  # IMPORT line landed (e.g. the call-injection step above silently failed to
+  # find its anchor) — that alone leaves onSessionStart/onSessionStop
+  # undefined and the widget never appears, so it must fail loudly, not just
+  # the import.
   if ! grep -q 'initNotetaker' "$engine/electron/main.ts"; then
     log "WARN: main.ts missing initNotetaker — meeting notetaker will not start"
   fi
-  if [[ ! -f "$engine/electron/paywall/notetakerWidget.ts" ]]; then
+  if ! grep -q 'initNotetaker(' "$engine/electron/main.ts"; then
+    log "WARN: main.ts has the initNotetaker import but never CALLS it — meeting notetaker will not start"
+  fi
+  # Widget lands at electron/paywall/remote/, not electron/paywall/ — same
+  # directory desktop/electron/remote/init.ts lands in (see the comment on
+  # the injection above this block). Checking the file's presence there AND
+  # that main.ts's import specifier actually points at it catches both a
+  # copy failure and a stale/wrong import path landing silently.
+  if [[ ! -f "$engine/electron/paywall/remote/notetakerWidget.ts" ]]; then
     log "WARN: notetakerWidget.ts not copied into engine — meeting notetaker widget will not initialise"
+  fi
+  if ! grep -q "from './paywall/remote/notetakerWidget'" "$engine/electron/main.ts"; then
+    log "WARN: main.ts missing the correct notetakerWidget import path — widget show/hide will be undefined"
   fi
 
   # ─── HUD/widget window tightening ─────────────────────────────
