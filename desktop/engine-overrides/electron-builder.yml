@@ -57,6 +57,10 @@ mac:
     - name: Unmute
       schemes:
         - unmute
+  extendInfo:
+    NSMicrophoneUsageDescription: "unmute uses your microphone to transcribe what you say into text."
+    NSAppleEventsUsageDescription: "unmute uses System Events to paste transcribed text at your cursor."
+    NSSystemAudioCaptureUsageDescription: "unmute's meeting notetaker captures system audio to transcribe both sides of a call, entirely on your device."
 win:
   target:
     - nsis

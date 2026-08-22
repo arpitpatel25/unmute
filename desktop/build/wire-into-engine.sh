@@ -140,6 +140,17 @@ wire_paywall() {
     log "WARN: $ROOT/native-ax not found — Computer Use (ax-mcp) will be unavailable"
   fi
 
+  # Copy the native-audio-tap addon (meeting notetaker system-audio capture).
+  # Same in-process pattern as native-ax/native-fn-listener — see that
+  # module's README for why.
+  if [[ -d "$ROOT/native-audio-tap" ]]; then
+    log "Copying native-audio-tap addon"
+    mkdir -p "$engine/native-audio-tap"
+    cp -R "$ROOT/native-audio-tap/." "$engine/native-audio-tap/"
+  else
+    log "WARN: $ROOT/native-audio-tap not found — meeting notetaker will be unavailable"
+  fi
+
   # Vendor the cua-driver embedded binary (Computer Use v2 engine). Unmute
   # spawns it as a DIRECT child so it runs inside the signed .app's TCC
   # responsibility chain (embedded mode). Fail LOUDLY if missing rather than
@@ -227,6 +238,9 @@ wire_paywall() {
     }
     if (fs.existsSync('$engine/native-ax/package.json')) {
       pkg.dependencies['unmute-native-ax'] = 'file:./native-ax'
+    }
+    if (fs.existsSync('$engine/native-audio-tap/package.json')) {
+      pkg.dependencies['unmute-native-audio-tap'] = 'file:./native-audio-tap'
     }
     // Unmute Remote: node-pty is the PTY backend for the owned interactive
     // claude session (PRD §4.1). It's a native module — electron-builder's
