@@ -142,11 +142,13 @@ wire_paywall() {
 
   # Copy the native-audio-tap addon (meeting notetaker system-audio capture).
   # Same in-process pattern as native-ax/native-fn-listener — see that
-  # module's README for why.
+  # module's README for why. Exclude the local dev build/ + node_modules so
+  # electron-builder rebuilds it clean for the ABI.
   if [[ -d "$ROOT/native-audio-tap" ]]; then
     log "Copying native-audio-tap addon"
     mkdir -p "$engine/native-audio-tap"
-    cp -R "$ROOT/native-audio-tap/." "$engine/native-audio-tap/"
+    rsync -a --exclude 'build' --exclude 'node_modules' "$ROOT/native-audio-tap/" "$engine/native-audio-tap/" 2>/dev/null \
+      || cp -R "$ROOT/native-audio-tap/." "$engine/native-audio-tap/"
   else
     log "WARN: $ROOT/native-audio-tap not found — meeting notetaker will be unavailable"
   fi
