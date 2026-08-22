@@ -26,7 +26,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { createTerminalInputGate, replayTerminalHistory } from './terminal-replay-gate'
+import { connectTerminalInputAfterReplay, type TerminalInputSession } from './terminal-replay-gate'
 
 type API = {
   remoteGetOutput?: (taskId: string) => Promise<string>
@@ -57,7 +57,7 @@ export function LiveTerminal({ taskId, onClose, fill = false }: { taskId: string
     let resizeTimer: ReturnType<typeof setTimeout> | null = null
     let lastCols = 0
     let lastRows = 0
-    const inputGate = createTerminalInputGate((data) => api().remoteTerminalInput?.(taskId, data))
+    let inputSession: TerminalInputSession | undefined
 
     // Fit xterm to its container, then tell the PTY the new size so the TUI
     // repaints at that width (SIGWINCH). Debounced: a window drag fires dozens of
@@ -120,29 +120,31 @@ export function LiveTerminal({ taskId, onClose, fill = false }: { taskId: string
           !e.ctrlKey && !e.metaKey && !e.altKey &&
           !e.isComposing
         ) {
-          inputGate.forward('\x1b\r')
+        inputSession?.forward('\x1b\r')
           return false
         }
         return true
       })
-      // Keystrokes → the task's stdin (typeable terminal, PRD §4.3).
-      term.onData((data) => inputGate.forward(data))
-
       // Replay the buffered RAW output, THEN attach the live stream on top — in
       // that order so history never lands after a newer live chunk. Subscribing
       // inside the .then keeps the two ordered through one path.
       void api().remoteGetOutput?.(taskId).then((buf) => {
         if (disposed || !term) return
         const replayTarget = term
-        replayTerminalHistory(replayTarget, buf ?? '', inputGate, () => {
-          if (disposed) return
-          off = api().remoteOnOutput?.((d) => {
-            if (!disposed && d.taskId === taskId && term) term.write(d.chunk)
-          })
-          // Now that the terminal is populated, negotiate the PTY size to match the
-          // grid the user sees, so all FUTURE output is painted at this width.
-          api().remoteTerminalResize?.(taskId, replayTarget.cols, replayTarget.rows)
-        })
+        inputSession = connectTerminalInputAfterReplay(
+          replayTarget,
+          buf ?? '',
+          (data) => api().remoteTerminalInput?.(taskId, data),
+          () => {
+            if (disposed) return
+            off = api().remoteOnOutput?.((d) => {
+              if (!disposed && d.taskId === taskId && term) term.write(d.chunk)
+            })
+            // Now that the terminal is populated, negotiate the PTY size to match the
+            // grid the user sees, so all FUTURE output is painted at this width.
+            api().remoteTerminalResize?.(taskId, replayTarget.cols, replayTarget.rows)
+          },
+        )
       })
     }
 
@@ -156,7 +158,7 @@ export function LiveTerminal({ taskId, onClose, fill = false }: { taskId: string
 
     return () => {
       disposed = true
-      inputGate.disable()
+      inputSession?.dispose()
       if (resizeTimer) clearTimeout(resizeTimer)
       ro.disconnect()
       off?.()

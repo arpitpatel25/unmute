@@ -1,27 +1,68 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createTerminalInputGate, replayTerminalHistory } from './terminal-replay-gate'
+import { connectTerminalInputAfterReplay } from './terminal-replay-gate'
 
-test('terminal device replies generated while replaying history never reach the live PTY', () => {
+test('historical replay stays display-only, then live input is attached exactly once', () => {
   const sent: string[] = []
-  const gate = createTerminalInputGate((data) => sent.push(data))
+  const listeners = new Set<(data: string) => void>()
+  const scheduled: Array<() => void> = []
   let writeDone: (() => void) | undefined
   const terminal = {
     write(_history: string, done?: () => void) {
-      gate.forward('\x1b[?65;20;1c')
       writeDone = done
+    },
+    onData(listener: (data: string) => void) {
+      listeners.add(listener)
+      return { dispose: () => listeners.delete(listener) }
     },
   }
 
-  replayTerminalHistory(terminal, '\x1b[c', gate, () => {})
-  assert.deepEqual(sent, [], 'xterm-generated replay responses stay local')
+  let ready = false
+  const session = connectTerminalInputAfterReplay(
+    terminal,
+    '\x1b[c',
+    (data) => sent.push(data),
+    () => { ready = true },
+    (callback) => scheduled.push(callback),
+  )
+
+  assert.equal(listeners.size, 0, 'no input listener exists during replay')
+  assert.equal(ready, false)
 
   writeDone?.()
-  gate.forward('\x1b[?65;20;1c')
-  gate.forward('\x1b[0n')
-  gate.forward('\x1b[12;34R')
-  gate.forward('\u009b?65;20;1c')
-  gate.forward('\x1b')
-  gate.forward('hello')
-  assert.deepEqual(sent, ['\x1b', 'hello'], 'device replies stay local while real input is forwarded')
+  assert.equal(listeners.size, 0, 'write callback alone does not expose replay replies')
+  scheduled.shift()?.()
+  assert.equal(listeners.size, 1)
+  assert.equal(ready, true)
+
+  listeners.forEach((listener) => listener('hello'))
+  listeners.forEach((listener) => listener('\x1b[?65;20;1c'))
+  session.forward('\x1b\r')
+  assert.deepEqual(sent, ['hello', '\x1b[?65;20;1c', '\x1b\r'], 'live input is forwarded verbatim once')
+
+  session.dispose()
+  assert.equal(listeners.size, 0)
+})
+
+test('empty history attaches once and disposal before activation cancels attachment', () => {
+  const scheduled: Array<() => void> = []
+  let attached = 0
+  const terminal = {
+    write() {},
+    onData() {
+      attached += 1
+      return { dispose() {} }
+    },
+  }
+
+  const session = connectTerminalInputAfterReplay(
+    terminal,
+    '',
+    () => {},
+    () => {},
+    (callback) => scheduled.push(callback),
+  )
+  session.dispose()
+  scheduled.shift()?.()
+  assert.equal(attached, 0)
 })
