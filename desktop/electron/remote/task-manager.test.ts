@@ -2261,3 +2261,42 @@ test('the warm-kill re-parks instead of killing a task that went back to work', 
   assert.equal(tm.get(id)!.state, 'processing')
   tm.kill(id)
 })
+
+// A finished one-off that nobody touches again must actually be GONE — not
+// just process-killed with a zombie record left for the pocket, the cockpit,
+// and the dashboard to each independently decide how long to keep showing.
+// Before this, the warm window's expiry called hardKill(): the PTY died but
+// task.home + meta.json + the in-memory row all survived, so three different
+// surfaces (each with its own, disagreeing idea of "how stale is too stale")
+// kept a real one-off "alive" for anywhere from 12h to 24h after it was truly
+// over. remove() already does the full erase (PRD §10.4) — this just wires
+// the automatic 15-minute-of-no-interaction path to call it, same as the
+// manual "delete" button would.
+test('an unattended one-off is fully erased when its warm window lapses — not just process-killed', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 120 })
+  const id = await tm.dispatch('quick errand nobody follows up on')
+  const task = tm.get(id)!
+  const home = task.home
+  await (async () => { const d = once(tm, 'done'); await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'done' } }); await d })()
+  await new Promise((r) => setTimeout(r, 300)) // past the warm window
+
+  assert.equal(fake.alive, false, 'the process is still killed, same as before')
+  assert.equal(tm.get(id), undefined, 'the task must be gone from the live list — pocket/cockpit/dashboard all read this')
+  await assert.rejects(fs.access(home), 'the on-disk record must be deleted, not just the in-memory row')
+})
+
+// Sessions must be completely unaffected — this is a one-off-only change.
+test('a session that finishes and is never touched again is NEVER erased by the warm window', { timeout: 5000 }, async () => {
+  const baseDir = await tmpBase()
+  const fake = makeFakeExecutor()
+  const tm = new TaskManager({ executorFactory: () => fake, baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 25, warmMs: 120 })
+  const id = await tm.dispatch('ongoing work', { kind: 'session' })
+  const task = tm.get(id)!
+  await (async () => { const d = once(tm, 'done'); await claudeWrites(task.statusPath, { state: 'done', result: { summary: 'turn one' } }); await d })()
+  await new Promise((r) => setTimeout(r, 300)) // well past what would be the warm window for a one-off
+
+  assert.ok(tm.get(id), 'a session must never be auto-erased, no matter how long it sits idle')
+  tm.kill(id)
+})

@@ -3442,12 +3442,13 @@ export class TaskManager extends EventEmitter {
           && oneoffWarmRemaining !== null
           && oneoffWarmRemaining <= 0
         if (completedOneoffExpired) {
-          this.hardKill(task.id)
-          task.error = undefined
-          task.resumeError = undefined
-          await this.persistState(task)
-          this.emit('updated', task)
+          // Same rule as the live timer (armWarmTimer): a one-off whose warm
+          // window has already lapsed is fully erased, not left as a record
+          // for the pocket/cockpit/dashboard to keep disagreeing about — this
+          // is just that expiry discovered lazily, on reattach, instead of by
+          // a timer that was running the whole time the app was closed.
           tlog.event('warm-idle-timeout', { warmMs: oneoffWarmMs, state: restoredState, recovered: true })
+          void this.remove(task.id)
           return
         }
         if (!TERMINAL.includes(task.state)) this.startPolling(task.id)
@@ -4911,8 +4912,18 @@ export class TaskManager extends EventEmitter {
         this.armWarmTimer(id, warmMs)
         return
       }
+      // A one-off nobody followed up on within the warm window is not just a
+      // process to kill — it's over, everywhere. hardKill() used to be the
+      // whole story here: the PTY died but the task's row and its on-disk
+      // record survived, leaving the pocket, the cockpit, and the dashboard
+      // to each independently decide (with three DIFFERENT timers) how long
+      // to keep showing a thing that was already dead. remove() does the
+      // full erase (PRD §10.4) — same hardKill() underneath, plus the row
+      // and its home dir are actually gone, so every surface agrees at once
+      // and a relaunch can't resurrect it. Sessions never reach this timer
+      // at all (parkWarm never arms it for kind === 'session').
       tlog.event('warm-idle-timeout', { warmMs, state: cur?.state ?? null })
-      this.hardKill(id)
+      void this.remove(id)
     }, warmMs)
     t.unref?.() // don't block process exit on the warm window
     this.warmTimers.set(id, t)
