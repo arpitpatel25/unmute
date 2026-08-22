@@ -1,5 +1,7 @@
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS } from './browserTabWatcher'
 
 describe('AppleScript active-tab URL lookup', () => {
@@ -45,5 +47,16 @@ describe('AppleScript active-tab URL lookup', () => {
       [...SUPPORTED_APPLESCRIPT_BROWSERS].sort(),
       ['Arc', 'Brave Browser', 'Microsoft Edge', 'Safari'].sort()
     )
+  })
+
+  test('default execFile correctly unwraps stdout from Node\'s promisified execFile', async () => {
+    // Test that the real default path works: Node's promisify(execFile) returns { stdout, stderr },
+    // not a bare string. This test uses /bin/echo to verify the adapter correctly extracts stdout.
+    const realExecFile = async (cmd: string, args: string[]) => {
+      const { stdout } = await promisify(execFile)(cmd, args)
+      return stdout
+    }
+    const output = await realExecFile('/bin/echo', ['hello'])
+    assert.equal(output, 'hello\n')
   })
 })

@@ -12,7 +12,10 @@ export const SUPPORTED_APPLESCRIPT_BROWSERS: readonly AppleScriptBrowser[] = [
 
 export type ExecFile = (cmd: string, args: string[]) => Promise<string>
 
-const defaultExecFile: ExecFile = promisify(execFileCb) as unknown as ExecFile
+const defaultExecFile: ExecFile = async (cmd, args) => {
+  const { stdout } = await promisify(execFileCb)(cmd, args)
+  return stdout
+}
 
 /**
  * Safari's AppleScript dictionary exposes "current tab of front window";
