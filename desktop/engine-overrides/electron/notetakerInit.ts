@@ -58,7 +58,7 @@ import { readNowPlaying } from './mediaController'
 import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowser } from './browserTabWatcher'
 import { ChunkBuffer } from './notetaker/chunkBuffer'
 import { transcribeAndPersistSession, newMeetingId } from './notetaker/transcribeSession'
-import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting } from './db'
+import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting } from './db'
 
 export type NotetakerInitHooks = {
   /** Called exactly when REAL capture starts/stops — from
@@ -172,6 +172,51 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   if (initialized) return
   initialized = true
 
+  // ── Meeting list/detail surface for the Notetaker tab (Tasks 8-10) ──
+  //
+  // DELIBERATELY REGISTERED BEFORE THE NATIVE-MODULE GUARD BELOW. These five
+  // handlers only read/write the `meetings` table and the meetings directory —
+  // none of them touch the audio tap or native-ax. Registering them behind the
+  // guard meant that an ABI mismatch, a failed native rebuild, or simply
+  // running on a non-macOS host made every ALREADY-SAVED meeting unreachable:
+  // the renderer's invoke() would reject with "No handler registered", which
+  // the list renders as an empty history — indistinguishable from having never
+  // recorded anything. Live capture degrades to unavailable; browsing what was
+  // already captured must not.
+  ipcMain.handle('notetaker:list-meetings', () => {
+    return getMeetings()
+  })
+
+  ipcMain.handle('notetaker:get-transcript', (_event, id: string) => {
+    const meeting = getMeeting(id)
+    if (!meeting || !meeting.transcript_path) return []
+    const meetingDir = path.join(app.getPath('userData'), 'meetings', id)
+    try {
+      const raw = fs.readFileSync(path.join(meetingDir, meeting.transcript_path), 'utf8')
+      return JSON.parse(raw)
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle('notetaker:rename-meeting', (_event, id: string, title: string) => {
+    updateMeetingTitle(id, title)
+  })
+
+  ipcMain.handle('notetaker:delete-meeting', (_event, id: string) => {
+    deleteMeeting(id)
+  })
+
+  ipcMain.handle('notetaker:get-audio-url', (_event, id: string, channel: 'mic' | 'system') => {
+    const meeting = getMeeting(id)
+    if (!meeting) return null
+    const relPath = channel === 'mic' ? meeting.audio_mic_path : meeting.audio_system_path
+    if (!relPath) return null
+    const fullPath = path.join(app.getPath('userData'), 'meetings', id, relPath)
+    if (!fs.existsSync(fullPath)) return null
+    return `file://${fullPath}`
+  })
+
   let nativeAudioTap: NativeAudioTap | null = null
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -203,21 +248,60 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // a rejection is logged instead of becoming a silent unhandled rejection.
   let chunkBuffer = new ChunkBuffer()
   let sessionStartedAt = 0
+  // Allocated at START, not at stop: the meeting's DB row is now written the
+  // moment capture begins (see below), so the id has to exist that early and
+  // the final insert must reuse it rather than mint a second one.
+  let sessionMeetingId = ''
 
   class HookedNotetakerSession extends NotetakerSession {
     start(pid: number): void {
       chunkBuffer = new ChunkBuffer()
       sessionStartedAt = Date.now()
-      super.start(pid)
+      sessionMeetingId = newMeetingId()
+      super.start(pid) // throws if the tap won't start — no placeholder row in that case
+      // A PLACEHOLDER ROW, WRITTEN IMMEDIATELY. Until this existed, the
+      // meetings row was only inserted at the very END of
+      // transcribeAndPersistSession(), so an app quit or crash mid-meeting
+      // erased the recording completely: no row, no audio, no error, nothing
+      // in the UI to tell the user it had ever happened. Now a
+      // status:'recording' row exists for the whole capture, so a meeting
+      // interrupted by a crash still shows up in the Notetaker list in a
+      // clearly-incomplete state. insertMeeting() is INSERT OR REPLACE, so the
+      // real row written at the end of transcription overwrites this one in
+      // place (same id) with the final title/status/paths.
+      // ended_at is seeded to started_at (not 0) so list ordering and the
+      // duration column stay sane while the meeting is still running.
+      try {
+        insertMeeting({
+          id: sessionMeetingId,
+          title: 'Recording…',
+          started_at: sessionStartedAt,
+          ended_at: sessionStartedAt,
+          duration_ms: 0,
+          status: 'recording',
+          transcript_path: null,
+          audio_mic_path: null,
+          audio_system_path: null,
+        })
+      } catch (e) {
+        // A failed placeholder row must never take down a capture that has
+        // already started — the end-of-session insert is still the real one.
+        console.warn('[notetaker] could not write the in-progress meeting row:', (e as Error).message)
+      }
       hooks.onSessionStart?.()
     }
     stop(): void {
       const wasActive = this.isActive
+      // Read before the async chain below so a subsequent start() can't
+      // retarget this session's persist call.
+      const meetingId = sessionMeetingId
+      const startedAt = sessionStartedAt
+      const buffer = chunkBuffer
       super.stop()
       if (wasActive) {
         hooks.onSessionStop?.()
         const endedAt = Date.now()
-        transcribeAndPersistSession(chunkBuffer, newMeetingId(), sessionStartedAt, endedAt).catch((e) => {
+        transcribeAndPersistSession(buffer, meetingId, startedAt, endedAt).catch((e) => {
           console.error('[notetaker] failed to transcribe/persist session:', (e as Error).message)
         })
       }
@@ -286,39 +370,25 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     keyboardManager.confirmNotesStop()
   })
 
-  // ── Meeting list/detail surface for the (not-yet-built) UI (Tasks 8-10) ──
-  ipcMain.handle('notetaker:list-meetings', () => {
-    return getMeetings()
-  })
-
-  ipcMain.handle('notetaker:get-transcript', (_event, id: string) => {
-    const meeting = getMeeting(id)
-    if (!meeting || !meeting.transcript_path) return []
-    const meetingDir = path.join(app.getPath('userData'), 'meetings', id)
+  // ── App quit while a meeting is being recorded ──
+  // BEST EFFORT, NOT A GUARANTEE. stop() kicks off transcribeAndPersistSession
+  // — which does real network I/O (managed STT) — and Electron will not wait
+  // for that promise before exiting, so a full save usually will NOT complete
+  // here. What this DOES buy: the tap is closed cleanly, and the meeting's
+  // placeholder row (written at start(), above) is already on disk, so the
+  // interrupted meeting is visible in the Notetaker list as 'recording'
+  // instead of vanishing without a trace. Anything more (a synchronous
+  // flush-audio-to-disk-then-transcribe-on-next-launch path) is a real design
+  // change, deliberately out of scope for this fix.
+  app.on('before-quit', () => {
+    if (!session.isActive) return
+    console.log('[notetaker] app is quitting during a capture — stopping the session (save is best-effort)')
     try {
-      const raw = fs.readFileSync(path.join(meetingDir, meeting.transcript_path), 'utf8')
-      return JSON.parse(raw)
-    } catch {
-      return []
+      session.stop()
+      keyboardManager.confirmNotesStop()
+    } catch (e) {
+      console.warn('[notetaker] stop-on-quit failed:', (e as Error).message)
     }
-  })
-
-  ipcMain.handle('notetaker:rename-meeting', (_event, id: string, title: string) => {
-    updateMeetingTitle(id, title)
-  })
-
-  ipcMain.handle('notetaker:delete-meeting', (_event, id: string) => {
-    deleteMeeting(id)
-  })
-
-  ipcMain.handle('notetaker:get-audio-url', (_event, id: string, channel: 'mic' | 'system') => {
-    const meeting = getMeeting(id)
-    if (!meeting) return null
-    const relPath = channel === 'mic' ? meeting.audio_mic_path : meeting.audio_system_path
-    if (!relPath) return null
-    const fullPath = path.join(app.getPath('userData'), 'meetings', id, relPath)
-    if (!fs.existsSync(fullPath)) return null
-    return `file://${fullPath}`
   })
 
   // ── Capture-active gate for the poll loop below ──
@@ -393,11 +463,35 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // into a hoisted function's body (confirmed with `tsc --strict`: `ax`
   // reads back as `NativeAx | null` inside a `function` here), but does
   // carry into a `const` arrow function defined after the narrowing point.
+  /** While the notetaker itself is recording, only every Nth tick actually
+   *  polls — 3s * 4 = one sample every ~12s. See pollMeetingSignal below. */
+  const ACTIVE_CAPTURE_POLL_DIVISOR = 4
+  let ticksSinceStart = 0
   const pollMeetingSignal = async (): Promise<void> => {
     // NEVER do this work while a capture is hot (see the otherCaptureActive
     // comment above) — skip this tick entirely rather than delay it, the
     // next tick 3s later is not worth the risk of corrupting live audio.
     if (otherCaptureActive) return
+
+    // The notetaker's OWN capture is a hot capture too: this tick spawns a
+    // `perl` child process (readNowPlaying), makes a synchronous native-ax
+    // frontmostApp() call, and may spawn `osascript` for the browser tab URL —
+    // every 3 seconds, right through the user's meeting. That was harmless
+    // while the captured audio was being discarded; now that the recording is
+    // transcribed and saved (and the widget is holding a live mic), it is not.
+    //
+    // BUT this deliberately THROTTLES rather than skips outright. Hard-skipping
+    // every tick while `session.isActive` would silently delete a whole stop
+    // path: MeetingWatcher only emits onMeetingEnded after its signal flips
+    // false, and NotetakerController.onMeetingEnded() early-returns unless
+    // `session.isActive` — i.e. the ONLY situation that event exists for is
+    // exactly the one a hard skip would stop feeding. A recording would then
+    // never notice its meeting had ended. Backing the cadence off to every 4th
+    // tick (~12s) removes ~75% of the main-process churn during a recording
+    // while keeping end-detection alive (the watcher debounces on wall-clock
+    // time, not on tick count, so it still flips after two throttled samples).
+    ticksSinceStart++
+    if (session.isActive && ticksSinceStart % ACTIVE_CAPTURE_POLL_DIVISOR !== 0) return
     try {
       const np = await readNowPlaying()
       let activeTabUrl: string | undefined
