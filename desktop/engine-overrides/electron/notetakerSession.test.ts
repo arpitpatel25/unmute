@@ -1,10 +1,10 @@
 // desktop/engine-overrides/electron/notetakerSession.test.ts
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { NotetakerSession, type TimestampedChunk } from './notetakerSession'
+import { NotetakerSession, type NativeAudioChunk, type TimestampedChunk } from './notetakerSession'
 
 function fakeNativeAudioTap() {
-  let capturedOnChunk: ((c: { samples: Float32Array; sampleRate: number; timestampMs: number }) => void) | null = null
+  let capturedOnChunk: ((c: NativeAudioChunk) => void) | null = null
   let startCalls: number[] = []
   let stopCalls = 0
   return {
@@ -17,8 +17,10 @@ function fakeNativeAudioTap() {
         stopCalls++
       },
     },
-    emitSystemChunk: (samples: Float32Array, sampleRate: number, timestampMs: number) => {
-      capturedOnChunk?.({ samples, sampleRate, timestampMs })
+    // `channels` defaults to 2 because the real tap is a stereo mixdown
+    // (initStereoMixdownOfProcesses) — the shape the addon actually delivers.
+    emitSystemChunk: (samples: Float32Array, sampleRate: number, timestampMs: number, channels = 2) => {
+      capturedOnChunk?.({ samples, sampleRate, channels, timestampMs })
     },
     get startCalls() { return startCalls },
     get stopCalls() { return stopCalls },
@@ -43,6 +45,27 @@ describe('NotetakerSession', () => {
     assert.equal(received.length, 1)
     assert.equal(received[0].source, 'system')
     assert.equal(received[0].timestampMs, 1000)
+  })
+
+  test('the native chunk\'s sampleRate and channel count are passed through, not assumed', () => {
+    const fake = fakeNativeAudioTap()
+    const received: TimestampedChunk[] = []
+    const session = new NotetakerSession(fake.tap, (c) => received.push(c))
+    session.start(4242)
+    // A 44.1k stereo device: neither value may be silently replaced by the
+    // old hardcoded 48000/mono assumption.
+    fake.emitSystemChunk(new Float32Array([0.1, 0.2, 0.3, 0.4]), 44100, 1000, 2)
+    assert.equal(received[0].sampleRate, 44100)
+    assert.equal(received[0].channels, 2)
+  })
+
+  test('mic chunks are mono — the renderer recorder is a single-channel capture', () => {
+    const fake = fakeNativeAudioTap()
+    const received: TimestampedChunk[] = []
+    const session = new NotetakerSession(fake.tap, (c) => received.push(c))
+    session.start(4242)
+    session.feedMicChunk(new Float32Array([0.3]), 16000, 1005)
+    assert.equal(received[0].channels, 1)
   })
 
   test('mic chunks fed in from the renderer are tagged with source "mic"', () => {
@@ -90,7 +113,7 @@ describe('NotetakerSession', () => {
   test('start() resets isActive to false if native startCapture throws synchronously, and a retry is possible', () => {
     let shouldThrow = true
     const throwingTap = {
-      startCapture: (_pid: number, _onChunk: (c: { samples: Float32Array; sampleRate: number; timestampMs: number }) => void) => {
+      startCapture: (_pid: number, _onChunk: (c: NativeAudioChunk) => void) => {
         if (shouldThrow) {
           throw new Error('AudioDeviceStart failed (TCC permission not yet granted)')
         }

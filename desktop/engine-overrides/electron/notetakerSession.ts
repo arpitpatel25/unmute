@@ -4,11 +4,29 @@ export type TimestampedChunk = {
   source: 'mic' | 'system'
   samples: Float32Array
   sampleRate: number
+  /** How many audio channels `samples` carries. The system tap is created as
+   *  a STEREO mixdown (initStereoMixdownOfProcesses), so its chunks are
+   *  normally 2-channel interleaved — a consumer that assumes mono would play
+   *  them back at roughly double speed. The mic side, fed from the renderer's
+   *  getUserMedia recorder, is mono. Carried honestly here so no downstream
+   *  consumer has to guess; nothing reads it yet. */
+  channels: number
+  timestampMs: number
+}
+
+/** One chunk as the native addon delivers it (see
+ *  desktop/native-audio-tap/src/audiotap.mm — `sampleRate` is the aggregate
+ *  device's real queried rate, `channels` is the buffer's own
+ *  mNumberChannels). */
+export type NativeAudioChunk = {
+  samples: Float32Array
+  sampleRate: number
+  channels: number
   timestampMs: number
 }
 
 export type NativeAudioTap = {
-  startCapture: (pid: number, onChunk: (c: { samples: Float32Array; sampleRate: number; timestampMs: number }) => void) => void
+  startCapture: (pid: number, onChunk: (c: NativeAudioChunk) => void) => void
   stopCapture: () => void
 }
 
@@ -42,7 +60,13 @@ export class NotetakerSession {
     try {
       this.nativeAudioTap.startCapture(targetPid, (c) => {
         if (!this.active) return
-        this.onChunk({ source: 'system', samples: c.samples, sampleRate: c.sampleRate, timestampMs: c.timestampMs })
+        this.onChunk({
+          source: 'system',
+          samples: c.samples,
+          sampleRate: c.sampleRate,
+          channels: c.channels,
+          timestampMs: c.timestampMs,
+        })
       })
       this.active = true
     } catch (err) {
@@ -51,9 +75,13 @@ export class NotetakerSession {
     }
   }
 
+  /** Signature deliberately unchanged. `channels: 1` is not a guess: the mic
+   *  path is the renderer's existing getUserMedia recorder, which is mono
+   *  (widget/useAudioRecorder.ts). Stated explicitly so the mic side of a
+   *  TimestampedChunk is as honest about its shape as the system side. */
   feedMicChunk(samples: Float32Array, sampleRate: number, timestampMs: number): void {
     if (!this.active) return
-    this.onChunk({ source: 'mic', samples, sampleRate, timestampMs })
+    this.onChunk({ source: 'mic', samples, sampleRate, channels: 1, timestampMs })
   }
 
   stop(): void {

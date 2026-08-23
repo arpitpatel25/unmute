@@ -33,6 +33,25 @@ AudioDeviceIOProcID gIOProcID = nullptr;
 Napi::ThreadSafeFunction gTSFN;
 std::atomic<bool> gCapturing{false};
 
+/** The aggregate device's REAL sample rate, queried once per capture session
+ *  in StartCapture. Was hardcoded to 48000.0, which is merely the common
+ *  case — a device running at 44.1k would have had every chunk mislabelled. */
+double gSampleRate = 48000.0;
+
+/** mach_absolute_time() -> Unix-epoch-milliseconds offset, and the host
+ *  timebase, both computed ONCE in StartCapture.
+ *
+ *  WHY NOT PER-CALLBACK: TapIOProc runs on a Core Audio REAL-TIME IO thread,
+ *  which has no autorelease pool, and this file is built without ARC (matching
+ *  native-ax's binding.gyp). The previous `[[NSDate date] timeIntervalSince1970]`
+ *  in the callback therefore leaked one autoreleased NSDate per callback —
+ *  ~90-100 leaks/second for the whole capture — on top of doing objc_msgSend
+ *  work on a latency-critical thread. Caching the offset also removes the
+ *  per-callback mach_absolute_time() re-derivation, which added its own drift:
+ *  the timestamp is now a pure affine function of the buffer's own mHostTime. */
+double gMachToWallOffsetMs = 0.0;
+mach_timebase_info_data_t gTimebase = {0, 0};
+
 /** Resolves a pid_t to its Core Audio "process object" AudioObjectID. */
 AudioObjectID ProcessObjectForPID(pid_t pid) {
   AudioObjectID processObjectID = kAudioObjectUnknown;
@@ -61,22 +80,30 @@ OSStatus TapIOProc(AudioObjectID inDevice,
   const AudioBuffer& buffer = inInputData->mBuffers[0];
   if (buffer.mData == nullptr || buffer.mDataByteSize == 0) return noErr;
 
+  // The tap is created with initStereoMixdownOfProcesses, so this buffer is
+  // genuinely multi-channel. Report how many channels the samples we are
+  // about to hand over actually carry, rather than leaving the consumer to
+  // assume mono: interleaved stereo read as mono plays at ~double speed.
+  // (When the stream is NON-interleaved, Core Audio gives one buffer PER
+  // channel and mNumberChannels is 1 — we read mBuffers[0] only, so 1 is
+  // still the honest answer for what `samples` contains.)
+  const uint32_t channels = buffer.mNumberChannels > 0 ? buffer.mNumberChannels : 1;
+
   const size_t sampleCount = buffer.mDataByteSize / sizeof(float);
   auto* samplesCopy = new float[sampleCount];
   memcpy(samplesCopy, buffer.mData, buffer.mDataByteSize);
 
   // mHostTime is in mach absolute-time units; convert to wall-clock ms via
-  // the host's timebase so JS gets an ordinary epoch-relative timestamp
-  // comparable to the mic stream's Date.now()-based timestamps.
-  static mach_timebase_info_data_t timebase = {0, 0};
-  if (timebase.denom == 0) mach_timebase_info(&timebase);
-  const double machNowNs = (double)inInputTime->mHostTime * timebase.numer / timebase.denom;
-  const double machNowMs = machNowNs / 1e6;
-  const double wallNowMs = (double)([[NSDate date] timeIntervalSince1970] * 1000.0);
-  const double timestampMs = wallNowMs - ((double)mach_absolute_time() * timebase.numer / timebase.denom / 1e6 - machNowMs);
+  // the host's timebase (both the timebase and the epoch offset were cached
+  // in StartCapture — see gMachToWallOffsetMs) so JS gets an ordinary
+  // epoch-relative timestamp comparable to the mic stream's Date.now()-based
+  // timestamps. NO Objective-C, and no allocation, on this real-time thread.
+  const double timestampMs =
+      gMachToWallOffsetMs +
+      ((double)inInputTime->mHostTime * gTimebase.numer / gTimebase.denom / 1e6);
 
-  struct ChunkData { float* samples; size_t count; double sampleRate; double timestampMs; };
-  auto* chunk = new ChunkData{samplesCopy, sampleCount, buffer.mDataByteSize > 0 ? 48000.0 : 0.0, timestampMs};
+  struct ChunkData { float* samples; size_t count; uint32_t channels; double sampleRate; double timestampMs; };
+  auto* chunk = new ChunkData{samplesCopy, sampleCount, channels, gSampleRate, timestampMs};
 
   gTSFN.NonBlockingCall(chunk, [](Napi::Env env, Napi::Function jsCallback, ChunkData* data) {
     Napi::Float32Array samples = Napi::Float32Array::New(env, data->count);
@@ -84,6 +111,7 @@ OSStatus TapIOProc(AudioObjectID inDevice,
     Napi::Object chunkObj = Napi::Object::New(env);
     chunkObj.Set("samples", samples);
     chunkObj.Set("sampleRate", Napi::Number::New(env, data->sampleRate));
+    chunkObj.Set("channels", Napi::Number::New(env, (double)data->channels));
     chunkObj.Set("timestampMs", Napi::Number::New(env, data->timestampMs));
     jsCallback.Call({chunkObj});
     delete[] data->samples;
@@ -191,6 +219,53 @@ Napi::Value StartCapture(const Napi::CallbackInfo& info) {
     gTapID = kAudioObjectUnknown;
     Napi::Error::New(env, "AudioHardwareCreateAggregateDevice failed, OSStatus=" + std::to_string(status)).ThrowAsJavaScriptException();
     return env.Undefined();
+  }
+
+  // ─── Per-session constants, resolved ONCE, off the real-time thread ───
+  //
+  // Everything TapIOProc needs but must not compute itself. This runs on the
+  // JS/main thread (a normal Cocoa context with an autorelease pool), which
+  // is exactly why the NSDate call lives here and not in the callback.
+
+  // 1 · The device's REAL sample rate. Ask the aggregate device for its input
+  //     stream format; fall back to the nominal rate, then to 48k.
+  {
+    AudioStreamBasicDescription asbd = {};
+    UInt32 asbdSize = sizeof(asbd);
+    AudioObjectPropertyAddress formatAddress = {
+      kAudioDevicePropertyStreamFormat,
+      kAudioObjectPropertyScopeInput,
+      kAudioObjectPropertyElementMain
+    };
+    OSStatus fmtStatus = AudioObjectGetPropertyData(
+      gAggregateDeviceID, &formatAddress, 0, nullptr, &asbdSize, &asbd);
+    if (fmtStatus == noErr && asbd.mSampleRate > 0.0) {
+      gSampleRate = asbd.mSampleRate;
+    } else {
+      Float64 nominal = 0.0;
+      UInt32 nominalSize = sizeof(nominal);
+      AudioObjectPropertyAddress rateAddress = {
+        kAudioDevicePropertyNominalSampleRate,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+      };
+      if (AudioObjectGetPropertyData(gAggregateDeviceID, &rateAddress, 0, nullptr,
+                                     &nominalSize, &nominal) == noErr && nominal > 0.0) {
+        gSampleRate = nominal;
+      } else {
+        gSampleRate = 48000.0; // last resort: the overwhelmingly common rate
+      }
+    }
+  }
+
+  // 2 · The mach-time -> wall-clock epoch offset, so TapIOProc can turn a
+  //     buffer's mHostTime into an epoch timestamp with pure arithmetic.
+  if (gTimebase.denom == 0) mach_timebase_info(&gTimebase);
+  {
+    const double machNowMs =
+        (double)mach_absolute_time() * gTimebase.numer / gTimebase.denom / 1e6;
+    const double wallNowMs = (double)([[NSDate date] timeIntervalSince1970] * 1000.0);
+    gMachToWallOffsetMs = wallNowMs - machNowMs;
   }
 
   // Defensive: gTSFN should always be null here (TeardownLocked releases
