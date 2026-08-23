@@ -56,8 +56,9 @@ import { NotetakerSession, type NativeAudioTap } from './notetakerSession'
 import { NotetakerController } from './notetakerController'
 import { readNowPlaying } from './mediaController'
 import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowser } from './browserTabWatcher'
-import { ChunkBuffer } from './notetaker/chunkBuffer'
-import { transcribeAndPersistSession, newMeetingId } from './notetaker/transcribeSession'
+import { PeriodicChunkEmitter, type FinalizedSegment } from './notetaker/periodicChunkEmitter'
+import { transcribeChunk, persistSession, newMeetingId } from './notetaker/transcribeSession'
+import type { TimedChunkText } from './notetaker/transcriptMerge'
 import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting } from './db'
 
 export type NotetakerInitHooks = {
@@ -255,17 +256,60 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // "hook == real transition" invariant (harmless today since
   // hideNotetakerWidget() is itself idempotent, but not something to rely
   // on staying harmless).
-  // Chunk accumulation + post-capture transcription (Tasks 2 and 5). A
-  // session's worth of audio chunks feeds `chunkBuffer` via `onChunk` below;
-  // `HookedNotetakerSession.start()` swaps in a FRESH buffer (and records
-  // `sessionStartedAt`) BEFORE calling `super.start()`, so any chunks that
-  // arrive synchronously during super.start() land in the new buffer, not a
-  // stale one left over from a previous session. `stop()` hands the
-  // just-finished buffer off to `transcribeAndPersistSession()` — fired and
-  // forgotten from stop()'s own perspective (stop() stays synchronous / never
-  // blocks the caller on transcription finishing), but with a `.catch()` so
-  // a rejection is logged instead of becoming a silent unhandled rejection.
-  let chunkBuffer = new ChunkBuffer()
+  // Periodic per-channel chunk cutting + IMMEDIATE per-chunk transcription
+  // (Task 6 of the periodic-flush plan, replacing the old
+  // buffer-everything-until-stop ChunkBuffer + single-shot
+  // transcribeAndPersistSession() from the earlier persistence plan). Each
+  // channel gets its own PeriodicChunkEmitter, whose onSegment fires as soon
+  // as vadPolicy cuts a chunk (not once at the very end of the meeting) —
+  // see makeChunkHandler below. This is what keeps a long meeting from
+  // buffering hours of raw Float32 audio in RAM: only ONE chunk's worth of
+  // samples is ever alive per channel at a time, and it is eligible for GC
+  // as soon as transcribeChunk() has WAV-encoded it and handed the encoded
+  // bytes to tryManagedSTT().
+  //
+  // Each channel's in-flight transcription promises + accumulated failure
+  // flag live on a small per-session `ChannelTracker` object, not on a
+  // shared module-level primitive — `HookedNotetakerSession.start()`
+  // allocates a FRESH tracker (and a fresh emitter closing over it) for both
+  // channels, exactly like the old fresh-`ChunkBuffer`-per-session pattern.
+  // Because the tracker is captured by the emitter's onSegment closure at
+  // construction time (not re-read from a reassignable outer variable), a
+  // subsequent start() reassigning `micTracker`/`systemTracker` can never
+  // cause an in-flight chunk from the PREVIOUS session to record its result
+  // (or its failure) against the NEW session — each stop() call also snapshots
+  // its own session's tracker/emitter into local consts before doing any
+  // awaiting, for the same reason `meetingId`/`startedAt` already were.
+  type ChannelTracker = {
+    promises: Promise<TimedChunkText>[]
+    failed: boolean
+  }
+
+  function makeChunkHandler(channel: 'mic' | 'system', tracker: ChannelTracker): (segment: FinalizedSegment) => void {
+    return (segment: FinalizedSegment) => {
+      const startMs = segment.startTimestampMs
+      const durationMs =
+        segment.sampleRate > 0 && segment.channels > 0
+          ? (segment.samples.length / segment.channels / segment.sampleRate) * 1000
+          : 0
+      const endMs = startMs + durationMs
+      // Fired and tracked, NOT awaited here — feeding further chunks (and
+      // the session generally) must never block on one chunk's network
+      // round-trip. transcribeChunk() never rejects (it catches internally),
+      // so this .then() chain always resolves, never throws into an
+      // unhandled rejection.
+      const p = transcribeChunk(channel, segment.samples, segment.channels, segment.sampleRate).then((result) => {
+        if (result.failed) tracker.failed = true
+        return { channel, text: result.text, startMs, endMs } as TimedChunkText
+      })
+      tracker.promises.push(p)
+    }
+  }
+
+  let micTracker: ChannelTracker = { promises: [], failed: false }
+  let systemTracker: ChannelTracker = { promises: [], failed: false }
+  let micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker))
+  let systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker))
   let sessionStartedAt = 0
   // Allocated at START, not at stop: the meeting's DB row is now written the
   // moment capture begins (see below), so the id has to exist that early and
@@ -274,13 +318,16 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
   class HookedNotetakerSession extends NotetakerSession {
     start(pid: number): void {
-      chunkBuffer = new ChunkBuffer()
+      micTracker = { promises: [], failed: false }
+      systemTracker = { promises: [], failed: false }
+      micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker))
+      systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker))
       sessionStartedAt = Date.now()
       sessionMeetingId = newMeetingId()
       super.start(pid) // throws if the tap won't start — no placeholder row in that case
       // A PLACEHOLDER ROW, WRITTEN IMMEDIATELY. Until this existed, the
       // meetings row was only inserted at the very END of
-      // transcribeAndPersistSession(), so an app quit or crash mid-meeting
+      // persistSession(), so an app quit or crash mid-meeting
       // erased the recording completely: no row, no audio, no error, nothing
       // in the UI to tell the user it had ever happened. Now a
       // status:'recording' row exists for the whole capture, so a meeting
@@ -312,22 +359,39 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     stop(): void {
       const wasActive = this.isActive
       // Read before the async chain below so a subsequent start() can't
-      // retarget this session's persist call.
+      // retarget this session's persist call — same reasoning now also
+      // applies to the emitter/tracker snapshots just below.
       const meetingId = sessionMeetingId
       const startedAt = sessionStartedAt
-      const buffer = chunkBuffer
+      const mic = micTracker
+      const system = systemTracker
+      const micEm = micEmitter
+      const systemEm = systemEmitter
       super.stop()
       if (wasActive) {
         hooks.onSessionStop?.()
         const endedAt = Date.now()
-        transcribeAndPersistSession(buffer, meetingId, startedAt, endedAt).catch((e) => {
-          console.error('[notetaker] failed to transcribe/persist session:', (e as Error).message)
-        })
+        // flush() finalizes each channel's trailing partial segment by
+        // firing onSegment ONE more time, through the exact same
+        // makeChunkHandler path as any other cut — no special-casing needed,
+        // and it lands in `mic`/`system`'s promises array like every other
+        // chunk since those closures captured these exact tracker objects.
+        micEm.flush()
+        systemEm.flush()
+        Promise.all([Promise.all(mic.promises), Promise.all(system.promises)])
+          .then(([micChunks, systemChunks]) => persistSession(micChunks, systemChunks, meetingId, startedAt, endedAt, mic.failed || system.failed))
+          .catch((e) => {
+            console.error('[notetaker] failed to transcribe/persist session:', (e as Error).message)
+          })
       }
     }
   }
   const session = new HookedNotetakerSession(nativeAudioTap, (chunk) => {
-    chunkBuffer.feed(chunk)
+    if (chunk.source === 'mic') {
+      micEmitter.feed(chunk.samples, chunk.sampleRate, chunk.channels, chunk.timestampMs)
+    } else {
+      systemEmitter.feed(chunk.samples, chunk.sampleRate, chunk.channels, chunk.timestampMs)
+    }
   })
 
   // ── The MIC half of the recording (spec §2/§4) ──
@@ -408,10 +472,14 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   })
 
   // ── App quit while a meeting is being recorded ──
-  // BEST EFFORT, NOT A GUARANTEE. stop() kicks off transcribeAndPersistSession
-  // — which does real network I/O (managed STT) — and Electron will not wait
-  // for that promise before exiting, so a full save usually will NOT complete
-  // here. What this DOES buy: the tap is closed cleanly, and the meeting's
+  // BEST EFFORT, NOT A GUARANTEE. stop() flushes both emitters and kicks off
+  // per-chunk transcription + persistSession() — which does real network I/O
+  // (managed STT, per chunk) — and Electron will not wait for those promises
+  // before exiting, so a full save usually will NOT complete here. Any chunk
+  // that already finished transcribing before quit is lost too, since
+  // persistSession() only runs once ALL chunks (including the flush()
+  // trailing partial) have settled. What this DOES buy: the tap is closed
+  // cleanly, and the meeting's
   // placeholder row (written at start(), above) is already on disk, so the
   // interrupted meeting is visible in the Notetaker list as 'recording'
   // instead of vanishing without a trace. Anything more (a synchronous

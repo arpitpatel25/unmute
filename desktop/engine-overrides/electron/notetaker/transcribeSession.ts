@@ -5,123 +5,111 @@ import path from 'node:path'
 import { tryManagedSTT } from '../paywall/paywall-route'
 import { encodeWav } from './wavEncoder'
 import { downmixAndResample } from './resample'
-import type { ChunkBuffer, FinalizedChannel } from './chunkBuffer'
-import { mergeTranscripts, generateTitle, type TranscriptSegment } from './transcriptMerge'
+import { mergeChannelChunks, generateTitle, type TranscriptSegment, type TimedChunkText } from './transcriptMerge'
 import { insertMeeting, type DBMeeting } from '../db'
 
 /**
- * Result of encoding + (attempting to) transcribe one channel's finalized
- * audio. `audioPath` is set as soon as the WAV write succeeds, independent
- * of whether the STT call itself later fails — so a transcription failure
- * never throws away audio that was already safely on disk.
+ * Result of transcribing ONE already-cut chunk of a channel's audio
+ * (Periodic-flush replacement for the old whole-session processChannel()).
  */
-type ChannelOutcome = {
+export type ChunkTranscriptionResult = {
   text: string
-  audioPath: string | null
   failed: boolean
 }
 
 /**
- * Downmixes one channel's buffered samples to MONO 16kHz, encodes that to
- * WAV, writes it to `<meetingDir>/audio-<channel>.wav`, then transcribes it
- * through the same managed-STT pipeline dictation already uses
- * (`tryManagedSTT`).
+ * Downsamples/resamples one chunk's raw samples to mono 16kHz, WAV-encodes
+ * it, and transcribes it through the same managed-STT pipeline dictation
+ * already uses (`tryManagedSTT`) — immediately, per chunk, not once at the
+ * end of a whole meeting. Called from each PeriodicChunkEmitter's onSegment
+ * callback (notetakerInit.ts).
  *
  * The mono/16k reduction is not cosmetic: the pipeline worker caps uploads at
- * MAX_AUDIO_BYTES = 50MB, and the system tap's native 48kHz STEREO PCM costs
- * 192,000 bytes/second once encoded as 16-bit WAV — i.e. the cap is hit at
- * ~4min33s of meeting. At mono 16kHz that is 32,000 bytes/second, so the safe
- * window is ~27 minutes. See resample.ts for the full reasoning.
+ * MAX_AUDIO_BYTES = 50MB (sized for compressed opus, not raw PCM) — see
+ * resample.ts for the full byte-budget reasoning. Periodic per-chunk
+ * transcription (each chunk capped at PeriodicChunkEmitter's hardCapMs, tens
+ * of seconds) keeps every individual upload trivially far under that cap
+ * regardless of total meeting length — the ~27-minute whole-meeting ceiling
+ * the old single-shot flow had no longer applies.
  *
- * Failure isolation: a thrown error (WAV encode, or the STT call itself)
- * is caught HERE, per channel — it does not abort the other channel's
- * processing, and does not discard an audio file that was already written.
- * The caller is told about the failure via `failed: true` so it can mark
- * the meeting's status accordingly, but whatever transcript/audio WAS
- * produced is still persisted.
+ * Failure isolation: a thrown error (WAV encode, or the STT call itself) is
+ * caught HERE, per chunk — it never aborts the rest of that channel's chunks,
+ * let alone the other channel's. The caller is told via `failed: true` so it
+ * can mark that chunk's channel (and therefore the whole meeting) failed,
+ * without losing whatever OTHER chunks did transcribe successfully.
+ *
+ * Nothing here retains the input `samples` beyond this call: the encoded
+ * `wav` Buffer is only ever passed into `tryManagedSTT` and never stored on
+ * any object that outlives this function, so once this promise settles both
+ * `samples` and `wav` are eligible for garbage collection.
  */
-async function processChannel(
+export async function transcribeChunk(
   channel: 'mic' | 'system',
-  finalized: FinalizedChannel,
-  meetingDir: string,
-): Promise<ChannelOutcome> {
-  if (!finalized) return { text: '', audioPath: null, failed: false }
-
-  let audioPath: string | null = null
+  samples: Float32Array,
+  channelsCount: number,
+  sampleRate: number,
+): Promise<ChunkTranscriptionResult> {
   try {
-    const reduced = downmixAndResample(finalized.samples, finalized.channels, finalized.sampleRate)
-    // Fewer samples than one 16kHz slot holds — there is nothing to transcribe
-    // and nothing worth writing. Not a failure: the channel was simply empty.
-    if (reduced.samples.length === 0) return { text: '', audioPath: null, failed: false }
+    const reduced = downmixAndResample(samples, channelsCount, sampleRate)
+    // Fewer samples than one 16kHz slot holds — there is nothing to
+    // transcribe. Not a failure: the chunk was simply (near-)silent/empty.
+    if (reduced.samples.length === 0) return { text: '', failed: false }
 
     const wav = encodeWav(reduced.samples, reduced.sampleRate, 1)
-    const fileName = `audio-${channel}.wav`
-    fs.writeFileSync(path.join(meetingDir, fileName), wav)
-    audioPath = fileName // audio is on disk now — preserved even if the STT call below throws
-
     const durationSeconds = reduced.samples.length / reduced.sampleRate
     const result = await tryManagedSTT(wav, durationSeconds, 'dictation')
-    // A NULL result is a FAILURE here, not an empty transcript. tryManagedSTT
-    // returns null both when the call really failed (413 from the size cap,
-    // network error, a 4xx from the STT provider) AND when managed STT is
-    // simply unavailable (local engine mode, no access token) — and in 'auto'
-    // engine mode it swallows rejections into that same null. Treating null as
-    // "successfully transcribed nothing" is what produced the worst failure
-    // mode this feature had: a meeting with real captured audio saved as
-    // status:'ready' with a blank transcript, indistinguishable from a meeting
-    // where nobody spoke. We KNOW audio existed (finalized was non-null and
-    // survived the reduction), so mark the channel failed and let the caller
-    // set status:'failed'. The audio file already written stays on disk.
+    // A NULL result is a FAILURE here, not an empty transcript — same
+    // Finding-3 reasoning as the old whole-session flow: tryManagedSTT
+    // returns null both when the call really failed AND when managed STT is
+    // simply unavailable, and treating that as "successfully transcribed
+    // nothing" is what produced a silent blank transcript on real audio.
+    // We KNOW audio existed (reduced.samples.length > 0 above), so mark this
+    // chunk's channel failed and let the caller factor that into the
+    // meeting's overall status. Other chunks (this channel's and the other
+    // channel's) are unaffected — this promise settling with `failed: true`
+    // never rejects, so it can never take down `Promise.all` for the rest.
     if (!result) {
-      console.error(`[notetaker] ${channel} transcription unavailable or failed (managed STT returned no result)`)
-      return { text: '', audioPath, failed: true }
+      console.error(`[notetaker] ${channel} chunk transcription unavailable or failed (managed STT returned no result)`)
+      return { text: '', failed: true }
     }
-    return { text: result.text ?? '', audioPath, failed: false }
+    return { text: result.text ?? '', failed: false }
   } catch (err) {
-    console.error(`[notetaker] ${channel} transcription failed:`, err)
-    return { text: '', audioPath, failed: true }
+    console.error(`[notetaker] ${channel} chunk transcription failed:`, err)
+    return { text: '', failed: true }
   }
 }
 
 /**
  * Called once, from HookedNotetakerSession's stop() flow (notetakerInit.ts),
- * after a capture session ends. Encodes whatever was buffered on each
- * channel to WAV, transcribes both through the same managed-STT pipeline
- * dictation already uses, merges the results, and persists everything —
- * transcript.json forever, the two audio files for 24h (see db.ts's
- * sweepExpiredMeetingAudio).
+ * after a capture session ends and every chunk's transcribeChunk() promise
+ * (mic + system) has already resolved. Interleaves both channels' per-chunk
+ * transcripts by real timestamp (mergeChannelChunks), generates a title,
+ * atomically writes transcript.json, and updates the meeting's DB row from
+ * its start()-time 'recording' placeholder to its final status.
  *
- * Mic and system channels are processed independently (see processChannel):
- * if one channel's STT call fails, the meeting is still persisted with
- * whatever audio/transcript the other channel produced, and `status` is set
- * to 'failed' so the UI can surface that this meeting is incomplete rather
- * than silently showing nothing.
+ * No per-meeting audio file is written any more (the old flow's
+ * audio-mic.wav/audio-system.wav, one whole-channel file each) — periodic
+ * flushing WAV-encodes and uploads each chunk independently and never
+ * accumulates a channel's full raw audio in memory, so there is no single
+ * in-memory buffer left to write out as one file at session end. Recreating
+ * that (e.g. streaming each chunk's PCM to a shared per-channel file on
+ * disk) is a real, separable feature and out of this task's scope — see
+ * task-6-report.md. `audio_mic_path`/`audio_system_path` are always null;
+ * `notetaker:get-audio-url` already handles a null path by returning null,
+ * so this degrades to "no playback" rather than a broken link.
  */
-export async function transcribeAndPersistSession(
-  buffer: ChunkBuffer,
+export async function persistSession(
+  micChunks: TimedChunkText[],
+  systemChunks: TimedChunkText[],
   meetingId: string,
   startedAt: number,
   endedAt: number,
+  failed: boolean,
 ): Promise<void> {
   const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
   fs.mkdirSync(meetingDir, { recursive: true })
 
-  const mic = buffer.finalize('mic')
-  const system = buffer.finalize('system')
-
-  const [micResult, systemResult] = await Promise.all([
-    processChannel('mic', mic, meetingDir),
-    processChannel('system', system, meetingDir),
-  ])
-
-  const status: DBMeeting['status'] = micResult.failed || systemResult.failed ? 'failed' : 'ready'
-
-  const micDurationMs = mic ? (mic.samples.length / mic.channels / mic.sampleRate) * 1000 : 0
-  const systemDurationMs = system ? (system.samples.length / system.channels / system.sampleRate) * 1000 : 0
-  const segments: TranscriptSegment[] = mergeTranscripts(
-    micResult.text, mic?.firstTimestampMs ?? 0, micDurationMs,
-    systemResult.text, system?.firstTimestampMs ?? 0, systemDurationMs,
-  )
+  const segments: TranscriptSegment[] = mergeChannelChunks(micChunks, systemChunks)
   const title = generateTitle(segments)
 
   const transcriptPath = 'transcript.json'
@@ -129,6 +117,8 @@ export async function transcribeAndPersistSession(
   const temp = `${target}.${process.pid}.tmp`
   fs.writeFileSync(temp, JSON.stringify(segments), 'utf8')
   fs.renameSync(temp, target)
+
+  const status: DBMeeting['status'] = failed ? 'failed' : 'ready'
 
   insertMeeting({
     id: meetingId,
@@ -138,8 +128,8 @@ export async function transcribeAndPersistSession(
     duration_ms: endedAt - startedAt,
     status,
     transcript_path: transcriptPath,
-    audio_mic_path: micResult.audioPath,
-    audio_system_path: systemResult.audioPath,
+    audio_mic_path: null,
+    audio_system_path: null,
   })
 }
 
