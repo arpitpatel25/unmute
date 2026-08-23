@@ -9,10 +9,28 @@ export type MeetingWatcherEvents = {
 
 const DEFAULT_DEBOUNCE_MS = 1500
 
+/**
+ * Two INDEPENDENT signals, checked in this order on purpose.
+ *
+ * THE TAB URL IS NOT GATED ON now-playing. `readNowPlaying()` reports the
+ * system MPNowPlayingInfoCenter item — what Music, Spotify and video players
+ * publish. Zoom, Google Meet, Teams and Webex publish nothing there; they
+ * just open an audio unit. So during a real meeting `nowPlaying.playing` is
+ * false in almost every case, and checking it first (as this did)
+ * short-circuited to `false` before the tab URL was ever looked at — which
+ * silently disabled the ENTIRE browser-tab detection path (spec §3,
+ * Safari/Edge/Brave/Arc via AppleScript). A URL that matches a meeting is a
+ * meeting signal on its own; nothing about "is something playing" makes it
+ * more or less true.
+ *
+ * The bundle-ID signal below still keeps its `playing` gate: a meeting app
+ * merely being open is not evidence of a call, and that gate is what
+ * distinguishes "Zoom is running" from "Zoom is in a meeting".
+ */
 function sampleLooksLikeMeeting(sample: MeetingSample): boolean {
+  if (isMeetingTabUrl(sample.activeTabUrl)) return true
   if (!sample.nowPlaying.playing) return false
   if (isMeetingAppBundleId(sample.nowPlaying.bundleIdentifier)) return true
-  if (isMeetingTabUrl(sample.activeTabUrl)) return true
   return false
 }
 

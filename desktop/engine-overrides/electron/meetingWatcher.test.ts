@@ -72,6 +72,21 @@ describe('MeetingWatcher debounced detection', () => {
     assert.equal(started, 0)
   })
 
+  test('a matching browser tab URL counts even when nothing is reported as now-playing', () => {
+    // The real-world case: Zoom/Meet/Teams/Webex never publish to
+    // MPNowPlayingInfoCenter, so `playing` is false throughout an actual
+    // meeting. The tab URL must stand on its own or browser detection never
+    // fires at all.
+    let started = 0
+    let clock = 0
+    const watcher = new MeetingWatcher({ onMeetingStarted: () => started++, onMeetingEnded: () => {} }, 1500, () => clock)
+    watcher.feed({ nowPlaying: { playing: false }, activeTabUrl: 'https://meet.google.com/abc-defg-hij' })
+    clock = 1600
+    watcher.feed({ nowPlaying: { playing: false }, activeTabUrl: 'https://meet.google.com/abc-defg-hij' })
+    assert.equal(started, 1)
+    assert.equal(watcher.isMeetingActive, true)
+  })
+
   test('nowPlaying.playing=false with no tab url is not a meeting signal', () => {
     let started = 0
     let clock = 0
