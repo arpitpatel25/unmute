@@ -9,6 +9,7 @@ import {
   plainLine,
   deriveCategory,
   deriveStatus,
+  selfContinuationDelaySeconds,
   type ObserverContext,
 } from './observer.ts'
 
@@ -24,6 +25,35 @@ test('parseHookEvent maps the five events we wire', () => {
   assert.equal(parseHookEvent({ ...base, hook_event_name: 'Stop', last_assistant_message: 'hi' })?.kind, 'turn-ended')
   assert.equal(parseHookEvent({ ...base, hook_event_name: 'Notification', message: 'm' })?.kind, 'waiting')
   assert.equal(parseHookEvent({ ...base, hook_event_name: 'SessionEnd', reason: 'clear' })?.kind, 'session-ended')
+})
+
+test('PostToolUse carries the tool\'s own input through, live', () => {
+  // This is what lets a self-continuation call (ScheduleWakeup) be caught the
+  // instant it happens, instead of reconstructed later from a transcript
+  // read that can lose a race against Claude Code's own file flush.
+  const e = parseHookEvent({
+    session_id: 's1', hook_event_name: 'PostToolUse', tool_name: 'ScheduleWakeup',
+    tool_input: { delaySeconds: 400, noop: true },
+  })
+  assert.equal(e?.kind, 'tool-used')
+  assert.deepEqual((e as { toolInput?: unknown })?.toolInput, { delaySeconds: 400, noop: true })
+})
+
+test('selfContinuationDelaySeconds: reads the wakeup tool\'s own delay', () => {
+  assert.equal(selfContinuationDelaySeconds('ScheduleWakeup', { delaySeconds: 400 }), 400)
+})
+
+test('selfContinuationDelaySeconds: null for any other tool', () => {
+  assert.equal(selfContinuationDelaySeconds('Read', {}), null)
+  assert.equal(selfContinuationDelaySeconds('Write', { delaySeconds: 400 }), null, 'the tool name is what matters, not the shape of its input')
+  assert.equal(selfContinuationDelaySeconds(undefined, {}), null)
+})
+
+test('selfContinuationDelaySeconds: a missing or invalid delaySeconds falls back to a conservative ceiling', () => {
+  assert.equal(selfContinuationDelaySeconds('ScheduleWakeup', {}), 3600)
+  assert.equal(selfContinuationDelaySeconds('ScheduleWakeup', { delaySeconds: -5 }), 3600)
+  assert.equal(selfContinuationDelaySeconds('ScheduleWakeup', { delaySeconds: 'soon' }), 3600)
+  assert.equal(selfContinuationDelaySeconds('ScheduleWakeup', null), 3600)
 })
 
 test('an unknown event is ignorable, never fatal', () => {

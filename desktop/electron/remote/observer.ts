@@ -97,8 +97,12 @@ export function askHeadline(questions: readonly AskQuestion[]): string {
 export type HookEvent =
   /** UserPromptSubmit — the prompt actually landed. Retires verifyDispatch. */
   | { kind: 'prompt-submitted'; sessionId: string; cwd?: string }
-  /** PostToolUse — real progress. Liveness only; never a state change. */
-  | { kind: 'tool-used'; sessionId: string; cwd?: string; tool?: string }
+  /** PostToolUse — real progress. Liveness only; never a state change on its
+   *  own — but `toolInput` is what lets the caller catch a self-continuation
+   *  tool call (ScheduleWakeup) LIVE, the instant it happens, instead of
+   *  reconstructing it later from a transcript file that might not be
+   *  flushed yet by the time Stop fires. See Task.checkpoint. */
+  | { kind: 'tool-used'; sessionId: string; cwd?: string; tool?: string; toolInput?: unknown }
   /** Stop — the turn ended, and here is the finished human-readable reply. */
   | { kind: 'turn-ended'; sessionId: string; cwd?: string; lastMessage: string }
   /** Notification — the session is waiting on the human. */
@@ -141,6 +145,31 @@ export function parseAskQuestions(toolInput: unknown): AskQuestion[] {
   return out
 }
 
+/** Tool names whose call means the session scheduled its own continuation,
+ *  not that it is actually finished — the autonomous-loop skill's own "wake
+ *  me again later" declaration. Maintained list, not a guess from prose. */
+const SELF_CONTINUATION_TOOLS = new Set(['ScheduleWakeup'])
+
+/** Conservative ceiling used when a self-continuation call's own delay is
+ *  missing or not a positive number — never immediate, never forever, on a
+ *  malformed call. */
+const FALLBACK_DELAY_SECONDS = 3600
+
+/** Is `tool` a self-continuation call, and if so, how long did it say it
+ *  would be before checking back? Reads `toolInput.delaySeconds` straight off
+ *  the live PostToolUse payload — the same number the loop itself is
+ *  trusting — so a checkpoint expires exactly when the loop's own promise
+ *  does. Captured from the tool call AS IT HAPPENS (see HookEvent's
+ *  `tool-used` doc comment for why this replaced a transcript re-read on
+ *  Stop: that read could lose a race against Claude Code's own flush). */
+export function selfContinuationDelaySeconds(tool: string | undefined, toolInput: unknown): number | null {
+  if (!tool || !SELF_CONTINUATION_TOOLS.has(tool)) return null
+  const input = (toolInput ?? {}) as { delaySeconds?: unknown }
+  const d = input.delaySeconds
+  if (typeof d === 'number' && Number.isFinite(d) && d > 0) return d
+  return FALLBACK_DELAY_SECONDS
+}
+
 /**
  * Normalize a raw hook payload into a typed event. Unknown events return null
  * rather than throwing: Claude Code keeps adding hook events, and an unfamiliar
@@ -172,7 +201,11 @@ export function parseHookEvent(payload: unknown): HookEvent | null {
         }
         return { kind: 'ask-closed', sessionId, cwd, askId: askIdOf(p), answers }
       }
-      return { kind: 'tool-used', sessionId, cwd, tool: typeof p.tool_name === 'string' ? p.tool_name : undefined }
+      return {
+        kind: 'tool-used', sessionId, cwd,
+        tool: typeof p.tool_name === 'string' ? p.tool_name : undefined,
+        toolInput: p.tool_input,
+      }
     case 'Stop':
       return {
         kind: 'turn-ended',

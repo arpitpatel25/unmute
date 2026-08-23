@@ -94,58 +94,6 @@ export function hadSideEffects(messages: readonly AssistantMessage[]): boolean {
   return messages.some((m) => m.tools.some((t) => MUTATING_TOOLS.has(t) || t.startsWith('mcp__')))
 }
 
-/** Tool names whose use means the turn ended because the session scheduled its
- *  own continuation, not because it is actually finished — the autonomous-loop
- *  skill's own "wake me again later" declaration. Add here if another
- *  self-continuation mechanism appears; this is a maintained list, not a
- *  guess from prose. */
-const SELF_CONTINUATION_TOOLS = new Set(['ScheduleWakeup'])
-
-/** A self-continuation tool call's own promise of when it expects to run
- *  again — read straight off `input.delaySeconds`, the same field the loop
- *  itself trusts. Falls back to a conservative ceiling (never immediate,
- *  never forever) when the field is missing or not a positive number, so a
- *  malformed call still expires rather than never suppressing OR suppressing
- *  permanently — both of which are worse than one conservative guess. */
-const FALLBACK_DELAY_SECONDS = 3600
-
-/** Did THIS TURN — the assistant messages since the last real user prompt —
- *  call a self-continuation tool, and if so, how long did it say it would be?
- *  Scoped to the current turn on purpose, unlike `hadSideEffects`: a loop
- *  used two turns ago must not keep marking every later, genuinely-finished
- *  turn as a checkpoint forever. Reads the raw transcript directly because
- *  turn boundaries need the interleaved user lines that `AssistantMessage[]`
- *  alone has already dropped, and the tool's `input` is not something
- *  `parseAssistantLine` keeps (it only keeps names — see its own header). */
-export function selfContinuationDelaySeconds(raw: string): number | null {
-  const lines = raw.split('\n')
-  let lastUserLine = -1
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].trim()) continue
-    if (parseTurnLine(lines[i])?.role === 'user') lastUserLine = i
-  }
-  for (let i = lastUserLine + 1; i < lines.length; i++) {
-    const line = lines[i]
-    if (!line.trim()) continue
-    const m = parseAssistantLine(line)
-    if (!m?.tools.some((t) => SELF_CONTINUATION_TOOLS.has(t))) continue
-    let o: unknown
-    try { o = JSON.parse(line) } catch { return FALLBACK_DELAY_SECONDS }
-    const content = (o as { message?: { content?: unknown } }).message?.content
-    if (Array.isArray(content)) {
-      for (const b of content) {
-        if (typeof b !== 'object' || b === null) continue
-        const block = b as { type?: unknown; name?: unknown; input?: { delaySeconds?: unknown } }
-        if (block.type !== 'tool_use' || !SELF_CONTINUATION_TOOLS.has(String(block.name))) continue
-        const d = block.input?.delaySeconds
-        if (typeof d === 'number' && Number.isFinite(d) && d > 0) return d
-      }
-    }
-    return FALLBACK_DELAY_SECONDS
-  }
-  return null
-}
-
 /** URLs the session's own prose mentions, de-duplicated, in order. Used as
  *  `result.artifacts` for navigate/watch/consume without the model being told
  *  to report them. Trailing punctuation is trimmed — prose ends sentences. */
@@ -160,18 +108,6 @@ export function urlsIn(text: string): string[] {
     out.push(url)
   }
   return out
-}
-
-/** The transcript file's raw bytes. Missing/unreadable ⇒ '' (never throws): a
- *  freshly-spawned session has no transcript yet, which is not an error. The
- *  one tolerant read every reader below is built on. */
-export async function readTranscriptRaw(path: string | null): Promise<string> {
-  if (!path) return ''
-  try {
-    return await fs.readFile(path, 'utf8')
-  } catch {
-    return ''
-  }
 }
 
 /** Read + parse a transcript file. Missing/unreadable ⇒ [] (never throws): a

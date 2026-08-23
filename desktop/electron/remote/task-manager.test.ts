@@ -1914,6 +1914,75 @@ test('a finished turn puts the model reply into the conversation, from the EVENT
   tm.killAll()
 })
 
+// ─── Checkpoint: caught live off PostToolUse, not reconstructed on Stop ────
+//
+// This used to be derived by re-reading the transcript file when turn-ended
+// fired — which raced Claude Code's own flush of that exact line (field-
+// observed: a real ScheduleWakeup call, made seconds before Stop, missed by
+// the read that followed, because it was not durable on disk yet). Caught
+// live off the PostToolUse hook instead: no file read, no race, the value is
+// already in the payload the instant the tool call happens.
+
+test('ScheduleWakeup sets a checkpoint with an expiry live, off the tool call itself', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  try {
+    const id = await tm.dispatch('work the plan', { kind: 'session' })
+    const sessionId = tm.get(id)!.sessionId!
+
+    const before = Date.now()
+    tm.onHookEvent({ kind: 'tool-used', sessionId, tool: 'ScheduleWakeup', toolInput: { delaySeconds: 400, noop: true } })
+    await new Promise((r) => setTimeout(r, 10))
+
+    const task = tm.get(id)!
+    assert.equal(task.checkpoint, true)
+    assert.ok(task.checkpointExpiresAt! >= before + 400_000, 'expiry honours the tool call\'s own delaySeconds')
+    assert.ok(task.checkpointExpiresAt! < before + 462_000, 'plus a small grace, not an unbounded window')
+  } finally {
+    tm.killAll()
+  }
+})
+
+test('a tool call AFTER ScheduleWakeup clears the checkpoint — real work resumed', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  try {
+    const id = await tm.dispatch('work the plan', { kind: 'session' })
+    const sessionId = tm.get(id)!.sessionId!
+
+    tm.onHookEvent({ kind: 'tool-used', sessionId, tool: 'ScheduleWakeup', toolInput: { delaySeconds: 400 } })
+    await new Promise((r) => setTimeout(r, 10))
+    assert.equal(tm.get(id)!.checkpoint, true)
+
+    tm.onHookEvent({ kind: 'tool-used', sessionId, tool: 'Write', toolInput: { file_path: '/x' } })
+    await new Promise((r) => setTimeout(r, 10))
+    assert.equal(tm.get(id)!.checkpoint, false, 'work continued past the scheduling declaration — never a true pause')
+    assert.equal(tm.get(id)!.checkpointExpiresAt, undefined)
+  } finally {
+    tm.killAll()
+  }
+})
+
+test('a new prompt clears an outstanding checkpoint — the continuation is proven, not just promised', async () => {
+  const baseDir = await tmpBase()
+  const tm = new TaskManager({ executorFactory: () => makeFakeExecutor(), baseDir, trustAcceptMs: 0, submitConfirmMs: 0, pollMs: 9999 })
+  try {
+    const id = await tm.dispatch('work the plan', { kind: 'session' })
+    const sessionId = tm.get(id)!.sessionId!
+
+    tm.onHookEvent({ kind: 'tool-used', sessionId, tool: 'ScheduleWakeup', toolInput: { delaySeconds: 400 } })
+    await new Promise((r) => setTimeout(r, 10))
+    assert.equal(tm.get(id)!.checkpoint, true)
+
+    tm.onHookEvent({ kind: 'prompt-submitted', sessionId })
+    await new Promise((r) => setTimeout(r, 10))
+    assert.equal(tm.get(id)!.checkpoint, false)
+    assert.equal(tm.get(id)!.checkpointExpiresAt, undefined)
+  } finally {
+    tm.killAll()
+  }
+})
+
 test('a hook event can NEVER land on a driven backend, by session id or by cwd', async () => {
   // The isolation is asymmetric: dispatch() forks to the drivers before any hook
   // code runs, so the OUTBOUND side is guarded by construction. The inbound side

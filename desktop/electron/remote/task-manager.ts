@@ -70,8 +70,8 @@ import {
 } from './status-file'
 import { buildDispatch } from './dispatch-prompt'
 import { detectSurface } from './surface'
-import { deriveStatus, isAnswerable, type HookEvent, type AskQuestion } from './observer'
-import { readTranscript, readTranscriptRaw, hadSideEffects, selfContinuationDelaySeconds, readLatestExchange } from './transcript'
+import { deriveStatus, isAnswerable, selfContinuationDelaySeconds, type HookEvent, type AskQuestion } from './observer'
+import { readTranscript, hadSideEffects, readLatestExchange } from './transcript'
 import type { Block } from './blocks'
 import { blocksFromClaudeTranscript } from './blocks-claude'
 import { blocksFromRollout } from './codex/blocks-rollout'
@@ -1181,7 +1181,26 @@ export class TaskManager extends EventEmitter {
       this.transition(task.id, 'processing')
     }
     if (event.kind === 'prompt-submitted') task.promptSubmittedAt = at
-    if (event.kind === 'tool-used') return // liveness only
+    if (event.kind === 'tool-used') {
+      // CAUGHT LIVE, not reconstructed later. This used to be derived on
+      // turn-ended by re-reading the transcript file — which raced Claude
+      // Code's own flush of that exact line: `Stop` can fire before the tool
+      // call it just made is durable on disk, so the read would come back
+      // without it and wrongly conclude "not a checkpoint" (field-observed:
+      // a real ScheduleWakeup call, made seconds before Stop, missed by the
+      // read that followed). PostToolUse fires synchronously as the call
+      // actually happens — no race to lose. ANY other tool call clears it:
+      // real work resumed past the scheduling declaration, so it was never a
+      // true pause point. Cheap and synchronous on purpose — no transcript
+      // read, no persistState, matching "liveness only" for everything else
+      // about this event. See selfContinuationDelaySeconds's own doc comment.
+      const delaySeconds = selfContinuationDelaySeconds(event.tool, event.toolInput)
+      task.checkpoint = delaySeconds !== null
+      task.checkpointExpiresAt = delaySeconds !== null
+        ? this.clock() + delaySeconds * 1000 + CHECKPOINT_GRACE_MS
+        : undefined
+      return // liveness (+ the above) only
+    }
     // A Notification says nothing a keyed event has not already said better —
     // it is liveness and nothing more (observer.ts explains why).
     if (event.kind === 'waiting') return
@@ -1236,22 +1255,11 @@ export class TaskManager extends EventEmitter {
       task.checkpoint = false
       task.checkpointExpiresAt = undefined
     }
+    // `tool-used` (including the checkpoint capture) is handled earlier, in
+    // onHookEvent, before this function is even called — see its own comment.
     if (event.kind === 'turn-ended') {
       const path = task.sessionId ? await resolveTranscriptById(task.cwd, task.sessionId) : null
       sideEffects = hadSideEffects(await readTranscript(path))
-      // Is this `done` a real stop, or the loop scheduling its own next turn?
-      // See selfContinuationDelaySeconds()'s own doc comment for the
-      // reasoning — this is what stops a busy autonomous session from
-      // popping the notch open on every turn boundary while it is still
-      // mid-plan. Bounded by the loop's own promised wakeup time (plus
-      // grace): if that time passes with no new prompt, the continuation
-      // never happened, and demanding() must stop trusting this checkpoint —
-      // see Task.checkpointExpiresAt.
-      const delaySeconds = selfContinuationDelaySeconds(await readTranscriptRaw(path))
-      task.checkpoint = delaySeconds !== null
-      task.checkpointExpiresAt = delaySeconds !== null
-        ? this.clock() + delaySeconds * 1000 + CHECKPOINT_GRACE_MS
-        : undefined
 
       // THE REPLY COMES FROM THE EVENT, NOT THE TRANSCRIPT.
       //
