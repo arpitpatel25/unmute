@@ -21,9 +21,22 @@ type API = {
   notetakerCancelRequested?: () => void
   notetakerOnCaptureActive?: (cb: (active: boolean) => void) => () => void
   notetakerMicChunk?: (samples: ArrayBuffer, sampleRate: number, timestampMs: number) => void
+  notetakerWidgetLog?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>) => void
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
+}
+
+/** Relays into main's durable notetaker log file (see notetakerInit.ts's
+ *  'notetaker:widget-log' handler) AND keeps the normal console output —
+ *  this window's devtools console is the fastest signal while iterating,
+ *  the log file is what survives after the window closes. */
+function wlog(level: 'debug' | 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>): void {
+  const line = `[notetaker-widget] ${message}`
+  if (level === 'error') console.error(line, fields)
+  else if (level === 'warn') console.warn(line, fields)
+  else console.log(line, fields)
+  api().notetakerWidgetLog?.(level, message, fields)
 }
 
 // ── Mic → main-process transcription tap ─────────────────────────────────
@@ -129,14 +142,16 @@ async function attachMicChunkTap(
     node.port.onmessage = (e: MessageEvent) => send(e.data as ArrayBuffer)
     source.connect(node)
     node.connect(sink)
+    wlog('info', 'mic tap attached via AudioWorklet', { chunkDurationMs, contextSampleRate: ctx.sampleRate })
     return () => {
       node.port.onmessage = null
       try { node.disconnect() } catch { /* graph already torn down */ }
       try { source.disconnect(node) } catch { /* already disconnected */ }
       try { sink.disconnect() } catch { /* already disconnected */ }
+      wlog('debug', 'mic tap (AudioWorklet) disposed')
     }
   } catch (err) {
-    console.warn('[notetaker] AudioWorklet mic tap unavailable, falling back to ScriptProcessor:', err)
+    wlog('warn', 'AudioWorklet mic tap unavailable, falling back to ScriptProcessor', { error: err instanceof Error ? err.message : String(err) })
   }
 
   try {
@@ -148,14 +163,16 @@ async function attachMicChunkTap(
     }
     source.connect(processor)
     processor.connect(sink)
+    wlog('info', 'mic tap attached via ScriptProcessorNode (AudioWorklet fallback)', { chunkDurationMs, contextSampleRate: ctx.sampleRate })
     return () => {
       processor.onaudioprocess = null
       try { processor.disconnect() } catch { /* already disconnected */ }
       try { source.disconnect(processor) } catch { /* already disconnected */ }
       try { sink.disconnect() } catch { /* already disconnected */ }
+      wlog('debug', 'mic tap (ScriptProcessor) disposed')
     }
   } catch (err) {
-    console.warn('[notetaker] no mic tap could be attached — this meeting will have no "You" channel:', err)
+    wlog('error', 'no mic tap could be attached — this meeting will have no "You" channel', { error: err instanceof Error ? err.message : String(err) })
     try { sink.disconnect() } catch { /* nothing to undo */ }
     return null
   }
@@ -307,6 +324,7 @@ export function NotetakerWidgetRoute() {
 
   useEffect(() => {
     const unsubscribe = api().notetakerOnCaptureActive?.((active) => {
+      wlog('debug', 'capture-active signal received from main', { active, wasActive: captureActiveRef.current })
       if (active && !captureActiveRef.current) setSessionId((n) => n + 1)
       captureActiveRef.current = active
       setCaptureActive(active)
@@ -321,6 +339,7 @@ export function NotetakerWidgetRoute() {
     let audioContext: AudioContext | null = null
     let disposeMicTap: (() => void) | null = null
 
+    wlog('info', 'requesting mic capture for a new session')
     navigator.mediaDevices
       .getUserMedia({ audio: true })
       .then((s) => {
@@ -329,6 +348,15 @@ export function NotetakerWidgetRoute() {
           return
         }
         stream = s
+        const track = s.getAudioTracks()[0]
+        wlog('info', 'mic capture granted', {
+          // The device label — this IS "what was the source of the mic
+          // audio" for the mic half of the meeting. Empty string is a real,
+          // observed browser value when the permission was granted but the
+          // OS declines to disclose the device name.
+          deviceLabel: track?.label || '<no label>',
+          deviceId: track?.getSettings?.().deviceId,
+        })
         const ctx = new AudioContext()
         audioContext = ctx
         const node = ctx.createAnalyser()
@@ -354,9 +382,15 @@ export function NotetakerWidgetRoute() {
           })
           .catch(() => { /* attachMicChunkTap already logs; never break the widget */ })
       })
-      .catch(() => {
+      .catch((err) => {
         // No mic access in this window (denied/unavailable) — the widget
-        // still shows and is still clickable, just with a flat waveform.
+        // still shows and is still clickable, just with a flat waveform, and
+        // the meeting will have no "You" channel at all — this is the single
+        // most useful line in the whole log for diagnosing that.
+        wlog('error', 'getUserMedia failed — this meeting will have no mic ("You") channel', {
+          errorName: err instanceof Error ? err.name : undefined,
+          errorMessage: err instanceof Error ? err.message : String(err),
+        })
       })
 
     return () => {
@@ -371,6 +405,7 @@ export function NotetakerWidgetRoute() {
       // effect keys off this prop) — it also releases the last reference to
       // the closed AudioContext's graph.
       setAnalyser(null)
+      wlog('debug', 'mic capture torn down for this session')
     }
   }, [captureActive])
 

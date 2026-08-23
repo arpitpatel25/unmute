@@ -17,6 +17,9 @@ import fs from 'fs'
 // and saveSession reads + clears it here. Single-flight assumption holds
 // because dictation is push-to-talk — one in-flight at a time.
 import { popLastEngine } from './paywall/main-extensions'
+import { createNotetakerLogger } from './notetaker/notetakerLog'
+
+const notetakerLog = createNotetakerLogger('db')
 
 let db: Database.Database
 let cleanupTimer: ReturnType<typeof setInterval> | null = null
@@ -294,6 +297,14 @@ export function insertMeeting(meeting: DBMeeting): void {
     meeting.audio_mic_path,
     meeting.audio_system_path,
   )
+  notetakerLog.child({ meetingId: meeting.id }).event('db-row-written', {
+    title: meeting.title,
+    status: meeting.status,
+    durationMs: meeting.duration_ms,
+    hasTranscript: !!meeting.transcript_path,
+    hasMicAudio: !!meeting.audio_mic_path,
+    hasSystemAudio: !!meeting.audio_system_path,
+  })
 }
 
 // Deliberately does NOT call any cleanup/sweep function first — unlike
@@ -314,12 +325,16 @@ export function updateMeetingTitle(id: string, title: string): void {
 
 export function deleteMeeting(id: string): void {
   const meeting = getMeeting(id)
-  if (!meeting) return
+  if (!meeting) {
+    notetakerLog.child({ meetingId: id }).warn('deleteMeeting called for an id with no row — nothing to delete')
+    return
+  }
   const meetingsDir = path.join(app.getPath('userData'), 'meetings', id)
   try {
     fs.rmSync(meetingsDir, { recursive: true, force: true })
   } catch { /* already gone */ }
   db.prepare('DELETE FROM meetings WHERE id = ?').run(id)
+  notetakerLog.child({ meetingId: id }).event('meeting-deleted', { title: meeting.title })
 }
 
 // Meeting rows and transcripts are kept forever; only the audio backing a
@@ -342,6 +357,9 @@ function sweepExpiredMeetingAudio(): void {
     'SELECT id, audio_mic_path, audio_system_path FROM meetings WHERE ended_at < ?'
   ).all(cutoff) as { id: string; audio_mic_path: string | null; audio_system_path: string | null }[]
 
+  if (expired.length > 0) {
+    notetakerLog.event('audio-sweep-started', { cutoff, candidateCount: expired.length })
+  }
   for (const row of expired) {
     const meetingDir = path.join(app.getPath('userData'), 'meetings', row.id)
     const candidates = new Set(
@@ -349,14 +367,20 @@ function sweepExpiredMeetingAudio(): void {
         (p): p is string => !!p
       )
     )
+    let unlinked = 0
     for (const relPath of candidates) {
       try {
         fs.unlinkSync(path.join(meetingDir, relPath))
+        unlinked++
       } catch { /* already gone, or never existed for this meeting */ }
     }
     if (row.audio_mic_path || row.audio_system_path) {
       db.prepare('UPDATE meetings SET audio_mic_path = NULL, audio_system_path = NULL WHERE id = ?').run(row.id)
     }
+    notetakerLog.child({ meetingId: row.id }).event('audio-swept', {
+      filesUnlinked: unlinked,
+      hadNullPaths: !row.audio_mic_path && !row.audio_system_path, // true = a crash/quit-orphaned meeting
+    })
   }
 }
 

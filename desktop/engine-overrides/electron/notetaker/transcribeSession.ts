@@ -7,6 +7,9 @@ import { encodeWav } from './wavEncoder'
 import { downmixAndResample } from './resample'
 import { mergeChannelChunks, generateTitle, type TranscriptSegment, type TimedChunkText } from './transcriptMerge'
 import { insertMeeting, type DBMeeting } from '../db'
+import { createNotetakerLogger } from './notetakerLog'
+
+const log = createNotetakerLogger('transcribe')
 
 /**
  * Result of transcribing ONE already-cut chunk of a channel's audio
@@ -48,7 +51,14 @@ export type EncodedChunk = {
  */
 export function encodeChunk(samples: Float32Array, channelsCount: number, sampleRate: number): EncodedChunk | null {
   const reduced = downmixAndResample(samples, channelsCount, sampleRate)
-  if (reduced.samples.length === 0) return null
+  if (reduced.samples.length === 0) {
+    log.debug('encodeChunk: empty chunk after downmix/resample, nothing to encode', {
+      inputSamples: samples.length,
+      inputChannels: channelsCount,
+      inputSampleRate: sampleRate,
+    })
+    return null
+  }
   const wav = encodeWav(reduced.samples, reduced.sampleRate, 1)
   const durationSeconds = reduced.samples.length / reduced.sampleRate
   return { wav, durationSeconds, sampleRate: reduced.sampleRate }
@@ -72,8 +82,11 @@ export function encodeChunk(samples: Float32Array, channelsCount: number, sample
  * losing whatever OTHER chunks did transcribe successfully.
  */
 export async function transcribeEncodedChunk(channel: 'mic' | 'system', encoded: EncodedChunk): Promise<ChunkTranscriptionResult> {
+  const startedAt = Date.now()
+  const clog = log.child({ channel })
   try {
     const result = await tryManagedSTT(encoded.wav, encoded.durationSeconds, 'dictation')
+    const latencyMs = Date.now() - startedAt
     // A NULL result is a FAILURE here, not an empty transcript — same
     // Finding-3 reasoning as the old whole-session flow: tryManagedSTT
     // returns null both when the call really failed AND when managed STT is
@@ -86,12 +99,28 @@ export async function transcribeEncodedChunk(channel: 'mic' | 'system', encoded:
     // `Promise.all` for the rest of this channel's or the other channel's
     // chunks.
     if (!result) {
-      console.error(`[notetaker] ${channel} chunk transcription unavailable or failed (managed STT returned no result)`)
+      clog.error(`${channel} chunk transcription unavailable or failed (managed STT returned no result)`, {
+        durationSeconds: encoded.durationSeconds,
+        sampleRate: encoded.sampleRate,
+        wavBytes: encoded.wav.length,
+        latencyMs,
+      })
       return { text: '', failed: true }
     }
+    clog.event('chunk-transcribed', {
+      durationSeconds: encoded.durationSeconds,
+      sampleRate: encoded.sampleRate,
+      latencyMs,
+      textLength: (result.text ?? '').length,
+      textPreview: result.text ?? '',
+    })
     return { text: result.text ?? '', failed: false }
   } catch (err) {
-    console.error(`[notetaker] ${channel} chunk transcription failed:`, err)
+    clog.error(`${channel} chunk transcription failed`, {
+      durationSeconds: encoded.durationSeconds,
+      latencyMs: Date.now() - startedAt,
+      error: err instanceof Error ? err.message : String(err),
+    })
     return { text: '', failed: true }
   }
 }
@@ -121,6 +150,7 @@ export async function persistSession(
   audioMicPath: string | null,
   audioSystemPath: string | null,
 ): Promise<void> {
+  const mlog = log.child({ meetingId })
   const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
   fs.mkdirSync(meetingDir, { recursive: true })
 
@@ -134,6 +164,17 @@ export async function persistSession(
   fs.renameSync(temp, target)
 
   const status: DBMeeting['status'] = failed ? 'failed' : 'ready'
+
+  mlog.event('session-persisted', {
+    title,
+    status,
+    durationMs: endedAt - startedAt,
+    micChunkCount: micChunks.length,
+    systemChunkCount: systemChunks.length,
+    segmentCount: segments.length,
+    hasMicAudio: !!audioMicPath,
+    hasSystemAudio: !!audioSystemPath,
+  })
 
   insertMeeting({
     id: meetingId,

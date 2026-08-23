@@ -61,6 +61,9 @@ import { encodeChunk, transcribeEncodedChunk, persistSession, newMeetingId } fro
 import type { TimedChunkText } from './notetaker/transcriptMerge'
 import { WavAppender } from './notetaker/wavAppender'
 import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting } from './db'
+import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
+
+const log = createNotetakerLogger('init')
 
 export type NotetakerInitHooks = {
   /** Called exactly when REAL capture starts/stops — from
@@ -99,9 +102,11 @@ interface NativeAx {
 function loadNativeAx(): NativeAx | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    return require('unmute-native-ax') as NativeAx
+    const ax = require('unmute-native-ax') as NativeAx
+    log.event('native-ax-loaded')
+    return ax
   } catch (e) {
-    console.warn('[notetaker] unmute-native-ax unavailable — cannot resolve a capture target:', (e as Error).message)
+    log.error('unmute-native-ax unavailable — cannot resolve a capture target', { error: (e as Error).message })
     return null
   }
 }
@@ -114,11 +119,19 @@ function loadNativeAx(): NativeAx | null {
 function resolveTargetPid(ax: NativeAx): number | null {
   try {
     const frontName = ax.frontmostApp()
-    if (!frontName) return null
+    if (!frontName) {
+      log.warn('resolveTargetPid: frontmostApp() returned nothing — no target to capture')
+      return null
+    }
     const match = ax.listApps().find((a) => a.name === frontName)
-    return match ? match.pid : null
+    if (!match) {
+      log.warn('resolveTargetPid: frontmost app has no matching entry in listApps() — cannot resolve a pid', { frontName })
+      return null
+    }
+    log.event('target-app-resolved', { appName: match.name, bundleId: match.bundleId, pid: match.pid })
+    return match.pid
   } catch (e) {
-    console.warn('[notetaker] resolveTargetPid failed:', (e as Error).message)
+    log.error('resolveTargetPid failed', { error: (e as Error).message })
     return null
   }
 }
@@ -144,12 +157,16 @@ function toFloat32(samples: unknown): Float32Array | null {
 
 function showNotetakerNotification(opts: { title: string; body?: string; onClick?: () => void }): void {
   try {
-    if (!Notification.isSupported()) return
+    if (!Notification.isSupported()) {
+      log.warn('notification not supported on this platform — dropped', { title: opts.title })
+      return
+    }
     const n = new Notification({ title: opts.title, body: opts.body ?? '' })
     if (opts.onClick) n.on('click', opts.onClick)
     n.show()
+    log.event('notification-shown', { title: opts.title, body: opts.body })
   } catch (e) {
-    console.warn('[notetaker] notification failed:', (e as Error).message)
+    log.error('notification failed', { error: (e as Error).message })
   }
 }
 
@@ -166,9 +183,10 @@ async function confirmNotetakerDialog(message: string): Promise<boolean> {
       cancelId: 1,
       message,
     })
+    log.event('confirm-dialog-answered', { message, confirmed: result.response === 0 })
     return result.response === 0
   } catch (e) {
-    console.warn('[notetaker] confirm dialog failed:', (e as Error).message)
+    log.error('confirm dialog failed', { error: (e as Error).message })
     return false // fail closed — never stop a running capture on a broken dialog
   }
 }
@@ -205,23 +223,34 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // recorded anything. Live capture degrades to unavailable; browsing what was
   // already captured must not.
   ipcMain.handle('notetaker:list-meetings', () => {
-    return getMeetings()
+    const meetings = getMeetings()
+    log.debug('list-meetings', { count: meetings.length })
+    return meetings
   })
 
   ipcMain.handle('notetaker:get-transcript', (_event, id: string) => {
     const meeting = getMeeting(id)
-    if (!meeting || !meeting.transcript_path) return []
+    if (!meeting || !meeting.transcript_path) {
+      log.child({ meetingId: id }).debug('get-transcript: no meeting or no transcript_path', {
+        found: !!meeting,
+      })
+      return []
+    }
     const meetingDir = path.join(app.getPath('userData'), 'meetings', id)
     try {
       const raw = fs.readFileSync(path.join(meetingDir, meeting.transcript_path), 'utf8')
-      return JSON.parse(raw)
-    } catch {
+      const parsed = JSON.parse(raw)
+      log.child({ meetingId: id }).debug('get-transcript: loaded', { segmentCount: Array.isArray(parsed) ? parsed.length : 0 })
+      return parsed
+    } catch (e) {
+      log.child({ meetingId: id }).warn('get-transcript: failed to read/parse transcript file', { error: (e as Error).message })
       return []
     }
   })
 
   ipcMain.handle('notetaker:rename-meeting', (_event, id: string, title: string) => {
     updateMeetingTitle(id, title)
+    log.child({ meetingId: id }).event('meeting-renamed', { title })
   })
 
   ipcMain.handle('notetaker:delete-meeting', (_event, id: string) => {
@@ -229,12 +258,23 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   })
 
   ipcMain.handle('notetaker:get-audio-url', (_event, id: string, channel: 'mic' | 'system') => {
+    const mlog = log.child({ meetingId: id })
     const meeting = getMeeting(id)
-    if (!meeting) return null
+    if (!meeting) {
+      mlog.debug('get-audio-url: no meeting row found', { channel })
+      return null
+    }
     const relPath = channel === 'mic' ? meeting.audio_mic_path : meeting.audio_system_path
-    if (!relPath) return null
+    if (!relPath) {
+      mlog.debug('get-audio-url: channel has no recorded/still-retained audio path', { channel })
+      return null
+    }
     const fullPath = path.join(app.getPath('userData'), 'meetings', id, relPath)
-    if (!fs.existsSync(fullPath)) return null
+    if (!fs.existsSync(fullPath)) {
+      mlog.warn('get-audio-url: DB has a path but the file is missing on disk', { channel, relPath })
+      return null
+    }
+    mlog.debug('get-audio-url: resolved', { channel })
     return `file://${fullPath}`
   })
 
@@ -242,11 +282,18 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     nativeAudioTap = require('unmute-native-audio-tap') as NativeAudioTap
+    log.event('native-audio-tap-loaded')
   } catch (e) {
-    console.warn('[notetaker] unmute-native-audio-tap unavailable — meeting notetaker disabled:', (e as Error).message)
+    log.error('unmute-native-audio-tap unavailable — meeting notetaker disabled', { error: (e as Error).message })
   }
   const ax = loadNativeAx()
-  if (!nativeAudioTap || !ax) return
+  if (!nativeAudioTap || !ax) {
+    log.error('notetaker feature disabled at startup — missing native module(s)', {
+      nativeAudioTapLoaded: !!nativeAudioTap,
+      nativeAxLoaded: !!ax,
+    })
+    return
+  }
 
   // Widget visibility must always match REAL capture state (not the
   // controller's detection/confirm logic), so it is wired here, at the one
@@ -308,20 +355,32 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
      *  chunk — the relative filename persistSession() should record in the
      *  DB row, or null if this channel never produced any real audio. */
     audioFileName: string | null
+    /** Log-only running counter — how many times this channel's emitter has
+     *  called onSegment at all (including empty/silent cuts), so a log line
+     *  can say "chunk 7 of the system channel" rather than just "a chunk". */
+    chunkIndex: number
   }
 
   function freshTracker(): ChannelTracker {
-    return { promises: [], attempted: 0, succeeded: 0, writer: null, audioFileName: null }
+    return { promises: [], attempted: 0, succeeded: 0, writer: null, audioFileName: null, chunkIndex: 0 }
   }
 
-  function makeChunkHandler(channel: 'mic' | 'system', tracker: ChannelTracker, meetingDir: string): (segment: FinalizedSegment) => void {
+  function makeChunkHandler(channel: 'mic' | 'system', tracker: ChannelTracker, meetingDir: string, mlog: ReturnType<typeof log.child>): (segment: FinalizedSegment) => void {
     return (segment: FinalizedSegment) => {
+      const chunkIndex = tracker.chunkIndex++
+      const clog = mlog.child({ channel, chunkIndex })
       const startMs = segment.startTimestampMs
       const durationMs =
         segment.sampleRate > 0 && segment.channels > 0
           ? (segment.samples.length / segment.channels / segment.sampleRate) * 1000
           : 0
       const endMs = startMs + durationMs
+      clog.event('chunk-cut', {
+        durationMs: Math.round(durationMs),
+        sampleCount: segment.samples.length,
+        sourceSampleRate: segment.sampleRate,
+        sourceChannels: segment.channels,
+      })
 
       const encoded = encodeChunk(segment.samples, segment.channels, segment.sampleRate)
       if (!encoded) {
@@ -331,6 +390,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         // already-resolved empty segment so ordering/merging still sees a
         // placeholder for this chunkIndex; not counted toward `attempted`,
         // so it can never make a channel look "failed."
+        clog.event('chunk-empty-skipped')
         tracker.promises.push(Promise.resolve({ channel, text: '', startMs, endMs } as TimedChunkText))
         return
       }
@@ -345,8 +405,9 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
           const fileName = `audio-${channel}.wav`
           tracker.writer = new WavAppender(path.join(meetingDir, fileName), encoded.sampleRate)
           tracker.audioFileName = fileName
+          clog.event('audio-file-opened', { fileName, sampleRate: encoded.sampleRate })
         } catch (e) {
-          console.warn(`[notetaker] could not open the ${channel} audio file for writing:`, (e as Error).message)
+          clog.error('could not open the audio file for writing', { error: (e as Error).message })
         }
       }
       if (tracker.writer) {
@@ -354,7 +415,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
           try {
             tracker.writer.append(encoded.wav.subarray(44)) // strip this chunk's own 44-byte header — only the FIRST write to the file carries one
           } catch (e) {
-            console.warn(`[notetaker] failed to append a ${channel} audio chunk to disk:`, (e as Error).message)
+            clog.error('failed to append audio chunk to disk', { error: (e as Error).message })
           }
         } else {
           // Fail safe rather than silently concatenate mismatched-rate PCM
@@ -362,7 +423,10 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
           // source that ever arrives at <= the target rate would encode at
           // its own, different rate) — still transcribe this chunk
           // normally below, just skip writing it into the shared file.
-          console.warn(`[notetaker] ${channel} chunk encoded at ${encoded.sampleRate}Hz, this session's audio file is ${tracker.writer.rate}Hz — skipping the audio-file append for this chunk (still transcribing it)`)
+          clog.warn('chunk sample rate does not match this session\'s audio file — skipping the audio-file append for this chunk (still transcribing it)', {
+            chunkSampleRate: encoded.sampleRate,
+            fileSampleRate: tracker.writer.rate,
+          })
         }
       }
 
@@ -389,11 +453,17 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // moment capture begins (see below), so the id has to exist that early and
   // the final insert must reuse it rather than mint a second one.
   let sessionMeetingId = ''
+  // Log-only heartbeat counter, reset in start() — see the mic-chunk IPC
+  // handler below.
+  let micChunksReceived = 0
 
   class HookedNotetakerSession extends NotetakerSession {
     start(pid: number): void {
       sessionStartedAt = Date.now()
       sessionMeetingId = newMeetingId()
+      micChunksReceived = 0
+      const mlog = log.child({ meetingId: sessionMeetingId })
+      mlog.event('capture-start-requested', { targetPid: pid })
       // Created eagerly (not lazily on first chunk) so the directory exists
       // before any WavAppender tries to open a file inside it — mkdir
       // failure is logged but never blocks capture from starting; a channel
@@ -403,13 +473,22 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       try {
         fs.mkdirSync(meetingDir, { recursive: true })
       } catch (e) {
-        console.warn('[notetaker] could not create the meeting directory:', (e as Error).message)
+        mlog.error('could not create the meeting directory', { error: (e as Error).message })
       }
       micTracker = freshTracker()
       systemTracker = freshTracker()
-      micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker, meetingDir))
-      systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker, meetingDir))
-      super.start(pid) // throws if the tap won't start — no placeholder row in that case
+      micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker, meetingDir, mlog))
+      systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker, meetingDir, mlog))
+      try {
+        super.start(pid) // throws if the tap won't start — no placeholder row in that case
+      } catch (e) {
+        mlog.error('native audio tap failed to start — capture did not begin (likely a TCC "System Audio Recording Only" denial)', {
+          targetPid: pid,
+          error: (e as Error).message,
+        })
+        throw e
+      }
+      mlog.event('capture-started', { targetPid: pid, meetingDir })
       // A PLACEHOLDER ROW, WRITTEN IMMEDIATELY. Until this existed, the
       // meetings row was only inserted at the very END of
       // persistSession(), so an app quit or crash mid-meeting
@@ -437,7 +516,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       } catch (e) {
         // A failed placeholder row must never take down a capture that has
         // already started — the end-of-session insert is still the real one.
-        console.warn('[notetaker] could not write the in-progress meeting row:', (e as Error).message)
+        mlog.error('could not write the in-progress meeting row', { error: (e as Error).message })
       }
       hooks.onSessionStart?.()
     }
@@ -452,10 +531,13 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       const system = systemTracker
       const micEm = micEmitter
       const systemEm = systemEmitter
+      const mlog = log.child({ meetingId })
+      mlog.event('capture-stop-requested', { wasActive })
       super.stop()
       if (wasActive) {
         hooks.onSessionStop?.()
         const endedAt = Date.now()
+        mlog.event('capture-stopped', { durationMs: endedAt - startedAt })
         // flush() finalizes each channel's trailing partial segment by
         // firing onSegment ONE more time, through the exact same
         // makeChunkHandler path as any other cut — no special-casing needed,
@@ -473,12 +555,12 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
             try {
               mic.writer?.close()
             } catch (e) {
-              console.warn('[notetaker] failed to close the mic audio file:', (e as Error).message)
+              mlog.error('failed to close the mic audio file', { error: (e as Error).message })
             }
             try {
               system.writer?.close()
             } catch (e) {
-              console.warn('[notetaker] failed to close the system audio file:', (e as Error).message)
+              mlog.error('failed to close the system audio file', { error: (e as Error).message })
             }
             // Partial-failure semantics: a channel is 'failed' only if it
             // was attempted at all AND every single attempt failed — one
@@ -489,6 +571,18 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
             // "empty channel is not a failure" semantics.
             const micFailed = mic.attempted > 0 && mic.succeeded === 0
             const systemFailed = system.attempted > 0 && system.succeeded === 0
+            mlog.event('channels-summarized', {
+              micChunks: mic.chunkIndex,
+              micAttempted: mic.attempted,
+              micSucceeded: mic.succeeded,
+              micFailed,
+              micHasAudioFile: !!mic.audioFileName,
+              systemChunks: system.chunkIndex,
+              systemAttempted: system.attempted,
+              systemSucceeded: system.succeeded,
+              systemFailed,
+              systemHasAudioFile: !!system.audioFileName,
+            })
             return persistSession(
               micChunks,
               systemChunks,
@@ -501,7 +595,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
             )
           })
           .catch((e) => {
-            console.error('[notetaker] failed to transcribe/persist session:', (e as Error).message)
+            mlog.error('failed to transcribe/persist session', { error: (e as Error).message })
           })
       }
     }
@@ -525,10 +619,29 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // returns early when the session is inactive, so a chunk still in flight
   // when a meeting ends is dropped by the session itself rather than by a
   // second, duplicate check that could drift out of sync with it.
+  /** Heartbeat cadence, not every-chunk — mic chunks arrive ~12/sec, so
+   *  logging every one would flood the file for no diagnostic gain. Every
+   *  100th (~every 8s during active capture) is enough to prove the mic
+   *  pipeline is alive without drowning the more interesting per-cut logs. */
+  const MIC_CHUNK_LOG_EVERY = 100
   ipcMain.on('notetaker:mic-chunk', (_event, samples: unknown, sampleRate: unknown, timestampMs: unknown) => {
     const pcm = toFloat32(samples)
-    if (!pcm || pcm.length === 0) return
-    if (typeof sampleRate !== 'number' || !(sampleRate > 0)) return
+    if (!pcm || pcm.length === 0) {
+      log.warn('mic-chunk dropped: could not decode samples payload', {
+        meetingId: sessionMeetingId || undefined,
+        sessionActive: session.isActive,
+      })
+      return
+    }
+    if (typeof sampleRate !== 'number' || !(sampleRate > 0)) {
+      log.warn('mic-chunk dropped: invalid sampleRate', { sampleRate, meetingId: sessionMeetingId || undefined })
+      return
+    }
+    if (!session.isActive) return // expected/silent: a straggler chunk after stop() — session itself also no-ops this
+    micChunksReceived++
+    if (micChunksReceived % MIC_CHUNK_LOG_EVERY === 1) {
+      log.child({ meetingId: sessionMeetingId }).debug('mic-chunk heartbeat', { chunksReceivedThisSession: micChunksReceived, sampleCount: pcm.length, sampleRate })
+    }
     session.feedMicChunk(pcm, sampleRate, typeof timestampMs === 'number' ? timestampMs : Date.now())
   })
 
@@ -541,6 +654,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
   // ── Manual chord trigger (Task 7's KeyboardManager events) ──
   keyboardManager.on('notes-start-requested', () => {
+    log.event('chord-start-requested')
     controller
       .onNotesStartRequested()
       .catch((e) => {
@@ -550,7 +664,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         // happened. The no-resolvable-pid case already gets its own
         // notification from inside the controller; this covers the throw
         // path the controller deliberately does not catch.
-        console.warn('[notetaker] start failed:', (e as Error).message)
+        log.error('start failed', { error: (e as Error).message })
         showNotetakerNotification({
           title: 'Notetaker',
           body: 'Could not start note-taking (permission denied, or capture failed to start).',
@@ -569,12 +683,13 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       })
   })
   keyboardManager.on('notes-stop-confirm-requested', () => {
+    log.event('chord-stop-confirm-requested')
     controller
       .onNotesStopConfirmRequested()
       .then(() => {
         if (!session.isActive) keyboardManager.confirmNotesStop()
       })
-      .catch((e) => console.warn('[notetaker] stop-confirm failed:', (e as Error).message))
+      .catch((e) => log.error('stop-confirm failed', { error: (e as Error).message }))
   })
 
   // ── Widget's own two-click Cancel (spec §6/§7) ──
@@ -587,6 +702,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // THIRD click (an OS dialog) on top of the two the user already made.
   ipcMain.on('notetaker:cancel-requested', () => {
     if (!session.isActive) return
+    log.event('widget-cancel-clicked')
     session.stop()
     keyboardManager.confirmNotesStop()
   })
@@ -607,12 +723,12 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // change, deliberately out of scope for this fix.
   app.on('before-quit', () => {
     if (!session.isActive) return
-    console.log('[notetaker] app is quitting during a capture — stopping the session (save is best-effort)')
+    log.child({ meetingId: sessionMeetingId }).event('quit-during-capture', { note: 'stopping the session — save is best-effort' })
     try {
       session.stop()
       keyboardManager.confirmNotesStop()
     } catch (e) {
-      console.warn('[notetaker] stop-on-quit failed:', (e as Error).message)
+      log.error('stop-on-quit failed', { error: (e as Error).message })
     }
   })
 
@@ -645,14 +761,18 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
   // ── Detection (MeetingWatcher, Task 3) ──
   const meetingWatcher = new MeetingWatcher({
-    onMeetingStarted: () => controller.onMeetingDetected(),
+    onMeetingStarted: () => {
+      log.event('meeting-detected')
+      controller.onMeetingDetected()
+    },
     onMeetingEnded: () => {
+      log.event('meeting-end-detected', { sessionWasActive: session.isActive })
       controller
         .onMeetingEnded()
         .then(() => {
           if (!session.isActive) keyboardManager.confirmNotesStop()
         })
-        .catch((e) => console.warn('[notetaker] meeting-ended handling failed:', (e as Error).message))
+        .catch((e) => log.error('meeting-ended handling failed', { error: (e as Error).message }))
     },
   })
 
@@ -692,6 +812,13 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
    *  polls — 3s * 4 = one sample every ~12s. See pollMeetingSignal below. */
   const ACTIVE_CAPTURE_POLL_DIVISOR = 4
   let ticksSinceStart = 0
+  /** Last sample logged, so the poll loop only writes a line when something
+   *  about the signal actually changed — a full log of every 3s tick would
+   *  dwarf everything else in the file for no diagnostic value. Only the
+   *  hostname of a tab URL is kept, never the full URL: a meeting URL's
+   *  path/query often carries a join token, and this log file may end up
+   *  read by someone other than the person who joined that meeting. */
+  let lastLoggedSample = ''
   const pollMeetingSignal = async (): Promise<void> => {
     // NEVER do this work while a capture is hot (see the otherCaptureActive
     // comment above) — skip this tick entirely rather than delay it, the
@@ -723,14 +850,47 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       const frontName = ax.frontmostApp()
       const browserName = SUPPORTED_APPLESCRIPT_BROWSERS.find((b: AppleScriptBrowser) => b === frontName)
       if (browserName) activeTabUrl = await getActiveTabUrl(browserName)
+
+      let tabHost: string | undefined
+      if (activeTabUrl) {
+        try { tabHost = new URL(activeTabUrl).host } catch { tabHost = '<unparseable-url>' }
+      }
+      const sample = JSON.stringify({ frontName, playing: np?.playing ?? false, bundleId: np?.bundleIdentifier, tabHost })
+      if (sample !== lastLoggedSample) {
+        lastLoggedSample = sample
+        log.debug('meeting-signal sample changed', {
+          frontmostApp: frontName,
+          nowPlayingBundleId: np?.bundleIdentifier,
+          nowPlayingActive: np?.playing ?? false,
+          browserWatched: browserName,
+          activeTabHost: tabHost,
+          meetingWatcherActive: meetingWatcher.isMeetingActive,
+        })
+      }
+
       meetingWatcher.feed({ nowPlaying: np ?? { playing: false }, activeTabUrl })
     } catch (e) {
-      console.warn('[notetaker] meeting-signal poll failed:', (e as Error).message)
+      log.error('meeting-signal poll failed', { error: (e as Error).message })
     }
   }
   const MEETING_POLL_MS = 3000
   const pollTimer = setInterval(() => { void pollMeetingSignal() }, MEETING_POLL_MS)
   pollTimer.unref()
 
-  console.log('[notetaker] wired')
+  // ── Renderer-side (widget) diagnostics, forwarded into this same log ──
+  // getUserMedia, device selection, and the AudioWorklet-vs-ScriptProcessor
+  // fallback all happen in the widget's renderer (NotetakerWidget.tsx) —
+  // this just relays those events into the one durable notetaker log file so
+  // "what was the source of the mic audio, and did it actually work" is
+  // answerable from ONE place instead of a renderer devtools console that
+  // closes when the widget window does. Never trusts the renderer's field
+  // shapes — worst case a malformed payload just gets logged as-is.
+  ipcMain.on('notetaker:widget-log', (_event, level: unknown, message: unknown, fields: unknown) => {
+    const lvl = level === 'warn' || level === 'error' || level === 'debug' ? level : 'info'
+    const msg = typeof message === 'string' ? message : String(message)
+    const wlog = log.child({ meetingId: sessionMeetingId || undefined })
+    wlog[lvl](msg, (fields && typeof fields === 'object' ? fields : undefined) as Record<string, unknown> | undefined)
+  })
+
+  log.event('wired', { logFile: getNotetakerLogFilePath() })
 }

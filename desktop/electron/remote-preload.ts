@@ -651,6 +651,13 @@ export const remotePreloadExtensions = {
    *  never recorded or its audio has already been swept (24h retention). */
   notetakerGetAudioUrl: (id: string, channel: 'mic' | 'system'): Promise<string | null> =>
     ipcRenderer.invoke('notetaker:get-audio-url', id, channel),
+  /** Relays a widget-renderer diagnostic (getUserMedia result, device label,
+   *  AudioWorklet-vs-ScriptProcessor fallback, tap teardown, etc.) into
+   *  main's one durable notetaker log file — see notetakerInit.ts's
+   *  'notetaker:widget-log' handler. send(), not invoke(): fire-and-forget,
+   *  nothing to return, must never block the renderer on a log line. */
+  notetakerWidgetLog: (level: 'debug' | 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>): void =>
+    ipcRenderer.send('notetaker:widget-log', level, message, fields),
 }
 
 export type RemoteAPI = typeof remotePreloadExtensions
