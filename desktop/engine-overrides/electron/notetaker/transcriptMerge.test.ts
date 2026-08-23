@@ -1,6 +1,6 @@
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { mergeTranscripts, generateTitle } from './transcriptMerge'
+import { mergeTranscripts, generateTitle, mergeChannelChunks } from './transcriptMerge'
 
 describe('mergeTranscripts', () => {
   test('mic-only transcript produces one mic segment', () => {
@@ -34,6 +34,52 @@ describe('mergeTranscripts', () => {
 
   test('whitespace-only text is treated as empty', () => {
     assert.deepEqual(mergeTranscripts('   ', 0, 0, '', 0, 0), [])
+  })
+})
+
+describe('mergeChannelChunks', () => {
+  test('interleaves mic and system chunks by startMs, not by channel', () => {
+    const segments = mergeChannelChunks(
+      [{ channel: 'mic', text: 'hi there', startMs: 0, endMs: 3000 }],
+      [{ channel: 'system', text: 'hey', startMs: 4000, endMs: 6000 }]
+    )
+    assert.equal(segments.length, 2)
+    assert.equal(segments[0].channel, 'mic')
+    assert.equal(segments[1].channel, 'system')
+  })
+
+  test('multiple chunks per channel all appear as separate ordered segments', () => {
+    const segments = mergeChannelChunks(
+      [
+        { channel: 'mic', text: 'first', startMs: 0, endMs: 1000 },
+        { channel: 'mic', text: 'second', startMs: 5000, endMs: 6000 },
+      ],
+      [{ channel: 'system', text: 'reply', startMs: 2000, endMs: 3000 }]
+    )
+    assert.equal(segments.length, 3)
+    assert.deepEqual(segments.map((s) => s.text), ['first', 'reply', 'second'])
+  })
+
+  test('empty-text chunks are dropped', () => {
+    const segments = mergeChannelChunks(
+      [{ channel: 'mic', text: '', startMs: 0, endMs: 1000 }],
+      [{ channel: 'system', text: 'real text', startMs: 2000, endMs: 3000 }]
+    )
+    assert.equal(segments.length, 1)
+    assert.equal(segments[0].channel, 'system')
+  })
+
+  test('both channels empty produces no segments', () => {
+    assert.deepEqual(mergeChannelChunks([], []), [])
+  })
+
+  test('preserves the channel label on each segment (does not merge adjacent-time segments across channels)', () => {
+    const segments = mergeChannelChunks(
+      [{ channel: 'mic', text: 'a', startMs: 0, endMs: 1000 }],
+      [{ channel: 'system', text: 'b', startMs: 1000, endMs: 2000 }]
+    )
+    assert.equal(segments.length, 2)
+    assert.notEqual(segments[0].channel, segments[1].channel)
   })
 })
 

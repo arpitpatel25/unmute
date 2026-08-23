@@ -26,6 +26,22 @@ export function mergeTranscripts(
   return segments.sort((a, b) => a.startMs - b.startMs)
 }
 
+export type TimedChunkText = { channel: 'mic' | 'system'; text: string; startMs: number; endMs: number }
+
+/**
+ * Interleaves already-transcribed, already-stitched chunks from both
+ * channels into one ordered transcript, by real per-chunk start time —
+ * a genuine improvement over the old one-block-per-channel merge, now
+ * that periodic flushing gives real per-chunk timestamps.
+ */
+export function mergeChannelChunks(micChunks: TimedChunkText[], systemChunks: TimedChunkText[]): TranscriptSegment[] {
+  const all: TranscriptSegment[] = [...micChunks, ...systemChunks]
+    .filter((c) => c.text.trim().length > 0)
+    .map((c) => ({ channel: c.channel, text: c.text.trim(), startMs: c.startMs, endMs: c.endMs }))
+
+  return all.sort((a, b) => a.startMs - b.startMs)
+}
+
 const MAX_TITLE_LENGTH = 60
 
 export function generateTitle(segments: TranscriptSegment[]): string {
