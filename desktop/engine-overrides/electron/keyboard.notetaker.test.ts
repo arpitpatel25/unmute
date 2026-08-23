@@ -1,3 +1,20 @@
+// NOT PART OF THE DEFAULT `npm test` RUN — run it with `npm run
+// test:notetaker-keyboard`.
+//
+// It is excluded from the default glob in package.json
+// ("engine-overrides/electron/**/!(keyboard.notetaker).test.ts") because it
+// CANNOT load standalone in this repo: keyboard.ts imports
+// './paywall/remote/capture/agentGesture', a path that only exists after
+// build/wire-into-engine.sh copies desktop/electron/remote/ onto the OSS
+// engine's electron/paywall/. Outside that wired tree the import fails with
+// ERR_MODULE_NOT_FOUND before a single test runs. That is a pre-existing,
+// already-ruled limitation of loading keyboard.ts here, not a bug in these
+// tests — but leaving a permanently-red file in the default suite trains
+// everyone to ignore the suite's overall pass/fail signal, which is exactly
+// how ten genuinely pre-existing failures in provider-contract.test.ts went
+// unnoticed. So it lives behind its own script instead: the default run's
+// exit code stays meaningful, and this file stays invocable.
+
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { KeyboardManager } from './keyboard'
@@ -7,7 +24,12 @@ import type { KeyEvent } from './keyListener'
 // yet (see the NotesChordKeyEvent comment in keyboard.ts) — this cast is
 // the test-side mirror of that same, deliberately-scoped workaround: the
 // values are exactly what native-fn-listener emits at runtime.
-type ChordEvent = 'left-control-down' | 'left-control-up' | 'left-option-down' | 'left-option-up'
+type ChordEvent =
+  | 'left-control-down'
+  | 'left-control-up'
+  | 'left-option-down'
+  | 'left-option-up'
+  | 'notes-chord-spoil'
 const tap = (km: KeyboardManager, event: ChordEvent) => km.handleKey(event as unknown as KeyEvent)
 
 /** One full press-and-release of both chord keys, control first. */
@@ -62,6 +84,64 @@ describe('notes chord (left-Control + left-Option double-tap) — independent of
     assert.equal(snap!.instructionActive, false)
     assert.equal(snap!.agentActive, false)
     assert.equal(snap!.remoteActive, false)
+  })
+
+  test('a key pressed between the two engages SPOILS the pair — VoiceOver navigation cannot start a recording', () => {
+    const km = new KeyboardManager()
+    let startRequested = 0
+    km.on('notes-start-requested', () => startRequested++)
+
+    // A VoiceOver user: hold VO (= left-Control + left-Option), press an
+    // arrow, release, do it again. Two engages inside the double-tap window,
+    // with real work in between.
+    tap(km, 'left-control-down')
+    tap(km, 'left-option-down')
+    tap(km, 'notes-chord-spoil') // VO+arrow
+    tap(km, 'left-control-up')
+    tap(km, 'left-option-up')
+
+    tap(km, 'left-control-down')
+    tap(km, 'left-option-down')
+
+    assert.equal(startRequested, 0)
+  })
+
+  test('the spoil clears once both chord keys are released, so a clean double-tap still works', () => {
+    const km = new KeyboardManager()
+    let startRequested = 0
+    km.on('notes-start-requested', () => startRequested++)
+
+    // Spoiled engagement first…
+    tap(km, 'left-control-down')
+    tap(km, 'left-option-down')
+    tap(km, 'notes-chord-spoil')
+    tap(km, 'left-control-up')
+    tap(km, 'left-option-up')
+
+    // …then a genuine, clean double-tap.
+    pressReleaseChord(km)
+    tap(km, 'left-control-down')
+    tap(km, 'left-option-down')
+
+    assert.equal(startRequested, 1)
+  })
+
+  test('a spoil while only ONE chord key is held does not block a later clean chord', () => {
+    const km = new KeyboardManager()
+    let startRequested = 0
+    km.on('notes-start-requested', () => startRequested++)
+
+    // The native layer only emits notes-chord-spoil while BOTH are held, but
+    // be explicit that a spoil is released by the full key-up pair either way.
+    tap(km, 'left-control-down')
+    tap(km, 'notes-chord-spoil')
+    tap(km, 'left-control-up')
+
+    pressReleaseChord(km)
+    tap(km, 'left-control-down')
+    tap(km, 'left-option-down')
+
+    assert.equal(startRequested, 1)
   })
 
   test('a second double-tap while notes is active requests a confirm, not a direct stop', () => {

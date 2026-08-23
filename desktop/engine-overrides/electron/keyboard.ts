@@ -51,7 +51,14 @@ type DualModeState = 'idle' | 'held' | 'awaiting-second' | 'push-recording' | 'h
 // union just lets handleKey's switch compare against them without widening
 // keyListener's exported type. Whoever finishes wiring the notetaker
 // end-to-end should fold these into KeyEvent for real type safety.
-type NotesChordKeyEvent = 'left-control-down' | 'left-control-up' | 'left-option-down' | 'left-option-up'
+type NotesChordKeyEvent =
+  | 'left-control-down'
+  | 'left-control-up'
+  | 'left-option-down'
+  | 'left-option-up'
+  /** Some OTHER key (or modifier) arrived while both chord keys were held —
+   *  see the notes-chord-spoil block in listener.mm. */
+  | 'notes-chord-spoil'
 
 // Exported (was module-private) so tests can construct an isolated instance
 // instead of sharing the process-wide `keyboardManager` singleton below.
@@ -108,6 +115,11 @@ export class KeyboardManager extends EventEmitter {
   private leftOptionHeld = false
   /** When the first tap of a pending chord pair landed. 0 = none. */
   private lastNotesChordTapAt = 0
+  /** Another key arrived while the chord was held, so THIS engagement can
+   *  never count as a tap — the same "spoiled" concept agentGesture.ts uses
+   *  for right-Command (`GestureState.spoiled`). Cleared only when both chord
+   *  keys are back up, i.e. when the gesture has genuinely ended. */
+  private notesChordSpoiled = false
 
   start(): void {
     keyListener.on('key', (event: KeyEvent) => this.handleKey(event))
@@ -283,6 +295,7 @@ export class KeyboardManager extends EventEmitter {
         break
       case 'left-control-up':
         this.leftControlHeld = false
+        this.clearNotesChordSpoilIfReleased()
         break
       case 'left-option-down':
         this.leftOptionHeld = true
@@ -290,6 +303,16 @@ export class KeyboardManager extends EventEmitter {
         break
       case 'left-option-up':
         this.leftOptionHeld = false
+        this.clearNotesChordSpoilIfReleased()
+        break
+      case 'notes-chord-spoil':
+        // Anything else pressed while the chord is held: this is VoiceOver
+        // navigation or another Ctrl+Opt shortcut, not a request to record.
+        // Kill both the current engagement AND any pending first tap, so two
+        // engagements with real work between them cannot pair into a
+        // double-tap.
+        this.notesChordSpoiled = true
+        this.lastNotesChordTapAt = 0
         break
     }
     // AFTER the handlers have run: exactly what the NEXT key will see.
@@ -449,6 +472,18 @@ export class KeyboardManager extends EventEmitter {
   // fully independent lane.
   private maybeHandleNotesChordDown(): void {
     if (!this.leftControlHeld || !this.leftOptionHeld) return // both must be down together
+    // SPOILED ENGAGEMENTS ARE NOT TAPS (spec §6's spirit, and a real privacy
+    // concern): left-Control+left-Option is macOS's OWN VoiceOver modifier.
+    // A VoiceOver user re-engages this exact pair constantly during normal
+    // navigation, and without this check two of those engagements landing
+    // inside DOUBLE_TAP_WINDOW_MS would start a system-audio recording — and
+    // raise its TCC prompt — that nobody asked for. Same rule agentGesture.ts
+    // applies to right-Command: a hold with any other key in it is a
+    // shortcut, never a tap.
+    if (this.notesChordSpoiled) {
+      console.log('[keyboard] Notes chord engage IGNORED — spoiled by another key (shortcut, not a tap)')
+      return
+    }
     const now = Date.now()
 
     const paired = this.lastNotesChordTapAt > 0 && now - this.lastNotesChordTapAt <= DOUBLE_TAP_WINDOW_MS
@@ -470,6 +505,14 @@ export class KeyboardManager extends EventEmitter {
     this.notesActive = true
     console.log('[keyboard] Notes chord double-tap — START')
     this.emit('notes-start-requested')
+  }
+
+  /** The spoil lasts until the gesture genuinely ends — BOTH chord keys back
+   *  up. Clearing it on the first release instead would hand the spoil back
+   *  the moment a VoiceOver user lifts one key mid-navigation, which is
+   *  exactly when they are most likely to press it again. */
+  private clearNotesChordSpoilIfReleased(): void {
+    if (!this.leftControlHeld && !this.leftOptionHeld) this.notesChordSpoiled = false
   }
 
   /** Called by the owning module once the user has confirmed they want to
