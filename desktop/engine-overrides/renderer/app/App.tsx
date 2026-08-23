@@ -26,10 +26,12 @@ import { RemoteSetup } from '../remote/RemoteSetup'
 import { RemoteSetupEntry } from '../remote/RemoteSetupEntry'
 import { RemoteHowItWorks } from '../remote/RemoteHowItWorks'
 import { TaskPanel } from '../remote/TaskPanel'
+import { NotetakerTab } from '../notetaker/NotetakerTab'
 
 /**
- * Four destinations, and only four:
+ * Five destinations:
  *   history       what you said
+ *   notetaker     the meetings you've recorded
  *   orchestrator  what your agents are doing
  *   account       who you are and what you pay
  *   settings      everything else
@@ -41,7 +43,7 @@ import { TaskPanel } from '../remote/TaskPanel'
  * to place in the Instruct explainer. That is an obligation, not something
  * already done: on this branch no explainer page exists yet.
  */
-type Tab = 'history' | 'orchestrator' | 'account' | 'settings'
+type Tab = 'history' | 'notetaker' | 'orchestrator' | 'account' | 'settings'
 
 /** Sub-pages of the Orchestrator tab. Setup is NOT one-time — a user may add a
  *  second agent months later, and Codex loses its connection whenever its app
@@ -296,13 +298,19 @@ function AppInner() {
           </p>
         </div>
 
-        {/* Nav items — four destinations, one glyph each. */}
+        {/* Nav items — five destinations, one glyph each. */}
         <div className="flex flex-col gap-0.5 px-1">
           <SidebarButton
             icon={<HistoryIcon />}
             label="History"
             active={activeTab === 'history'}
             onClick={() => setActiveTab('history')}
+          />
+          <SidebarButton
+            icon={<NotetakerIcon />}
+            label="Notetaker"
+            active={activeTab === 'notetaker'}
+            onClick={() => setActiveTab('notetaker')}
           />
           <SidebarButton
             icon={<OrchestratorIcon />}
@@ -358,6 +366,7 @@ function AppInner() {
       <main className="flex-1 pt-10 px-10 overflow-y-auto">
         <div className="max-w-2xl mx-auto pb-8">
           {activeTab === 'history' && <History />}
+          {activeTab === 'notetaker' && <NotetakerTab />}
           {activeTab === 'orchestrator' && (
             <OrchestratorTab page={orchestratorPage} onPageChange={setOrchestratorPage} />
           )}
@@ -559,6 +568,18 @@ function HistoryIcon() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="8" cy="8" r="6" />
       <polyline points="8,5 8,8 10,10" />
+    </svg>
+  )
+}
+
+/** Notetaker — a document glyph (two ruled lines), distinct from History's
+ *  clock. Same size/stroke conventions as every other sidebar glyph. */
+function NotetakerIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="2" width="10" height="12" rx="1.5" />
+      <line x1="5.5" y1="6" x2="10.5" y2="6" />
+      <line x1="5.5" y1="9" x2="10.5" y2="9" />
     </svg>
   )
 }
