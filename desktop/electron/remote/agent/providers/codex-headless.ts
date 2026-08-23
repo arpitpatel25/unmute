@@ -26,6 +26,14 @@ export function codexHeadlessArgv(launch: AgentProcessLaunch, systemPrompt: stri
     '-s', 'read-only',
     '-C', launch.cwd,
     '-c', `developer_instructions=${JSON.stringify(systemPrompt)}`,
+    // Left unset, this falls back to whatever the selected model's own
+    // default happens to be — a model swap could silently carry it to high.
+    // A headless Agent turn (a memory lookup, a clipboard copy, a task
+    // handoff) is exactly the ordinary work Codex's own guidance recommends
+    // medium for. Scoped to the headless Agent only — a real orchestrator
+    // SESSION (task-manager.ts's dispatch, real coding work) is deliberately
+    // untouched and keeps following the user's own model/effort picker.
+    '-c', 'model_reasoning_effort="medium"',
     // CLI overrides have the highest precedence. Clear every inherited MCP
     // table (including managed/project layers), then add back only Unmute.
     '-c', 'mcp_servers={}',

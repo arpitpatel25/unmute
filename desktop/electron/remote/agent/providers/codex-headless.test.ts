@@ -52,6 +52,18 @@ test('Codex pre-approves only the Unmute Agent MCP server while Claude stays pro
   assert.ok(!argv.join(' ').includes('secret'), 'the bearer token must stay in the environment')
 })
 
+// Left unset, Codex falls back to whatever the selected model's own default
+// happens to be — currently medium for the field, but not pinned, and a
+// model swap would silently carry it to high. A headless Agent turn (a
+// memory lookup, a clipboard copy, a task handoff) is exactly the ordinary
+// work Codex's own guidance recommends medium for; a real orchestrator
+// SESSION (task-manager.ts's dispatch — actual coding work) is deliberately
+// left alone, still following the user's own model/effort picker.
+test('the Agent pins Codex to medium effort, not whatever the selected model defaults to', () => {
+  const argv = codexHeadlessArgv(launch(), 'CONSTITUTION')
+  assert.ok(argv.includes('model_reasoning_effort="medium"'))
+})
+
 test('resume uses the exact Codex thread ID selected by the runtime', () => {
   const argv = codexHeadlessArgv(launch({ kind: 'resume', id: THREAD_ID }), 'CONSTITUTION')
   const exec = argv.indexOf('exec')

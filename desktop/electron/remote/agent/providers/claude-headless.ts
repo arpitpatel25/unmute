@@ -143,6 +143,16 @@ export function headlessArgv(
     '--append-system-prompt', systemPrompt,
     '--allowedTools', allowedTools,
     '--disallowedTools', AGENT_TOOL_DENYLIST,
+    // Left unset, Claude Code defaults to `high` on Sonnet 5 — measured live:
+    // a headless turn (a memory lookup, a clipboard copy, a task handoff,
+    // none of it deep reasoning) spent 2,583 thinking tokens on one step,
+    // ~39s for a reply that should be near-instant. `medium` is Anthropic's
+    // own documented sweet spot for ordinary work. Scoped to the headless
+    // Agent only — an interactive orchestrator SESSION (task-manager.ts's
+    // dispatch, real coding/architecture work) is deliberately untouched and
+    // stays on the CLI's own high default, where the deeper reasoning earns
+    // its latency.
+    '--effort', 'medium',
     ...mcpArgs,
     // Fresh-vs-resume was already decided by the runtime. Re-deriving it here
     // is how two paths that must agree start disagreeing.

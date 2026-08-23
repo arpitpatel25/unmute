@@ -152,6 +152,18 @@ test('the allowlist is the only tool grant — no blanket permission bypass', ()
   assert.ok(!argv.includes('--dangerously-skip-permissions'))
 })
 
+// Claude Code defaults to `high` effort with nothing set — measured live: a
+// headless Agent turn (a memory lookup + a clipboard copy + a task handoff,
+// none of it deep reasoning) spent 2,583 thinking tokens on one step, ~39s
+// for a reply that should be near-instant. `medium` is Anthropic's own
+// documented sweet spot for ordinary work; a real orchestrator SESSION
+// (task-manager.ts's dispatch — actual coding/architecture work) is
+// deliberately left alone, still on the CLI's own high default.
+test('the Agent runs at medium effort, not the CLI\'s high default', () => {
+  const argv = headlessArgv(launch({ kind: 'fresh', id: FRESH }), 'CONSTITUTION')
+  assert.equal(argv[argv.indexOf('--effort') + 1], 'medium')
+})
+
 // ── the driver ────────────────────────────────────────────────────────────
 
 class FakeChild implements HeadlessChild {
