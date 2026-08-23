@@ -144,6 +144,38 @@ export interface RemoteSetupStatus {
   complete: boolean
 }
 
+// Mirrors DBMeeting (engine-overrides/electron/db.ts) and TranscriptSegment
+// (engine-overrides/electron/notetaker/transcriptMerge.ts) — NOT imported
+// from there. Those live in the engine-overrides/ tree, which
+// wire-into-engine.sh copies wholesale onto $engine/electron/ (cp -R
+// engine-overrides/. $engine/), while this file lives in the electron/ tree,
+// copied wholesale onto $engine/electron/paywall/ (cp -R electron/.
+// $engine/electron/paywall/). The two copies preserve relative structure
+// only WITHIN themselves, so a relative import from here to db.ts would
+// resolve differently pre- and post-copy — the exact cross-tree hazard
+// notetakerInit.ts's own header comment documents for init.ts. Duplicating
+// the shape here, the same way this file already does for every other
+// DB-backed snapshot type (RemoteTaskSnapshot, UnmuteMemorySnapshot, etc.),
+// keeps the import graph same-directory and correct both pre- and post-copy.
+export interface NotetakerMeetingSnapshot {
+  id: string
+  title: string
+  started_at: number
+  ended_at: number
+  duration_ms: number
+  status: 'recording' | 'transcribing' | 'ready' | 'failed'
+  transcript_path: string | null
+  audio_mic_path: string | null
+  audio_system_path: string | null
+}
+
+export interface NotetakerTranscriptSegment {
+  channel: 'mic' | 'system'
+  text: string
+  startMs: number
+  endMs: number
+}
+
 export const remotePreloadExtensions = {
   // ── Unmute Agent ──
   remoteGetAgentSettings: (): Promise<UnmuteAgentSettingsSnapshot> =>
@@ -590,6 +622,22 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('notetaker:capture-active', handler)
     return () => ipcRenderer.removeListener('notetaker:capture-active', handler)
   },
+
+  // ── Meeting list/detail (Tasks 8-10's UI) ──
+  /** All meetings, newest-started first. */
+  notetakerListMeetings: (): Promise<NotetakerMeetingSnapshot[]> => ipcRenderer.invoke('notetaker:list-meetings'),
+  /** A meeting's merged transcript segments, or [] if none / unreadable. */
+  notetakerGetTranscript: (id: string): Promise<NotetakerTranscriptSegment[]> =>
+    ipcRenderer.invoke('notetaker:get-transcript', id),
+  /** Rename a meeting (title is user-editable, like task names). */
+  notetakerRenameMeeting: (id: string, title: string): Promise<void> =>
+    ipcRenderer.invoke('notetaker:rename-meeting', id, title),
+  /** Delete a meeting's row, transcript, and any remaining audio. */
+  notetakerDeleteMeeting: (id: string): Promise<void> => ipcRenderer.invoke('notetaker:delete-meeting', id),
+  /** A `file://` URL for an `<audio>` element, or null if that channel was
+   *  never recorded or its audio has already been swept (24h retention). */
+  notetakerGetAudioUrl: (id: string, channel: 'mic' | 'system'): Promise<string | null> =>
+    ipcRenderer.invoke('notetaker:get-audio-url', id, channel),
 }
 
 export type RemoteAPI = typeof remotePreloadExtensions

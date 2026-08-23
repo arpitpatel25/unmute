@@ -47,7 +47,9 @@
 //
 // Per docs/superpowers/specs/2026-08-23-meeting-notetaker-detection-capture.md.
 
-import { Notification, dialog, ipcMain } from 'electron'
+import { Notification, dialog, ipcMain, app } from 'electron'
+import path from 'path'
+import fs from 'fs'
 import { keyboardManager } from './keyboard'
 import { MeetingWatcher } from './meetingWatcher'
 import { NotetakerSession, type NativeAudioTap } from './notetakerSession'
@@ -56,6 +58,7 @@ import { readNowPlaying } from './mediaController'
 import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowser } from './browserTabWatcher'
 import { ChunkBuffer } from './notetaker/chunkBuffer'
 import { transcribeAndPersistSession, newMeetingId } from './notetaker/transcribeSession'
+import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting } from './db'
 
 export type NotetakerInitHooks = {
   /** Called exactly when REAL capture starts/stops — from
@@ -281,6 +284,41 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     if (!session.isActive) return
     session.stop()
     keyboardManager.confirmNotesStop()
+  })
+
+  // ── Meeting list/detail surface for the (not-yet-built) UI (Tasks 8-10) ──
+  ipcMain.handle('notetaker:list-meetings', () => {
+    return getMeetings()
+  })
+
+  ipcMain.handle('notetaker:get-transcript', (_event, id: string) => {
+    const meeting = getMeeting(id)
+    if (!meeting || !meeting.transcript_path) return []
+    const meetingDir = path.join(app.getPath('userData'), 'meetings', id)
+    try {
+      const raw = fs.readFileSync(path.join(meetingDir, meeting.transcript_path), 'utf8')
+      return JSON.parse(raw)
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle('notetaker:rename-meeting', (_event, id: string, title: string) => {
+    updateMeetingTitle(id, title)
+  })
+
+  ipcMain.handle('notetaker:delete-meeting', (_event, id: string) => {
+    deleteMeeting(id)
+  })
+
+  ipcMain.handle('notetaker:get-audio-url', (_event, id: string, channel: 'mic' | 'system') => {
+    const meeting = getMeeting(id)
+    if (!meeting) return null
+    const relPath = channel === 'mic' ? meeting.audio_mic_path : meeting.audio_system_path
+    if (!relPath) return null
+    const fullPath = path.join(app.getPath('userData'), 'meetings', id, relPath)
+    if (!fs.existsSync(fullPath)) return null
+    return `file://${fullPath}`
   })
 
   // ── Capture-active gate for the poll loop below ──
