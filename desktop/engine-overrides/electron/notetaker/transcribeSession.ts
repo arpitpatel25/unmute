@@ -17,57 +17,74 @@ export type ChunkTranscriptionResult = {
   failed: boolean
 }
 
-/**
- * Downsamples/resamples one chunk's raw samples to mono 16kHz, WAV-encodes
- * it, and transcribes it through the same managed-STT pipeline dictation
- * already uses (`tryManagedSTT`) — immediately, per chunk, not once at the
- * end of a whole meeting. Called from each PeriodicChunkEmitter's onSegment
- * callback (notetakerInit.ts).
- *
- * The mono/16k reduction is not cosmetic: the pipeline worker caps uploads at
- * MAX_AUDIO_BYTES = 50MB (sized for compressed opus, not raw PCM) — see
- * resample.ts for the full byte-budget reasoning. Periodic per-chunk
- * transcription (each chunk capped at PeriodicChunkEmitter's hardCapMs, tens
- * of seconds) keeps every individual upload trivially far under that cap
- * regardless of total meeting length — the ~27-minute whole-meeting ceiling
- * the old single-shot flow had no longer applies.
- *
- * Failure isolation: a thrown error (WAV encode, or the STT call itself) is
- * caught HERE, per chunk — it never aborts the rest of that channel's chunks,
- * let alone the other channel's. The caller is told via `failed: true` so it
- * can mark that chunk's channel (and therefore the whole meeting) failed,
- * without losing whatever OTHER chunks did transcribe successfully.
- *
- * Nothing here retains the input `samples` beyond this call: the encoded
- * `wav` Buffer is only ever passed into `tryManagedSTT` and never stored on
- * any object that outlives this function, so once this promise settles both
- * `samples` and `wav` are eligible for garbage collection.
- */
-export async function transcribeChunk(
-  channel: 'mic' | 'system',
-  samples: Float32Array,
-  channelsCount: number,
-  sampleRate: number,
-): Promise<ChunkTranscriptionResult> {
-  try {
-    const reduced = downmixAndResample(samples, channelsCount, sampleRate)
-    // Fewer samples than one 16kHz slot holds — there is nothing to
-    // transcribe. Not a failure: the chunk was simply (near-)silent/empty.
-    if (reduced.samples.length === 0) return { text: '', failed: false }
+/** One chunk's audio, already reduced to mono/target-rate and WAV-encoded — the input `transcribeEncodedChunk` needs, and the payload `notetakerInit.ts` streams to disk. */
+export type EncodedChunk = {
+  wav: Buffer
+  durationSeconds: number
+  /** The rate `wav` was actually encoded at (downmixAndResample never
+   *  upsamples, so this is usually TARGET_SAMPLE_RATE but can differ if the
+   *  source itself arrived at or below that rate). */
+  sampleRate: number
+}
 
-    const wav = encodeWav(reduced.samples, reduced.sampleRate, 1)
-    const durationSeconds = reduced.samples.length / reduced.sampleRate
-    const result = await tryManagedSTT(wav, durationSeconds, 'dictation')
+/**
+ * Downsamples/resamples one chunk's raw samples to mono target-rate PCM and
+ * WAV-encodes it. Deliberately a plain SYNCHRONOUS function, not folded into
+ * the (async) transcription call below — this is what makes the memory
+ * bound structural rather than incidental: `samples` and the intermediate
+ * `reduced` array are locals of THIS function only. Once it returns, they
+ * are unreachable from anywhere else in the program; they can never be kept
+ * alive as part of a paused async-function frame across the network
+ * `await` in `transcribeEncodedChunk`, because that function never receives
+ * them in the first place — only the already-encoded `wav` Buffer does.
+ *
+ * The mono/target-rate reduction is not cosmetic: the pipeline worker caps
+ * uploads at MAX_AUDIO_BYTES = 50MB (sized for compressed opus, not raw
+ * PCM) — see resample.ts for the full byte-budget reasoning.
+ *
+ * Returns null for a chunk with nothing worth transcribing or persisting
+ * (fewer samples than one target-rate slot holds) — not a failure, the
+ * chunk was simply (near-)silent/empty.
+ */
+export function encodeChunk(samples: Float32Array, channelsCount: number, sampleRate: number): EncodedChunk | null {
+  const reduced = downmixAndResample(samples, channelsCount, sampleRate)
+  if (reduced.samples.length === 0) return null
+  const wav = encodeWav(reduced.samples, reduced.sampleRate, 1)
+  const durationSeconds = reduced.samples.length / reduced.sampleRate
+  return { wav, durationSeconds, sampleRate: reduced.sampleRate }
+}
+
+/**
+ * Sends one already-encoded chunk's WAV bytes through the same managed-STT
+ * pipeline dictation already uses (`tryManagedSTT`) — immediately, per
+ * chunk, not once at the end of a whole meeting. Called from each
+ * PeriodicChunkEmitter's onSegment callback (notetakerInit.ts), AFTER that
+ * chunk's audio has already been synchronously appended to its channel's
+ * on-disk WAV file (see WavAppender) — this call and that append are
+ * independent of each other; a failure here never loses audio already
+ * safely on disk, exactly like the old whole-session processChannel() kept
+ * a channel's audio file even when its STT call failed.
+ *
+ * Failure isolation: a thrown error (the STT call itself) is caught HERE,
+ * per chunk — it never aborts the rest of that channel's chunks, let alone
+ * the other channel's. The caller is told via `failed: true` so it can
+ * track that chunk's channel toward the meeting's overall status, without
+ * losing whatever OTHER chunks did transcribe successfully.
+ */
+export async function transcribeEncodedChunk(channel: 'mic' | 'system', encoded: EncodedChunk): Promise<ChunkTranscriptionResult> {
+  try {
+    const result = await tryManagedSTT(encoded.wav, encoded.durationSeconds, 'dictation')
     // A NULL result is a FAILURE here, not an empty transcript — same
     // Finding-3 reasoning as the old whole-session flow: tryManagedSTT
     // returns null both when the call really failed AND when managed STT is
     // simply unavailable, and treating that as "successfully transcribed
     // nothing" is what produced a silent blank transcript on real audio.
-    // We KNOW audio existed (reduced.samples.length > 0 above), so mark this
-    // chunk's channel failed and let the caller factor that into the
-    // meeting's overall status. Other chunks (this channel's and the other
-    // channel's) are unaffected — this promise settling with `failed: true`
-    // never rejects, so it can never take down `Promise.all` for the rest.
+    // We KNOW audio existed (encodeChunk already filtered out empty
+    // chunks), so mark this chunk failed and let the caller factor that
+    // into the channel's/meeting's overall status. This promise settling
+    // with `failed: true` never rejects, so it can never take down
+    // `Promise.all` for the rest of this channel's or the other channel's
+    // chunks.
     if (!result) {
       console.error(`[notetaker] ${channel} chunk transcription unavailable or failed (managed STT returned no result)`)
       return { text: '', failed: true }
@@ -81,22 +98,18 @@ export async function transcribeChunk(
 
 /**
  * Called once, from HookedNotetakerSession's stop() flow (notetakerInit.ts),
- * after a capture session ends and every chunk's transcribeChunk() promise
- * (mic + system) has already resolved. Interleaves both channels' per-chunk
- * transcripts by real timestamp (mergeChannelChunks), generates a title,
- * atomically writes transcript.json, and updates the meeting's DB row from
- * its start()-time 'recording' placeholder to its final status.
+ * after a capture session ends, both channels' WAV-file writers have been
+ * closed, and every chunk's transcription promise (mic + system) has
+ * already resolved. Interleaves both channels' per-chunk transcripts by
+ * real timestamp (mergeChannelChunks), generates a title, atomically writes
+ * transcript.json, and updates the meeting's DB row from its start()-time
+ * 'recording' placeholder to its final status.
  *
- * No per-meeting audio file is written any more (the old flow's
- * audio-mic.wav/audio-system.wav, one whole-channel file each) — periodic
- * flushing WAV-encodes and uploads each chunk independently and never
- * accumulates a channel's full raw audio in memory, so there is no single
- * in-memory buffer left to write out as one file at session end. Recreating
- * that (e.g. streaming each chunk's PCM to a shared per-channel file on
- * disk) is a real, separable feature and out of this task's scope — see
- * task-6-report.md. `audio_mic_path`/`audio_system_path` are always null;
- * `notetaker:get-audio-url` already handles a null path by returning null,
- * so this degrades to "no playback" rather than a broken link.
+ * `audioMicPath`/`audioSystemPath` are the relative filenames
+ * (`audio-mic.wav`/`audio-system.wav`) the caller's WavAppenders actually
+ * wrote, or null for a channel that produced zero real (non-silent) chunks
+ * — same "no audio, no file" semantics the old whole-session flow had for
+ * an entirely-empty channel.
  */
 export async function persistSession(
   micChunks: TimedChunkText[],
@@ -105,6 +118,8 @@ export async function persistSession(
   startedAt: number,
   endedAt: number,
   failed: boolean,
+  audioMicPath: string | null,
+  audioSystemPath: string | null,
 ): Promise<void> {
   const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
   fs.mkdirSync(meetingDir, { recursive: true })
@@ -128,8 +143,8 @@ export async function persistSession(
     duration_ms: endedAt - startedAt,
     status,
     transcript_path: transcriptPath,
-    audio_mic_path: null,
-    audio_system_path: null,
+    audio_mic_path: audioMicPath,
+    audio_system_path: audioSystemPath,
   })
 }
 

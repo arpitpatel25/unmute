@@ -57,8 +57,9 @@ import { NotetakerController } from './notetakerController'
 import { readNowPlaying } from './mediaController'
 import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowser } from './browserTabWatcher'
 import { PeriodicChunkEmitter, type FinalizedSegment } from './notetaker/periodicChunkEmitter'
-import { transcribeChunk, persistSession, newMeetingId } from './notetaker/transcribeSession'
+import { encodeChunk, transcribeEncodedChunk, persistSession, newMeetingId } from './notetaker/transcribeSession'
 import type { TimedChunkText } from './notetaker/transcriptMerge'
+import { WavAppender } from './notetaker/wavAppender'
 import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting } from './db'
 
 export type NotetakerInitHooks = {
@@ -264,28 +265,56 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // as vadPolicy cuts a chunk (not once at the very end of the meeting) —
   // see makeChunkHandler below. This is what keeps a long meeting from
   // buffering hours of raw Float32 audio in RAM: only ONE chunk's worth of
-  // samples is ever alive per channel at a time, and it is eligible for GC
-  // as soon as transcribeChunk() has WAV-encoded it and handed the encoded
-  // bytes to tryManagedSTT().
+  // samples is ever alive per channel at a time, and encodeChunk() (a plain
+  // synchronous function, see transcribeSession.ts) makes those samples —
+  // and the intermediate downmixed/resampled array — PROVABLY unreachable
+  // the moment it returns, before any network I/O even starts. Only the
+  // already-encoded `wav` Buffer survives into transcribeEncodedChunk()'s
+  // `await tryManagedSTT(...)`, which is the structural (not just
+  // GC-timing-dependent) form of the memory bound this plan exists to fix.
   //
-  // Each channel's in-flight transcription promises + accumulated failure
-  // flag live on a small per-session `ChannelTracker` object, not on a
-  // shared module-level primitive — `HookedNotetakerSession.start()`
+  // Each chunk's audio is ALSO streamed to its channel's on-disk WAV file
+  // (`WavAppender`) synchronously, right after encodeChunk() and before the
+  // STT call fires — this restores the pre-periodic-flush "You"/"Them"
+  // playback file the governing spec's own non-goals list (§5) requires
+  // stay intact ("this spec doesn't change... the 24h audio-only... split"),
+  // without re-buffering a whole channel's audio in memory: only one
+  // chunk's encoded bytes are ever in flight to disk at a time.
+  //
+  // Each channel's in-flight transcription promises, per-chunk success/
+  // attempt counts (for partial-failure semantics, see stop() below), and
+  // WavAppender live on a small per-session `ChannelTracker` object, not on
+  // shared module-level primitives — `HookedNotetakerSession.start()`
   // allocates a FRESH tracker (and a fresh emitter closing over it) for both
   // channels, exactly like the old fresh-`ChunkBuffer`-per-session pattern.
   // Because the tracker is captured by the emitter's onSegment closure at
   // construction time (not re-read from a reassignable outer variable), a
   // subsequent start() reassigning `micTracker`/`systemTracker` can never
   // cause an in-flight chunk from the PREVIOUS session to record its result
-  // (or its failure) against the NEW session — each stop() call also snapshots
-  // its own session's tracker/emitter into local consts before doing any
-  // awaiting, for the same reason `meetingId`/`startedAt` already were.
+  // against the NEW session — each stop() call also snapshots its own
+  // session's tracker/emitter into local consts before doing any awaiting,
+  // for the same reason `meetingId`/`startedAt` already were.
   type ChannelTracker = {
     promises: Promise<TimedChunkText>[]
-    failed: boolean
+    /** Chunks that had real (non-silent) audio and were actually sent to
+     *  STT — excludes chunks encodeChunk() judged empty/silent. */
+    attempted: number
+    /** Of `attempted`, how many got back a real transcript. Used for
+     *  partial-failure semantics: a channel is only 'failed' if it was
+     *  attempted at all AND every single attempt failed — see stop(). */
+    succeeded: number
+    writer: WavAppender | null
+    /** Set together with `writer`, once, on that channel's first non-empty
+     *  chunk — the relative filename persistSession() should record in the
+     *  DB row, or null if this channel never produced any real audio. */
+    audioFileName: string | null
   }
 
-  function makeChunkHandler(channel: 'mic' | 'system', tracker: ChannelTracker): (segment: FinalizedSegment) => void {
+  function freshTracker(): ChannelTracker {
+    return { promises: [], attempted: 0, succeeded: 0, writer: null, audioFileName: null }
+  }
+
+  function makeChunkHandler(channel: 'mic' | 'system', tracker: ChannelTracker, meetingDir: string): (segment: FinalizedSegment) => void {
     return (segment: FinalizedSegment) => {
       const startMs = segment.startTimestampMs
       const durationMs =
@@ -293,23 +322,67 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
           ? (segment.samples.length / segment.channels / segment.sampleRate) * 1000
           : 0
       const endMs = startMs + durationMs
+
+      const encoded = encodeChunk(segment.samples, segment.channels, segment.sampleRate)
+      if (!encoded) {
+        // Near-silent/empty chunk (per encodeChunk's own threshold) —
+        // nothing worth transcribing or writing to the audio file. Recorded
+        // as an already-resolved empty segment so ordering/merging still
+        // sees a placeholder for this chunkIndex; not counted toward
+        // `attempted`, so it can never make a channel look "failed."
+        tracker.promises.push(Promise.resolve({ channel, text: '', startMs, endMs } as TimedChunkText))
+        return
+      }
+
+      // Stream to disk BEFORE firing the STT call, synchronously — chunks
+      // land in the file in cut order, and by the time we go async below,
+      // `segment.samples` (this closure's only reference to the raw audio)
+      // has already been dropped: encodeChunk() returned, so its locals are
+      // gone, and this callback itself never stored `segment` anywhere.
+      if (!tracker.writer) {
+        try {
+          const fileName = `audio-${channel}.wav`
+          tracker.writer = new WavAppender(path.join(meetingDir, fileName), encoded.sampleRate)
+          tracker.audioFileName = fileName
+        } catch (e) {
+          console.warn(`[notetaker] could not open the ${channel} audio file for writing:`, (e as Error).message)
+        }
+      }
+      if (tracker.writer) {
+        if (tracker.writer.rate === encoded.sampleRate) {
+          try {
+            tracker.writer.append(encoded.wav.subarray(44)) // strip this chunk's own 44-byte header — only the FIRST write to the file carries one
+          } catch (e) {
+            console.warn(`[notetaker] failed to append a ${channel} audio chunk to disk:`, (e as Error).message)
+          }
+        } else {
+          // Fail safe rather than silently concatenate mismatched-rate PCM
+          // under one header (downmixAndResample never upsamples, so a
+          // source that ever arrives at <= the target rate would encode at
+          // its own, different rate) — still transcribe this chunk
+          // normally below, just skip writing it into the shared file.
+          console.warn(`[notetaker] ${channel} chunk encoded at ${encoded.sampleRate}Hz, this session's audio file is ${tracker.writer.rate}Hz — skipping the audio-file append for this chunk (still transcribing it)`)
+        }
+      }
+
+      tracker.attempted++
       // Fired and tracked, NOT awaited here — feeding further chunks (and
       // the session generally) must never block on one chunk's network
-      // round-trip. transcribeChunk() never rejects (it catches internally),
-      // so this .then() chain always resolves, never throws into an
-      // unhandled rejection.
-      const p = transcribeChunk(channel, segment.samples, segment.channels, segment.sampleRate).then((result) => {
-        if (result.failed) tracker.failed = true
+      // round-trip. transcribeEncodedChunk() never rejects (it catches
+      // internally), so this .then() chain always resolves, never throws
+      // into an unhandled rejection.
+      const p = transcribeEncodedChunk(channel, encoded).then((result) => {
+        if (!result.failed) tracker.succeeded++
         return { channel, text: result.text, startMs, endMs } as TimedChunkText
       })
       tracker.promises.push(p)
     }
   }
 
-  let micTracker: ChannelTracker = { promises: [], failed: false }
-  let systemTracker: ChannelTracker = { promises: [], failed: false }
-  let micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker))
-  let systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker))
+  let micTracker: ChannelTracker = freshTracker()
+  let systemTracker: ChannelTracker = freshTracker()
+  let micEmitter = new PeriodicChunkEmitter(() => {})
+  let systemEmitter = new PeriodicChunkEmitter(() => {})
   let sessionStartedAt = 0
   // Allocated at START, not at stop: the meeting's DB row is now written the
   // moment capture begins (see below), so the id has to exist that early and
@@ -318,12 +391,23 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
   class HookedNotetakerSession extends NotetakerSession {
     start(pid: number): void {
-      micTracker = { promises: [], failed: false }
-      systemTracker = { promises: [], failed: false }
-      micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker))
-      systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker))
       sessionStartedAt = Date.now()
       sessionMeetingId = newMeetingId()
+      // Created eagerly (not lazily on first chunk) so the directory exists
+      // before any WavAppender tries to open a file inside it — mkdir
+      // failure is logged but never blocks capture from starting; a channel
+      // whose WavAppender then fails to open just falls back to
+      // transcription-only for that channel (see the try/catch above).
+      const meetingDir = path.join(app.getPath('userData'), 'meetings', sessionMeetingId)
+      try {
+        fs.mkdirSync(meetingDir, { recursive: true })
+      } catch (e) {
+        console.warn('[notetaker] could not create the meeting directory:', (e as Error).message)
+      }
+      micTracker = freshTracker()
+      systemTracker = freshTracker()
+      micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker, meetingDir))
+      systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker, meetingDir))
       super.start(pid) // throws if the tap won't start — no placeholder row in that case
       // A PLACEHOLDER ROW, WRITTEN IMMEDIATELY. Until this existed, the
       // meetings row was only inserted at the very END of
@@ -379,7 +463,42 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         micEm.flush()
         systemEm.flush()
         Promise.all([Promise.all(mic.promises), Promise.all(system.promises)])
-          .then(([micChunks, systemChunks]) => persistSession(micChunks, systemChunks, meetingId, startedAt, endedAt, mic.failed || system.failed))
+          .then(([micChunks, systemChunks]) => {
+            // Close both writers now that no more append() calls can
+            // happen (flush() already fired, and every promise above has
+            // settled) — this patches each file's WAV header with its
+            // final byte count. A channel that never opened a writer (zero
+            // real chunks) has nothing to close.
+            try {
+              mic.writer?.close()
+            } catch (e) {
+              console.warn('[notetaker] failed to close the mic audio file:', (e as Error).message)
+            }
+            try {
+              system.writer?.close()
+            } catch (e) {
+              console.warn('[notetaker] failed to close the system audio file:', (e as Error).message)
+            }
+            // Partial-failure semantics: a channel is 'failed' only if it
+            // was attempted at all AND every single attempt failed — one
+            // transient STT blip in an hour-long meeting should not throw
+            // away an otherwise-good transcript. A channel with zero
+            // attempts (nothing captured/nothing but silence) is not
+            // failed either, matching the old whole-session flow's
+            // "empty channel is not a failure" semantics.
+            const micFailed = mic.attempted > 0 && mic.succeeded === 0
+            const systemFailed = system.attempted > 0 && system.succeeded === 0
+            return persistSession(
+              micChunks,
+              systemChunks,
+              meetingId,
+              startedAt,
+              endedAt,
+              micFailed || systemFailed,
+              mic.audioFileName,
+              system.audioFileName,
+            )
+          })
           .catch((e) => {
             console.error('[notetaker] failed to transcribe/persist session:', (e as Error).message)
           })
