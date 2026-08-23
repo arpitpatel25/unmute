@@ -20,9 +20,145 @@ const BAR_COUNT = 5
 type API = {
   notetakerCancelRequested?: () => void
   notetakerOnCaptureActive?: (cb: (active: boolean) => void) => () => void
+  notetakerMicChunk?: (samples: ArrayBuffer, sampleRate: number, timestampMs: number) => void
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
+}
+
+// ── Mic → main-process transcription tap ─────────────────────────────────
+//
+// The system-audio side of a meeting is captured natively in main (the Core
+// Audio process tap). The MIC side has to come from a renderer, because
+// getUserMedia only exists there — and this widget is the one window that
+// already holds an open mic stream for exactly the capture window, with a
+// lifecycle that is already correct (acquired on `notetaker:capture-active`
+// true, fully released on false). So the transcription tap rides on THAT
+// stream and THAT AudioContext rather than opening a second, independent
+// getUserMedia: a third concurrent mic consumer is precisely the risk the
+// branch review flagged, and this avoids adding one.
+//
+// Raw Float32 PCM goes to main over `notetaker:mic-chunk`, where it is handed
+// to NotetakerSession.feedMicChunk() (a no-op if the session isn't active,
+// so a late in-flight chunk can never leak into the next meeting).
+
+/** ~85ms of audio at 48kHz — roughly 12 IPC messages a second, small enough
+ *  that a chunk boundary costs nothing and large enough not to spam IPC with
+ *  the worklet's native 128-frame quanta. */
+const MIC_CHUNK_SAMPLES = 4096
+
+/** The AudioWorklet processor, as source text. There is no AudioWorklet
+ *  infrastructure anywhere in this renderer to follow (nothing in the tree
+ *  calls addModule() and there are no .worklet.* files), and addModule() takes
+ *  a URL, not a function — so the module is loaded from a Blob URL. That keeps
+ *  the whole mechanism inside this one file: no new build-config entry point,
+ *  no asset that has to resolve differently in dev (localhost) vs a packaged
+ *  app (file://). Batching happens in here so the audio thread posts ~12
+ *  messages/sec instead of ~375. */
+const MIC_WORKLET_SOURCE = `
+class NotetakerMicProcessor extends AudioWorkletProcessor {
+  constructor(options) {
+    super()
+    const opts = (options && options.processorOptions) || {}
+    this._size = opts.chunkSamples > 0 ? opts.chunkSamples : 4096
+    this._buf = new Float32Array(this._size)
+    this._n = 0
+  }
+  process(inputs) {
+    const channel = inputs[0] && inputs[0][0]
+    if (channel) {
+      for (let i = 0; i < channel.length; i++) {
+        this._buf[this._n++] = channel[i]
+        if (this._n === this._size) {
+          const out = new Float32Array(this._buf)
+          this.port.postMessage(out.buffer, [out.buffer])
+          this._n = 0
+        }
+      }
+    }
+    return true
+  }
+}
+registerProcessor('notetaker-mic', NotetakerMicProcessor)
+`
+
+/**
+ * Attaches a PCM tap to an ALREADY-OPEN capture graph and streams its samples
+ * to the main process. Returns a disposer, or null if no tap could be
+ * attached (in which case the meeting simply has no mic channel — the widget,
+ * the waveform, and the system-audio side all carry on unaffected).
+ *
+ * AudioWorkletNode is the primary path (ScriptProcessorNode is deprecated and
+ * runs its callback on the main thread); the ScriptProcessorNode fallback
+ * exists only for the case where addModule() is refused, since losing the
+ * user's own half of every meeting is a much worse outcome than using a
+ * deprecated-but-working node.
+ */
+async function attachMicChunkTap(
+  ctx: AudioContext,
+  source: MediaStreamAudioSourceNode,
+): Promise<(() => void) | null> {
+  const chunkDurationMs = Math.round((MIC_CHUNK_SAMPLES / ctx.sampleRate) * 1000)
+  const send = (samples: ArrayBuffer) => {
+    // Timestamp the START of the chunk, not the moment it finished filling —
+    // the main process aligns the two channels' transcripts by first
+    // timestamp, so a systematic one-chunk lag would skew the merge.
+    api().notetakerMicChunk?.(samples, ctx.sampleRate, Date.now() - chunkDurationMs)
+  }
+
+  // A node only actually runs when the graph pulls it, so the tap needs a
+  // path to the destination. Muted gain, not a direct connect: the tap's own
+  // output is silence, but routing it through an explicit zero-gain node means
+  // nothing can ever make the meeting's mic audible back through the speakers.
+  const sink = ctx.createGain()
+  sink.gain.value = 0
+  sink.connect(ctx.destination)
+
+  try {
+    const url = URL.createObjectURL(new Blob([MIC_WORKLET_SOURCE], { type: 'application/javascript' }))
+    try {
+      await ctx.audioWorklet.addModule(url)
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+    const node = new AudioWorkletNode(ctx, 'notetaker-mic', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      processorOptions: { chunkSamples: MIC_CHUNK_SAMPLES },
+    })
+    node.port.onmessage = (e: MessageEvent) => send(e.data as ArrayBuffer)
+    source.connect(node)
+    node.connect(sink)
+    return () => {
+      node.port.onmessage = null
+      try { node.disconnect() } catch { /* graph already torn down */ }
+      try { source.disconnect(node) } catch { /* already disconnected */ }
+      try { sink.disconnect() } catch { /* already disconnected */ }
+    }
+  } catch (err) {
+    console.warn('[notetaker] AudioWorklet mic tap unavailable, falling back to ScriptProcessor:', err)
+  }
+
+  try {
+    const processor = ctx.createScriptProcessor(MIC_CHUNK_SAMPLES, 1, 1)
+    processor.onaudioprocess = (e: AudioProcessingEvent) => {
+      // getChannelData hands back a view the engine reuses — copy before it
+      // crosses the IPC boundary.
+      send(new Float32Array(e.inputBuffer.getChannelData(0)).buffer)
+    }
+    source.connect(processor)
+    processor.connect(sink)
+    return () => {
+      processor.onaudioprocess = null
+      try { processor.disconnect() } catch { /* already disconnected */ }
+      try { source.disconnect(processor) } catch { /* already disconnected */ }
+      try { sink.disconnect() } catch { /* already disconnected */ }
+    }
+  } catch (err) {
+    console.warn('[notetaker] no mic tap could be attached — this meeting will have no "You" channel:', err)
+    try { sink.disconnect() } catch { /* nothing to undo */ }
+    return null
+  }
 }
 
 /**
@@ -151,6 +287,12 @@ export function NotetakerWidget({
  * show/hide hooks). Every acquired resource — the MediaStream's tracks, the
  * AudioContext, and (through `analyser` going back to null) the waveform's
  * requestAnimationFrame loop — is released the moment it goes false.
+ *
+ * This capture is ALSO the meeting's mic channel: attachMicChunkTap() hangs a
+ * PCM tap off the same source node and streams it to the main process (see
+ * that function's comment for why it reuses this stream instead of opening a
+ * second one). The tap is torn down first in the cleanup below, so it lives
+ * strictly inside the same window as the stream it reads.
  */
 export function NotetakerWidgetRoute() {
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
@@ -177,6 +319,7 @@ export function NotetakerWidgetRoute() {
     let cancelled = false
     let stream: MediaStream | null = null
     let audioContext: AudioContext | null = null
+    let disposeMicTap: (() => void) | null = null
 
     navigator.mediaDevices
       .getUserMedia({ audio: true })
@@ -186,11 +329,30 @@ export function NotetakerWidgetRoute() {
           return
         }
         stream = s
-        audioContext = new AudioContext()
-        const node = audioContext.createAnalyser()
+        const ctx = new AudioContext()
+        audioContext = ctx
+        const node = ctx.createAnalyser()
         node.fftSize = 128
-        audioContext.createMediaStreamSource(s).connect(node)
+        const source = ctx.createMediaStreamSource(s)
+        source.connect(node)
         setAnalyser(node)
+
+        // The transcription tap hangs off the SAME source node as the
+        // waveform's analyser. Attached in its own promise chain so that
+        // loading the worklet can never delay (or fail) the waveform, and so
+        // this .then() keeps the exact synchronous shape the mic-lifecycle fix
+        // established.
+        void attachMicChunkTap(ctx, source)
+          .then((dispose) => {
+            // Capture may have stopped while addModule() was loading — the
+            // cleanup below has already run and can't see this disposer, so
+            // undo it here instead. (Closing the context alone would stop the
+            // audio, but leaving the node connected to a closed graph is
+            // exactly the kind of thing that outlives a session.)
+            if (cancelled) dispose?.()
+            else disposeMicTap = dispose
+          })
+          .catch(() => { /* attachMicChunkTap already logs; never break the widget */ })
       })
       .catch(() => {
         // No mic access in this window (denied/unavailable) — the widget
@@ -199,6 +361,10 @@ export function NotetakerWidgetRoute() {
 
     return () => {
       cancelled = true
+      // Detach the tap BEFORE the tracks and context go away, so no chunk is
+      // posted from a graph that is already being torn down.
+      disposeMicTap?.()
+      disposeMicTap = null
       stream?.getTracks().forEach((t) => t.stop())
       void audioContext?.close()
       // Dropping the analyser is what stops the waveform's rAF loop (its

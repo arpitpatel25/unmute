@@ -25,7 +25,9 @@
     "engine-overrides/renderer/widget/**/*.tsx",
     "engine-overrides/renderer/widget/**/*.ts",
     "engine-overrides/renderer/app/**/*.tsx",
-    "engine-overrides/renderer/app/**/*.ts"
+    "engine-overrides/renderer/app/**/*.ts",
+    "engine-overrides/renderer/notetaker/**/*.tsx",
+    "engine-overrides/renderer/notetaker/**/*.ts"
   ],
   "exclude": [
     "engine-overrides/renderer/remote/**/*.test.ts"

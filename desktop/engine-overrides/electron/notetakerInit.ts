@@ -121,6 +121,25 @@ function resolveTargetPid(ax: NativeAx): number | null {
   }
 }
 
+/**
+ * Reconstructs the renderer's Float32 PCM from whatever Electron's structured
+ * clone handed us. It should always be a plain ArrayBuffer (that is what
+ * remote-preload's notetakerMicChunk sends, matching sendAudioChunk's existing
+ * ArrayBuffer-over-IPC precedent), but a Buffer/TypedArray view is accepted
+ * too so a serialization surprise degrades to "still works" rather than "the
+ * mic channel is silently empty again". Returns null for anything else.
+ */
+function toFloat32(samples: unknown): Float32Array | null {
+  let buffer: ArrayBuffer | null = null
+  if (samples instanceof ArrayBuffer) {
+    buffer = samples
+  } else if (ArrayBuffer.isView(samples)) {
+    buffer = samples.buffer.slice(samples.byteOffset, samples.byteOffset + samples.byteLength) as ArrayBuffer
+  }
+  if (!buffer || buffer.byteLength === 0 || buffer.byteLength % 4 !== 0) return null
+  return new Float32Array(buffer)
+}
+
 function showNotetakerNotification(opts: { title: string; body?: string; onClick?: () => void }): void {
   try {
     if (!Notification.isSupported()) return
@@ -309,6 +328,24 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   }
   const session = new HookedNotetakerSession(nativeAudioTap, (chunk) => {
     chunkBuffer.feed(chunk)
+  })
+
+  // ── The MIC half of the recording (spec §2/§4) ──
+  // getUserMedia only exists in a renderer, so the mic channel arrives here as
+  // raw PCM from the floating widget — the one window that already holds an
+  // open mic stream for exactly the capture window (see NotetakerWidget.tsx's
+  // attachMicChunkTap). Without this handler feedMicChunk() had no production
+  // caller at all and every saved meeting was a "them"-only transcript.
+  //
+  // No isActive guard here on purpose: NotetakerSession.feedMicChunk() already
+  // returns early when the session is inactive, so a chunk still in flight
+  // when a meeting ends is dropped by the session itself rather than by a
+  // second, duplicate check that could drift out of sync with it.
+  ipcMain.on('notetaker:mic-chunk', (_event, samples: unknown, sampleRate: unknown, timestampMs: unknown) => {
+    const pcm = toFloat32(samples)
+    if (!pcm || pcm.length === 0) return
+    if (typeof sampleRate !== 'number' || !(sampleRate > 0)) return
+    session.feedMicChunk(pcm, sampleRate, typeof timestampMs === 'number' ? timestampMs : Date.now())
   })
 
   const controller = new NotetakerController({

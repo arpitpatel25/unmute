@@ -622,6 +622,19 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('notetaker:capture-active', handler)
     return () => ipcRenderer.removeListener('notetaker:capture-active', handler)
   },
+  /** The MIC half of a meeting recording: raw Float32 PCM tapped off the
+   *  widget's own (already-open, capture-window-scoped) getUserMedia stream,
+   *  handed to NotetakerSession.feedMicChunk() in main. The system half comes
+   *  from the native Core Audio process tap and never touches a renderer.
+   *
+   *  send(), not invoke(): this is a continuous ~12-messages-per-second audio
+   *  feed with nothing to return — the same fire-and-forget shape as
+   *  notetakerCancelRequested above, and as sendAudioChunk's ArrayBuffer
+   *  payload in the dictation path. `samples` is a transferable ArrayBuffer of
+   *  little-endian Float32s, NOT an array of numbers: an array would be ~8x
+   *  the bytes and pay a full serialize/deserialize per sample. */
+  notetakerMicChunk: (samples: ArrayBuffer, sampleRate: number, timestampMs: number): void =>
+    ipcRenderer.send('notetaker:mic-chunk', samples, sampleRate, timestampMs),
 
   // ── Meeting list/detail (Tasks 8-10's UI) ──
   /** All meetings, newest-started first. */
