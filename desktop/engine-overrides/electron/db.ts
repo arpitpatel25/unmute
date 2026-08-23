@@ -328,19 +328,35 @@ export function deleteMeeting(id: string): void {
 // own non-exported convention.
 function sweepExpiredMeetingAudio(): void {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000
+  // Not gated on audio_*_path being non-null: a session that crashed or was
+  // quit mid-meeting never reaches persistSession(), so its row keeps the
+  // start()-time placeholder's NULL paths even though its WavAppender wrote
+  // real PCM to the meeting's fixed audio-mic.wav/audio-system.wav files
+  // (see notetakerInit.ts's makeChunkHandler). Sweeping every row past the
+  // cutoff regardless of path columns, and always attempting the fixed
+  // filenames in addition to any DB-recorded paths, means that orphaned
+  // audio is reclaimed on the same 24h schedule as normal audio instead of
+  // living forever. The placeholder row seeds ended_at to the session's
+  // start time (not 0), so a crashed meeting's cutoff still fires correctly.
   const expired = db.prepare(
-    'SELECT id, audio_mic_path, audio_system_path FROM meetings WHERE ended_at < ? AND (audio_mic_path IS NOT NULL OR audio_system_path IS NOT NULL)'
+    'SELECT id, audio_mic_path, audio_system_path FROM meetings WHERE ended_at < ?'
   ).all(cutoff) as { id: string; audio_mic_path: string | null; audio_system_path: string | null }[]
 
   for (const row of expired) {
     const meetingDir = path.join(app.getPath('userData'), 'meetings', row.id)
-    for (const relPath of [row.audio_mic_path, row.audio_system_path]) {
-      if (!relPath) continue
+    const candidates = new Set(
+      [row.audio_mic_path, row.audio_system_path, 'audio-mic.wav', 'audio-system.wav'].filter(
+        (p): p is string => !!p
+      )
+    )
+    for (const relPath of candidates) {
       try {
         fs.unlinkSync(path.join(meetingDir, relPath))
-      } catch { /* already gone */ }
+      } catch { /* already gone, or never existed for this meeting */ }
     }
-    db.prepare('UPDATE meetings SET audio_mic_path = NULL, audio_system_path = NULL WHERE id = ?').run(row.id)
+    if (row.audio_mic_path || row.audio_system_path) {
+      db.prepare('UPDATE meetings SET audio_mic_path = NULL, audio_system_path = NULL WHERE id = ?').run(row.id)
+    }
   }
 }
 

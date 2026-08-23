@@ -32,11 +32,16 @@ export class WavAppender {
   constructor(filePath: string, sampleRate: number) {
     this.sampleRateValue = sampleRate
     this.fd = fs.openSync(filePath, 'w')
-    // encodeWav() on zero samples produces exactly a valid 44-byte
-    // RIFF/WAVE/fmt/data header with both size fields at 0 — reused here as
-    // the placeholder rather than duplicating the header-layout logic.
-    const header = encodeWav(new Float32Array(0), sampleRate, 1)
-    fs.writeSync(this.fd, header) // sequential: fd position 0 -> 44
+    try {
+      // encodeWav() on zero samples produces exactly a valid 44-byte
+      // RIFF/WAVE/fmt/data header with both size fields at 0 — reused here
+      // as the placeholder rather than duplicating the header-layout logic.
+      const header = encodeWav(new Float32Array(0), sampleRate, 1)
+      fs.writeSync(this.fd, header) // sequential: fd position 0 -> 44
+    } catch (e) {
+      fs.closeSync(this.fd) // don't leak the fd if the caller retries construction
+      throw e
+    }
   }
 
   /** The sample rate this writer's header was created with. A later chunk
@@ -72,12 +77,15 @@ export class WavAppender {
   close(): void {
     if (this.closed) return
     this.closed = true
-    const riffSize = Buffer.alloc(4)
-    riffSize.writeUInt32LE(36 + this.dataBytes, 0)
-    fs.writeSync(this.fd, riffSize, 0, 4, 4) // explicit position: pwrite, doesn't touch the sequential cursor
-    const dataSize = Buffer.alloc(4)
-    dataSize.writeUInt32LE(this.dataBytes, 0)
-    fs.writeSync(this.fd, dataSize, 0, 4, 40)
-    fs.closeSync(this.fd)
+    try {
+      const riffSize = Buffer.alloc(4)
+      riffSize.writeUInt32LE(36 + this.dataBytes, 0)
+      fs.writeSync(this.fd, riffSize, 0, 4, 4) // explicit position: pwrite, doesn't touch the sequential cursor
+      const dataSize = Buffer.alloc(4)
+      dataSize.writeUInt32LE(this.dataBytes, 0)
+      fs.writeSync(this.fd, dataSize, 0, 4, 40)
+    } finally {
+      fs.closeSync(this.fd)
+    }
   }
 }

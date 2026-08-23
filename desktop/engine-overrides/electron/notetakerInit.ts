@@ -325,11 +325,12 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
 
       const encoded = encodeChunk(segment.samples, segment.channels, segment.sampleRate)
       if (!encoded) {
-        // Near-silent/empty chunk (per encodeChunk's own threshold) —
-        // nothing worth transcribing or writing to the audio file. Recorded
-        // as an already-resolved empty segment so ordering/merging still
-        // sees a placeholder for this chunkIndex; not counted toward
-        // `attempted`, so it can never make a channel look "failed."
+        // Empty chunk (encodeChunk only rejects zero-length sample arrays —
+        // it has no silence threshold of its own) — nothing worth
+        // transcribing or writing to the audio file. Recorded as an
+        // already-resolved empty segment so ordering/merging still sees a
+        // placeholder for this chunkIndex; not counted toward `attempted`,
+        // so it can never make a channel look "failed."
         tracker.promises.push(Promise.resolve({ channel, text: '', startMs, endMs } as TimedChunkText))
         return
       }
