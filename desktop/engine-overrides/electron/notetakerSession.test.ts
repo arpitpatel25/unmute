@@ -110,16 +110,16 @@ describe('NotetakerSession', () => {
     assert.throws(() => session.start(4242))
   })
 
-  test('start() returns the native tap\'s diagnostics (tappedPids/candidatePidCount) when the tap reports them', () => {
+  test('start() returns the native tap\'s diagnostics (mode/excludedOwnProcess) when the tap reports them', () => {
     const diagnosticTap = {
       startCapture: (_pid: number, _onChunk: (c: NativeAudioChunk) => void) => {
-        return { tappedPids: [4242, 4243, 4244], candidatePidCount: 5 }
+        return { mode: 'global-exclude-self' as const, excludedOwnProcess: true, ownLookupStatus: 0 }
       },
       stopCapture: () => {},
     }
     const session = new NotetakerSession(diagnosticTap, () => {})
     const result = session.start(4242)
-    assert.deepEqual(result, { tappedPids: [4242, 4243, 4244], candidatePidCount: 5 })
+    assert.deepEqual(result, { mode: 'global-exclude-self', excludedOwnProcess: true, ownLookupStatus: 0 })
   })
 
   test('start() returns undefined when the native tap reports no diagnostics (e.g. a bare test fake)', () => {

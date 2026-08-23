@@ -7,18 +7,35 @@
 // Recording Only" TCC grant the user approves for the signed .app would not
 // apply to it.
 //
-// API surface confirmed against the macOS 26.2 SDK (targets 14.2+):
+// API surface confirmed against the real macOS SDK (targets 14.2+ for
+// Process Taps generally; CATapDescription itself is API_AVAILABLE(macos(12.0))):
 //   CATapDescription            — CoreAudio.framework/Headers/CATapDescription.h
 //   AudioHardwareCreateProcessTap — .../AudioHardwareTapping.h
 //   kAudioAggregateDeviceTapListKey / kAudioSubTapUIDKey / kAudioSubTapDriftCompensationKey
 //                                — .../AudioHardware.h
 //   kAudioHardwarePropertyTranslatePIDToProcessObject
 //                                — .../AudioHardware.h (pid_t -> AudioObjectID)
-//   proc_listallpids / proc_pidpath
-//                                — <libproc.h> (public, no entitlement needed)
-//                                  used to find a multi-process app's sibling
-//                                  pids (e.g. Chrome's helper subprocesses) —
-//                                  see PidsForSameApp below.
+//
+// GLOBAL TAP, NOT PER-PROCESS: captures the system's whole audio output mix
+// via initStereoGlobalTapButExcludeProcesses: (excluding only THIS app's own
+// process object, so nothing we ever play could feed back into a recording),
+// rather than resolving a specific target app's pid and building a per-
+// process mixdown tap. An earlier version of this file resolved one target
+// pid (or, in one iteration, that pid's whole .app-bundle process family) and
+// tapped only those — but a multi-process browser like Chrome never emits
+// audio from its own main process, and per-process pid resolution proved
+// fragile even after fixing that (a still-unexplained regression where
+// kAudioHardwarePropertyTranslatePIDToProcessObject failed for every
+// candidate pid despite an unchanged, previously-working call). Confirmed
+// against two of the most-starred open-source projects doing the exact same
+// thing on macOS (Zackriya-Solutions/meetily, screenpipe/screenpipe): both
+// independently converged on a global tap excluding only their own pid,
+// specifically BECAUSE it sidesteps per-process pid targeting entirely — no
+// app resolution, no multi-process enumeration, nothing to get wrong about
+// which pid actually produces sound. The only pid this file still needs to
+// resolve is its OWN (via getpid()), which is always valid and always
+// running — a fundamentally smaller, more reliable lookup than resolving an
+// arbitrary third-party app's pid ever was.
 
 #include <napi.h>
 #import <Cocoa/Cocoa.h>
@@ -26,13 +43,10 @@
 #import <CoreAudio/AudioHardwareTapping.h>
 #import <CoreAudio/CATapDescription.h>
 #include <mach/mach_time.h>
-#include <libproc.h>
+#include <unistd.h>
 #include <string>
 #include <atomic>
 #include <mutex>
-#include <vector>
-#include <algorithm>
-#include <cstring>
 
 namespace {
 
@@ -61,8 +75,18 @@ double gSampleRate = 48000.0;
 double gMachToWallOffsetMs = 0.0;
 mach_timebase_info_data_t gTimebase = {0, 0};
 
-/** Resolves a pid_t to its Core Audio "process object" AudioObjectID. */
-AudioObjectID ProcessObjectForPID(pid_t pid) {
+/** Resolves a pid_t to its Core Audio "process object" AudioObjectID, PLUS
+ *  the raw OSStatus — these are two genuinely different failure signals
+ *  that a plain AudioObjectID-or-kAudioObjectUnknown return collapses
+ *  together: `status == noErr` but `id == kAudioObjectUnknown` means Core
+ *  Audio explicitly answered "no process object for this pid" (a normal,
+ *  non-error answer for a process with no audio capability at all);
+ *  `status != noErr` means the LOOKUP ITSELF failed (permission problem,
+ *  invalid pid, HAL in a bad state, etc.) — a materially different thing to
+ *  see in a log when every candidate is failing identically. */
+struct ProcessObjectResult { AudioObjectID id; OSStatus status; };
+
+ProcessObjectResult ProcessObjectForPID(pid_t pid) {
   AudioObjectID processObjectID = kAudioObjectUnknown;
   UInt32 dataSize = sizeof(processObjectID);
   AudioObjectPropertyAddress address = {
@@ -72,78 +96,8 @@ AudioObjectID ProcessObjectForPID(pid_t pid) {
   };
   OSStatus status = AudioObjectGetPropertyData(
     kAudioObjectSystemObject, &address, sizeof(pid), &pid, &dataSize, &processObjectID);
-  if (status != noErr) return kAudioObjectUnknown;
-  return processObjectID;
-}
-
-/**
- * Every currently-running pid whose executable lives inside the SAME .app
- * bundle as targetPid — e.g. Chrome's main process together with its GPU,
- * renderer, and helper subprocesses.
- *
- * WHY THIS EXISTS: initStereoMixdownOfProcesses only captures audio actually
- * EMITTED by the given process object(s). A single resolved "target pid" (the
- * frontmost app's main process, as resolved by native-ax) is correct for a
- * single-process app, but Chrome (like every modern Chromium-family browser)
- * never emits audio from its own main process — real output happens in a
- * "Google Chrome Helper (Renderer)" or similar helper subprocess, one per
- * tab/site under Chrome's site-isolation model. Tapping only the main pid
- * therefore installs a real, error-free tap on a process that produces
- * nothing: no OSStatus ever fails, gCapturing is true, and the IOProc simply
- * never fires — which is exactly the "capture starts cleanly, zero chunks
- * ever" symptom this fix addresses. Confirmed empirically (ps -eo pid,comm):
- * every Chrome-family pid's executable path is rooted at the identical
- * "/Applications/Google Chrome.app" prefix, which is what this function
- * matches on.
- *
- * Uses only public libproc.h calls (proc_listallpids/proc_pidpath) — no
- * private API. Falls back to {targetPid} alone if the bundle root can't be
- * determined (proc_pidpath failure, or a bare non-bundled CLI process),
- * which preserves today's single-process behavior for anything that isn't
- * shaped like a browser.
- */
-std::vector<pid_t> PidsForSameApp(pid_t targetPid) {
-  std::vector<pid_t> fallback{targetPid};
-
-  char targetPath[PROC_PIDPATHINFO_MAXSIZE] = {0};
-  if (proc_pidpath(targetPid, targetPath, sizeof(targetPath)) <= 0) return fallback;
-
-  std::string targetPathStr(targetPath);
-  size_t appPos = targetPathStr.rfind(".app/");
-  if (appPos == std::string::npos) return fallback; // not inside a bundle at all
-  std::string bundleRoot = targetPathStr.substr(0, appPos + 4); // include the ".app" itself
-
-  int bufferSize = proc_listallpids(nullptr, 0);
-  if (bufferSize <= 0) return fallback;
-  // Headroom: the process list can legitimately grow between the sizing
-  // call above and the real one below.
-  std::vector<pid_t> allPids((size_t)bufferSize * 2 / sizeof(pid_t) + 64);
-  int writtenBytes = proc_listallpids(allPids.data(), (int)(allPids.size() * sizeof(pid_t)));
-  if (writtenBytes <= 0) return fallback;
-  size_t pidCount = std::min(allPids.size(), (size_t)writtenBytes / sizeof(pid_t));
-
-  // A pathological process count should never turn this into a stall — cap
-  // how many candidates get probed.
-  const size_t kMaxCandidates = 2000;
-  pidCount = std::min(pidCount, kMaxCandidates);
-
-  std::vector<pid_t> result;
-  for (size_t i = 0; i < pidCount; i++) {
-    pid_t candidate = allPids[i];
-    if (candidate <= 0) continue;
-    char candidatePath[PROC_PIDPATHINFO_MAXSIZE] = {0};
-    if (proc_pidpath(candidate, candidatePath, sizeof(candidatePath)) <= 0) continue;
-    if (strncmp(candidatePath, bundleRoot.c_str(), bundleRoot.size()) == 0) {
-      result.push_back(candidate);
-    }
-  }
-  if (result.empty()) return fallback;
-
-  // CATapDescription's mixdown array doesn't need (and shouldn't get)
-  // hundreds of entries for an app with an unusual number of helpers.
-  const size_t kMaxTapped = 64;
-  if (result.size() > kMaxTapped) result.resize(kMaxTapped);
-  return result;
+  if (status != noErr) return { kAudioObjectUnknown, status };
+  return { processObjectID, noErr };
 }
 
 OSStatus TapIOProc(AudioObjectID inDevice,
@@ -159,8 +113,8 @@ OSStatus TapIOProc(AudioObjectID inDevice,
   const AudioBuffer& buffer = inInputData->mBuffers[0];
   if (buffer.mData == nullptr || buffer.mDataByteSize == 0) return noErr;
 
-  // The tap is created with initStereoMixdownOfProcesses, so this buffer is
-  // genuinely multi-channel. Report how many channels the samples we are
+  // The tap is created with initStereoGlobalTapButExcludeProcesses, so this
+  // buffer is genuinely multi-channel. Report how many channels the samples we are
   // about to hand over actually carry, rather than leaving the consumer to
   // assume mono: interleaved stereo read as mono plays at ~double speed.
   // (When the stream is NON-interleaved, Core Audio gives one buffer PER
@@ -249,7 +203,7 @@ Napi::Value PidForBundleId(const Napi::CallbackInfo& info) {
   return env.Null();
 }
 
-/** startCapture(pid: number, onChunk: (chunk) => void): { tappedPids: number[], candidatePidCount: number } */
+/** startCapture(pid: number, onChunk: (chunk) => void): { mode: 'global-exclude-self', excludedOwnProcess: boolean, ownLookupStatus: number } */
 Napi::Value StartCapture(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (gCapturing.load()) {
@@ -261,34 +215,27 @@ Napi::Value StartCapture(const Napi::CallbackInfo& info) {
     return env.Undefined();
   }
 
-  pid_t targetPID = (pid_t)info[0].As<Napi::Number>().Int32Value();
+  // `pid` (the resolved "frontmost app" target) is accepted for API
+  // continuity and so the caller can keep its existing "is anything
+  // reasonable focused" gate/logging, but is NO LONGER used to build the
+  // tap — see this file's header comment for why. The only pid this
+  // function itself resolves is its own, to exclude it from the global tap.
+  (void)info[0].As<Napi::Number>().Int32Value();
 
-  // Tap every process sharing the target's .app bundle, not just the
-  // resolved pid itself — see PidsForSameApp's comment for why a
-  // single-pid tap silently captures nothing for Chrome and every other
-  // multi-process browser.
-  std::vector<pid_t> candidatePids = PidsForSameApp(targetPID);
-  std::vector<AudioObjectID> processObjects;
-  std::vector<pid_t> tappedPids;
-  for (pid_t candidate : candidatePids) {
-    AudioObjectID obj = ProcessObjectForPID(candidate);
-    if (obj != kAudioObjectUnknown) {
-      processObjects.push_back(obj);
-      tappedPids.push_back(candidate);
-    }
+  ProcessObjectResult ownResult = ProcessObjectForPID(getpid());
+  NSMutableArray<NSNumber*>* excludedProcesses = [NSMutableArray array];
+  if (ownResult.id != kAudioObjectUnknown) {
+    [excludedProcesses addObject:@(ownResult.id)];
   }
-  if (processObjects.empty()) {
-    Napi::Error::New(env, "no Core Audio process object for that PID or any of its sibling processes (app may not be producing audio yet)").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-
-  NSMutableArray<NSNumber*>* processObjectNumbers = [NSMutableArray arrayWithCapacity:processObjects.size()];
-  for (AudioObjectID obj : processObjects) {
-    [processObjectNumbers addObject:@(obj)];
-  }
+  // If we can't even resolve our OWN pid (should be essentially
+  // impossible — we are, definitionally, a running process), proceed
+  // anyway with an empty exclusion list rather than fail closed: missing
+  // the self-exclusion is a much smaller downside (a feedback risk only if
+  // this app itself ever plays audio, which today it doesn't) than
+  // refusing to capture system audio at all.
 
   CATapDescription* tapDescription =
-      [[CATapDescription alloc] initStereoMixdownOfProcesses:processObjectNumbers];
+      [[CATapDescription alloc] initStereoGlobalTapButExcludeProcesses:excludedProcesses];
   tapDescription.name = @"UnmuteNotetakerTap";
   tapDescription.muteBehavior = CATapUnmuted; // spec §2: the user's other audio keeps playing normally
   tapDescription.privateTap = YES;
@@ -397,19 +344,14 @@ Napi::Value StartCapture(const Napi::CallbackInfo& info) {
   gCapturing.store(true);
 
   // Diagnostics, not just success/failure — startCapture() throwing tells
-  // the caller "capture never began," but every OSStatus above can also
-  // succeed while tapping a set of processes that never actually emits
-  // audio (the exact "clean start, zero chunks" failure mode this whole
-  // multi-pid change exists to fix). Surfacing which pids actually got a
-  // valid Core Audio process object lets the JS layer log something a
-  // human can act on, instead of silence.
+  // the caller "capture never began," but a global tap can also succeed
+  // while excluding nothing (if the self-lookup failed) — worth knowing
+  // even though it's not fatal, so the JS layer can log something a human
+  // can act on instead of silence.
   Napi::Object result = Napi::Object::New(env);
-  Napi::Array tappedArray = Napi::Array::New(env, tappedPids.size());
-  for (size_t i = 0; i < tappedPids.size(); i++) {
-    tappedArray.Set((uint32_t)i, Napi::Number::New(env, (double)tappedPids[i]));
-  }
-  result.Set("tappedPids", tappedArray);
-  result.Set("candidatePidCount", Napi::Number::New(env, (double)candidatePids.size()));
+  result.Set("mode", Napi::String::New(env, "global-exclude-self"));
+  result.Set("excludedOwnProcess", Napi::Boolean::New(env, ownResult.id != kAudioObjectUnknown));
+  result.Set("ownLookupStatus", Napi::Number::New(env, (double)ownResult.status));
   return result;
 }
 

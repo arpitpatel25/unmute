@@ -26,20 +26,24 @@ export type NativeAudioChunk = {
 }
 
 /** Diagnostics returned by a successful startCapture() — see
- *  desktop/native-audio-tap/src/audiotap.mm's StartCapture: the native tap
- *  now targets every process sharing the requested pid's .app bundle (a
- *  single main-process pid, for a browser like Chrome, captures nothing —
- *  the audio comes out of a helper subprocess), so knowing WHICH pids
- *  actually resolved to a real Core Audio process object is the difference
- *  between "capture started" and "capture started and will actually
- *  produce audio." */
+ *  desktop/native-audio-tap/src/audiotap.mm's StartCapture. The native tap
+ *  captures the system's WHOLE audio output mix (initStereoGlobalTapButExcludeProcesses),
+ *  excluding only this app's own process — not a specific target app's pid.
+ *  (An earlier version resolved a target pid, or that pid's whole .app-bundle
+ *  process family, and tapped only those; a multi-process browser like
+ *  Chrome never emits audio from its own main process, so that approach
+ *  proved fragile — see the native file's header comment for the full
+ *  history and the two open-source projects this global-tap approach was
+ *  validated against.) */
 export type AudioTapStartResult = {
-  /** Pids that resolved to a real Core Audio process object and are
-   *  genuinely part of the tap's mixdown. */
-  tappedPids: number[]
-  /** How many sibling pids (same .app bundle) were probed, tapped or not —
-   *  a huge gap between this and tappedPids.length can itself be a signal. */
-  candidatePidCount: number
+  mode: 'global-exclude-self'
+  /** Whether this app's own process was successfully excluded from the tap
+   *  (should always be true — false means a feedback risk if this app ever
+   *  plays audio itself, which it doesn't today, so not fatal). */
+  excludedOwnProcess: boolean
+  /** Raw OSStatus from resolving this app's own pid to a Core Audio process
+   *  object. 0 (noErr) when excludedOwnProcess is true. */
+  ownLookupStatus: number
 }
 
 export type NativeAudioTap = {

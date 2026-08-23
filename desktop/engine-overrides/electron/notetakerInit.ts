@@ -489,23 +489,23 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         })
         throw e
       }
-      // The tap can start cleanly and still capture NOTHING, if every pid it
-      // resolved to belongs to a process that never emits audio itself (the
-      // "clean start, zero chunks" failure mode this diagnostic exists to
-      // catch — see audiotap.mm's PidsForSameApp). tappedPids.length === 0
-      // here would be surprising (start() should have thrown instead), so
-      // it's logged as an error, not just a debug note.
-      if (tapResult && tapResult.tappedPids.length === 0) {
-        mlog.error('native audio tap started but resolved ZERO tappable processes — system audio will not be captured', {
+      // A global tap (see audiotap.mm's header comment for why it replaced
+      // per-process pid targeting) can't fail to capture audio the way a
+      // mistargeted per-process tap could — it captures everything except
+      // whatever it excludes. The one thing still worth flagging is a
+      // failure to exclude THIS app's own process (a feedback risk, not a
+      // "captures nothing" risk), logged as a warning, not an error.
+      if (tapResult && !tapResult.excludedOwnProcess) {
+        mlog.warn('native audio tap started but could not exclude this app\'s own process from the global tap', {
           targetPid: pid,
-          candidatePidCount: tapResult.candidatePidCount,
+          ownLookupStatus: tapResult.ownLookupStatus,
         })
       } else if (tapResult) {
         mlog.event('capture-started', {
           targetPid: pid,
           meetingDir,
-          tappedPids: tapResult.tappedPids,
-          candidatePidCount: tapResult.candidatePidCount,
+          mode: tapResult.mode,
+          excludedOwnProcess: tapResult.excludedOwnProcess,
         })
       } else {
         mlog.event('capture-started', { targetPid: pid, meetingDir })

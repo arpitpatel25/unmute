@@ -30,13 +30,20 @@ Approve it, then re-run.
 ## API
 
 - `pidForBundleId(bundleId: string): number | null`
-- `startCapture(pid: number, onChunk: (chunk: { samples: Float32Array, sampleRate: number, timestampMs: number }) => void): { tappedPids: number[], candidatePidCount: number }`
-  — taps every process sharing `pid`'s `.app` bundle, not just `pid` itself.
-  A single-process target's audio comes from its own pid; a multi-process
-  browser's (Chrome, Edge, Arc, …) never does — real output happens in a
-  helper/renderer subprocess — so tapping only the resolved "frontmost app"
-  pid silently captures nothing for any Chromium-family app. `tappedPids` is
-  which of the app's sibling processes actually resolved to a real Core
-  Audio process object; `candidatePidCount` is how many were probed. Throws
-  only if NONE of them did.
+- `startCapture(pid: number, onChunk: (chunk: { samples: Float32Array, sampleRate: number, timestampMs: number }) => void): { mode: 'global-exclude-self', excludedOwnProcess: boolean, ownLookupStatus: number }`
+  — captures the system's WHOLE audio output mix (`initStereoGlobalTapButExcludeProcesses:`),
+  excluding only THIS process, not `pid`-scoped. `pid` is accepted for API
+  continuity (callers may still use it for their own "is anything reasonable
+  focused" gating/logging) but no longer determines what gets captured.
+  This replaced an earlier per-process-pid approach (tap only the resolved
+  target app, or that app's whole `.app`-bundle process family) after two
+  real problems: a multi-process browser like Chrome never emits audio from
+  its own main process (real output comes from a helper/renderer
+  subprocess), and per-process pid resolution proved fragile even after
+  fixing that. Validated against two of the most-starred open-source
+  projects doing the same thing on macOS (Zackriya-Solutions/meetily,
+  screenpipe/screenpipe) — both independently use this same global-tap
+  pattern for exactly this reason. `excludedOwnProcess`/`ownLookupStatus`
+  report whether this app's own pid resolved (should always be true — a
+  `false` is a feedback-risk warning, not a capture failure).
 - `stopCapture(): void`
