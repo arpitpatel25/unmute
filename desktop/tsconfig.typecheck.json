@@ -1,5 +1,5 @@
 {
-  "compilerObjectNote": "Typecheck-only config for the Remote main-process modules. Not used by the engine build (which has its own tsconfig + real electron).",
+  "compilerObjectNote": "Typecheck-only config for the Remote main-process modules AND the engine-overrides main-process modules. Not used by the engine build (which has its own tsconfig + real electron).",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -15,7 +15,57 @@
   "include": [
     "typecheck/electron-stub.d.ts",
     "electron/remote/**/*.ts",
-    "electron/remote-preload.ts"
+    "electron/remote-preload.ts",
+    // engine-overrides/electron/ had NO standing typecheck coverage at all,
+    // which is how a whole feature's worth of main-process code (the meeting
+    // notetaker: notetakerInit.ts, notetakerController.ts, notetakerSession.ts,
+    // meetingWatcher.ts, meetingApps.ts, browserTabWatcher.ts) shipped with
+    // `require()` calls, type casts and TS-narrowing subtleties that only a
+    // human reading the diff would catch. It is covered now.
+    "engine-overrides/electron/**/*.ts"
   ],
-  "exclude": ["electron/remote/**/*.test.ts", "electron/remote/probe/**"]
+  "exclude": [
+    "electron/remote/**/*.test.ts",
+    "electron/remote/probe/**",
+    "engine-overrides/electron/**/*.test.ts",
+
+    // ─── OSS-ENGINE OVERLAY FILES — NOT TYPECHECKABLE FROM THIS REPO ───
+    //
+    // These are not standalone modules: they are patched REPLACEMENTS for
+    // files in the cloned OSS engine, and they import siblings that only exist
+    // in the wired tree (./api, ./audio, ./windowManager, ./ffmpeg, ./prompts,
+    // ./keyStore, ./paywall/*, better-sqlite3, …). build/wire-into-engine.sh
+    // copies them into work/oss-engine/electron/, and only THERE do their
+    // imports resolve; here each one is an unavoidable TS2307 wall (38 errors
+    // in sessionManager.ts alone) that would drown out every real finding on
+    // the files above. Same pre-existing limitation that keeps
+    // keyboard.notetaker.test.ts out of the default `npm test` glob — see the
+    // header comment on that file.
+    //
+    // The last two are excluded only because they IMPORT overlay files
+    // (dictation-recovery.ts → ./db + ./parakeet, whisper.ts → ./parakeet):
+    // `exclude` does not stop a transitive pull-in, so they have to go too or
+    // their imports come back as errors under someone else's name.
+    "engine-overrides/electron/buildOSSAdapter.ts",
+    "engine-overrides/electron/clipboard.ts",
+    "engine-overrides/electron/db.ts",
+    "engine-overrides/electron/parakeet.ts",
+    "engine-overrides/electron/sessionManager.ts",
+    "engine-overrides/electron/dictation-recovery.ts",
+    "engine-overrides/electron/whisper.ts"
+
+    // NOT EXCLUDABLE: keyboard.ts. It is an overlay file too (its
+    // './paywall/remote/capture/agentGesture' import only resolves post-wire),
+    // but notetakerInit.ts — the single highest-integration-risk file in the
+    // notetaker feature, and the main reason this include exists — imports
+    // `keyboardManager` from it, so it is pulled in transitively no matter
+    // what. It contributes exactly two errors, BOTH pre-existing and both
+    // deliberately left alone: the post-wire import path above, and a
+    // duplicate `lastAgentToggleTime` field declaration introduced in f26beba,
+    // long before the notetaker branch. `tsc`'s exit code here was ALREADY
+    // non-zero before this include was added (two long-standing errors in
+    // electron/remote/init.ts), so this config has never been a green gate —
+    // it is a "read the list" tool, and the list is now much shorter than the
+    // 48 errors a naive whole-directory include produces.
+  ]
 }

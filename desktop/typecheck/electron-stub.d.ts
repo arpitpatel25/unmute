@@ -93,7 +93,25 @@ declare module 'electron' {
   export class Notification {
     constructor(opts: { title: string; body: string })
     show(): void
+    /** 'click' / 'close' / 'show' — the notetaker attaches a click handler so
+     *  its meeting-detected prompt can act on being tapped. */
+    on(event: string, cb: (...a: unknown[]) => void): void
     static isSupported(): boolean
+  }
+  /** Native modal dialogs. Only showMessageBox is used (the notetaker's
+   *  stop-confirmation, spec §6); `response` is the index of the button the
+   *  user chose, within the `buttons` array. */
+  export const dialog: {
+    showMessageBox(opts: {
+      type?: 'none' | 'info' | 'error' | 'question' | 'warning'
+      buttons?: string[]
+      defaultId?: number
+      cancelId?: number
+      title?: string
+      message: string
+      detail?: string
+    }): Promise<{ response: number; checkboxChecked: boolean }>
+    showErrorBox(title: string, content: string): void
   }
 }
 
