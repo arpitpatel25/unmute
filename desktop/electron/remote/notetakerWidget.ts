@@ -26,6 +26,30 @@ const log = createLogger('notetaker-widget')
 
 let widgetWindow: BrowserWindow | null = null
 
+/** The capture-active signal last broadcast to the widget's renderer.
+ *
+ *  WHY THIS EXISTS: the window is deliberately REUSED across sessions
+ *  (hide, not close — creating a transparent always-on-top panel is not
+ *  free), and it runs with `backgroundThrottling: false` +
+ *  `paintWhenInitiallyHidden: true`. That combination means
+ *  NotetakerWidgetRoute never unmounts between sessions, so a mount-time
+ *  `getUserMedia()` would keep a SECOND live mic capture open for the rest
+ *  of the app's run after the first session — macOS mic indicator stuck on,
+ *  Bluetooth pinned to the low-quality HFP codec, and dictation quality
+ *  degraded. So capture is gated on this signal instead: the renderer
+ *  acquires the mic when it goes true and fully tears it down (tracks
+ *  stopped, AudioContext closed, rAF cancelled) when it goes false. */
+let captureActive = false
+
+/** Tell the widget's renderer whether a REAL capture is running. Safe to
+ *  call before the window exists or before its renderer has loaded — the
+ *  state is cached and re-sent on every 'did-finish-load'. */
+function broadcastCaptureActive(active: boolean): void {
+  captureActive = active
+  if (!widgetWindow || widgetWindow.isDestroyed()) return
+  widgetWindow.webContents.send('notetaker:capture-active', active)
+}
+
 /** Bottom-left bounds on the display nearest the cursor — mirrors overlay.ts's
  *  dockedBounds() (screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea)
  *  but anchored to the opposite corner and sized for a small circle. */
@@ -90,6 +114,17 @@ export function createNotetakerWidget(): BrowserWindow {
     void widgetWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: '/notetaker-widget' })
   }
 
+  // Re-assert the capture-active signal after every load. The renderer is
+  // the only thing that can hold the mic open, and it can miss the initial
+  // send in two real cases: the very first show() (the window is created and
+  // told to load in the same tick, long before the route has mounted a
+  // listener), and a dev-mode Vite HMR full reload mid-session. Re-sending on
+  // load makes the signal self-healing in both.
+  widgetWindow.webContents.on('did-finish-load', () => {
+    if (!widgetWindow || widgetWindow.isDestroyed()) return
+    widgetWindow.webContents.send('notetaker:capture-active', captureActive)
+  })
+
   widgetWindow.on('closed', () => { widgetWindow = null })
   log.event('notetaker-widget-created', {})
   return widgetWindow
@@ -127,12 +162,21 @@ export function showNotetakerWidget(): void {
   win.setBounds(widgetBounds())
   if (!win.isVisible()) win.showInactive()
   reassertOmnipresence(win)
+  // Arm the renderer's mic capture. This call site is exactly
+  // NotetakerSession.start() (notetakerInit.ts injects showNotetakerWidget as
+  // its onSessionStart hook), so the widget's mic is live for precisely as
+  // long as a real capture is.
+  broadcastCaptureActive(true)
   log.event('notetaker-widget-shown', {})
 }
 
 /** Hide the widget without destroying it (fast to bring back). Called from
  *  NotetakerSession stop. */
 export function hideNotetakerWidget(): void {
+  // Disarm BEFORE hiding: hiding alone does not unmount the renderer (the
+  // window keeps running unthrottled), so without this the widget's
+  // getUserMedia stream would stay open forever — see `captureActive` above.
+  broadcastCaptureActive(false)
   if (widgetWindow && !widgetWindow.isDestroyed() && widgetWindow.isVisible()) {
     widgetWindow.hide()
   }
@@ -147,6 +191,7 @@ function closeWindow(win: BrowserWindow): void {
 
 /** Tear the window down entirely (app quit / feature teardown). */
 export function destroyNotetakerWidget(): void {
+  broadcastCaptureActive(false)
   if (widgetWindow && !widgetWindow.isDestroyed()) {
     closeWindow(widgetWindow)
   }

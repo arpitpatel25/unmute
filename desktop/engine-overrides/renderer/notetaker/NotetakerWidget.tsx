@@ -19,6 +19,7 @@ const BAR_COUNT = 5
 
 type API = {
   notetakerCancelRequested?: () => void
+  notetakerOnCaptureActive?: (cb: (active: boolean) => void) => () => void
 }
 function api(): API {
   return (window as unknown as { electronAPI?: API }).electronAPI ?? {}
@@ -32,14 +33,28 @@ function api(): API {
  */
 export function NotetakerWidget({
   analyser,
+  sessionId = 0,
   onCancelConfirmed,
 }: {
   analyser: AnalyserNode | null
+  /** Bumped by the route on every new capture session. The widget WINDOW is
+   *  reused across sessions (hidden, never closed), so this component never
+   *  remounts — without this, a "Cancel" the user surfaced but never
+   *  confirmed in one session would still be on screen when the next session
+   *  opened the widget. */
+  sessionId?: number
   onCancelConfirmed: () => void
 }) {
   const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0.1))
   const [confirmingCancel, setConfirmingCancel] = useState(false)
   const rafRef = useRef<number | undefined>(undefined)
+
+  // A new session always starts on the waveform face, never on a stale
+  // Cancel button (or a frozen last frame of bars) left over from the last one.
+  useEffect(() => {
+    setConfirmingCancel(false)
+    setLevels(new Array(BAR_COUNT).fill(0.1))
+  }, [sessionId])
 
   // Live waveform: reads the analyser every animation frame. No setInterval —
   // requestAnimationFrame both matches the display refresh and stops for free
@@ -119,16 +134,46 @@ export function NotetakerWidget({
  * widget/useAudioRecorder.ts's analyser setup (AudioContext + createAnalyser,
  * fftSize 128, one MediaStreamSource) — and wires the confirmed-Cancel click
  * to the main process over the `notetaker:cancel-requested` IPC channel via
- * the shared preload bridge (electron/remote-preload.ts). The main-process
- * handler for that channel, and feeding this window a REAL shared analyser
- * tied to the actual meeting audio rather than a locally-opened mic stream,
- * are composition-root concerns (Task 10) — this widget degrades gracefully
- * (flat/no bars) if getUserMedia is unavailable or denied.
+ * the shared preload bridge (electron/remote-preload.ts). Feeding this window
+ * a REAL shared analyser tied to the actual meeting audio rather than a
+ * locally-opened mic stream is still a composition-root concern — this widget
+ * degrades gracefully (flat/no bars) if getUserMedia is unavailable or denied.
+ *
+ * MIC LIFETIME IS DRIVEN BY IPC, NOT BY MOUNT. The widget WINDOW is created
+ * once and thereafter only shown/hidden (see notetakerWidget.ts) with
+ * `backgroundThrottling: false` + `paintWhenInitiallyHidden: true`, so this
+ * component NEVER unmounts and a mount-time getUserMedia would never be
+ * released: after one note-taking session the app would hold a second live
+ * mic capture for the rest of its run — macOS mic indicator stuck on,
+ * Bluetooth pinned to the low-quality HFP codec, dictation quality degraded.
+ * So the capture is gated on `notetaker:capture-active`, which main sends
+ * true from NotetakerSession.start() and false from its stop() (via the
+ * show/hide hooks). Every acquired resource — the MediaStream's tracks, the
+ * AudioContext, and (through `analyser` going back to null) the waveform's
+ * requestAnimationFrame loop — is released the moment it goes false.
  */
 export function NotetakerWidgetRoute() {
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
+  const [captureActive, setCaptureActive] = useState(false)
+  /** Increments on every false→true transition: one "session" of the widget. */
+  const [sessionId, setSessionId] = useState(0)
+  // Read in the IPC handler to detect the transition. A ref, not the state
+  // value: the handler is registered once (empty deps) so it would close over
+  // a stale `captureActive`, and deriving it inside a setState updater would
+  // double-count under React's double-invoked updaters in StrictMode.
+  const captureActiveRef = useRef(false)
 
   useEffect(() => {
+    const unsubscribe = api().notetakerOnCaptureActive?.((active) => {
+      if (active && !captureActiveRef.current) setSessionId((n) => n + 1)
+      captureActiveRef.current = active
+      setCaptureActive(active)
+    })
+    return () => unsubscribe?.()
+  }, [])
+
+  useEffect(() => {
+    if (!captureActive) return
     let cancelled = false
     let stream: MediaStream | null = null
     let audioContext: AudioContext | null = null
@@ -156,12 +201,17 @@ export function NotetakerWidgetRoute() {
       cancelled = true
       stream?.getTracks().forEach((t) => t.stop())
       void audioContext?.close()
+      // Dropping the analyser is what stops the waveform's rAF loop (its
+      // effect keys off this prop) — it also releases the last reference to
+      // the closed AudioContext's graph.
+      setAnalyser(null)
     }
-  }, [])
+  }, [captureActive])
 
   return (
     <NotetakerWidget
       analyser={analyser}
+      sessionId={sessionId}
       onCancelConfirmed={() => api().notetakerCancelRequested?.()}
     />
   )

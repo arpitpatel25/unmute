@@ -578,6 +578,18 @@ export const remotePreloadExtensions = {
    *  note-taking session (spec §6: stop is never a single, direct action;
    *  the confirm already happened in the renderer by the time this fires). */
   notetakerCancelRequested: (): void => ipcRenderer.send('notetaker:cancel-requested'),
+  /** Main tells the widget whether a REAL capture is running right now.
+   *  The widget window is REUSED across sessions (hidden, never closed), so
+   *  its renderer never unmounts — it must acquire the mic on `true` and
+   *  fully release it on `false` rather than at mount/unmount, or one
+   *  session would leave a second live mic capture open for the rest of the
+   *  app's run (mic indicator stuck on, Bluetooth pinned to HFP, dictation
+   *  degraded). Returns an unsubscribe fn, like the other on* bridges. */
+  notetakerOnCaptureActive: (cb: (active: boolean) => void): (() => void) => {
+    const handler = (_e: unknown, active: boolean) => cb(!!active)
+    ipcRenderer.on('notetaker:capture-active', handler)
+    return () => ipcRenderer.removeListener('notetaker:capture-active', handler)
+  },
 }
 
 export type RemoteAPI = typeof remotePreloadExtensions
