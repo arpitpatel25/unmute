@@ -48,6 +48,16 @@ test('normalizePolicy: defaults are safe (disabled, allow-all, screenshots on)',
   assert.equal(DEFAULT_POLICY.allowAll, true)
 })
 
+// TEMPORARY KILL SWITCH (see policy.ts's own comment for the why — the
+// unmute-computer MCP leaking into Codex via ChatGPT desktop's config
+// import). Every consumer reads its answer from normalizePolicy, so this one
+// assertion is the whole guarantee: no settings.json value, however it got
+// there, can make Computer Use live again while the switch is on.
+test('normalizePolicy: the kill switch wins even over an explicit, real enabled:true', () => {
+  const p = normalizePolicy({ enabled: true, screenshotEnabled: true, allowAll: true, allowed: [] })
+  assert.equal(p.enabled, false)
+})
+
 test('normalizePolicy: coerces junk without throwing', () => {
   const p = normalizePolicy({ enabled: 'yes', allowAll: false, screenshotEnabled: false, allowed: ['a', 2, null, 'b'] })
   assert.equal(p.enabled, false) // only strict true counts

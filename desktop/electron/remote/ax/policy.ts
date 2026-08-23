@@ -43,12 +43,31 @@ export function isAppAllowed(policy: AxPolicy, name: string, bundleId?: string):
   return false
 }
 
+// TEMPORARY KILL SWITCH — Computer Use is entirely off, for everyone, with
+// no way for a user or a stray settings.json to turn it back on. Not a
+// deletion: every registration/enforcement/IPC path below is untouched and
+// still correct, they just all read through here, and here always says no.
+//
+// WHY: `unmute-computer` (the Claude Code MCP this gates) was leaking into
+// Codex — the ChatGPT desktop app's "import your Claude setup" feature
+// copies the whole Claude Code config, MCP servers included, into Codex on
+// every launch, independent of anything Unmute does (see ax/codex-prune.ts's
+// header for the full story). Turning registration off at the source is the
+// only fix that does not depend on winning a race against another app.
+//
+// TO BRING IT BACK: delete this block. Nothing else needs to change — every
+// consumer (applyAxRegistration, the ax-mcp server, the CUA router, both
+// `remote:*-computer-use` IPC handlers) already reads its answer from here,
+// not from raw settings, so restoring the real value here restores the
+// feature everywhere at once.
+const KILL_SWITCH = true
+
 /** Normalize whatever is read from settings into a complete, valid policy —
  *  missing/invalid fields fall back to defaults (never throws). */
 export function normalizePolicy(raw: unknown): AxPolicy {
   const r = (raw ?? {}) as Partial<AxPolicy>
   return {
-    enabled: r.enabled === true,
+    enabled: KILL_SWITCH ? false : r.enabled === true,
     screenshotEnabled: r.screenshotEnabled !== false, // default true
     allowAll: r.allowAll !== false, // default true
     allowed: Array.isArray(r.allowed) ? r.allowed.filter((s): s is string => typeof s === 'string') : [],
