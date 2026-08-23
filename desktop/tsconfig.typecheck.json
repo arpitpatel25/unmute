@@ -42,8 +42,9 @@
     // keyboard.notetaker.test.ts out of the default `npm test` glob — see the
     // header comment on that file.
     //
-    // The last two are excluded only because they IMPORT overlay files
-    // (dictation-recovery.ts → ./db + ./parakeet, whisper.ts → ./parakeet):
+    // The last three are excluded only because they IMPORT overlay files
+    // (dictation-recovery.ts → ./db + ./parakeet, whisper.ts → ./parakeet,
+    // notetaker/transcribeSession.ts → ../db + ../paywall/paywall-route):
     // `exclude` does not stop a transitive pull-in, so they have to go too or
     // their imports come back as errors under someone else's name.
     "engine-overrides/electron/buildOSSAdapter.ts",
@@ -52,7 +53,8 @@
     "engine-overrides/electron/parakeet.ts",
     "engine-overrides/electron/sessionManager.ts",
     "engine-overrides/electron/dictation-recovery.ts",
-    "engine-overrides/electron/whisper.ts"
+    "engine-overrides/electron/whisper.ts",
+    "engine-overrides/electron/notetaker/transcribeSession.ts"
 
     // NOT EXCLUDABLE: keyboard.ts. It is an overlay file too (its
     // './paywall/remote/capture/agentGesture' import only resolves post-wire),
