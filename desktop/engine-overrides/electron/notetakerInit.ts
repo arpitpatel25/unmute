@@ -55,6 +55,7 @@ import { NotetakerController } from './notetakerController'
 import { readNowPlaying } from './mediaController'
 import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowser } from './browserTabWatcher'
 import { ChunkBuffer } from './notetaker/chunkBuffer'
+import { transcribeAndPersistSession, newMeetingId } from './notetaker/transcribeSession'
 
 export type NotetakerInitHooks = {
   /** Called exactly when REAL capture starts/stops — from
@@ -89,31 +90,6 @@ interface NativeAx {
   frontmostApp(): string
   listApps(): Array<{ name: string; bundleId: string; pid: number; windowsHere: number; windowsAnywhere: number }>
 }
-
-/**
- * `transcribeAndPersistSession`/`newMeetingId` live in
- * `./notetaker/transcribeSession.ts` — itself an OSS-overlay-adjacent file
- * that imports `../db` and `../paywall/paywall-route`, both overlay-only
- * modules that only resolve post-`wire-into-engine.sh` (see
- * tsconfig.typecheck.json's own "OSS-ENGINE OVERLAY FILES" comment, which
- * already excludes transcribeSession.ts from the typechecked program for
- * exactly this reason). A plain `import` here would pull that whole
- * unresolvable chain back into the program transitively THROUGH
- * notetakerInit.ts, which the same tsconfig documents as deliberately
- * NOT excludable (it's the anchor file the include exists for) — verified
- * by trying the plain-import form first: it reintroduces the exact 3 errors
- * (db.ts x2, paywall-route.ts x1) task-5-report.md already hit one level
- * down. Loaded via `require()` + a hand-written interface instead, same
- * pattern as loadNativeAx()/nativeAudioTap below — this is a same-tree
- * sibling file that always exists (unlike the native addons), so this is
- * purely a typecheck-scoping device, not an availability guard.
- */
-interface TranscribeSessionModule {
-  transcribeAndPersistSession: (buffer: ChunkBuffer, meetingId: string, startedAt: number, endedAt: number) => Promise<void>
-  newMeetingId: () => string
-}
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { transcribeAndPersistSession, newMeetingId } = require('./notetaker/transcribeSession') as TranscribeSessionModule
 
 function loadNativeAx(): NativeAx | null {
   try {
