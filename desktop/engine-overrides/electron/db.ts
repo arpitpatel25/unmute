@@ -38,6 +38,21 @@ export interface DBSession {
   engine: EngineTag | null
 }
 
+// Meetings are a separate retention lane from sessions: rows and transcripts
+// are kept forever (no TTL, no row cap). Only the audio files backing a
+// meeting are swept 24h after it ends — see sweepExpiredMeetingAudio().
+export interface DBMeeting {
+  id: string
+  title: string
+  started_at: number
+  ended_at: number
+  duration_ms: number
+  status: 'recording' | 'transcribing' | 'ready' | 'failed'
+  transcript_path: string | null
+  audio_mic_path: string | null
+  audio_system_path: string | null
+}
+
 export function initDB(): void {
   const dbPath = path.join(app.getPath('userData'), 'unmute.db')
   db = new Database(dbPath)
@@ -87,11 +102,30 @@ export function initDB(): void {
     );
   `)
 
+  // Unlike sessions, meetings are never unconditionally swept: no TTL, no
+  // row cap. Only their audio files are time-expired, via
+  // sweepExpiredMeetingAudio() below — the DB row and transcript persist.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS meetings (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'recording',
+      transcript_path TEXT,
+      audio_mic_path TEXT,
+      audio_system_path TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_meetings_started ON meetings(started_at DESC);
+  `)
+
   cleanupSessions()
+  sweepExpiredMeetingAudio()
   // A write-triggered cleanup is not a hard retention guarantee for someone
   // who leaves the app open overnight. Reap on a short, unref'd cadence too.
   if (cleanupTimer) clearInterval(cleanupTimer)
-  cleanupTimer = setInterval(() => cleanupSessions(), 60 * 60 * 1000)
+  cleanupTimer = setInterval(() => { cleanupSessions(); sweepExpiredMeetingAudio() }, 60 * 60 * 1000)
   cleanupTimer.unref?.()
 }
 
@@ -241,6 +275,73 @@ export function updateBetterTranscript(sessionId: string, text: string): void {
 
 export function deleteSession(id: string): void {
   db.prepare('DELETE FROM sessions WHERE id = ?').run(id)
+}
+
+export function insertMeeting(meeting: DBMeeting): void {
+  const stmt = db.prepare(`
+    INSERT OR REPLACE INTO meetings (
+      id, title, started_at, ended_at, duration_ms, status, transcript_path, audio_mic_path, audio_system_path
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  stmt.run(
+    meeting.id,
+    meeting.title,
+    meeting.started_at,
+    meeting.ended_at,
+    meeting.duration_ms,
+    meeting.status,
+    meeting.transcript_path,
+    meeting.audio_mic_path,
+    meeting.audio_system_path,
+  )
+}
+
+// Deliberately does NOT call any cleanup/sweep function first — unlike
+// getSessions(), meetings are never unconditionally swept on read. Audio
+// expiry is time-driven (sweepExpiredMeetingAudio, wired into initDB's
+// startup + hourly timer), not read-driven.
+export function getMeetings(limit = 200): DBMeeting[] {
+  return db.prepare('SELECT * FROM meetings ORDER BY started_at DESC LIMIT ?').all(limit) as DBMeeting[]
+}
+
+export function getMeeting(id: string): DBMeeting | null {
+  return (db.prepare('SELECT * FROM meetings WHERE id = ?').get(id) as DBMeeting | undefined) ?? null
+}
+
+export function updateMeetingTitle(id: string, title: string): void {
+  db.prepare('UPDATE meetings SET title = ? WHERE id = ?').run(title, id)
+}
+
+export function deleteMeeting(id: string): void {
+  const meeting = getMeeting(id)
+  if (!meeting) return
+  const meetingsDir = path.join(app.getPath('userData'), 'meetings', id)
+  try {
+    fs.rmSync(meetingsDir, { recursive: true, force: true })
+  } catch { /* already gone */ }
+  db.prepare('DELETE FROM meetings WHERE id = ?').run(id)
+}
+
+// Meeting rows and transcripts are kept forever; only the audio backing a
+// meeting expires, 24h after the meeting ended. Not exported — called only
+// from initDB()'s startup + hourly-timer wiring, matching cleanupSessions()'s
+// own non-exported convention.
+function sweepExpiredMeetingAudio(): void {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000
+  const expired = db.prepare(
+    'SELECT id, audio_mic_path, audio_system_path FROM meetings WHERE ended_at < ? AND (audio_mic_path IS NOT NULL OR audio_system_path IS NOT NULL)'
+  ).all(cutoff) as { id: string; audio_mic_path: string | null; audio_system_path: string | null }[]
+
+  for (const row of expired) {
+    const meetingDir = path.join(app.getPath('userData'), 'meetings', row.id)
+    for (const relPath of [row.audio_mic_path, row.audio_system_path]) {
+      if (!relPath) continue
+      try {
+        fs.unlinkSync(path.join(meetingDir, relPath))
+      } catch { /* already gone */ }
+    }
+    db.prepare('UPDATE meetings SET audio_mic_path = NULL, audio_system_path = NULL WHERE id = ?').run(row.id)
+  }
 }
 
 function cleanupSessions(): void {
