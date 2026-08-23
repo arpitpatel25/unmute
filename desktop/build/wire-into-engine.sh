@@ -624,6 +624,19 @@ import { remotePreloadExtensions } from './paywall/remote-preload'
   if ! grep -q "from './paywall/remote/notetakerWidget'" "$engine/electron/main.ts"; then
     log "WARN: main.ts missing the correct notetakerWidget import path — widget show/hide will be undefined"
   fi
+  # The Core Audio Process Tap needs BOTH halves of its TCC contract: the
+  # NSAudioCaptureUsageDescription string (in engine-overrides/electron-builder.yml)
+  # and the com.apple.security.device.audio-input entitlement. The entitlements
+  # plist comes from the cloned OSS engine, not from this repo, so it can drift
+  # out from under us on an engine bump. Worth warning about because the failure
+  # is SILENT: without the grant, AudioHardwareCreateProcessTap and
+  # AudioDeviceStart both still return noErr and every captured buffer is zeros.
+  local mac_entitlements="$engine/build/entitlements.mac.plist"
+  if [[ ! -f "$mac_entitlements" ]]; then
+    log "WARN: $mac_entitlements not found — cannot verify the notetaker's audio-input entitlement"
+  elif ! grep -q 'com.apple.security.device.audio-input' "$mac_entitlements"; then
+    log "WARN: entitlements.mac.plist missing com.apple.security.device.audio-input — system-audio capture will be silently denied (all-zero buffers, no error)"
+  fi
 
   # ─── HUD/widget window tightening ─────────────────────────────
   # OSS widget window is 520×140 — the pill itself is only ~480×44 wide

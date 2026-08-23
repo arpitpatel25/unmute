@@ -941,7 +941,7 @@ git commit -m "notetaker: add native-audio-tap addon (Core Audio Process Tap cap
 
 **Interfaces:**
 - Consumes: nothing new
-- Produces: `unmute-native-audio-tap` present as a `file:` dependency in the wired engine's `package.json`, `NSSystemAudioCaptureUsageDescription` present in the packaged app's `Info.plist`
+- Produces: `unmute-native-audio-tap` present as a `file:` dependency in the wired engine's `package.json`, `NSAudioCaptureUsageDescription` present in the packaged app's `Info.plist`
 
 - [ ] **Step 1: Add the copy block to `wire-into-engine.sh`**
 
@@ -979,7 +979,7 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: "unmute uses your microphone to transcribe what you say into text."
     NSAppleEventsUsageDescription: "unmute uses System Events to paste transcribed text at your cursor."
-    NSSystemAudioCaptureUsageDescription: "unmute's meeting notetaker captures system audio to transcribe both sides of a call, entirely on your device."
+    NSAudioCaptureUsageDescription: "unmute's meeting notetaker captures system audio to transcribe both sides of a call, entirely on your device."
 ```
 
 Note: `NSMicrophoneUsageDescription` and `NSAppleEventsUsageDescription` are included here explicitly because — per plan research — the OSS engine's own copy of these strings lives in `desktop/work/oss-engine/package.json`'s `build.mac.extendInfo`, and `engine-overrides/electron-builder.yml` **replaces** (not merges with) the OSS `electron-builder.yml`. If `electron-builder.yml` is the config electron-builder actually reads for the Pro/wired build, these two existing strings need to be here too, not just the new one — verify against a real packaged build's `Info.plist` (`plutil -p` on the built `.app/Contents/Info.plist`) before assuming any of the three actually land in the output.

@@ -60,7 +60,14 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: "unmute uses your microphone to transcribe what you say into text."
     NSAppleEventsUsageDescription: "unmute uses System Events to paste transcribed text at your cursor."
-    NSSystemAudioCaptureUsageDescription: "unmute's meeting notetaker captures system audio to transcribe both sides of a call, entirely on your device."
+    # NSAudioCaptureUsageDescription — NOT NSSystemAudioCaptureUsageDescription.
+    # The latter is not a real key, and getting it wrong is silent: per Apple's
+    # documented TCC behavior a missing/misnamed usage string makes the Core
+    # Audio Process Tap request DENIED WITHOUT A PROMPT, while every call
+    # (AudioHardwareCreateProcessTap, AudioDeviceStart) still returns noErr.
+    # The only symptom is that every captured buffer is silence — which the
+    # native module's throw/reject-based error handling can never detect.
+    NSAudioCaptureUsageDescription: "unmute's meeting notetaker captures system audio to transcribe both sides of a call, entirely on your device."
 win:
   target:
     - nsis

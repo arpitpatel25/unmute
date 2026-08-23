@@ -137,7 +137,10 @@ Clicking it (mouse) surfaces the cancel option described in §6.
 Capture requires a new TCC grant distinct from anything Unmute currently
 requests: **Screen & System Audio Recording → System Audio Recording Only**,
 gated by `com.apple.security.device.audio-input` entitlement and an
-`NSSystemAudioCaptureUsageDescription` plist string. There is no
+`NSAudioCaptureUsageDescription` plist string (NOT
+`NSSystemAudioCaptureUsageDescription` — an earlier draft of this spec named
+a key that does not exist; a missing/misnamed usage string makes the request
+silently DENIED while every Core Audio call still returns `noErr`). There is no
 `requestAuthorization`-style API — the prompt only fires when IO actually
 starts on the tap-backed aggregate device, so the first real capture attempt
 is also the permission request. Needs its own onboarding copy, separate from
