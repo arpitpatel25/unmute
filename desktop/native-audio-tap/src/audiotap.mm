@@ -14,6 +14,11 @@
 //                                — .../AudioHardware.h
 //   kAudioHardwarePropertyTranslatePIDToProcessObject
 //                                — .../AudioHardware.h (pid_t -> AudioObjectID)
+//   proc_listallpids / proc_pidpath
+//                                — <libproc.h> (public, no entitlement needed)
+//                                  used to find a multi-process app's sibling
+//                                  pids (e.g. Chrome's helper subprocesses) —
+//                                  see PidsForSameApp below.
 
 #include <napi.h>
 #import <Cocoa/Cocoa.h>
@@ -21,9 +26,13 @@
 #import <CoreAudio/AudioHardwareTapping.h>
 #import <CoreAudio/CATapDescription.h>
 #include <mach/mach_time.h>
+#include <libproc.h>
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <vector>
+#include <algorithm>
+#include <cstring>
 
 namespace {
 
@@ -65,6 +74,76 @@ AudioObjectID ProcessObjectForPID(pid_t pid) {
     kAudioObjectSystemObject, &address, sizeof(pid), &pid, &dataSize, &processObjectID);
   if (status != noErr) return kAudioObjectUnknown;
   return processObjectID;
+}
+
+/**
+ * Every currently-running pid whose executable lives inside the SAME .app
+ * bundle as targetPid — e.g. Chrome's main process together with its GPU,
+ * renderer, and helper subprocesses.
+ *
+ * WHY THIS EXISTS: initStereoMixdownOfProcesses only captures audio actually
+ * EMITTED by the given process object(s). A single resolved "target pid" (the
+ * frontmost app's main process, as resolved by native-ax) is correct for a
+ * single-process app, but Chrome (like every modern Chromium-family browser)
+ * never emits audio from its own main process — real output happens in a
+ * "Google Chrome Helper (Renderer)" or similar helper subprocess, one per
+ * tab/site under Chrome's site-isolation model. Tapping only the main pid
+ * therefore installs a real, error-free tap on a process that produces
+ * nothing: no OSStatus ever fails, gCapturing is true, and the IOProc simply
+ * never fires — which is exactly the "capture starts cleanly, zero chunks
+ * ever" symptom this fix addresses. Confirmed empirically (ps -eo pid,comm):
+ * every Chrome-family pid's executable path is rooted at the identical
+ * "/Applications/Google Chrome.app" prefix, which is what this function
+ * matches on.
+ *
+ * Uses only public libproc.h calls (proc_listallpids/proc_pidpath) — no
+ * private API. Falls back to {targetPid} alone if the bundle root can't be
+ * determined (proc_pidpath failure, or a bare non-bundled CLI process),
+ * which preserves today's single-process behavior for anything that isn't
+ * shaped like a browser.
+ */
+std::vector<pid_t> PidsForSameApp(pid_t targetPid) {
+  std::vector<pid_t> fallback{targetPid};
+
+  char targetPath[PROC_PIDPATHINFO_MAXSIZE] = {0};
+  if (proc_pidpath(targetPid, targetPath, sizeof(targetPath)) <= 0) return fallback;
+
+  std::string targetPathStr(targetPath);
+  size_t appPos = targetPathStr.rfind(".app/");
+  if (appPos == std::string::npos) return fallback; // not inside a bundle at all
+  std::string bundleRoot = targetPathStr.substr(0, appPos + 4); // include the ".app" itself
+
+  int bufferSize = proc_listallpids(nullptr, 0);
+  if (bufferSize <= 0) return fallback;
+  // Headroom: the process list can legitimately grow between the sizing
+  // call above and the real one below.
+  std::vector<pid_t> allPids((size_t)bufferSize * 2 / sizeof(pid_t) + 64);
+  int writtenBytes = proc_listallpids(allPids.data(), (int)(allPids.size() * sizeof(pid_t)));
+  if (writtenBytes <= 0) return fallback;
+  size_t pidCount = std::min(allPids.size(), (size_t)writtenBytes / sizeof(pid_t));
+
+  // A pathological process count should never turn this into a stall — cap
+  // how many candidates get probed.
+  const size_t kMaxCandidates = 2000;
+  pidCount = std::min(pidCount, kMaxCandidates);
+
+  std::vector<pid_t> result;
+  for (size_t i = 0; i < pidCount; i++) {
+    pid_t candidate = allPids[i];
+    if (candidate <= 0) continue;
+    char candidatePath[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    if (proc_pidpath(candidate, candidatePath, sizeof(candidatePath)) <= 0) continue;
+    if (strncmp(candidatePath, bundleRoot.c_str(), bundleRoot.size()) == 0) {
+      result.push_back(candidate);
+    }
+  }
+  if (result.empty()) return fallback;
+
+  // CATapDescription's mixdown array doesn't need (and shouldn't get)
+  // hundreds of entries for an app with an unusual number of helpers.
+  const size_t kMaxTapped = 64;
+  if (result.size() > kMaxTapped) result.resize(kMaxTapped);
+  return result;
 }
 
 OSStatus TapIOProc(AudioObjectID inDevice,
@@ -170,7 +249,7 @@ Napi::Value PidForBundleId(const Napi::CallbackInfo& info) {
   return env.Null();
 }
 
-/** startCapture(pid: number, onChunk: (chunk) => void): void */
+/** startCapture(pid: number, onChunk: (chunk) => void): { tappedPids: number[], candidatePidCount: number } */
 Napi::Value StartCapture(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (gCapturing.load()) {
@@ -183,14 +262,33 @@ Napi::Value StartCapture(const Napi::CallbackInfo& info) {
   }
 
   pid_t targetPID = (pid_t)info[0].As<Napi::Number>().Int32Value();
-  AudioObjectID processObjectID = ProcessObjectForPID(targetPID);
-  if (processObjectID == kAudioObjectUnknown) {
-    Napi::Error::New(env, "no Core Audio process object for that PID (process may not be producing audio yet)").ThrowAsJavaScriptException();
+
+  // Tap every process sharing the target's .app bundle, not just the
+  // resolved pid itself — see PidsForSameApp's comment for why a
+  // single-pid tap silently captures nothing for Chrome and every other
+  // multi-process browser.
+  std::vector<pid_t> candidatePids = PidsForSameApp(targetPID);
+  std::vector<AudioObjectID> processObjects;
+  std::vector<pid_t> tappedPids;
+  for (pid_t candidate : candidatePids) {
+    AudioObjectID obj = ProcessObjectForPID(candidate);
+    if (obj != kAudioObjectUnknown) {
+      processObjects.push_back(obj);
+      tappedPids.push_back(candidate);
+    }
+  }
+  if (processObjects.empty()) {
+    Napi::Error::New(env, "no Core Audio process object for that PID or any of its sibling processes (app may not be producing audio yet)").ThrowAsJavaScriptException();
     return env.Undefined();
   }
 
+  NSMutableArray<NSNumber*>* processObjectNumbers = [NSMutableArray arrayWithCapacity:processObjects.size()];
+  for (AudioObjectID obj : processObjects) {
+    [processObjectNumbers addObject:@(obj)];
+  }
+
   CATapDescription* tapDescription =
-      [[CATapDescription alloc] initStereoMixdownOfProcesses:@[ @(processObjectID) ]];
+      [[CATapDescription alloc] initStereoMixdownOfProcesses:processObjectNumbers];
   tapDescription.name = @"UnmuteNotetakerTap";
   tapDescription.muteBehavior = CATapUnmuted; // spec §2: the user's other audio keeps playing normally
   tapDescription.privateTap = YES;
@@ -297,7 +395,22 @@ Napi::Value StartCapture(const Napi::CallbackInfo& info) {
   }
 
   gCapturing.store(true);
-  return env.Undefined();
+
+  // Diagnostics, not just success/failure — startCapture() throwing tells
+  // the caller "capture never began," but every OSStatus above can also
+  // succeed while tapping a set of processes that never actually emits
+  // audio (the exact "clean start, zero chunks" failure mode this whole
+  // multi-pid change exists to fix). Surfacing which pids actually got a
+  // valid Core Audio process object lets the JS layer log something a
+  // human can act on, instead of silence.
+  Napi::Object result = Napi::Object::New(env);
+  Napi::Array tappedArray = Napi::Array::New(env, tappedPids.size());
+  for (size_t i = 0; i < tappedPids.size(); i++) {
+    tappedArray.Set((uint32_t)i, Napi::Number::New(env, (double)tappedPids[i]));
+  }
+  result.Set("tappedPids", tappedArray);
+  result.Set("candidatePidCount", Napi::Number::New(env, (double)candidatePids.size()));
+  return result;
 }
 
 /** stopCapture(): void */

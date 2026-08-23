@@ -19,13 +19,19 @@ if (pid == null) {
 console.log(`found pid ${pid} for ${bundleId}, starting capture...`)
 let chunks = 0
 let totalSamples = 0
-native.startCapture(pid, (chunk) => {
+const startResult = native.startCapture(pid, (chunk) => {
   chunks++
   totalSamples += chunk.samples.length
   if (chunks % 20 === 0) {
     console.log(`chunk #${chunks}, sampleRate=${chunk.sampleRate}, timestampMs=${chunk.timestampMs}`)
   }
 })
+// tappedPids is the real diagnostic here: for a multi-process app (any
+// Chromium-family browser), this should be MORE than just [pid] — if it's
+// only the one pid you asked for, or 0 chunks show up in 5s despite a
+// non-empty tappedPids list, that's the exact "clean start, silent capture"
+// failure this field exists to catch. See audiotap.mm's PidsForSameApp.
+console.log(`tapped pids: [${(startResult?.tappedPids ?? []).join(', ')}] (${startResult?.candidatePidCount ?? '?'} candidates probed)`)
 
 setTimeout(() => {
   native.stopCapture()

@@ -25,8 +25,25 @@ export type NativeAudioChunk = {
   timestampMs: number
 }
 
+/** Diagnostics returned by a successful startCapture() — see
+ *  desktop/native-audio-tap/src/audiotap.mm's StartCapture: the native tap
+ *  now targets every process sharing the requested pid's .app bundle (a
+ *  single main-process pid, for a browser like Chrome, captures nothing —
+ *  the audio comes out of a helper subprocess), so knowing WHICH pids
+ *  actually resolved to a real Core Audio process object is the difference
+ *  between "capture started" and "capture started and will actually
+ *  produce audio." */
+export type AudioTapStartResult = {
+  /** Pids that resolved to a real Core Audio process object and are
+   *  genuinely part of the tap's mixdown. */
+  tappedPids: number[]
+  /** How many sibling pids (same .app bundle) were probed, tapped or not —
+   *  a huge gap between this and tappedPids.length can itself be a signal. */
+  candidatePidCount: number
+}
+
 export type NativeAudioTap = {
-  startCapture: (pid: number, onChunk: (c: NativeAudioChunk) => void) => void
+  startCapture: (pid: number, onChunk: (c: NativeAudioChunk) => void) => AudioTapStartResult | void
   stopCapture: () => void
 }
 
@@ -53,12 +70,17 @@ export class NotetakerSession {
     return this.active
   }
 
-  start(targetPid: number): void {
+  /** Returns the native tap's diagnostics (which pids actually got tapped),
+   *  or undefined if the underlying tap doesn't report any (e.g. a test
+   *  fake). Callers that want to log this should read the return value —
+   *  it is NOT stored on the session, to keep this class's own state
+   *  minimal. */
+  start(targetPid: number): AudioTapStartResult | undefined {
     if (this.active) {
       throw new Error('NotetakerSession already active — call stop() first')
     }
     try {
-      this.nativeAudioTap.startCapture(targetPid, (c) => {
+      const result = this.nativeAudioTap.startCapture(targetPid, (c) => {
         if (!this.active) return
         this.onChunk({
           source: 'system',
@@ -69,6 +91,7 @@ export class NotetakerSession {
         })
       })
       this.active = true
+      return result || undefined
     } catch (err) {
       this.active = false
       throw err

@@ -52,7 +52,7 @@ import path from 'path'
 import fs from 'fs'
 import { keyboardManager } from './keyboard'
 import { MeetingWatcher } from './meetingWatcher'
-import { NotetakerSession, type NativeAudioTap } from './notetakerSession'
+import { NotetakerSession, type NativeAudioTap, type AudioTapStartResult } from './notetakerSession'
 import { NotetakerController } from './notetakerController'
 import { readNowPlaying } from './mediaController'
 import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowser } from './browserTabWatcher'
@@ -458,7 +458,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   let micChunksReceived = 0
 
   class HookedNotetakerSession extends NotetakerSession {
-    start(pid: number): void {
+    start(pid: number): AudioTapStartResult | undefined {
       sessionStartedAt = Date.now()
       sessionMeetingId = newMeetingId()
       micChunksReceived = 0
@@ -479,8 +479,9 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       systemTracker = freshTracker()
       micEmitter = new PeriodicChunkEmitter(makeChunkHandler('mic', micTracker, meetingDir, mlog))
       systemEmitter = new PeriodicChunkEmitter(makeChunkHandler('system', systemTracker, meetingDir, mlog))
+      let tapResult: AudioTapStartResult | undefined
       try {
-        super.start(pid) // throws if the tap won't start — no placeholder row in that case
+        tapResult = super.start(pid) // throws if the tap won't start — no placeholder row in that case
       } catch (e) {
         mlog.error('native audio tap failed to start — capture did not begin (likely a TCC "System Audio Recording Only" denial)', {
           targetPid: pid,
@@ -488,7 +489,27 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         })
         throw e
       }
-      mlog.event('capture-started', { targetPid: pid, meetingDir })
+      // The tap can start cleanly and still capture NOTHING, if every pid it
+      // resolved to belongs to a process that never emits audio itself (the
+      // "clean start, zero chunks" failure mode this diagnostic exists to
+      // catch — see audiotap.mm's PidsForSameApp). tappedPids.length === 0
+      // here would be surprising (start() should have thrown instead), so
+      // it's logged as an error, not just a debug note.
+      if (tapResult && tapResult.tappedPids.length === 0) {
+        mlog.error('native audio tap started but resolved ZERO tappable processes — system audio will not be captured', {
+          targetPid: pid,
+          candidatePidCount: tapResult.candidatePidCount,
+        })
+      } else if (tapResult) {
+        mlog.event('capture-started', {
+          targetPid: pid,
+          meetingDir,
+          tappedPids: tapResult.tappedPids,
+          candidatePidCount: tapResult.candidatePidCount,
+        })
+      } else {
+        mlog.event('capture-started', { targetPid: pid, meetingDir })
+      }
       // A PLACEHOLDER ROW, WRITTEN IMMEDIATELY. Until this existed, the
       // meetings row was only inserted at the very END of
       // persistSession(), so an app quit or crash mid-meeting
@@ -519,6 +540,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         mlog.error('could not write the in-progress meeting row', { error: (e as Error).message })
       }
       hooks.onSessionStart?.()
+      return tapResult
     }
     stop(): void {
       const wasActive = this.isActive

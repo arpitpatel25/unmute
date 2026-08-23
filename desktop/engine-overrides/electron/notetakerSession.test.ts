@@ -110,6 +110,25 @@ describe('NotetakerSession', () => {
     assert.throws(() => session.start(4242))
   })
 
+  test('start() returns the native tap\'s diagnostics (tappedPids/candidatePidCount) when the tap reports them', () => {
+    const diagnosticTap = {
+      startCapture: (_pid: number, _onChunk: (c: NativeAudioChunk) => void) => {
+        return { tappedPids: [4242, 4243, 4244], candidatePidCount: 5 }
+      },
+      stopCapture: () => {},
+    }
+    const session = new NotetakerSession(diagnosticTap, () => {})
+    const result = session.start(4242)
+    assert.deepEqual(result, { tappedPids: [4242, 4243, 4244], candidatePidCount: 5 })
+  })
+
+  test('start() returns undefined when the native tap reports no diagnostics (e.g. a bare test fake)', () => {
+    const fake = fakeNativeAudioTap()
+    const session = new NotetakerSession(fake.tap, () => {})
+    const result = session.start(4242)
+    assert.equal(result, undefined)
+  })
+
   test('start() resets isActive to false if native startCapture throws synchronously, and a retry is possible', () => {
     let shouldThrow = true
     const throwingTap = {
