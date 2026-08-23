@@ -54,6 +54,7 @@ import { NotetakerSession, type NativeAudioTap } from './notetakerSession'
 import { NotetakerController } from './notetakerController'
 import { readNowPlaying } from './mediaController'
 import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowser } from './browserTabWatcher'
+import { ChunkBuffer } from './notetaker/chunkBuffer'
 
 export type NotetakerInitHooks = {
   /** Called exactly when REAL capture starts/stops — from
@@ -88,6 +89,31 @@ interface NativeAx {
   frontmostApp(): string
   listApps(): Array<{ name: string; bundleId: string; pid: number; windowsHere: number; windowsAnywhere: number }>
 }
+
+/**
+ * `transcribeAndPersistSession`/`newMeetingId` live in
+ * `./notetaker/transcribeSession.ts` — itself an OSS-overlay-adjacent file
+ * that imports `../db` and `../paywall/paywall-route`, both overlay-only
+ * modules that only resolve post-`wire-into-engine.sh` (see
+ * tsconfig.typecheck.json's own "OSS-ENGINE OVERLAY FILES" comment, which
+ * already excludes transcribeSession.ts from the typechecked program for
+ * exactly this reason). A plain `import` here would pull that whole
+ * unresolvable chain back into the program transitively THROUGH
+ * notetakerInit.ts, which the same tsconfig documents as deliberately
+ * NOT excludable (it's the anchor file the include exists for) — verified
+ * by trying the plain-import form first: it reintroduces the exact 3 errors
+ * (db.ts x2, paywall-route.ts x1) task-5-report.md already hit one level
+ * down. Loaded via `require()` + a hand-written interface instead, same
+ * pattern as loadNativeAx()/nativeAudioTap below — this is a same-tree
+ * sibling file that always exists (unlike the native addons), so this is
+ * purely a typecheck-scoping device, not an availability guard.
+ */
+interface TranscribeSessionModule {
+  transcribeAndPersistSession: (buffer: ChunkBuffer, meetingId: string, startedAt: number, endedAt: number) => Promise<void>
+  newMeetingId: () => string
+}
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { transcribeAndPersistSession, newMeetingId } = require('./notetaker/transcribeSession') as TranscribeSessionModule
 
 function loadNativeAx(): NativeAx | null {
   try {
@@ -186,22 +212,41 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // "hook == real transition" invariant (harmless today since
   // hideNotetakerWidget() is itself idempotent, but not something to rely
   // on staying harmless).
+  // Chunk accumulation + post-capture transcription (Tasks 2 and 5). A
+  // session's worth of audio chunks feeds `chunkBuffer` via `onChunk` below;
+  // `HookedNotetakerSession.start()` swaps in a FRESH buffer (and records
+  // `sessionStartedAt`) BEFORE calling `super.start()`, so any chunks that
+  // arrive synchronously during super.start() land in the new buffer, not a
+  // stale one left over from a previous session. `stop()` hands the
+  // just-finished buffer off to `transcribeAndPersistSession()` — fired and
+  // forgotten from stop()'s own perspective (stop() stays synchronous / never
+  // blocks the caller on transcription finishing), but with a `.catch()` so
+  // a rejection is logged instead of becoming a silent unhandled rejection.
+  let chunkBuffer = new ChunkBuffer()
+  let sessionStartedAt = 0
+
   class HookedNotetakerSession extends NotetakerSession {
     start(pid: number): void {
+      chunkBuffer = new ChunkBuffer()
+      sessionStartedAt = Date.now()
       super.start(pid)
       hooks.onSessionStart?.()
     }
     stop(): void {
       const wasActive = this.isActive
       super.stop()
-      if (wasActive) hooks.onSessionStop?.()
+      if (wasActive) {
+        hooks.onSessionStop?.()
+        const endedAt = Date.now()
+        transcribeAndPersistSession(chunkBuffer, newMeetingId(), sessionStartedAt, endedAt).catch((e) => {
+          console.error('[notetaker] failed to transcribe/persist session:', (e as Error).message)
+        })
+      }
     }
   }
-  // Captured chunks have no downstream consumer yet — Tasks 1-9 built
-  // detection + capture only (see the spec's own title); an actual notes
-  // composer/transcript/persistence layer is not part of this plan. This is
-  // a deliberate placeholder, not a forgotten wire-up.
-  const session = new HookedNotetakerSession(nativeAudioTap, () => {})
+  const session = new HookedNotetakerSession(nativeAudioTap, (chunk) => {
+    chunkBuffer.feed(chunk)
+  })
 
   const controller = new NotetakerController({
     session,
