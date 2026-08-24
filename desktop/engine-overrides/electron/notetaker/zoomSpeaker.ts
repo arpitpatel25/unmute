@@ -14,13 +14,21 @@
 // the exact label pattern Zoom uses for "this person is talking" is a
 // documented guess, not a confirmed fact.
 //
-// This ships with every candidate node it examined captured in
-// rawCandidates specifically so a real capture's notetaker log (which logs
-// this function's full result on every poll — see notetakerInit.ts) can be
-// read after a real Zoom call to see what the tree actually contains, and
-// this heuristic can be tuned from real data in a fast follow-up round —
-// the same "ship instrumented, verify from real logs, fix" loop that found
-// and fixed this session's real audio-tap bugs.
+// This ships with full diagnostics captured on every call — not just the
+// nodes that happened to match the heuristic's regex, but EVERY node the
+// walk returned, plus whether Zoom resolved at all — specifically so a real
+// capture's notetaker log (see notetakerInit.ts, which dumps allNodes in
+// full on a session's first poll, and the lightweight scalar fields on
+// every poll after that) can be read after a real Zoom call to see what the
+// tree actually contains, and this heuristic can be tuned from real data in
+// a fast follow-up round. An earlier version of this function only returned
+// nodes that already matched the regex in rawCandidates — which meant that
+// exactly when the heuristic was wrong (the case this instrumentation
+// exists for), every poll produced an empty result indistinguishable from
+// "Zoom wasn't running at all" or "Zoom resolved but the window index was
+// wrong." allNodes/nodesReturned/totalWalked/axError close that gap: they
+// let a human tell those three failure modes apart from the log alone,
+// instead of learning nothing from a real call and having to guess again.
 
 export type NativeAxFindResult = {
   app: string
@@ -37,13 +45,30 @@ export type SpeakerPollResult = {
   speakerName: string | null
   candidateCount: number
   rawCandidates: Array<{ role: string; label: string }>
+  /** Every node the walk returned, not just regex matches — see header
+   *  comment. Large; callers should log this in full only occasionally
+   *  (e.g. a session's first poll), not on every tick. */
+  allNodes: Array<{ role: string; label: string }>
+  /** How many nodes the walk returned. 0 with a non-null axError means Zoom
+   *  wasn't resolved at all; 0 with axError null and candidateCount 0 means
+   *  Zoom resolved fine but nothing in its tree matched the heuristic. */
+  nodesReturned: number
+  /** ax.find()'s own reported total, surfaced separately from
+   *  nodesReturned in case a future native-ax version ever returns fewer
+   *  nodes than it walked (it doesn't today, but nothing here should assume
+   *  that stays true). */
+  totalWalked: number
+  /** ax.find()'s own error field, verbatim, or null. */
+  axError: string | null
 }
 
 // Common screen-reader conventions for indicating an active speaker —
 // documented guess, see header comment.
 const SPEAKING_HINT = /\bis speaking\b|\bspeaking now\b|\bactive speaker\b|\btalking\b/i
 
-const EMPTY_RESULT: SpeakerPollResult = { speakerName: null, candidateCount: 0, rawCandidates: [] }
+function emptyResult(nodesReturned: number, totalWalked: number, axError: string | null): SpeakerPollResult {
+  return { speakerName: null, candidateCount: 0, rawCandidates: [], allNodes: [], nodesReturned, totalWalked, axError }
+}
 
 export function pollZoomSpeaker(ax: NativeAxLike): SpeakerPollResult {
   // The whole body is guarded, not just ax.find() — this function is typed
@@ -54,12 +79,16 @@ export function pollZoomSpeaker(ax: NativeAxLike): SpeakerPollResult {
   // capture session — an uncaught throw here would crash that timer.
   try {
     const found = ax.find('zoom.us', '', '')
-    if (found.error || !Array.isArray(found.nodes)) return EMPTY_RESULT
+    if (found.error || !Array.isArray(found.nodes)) {
+      return emptyResult(0, found.total ?? 0, found.error ?? null)
+    }
 
+    const allNodes = found.nodes.filter((n) => !!n).map((n) => ({ role: n.role, label: n.label }))
     const candidates = found.nodes.filter((n) => n && SPEAKING_HINT.test(n.label ?? ''))
     const rawCandidates = candidates.map((n) => ({ role: n.role, label: n.label }))
+    const base = { allNodes, nodesReturned: found.nodes.length, totalWalked: found.total, axError: null as string | null }
     if (candidates.length === 0) {
-      return { speakerName: null, candidateCount: 0, rawCandidates }
+      return { speakerName: null, candidateCount: 0, rawCandidates, ...base }
     }
 
     // Strip the matched hint phrase and any surrounding punctuation/parens
@@ -75,8 +104,9 @@ export function pollZoomSpeaker(ax: NativeAxLike): SpeakerPollResult {
       speakerName: rawName.length > 0 ? rawName : null,
       candidateCount: candidates.length,
       rawCandidates,
+      ...base,
     }
   } catch {
-    return EMPTY_RESULT
+    return emptyResult(0, 0, null)
   }
 }

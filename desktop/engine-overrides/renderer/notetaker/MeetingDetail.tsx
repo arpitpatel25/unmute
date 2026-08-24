@@ -1,5 +1,8 @@
-// Meeting detail — transcript (mic segments "You", system segments "Them"),
-// audio playback for whichever channel(s) still have audio (hidden once the
+// Meeting detail — transcript (mic segments "You"; system segments show a
+// real attributed speaker name when known — Zoom calls only, read from
+// Zoom's own accessibility tree, see zoomSpeaker.ts — falling back to
+// generic "Them" otherwise, same as before that existed), audio playback
+// for whichever channel(s) still have audio (hidden once the
 // 24h sweep has removed a channel's file — notetaker:get-audio-url returns
 // null in that case), an editable title, and delete. `initialTitle` comes
 // from MeetingsList's already-fetched row rather than a redundant IPC round

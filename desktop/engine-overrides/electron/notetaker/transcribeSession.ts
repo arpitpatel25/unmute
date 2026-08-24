@@ -150,6 +150,7 @@ export async function persistSession(
   audioMicPath: string | null,
   audioSystemPath: string | null,
   zoomSpeakerSamples: SpeakerSample[] = [],
+  wasZoomSession = false,
 ): Promise<void> {
   const mlog = log.child({ meetingId })
   const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
@@ -180,7 +181,15 @@ export async function persistSession(
 
   const systemSegmentCount = attributedSegments.filter((s) => s.channel === 'system').length
   const attributedCount = attributedSegments.filter((s) => s.channel === 'system' && s.speakerName).length
+  // wasZoomSession distinguishes "not a Zoom call — attribution never
+  // applies here, zero samples is expected" from "was a Zoom call, polled,
+  // learned nothing" (a real problem worth investigating from
+  // zoom-speaker-poll's own per-poll diagnostics in the notetaker log) —
+  // without it, both cases logged identically as zero samples/zero
+  // attributed, which is exactly what a whole-plan review flagged as
+  // undermining this feature's own "verify from real logs" strategy.
   mlog.event('speaker-attribution-summary', {
+    wasZoomSession,
     zoomSpeakerSamplesCollected: zoomSpeakerSamples.length,
     systemSegmentCount,
     attributedCount,

@@ -66,4 +66,50 @@ describe('pollZoomSpeaker', () => {
     const result = pollZoomSpeaker(ax)
     assert.equal(result.speakerName, null)
   })
+
+  // Diagnostics — added after a whole-plan review found that rawCandidates
+  // alone (only nodes matching the heuristic) is useless for diagnosing
+  // exactly the case it exists for: a wrong heuristic, where every poll
+  // would otherwise look identically empty regardless of whether Zoom
+  // wasn't running, resolved but returned nothing, or resolved and returned
+  // plenty of nodes that just didn't match the regex.
+
+  test('allNodes contains every node the walk returned, not just regex matches', () => {
+    const ax = fakeAx([
+      { id: 1, role: 'AXButton', label: 'Mute', actions: [] },
+      { id: 2, role: 'AXStaticText', label: 'Participants (4)', actions: [] },
+    ])
+    const result = pollZoomSpeaker(ax)
+    assert.equal(result.allNodes.length, 2)
+    assert.deepEqual(result.allNodes, [
+      { role: 'AXButton', label: 'Mute' },
+      { role: 'AXStaticText', label: 'Participants (4)' },
+    ])
+  })
+
+  test('nodesReturned/totalWalked reflect a real, non-empty tree even when nothing matches', () => {
+    const ax = fakeAx([
+      { id: 1, role: 'AXButton', label: 'Mute', actions: [] },
+      { id: 2, role: 'AXButton', label: 'Leave', actions: [] },
+    ])
+    const result = pollZoomSpeaker(ax)
+    assert.equal(result.candidateCount, 0)
+    assert.equal(result.nodesReturned, 2) // distinguishes "resolved, found nothing" from "never resolved"
+    assert.equal(result.totalWalked, 2)
+    assert.equal(result.axError, null)
+  })
+
+  test('an ax.find() error surfaces verbatim in axError, with nodesReturned 0', () => {
+    const ax: NativeAxLike = { find: () => ({ app: 'zoom.us', nodes: [], total: 0, error: "app 'zoom.us' is not running" }) }
+    const result = pollZoomSpeaker(ax)
+    assert.equal(result.axError, "app 'zoom.us' is not running")
+    assert.equal(result.nodesReturned, 0)
+    assert.equal(result.allNodes.length, 0)
+  })
+
+  test('an empty node list (Zoom resolved, zero nodes) has axError null, not confused with a real error', () => {
+    const result = pollZoomSpeaker(fakeAx([]))
+    assert.equal(result.axError, null)
+    assert.equal(result.nodesReturned, 0)
+  })
 })

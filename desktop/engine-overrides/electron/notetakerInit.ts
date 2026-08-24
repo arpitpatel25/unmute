@@ -83,11 +83,24 @@ export type NotetakerInitHooks = {
  * see its own file header: "AX tree walks can take up to the 8s messaging
  * timeout... running them on the Electron MAIN thread would block it") —
  * that file is cross-tree from here the same way notetakerWidget.ts is.
+ *
  * frontmostApp()/listApps() are cheap NSWorkspace/CGWindowList enumerations
  * (native-ax/src/ax.mm:364,379 — no AX tree walk at all), fast enough to
  * call directly and synchronously on the main thread, same as this file's
  * sibling mediaController.ts's synchronous-feeling (if child-process-backed)
  * readNowPlaying().
+ *
+ * `find` is DIFFERENT and does NOT get that same justification — it IS a
+ * real synchronous AX-tree walk (native-ax/src/ax.mm's withNodes, up to 4000
+ * nodes with an 8s per-element messaging timeout), exactly the class of call
+ * ax-bridge.ts exists to keep off the main thread. It was added here anyway
+ * (for Zoom active-speaker polling, see zoomSpeaker.ts) rather than routed
+ * through ax-bridge, accepting the main-thread cost as a known, deliberate
+ * tradeoff — mitigated by throttling the poll interval, NOT by this being
+ * cheap the way frontmostApp()/listApps() are. See the Zoom-speaker-poll
+ * setInterval below for the throttling rationale. Routing this through
+ * ax-bridge instead is a real, larger follow-up worth doing if the
+ * throttled cadence proves too coarse in practice.
  */
 interface NativeAx {
   /** Returns the frontmost app's localizedName as a plain STRING — NOT an
@@ -476,6 +489,11 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   // can never corrupt a still-in-flight previous session's persist chain.
   let zoomSpeakerSamples: SpeakerSample[] = []
   let zoomSpeakerPollTimer: ReturnType<typeof setInterval> | null = null
+  /** Whether the CURRENT session was recognized as Zoom — same per-session
+   *  reset/snapshot discipline as zoomSpeakerSamples, so stop()'s summary
+   *  log can distinguish "not a Zoom call" from "was a Zoom call, polled,
+   *  learned nothing" instead of both looking identical (zero samples). */
+  let zoomSessionActive = false
   let sessionStartedAt = 0
   // Allocated at START, not at stop: the meeting's DB row is now written the
   // moment capture begins (see below), so the id has to exist that early and
@@ -558,21 +576,45 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       // being safe by construction here.
       const samples: SpeakerSample[] = []
       zoomSpeakerSamples = samples
-      const isZoomSession = zoomAx.listApps().some((a) => a.pid === pid && a.bundleId === ZOOM_BUNDLE_ID)
+      // Guarded like resolveTargetPid's own listApps() call a few dozen
+      // lines up — this file already treats that call as throwable, and an
+      // uncaught throw HERE would propagate out of start() after the tap is
+      // already live (active=true), skipping both the placeholder DB row
+      // and hooks.onSessionStart?.() (the widget/mic) below — a much larger
+      // blast radius than losing Zoom speaker attribution for one session.
+      let isZoomSession = false
+      try {
+        isZoomSession = zoomAx.listApps().some((a) => a.pid === pid && a.bundleId === ZOOM_BUNDLE_ID)
+      } catch (e) {
+        mlog.warn('could not determine whether this is a Zoom session — speaker attribution disabled for it', {
+          error: (e as Error).message,
+        })
+      }
+      zoomSessionActive = isZoomSession
       if (isZoomSession) {
-        const ZOOM_SPEAKER_POLL_MS = 2500
+        // 12s, matching pollMeetingSignal's own throttled-while-active
+        // cadence below (3000ms * ACTIVE_CAPTURE_POLL_DIVISOR) — NOT a
+        // lighter version of the same "poll frequently, skip most ticks"
+        // pattern, because unlike pollMeetingSignal there is no cheap
+        // per-tick work this timer needs to keep doing on a skipped tick
+        // (no debounce window to feed) — so the interval itself is just
+        // set to the safe cadence directly. pollZoomSpeaker's AX-tree walk
+        // is NOT cheap the way frontmostApp()/listApps() are (see the
+        // NativeAx interface's own header comment) — it is exactly the
+        // "heavy main-process work during a hot capture" class of call
+        // pollMeetingSignal's own comment below warns can corrupt audio,
+        // so it gets the same cadence, not a faster one.
+        const ZOOM_SPEAKER_POLL_MS = 12000
         let lastLoggedSpeaker: string | null | undefined = undefined // undefined = never logged yet
+        let firstPoll = true
         zoomSpeakerPollTimer = setInterval(() => {
           // Same "never do heavy main-process work while a capture is hot"
-          // constraint pollMeetingSignal already documents below — an
-          // AX-tree walk is exactly that kind of work, and this runs at a
-          // SHORTER interval than pollMeetingSignal's own throttled-while-
-          // active cadence, so it gets the same otherCaptureActive gate.
+          // constraint pollMeetingSignal documents below.
           if (otherCaptureActive) return
           // Stamped before the walk, not after — pollZoomSpeaker's AX walk
           // can take real time (up to an 8s messaging timeout in the
           // native addon), and a sample timestamped after a slow walk could
-          // land in the wrong transcript segment once Task 4 does
+          // land in the wrong transcript segment given Task 4's
           // startMs<=t<=endMs range matching.
           const timestampMs = Date.now()
           // `zoomAx: NativeAx` (now including `find`, per the interface
@@ -580,22 +622,29 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
           // NativeAxLike — no cast needed.
           const result = pollZoomSpeaker(zoomAx)
           samples.push({ speakerName: result.speakerName, timestampMs })
-          // Change-only logging for the resolved name (same convention as
-          // pollMeetingSignal's meeting-signal sample changed below), but
-          // always include rawCandidates when there's anything to show —
-          // this raw data is the whole point, see zoomSpeaker.ts's header
-          // comment. TODO: drop to change-only once the label heuristic is
-          // tuned from a real call's log data — this is deliberately
-          // verbose for exactly that one-time tuning pass, not meant to
-          // stay this chatty long-term.
-          if (result.speakerName !== lastLoggedSpeaker || result.candidateCount > 0) {
-            lastLoggedSpeaker = result.speakerName
-            mlog.debug('zoom-speaker-poll', {
-              speakerName: result.speakerName,
-              candidateCount: result.candidateCount,
-              rawCandidates: result.rawCandidates,
-            })
+          // Lightweight scalar diagnostics on EVERY poll (cheap, and the
+          // whole reason they exist — see zoomSpeaker.ts's header comment
+          // — is to tell apart "Zoom never resolved" (axError set) from
+          // "resolved, found nodes, none matched" (nodesReturned>0,
+          // candidateCount 0) from "resolved, found nothing at all"
+          // (nodesReturned 0, axError null), none of which a change-only
+          // log of just speakerName could distinguish). The full node list
+          // is NOT logged every poll (too large over a whole meeting) —
+          // only once, on the session's first poll, which is enough to see
+          // the real tree shape for tuning the heuristic afterward.
+          if (firstPoll) {
+            firstPoll = false
+            mlog.debug('zoom-speaker-poll-first-tree-dump', { allNodes: result.allNodes })
           }
+          if (result.speakerName !== lastLoggedSpeaker) lastLoggedSpeaker = result.speakerName
+          mlog.debug('zoom-speaker-poll', {
+            speakerName: result.speakerName,
+            candidateCount: result.candidateCount,
+            rawCandidates: result.rawCandidates,
+            nodesReturned: result.nodesReturned,
+            totalWalked: result.totalWalked,
+            axError: result.axError,
+          })
         }, ZOOM_SPEAKER_POLL_MS)
         zoomSpeakerPollTimer.unref()
       }
@@ -653,6 +702,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         zoomSpeakerPollTimer = null
       }
       const speakerSamplesForThisSession = zoomSpeakerSamples
+      const wasZoomSession = zoomSessionActive
       const mlog = log.child({ meetingId })
       mlog.event('capture-stop-requested', { wasActive })
       super.stop()
@@ -715,6 +765,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
               mic.audioFileName,
               system.audioFileName,
               speakerSamplesForThisSession,
+              wasZoomSession,
             )
           })
           .catch((e) => {
