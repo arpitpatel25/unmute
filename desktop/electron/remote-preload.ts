@@ -174,6 +174,7 @@ export interface NotetakerTranscriptSegment {
   text: string
   startMs: number
   endMs: number
+  speakerName?: string | null
 }
 
 export const remotePreloadExtensions = {

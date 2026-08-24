@@ -16,6 +16,7 @@ type NotetakerTranscriptSegment = {
   text: string
   startMs: number
   endMs: number
+  speakerName?: string | null
 }
 
 type API = {
@@ -151,7 +152,9 @@ export function MeetingDetail({
         {segments?.length === 0 && <p className="text-ink-60 text-sm">No transcript available.</p>}
         {segments?.map((seg, i) => (
           <div key={i} className="text-[13px] leading-relaxed">
-            <span className="font-semibold text-ink">{seg.channel === 'mic' ? 'You: ' : 'Them: '}</span>
+            <span className="font-semibold text-ink">
+              {seg.channel === 'mic' ? 'You' : (seg.speakerName || 'Them')}:{' '}
+            </span>
             <span className="text-ink">{seg.text}</span>
           </div>
         ))}
