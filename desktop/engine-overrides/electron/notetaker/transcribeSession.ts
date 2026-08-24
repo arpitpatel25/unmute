@@ -5,7 +5,7 @@ import path from 'node:path'
 import { tryManagedSTT } from '../paywall/paywall-route'
 import { encodeWav } from './wavEncoder'
 import { downmixAndResample } from './resample'
-import { mergeChannelChunks, generateTitle, type TranscriptSegment, type TimedChunkText } from './transcriptMerge'
+import { mergeChannelChunks, generateTitle, attributeSpeakers, type TranscriptSegment, type TimedChunkText, type SpeakerSample } from './transcriptMerge'
 import { insertMeeting, type DBMeeting } from '../db'
 import { createNotetakerLogger } from './notetakerLog'
 
@@ -149,18 +149,20 @@ export async function persistSession(
   failed: boolean,
   audioMicPath: string | null,
   audioSystemPath: string | null,
+  zoomSpeakerSamples: SpeakerSample[] = [],
 ): Promise<void> {
   const mlog = log.child({ meetingId })
   const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
   fs.mkdirSync(meetingDir, { recursive: true })
 
   const segments: TranscriptSegment[] = mergeChannelChunks(micChunks, systemChunks)
-  const title = generateTitle(segments)
+  const attributedSegments = attributeSpeakers(segments, zoomSpeakerSamples)
+  const title = generateTitle(attributedSegments)
 
   const transcriptPath = 'transcript.json'
   const target = path.join(meetingDir, transcriptPath)
   const temp = `${target}.${process.pid}.tmp`
-  fs.writeFileSync(temp, JSON.stringify(segments), 'utf8')
+  fs.writeFileSync(temp, JSON.stringify(attributedSegments), 'utf8')
   fs.renameSync(temp, target)
 
   const status: DBMeeting['status'] = failed ? 'failed' : 'ready'
@@ -171,9 +173,17 @@ export async function persistSession(
     durationMs: endedAt - startedAt,
     micChunkCount: micChunks.length,
     systemChunkCount: systemChunks.length,
-    segmentCount: segments.length,
+    segmentCount: attributedSegments.length,
     hasMicAudio: !!audioMicPath,
     hasSystemAudio: !!audioSystemPath,
+  })
+
+  const systemSegmentCount = attributedSegments.filter((s) => s.channel === 'system').length
+  const attributedCount = attributedSegments.filter((s) => s.channel === 'system' && s.speakerName).length
+  mlog.event('speaker-attribution-summary', {
+    zoomSpeakerSamplesCollected: zoomSpeakerSamples.length,
+    systemSegmentCount,
+    attributedCount,
   })
 
   insertMeeting({
