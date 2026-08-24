@@ -1,4 +1,4 @@
-export type TranscriptSegment = { channel: 'mic' | 'system'; text: string; startMs: number; endMs: number }
+export type TranscriptSegment = { channel: 'mic' | 'system'; text: string; startMs: number; endMs: number; speakerName?: string | null }
 
 /**
  * Merges the two channels' whole-recording transcripts into ordered
@@ -53,4 +53,41 @@ export function generateTitle(segments: TranscriptSegment[]): string {
     return first.text
   }
   return first.text.slice(0, MAX_TITLE_LENGTH).trim()
+}
+
+export type SpeakerSample = { speakerName: string | null; timestampMs: number }
+
+/**
+ * Attributes each system-channel segment to whichever speaker was sampled
+ * for the largest share of that segment's [startMs, endMs] window
+ * (majority vote by count of in-range samples — samples arrive on a
+ * roughly-fixed poll interval, so sample count is a fair proxy for time
+ * share). Mic segments are never touched — they're always "You," no
+ * attribution needed. Ties go to whichever candidate was sampled first
+ * (Map insertion order), deterministic rather than arbitrary.
+ *
+ * Pure — does not mutate its inputs. See
+ * docs/superpowers/specs/2026-08-24-notetaker-speaker-attribution.md §3.2.
+ */
+export function attributeSpeakers(
+  segments: TranscriptSegment[],
+  samples: SpeakerSample[]
+): TranscriptSegment[] {
+  return segments.map((seg) => {
+    if (seg.channel !== 'system') return seg
+    const inRange = samples.filter(
+      (s) => s.timestampMs >= seg.startMs && s.timestampMs <= seg.endMs && s.speakerName
+    )
+    if (inRange.length === 0) return { ...seg, speakerName: null }
+    const counts = new Map<string, number>()
+    for (const s of inRange) {
+      counts.set(s.speakerName as string, (counts.get(s.speakerName as string) ?? 0) + 1)
+    }
+    let winner: string | null = null
+    let winnerCount = 0
+    for (const [name, count] of counts) {
+      if (count > winnerCount) { winner = name; winnerCount = count }
+    }
+    return { ...seg, speakerName: winner }
+  })
 }
