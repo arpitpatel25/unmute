@@ -4,8 +4,14 @@
  * IDs (Chrome, Safari, etc.) are deliberately excluded here — a browser
  * running is not itself a meeting signal; see isMeetingTabUrl for that case.
  */
+/** Named separately (not just the array entry below) so other files that
+ *  need to identify Zoom specifically — e.g. the notetaker's Zoom
+ *  active-speaker poller — import one canonical constant instead of
+ *  duplicating the literal string, which would otherwise be free to drift. */
+export const ZOOM_BUNDLE_ID = 'us.zoom.xos'
+
 export const MEETING_APP_BUNDLE_IDS: readonly string[] = [
-  'us.zoom.xos', // Zoom desktop
+  ZOOM_BUNDLE_ID, // Zoom desktop
   'com.microsoft.teams2', // Teams (new)
   'com.microsoft.teams', // Teams (classic)
   'Cisco-Systems.Spark', // Webex

@@ -61,6 +61,7 @@ import { encodeChunk, transcribeEncodedChunk, persistSession, newMeetingId } fro
 import type { TimedChunkText, SpeakerSample } from './notetaker/transcriptMerge'
 import { WavAppender } from './notetaker/wavAppender'
 import { pollZoomSpeaker } from './notetaker/zoomSpeaker'
+import { ZOOM_BUNDLE_ID } from './meetingApps'
 import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting } from './db'
 import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
 
@@ -543,22 +544,50 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       // function before reaching here, so no interval is ever left running
       // for a session that never began). Placed after the tap-start
       // try/catch, not before it, for exactly that reason.
-      zoomSpeakerSamples = []
-      const isZoomSession = zoomAx.listApps().some((a) => a.pid === pid && a.bundleId === 'us.zoom.xos')
+      // A fresh array object, not an in-place clear — critical so that the
+      // `speakerSamplesForThisSession` const snapshotted in a PREVIOUS
+      // session's stop() (see below) keeps pointing at that session's own
+      // array forever, even after this line reassigns the outer `let` for
+      // the new session. The interval below closes over THIS local
+      // `samples` binding, not the reassignable outer `zoomSpeakerSamples`
+      // — the same "capture the object, don't re-read a reassignable outer
+      // variable" discipline this file's makeChunkHandler/tracker pattern
+      // already uses, and for the identical reason: without it, correctness
+      // would depend on invariants living in a different file/function
+      // (NotetakerSession refusing a second concurrent start()) rather than
+      // being safe by construction here.
+      const samples: SpeakerSample[] = []
+      zoomSpeakerSamples = samples
+      const isZoomSession = zoomAx.listApps().some((a) => a.pid === pid && a.bundleId === ZOOM_BUNDLE_ID)
       if (isZoomSession) {
         const ZOOM_SPEAKER_POLL_MS = 2500
         let lastLoggedSpeaker: string | null | undefined = undefined // undefined = never logged yet
         zoomSpeakerPollTimer = setInterval(() => {
+          // Same "never do heavy main-process work while a capture is hot"
+          // constraint pollMeetingSignal already documents below — an
+          // AX-tree walk is exactly that kind of work, and this runs at a
+          // SHORTER interval than pollMeetingSignal's own throttled-while-
+          // active cadence, so it gets the same otherCaptureActive gate.
+          if (otherCaptureActive) return
+          // Stamped before the walk, not after — pollZoomSpeaker's AX walk
+          // can take real time (up to an 8s messaging timeout in the
+          // native addon), and a sample timestamped after a slow walk could
+          // land in the wrong transcript segment once Task 4 does
+          // startMs<=t<=endMs range matching.
+          const timestampMs = Date.now()
           // `zoomAx: NativeAx` (now including `find`, per the interface
           // extension above) structurally satisfies zoomSpeaker.ts's
           // NativeAxLike — no cast needed.
           const result = pollZoomSpeaker(zoomAx)
-          zoomSpeakerSamples.push({ speakerName: result.speakerName, timestampMs: Date.now() })
+          samples.push({ speakerName: result.speakerName, timestampMs })
           // Change-only logging for the resolved name (same convention as
           // pollMeetingSignal's meeting-signal sample changed below), but
           // always include rawCandidates when there's anything to show —
           // this raw data is the whole point, see zoomSpeaker.ts's header
-          // comment.
+          // comment. TODO: drop to change-only once the label heuristic is
+          // tuned from a real call's log data — this is deliberately
+          // verbose for exactly that one-time tuning pass, not meant to
+          // stay this chatty long-term.
           if (result.speakerName !== lastLoggedSpeaker || result.candidateCount > 0) {
             lastLoggedSpeaker = result.speakerName
             mlog.debug('zoom-speaker-poll', {
