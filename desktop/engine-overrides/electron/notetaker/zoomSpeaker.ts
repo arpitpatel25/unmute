@@ -43,35 +43,40 @@ export type SpeakerPollResult = {
 // documented guess, see header comment.
 const SPEAKING_HINT = /\bis speaking\b|\bspeaking now\b|\bactive speaker\b|\btalking\b/i
 
+const EMPTY_RESULT: SpeakerPollResult = { speakerName: null, candidateCount: 0, rawCandidates: [] }
+
 export function pollZoomSpeaker(ax: NativeAxLike): SpeakerPollResult {
-  let found: NativeAxFindResult
+  // The whole body is guarded, not just ax.find() — this function is typed
+  // against the abstract NativeAxLike interface, not the concrete addon, so
+  // "never throws" has to hold even against a malformed implementation (a
+  // node missing expected fields, etc.), not just the real addon's
+  // known-well-formed output. Called on a live poll timer during an active
+  // capture session — an uncaught throw here would crash that timer.
   try {
-    found = ax.find('zoom.us', '', '')
+    const found = ax.find('zoom.us', '', '')
+    if (found.error || !Array.isArray(found.nodes)) return EMPTY_RESULT
+
+    const candidates = found.nodes.filter((n) => n && SPEAKING_HINT.test(n.label ?? ''))
+    const rawCandidates = candidates.map((n) => ({ role: n.role, label: n.label }))
+    if (candidates.length === 0) {
+      return { speakerName: null, candidateCount: 0, rawCandidates }
+    }
+
+    // Strip the matched hint phrase and any surrounding punctuation/parens
+    // to recover just the name. First match wins — deterministic, not a
+    // guess at "most likely" when multiple candidates exist.
+    const rawName = candidates[0].label
+      .replace(SPEAKING_HINT, '')
+      .replace(/[(),.\-–—]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    return {
+      speakerName: rawName.length > 0 ? rawName : null,
+      candidateCount: candidates.length,
+      rawCandidates,
+    }
   } catch {
-    return { speakerName: null, candidateCount: 0, rawCandidates: [] }
-  }
-  if (found.error || !Array.isArray(found.nodes)) {
-    return { speakerName: null, candidateCount: 0, rawCandidates: [] }
-  }
-
-  const candidates = found.nodes.filter((n) => SPEAKING_HINT.test(n.label ?? ''))
-  const rawCandidates = candidates.map((n) => ({ role: n.role, label: n.label }))
-  if (candidates.length === 0) {
-    return { speakerName: null, candidateCount: 0, rawCandidates }
-  }
-
-  // Strip the matched hint phrase and any surrounding punctuation/parens to
-  // recover just the name. First match wins — deterministic, not a guess
-  // at "most likely" when multiple candidates exist.
-  const rawName = candidates[0].label
-    .replace(SPEAKING_HINT, '')
-    .replace(/[(),.\-–—]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  return {
-    speakerName: rawName.length > 0 ? rawName : null,
-    candidateCount: candidates.length,
-    rawCandidates,
+    return EMPTY_RESULT
   }
 }
