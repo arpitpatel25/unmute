@@ -58,8 +58,9 @@ import { readNowPlaying } from './mediaController'
 import { getActiveTabUrl, SUPPORTED_APPLESCRIPT_BROWSERS, type AppleScriptBrowser } from './browserTabWatcher'
 import { PeriodicChunkEmitter, type FinalizedSegment } from './notetaker/periodicChunkEmitter'
 import { encodeChunk, transcribeEncodedChunk, persistSession, newMeetingId } from './notetaker/transcribeSession'
-import type { TimedChunkText } from './notetaker/transcriptMerge'
+import type { TimedChunkText, SpeakerSample } from './notetaker/transcriptMerge'
 import { WavAppender } from './notetaker/wavAppender'
+import { pollZoomSpeaker } from './notetaker/zoomSpeaker'
 import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting } from './db'
 import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
 
@@ -97,6 +98,14 @@ interface NativeAx {
    *  fix). Confirmed by reading native-ax/src/ax.mm:379-384 directly. */
   frontmostApp(): string
   listApps(): Array<{ name: string; bundleId: string; pid: number; windowsHere: number; windowsAnywhere: number }>
+  /** Added for Zoom active-speaker polling — see zoomSpeaker.ts. Matches
+   *  unmute-native-ax's real find(app, label, role) signature. */
+  find(app: string, label: string, role: string): {
+    app: string
+    nodes: Array<{ id: number; role: string; label: string; actions: string[] }>
+    total: number
+    error?: string
+  }
 }
 
 function loadNativeAx(): NativeAx | null {
@@ -294,6 +303,17 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     })
     return
   }
+  // `ax` is narrowed to non-null by the guard above, but — like the
+  // hoisted-`function` case documented on pollMeetingSignal further down
+  // ("does not carry into a hoisted function's body... does carry into a
+  // const arrow function defined after the narrowing point") — that
+  // narrowing does NOT carry into HookedNotetakerSession's class methods
+  // below (confirmed by `tsc --strict`: `ax` reads back as `NativeAx | null`
+  // inside start()). Capturing it into a fresh const HERE, at the point
+  // where its type is fixed rather than merely narrowed, gives
+  // `zoomAx: NativeAx` a type that isn't control-flow-dependent, so it
+  // carries into any closure unconditionally — same object, no re-require.
+  const zoomAx: NativeAx = ax
 
   // Widget visibility must always match REAL capture state (not the
   // controller's detection/confirm logic), so it is wired here, at the one
@@ -448,6 +468,13 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   let systemTracker: ChannelTracker = freshTracker()
   let micEmitter = new PeriodicChunkEmitter(() => {})
   let systemEmitter = new PeriodicChunkEmitter(() => {})
+  // Zoom active-speaker polling state (Task 3 of the speaker-attribution
+  // plan). Per-session, exactly like micTracker/systemTracker above: reset
+  // fresh in start(), snapshotted into a local const in stop() before any
+  // async work, so a subsequent start() reassigning `zoomSpeakerSamples`
+  // can never corrupt a still-in-flight previous session's persist chain.
+  let zoomSpeakerSamples: SpeakerSample[] = []
+  let zoomSpeakerPollTimer: ReturnType<typeof setInterval> | null = null
   let sessionStartedAt = 0
   // Allocated at START, not at stop: the meeting's DB row is now written the
   // moment capture begins (see below), so the id has to exist that early and
@@ -510,6 +537,39 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       } else {
         mlog.event('capture-started', { targetPid: pid, meetingDir })
       }
+      // Zoom active-speaker polling (Task 3 of the speaker-attribution
+      // plan) — only for a Zoom session, and only started once the tap has
+      // actually started above (a failed tap start throws out of this
+      // function before reaching here, so no interval is ever left running
+      // for a session that never began). Placed after the tap-start
+      // try/catch, not before it, for exactly that reason.
+      zoomSpeakerSamples = []
+      const isZoomSession = zoomAx.listApps().some((a) => a.pid === pid && a.bundleId === 'us.zoom.xos')
+      if (isZoomSession) {
+        const ZOOM_SPEAKER_POLL_MS = 2500
+        let lastLoggedSpeaker: string | null | undefined = undefined // undefined = never logged yet
+        zoomSpeakerPollTimer = setInterval(() => {
+          // `zoomAx: NativeAx` (now including `find`, per the interface
+          // extension above) structurally satisfies zoomSpeaker.ts's
+          // NativeAxLike — no cast needed.
+          const result = pollZoomSpeaker(zoomAx)
+          zoomSpeakerSamples.push({ speakerName: result.speakerName, timestampMs: Date.now() })
+          // Change-only logging for the resolved name (same convention as
+          // pollMeetingSignal's meeting-signal sample changed below), but
+          // always include rawCandidates when there's anything to show —
+          // this raw data is the whole point, see zoomSpeaker.ts's header
+          // comment.
+          if (result.speakerName !== lastLoggedSpeaker || result.candidateCount > 0) {
+            lastLoggedSpeaker = result.speakerName
+            mlog.debug('zoom-speaker-poll', {
+              speakerName: result.speakerName,
+              candidateCount: result.candidateCount,
+              rawCandidates: result.rawCandidates,
+            })
+          }
+        }, ZOOM_SPEAKER_POLL_MS)
+        zoomSpeakerPollTimer.unref()
+      }
       // A PLACEHOLDER ROW, WRITTEN IMMEDIATELY. Until this existed, the
       // meetings row was only inserted at the very END of
       // persistSession(), so an app quit or crash mid-meeting
@@ -553,6 +613,17 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
       const system = systemTracker
       const micEm = micEmitter
       const systemEm = systemEmitter
+      // Same snapshot-before-any-async-work discipline as mic/system/
+      // meetingId/startedAt above: clear this session's own poll timer
+      // (never a subsequent session's, since each start() creates its own
+      // via the outer `let`) and capture the samples array into a local
+      // const so a subsequent start() reassigning `zoomSpeakerSamples`
+      // can't corrupt this session's still-in-flight persist chain below.
+      if (zoomSpeakerPollTimer) {
+        clearInterval(zoomSpeakerPollTimer)
+        zoomSpeakerPollTimer = null
+      }
+      const speakerSamplesForThisSession = zoomSpeakerSamples
       const mlog = log.child({ meetingId })
       mlog.event('capture-stop-requested', { wasActive })
       super.stop()
@@ -614,6 +685,7 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
               micFailed || systemFailed,
               mic.audioFileName,
               system.audioFileName,
+              speakerSamplesForThisSession,
             )
           })
           .catch((e) => {
