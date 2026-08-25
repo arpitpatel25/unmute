@@ -157,6 +157,8 @@ export interface RemoteSetupStatus {
 // the shape here, the same way this file already does for every other
 // DB-backed snapshot type (RemoteTaskSnapshot, UnmuteMemorySnapshot, etc.),
 // keeps the import graph same-directory and correct both pre- and post-copy.
+export type NotetakerPipelineStatus = 'disabled' | 'pending' | 'success' | 'failed'
+
 export interface NotetakerMeetingSnapshot {
   id: string
   title: string
@@ -167,6 +169,10 @@ export interface NotetakerMeetingSnapshot {
   transcript_path: string | null
   audio_mic_path: string | null
   audio_system_path: string | null
+  cleanup_status: NotetakerPipelineStatus
+  summary_status: NotetakerPipelineStatus
+  cleaned_transcript_path: string | null
+  notes_path: string | null
 }
 
 export interface NotetakerTranscriptSegment {
@@ -175,6 +181,27 @@ export interface NotetakerTranscriptSegment {
   startMs: number
   endMs: number
   speakerName?: string | null
+}
+
+// Mirrors db.ts's NotetakerSettingsRow, same cross-tree-duplication reason
+// as NotetakerMeetingSnapshot above.
+export interface NotetakerPipelineSettings {
+  auto_pipeline_enabled: 0 | 1
+  provider: 'claude' | 'codex'
+  cleanup_prompt: string | null
+  summary_prompt: string | null
+  availability: { claude: boolean; codex: boolean }
+  default_cleanup_prompt: string
+  default_summary_prompt: string
+}
+
+// Mirrors notesSummary.ts's MeetingNotes, same reason.
+export interface NotetakerMeetingNotes {
+  title: string
+  summary: string
+  keyPoints: string[]
+  decisions: string[]
+  actionItems: string[]
 }
 
 export const remotePreloadExtensions = {
@@ -691,6 +718,31 @@ export const remotePreloadExtensions = {
    *  nothing to return, must never block the renderer on a log line. */
   notetakerWidgetLog: (level: 'debug' | 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>): void =>
     ipcRenderer.send('notetaker:widget-log', level, message, fields),
+
+  // ── Transcript cleanup + auto-summarization (2026-08-25 spec) ──
+  /** The CLEANED transcript's segments, or [] if cleanup hasn't succeeded
+   *  for this meeting (disabled, pending, or failed) — see
+   *  notetakerGetTranscript above for the raw version, always available
+   *  regardless of cleanup status. */
+  notetakerGetCleanedTranscript: (id: string): Promise<NotetakerTranscriptSegment[]> =>
+    ipcRenderer.invoke('notetaker:get-cleaned-transcript', id),
+  /** Generated notes, or null if summarization hasn't succeeded for this
+   *  meeting. */
+  notetakerGetNotes: (id: string): Promise<NotetakerMeetingNotes | null> =>
+    ipcRenderer.invoke('notetaker:get-notes', id),
+  /** Current pipeline settings, plus live provider availability (spec §8 —
+   *  only an actually-usable provider may be selected). */
+  notetakerGetPipelineSettings: (): Promise<NotetakerPipelineSettings> =>
+    ipcRenderer.invoke('notetaker:get-pipeline-settings'),
+  notetakerSavePipelineSettings: (patch: Partial<Pick<NotetakerPipelineSettings, 'auto_pipeline_enabled' | 'provider' | 'cleanup_prompt' | 'summary_prompt'>>): Promise<void> =>
+    ipcRenderer.invoke('notetaker:save-pipeline-settings', patch),
+  /** Re-runs whichever pipeline stage(s) haven't succeeded yet for this
+   *  meeting (spec §6) — never redoes a stage that already succeeded. */
+  notetakerRetryPipeline: (id: string): Promise<void> => ipcRenderer.invoke('notetaker:retry-pipeline', id),
+  /** Just the two status fields — a lightweight poll target while a stage
+   *  is 'pending', instead of re-fetching the whole meeting list. */
+  notetakerGetPipelineStatus: (id: string): Promise<{ cleanup_status: NotetakerPipelineStatus; summary_status: NotetakerPipelineStatus } | null> =>
+    ipcRenderer.invoke('notetaker:get-pipeline-status', id),
 }
 
 export type RemoteAPI = typeof remotePreloadExtensions

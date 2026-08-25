@@ -14,6 +14,8 @@ import { MeetingDetail } from './MeetingDetail'
 // pre-/post-copy); every other renderer file in this app (useRemoteTasks.ts,
 // NotetakerWidget.tsx) redefines its preload-facing shape locally for the
 // same reason, so this follows that precedent rather than the DBMeeting shape.
+export type NotetakerPipelineStatus = 'disabled' | 'pending' | 'success' | 'failed'
+
 export type NotetakerMeeting = {
   id: string
   title: string
@@ -24,6 +26,10 @@ export type NotetakerMeeting = {
   transcript_path: string | null
   audio_mic_path: string | null
   audio_system_path: string | null
+  cleanup_status: NotetakerPipelineStatus
+  summary_status: NotetakerPipelineStatus
+  cleaned_transcript_path: string | null
+  notes_path: string | null
 }
 
 const STATUS_LABEL: Record<NotetakerMeeting['status'], string> = {
@@ -85,6 +91,10 @@ export function MeetingsList({
       <MeetingDetail
         id={selected.id}
         initialTitle={selected.title}
+        startedAt={selected.started_at}
+        durationMs={selected.duration_ms}
+        initialCleanupStatus={selected.cleanup_status}
+        initialSummaryStatus={selected.summary_status}
         onBack={() => setSelectedId(null)}
       />
     )

@@ -44,6 +44,8 @@ export interface DBSession {
 // Meetings are a separate retention lane from sessions: rows and transcripts
 // are kept forever (no TTL, no row cap). Only the audio files backing a
 // meeting are swept 24h after it ends — see sweepExpiredMeetingAudio().
+export type PipelineStatus = 'disabled' | 'pending' | 'success' | 'failed'
+
 export interface DBMeeting {
   id: string
   title: string
@@ -54,6 +56,24 @@ export interface DBMeeting {
   transcript_path: string | null
   audio_mic_path: string | null
   audio_system_path: string | null
+  // Transcript cleanup + auto-summarization (2026-08-25 spec) — see
+  // notetakerInit.ts's runNotetakerPipeline for what actually drives these.
+  cleanup_status: PipelineStatus
+  summary_status: PipelineStatus
+  cleaned_transcript_path: string | null
+  notes_path: string | null
+}
+
+/** Single-row settings for the cleanup/summarization pipeline. provider
+ *  matches PROVIDERS registry ids (electron/remote/providers.ts) —
+ *  'claude' | 'codex' — not a prose label. cleanup_prompt/summary_prompt
+ *  are null when the user hasn't overridden the built-in default (see
+ *  transcriptCleanup.ts/notesSummary.ts's own DEFAULT_*_PROMPT). */
+export interface NotetakerSettingsRow {
+  auto_pipeline_enabled: 0 | 1
+  provider: 'claude' | 'codex'
+  cleanup_prompt: string | null
+  summary_prompt: string | null
 }
 
 export function initDB(): void {
@@ -122,6 +142,32 @@ export function initDB(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_meetings_started ON meetings(started_at DESC);
   `)
+
+  // Migration for existing installs, same shape as sessions' engine/
+  // better_transcript columns above — sqlite has no IF NOT EXISTS for ADD
+  // COLUMN until 3.35, so we catch-and-ignore instead.
+  for (const col of [
+    "cleanup_status TEXT NOT NULL DEFAULT 'disabled'",
+    "summary_status TEXT NOT NULL DEFAULT 'disabled'",
+    'cleaned_transcript_path TEXT',
+    'notes_path TEXT',
+  ]) {
+    try { db.exec(`ALTER TABLE meetings ADD COLUMN ${col}`) } catch { /* already there */ }
+  }
+
+  // Single-row settings table for the cleanup/summarization pipeline (2026-
+  // 08-25 spec). The id=1 CHECK plus the INSERT OR IGNORE seed below mean
+  // getNotetakerSettings() never has to handle a missing row.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notetaker_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      auto_pipeline_enabled INTEGER NOT NULL DEFAULT 0,
+      provider TEXT NOT NULL DEFAULT 'claude',
+      cleanup_prompt TEXT,
+      summary_prompt TEXT
+    );
+  `)
+  db.prepare('INSERT OR IGNORE INTO notetaker_settings (id) VALUES (1)').run()
 
   cleanupSessions()
   sweepExpiredMeetingAudio()
@@ -283,8 +329,9 @@ export function deleteSession(id: string): void {
 export function insertMeeting(meeting: DBMeeting): void {
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO meetings (
-      id, title, started_at, ended_at, duration_ms, status, transcript_path, audio_mic_path, audio_system_path
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, title, started_at, ended_at, duration_ms, status, transcript_path, audio_mic_path, audio_system_path,
+      cleanup_status, summary_status, cleaned_transcript_path, notes_path
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   stmt.run(
     meeting.id,
@@ -296,6 +343,10 @@ export function insertMeeting(meeting: DBMeeting): void {
     meeting.transcript_path,
     meeting.audio_mic_path,
     meeting.audio_system_path,
+    meeting.cleanup_status,
+    meeting.summary_status,
+    meeting.cleaned_transcript_path,
+    meeting.notes_path,
   )
   notetakerLog.child({ meetingId: meeting.id }).event('db-row-written', {
     title: meeting.title,
@@ -321,6 +372,51 @@ export function getMeeting(id: string): DBMeeting | null {
 
 export function updateMeetingTitle(id: string, title: string): void {
   db.prepare('UPDATE meetings SET title = ? WHERE id = ?').run(title, id)
+}
+
+/** Narrow, partial update for the cleanup/summarization pipeline's own
+ *  status fields — deliberately NOT routed through insertMeeting()'s
+ *  full-row INSERT OR REPLACE, which would require re-supplying every
+ *  other column (title, transcript_path, ...) or risk clobbering them with
+ *  stale values. Column list is a fixed whitelist, never built from
+ *  arbitrary object keys, so this can never be tricked into updating a
+ *  column it wasn't written to touch. */
+export function updateMeetingPipelineStatus(id: string, patch: {
+  cleanup_status?: PipelineStatus
+  summary_status?: PipelineStatus
+  cleaned_transcript_path?: string | null
+  notes_path?: string | null
+}): void {
+  const sets: string[] = []
+  const values: unknown[] = []
+  if (patch.cleanup_status !== undefined) { sets.push('cleanup_status = ?'); values.push(patch.cleanup_status) }
+  if (patch.summary_status !== undefined) { sets.push('summary_status = ?'); values.push(patch.summary_status) }
+  if (patch.cleaned_transcript_path !== undefined) { sets.push('cleaned_transcript_path = ?'); values.push(patch.cleaned_transcript_path) }
+  if (patch.notes_path !== undefined) { sets.push('notes_path = ?'); values.push(patch.notes_path) }
+  if (sets.length === 0) return
+  values.push(id)
+  db.prepare(`UPDATE meetings SET ${sets.join(', ')} WHERE id = ?`).run(...values)
+  notetakerLog.child({ meetingId: id }).event('pipeline-status-updated', patch)
+}
+
+/** Single row, always present after initDB() (seeded via INSERT OR IGNORE) —
+ *  callers never have to handle "no settings yet". */
+export function getNotetakerSettings(): NotetakerSettingsRow {
+  return db.prepare('SELECT * FROM notetaker_settings WHERE id = 1').get() as NotetakerSettingsRow
+}
+
+/** Same fixed-whitelist partial-update shape as updateMeetingPipelineStatus
+ *  above, for the identical reason — never build the SET clause from
+ *  arbitrary object keys. */
+export function saveNotetakerSettings(patch: Partial<NotetakerSettingsRow>): void {
+  const sets: string[] = []
+  const values: unknown[] = []
+  if (patch.auto_pipeline_enabled !== undefined) { sets.push('auto_pipeline_enabled = ?'); values.push(patch.auto_pipeline_enabled) }
+  if (patch.provider !== undefined) { sets.push('provider = ?'); values.push(patch.provider) }
+  if (patch.cleanup_prompt !== undefined) { sets.push('cleanup_prompt = ?'); values.push(patch.cleanup_prompt) }
+  if (patch.summary_prompt !== undefined) { sets.push('summary_prompt = ?'); values.push(patch.summary_prompt) }
+  if (sets.length === 0) return
+  db.prepare(`UPDATE notetaker_settings SET ${sets.join(', ')} WHERE id = 1`).run(...values)
 }
 
 export function deleteMeeting(id: string): void {

@@ -526,6 +526,26 @@ async function probeBackends(): Promise<BackendProbe[]> {
   return out
 }
 
+/**
+ * The notetaker's cleanup/summarization pipeline (2026-08-25 spec) needs to
+ * know whether Claude Code CLI / Codex CLI is actually usable right now —
+ * reusing probeBackends()'s existing detection rather than re-implementing
+ * CLI/sign-in probing a second time. Passed to notetakerInit.ts as the
+ * `getAgentAvailability` hook (same cross-tree opaque-injection pattern as
+ * onOpenMeeting/onStopPendingChanged — see notetakerInit.ts's own header
+ * comment on why this OSS-tree file can't import probeBackends directly).
+ * Filtered to just the two PTY-transport CLI backends: a driven desktop
+ * app can't run headlessly, so it's irrelevant here regardless of its own
+ * readiness.
+ */
+export async function getAgentAvailability(): Promise<{ claude: boolean; codex: boolean }> {
+  const probes = await probeBackends()
+  return {
+    claude: probes.find((b) => b.id === 'claude')?.ready ?? false,
+    codex: probes.find((b) => b.id === 'codex')?.ready ?? false,
+  }
+}
+
 /** Assemble the onboarding checklist from detected + confirmed state (§12). */
 async function getSetupStatus() {
   const browserEnabled = settings.get('browserEnabled') !== false

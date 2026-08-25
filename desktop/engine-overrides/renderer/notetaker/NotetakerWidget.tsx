@@ -134,6 +134,59 @@ async function registerMicWorklet(ctx: AudioContext): Promise<boolean> {
 }
 
 /**
+ * Plays one short synthesized tone into the widget's own AudioContext —
+ * a real sine oscillator with a quick attack/decay GainNode envelope
+ * (avoids the click a hard on/off would produce), connected straight to
+ * ctx.destination (audible, unlike the mic tap's own muted monitoring
+ * path — see attachMicChunkTap's `sink` below). Nodes are created fresh
+ * per call and clean themselves up on `onended`, matching this file's
+ * existing node-lifecycle discipline elsewhere.
+ */
+function playTone(ctx: AudioContext, freqHz: number, startAt: number, durationSeconds: number, peakGain: number): void {
+  const osc = ctx.createOscillator()
+  osc.type = 'sine'
+  osc.frequency.value = freqHz
+  const gain = ctx.createGain()
+  gain.gain.setValueAtTime(0, startAt)
+  // Quick attack (~12ms) then exponential decay to near-silence — the
+  // "mild/cute" character asked for: soft onset, no harsh edges, gone
+  // before it can feel like an alert.
+  gain.gain.linearRampToValueAtTime(peakGain, startAt + 0.012)
+  gain.gain.exponentialRampToValueAtTime(0.0001, startAt + durationSeconds)
+  osc.connect(gain)
+  gain.connect(ctx.destination)
+  osc.start(startAt)
+  osc.stop(startAt + durationSeconds + 0.02)
+  osc.onended = () => {
+    try { osc.disconnect() } catch { /* already disconnected */ }
+    try { gain.disconnect() } catch { /* already disconnected */ }
+  }
+}
+
+/**
+ * The notetaker's start/stop feedback sound — synthesized, not a bundled
+ * asset: no existing sound-effect infrastructure exists anywhere in this
+ * app to extend, and there's no reliable way to source a properly licensed
+ * "cute, mild, some bass to it" sound file. A rising two-note chime (C5→E5)
+ * for start, the same interval falling (E5→C5) for stop — mirrored, so the
+ * two read as a matched pair, not two unrelated sounds — each layered with
+ * a quiet, short low-octave "thump" under the first note for the
+ * requested bass, felt more than heard rather than a boomy hit.
+ */
+export function playNotetakerChime(ctx: AudioContext, direction: 'start' | 'stop'): void {
+  const now = ctx.currentTime
+  const NOTE_DURATION = 0.11
+  const NOTE_GAP = 0.09
+  const C5 = 523.25
+  const E5 = 659.25
+  const BASS = 130.81 // C3 — two octaves below C5, felt more than heard
+  const [first, second] = direction === 'start' ? [C5, E5] : [E5, C5]
+  playTone(ctx, first, now, NOTE_DURATION, 0.11)
+  playTone(ctx, BASS, now, NOTE_DURATION * 1.4, 0.05)
+  playTone(ctx, second, now + NOTE_GAP, NOTE_DURATION, 0.11)
+}
+
+/**
  * Attaches a PCM tap to an ALREADY-OPEN capture graph and streams its samples
  * to the main process. Returns a disposer, or null if no tap could be
  * attached (in which case the meeting simply has no mic channel — the widget,
@@ -525,7 +578,17 @@ export function NotetakerWidgetRoute() {
     wlog('debug', 'capture-active listener mounted', { msSinceMount: registeredAt - mountedAtRef.current })
     const unsubscribe = api().notetakerOnCaptureActive?.((active) => {
       wlog('debug', 'capture-active signal received from main', { active, wasActive: captureActiveRef.current, msSinceListenerMounted: Date.now() - registeredAt })
-      if (active && !captureActiveRef.current) setSessionId((n) => n + 1)
+      // Feedback chime on the real false→true/true→false transition only —
+      // never on a same-value resend (did-finish-load / widget-ready can
+      // both resend the current cached state, which must not replay the
+      // sound). Uses the same always-running AudioContext the mic tap does
+      // (see the earlier fix removing suspend() between sessions).
+      if (active && !captureActiveRef.current) {
+        setSessionId((n) => n + 1)
+        if (audioContextRef.current) playNotetakerChime(audioContextRef.current, 'start')
+      } else if (!active && captureActiveRef.current && audioContextRef.current) {
+        playNotetakerChime(audioContextRef.current, 'stop')
+      }
       captureActiveRef.current = active
       setCaptureActive(active)
     })

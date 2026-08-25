@@ -511,7 +511,8 @@ import { notetakerAgentAdapters } from './notetakerInit'
   if ! grep -q 'initNotetaker' "$main_ts"; then
     sed -i.bak "/^import { initRemote } from '\.\/paywall\/remote\/init'/a\\
 import { initNotetaker } from './notetakerInit'\\
-import { showNotetakerWidget, hideNotetakerWidget, broadcastStopPending } from './paywall/remote/notetakerWidget'
+import { showNotetakerWidget, hideNotetakerWidget, broadcastStopPending } from './paywall/remote/notetakerWidget'\\
+import { getAgentAvailability } from './paywall/remote/init'
 " "$main_ts"
     rm -f "$main_ts.bak"
     node -e "
@@ -537,6 +538,10 @@ import { showNotetakerWidget, hideNotetakerWidget, broadcastStopPending } from '
           '      showMainWindow()\n' +
           '      win.webContents.send(\\'notetaker:open-meeting-requested\\', meetingId)\n' +
           '    },\n' +
+          '    // Reuses probeBackends()\\'s existing CLI/sign-in detection for the\n' +
+          '    // cleanup/summarization pipeline\\'s Settings provider picker — see\n' +
+          '    // NotetakerInitHooks\\'s own comment on getAgentAvailability.\n' +
+          '    getAgentAvailability,\n' +
           '  })\n'
         )
       }

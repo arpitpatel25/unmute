@@ -43,7 +43,8 @@
 //
 //   import { initNotetaker } from './notetakerInit'
 //   import { showNotetakerWidget, hideNotetakerWidget, broadcastStopPending } from './paywall/remote/notetakerWidget'
-//   initNotetaker({ onSessionStart: showNotetakerWidget, onSessionStop: hideNotetakerWidget, onStopPendingChanged: broadcastStopPending })
+//   import { getAgentAvailability } from './paywall/remote/init'
+//   initNotetaker({ onSessionStart: showNotetakerWidget, onSessionStop: hideNotetakerWidget, onStopPendingChanged: broadcastStopPending, getAgentAvailability })
 //
 // Per docs/superpowers/specs/2026-08-23-meeting-notetaker-detection-capture.md.
 
@@ -63,8 +64,13 @@ import type { TimedChunkText, SpeakerSample, TranscriptSegment } from './notetak
 import { WavAppender } from './notetaker/wavAppender'
 import { pollZoomSpeaker } from './notetaker/zoomSpeaker'
 import { ZOOM_BUNDLE_ID } from './meetingApps'
-import { getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting, type DBMeeting } from './db'
+import {
+  getMeetings, getMeeting, updateMeetingTitle, deleteMeeting, insertMeeting, type DBMeeting,
+  getNotetakerSettings, saveNotetakerSettings, updateMeetingPipelineStatus,
+} from './db'
 import { createNotetakerLogger, getNotetakerLogFilePath } from './notetaker/notetakerLog'
+import { cleanupTranscript, DEFAULT_CLEANUP_PROMPT } from './notetaker/transcriptCleanup'
+import { generateNotes, DEFAULT_SUMMARY_PROMPT } from './notetaker/notesSummary'
 
 const log = createNotetakerLogger('init')
 
@@ -89,6 +95,16 @@ export type NotetakerInitHooks = {
    *  widget. Same cross-tree reason as onSessionStart/onSessionStop: the
    *  widget lives in the closed-source paywall tree. */
   onStopPendingChanged?: (pending: boolean) => void
+  /** Whether Claude Code CLI / Codex CLI is actually usable right now — the
+   *  transcript cleanup + auto-summarization pipeline's (2026-08-25 spec)
+   *  one piece that genuinely needs the closed-source tree: reuses
+   *  electron/remote/init.ts's existing probeBackends() detection rather
+   *  than re-implementing CLI/sign-in probing here. Same cross-tree reason
+   *  as every other hook above. The pipeline itself (headlessAgent.ts) does
+   *  NOT call this — a provider that's actually unavailable just fails its
+   *  runHeadlessAgent call cleanly, an already-handled outcome; this hook
+   *  is purely for the Settings UI's provider picker. */
+  getAgentAvailability?: () => Promise<{ claude: boolean; codex: boolean }>
 }
 
 /** How long the key's own single-tap stop waits, undone, before it actually
@@ -336,6 +352,60 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     }
     mlog.debug('get-audio-url: resolved', { channel })
     return `file://${fullPath}`
+  })
+
+  // ── Transcript cleanup + auto-summarization (2026-08-25 spec) ──
+  // Same "before the native-module guard" reasoning as the five handlers
+  // above: none of these touch the audio tap, so browsing/configuring
+  // already-saved meetings must not depend on it.
+  ipcMain.handle('notetaker:get-cleaned-transcript', (_event, id: string) => {
+    const segments = readCleanedTranscriptSegments(id)
+    log.child({ meetingId: id }).debug('get-cleaned-transcript: loaded', { segmentCount: segments.length })
+    return segments
+  })
+
+  ipcMain.handle('notetaker:get-notes', (_event, id: string) => {
+    const meeting = getMeeting(id)
+    if (!meeting || !meeting.notes_path) return null
+    try {
+      const meetingDir = path.join(app.getPath('userData'), 'meetings', id)
+      return JSON.parse(fs.readFileSync(path.join(meetingDir, meeting.notes_path), 'utf8'))
+    } catch (e) {
+      log.child({ meetingId: id }).warn('get-notes: failed to read/parse notes file', { error: (e as Error).message })
+      return null
+    }
+  })
+
+  ipcMain.handle('notetaker:get-pipeline-settings', async () => {
+    const settings = getNotetakerSettings()
+    const availability = (await hooks.getAgentAvailability?.()) ?? { claude: false, codex: false }
+    // The renderer needs real default text to SHOW (not just infer "using
+    // default" from a null override) — see NotetakerSettings.tsx's
+    // PromptEditor, which seeds the textarea with this rather than an
+    // empty box + placeholder.
+    return { ...settings, availability, default_cleanup_prompt: DEFAULT_CLEANUP_PROMPT, default_summary_prompt: DEFAULT_SUMMARY_PROMPT }
+  })
+
+  ipcMain.handle('notetaker:save-pipeline-settings', (_event, patch: Parameters<typeof saveNotetakerSettings>[0]) => {
+    saveNotetakerSettings(patch)
+    log.event('pipeline-settings-saved', { keys: Object.keys(patch) })
+  })
+
+  // Lightweight poll target for MeetingDetail.tsx while a stage is
+  // 'pending' — the full meeting row (notetaker:list-meetings) is fine for
+  // an initial load but wasteful to re-fetch every few seconds just to
+  // watch two fields settle.
+  ipcMain.handle('notetaker:get-pipeline-status', (_event, id: string) => {
+    const meeting = getMeeting(id)
+    if (!meeting) return null
+    return { cleanup_status: meeting.cleanup_status, summary_status: meeting.summary_status }
+  })
+
+  ipcMain.handle('notetaker:retry-pipeline', (_event, id: string) => {
+    log.child({ meetingId: id }).event('pipeline-retry-requested')
+    retryNotetakerPipeline(id).catch((e) => {
+      log.child({ meetingId: id }).error('pipeline retry threw unexpectedly', { error: (e as Error).message })
+    })
   })
 
   let nativeAudioTap: NativeAudioTap | null = null
@@ -730,6 +800,14 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
           transcript_path: null,
           audio_mic_path: null,
           audio_system_path: null,
+          // Placeholder only — persistSession()'s own insertMeeting() (INSERT
+          // OR REPLACE, same id) overwrites this row at the end of the
+          // meeting; runNotetakerPipeline() then stamps the real enabled/
+          // pending state on top of that via updateMeetingPipelineStatus().
+          cleanup_status: 'disabled',
+          summary_status: 'disabled',
+          cleaned_transcript_path: null,
+          notes_path: null,
         })
       } catch (e) {
         // A failed placeholder row must never take down a capture that has
@@ -832,6 +910,17 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
               speakerSamplesForThisSession,
               wasZoomSession,
             )
+          })
+          .then((segments) => {
+            // Fire-and-forget, same posture as the rest of this async tail:
+            // never blocks or throws into the existing persist flow. Its own
+            // failures are fully handled internally (stamped as
+            // cleanup_status/summary_status = 'failed', logged) — nothing
+            // for this .catch to do beyond a last-resort log line for
+            // something truly unexpected slipping past that.
+            runNotetakerPipeline(meetingId, segments).catch((e) => {
+              mlog.error('notetaker pipeline threw unexpectedly', { error: (e as Error).message })
+            })
           })
           .catch((e) => {
             mlog.error('failed to transcribe/persist session', { error: (e as Error).message })
@@ -1216,6 +1305,121 @@ function readTranscriptSegments(meetingId: string): TranscriptSegment[] {
   }
 }
 
+/** Same shape as readTranscriptSegments, for the CLEANED transcript —
+ *  used by the Agent's fallback-to-raw rule (notetakerAgentAdapters below)
+ *  and by retryNotetakerPipeline's summary-only path (cleanup already
+ *  succeeded; re-summarizing shouldn't re-read the raw file). */
+function readCleanedTranscriptSegments(meetingId: string): TranscriptSegment[] {
+  const meeting = getMeeting(meetingId)
+  if (!meeting || !meeting.cleaned_transcript_path) return []
+  const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
+  try {
+    const raw = fs.readFileSync(path.join(meetingDir, meeting.cleaned_transcript_path), 'utf8')
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed as TranscriptSegment[] : []
+  } catch (e) {
+    log.child({ meetingId }).warn('readCleanedTranscriptSegments: failed to read/parse cleaned transcript file', { error: (e as Error).message })
+    return []
+  }
+}
+
+/** Atomic write, matching persistSession's own temp-then-rename convention
+ *  for transcript.json — a crash mid-write must never leave a corrupt
+ *  cleaned-transcript.json/notes.json behind. */
+function writeMeetingJsonFile(meetingId: string, fileName: string, data: unknown): void {
+  const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
+  fs.mkdirSync(meetingDir, { recursive: true })
+  const target = path.join(meetingDir, fileName)
+  const temp = `${target}.${process.pid}.tmp`
+  fs.writeFileSync(temp, JSON.stringify(data), 'utf8')
+  fs.renameSync(temp, target)
+}
+
+const CLEANED_TRANSCRIPT_FILENAME = 'cleaned-transcript.json'
+const NOTES_FILENAME = 'notes.json'
+
+/** The cleanup stage alone — segments in, cleaned segments written + status
+ *  stamped. Returns whether it succeeded, so callers (the auto pipeline and
+ *  the retry path) can decide whether to proceed to the summary stage. */
+async function runCleanupStage(meetingId: string, segments: TranscriptSegment[], provider: 'claude' | 'codex', promptOverride: string | null): Promise<TranscriptSegment[] | null> {
+  const mlog = log.child({ meetingId })
+  updateMeetingPipelineStatus(meetingId, { cleanup_status: 'pending' })
+  mlog.event('pipeline-cleanup-started', { provider, segmentCount: segments.length })
+  const result = await cleanupTranscript(segments, provider, promptOverride)
+  if (!result.ok) {
+    mlog.error('pipeline-cleanup-failed', { error: result.error })
+    updateMeetingPipelineStatus(meetingId, { cleanup_status: 'failed' })
+    return null
+  }
+  writeMeetingJsonFile(meetingId, CLEANED_TRANSCRIPT_FILENAME, result.segments)
+  updateMeetingPipelineStatus(meetingId, { cleanup_status: 'success', cleaned_transcript_path: CLEANED_TRANSCRIPT_FILENAME })
+  mlog.event('pipeline-cleanup-succeeded', { segmentCount: result.segments.length })
+  return result.segments
+}
+
+/** The summary stage alone — only ever called with an already-cleaned
+ *  transcript (spec §5: summarization never runs against raw text). */
+async function runSummaryStage(meetingId: string, cleanedSegments: TranscriptSegment[], provider: 'claude' | 'codex', promptOverride: string | null): Promise<void> {
+  const mlog = log.child({ meetingId })
+  updateMeetingPipelineStatus(meetingId, { summary_status: 'pending' })
+  mlog.event('pipeline-summary-started', { provider })
+  const result = await generateNotes(cleanedSegments, provider, promptOverride)
+  if (!result.ok) {
+    mlog.error('pipeline-summary-failed', { error: result.error })
+    updateMeetingPipelineStatus(meetingId, { summary_status: 'failed' })
+    return
+  }
+  writeMeetingJsonFile(meetingId, NOTES_FILENAME, result.notes)
+  updateMeetingPipelineStatus(meetingId, { summary_status: 'success', notes_path: NOTES_FILENAME })
+  // notes.json's title supersedes generateTitle()'s first-line heuristic
+  // for this meeting once summarization succeeds (spec §5) — the row
+  // already has SOME title (persistSession always sets one), this just
+  // replaces it with the real one.
+  updateMeetingTitle(meetingId, result.notes.title)
+  mlog.event('pipeline-summary-succeeded', { title: result.notes.title })
+}
+
+/** Runs the full cleanup → summary pipeline for a freshly-persisted
+ *  meeting, or does nothing (stamping both stages 'disabled') if the
+ *  toggle is off or there's nothing worth processing. Called fire-and-
+ *  forget right after persistSession() resolves — never blocks or throws
+ *  into the existing persist flow. */
+async function runNotetakerPipeline(meetingId: string, segments: TranscriptSegment[]): Promise<void> {
+  const settings = getNotetakerSettings()
+  const mlog = log.child({ meetingId })
+  // Empty transcript (both channels silent/failed) is not a pipeline
+  // failure — mirrors this file's own "empty channel is not a failure"
+  // convention elsewhere — there is simply nothing to clean or summarize.
+  if (!settings.auto_pipeline_enabled || segments.length === 0) {
+    mlog.event('pipeline-skipped', { reason: !settings.auto_pipeline_enabled ? 'disabled' : 'empty-transcript' })
+    updateMeetingPipelineStatus(meetingId, { cleanup_status: 'disabled', summary_status: 'disabled' })
+    return
+  }
+  const cleaned = await runCleanupStage(meetingId, segments, settings.provider, settings.cleanup_prompt)
+  if (!cleaned) return
+  await runSummaryStage(meetingId, cleaned, settings.provider, settings.summary_prompt)
+}
+
+/** Retry: re-inspects the meeting's CURRENT status and does the minimum
+ *  needed to move forward (spec §6) — never redoes a stage that already
+ *  succeeded. */
+async function retryNotetakerPipeline(meetingId: string): Promise<void> {
+  const meeting = getMeeting(meetingId)
+  if (!meeting) return
+  const settings = getNotetakerSettings()
+  if (meeting.cleanup_status !== 'success') {
+    const raw = readTranscriptSegments(meetingId)
+    const cleaned = await runCleanupStage(meetingId, raw, settings.provider, settings.cleanup_prompt)
+    if (!cleaned) return
+    await runSummaryStage(meetingId, cleaned, settings.provider, settings.summary_prompt)
+    return
+  }
+  if (meeting.summary_status !== 'success') {
+    const cleaned = readCleanedTranscriptSegments(meetingId)
+    await runSummaryStage(meetingId, cleaned, settings.provider, settings.summary_prompt)
+  }
+}
+
 /** A short excerpt of `text` centred on the first place `needle` (already
  *  lower-cased) appears — same "tell hits apart before opening one" purpose
  *  as history's own snippet(), sized generously since a meeting segment can
@@ -1259,6 +1463,16 @@ export function openMeetingInApp(meetingId: string): boolean {
  *  Structurally satisfies NotetakerAdapters (electron/remote/agent/
  *  capabilities/notetaker.ts) without importing that type — see this
  *  section's own header comment. */
+/** The fallback rule from the 2026-08-25 spec (§7): prefer the cleaned
+ *  transcript, fall back to raw only when cleanup hasn't succeeded
+ *  (disabled, pending, or failed) — never a mix. A given read is either
+ *  fully off the cleaned artifacts or fully off the raw ones. */
+function transcriptForMeeting(meeting: DBMeeting): TranscriptSegment[] {
+  return meeting.cleanup_status === 'success'
+    ? readCleanedTranscriptSegments(meeting.id)
+    : readTranscriptSegments(meeting.id)
+}
+
 export function notetakerAgentAdapters() {
   return {
     async list(limit?: number) {
@@ -1279,7 +1493,7 @@ export function notetakerAgentAdapters() {
         snippet: string
       }> = []
       for (const meeting of getMeetings(SEARCH_SCAN_LIMIT)) {
-        for (const seg of readTranscriptSegments(meeting.id)) {
+        for (const seg of transcriptForMeeting(meeting)) {
           if (!seg.text.toLocaleLowerCase('en-US').includes(needle)) continue
           hits.push({
             meetingId: meeting.id,
@@ -1301,7 +1515,7 @@ export function notetakerAgentAdapters() {
     async read(meetingId: string) {
       const meeting = getMeeting(meetingId)
       if (!meeting) return null
-      return { meeting: toMeetingSummary(meeting), segments: readTranscriptSegments(meetingId) }
+      return { meeting: toMeetingSummary(meeting), segments: transcriptForMeeting(meeting) }
     },
 
     async open(meetingId: string) {

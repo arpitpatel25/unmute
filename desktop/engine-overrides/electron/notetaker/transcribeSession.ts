@@ -151,7 +151,7 @@ export async function persistSession(
   audioSystemPath: string | null,
   zoomSpeakerSamples: SpeakerSample[] = [],
   wasZoomSession = false,
-): Promise<void> {
+): Promise<TranscriptSegment[]> {
   const mlog = log.child({ meetingId })
   const meetingDir = path.join(app.getPath('userData'), 'meetings', meetingId)
   fs.mkdirSync(meetingDir, { recursive: true })
@@ -205,7 +205,18 @@ export async function persistSession(
     transcript_path: transcriptPath,
     audio_mic_path: audioMicPath,
     audio_system_path: audioSystemPath,
+    // Seeded 'disabled' regardless of the real setting — this function has
+    // no reason to know about the cleanup/summary pipeline at all.
+    // notetakerInit.ts's runNotetakerPipeline() runs AFTER this and stamps
+    // the real enabled/pending/success/failed state via
+    // updateMeetingPipelineStatus(), never through a second insertMeeting().
+    cleanup_status: 'disabled',
+    summary_status: 'disabled',
+    cleaned_transcript_path: null,
+    notes_path: null,
   })
+
+  return attributedSegments
 }
 
 export function newMeetingId(): string {
