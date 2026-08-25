@@ -271,6 +271,34 @@ async function confirmNotetakerDialog(message: string): Promise<boolean> {
   }
 }
 
+/** A second, dedicated confirm dialog for the widget's "Discard meeting" —
+ *  deliberately not a reuse of confirmNotetakerDialog above (different
+ *  wording, different button order/default). "Discard" is now a genuinely
+ *  destructive action (session.discard() deletes the audio + transcript +
+ *  DB row, no undo), so the SAFE choice (Cancel) is both the default and
+ *  what Return/Escape trigger — a stray keypress must never destroy a
+ *  meeting. `type: 'warning'` + macOS's own destructive-button styling on
+ *  'Discard Meeting' (button index 1, the non-default one) is the standard
+ *  system look for "this can't be undone." */
+async function confirmDiscardDialog(): Promise<boolean> {
+  try {
+    const result = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: ['Cancel', 'Discard Meeting'],
+      defaultId: 0,
+      cancelId: 0,
+      message: 'Discard this meeting?',
+      detail: 'The recording will stop and nothing will be saved. This can\'t be undone.',
+    })
+    const confirmed = result.response === 1
+    log.event('discard-confirm-dialog-answered', { confirmed })
+    return confirmed
+  } catch (e) {
+    log.error('discard confirm dialog failed', { error: (e as Error).message })
+    return false // fail closed — never discard a running capture on a broken dialog
+  }
+}
+
 let initialized = false
 /** Set from NotetakerInitHooks.onOpenMeeting when initNotetaker() runs — see
  *  that field's own comment. Read by openMeetingInApp() near the end of this
@@ -942,6 +970,47 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
           })
       }
     }
+
+    /** The widget's "Discard meeting" — genuinely discards, unlike stop()
+     *  above. No flush, no transcription, no persistSession: those are the
+     *  entire reason a "Cancel"/"Discard" affordance existed but had never
+     *  actually discarded anything before this — it called stop() and got
+     *  the full save pipeline every time. Stops the native tap the same
+     *  way stop() does, closes each channel's WAV writer (already holds
+     *  partial audio, appended incrementally during capture, not just at
+     *  the end — closing it here rather than leaving the fd open for
+     *  deleteMeeting() to orphan), then deletes the meeting's entire
+     *  directory and its placeholder DB row (start() already wrote one).
+     *  Caller is responsible for confirming with the user FIRST — see
+     *  confirmDiscardDialog() at the 'notetaker:cancel-requested' handler
+     *  below; this method itself never asks. */
+    discard(): void {
+      const wasActive = this.isActive
+      const meetingId = sessionMeetingId
+      const mic = micTracker
+      const system = systemTracker
+      if (zoomSpeakerPollTimer) {
+        clearInterval(zoomSpeakerPollTimer)
+        zoomSpeakerPollTimer = null
+      }
+      const mlog = log.child({ meetingId })
+      mlog.event('capture-discard-requested', { wasActive })
+      super.stop()
+      if (!wasActive) return
+      hooks.onSessionStop?.()
+      try {
+        mic.writer?.close()
+      } catch (e) {
+        mlog.error('failed to close the mic audio file while discarding', { error: (e as Error).message })
+      }
+      try {
+        system.writer?.close()
+      } catch (e) {
+        mlog.error('failed to close the system audio file while discarding', { error: (e as Error).message })
+      }
+      deleteMeeting(meetingId)
+      mlog.event('capture-discarded')
+    }
   }
   /** Same cadence reasoning as MIC_CHUNK_LOG_EVERY below (~every 100th chunk
    *  is a heartbeat, not a flood) — system chunks arrive from the native tap
@@ -1073,12 +1142,30 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     if (!session.isActive) return
     log.event('widget-cancel-clicked')
     // Defensive: if the key's own undo window happened to be armed when the
-    // click landed, clear it — otherwise its timer would still be live and
-    // fire session.stop() again later, possibly against a NEW meeting the
-    // user has since started (see NotetakerController.cancelPendingStop).
+    // click landed, clear it now — otherwise its timer would still be live
+    // and fire session.stop() again later, possibly against a NEW meeting
+    // the user has since started (see NotetakerController.cancelPendingStop).
+    // Unaffected by the confirm dialog below — this is just timer hygiene,
+    // not part of the user's actual discard decision.
     controller.cancelPendingStop()
-    session.stop()
-    keyboardManager.confirmNotesStop()
+    void (async () => {
+      // Genuinely destructive now (session.discard() deletes the audio,
+      // transcript, and DB row — no undo), so it gets a real "are you
+      // sure" instead of trusting the widget's own two-tap zone alone.
+      const confirmed = await confirmDiscardDialog()
+      if (!confirmed) {
+        log.event('widget-discard-not-confirmed')
+        return
+      }
+      // The session may have already ended (or a new one started) while
+      // the native dialog was open — never discard against stale intent.
+      if (!session.isActive) {
+        log.event('widget-discard-confirmed-but-session-no-longer-active')
+        return
+      }
+      session.discard()
+      keyboardManager.confirmNotesStop()
+    })()
   })
 
   // ── App quit while a meeting is being recorded ──
