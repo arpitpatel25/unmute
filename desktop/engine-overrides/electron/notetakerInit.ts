@@ -1379,6 +1379,14 @@ async function runSummaryStage(meetingId: string, cleanedSegments: TranscriptSeg
   }
   writeMeetingJsonFile(meetingId, NOTES_FILENAME, result.notes)
   updateMeetingPipelineStatus(meetingId, { summary_status: 'success', notes_path: NOTES_FILENAME })
+  if (result.degraded) {
+    // The model's response didn't come back as the JSON shape we asked
+    // for, so notes.title is deliberately blank (generateNotes never
+    // fabricates one) — leave the meeting's existing title (persistSession
+    // always sets one) alone rather than overwrite it with nothing.
+    mlog.event('pipeline-summary-succeeded-degraded', { summaryLength: result.notes.summary.length })
+    return
+  }
   // notes.json's title supersedes generateTitle()'s first-line heuristic
   // for this meeting once summarization succeeds (spec §5) — the row
   // already has SOME title (persistSession always sets one), this just

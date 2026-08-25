@@ -1,6 +1,6 @@
 import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseSummaryOutput, generateNotes, buildSummaryInput, DEFAULT_SUMMARY_INSTRUCTIONS } from './notesSummary'
+import { parseSummaryOutput, generateNotes, buildSummaryInput, buildDegradedNotes, DEFAULT_SUMMARY_INSTRUCTIONS } from './notesSummary'
 import type { TranscriptSegment } from './transcriptMerge'
 import type { HeadlessProvider } from './headlessAgent'
 
@@ -90,16 +90,38 @@ describe('buildSummaryInput', () => {
   })
 })
 
+describe('buildDegradedNotes', () => {
+  test('the raw output becomes the summary verbatim; every list is empty; title is left blank, never invented', () => {
+    const notes = buildDegradedNotes('The team discussed the Q3 budget and agreed to revisit next week.')
+    assert.deepEqual(notes, {
+      title: '',
+      summary: 'The team discussed the Q3 budget and agreed to revisit next week.',
+      keyPoints: [],
+      decisions: [],
+      actionItems: [],
+      openQuestions: [],
+    })
+  })
+
+  test('whitespace-only output has nothing worth keeping — null, not an empty summary', () => {
+    assert.equal(buildDegradedNotes('   \n  '), null)
+    assert.equal(buildDegradedNotes(''), null)
+  })
+})
+
 describe('generateNotes', () => {
   function fakeRunner(response: { ok: true; output: string } | { ok: false; error: string }) {
     return async (_provider: HeadlessProvider, _input: string) => response
   }
 
-  test('happy path returns parsed notes', async () => {
+  test('happy path returns parsed notes, not degraded', async () => {
     const runner = fakeRunner({ ok: true, output: JSON.stringify({ title: 'T', summary: 'S' }) })
     const result = await generateNotes([seg('mic', 'hi')], 'claude', undefined, runner)
     assert.equal(result.ok, true)
-    if (result.ok) assert.equal(result.notes.title, 'T')
+    if (result.ok) {
+      assert.equal(result.notes.title, 'T')
+      assert.equal(result.degraded, undefined)
+    }
   })
 
   test('the call itself failing is ok:false', async () => {
@@ -108,8 +130,27 @@ describe('generateNotes', () => {
     assert.deepEqual(result, { ok: false, error: 'boom' })
   })
 
-  test('a response missing title/summary is ok:false', async () => {
+  test('a response that is not the expected JSON shape but has real content is a degraded success, not a failure — the generation is not wasted', async () => {
+    const runner = fakeRunner({ ok: true, output: 'The meeting covered budget and timeline, no formal decisions were made.' })
+    const result = await generateNotes([seg('mic', 'hi')], 'claude', undefined, runner)
+    assert.equal(result.ok, true)
+    if (result.ok) {
+      assert.equal(result.degraded, true)
+      assert.equal(result.notes.title, '')
+      assert.equal(result.notes.summary, 'The meeting covered budget and timeline, no formal decisions were made.')
+      assert.deepEqual(result.notes.keyPoints, [])
+    }
+  })
+
+  test('a response missing title/summary but otherwise real JSON content still degrades to the raw text, not a failure', async () => {
     const runner = fakeRunner({ ok: true, output: JSON.stringify({ keyPoints: ['x'] }) })
+    const result = await generateNotes([seg('mic', 'hi')], 'claude', undefined, runner)
+    assert.equal(result.ok, true)
+    if (result.ok) assert.equal(result.degraded, true)
+  })
+
+  test('a call that succeeds with genuinely empty output is still ok:false — nothing to salvage', async () => {
+    const runner = fakeRunner({ ok: true, output: '   ' })
     const result = await generateNotes([seg('mic', 'hi')], 'claude', undefined, runner)
     assert.equal(result.ok, false)
   })

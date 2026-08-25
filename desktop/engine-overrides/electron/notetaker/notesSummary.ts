@@ -115,8 +115,21 @@ export function parseSummaryOutput(raw: string): MeetingNotes | null {
   }
 }
 
+/** Pure. When the model's response wasn't usable JSON but the call itself
+ *  produced real text, this is what stands in for a proper MeetingNotes —
+ *  the raw output becomes the summary verbatim, every list stays empty,
+ *  and `title` is left blank (never fabricated) so the caller keeps
+ *  whatever title the meeting already had rather than overwrite it with
+ *  something invented. Returns null when there's nothing worth keeping at
+ *  all (empty/whitespace-only output) — that case is still a real failure. */
+export function buildDegradedNotes(raw: string): MeetingNotes | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  return { title: '', summary: trimmed, keyPoints: [], decisions: [], actionItems: [], openQuestions: [] }
+}
+
 export type SummaryResult =
-  | { ok: true; notes: MeetingNotes }
+  | { ok: true; notes: MeetingNotes; degraded?: boolean }
   | { ok: false; error: string }
 
 export async function generateNotes(
@@ -133,10 +146,20 @@ export async function generateNotes(
     return { ok: false, error: result.error }
   }
   const notes = parseSummaryOutput(result.output)
-  if (!notes) {
-    log.error('summary response was not usable (missing title/summary or unparseable)', { provider, outputPreview: result.output.slice(0, 200) })
+  if (notes) {
+    log.debug('summary completed', { provider, title: notes.title, keyPointCount: notes.keyPoints.length, decisionCount: notes.decisions.length, actionItemCount: notes.actionItems.length, openQuestionCount: notes.openQuestions.length })
+    return { ok: true, notes }
+  }
+  // The call succeeded and produced real text, it just didn't come back as
+  // the JSON shape we asked for — that's still a real generation the
+  // user's own usage paid for, not nothing. Surface it as a degraded
+  // success (unstructured summary, no sections) rather than discarding it
+  // and asking for a retry.
+  const degradedNotes = buildDegradedNotes(result.output)
+  if (!degradedNotes) {
+    log.error('summary response was not usable (empty output)', { provider })
     return { ok: false, error: 'response missing title/summary or unparseable' }
   }
-  log.debug('summary completed', { provider, title: notes.title, keyPointCount: notes.keyPoints.length, decisionCount: notes.decisions.length, actionItemCount: notes.actionItems.length, openQuestionCount: notes.openQuestions.length })
-  return { ok: true, notes }
+  log.warn('summary response was not structured JSON — falling back to the raw output as an unstructured summary', { provider, outputPreview: result.output.slice(0, 200) })
+  return { ok: true, notes: degradedNotes, degraded: true }
 }
