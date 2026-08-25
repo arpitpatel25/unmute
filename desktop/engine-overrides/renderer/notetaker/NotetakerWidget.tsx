@@ -20,6 +20,7 @@ const BAR_COUNT = 5
 type API = {
   notetakerCancelRequested?: () => void
   notetakerOnCaptureActive?: (cb: (active: boolean) => void) => () => void
+  notetakerOnStopPending?: (cb: (pending: boolean) => void) => () => void
   notetakerMicChunk?: (samples: ArrayBuffer, sampleRate: number, timestampMs: number) => void
   notetakerWidgetLog?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>) => void
 }
@@ -221,6 +222,7 @@ async function attachMicChunkTap(
 export function NotetakerWidget({
   analyser,
   sessionId = 0,
+  stopPending = false,
   onCancelConfirmed,
 }: {
   analyser: AnalyserNode | null
@@ -230,6 +232,14 @@ export function NotetakerWidget({
    *  confirmed in one session would still be on screen when the next session
    *  opened the widget. */
   sessionId?: number
+  /** True while the KEYBOARD's own single-tap stop is in its undo window
+   *  (main → notetaker:stop-pending, see notetakerWidget.ts's
+   *  broadcastStopPending). Recording is still running — this is a separate
+   *  signal from `analyser` going null, which only happens once a stop is
+   *  actually finalized. Mutually exclusive with `confirmingCancel` below by
+   *  construction: this widget's own click handler is disabled while true,
+   *  since the only way to resolve THIS state is another tap on the key. */
+  stopPending?: boolean
   onCancelConfirmed: () => void
 }) {
   const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0.1))
@@ -274,13 +284,15 @@ export function NotetakerWidget({
 
   // Same fixed-glass material as the dictation pill cluster (Theme.swift's
   // PillGlass, ported to CSS): a top-down sheen over a near-black base, one
-  // hairline rim, no drop shadow. Tinted red (Theme.cError) only while
-  // confirming a cancel — "one tinted thing per surface," and here that's the
-  // one destructive control on the whole widget.
-  const glassBackground = confirmingCancel
+  // hairline rim, no drop shadow. Tinted red (Theme.cError) while confirming
+  // a cancel OR while the key's own undo window is counting down — "one
+  // tinted thing per surface," and here that's the one destructive outcome
+  // on the whole widget, whichever path is heading toward it.
+  const tinted = confirmingCancel || stopPending
+  const glassBackground = tinted
     ? 'linear-gradient(to bottom, rgba(255,255,255,0.06), rgba(255,255,255,0.02) 55%, rgba(255,69,58,0.10) 100%), rgb(14,15,19)'
     : 'linear-gradient(to bottom, rgba(255,255,255,0.09), rgba(255,255,255,0.02) 55%, rgba(255,255,255,0) 100%), rgb(14,15,19)'
-  const glassBorder = confirmingCancel ? '1.5px solid rgba(255,69,58,0.75)' : '1px solid rgba(255,255,255,0.10)'
+  const glassBorder = tinted ? '1.5px solid rgba(255,69,58,0.75)' : '1px solid rgba(255,255,255,0.10)'
 
   return (
     <div
@@ -293,17 +305,36 @@ export function NotetakerWidget({
       <div
         role="button"
         tabIndex={0}
-        aria-label={confirmingCancel ? 'Cancel note-taking?' : 'Note-taking in progress'}
-        onClick={() => setConfirmingCancel((v) => !v)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') setConfirmingCancel((v) => !v)
-        }}
+        aria-label={
+          stopPending
+            ? 'Stopping note-taking — tap left Control again to keep recording'
+            : confirmingCancel
+              ? 'Cancel note-taking?'
+              : 'Note-taking in progress'
+        }
+        // Click is disabled while stopPending: the only affordance that
+        // resolves THIS state is another tap on the key (see the class-level
+        // prop comment), and letting a click also raise the Cancel button
+        // here would let two different "about to stop" states collide.
+        onClick={stopPending ? undefined : () => setConfirmingCancel((v) => !v)}
+        onKeyDown={
+          stopPending
+            ? undefined
+            : (e) => {
+                if (e.key === 'Enter' || e.key === ' ') setConfirmingCancel((v) => !v)
+              }
+        }
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}
-        className="w-14 h-14 rounded-full flex items-center justify-center gap-[3px] cursor-pointer select-none"
-        style={{ background: glassBackground, border: glassBorder, boxShadow: 'none' }}
+        className={`w-14 h-14 rounded-full flex items-center justify-center gap-[3px] select-none ${stopPending ? 'cursor-default' : 'cursor-pointer'}`}
+        style={{
+          background: glassBackground,
+          border: glassBorder,
+          boxShadow: 'none',
+          animation: stopPending ? 'notetaker-stop-pending-pulse 1s ease-in-out infinite' : undefined,
+        }}
       >
-        {confirmingCancel ? (
+        {confirmingCancel && !stopPending ? (
           <button
             type="button"
             onClick={(e) => {
@@ -331,15 +362,30 @@ export function NotetakerWidget({
           ))
         )}
       </div>
-      {/* Hover-only identity label, never a permanent badge on the circle —
-       *  and never shown while confirming a cancel, since that state already
-       *  reads as itself. */}
+      {/* @keyframes for the stopPending pulse — inlined (no stylesheet in
+       *  this window) rather than a JS-driven animation, same reasoning as
+       *  the waveform preferring CSS transitions over extra rAF work. */}
+      <style>{`
+        @keyframes notetaker-stop-pending-pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.55; }
+        }
+      `}</style>
+      {/* Hover-only identity label normally; while stopPending it becomes a
+       *  persistent (not hover-gated) instruction, since that state is
+       *  time-sensitive and the user may not be hovering the widget at all
+       *  when it starts (they just tapped a key). Never shown while
+       *  confirming a cancel, since that state already reads as itself. */}
       {!confirmingCancel && (
         <div
           className="mt-1.5 text-[11px] font-semibold text-white/70 bg-[rgba(14,15,19,0.9)] border border-white/[0.06] rounded-full px-2.5 py-1 whitespace-nowrap"
-          style={{ opacity: hovering ? 1 : 0, transition: 'opacity 150ms ease-out', pointerEvents: 'none' }}
+          style={{
+            opacity: stopPending || hovering ? 1 : 0,
+            transition: 'opacity 150ms ease-out',
+            pointerEvents: 'none',
+          }}
         >
-          Note taker
+          {stopPending ? 'Tap to keep recording' : 'Note taker'}
         </div>
       )}
     </div>
@@ -395,6 +441,7 @@ export function NotetakerWidgetRoute() {
 
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
   const [captureActive, setCaptureActive] = useState(false)
+  const [stopPending, setStopPending] = useState(false)
   /** Increments on every false→true transition: one "session" of the widget. */
   const [sessionId, setSessionId] = useState(0)
   // Read in the IPC handler to detect the transition. A ref, not the state
@@ -431,6 +478,17 @@ export function NotetakerWidgetRoute() {
       if (active && !captureActiveRef.current) setSessionId((n) => n + 1)
       captureActiveRef.current = active
       setCaptureActive(active)
+    })
+    return () => unsubscribe?.()
+  }, [])
+
+  // Separate from captureActive on purpose — see NotetakerWidget's
+  // `stopPending` prop comment: capture keeps running through this window,
+  // it is only about to stop unless the user taps left Control again.
+  useEffect(() => {
+    const unsubscribe = api().notetakerOnStopPending?.((pending) => {
+      wlog('debug', 'stop-pending signal received from main', { pending })
+      setStopPending(pending)
     })
     return () => unsubscribe?.()
   }, [])
@@ -538,6 +596,7 @@ export function NotetakerWidgetRoute() {
     <NotetakerWidget
       analyser={analyser}
       sessionId={sessionId}
+      stopPending={stopPending}
       onCancelConfirmed={() => api().notetakerCancelRequested?.()}
     />
   )

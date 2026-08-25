@@ -18,6 +18,12 @@
 //
 // Electron glue (BrowserWindow/screen), so — like overlay.ts — not
 // unit-tested (see notetakerWidget's sibling files for the same rationale).
+//
+// A SEPARATE stop signal (broadcastStopPending, notetaker:stop-pending)
+// covers the keyboard's own single-tap stop: capture keeps running while it
+// counts down, so it is not the same as captureActive going false. See
+// NotetakerController.onNotesStopRequested for the arm/cancel/finalize shape
+// this mirrors, and NotetakerWidget.tsx for the widget's visual response.
 
 import { BrowserWindow, screen } from 'electron'
 import { join } from 'node:path'
@@ -49,6 +55,23 @@ function broadcastCaptureActive(active: boolean): void {
   captureActive = active
   if (!widgetWindow || widgetWindow.isDestroyed()) return
   widgetWindow.webContents.send('notetaker:capture-active', active)
+}
+
+/** Last stop-pending state broadcast — same re-send-on-load reasoning as
+ *  `captureActive` above, and reset to false whenever a session ends (see
+ *  hideNotetakerWidget) so a stale pending tint can never survive into the
+ *  next meeting's widget. */
+let stopPending = false
+
+/** Tell the widget's renderer whether a manual (keyboard) stop is currently
+ *  in its undo window — see NotetakerController.onNotesStopRequested. Wired
+ *  as notetakerInit.ts's onStopPendingChanged hook, the same cross-tree
+ *  pattern as onSessionStart/onSessionStop (see that file's header comment
+ *  on why this widget can only be reached via injected hooks). */
+export function broadcastStopPending(pending: boolean): void {
+  stopPending = pending
+  if (!widgetWindow || widgetWindow.isDestroyed()) return
+  widgetWindow.webContents.send('notetaker:stop-pending', pending)
 }
 
 /** Bottom-left bounds on the display nearest the cursor — mirrors overlay.ts's
@@ -139,6 +162,7 @@ export function createNotetakerWidget(): BrowserWindow {
   widgetWindow.webContents.on('did-finish-load', () => {
     if (!widgetWindow || widgetWindow.isDestroyed()) return
     widgetWindow.webContents.send('notetaker:capture-active', captureActive)
+    widgetWindow.webContents.send('notetaker:stop-pending', stopPending)
   })
 
   widgetWindow.on('closed', () => { widgetWindow = null })
@@ -193,6 +217,11 @@ export function hideNotetakerWidget(): void {
   // window keeps running unthrottled), so without this the widget's
   // getUserMedia stream would stay open forever — see `captureActive` above.
   broadcastCaptureActive(false)
+  // Defensive reset, mirroring captureActive: the controller already clears
+  // this before a real stop (see NotetakerController.finalizeStop), so this
+  // is normally a no-op — but it guarantees the NEXT session's widget can
+  // never open already tinted from a stale pending-stop that never resolved.
+  broadcastStopPending(false)
   if (widgetWindow && !widgetWindow.isDestroyed() && widgetWindow.isVisible()) {
     widgetWindow.hide()
   }
@@ -208,6 +237,7 @@ function closeWindow(win: BrowserWindow): void {
 /** Tear the window down entirely (app quit / feature teardown). */
 export function destroyNotetakerWidget(): void {
   broadcastCaptureActive(false)
+  broadcastStopPending(false)
   if (widgetWindow && !widgetWindow.isDestroyed()) {
     closeWindow(widgetWindow)
   }

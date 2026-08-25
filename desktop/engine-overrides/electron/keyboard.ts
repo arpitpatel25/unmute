@@ -441,14 +441,13 @@ export class KeyboardManager extends EventEmitter {
   // meeting is running spoil the gesture instead of stopping it the instant
   // Control goes down (see the class-level comment on `notesGesture`).
   //
-  // ASYMMETRIC ON PURPOSE, same shape as feedAgentGesture: a single clean
-  // tap while a meeting is already running stops it immediately — ending
-  // something already happening is the user's own deliberate act and does
-  // not need a second confirmation (spec §6 revised: the confirm-dialog
-  // flow stays for the AUTOMATIC meeting-ended detection in
-  // notetakerController.ts's onMeetingEnded(), which is unrelated to this
-  // key). Starting one is the bigger commitment — it turns on system-audio
-  // capture and raises its own TCC prompt — so that still needs two taps.
+  // ASYMMETRIC ON PURPOSE, same shape as feedAgentGesture: every single
+  // clean tap while a meeting is already running is emitted here, still
+  // undebounced — but what a given tap actually DOES (arm an undo window,
+  // cancel one, or nothing) is the controller's own state machine, not this
+  // key's (see NotetakerController.onNotesStopRequested). Starting a
+  // meeting is the bigger commitment — it turns on system-audio capture and
+  // raises its own TCC prompt — so that still needs two taps to even begin.
   //
   // NO EXCLUSION CHECK, ON PURPOSE (spec §5): dictationActive/
   // instructionActive/agentActive/remoteActive are never read here, and
@@ -461,12 +460,13 @@ export class KeyboardManager extends EventEmitter {
 
     const now = Date.now()
 
-    // STOP FIRST — a single clean tap ends a running capture, never debounced
-    // (the stop tap must always go through so the user can end a meeting
-    // without delay). `confirmNotesStop()` remains the sole writer that
-    // clears `notesActive` back to false — the owning module (notetakerInit.ts)
-    // calls it right after the real session.stop() actually runs, mirroring
-    // the widget's own direct-cancel path.
+    // STOP FIRST — every single clean tap while active is emitted, never
+    // debounced (a tap must always go through, whether it is arming an undo
+    // window or cancelling one — see the controller's own
+    // onNotesStopRequested for what each tap actually does). `notesActive`
+    // stays true for the controller's whole undo window on purpose: it only
+    // goes back to false via confirmNotesStop(), called once the stop is
+    // actually finalized, mirroring the widget's own direct-cancel path.
     if (this.notesActive) {
       this.lastNotesToggleTime = now
       this.lastNotesTapAt = 0

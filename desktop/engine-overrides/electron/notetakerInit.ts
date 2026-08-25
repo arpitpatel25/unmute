@@ -42,8 +42,8 @@
 // dedicated grep checks in wire-into-engine.sh:
 //
 //   import { initNotetaker } from './notetakerInit'
-//   import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notetakerWidget'
-//   initNotetaker({ onSessionStart: showNotetakerWidget, onSessionStop: hideNotetakerWidget })
+//   import { showNotetakerWidget, hideNotetakerWidget, broadcastStopPending } from './paywall/remote/notetakerWidget'
+//   initNotetaker({ onSessionStart: showNotetakerWidget, onSessionStop: hideNotetakerWidget, onStopPendingChanged: broadcastStopPending })
 //
 // Per docs/superpowers/specs/2026-08-23-meeting-notetaker-detection-capture.md.
 
@@ -84,7 +84,17 @@ export type NotetakerInitHooks = {
    *  Called by openMeetingInApp(), the Agent's notetaker_open tool's
    *  eventual destination. */
   onOpenMeeting?: (meetingId: string) => void
+  /** The key's single-tap stop just armed or cleared its undo window (see
+   *  NotetakerController.onNotesStopRequested) — tint/untint the floating
+   *  widget. Same cross-tree reason as onSessionStart/onSessionStop: the
+   *  widget lives in the closed-source paywall tree. */
+  onStopPendingChanged?: (pending: boolean) => void
 }
+
+/** How long the key's own single-tap stop waits, undone, before it actually
+ *  stops the session — long enough to notice and react to, short enough
+ *  that a deliberate stop doesn't feel delayed. */
+const NOTES_STOP_GRACE_MS = 3000
 
 /**
  * The slice of the native-ax addon's surface this file actually needs.
@@ -837,6 +847,9 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     resolveTargetPid: () => resolveTargetPid(ax),
     showNotification: showNotetakerNotification,
     confirm: confirmNotetakerDialog,
+    stopGraceMs: NOTES_STOP_GRACE_MS,
+    onStopPendingChanged: (pending) => hooks.onStopPendingChanged?.(pending),
+    onStopFinalized: () => keyboardManager.confirmNotesStop(),
   })
 
   // ── Manual chord trigger (Task 7's KeyboardManager events) ──
@@ -868,19 +881,23 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
         if (!session.isActive) keyboardManager.confirmNotesStop()
       })
   })
-  // ── Single-tap stop (the key's own gesture, spec §6 revised) ──
-  // Wired DIRECTLY to session.stop(), same shape as the widget's own Cancel
-  // below: a single clean tap while a meeting is running IS the user's
-  // confirmation, so there is no dialog to route through here. The
-  // confirm-dialog flow (controller.onNotesStopConfirmRequested) still
-  // exists and still runs — it is onMeetingEnded's path, for the case where
-  // Unmute itself detected the meeting ending and needs to ask, not the case
-  // where the user just told it to stop directly.
+  // ── Single-tap stop (the key's own gesture, spec §6 twice-revised) ──
+  // Routed through the controller's own arm/cancel/finalize state machine
+  // (NotetakerController.onNotesStopRequested) instead of stopping directly:
+  // the FIRST tap while a meeting is running arms a short on-screen undo
+  // window rather than stopping immediately, and a SECOND tap before it
+  // elapses cancels the pending stop. keyboardManager.confirmNotesStop() is
+  // called from the controller's onStopFinalized callback (wired above)
+  // once the window actually elapses, NOT here — notesActive must stay true
+  // for the whole undo window, or a stray double-tap mid-window would read
+  // as a fresh session start. The confirm-dialog flow
+  // (controller.onNotesStopConfirmRequested) is unrelated and unchanged —
+  // it is onMeetingEnded's path, for the case where Unmute itself detected
+  // the meeting ending and needs to ask, not the case where the user just
+  // told it to stop directly.
   keyboardManager.on('notes-stop-requested', () => {
-    if (!session.isActive) return
-    log.event('chord-stop-requested')
-    session.stop()
-    keyboardManager.confirmNotesStop()
+    log.event('chord-stop-requested', { wasAlreadyPending: controller.isStopPending })
+    controller.onNotesStopRequested()
   })
 
   // ── Widget's own two-click Cancel (spec §6/§7) ──
@@ -893,6 +910,11 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
   ipcMain.on('notetaker:cancel-requested', () => {
     if (!session.isActive) return
     log.event('widget-cancel-clicked')
+    // Defensive: if the key's own undo window happened to be armed when the
+    // click landed, clear it — otherwise its timer would still be live and
+    // fire session.stop() again later, possibly against a NEW meeting the
+    // user has since started (see NotetakerController.cancelPendingStop).
+    controller.cancelPendingStop()
     session.stop()
     keyboardManager.confirmNotesStop()
   })
@@ -915,6 +937,10 @@ export function initNotetaker(hooks: NotetakerInitHooks = {}): void {
     if (!session.isActive) return
     log.child({ meetingId: sessionMeetingId }).event('quit-during-capture', { note: 'stopping the session — save is best-effort' })
     try {
+      // Defensive, same reasoning as the widget-cancel handler above: quit
+      // can land mid-undo-window, and a stray armed timer has nothing left
+      // to fire against once the process is going down anyway.
+      controller.cancelPendingStop()
       session.stop()
       keyboardManager.confirmNotesStop()
     } catch (e) {

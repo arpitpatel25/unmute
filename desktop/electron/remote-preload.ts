@@ -623,6 +623,17 @@ export const remotePreloadExtensions = {
     ipcRenderer.on('notetaker:capture-active', handler)
     return () => ipcRenderer.removeListener('notetaker:capture-active', handler)
   },
+  /** Main tells the widget whether a manual (keyboard) stop is currently in
+   *  its undo window — capture is STILL running (this is not
+   *  notetakerOnCaptureActive going false), it is only about to stop unless
+   *  the user taps left Control again before it elapses. See
+   *  NotetakerController.onNotesStopRequested's own comment for the full
+   *  arm/cancel/finalize shape this mirrors. */
+  notetakerOnStopPending: (cb: (pending: boolean) => void): (() => void) => {
+    const handler = (_e: unknown, pending: boolean) => cb(!!pending)
+    ipcRenderer.on('notetaker:stop-pending', handler)
+    return () => ipcRenderer.removeListener('notetaker:stop-pending', handler)
+  },
   /** The Unmute Agent asked to open one meeting (notetaker_open) — main has
    *  already shown/focused the window by the time this fires; the renderer's
    *  only job is to land on the Notetaker tab with this meeting selected. */

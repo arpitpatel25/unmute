@@ -511,7 +511,7 @@ import { notetakerAgentAdapters } from './notetakerInit'
   if ! grep -q 'initNotetaker' "$main_ts"; then
     sed -i.bak "/^import { initRemote } from '\.\/paywall\/remote\/init'/a\\
 import { initNotetaker } from './notetakerInit'\\
-import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notetakerWidget'
+import { showNotetakerWidget, hideNotetakerWidget, broadcastStopPending } from './paywall/remote/notetakerWidget'
 " "$main_ts"
     rm -f "$main_ts.bak"
     node -e "
@@ -523,6 +523,11 @@ import { showNotetakerWidget, hideNotetakerWidget } from './paywall/remote/notet
           '  initNotetaker({\n' +
           '    onSessionStart: showNotetakerWidget,\n' +
           '    onSessionStop: hideNotetakerWidget,\n' +
+          '    // The key\\'s own single-tap stop arms a short undo window before it\n' +
+          '    // actually stops (NotetakerController.onNotesStopRequested) — this tints\n' +
+          '    // the widget for exactly that window, same cross-tree reason as the two\n' +
+          '    // hooks above.\n' +
+          '    onStopPendingChanged: broadcastStopPending,\n' +
           '    // getMainWindow/createMainWindow/showMainWindow are already imported\n' +
           '    // above (this file creates its own main window) — the notetaker tree\n' +
           '    // cannot import windowManager.ts directly (see NotetakerInitHooks\\'s\n' +

@@ -98,7 +98,7 @@ describe('notes key (left-Control, double-tap start / single-tap stop) — indep
     assert.equal(startRequested, 1)
   })
 
-  test('a single clean tap while notes is active stops it DIRECTLY — no confirmation', () => {
+  test('a single clean tap while notes is active emits notes-stop-requested — not a double-tap, no dialog', () => {
     const km = new KeyboardManager()
     let startRequested = 0
     let stopRequested = 0
@@ -111,8 +111,11 @@ describe('notes key (left-Control, double-tap start / single-tap stop) — indep
     assert.equal(startRequested, 1)
     assert.equal(stopRequested, 0)
 
-    // ONE clean tap while active stops it — not a double-tap, no confirm
-    // event, nothing else in between.
+    // ONE clean tap while active fires the stop event — not a double-tap,
+    // no confirm event, nothing else in between. What that event actually
+    // DOES (arm an undo window, cancel one, or finalize) is
+    // NotetakerController's own state machine, exercised in
+    // notetakerController.test.ts, not this key's.
     pressRelease(km)
     assert.equal(stopRequested, 1)
     assert.equal(startRequested, 1) // unchanged — this was a stop, not a restart
