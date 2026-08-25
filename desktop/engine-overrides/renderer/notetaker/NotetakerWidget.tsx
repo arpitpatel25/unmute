@@ -162,9 +162,30 @@ async function attachMicChunkTap(
   // path to the destination. Muted gain, not a direct connect: the tap's own
   // output is silence, but routing it through an explicit zero-gain node means
   // nothing can ever make the meeting's mic audible back through the speakers.
-  const sink = ctx.createGain()
-  sink.gain.value = 0
-  sink.connect(ctx.destination)
+  //
+  // GUARDED, UNLIKE THE REST OF THIS FUNCTION'S OWN try/catch BLOCKS BELOW:
+  // this used to run unwrapped, so on a REUSED, cross-session AudioContext
+  // (see NotetakerWidgetRoute's own comment on why the context lives for the
+  // window's whole lifetime) any exception here — e.g. a stale `ctx.state`
+  // the moment this runs — rejected the whole function with NO wlog call at
+  // all, silently swallowed by this function's caller ("attachMicChunkTap
+  // already logs" is exactly the assumption this violated). Live-observed:
+  // two out of three back-to-back meetings in the same window session had
+  // "mic capture granted" logged and then nothing else ever — no tap
+  // attached, no error, no chunks, meeting saved with no "You" channel and
+  // no trace of why. This makes that failure path actually log something.
+  let sink: GainNode
+  try {
+    sink = ctx.createGain()
+    sink.gain.value = 0
+    sink.connect(ctx.destination)
+  } catch (err) {
+    wlog('error', 'mic tap sink could not be created — this meeting will have no "You" channel', {
+      error: err instanceof Error ? err.message : String(err),
+      contextState: ctx.state,
+    })
+    return null
+  }
 
   if (workletRegistered) {
     try {
@@ -555,7 +576,18 @@ export function NotetakerWidgetRoute() {
             if (cancelled) dispose?.()
             else disposeMicTap = dispose
           })
-          .catch(() => { /* attachMicChunkTap already logs; never break the widget */ })
+          .catch((err) => {
+            // Defense in depth, not the primary diagnostic anymore:
+            // attachMicChunkTap now guarantees its own wlog on every
+            // failure path (see its sink-creation try/catch). This only
+            // fires for something UNFORESEEN in this chain itself (e.g. the
+            // `.then((dispose) => …)` step above throwing) — previously
+            // fully silent, same failure shape as the bug that motivated
+            // guarding attachMicChunkTap in the first place.
+            wlog('error', 'mic tap attach chain failed unexpectedly — this meeting will have no "You" channel', {
+              error: err instanceof Error ? err.message : String(err),
+            })
+          })
       })
       .catch((err) => {
         // No mic access in this window (denied/unavailable) — the widget
